@@ -2,25 +2,15 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: '**/branch-ui-general-modals-matrix.spec.ts',
-  timeout: 45_000,
-  expect: {
-    timeout: 5_000,
-  },
+  testMatch: '**/branch-ui-k12-deep-surfaces-matrix.spec.ts',
+  timeout: 600_000,
+  expect: { timeout: 15_000 },
   retries: 0,
   workers: 1,
   fullyParallel: false,
-  outputDir: '/tmp/hexclaw-branch-ui-general-modals-playwright',
-  reporter: [
-    ['list'],
-    [
-      'html',
-      {
-        outputFolder: '/tmp/hexclaw-branch-ui-general-modals-report',
-        open: 'never',
-      },
-    ],
-  ],
+  outputDir:
+    process.env.HEX_UI_PW_OUTPUT || `/tmp/hexclaw-k12-deep-surfaces-playwright-${process.pid}`,
+  reporter: [['list']],
   use: {
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
@@ -28,8 +18,6 @@ export default defineConfig({
     timezoneId: 'Asia/Shanghai',
     colorScheme: 'light',
     reducedMotion: 'reduce',
-    actionTimeout: 5_000,
-    navigationTimeout: 12_000,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },

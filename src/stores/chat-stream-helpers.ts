@@ -8,7 +8,6 @@ import type {
   RuntimeWireSnapshot,
 } from '@/types'
 import {
-  createRuntimeWireSnapshot,
   mergeRuntimeWireFrame,
   normalizeRuntimeSnapshotMetadata,
 } from '@/types/chat'

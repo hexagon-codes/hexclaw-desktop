@@ -14,6 +14,14 @@
     "displayName": "HexClaw-GPT",
     "model": "gpt-5.6-sol"
   },
+  "gradingCalibrationApproval": {
+    "status": "blocked",
+    "approval_ref": null,
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "artifact_sha256": null,
+    "release_config_sha256": null
+  },
   "submissions": {
     "plannedTopLevel": 6,
     "maximumTopLevel": 8
@@ -67,14 +75,16 @@
     "HEX_K12_LIVE_APP_BINARY",
     "HEX_K12_LIVE_APP_SHA256",
     "HEX_K12_LIVE_EXPECTED_VERSION",
-      "HEX_K12_LIVE_AGENT",
-      "HEXCLAW_LOCAL_SRC",
-      "HEX_K12_LIVE_FIXTURE_PROFILE",
-      "HEX_K12_LIVE_FIXTURE_STORE",
-      "HEX_K12_LIVE_FIXTURE_MANIFEST",
-      "HEX_K12_LIVE_SIDECAR_CONTROL",
-      "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
-      "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG"
+    "HEX_K12_LIVE_AGENT",
+    "HEXCLAW_LOCAL_SRC",
+    "HEX_K12_LIVE_FIXTURE_PROFILE",
+    "HEX_K12_LIVE_FIXTURE_STORE",
+    "HEX_K12_LIVE_FIXTURE_MANIFEST",
+    "HEX_K12_LIVE_SIDECAR_CONTROL",
+    "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
+    "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
+    "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
+    "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256"
   ],
   "forbiddenRequestPathPrefixes": [
     "/api/k12/tutoring-tips/send",

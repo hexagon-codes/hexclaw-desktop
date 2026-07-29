@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {
+  syntheticArtifactSHA256,
+  syntheticGradingBudget,
+  syntheticGradingCalibrationApproval,
+  syntheticGradingCalibrationBytes,
+  syntheticGradingCalibrationEnvironment,
+  syntheticSidecarConfigSHA256,
+} from './helpers/k12-grading-calibration-synthetic.mjs'
 
 const repoFile = (path) => new URL(`../../${path}`, import.meta.url)
 
@@ -45,23 +53,27 @@ test('dead stale PID is removed without signal and yields no PID/path/command re
   )
   let signals = 0
   let removed = 0
-  const result = await normalizeStoppedState(config, {
-    ...boundaryEmpty,
-    pidFilePID: 4242,
-    process: null,
-  }, {
-    removePIDFile: async (_path, identity) => {
-      assert.deepEqual(identity, {
-        expectedPID: 4242,
-        expectedMode: 0o600,
-        rejectSymlink: true,
-      })
-      removed += 1
+  const result = await normalizeStoppedState(
+    config,
+    {
+      ...boundaryEmpty,
+      pidFilePID: 4242,
+      process: null,
     },
-    signalProcess: async () => {
-      signals += 1
+    {
+      removePIDFile: async (_path, identity) => {
+        assert.deepEqual(identity, {
+          expectedPID: 4242,
+          expectedMode: 0o600,
+          rejectSymlink: true,
+        })
+        removed += 1
+      },
+      signalProcess: async () => {
+        signals += 1
+      },
     },
-  })
+  )
   assert.deepEqual(result.receipt, {
     schema_version: 1,
     pid_file_existed: true,
@@ -86,23 +98,27 @@ test('foreign PID reuse removes only controller PID file and never signals forei
   )
   let signals = 0
   let removed = 0
-  const result = await normalizeStoppedState(config, {
-    ...boundaryEmpty,
-    pidFilePID: 4242,
-    process: {
-      pid: 4242,
-      executablePath: '/usr/bin/sleep',
-      argv: ['/usr/bin/sleep', '30'],
-      binarySHA256: 'f'.repeat(64),
+  const result = await normalizeStoppedState(
+    config,
+    {
+      ...boundaryEmpty,
+      pidFilePID: 4242,
+      process: {
+        pid: 4242,
+        executablePath: '/usr/bin/sleep',
+        argv: ['/usr/bin/sleep', '30'],
+        binarySHA256: 'f'.repeat(64),
+      },
     },
-  }, {
-    removePIDFile: async () => {
-      removed += 1
+    {
+      removePIDFile: async () => {
+        removed += 1
+      },
+      signalProcess: async () => {
+        signals += 1
+      },
     },
-    signalProcess: async () => {
-      signals += 1
-    },
-  })
+  )
   assert.equal(result.state, 'stopped')
   assert.equal(result.receipt.pid_alive, true)
   assert.equal(result.receipt.owned_process, false)
@@ -122,38 +138,40 @@ test('listener or lock evidence blocks stale unlink while exact owned process re
     { versionStatus: 200 },
   ]) {
     let removed = false
-    const result = await normalizeStoppedState(config, {
-      ...boundaryEmpty,
-      ...boundary,
-      pidFilePID: 4242,
-      process: null,
-    }, {
-      removePIDFile: async () => {
-        removed = true
+    const result = await normalizeStoppedState(
+      config,
+      {
+        ...boundaryEmpty,
+        ...boundary,
+        pidFilePID: 4242,
+        process: null,
       },
-    })
+      {
+        removePIDFile: async () => {
+          removed = true
+        },
+      },
+    )
     assert.equal(result.state, 'blocked')
     assert.equal(removed, false)
   }
 
-  const owned = await normalizeStoppedState(config, {
-    ...boundaryEmpty,
-    pidFilePID: 4242,
-    process: {
-      pid: 4242,
-      executablePath: config.binaryPath,
-      argv: [
-        config.binaryPath,
-        'serve',
-        '--desktop',
-        '--config',
-        config.sidecarConfigPath,
-      ],
-      binarySHA256: config.binarySHA256,
+  const owned = await normalizeStoppedState(
+    config,
+    {
+      ...boundaryEmpty,
+      pidFilePID: 4242,
+      process: {
+        pid: 4242,
+        executablePath: config.binaryPath,
+        argv: [config.binaryPath, 'serve', '--desktop', '--config', config.sidecarConfigPath],
+        binarySHA256: config.binarySHA256,
+      },
     },
-  }, {
-    removePIDFile: async () => assert.fail('owned PID must not be stale-unlinked'),
-  })
+    {
+      removePIDFile: async () => assert.fail('owned PID must not be stale-unlinked'),
+    },
+  )
   assert.equal(owned.state, 'owned')
   assert.equal(owned.pid, 4242)
 })
@@ -167,9 +185,11 @@ test('fixture preflight requires env URLs and app SHA to match attested controll
     HEX_K12_LIVE_FIXTURE_PROFILE: '/tmp/k12-url-pid/profile',
     HEX_K12_LIVE_FIXTURE_STORE: '/tmp/k12-url-pid/profile/.hexclaw/data.db',
     HEX_K12_LIVE_FIXTURE_MANIFEST: '/tmp/k12-url-pid/profile/fixture.json',
-    HEX_K12_LIVE_SIDECAR_CONTROL: '/work/hexclaw-desktop/scripts/ci/k12-current-bug-isolated-sidecar-control.mjs',
+    HEX_K12_LIVE_SIDECAR_CONTROL:
+      '/work/hexclaw-desktop/scripts/ci/k12-current-bug-isolated-sidecar-control.mjs',
     HEX_K12_LIVE_SIDECAR_CONTROL_SHA256: 'a'.repeat(64),
     HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG: '/tmp/k12-url-pid/controller.json',
+    ...syntheticGradingCalibrationEnvironment('/tmp/k12-url-pid/grading-calibration.json'),
     HEX_K12_LIVE_APP_URL: config.releaseUIURL,
     HEX_K12_LIVE_SIDECAR_URL: config.sidecarURL,
     HEX_K12_LIVE_APP_SHA256: config.releaseInstalledAppSHA256,
@@ -177,24 +197,36 @@ test('fixture preflight requires env URLs and app SHA to match attested controll
   const directories = new Set([env.HEXCLAW_LOCAL_SRC, env.HEX_K12_LIVE_FIXTURE_PROFILE])
   const adapters = {
     inspectPath: (path) => ({
-      kind: path === env.HEX_K12_LIVE_FIXTURE_MANIFEST
-        ? 'missing'
-        : directories.has(path)
-          ? 'directory'
-          : 'file',
+      kind:
+        path === env.HEX_K12_LIVE_FIXTURE_MANIFEST
+          ? 'missing'
+          : directories.has(path)
+            ? 'directory'
+            : 'file',
       canonicalPath: path.replace(/^\/tmp\//, '/private/tmp/'),
       mode: directories.has(path)
-        ? path === env.HEXCLAW_LOCAL_SRC ? 0o755 : 0o700
-        : path === env.HEX_K12_LIVE_SIDECAR_CONTROL ? 0o755 : 0o600,
+        ? path === env.HEXCLAW_LOCAL_SRC
+          ? 0o755
+          : 0o700
+        : path === env.HEX_K12_LIVE_SIDECAR_CONTROL
+          ? 0o755
+          : 0o600,
       executable: path === env.HEX_K12_LIVE_SIDECAR_CONTROL,
       symlink: false,
     }),
-    fileSHA256: () => env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
+    fileSHA256: (path) =>
+      path.endsWith('/grading-calibration.json')
+        ? syntheticArtifactSHA256
+        : env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
     readControllerRuntimeContract: () => ({
       sidecarURL: config.sidecarURL,
       releaseUIURL: config.releaseUIURL,
       installedAppSHA256: config.releaseInstalledAppSHA256,
+      gradingBudget: syntheticGradingBudget(),
+      sidecarConfigSHA256: syntheticSidecarConfigSHA256,
     }),
+    readGradingCalibrationBytes: () => syntheticGradingCalibrationBytes(),
+    gradingCalibrationApproval: syntheticGradingCalibrationApproval(),
   }
   validateFixtureEnvironment(env, adapters)
   for (const mutation of [

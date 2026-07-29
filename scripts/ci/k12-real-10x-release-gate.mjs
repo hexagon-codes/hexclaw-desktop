@@ -6,10 +6,16 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateGradingCalibrationApproval } from './k12-current-bug-fixture-orchestrator.mjs'
+import { parseStrictJSON } from './k12-strict-json.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
-const contract = JSON.parse(
+export function parseReal10xReleaseContract(raw) {
+  return parseStrictJSON(raw, { label: 'K12 real 10x release contract' })
+}
+
+const contract = parseReal10xReleaseContract(
   readFileSync(
     new URL('../../tests/live/k12-real-10x-release.contract.json', import.meta.url),
     'utf8',
@@ -35,10 +41,7 @@ function trustedHook(contractValue, hook) {
 
 export function preflightReleaseGate(
   contractValue,
-  {
-    env = process.env,
-    hookExists = (module) => existsSync(resolve(repoRoot, module)),
-  } = {},
+  { env = process.env, hookExists = (module) => existsSync(resolve(repoRoot, module)) } = {},
 ) {
   const blockers = []
   const cycleIDs = contractValue.cycles?.map(({ id }) => id) ?? []
@@ -67,10 +70,19 @@ export function preflightReleaseGate(
       reason: 'execution must be serial, zero-retry, skip-blocking and DingTalk-disabled',
     })
   }
+  try {
+    validateGradingCalibrationApproval(contractValue.gradingCalibrationApproval, {
+      provider: contractValue.provider?.identity,
+      model: contractValue.provider?.model,
+    })
+  } catch {
+    blockers.push({
+      kind: 'grading-calibration-approval',
+      reason: 'approved calibration artifact and release config digests are required',
+    })
+  }
 
-  for (const [name, expected] of Object.entries(
-    contractValue.requiredEnvironment?.exact ?? {},
-  )) {
+  for (const [name, expected] of Object.entries(contractValue.requiredEnvironment?.exact ?? {})) {
     if ((env[name] ?? '').trim() !== expected) {
       blockers.push({ kind: 'environment', name, reason: `must equal ${expected}` })
     }
@@ -82,9 +94,7 @@ export function preflightReleaseGate(
   }
 
   for (const cycle of contractValue.cycles ?? []) {
-    for (const [name, expected] of Object.entries(
-      cycle.requiredEnvironment?.exact ?? {},
-    )) {
+    for (const [name, expected] of Object.entries(cycle.requiredEnvironment?.exact ?? {})) {
       if ((env[name] ?? '').trim() !== expected) {
         blockers.push({
           kind: 'environment',
@@ -134,12 +144,7 @@ function digest(value) {
 
 export function executeReleasePlan(
   contractValue,
-  {
-    baseRunId,
-    env = process.env,
-    spawn = spawnSync,
-    cwd = repoRoot,
-  },
+  { baseRunId, env = process.env, spawn = spawnSync, cwd = repoRoot },
 ) {
   const results = []
   for (const cycle of contractValue.cycles) {

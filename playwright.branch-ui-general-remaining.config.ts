@@ -2,21 +2,19 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: '**/branch-ui-general-modals-matrix.spec.ts',
-  timeout: 45_000,
-  expect: {
-    timeout: 5_000,
-  },
+  testMatch: '**/branch-ui-general-remaining-matrix.spec.ts',
+  timeout: 60_000,
+  expect: { timeout: 5_000 },
   retries: 0,
   workers: 1,
   fullyParallel: false,
-  outputDir: '/tmp/hexclaw-branch-ui-general-modals-playwright',
+  outputDir: '/tmp/hexclaw-branch-ui-general-remaining-playwright',
   reporter: [
     ['list'],
     [
       'html',
       {
-        outputFolder: '/tmp/hexclaw-branch-ui-general-modals-report',
+        outputFolder: '/tmp/hexclaw-branch-ui-general-remaining-report',
         open: 'never',
       },
     ],

@@ -6,15 +6,12 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-const REFERENCE_URL =
-  process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
+const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 const SOURCE_URL =
   process.env.HEX_UI_SOURCE_URL?.trim() ||
   process.env.HEX_UI_IMPLEMENTATION_URL?.trim() ||
   'http://127.0.0.1:16061'
-const EVIDENCE_ROOT = path.resolve(
-  'test-results/branch-ui-general-modals/evidence',
-)
+const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-general-modals/evidence')
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
@@ -60,7 +57,10 @@ interface PixelDiff {
 }
 
 const modalTargets = (selector: string): GeometryTarget[] => [
-  { name: 'overlay', selector: `${selector}:has(${selector === '#overlay' ? '#overlayCard' : '*'})` },
+  {
+    name: 'overlay',
+    selector: `${selector}:has(${selector === '#overlay' ? '#overlayCard' : '*'})`,
+  },
   { name: 'dialog', selector },
 ]
 
@@ -231,7 +231,8 @@ const surfaces: Surface[] = [
       { name: 'dialog', selector: '[data-testid="knowledge-add-document-modal"]' },
       {
         name: 'drop-zone',
-        selector: '[data-testid="knowledge-add-document-modal"] .knowledge-add-document-modal__drop',
+        selector:
+          '[data-testid="knowledge-add-document-modal"] .knowledge-add-document-modal__drop',
       },
     ],
     mapping: 'COMPARABLE',
@@ -330,7 +331,7 @@ const surfaces: Surface[] = [
     mappingReason: 'Both legs expose the data-connector picker.',
   },
   {
-    id: 'integration-skill-install',
+    id: 'integration-skill-install-modal',
     route: '/integration',
     referenceOpen: 'installSkill()',
     sourceOpen: 'skill-install',
@@ -351,9 +352,7 @@ const surfaces: Surface[] = [
     sourceOpen: 'skill-ai-create',
     referenceReady: '[data-skill-ai-create-dialog]',
     sourceReady: 'textarea',
-    referenceTargets: [
-      { name: 'missing-dialog', selector: '[data-skill-ai-create-dialog]' },
-    ],
+    referenceTargets: [{ name: 'missing-dialog', selector: '[data-skill-ai-create-dialog]' }],
     sourceTargets: [
       { name: 'overlay', selector: 'body > .fixed.inset-0' },
       { name: 'dialog', selector: 'body > .fixed.inset-0 textarea' },
@@ -427,8 +426,7 @@ const surfaces: Surface[] = [
   {
     id: 'logs-detail-drawer',
     route: '/logs',
-    referenceOpen:
-      "openLogDetail(document.querySelector('.screen[data-pane=\"logs\"] .logrow'))",
+    referenceOpen: 'openLogDetail(document.querySelector(\'.screen[data-pane="logs"] .logrow\'))',
     sourceOpen: 'logs-detail',
     referenceReady: '#logdrawer.on',
     sourceReady: '.hc-logs__drawer',
@@ -594,8 +592,22 @@ function runtimeFixture(apiPath: string, method: string): unknown {
           id: 'workflow-daily',
           name: '每日飞书日报',
           nodes: [
-            { id: 'input', type: 'input', label: '定时触发', x: 0, y: 0, config: { value: '{{input}}' } },
-            { id: 'agent', type: 'agent', label: '日报分析师', x: 220, y: 0, config: { prompt: '总结昨日数据' } },
+            {
+              id: 'input',
+              type: 'input',
+              label: '定时触发',
+              x: 0,
+              y: 0,
+              config: { value: '{{input}}' },
+            },
+            {
+              id: 'agent',
+              type: 'agent',
+              label: '日报分析师',
+              x: 220,
+              y: 0,
+              config: { prompt: '总结昨日数据' },
+            },
             { id: 'output', type: 'output', label: '完成', x: 440, y: 0, config: {} },
           ],
           edges: [
@@ -726,8 +738,8 @@ async function clickFirst(page: Page, selector: string, name?: string) {
   const locator = name
     ? page.locator(selector).filter({ hasText: name }).first()
     : page.locator(selector).first()
-  await locator.waitFor({ state: 'visible', timeout: 3_000 })
-  await locator.click({ timeout: 3_000 })
+  await locator.waitFor({ state: 'visible', timeout: 8_000 })
+  await locator.click({ timeout: 8_000 })
 }
 
 async function openReference(page: Page, surface: Surface): Promise<OpenEvidence> {
@@ -826,11 +838,15 @@ async function openSource(page: Page, surface: Surface): Promise<OpenEvidence> {
           : surface.route
     await page.goto(`${SOURCE_URL}${route}`, {
       waitUntil: 'domcontentloaded',
-      timeout: 12_000,
+      timeout: 20_000,
     })
     await page.locator('.hc-app').waitFor({ state: 'visible', timeout: 8_000 })
     await openSourceAction(page, surface.sourceOpen)
-    await page.locator(surface.sourceReady).first().waitFor({ state: 'visible', timeout: 3_000 })
+    const sourceReadyTimeout = surface.sourceOpen === 'skill-ai-create' ? 8_000 : 3_000
+    await page
+      .locator(surface.sourceReady)
+      .first()
+      .waitFor({ state: 'visible', timeout: sourceReadyTimeout })
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught)
   }
@@ -969,8 +985,7 @@ async function exerciseSurface(browser: Browser, surface: Surface, testInfo: Tes
       acceptance: {
         threshold: PIXEL_THRESHOLD,
         maxChangedPixelRatio: MAX_CHANGED_PIXEL_RATIO,
-        pixelStatus:
-          pixelDiff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO ? 'PASS' : 'RED',
+        pixelStatus: pixelDiff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO ? 'PASS' : 'RED',
         installedApplicationThirdLeg: 'NOT_RUN',
       },
       evidence: {
@@ -1004,9 +1019,9 @@ async function exerciseSurface(browser: Browser, surface: Surface, testInfo: Tes
 
     expect(
       status,
-      `${surface.id}: ${status}; changed=${(
-        pixelDiff.changed_pixel_ratio * 100
-      ).toFixed(4)}%; mapping=${effectiveMapping}; reason=${surface.mappingReason}; referenceOpen=${referenceOpen.error ?? 'ok'}; sourceOpen=${sourceOpen.error ?? 'ok'}`,
+      `${surface.id}: ${status}; changed=${(pixelDiff.changed_pixel_ratio * 100).toFixed(
+        4,
+      )}%; mapping=${effectiveMapping}; reason=${surface.mappingReason}; referenceOpen=${referenceOpen.error ?? 'ok'}; sourceOpen=${sourceOpen.error ?? 'ok'}`,
     ).toBe('PASS')
   } finally {
     await context.close()

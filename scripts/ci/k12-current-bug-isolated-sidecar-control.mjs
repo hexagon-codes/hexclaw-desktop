@@ -16,6 +16,8 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { readAttestedFileSnapshot } from './k12-attested-file.mjs'
+import { parseStrictJSON } from './k12-strict-json.mjs'
 
 const execFile = promisify(execFileCallback)
 
@@ -64,10 +66,12 @@ function fail(message) {
 }
 
 function canonicalTmp(pathname) {
-  return pathname === '/tmp'
-    || pathname.startsWith(`/tmp${sep}`)
-    || pathname === '/private/tmp'
-    || pathname.startsWith(`/private/tmp${sep}`)
+  return (
+    pathname === '/tmp' ||
+    pathname.startsWith(`/tmp${sep}`) ||
+    pathname === '/private/tmp' ||
+    pathname.startsWith(`/private/tmp${sep}`)
+  )
 }
 
 function isInside(parent, child) {
@@ -107,26 +111,20 @@ function defaultFileSHA256(pathname) {
   return createHash('sha256').update(readFileSync(pathname)).digest('hex')
 }
 
-function defaultVerifyControllerReleaseAttestation({
-  receiptPath,
-  expectedReceiptSHA256,
-}) {
-  const raw = readFileSync(receiptPath)
-  const receiptSHA256 = createHash('sha256').update(raw).digest('hex')
-  if (receiptSHA256 !== expectedReceiptSHA256) fail('release attestation SHA-256 mismatch')
+function verifyControllerReleaseAttestation(snapshot) {
   let receipt
   try {
-    receipt = JSON.parse(String(raw))
-  } catch {
-    fail('release attestation is not valid JSON')
+    receipt = parseStrictJSON(snapshot.bytes, { label: 'release attestation' })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
   }
   if (!receipt || Array.isArray(receipt) || typeof receipt !== 'object') {
     fail('release attestation must be an object')
   }
   const fields = Object.keys(receipt).sort()
   if (
-    fields.length !== RELEASE_ATTESTATION_FIELDS.length
-    || fields.some((field, index) => field !== RELEASE_ATTESTATION_FIELDS[index])
+    fields.length !== RELEASE_ATTESTATION_FIELDS.length ||
+    fields.some((field, index) => field !== RELEASE_ATTESTATION_FIELDS[index])
   ) {
     fail('release attestation fields do not match the exact schema')
   }
@@ -135,7 +133,7 @@ function defaultVerifyControllerReleaseAttestation({
     releaseVersion: receipt.release_version,
     sidecarSHA256: receipt.sidecar_sha256,
     installedAppSHA256: receipt.installed_app_sha256,
-    attestationSHA256: receiptSHA256,
+    attestationSHA256: snapshot.sha256,
   }
 }
 
@@ -157,7 +155,10 @@ function requireKind(inspected, expected, name) {
   if (expected === 'file' && (inspected.regularFile === false || inspected.directory === true)) {
     fail(`${name} must be an existing file`)
   }
-  if (expected === 'directory' && (inspected.directory === false || inspected.regularFile === true)) {
+  if (
+    expected === 'directory' &&
+    (inspected.directory === false || inspected.regularFile === true)
+  ) {
     fail(`${name} must be an existing directory`)
   }
 }
@@ -166,32 +167,19 @@ function requireMode(inspected, expected, name) {
   if (inspected.mode !== expected) fail(`${name} permissions must be ${expected.toString(8)}`)
 }
 
-function exactTopLevelKeys(raw) {
-  const keys = []
-  const expression = /"((?:\\.|[^"\\])*)"\s*:/g
-  let match
-  while ((match = expression.exec(raw)) !== null) {
-    keys.push(JSON.parse(`"${match[1]}"`))
-  }
-  return keys
-}
-
 function parseExactConfig(raw) {
   const text = String(raw)
   let value
   try {
-    value = JSON.parse(text)
-  } catch {
-    fail('config is not valid JSON')
+    value = parseStrictJSON(text, { label: 'controller config' })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
   }
   if (!value || Array.isArray(value) || typeof value !== 'object') fail('config must be an object')
   const keys = Object.keys(value).sort()
-  const sourceKeys = exactTopLevelKeys(text).sort()
   if (
-    keys.length !== CONFIG_FIELDS.length
-    || sourceKeys.length !== CONFIG_FIELDS.length
-    || keys.some((key, index) => key !== CONFIG_FIELDS[index])
-    || sourceKeys.some((key, index) => key !== CONFIG_FIELDS[index])
+    keys.length !== CONFIG_FIELDS.length ||
+    keys.some((key, index) => key !== CONFIG_FIELDS[index])
   ) {
     fail('config fields do not match the exact schema')
   }
@@ -199,10 +187,13 @@ function parseExactConfig(raw) {
 }
 
 function parseYAMLScalar(raw) {
-  const value = raw.trim().replace(/\s+#.*$/, '').trim()
+  const value = raw
+    .trim()
+    .replace(/\s+#.*$/, '')
+    .trim()
   if (
-    (value.startsWith('"') && value.endsWith('"'))
-    || (value.startsWith("'") && value.endsWith("'"))
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
   ) {
     return value.slice(1, -1)
   }
@@ -248,10 +239,7 @@ function parseYAMLGradingBudget(raw) {
     if (indent <= k12Indent) break
     if (gradingBudgetIndent === undefined) {
       k12ChildIndent ??= indent
-      if (
-        indent === k12ChildIndent
-        && /^grading_budget:\s*(?:#.*)?$/.test(content)
-      ) {
+      if (indent === k12ChildIndent && /^grading_budget:\s*(?:#.*)?$/.test(content)) {
         gradingBudgetIndent = indent
         gradingBudget = {}
       }
@@ -289,12 +277,7 @@ function parseYAMLGradingBudget(raw) {
     }
 
     if (/^assessing_buckets:\s*(?:#.*)?$/.test(content)) {
-      assignUnique(
-        gradingBudget,
-        'assessing_buckets',
-        [],
-        'k12.grading_budget.assessing_buckets',
-      )
+      assignUnique(gradingBudget, 'assessing_buckets', [], 'k12.grading_budget.assessing_buckets')
       bucketsIndent = indent
       continue
     }
@@ -351,10 +334,6 @@ export function parseSidecarBinding(raw) {
   return { host, port, gradingBudget: parseYAMLGradingBudget(raw) }
 }
 
-function defaultReadSidecarBinding(pathname) {
-  return parseSidecarBinding(readFileSync(pathname, 'utf8'))
-}
-
 function requireFrozenGradingBudget(binding) {
   const gradingBudget = binding?.gradingBudget
   if (!gradingBudget || Array.isArray(gradingBudget) || typeof gradingBudget !== 'object') {
@@ -377,23 +356,24 @@ function requireFrozenGradingBudget(binding) {
   }
   const requiredBucketSizes = [1, 8, 16, 32]
   if (
-    !Array.isArray(gradingBudget.assessing_buckets)
-    || gradingBudget.assessing_buckets.length !== requiredBucketSizes.length
-    || gradingBudget.assessing_buckets.some((bucket, index) => (
-      !bucket
-      || Array.isArray(bucket)
-      || typeof bucket !== 'object'
-      || bucket.max_problems !== requiredBucketSizes[index]
-      || !Number.isInteger(bucket.seconds)
-      || bucket.seconds <= 0
-    ))
+    !Array.isArray(gradingBudget.assessing_buckets) ||
+    gradingBudget.assessing_buckets.length !== requiredBucketSizes.length ||
+    gradingBudget.assessing_buckets.some(
+      (bucket, index) =>
+        !bucket ||
+        Array.isArray(bucket) ||
+        typeof bucket !== 'object' ||
+        bucket.max_problems !== requiredBucketSizes[index] ||
+        !Number.isInteger(bucket.seconds) ||
+        bucket.seconds <= 0,
+    )
   ) {
     fail('k12.grading_budget.assessing_buckets must contain ordered positive 1/8/16/32 buckets')
   }
   if (
-    !Number.isInteger(gradingBudget.item_concurrency)
-    || gradingBudget.item_concurrency < 1
-    || gradingBudget.item_concurrency > 32
+    !Number.isInteger(gradingBudget.item_concurrency) ||
+    gradingBudget.item_concurrency < 1 ||
+    gradingBudget.item_concurrency > 32
   ) {
     fail('k12.grading_budget.item_concurrency must be an integer from 1 through 32')
   }
@@ -401,13 +381,13 @@ function requireFrozenGradingBudget(binding) {
 
 export function parseControllerCLI(argv) {
   if (
-    !Array.isArray(argv)
-    || argv.length !== 3
-    || !['start', 'stop'].includes(argv[0])
-    || argv[1] !== '--config'
-    || typeof argv[2] !== 'string'
-    || !isAbsolute(argv[2])
-    || !canonicalTmp(resolve(argv[2]))
+    !Array.isArray(argv) ||
+    argv.length !== 3 ||
+    !['start', 'stop'].includes(argv[0]) ||
+    argv[1] !== '--config' ||
+    typeof argv[2] !== 'string' ||
+    !isAbsolute(argv[2]) ||
+    !canonicalTmp(resolve(argv[2]))
   ) {
     fail('usage: start|stop --config <absolute-/tmp-json>')
   }
@@ -428,7 +408,12 @@ export function validateControllerConfig(raw, context = {}) {
 
   if (value.schema_version !== 2) fail('unsupported schema version')
   if (value.host !== '127.0.0.1') fail('host must be 127.0.0.1')
-  if (!Number.isInteger(value.port) || value.port < 1024 || value.port > 65535 || value.port === FORBIDDEN_PORT) {
+  if (
+    !Number.isInteger(value.port) ||
+    value.port < 1024 ||
+    value.port > 65535 ||
+    value.port === FORBIDDEN_PORT
+  ) {
     fail('port is invalid or forbidden')
   }
   if (value.sidecar_url !== `http://${value.host}:${value.port}`) {
@@ -437,7 +422,8 @@ export function validateControllerConfig(raw, context = {}) {
   if (value.release_ui_url !== RELEASE_UI_URL) {
     fail('release_ui_url must be the canonical exact-byte release origin')
   }
-  if (value.sidecar_url === value.release_ui_url) fail('release UI and Sidecar origins must be distinct')
+  if (value.sidecar_url === value.release_ui_url)
+    fail('release UI and Sidecar origins must be distinct')
   for (const [name, timeout] of [
     ['startup_timeout_ms', value.startup_timeout_ms],
     ['shutdown_timeout_ms', value.shutdown_timeout_ms],
@@ -449,11 +435,7 @@ export function validateControllerConfig(raw, context = {}) {
   if (typeof value.expected_version !== 'string' || value.expected_version.trim() === '') {
     fail('expected_version is required')
   }
-  for (const field of [
-    'sidecar_config_sha256',
-    'binary_sha256',
-    'release_attestation_sha256',
-  ]) {
+  for (const field of ['sidecar_config_sha256', 'binary_sha256', 'release_attestation_sha256']) {
     if (typeof value[field] !== 'string' || !/^[a-f0-9]{64}$/.test(value[field])) {
       fail(`${field} must be 64 lowercase hex characters`)
     }
@@ -485,7 +467,10 @@ export function validateControllerConfig(raw, context = {}) {
   if (binary.executable === false) fail('binary_path must be executable')
   requireKind(releaseAttestation, 'file', 'release_attestation_path')
   requireMode(releaseAttestation, PRIVATE_FILE_MODE, 'release_attestation_path')
-  for (const [inspected, name] of [[pidFile, 'pid_file'], [lockFile, 'lock_file']]) {
+  for (const [inspected, name] of [
+    [pidFile, 'pid_file'],
+    [lockFile, 'lock_file'],
+  ]) {
     if (inspected.kind !== 'missing') {
       requireKind(inspected, 'file', name)
       requireMode(inspected, PRIVATE_FILE_MODE, name)
@@ -520,24 +505,36 @@ export function validateControllerConfig(raw, context = {}) {
 
   const fileSHA256 = context.fileSHA256 ?? defaultFileSHA256
   if (fileSHA256(binaryPath).toLowerCase() !== value.binary_sha256) fail('binary SHA-256 mismatch')
-  if (fileSHA256(sidecarConfigPath).toLowerCase() !== value.sidecar_config_sha256) {
+  let sidecarConfigSnapshot
+  try {
+    sidecarConfigSnapshot = readAttestedFileSnapshot(sidecarConfigPath, {
+      label: 'sidecar config',
+      readBytes: context.readSidecarConfigBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  const binding = parseSidecarBinding(String(sidecarConfigSnapshot.bytes))
+  if (sidecarConfigSnapshot.sha256 !== value.sidecar_config_sha256) {
     fail('sidecar config SHA-256 mismatch')
   }
-  if (fileSHA256(releaseAttestationPath).toLowerCase() !== value.release_attestation_sha256) {
-    fail('release attestation SHA-256 mismatch')
-  }
-  const readBinding = context.readSidecarBinding ?? defaultReadSidecarBinding
-  const binding = readBinding(sidecarConfigPath)
   if (binding?.host !== value.host || binding?.port !== value.port) {
     fail('sidecar config host/port drift')
   }
   requireFrozenGradingBudget(binding)
-  const verifyReleaseAttestation = context.verifyReleaseAttestation
-    ?? defaultVerifyControllerReleaseAttestation
-  const attestation = verifyReleaseAttestation({
-    receiptPath: releaseAttestationPath,
-    expectedReceiptSHA256: value.release_attestation_sha256,
-  })
+  let releaseAttestationSnapshot
+  try {
+    releaseAttestationSnapshot = readAttestedFileSnapshot(releaseAttestationPath, {
+      label: 'release attestation',
+      readBytes: context.readReleaseAttestationBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  const attestation = verifyControllerReleaseAttestation(releaseAttestationSnapshot)
+  if (releaseAttestationSnapshot.sha256 !== value.release_attestation_sha256) {
+    fail('release attestation SHA-256 mismatch')
+  }
   const attestationSHA256 = attestation?.attestationSHA256 ?? attestation?.receiptSHA256
   for (const [name, digest] of [
     ['release attestation SHA-256', attestationSHA256],
@@ -580,13 +577,7 @@ export function validateControllerConfig(raw, context = {}) {
 }
 
 function expectedArgv(config) {
-  return [
-    config.binaryPath,
-    'serve',
-    '--desktop',
-    '--config',
-    config.sidecarConfigPath,
-  ]
+  return [config.binaryPath, 'serve', '--desktop', '--config', config.sidecarConfigPath]
 }
 
 function positivePID(value) {
@@ -594,20 +585,22 @@ function positivePID(value) {
 }
 
 function exactArray(left, right) {
-  return Array.isArray(left)
-    && left.length === right.length
-    && left.every((value, index) => value === right[index])
+  return (
+    Array.isArray(left) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  )
 }
 
 function assertOwnedProcess(config, snapshot, expectedPID) {
   const processState = snapshot?.process
   if (
-    !processState
-    || !positivePID(processState.pid)
-    || processState.pid !== expectedPID
-    || !samePath(processState.executablePath, config.binaryPath)
-    || !exactArray(processState.argv, expectedArgv(config))
-    || processState.binarySHA256 !== config.binarySHA256
+    !processState ||
+    !positivePID(processState.pid) ||
+    processState.pid !== expectedPID ||
+    !samePath(processState.executablePath, config.binaryPath) ||
+    !exactArray(processState.argv, expectedArgv(config)) ||
+    processState.binarySHA256 !== config.binarySHA256
   ) {
     fail('process identity mismatch')
   }
@@ -616,30 +609,26 @@ function assertOwnedProcess(config, snapshot, expectedPID) {
 
 export function assertRunningIdentity(config, snapshot) {
   const pid = snapshot?.pidFilePID
-  if (
-    !positivePID(pid)
-    || snapshot.listenerPID !== pid
-    || snapshot.lockPID !== pid
-  ) {
+  if (!positivePID(pid) || snapshot.listenerPID !== pid || snapshot.lockPID !== pid) {
     fail('PID/listener/lock identity mismatch')
   }
   assertOwnedProcess(config, snapshot, pid)
   if (
-    snapshot.healthStatus !== 200
-    || snapshot.versionStatus !== 200
-    || snapshot.version !== config.expectedVersion
-    || snapshot.sidecarRootStatus !== 404
+    snapshot.healthStatus !== 200 ||
+    snapshot.versionStatus !== 200 ||
+    snapshot.version !== config.expectedVersion ||
+    snapshot.sidecarRootStatus !== 404
   ) {
     fail('health/version identity mismatch')
   }
   if (
-    snapshot.releaseUIStatus !== 200
-    || snapshot.releaseUIProxyHealthStatus !== 200
-    || snapshot.releaseAttestationStatus !== 200
-    || snapshot.releaseAttestationSHA256 !== config.releaseAttestationSHA256
-    || snapshot.releaseInstalledAppSHA256 !== config.releaseInstalledAppSHA256
-    || snapshot.releaseSidecarSHA256 !== config.binarySHA256
-    || snapshot.releaseVersion !== config.expectedVersion
+    snapshot.releaseUIStatus !== 200 ||
+    snapshot.releaseUIProxyHealthStatus !== 200 ||
+    snapshot.releaseAttestationStatus !== 200 ||
+    snapshot.releaseAttestationSHA256 !== config.releaseAttestationSHA256 ||
+    snapshot.releaseInstalledAppSHA256 !== config.releaseInstalledAppSHA256 ||
+    snapshot.releaseSidecarSHA256 !== config.binarySHA256 ||
+    snapshot.releaseVersion !== config.expectedVersion
   ) {
     fail('release UI/attestation identity mismatch')
   }
@@ -647,11 +636,9 @@ export function assertRunningIdentity(config, snapshot) {
 }
 
 function hasEndpointEvidence(snapshot) {
-  return [
-    snapshot?.healthStatus,
-    snapshot?.versionStatus,
-    snapshot?.sidecarRootStatus,
-  ].some((value) => value !== null && value !== undefined)
+  return [snapshot?.healthStatus, snapshot?.versionStatus, snapshot?.sidecarRootStatus].some(
+    (value) => value !== null && value !== undefined,
+  )
 }
 
 function matchesOwnedProcess(config, snapshot, expectedPID) {
@@ -687,18 +674,12 @@ export async function normalizeStoppedState(config, snapshot, deps = {}) {
   const pid = snapshot?.pidFilePID
   const pidFileExisted = positivePID(pid)
   const pidAlive = snapshot?.process !== null && snapshot?.process !== undefined
-  const ownedProcess = pidFileExisted && pidAlive
-    ? matchesOwnedProcess(config, snapshot, pid)
-    : false
-  const listenerPresent = snapshot?.listenerPID !== null
-    && snapshot?.listenerPID !== undefined
-  const lockPresent = snapshot?.lockPID !== null
-    && snapshot?.lockPID !== undefined
-  const boundaryMismatch = (
-    listenerPresent && snapshot.listenerPID !== pid
-  ) || (
-    lockPresent && snapshot.lockPID !== pid
-  )
+  const ownedProcess =
+    pidFileExisted && pidAlive ? matchesOwnedProcess(config, snapshot, pid) : false
+  const listenerPresent = snapshot?.listenerPID !== null && snapshot?.listenerPID !== undefined
+  const lockPresent = snapshot?.lockPID !== null && snapshot?.lockPID !== undefined
+  const boundaryMismatch =
+    (listenerPresent && snapshot.listenerPID !== pid) || (lockPresent && snapshot.lockPID !== pid)
 
   if (ownedProcess && !boundaryMismatch) {
     return Object.freeze({
@@ -754,12 +735,12 @@ export async function normalizeStoppedState(config, snapshot, deps = {}) {
 
 export function assertStoppedState(_config, snapshot) {
   if (
-    snapshot?.pidFilePID !== null
-    || snapshot?.process !== null
-    || snapshot?.listenerPID !== null
-    || snapshot?.lockPID !== null
-    || (snapshot?.healthStatus !== null && snapshot?.healthStatus !== undefined)
-    || (snapshot?.versionStatus !== null && snapshot?.versionStatus !== undefined)
+    snapshot?.pidFilePID !== null ||
+    snapshot?.process !== null ||
+    snapshot?.listenerPID !== null ||
+    snapshot?.lockPID !== null ||
+    (snapshot?.healthStatus !== null && snapshot?.healthStatus !== undefined) ||
+    (snapshot?.versionStatus !== null && snapshot?.versionStatus !== undefined)
   ) {
     fail('Sidecar is not fully stopped')
   }
@@ -768,11 +749,11 @@ export function assertStoppedState(_config, snapshot) {
 
 function assertQuiescent(snapshot) {
   if (
-    snapshot?.process !== null
-    || snapshot?.listenerPID !== null
-    || snapshot?.lockPID !== null
-    || (snapshot?.healthStatus !== null && snapshot?.healthStatus !== undefined)
-    || (snapshot?.versionStatus !== null && snapshot?.versionStatus !== undefined)
+    snapshot?.process !== null ||
+    snapshot?.listenerPID !== null ||
+    snapshot?.lockPID !== null ||
+    (snapshot?.healthStatus !== null && snapshot?.healthStatus !== undefined) ||
+    (snapshot?.versionStatus !== null && snapshot?.versionStatus !== undefined)
   ) {
     fail('Sidecar did not release process, port, lock and health endpoints')
   }
@@ -891,15 +872,8 @@ function readPIDFile(pathname) {
 
 async function listenerPID(port) {
   try {
-    const { stdout } = await execFile('lsof', [
-      '-nP',
-      `-iTCP:${port}`,
-      '-sTCP:LISTEN',
-      '-t',
-    ])
-    const values = [...new Set(
-      stdout.split(/\s+/).filter(Boolean).map(Number).filter(positivePID),
-    )]
+    const { stdout } = await execFile('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])
+    const values = [...new Set(stdout.split(/\s+/).filter(Boolean).map(Number).filter(positivePID))]
     if (values.length === 0) return null
     return values.length === 1 ? values[0] : -1
   } catch (error) {
@@ -920,15 +894,11 @@ function alive(pid) {
 
 async function processExecutable(pid) {
   try {
-    const { stdout } = await execFile('lsof', [
-      '-a',
-      '-p',
-      String(pid),
-      '-d',
-      'txt',
-      '-Fn',
-    ])
-    const pathname = stdout.split(/\r?\n/).find((line) => line.startsWith('n'))?.slice(1)
+    const { stdout } = await execFile('lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'])
+    const pathname = stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith('n'))
+      ?.slice(1)
     if (pathname) return realpathSync(pathname)
   } catch {
     // Fall through to ps comm.
@@ -992,20 +962,17 @@ async function httpEvidence(config, listener) {
     : { status: null, body: null }
   const releaseUI = await request(releaseUIBase, '/')
   const releaseProxyHealth = await request(releaseUIBase, '/health')
-  const releaseAttestation = await request(
-    releaseUIBase,
-    '/__hexclaw_release_attestation',
-  )
+  const releaseAttestation = await request(releaseUIBase, '/__hexclaw_release_attestation')
   return {
     healthStatus: health.status === 200 && health.body?.status === 'healthy' ? 200 : health.status,
     versionStatus: version.status,
     version: version.body?.version ?? null,
     sidecarRootStatus: sidecarRoot.status,
     releaseUIStatus: releaseUI.status,
-    releaseUIProxyHealthStatus: releaseProxyHealth.status === 200
-      && releaseProxyHealth.body?.status === 'healthy'
-      ? 200
-      : releaseProxyHealth.status,
+    releaseUIProxyHealthStatus:
+      releaseProxyHealth.status === 200 && releaseProxyHealth.body?.status === 'healthy'
+        ? 200
+        : releaseProxyHealth.status,
     releaseAttestationStatus: releaseAttestation.status,
     releaseAttestationSHA256: releaseAttestation.body?.receipt_sha256 ?? null,
     releaseInstalledAppSHA256: releaseAttestation.body?.installed_app_sha256 ?? null,
@@ -1051,11 +1018,11 @@ function removeControllerPIDFile(pathname, identity = {}) {
   }
   const second = lstatSync(pathname)
   if (
-    second.isSymbolicLink()
-    || !second.isFile()
-    || second.dev !== first.dev
-    || second.ino !== first.ino
-    || (second.mode & 0o777) !== expectedMode
+    second.isSymbolicLink() ||
+    !second.isFile() ||
+    second.dev !== first.dev ||
+    second.ino !== first.ino ||
+    (second.mode & 0o777) !== expectedMode
   ) {
     fail('PID file identity changed before unlink')
   }
@@ -1082,15 +1049,13 @@ export function createSystemControllerRuntime(config) {
     const lockPID = readPIDFile(config.lockFile)
     const listener = await listenerPID(config.port)
     const candidate = pidFilePID ?? listener ?? lockPID
-    const processState = positivePID(candidate)
-      ? await inspectProcess(candidate, config)
-      : null
+    const processState = positivePID(candidate) ? await inspectProcess(candidate, config) : null
     return {
       pidFilePID,
       process: processState,
       listenerPID: listener,
       lockPID,
-      ...await httpEvidence(config, listener),
+      ...(await httpEvidence(config, listener)),
     }
   }
 
@@ -1126,11 +1091,11 @@ export function createSystemControllerRuntime(config) {
         if (snapshot.lockPID === pid) await removeOwnedStaleLock(config.lockFile, pid)
         const final = await inspectState()
         if (
-          final.process === null
-          && final.listenerPID === null
-          && final.lockPID === null
-          && final.healthStatus === null
-          && final.versionStatus === null
+          final.process === null &&
+          final.listenerPID === null &&
+          final.lockPID === null &&
+          final.healthStatus === null &&
+          final.versionStatus === null
         ) {
           return final
         }
@@ -1216,10 +1181,19 @@ export function createSystemControllerRuntime(config) {
 
 export async function runControllerCLI(argv, context = {}) {
   const parsed = parseControllerCLI(argv)
-  const raw = readFileSync(parsed.configPath, 'utf8')
+  let controllerConfigSnapshot
+  try {
+    controllerConfigSnapshot = readAttestedFileSnapshot(parsed.configPath, {
+      label: 'controller config',
+      readBytes: context.readControllerConfigBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  const raw = controllerConfigSnapshot.bytes
   const config = validateControllerConfig(raw, {
+    ...context,
     configPath: parsed.configPath,
-    homeDirectory: context.homeDirectory,
   })
   const runtime = context.runtime ?? createSystemControllerRuntime(config)
   const uninstall = installControllerSignalCleanup(context.processLike ?? process, {

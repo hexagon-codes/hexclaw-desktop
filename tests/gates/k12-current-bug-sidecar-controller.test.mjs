@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -36,8 +37,10 @@ const paths = {
 }
 
 const binarySHA = 'a'.repeat(64)
-const configSHA = 'b'.repeat(64)
-const attestationSHA = 'd'.repeat(64)
+
+function sha256(raw) {
+  return createHash('sha256').update(raw).digest('hex')
+}
 
 function completeGradingBudget(overrides = {}) {
   return {
@@ -58,6 +61,72 @@ function completeGradingBudget(overrides = {}) {
     ...overrides,
   }
 }
+
+function sidecarConfigBytes(overrides = {}) {
+  const budget = Object.hasOwn(overrides, 'gradingBudget')
+    ? overrides.gradingBudget
+    : completeGradingBudget()
+  const budgetBlock =
+    budget === undefined
+      ? ''
+      : `k12:
+  grading_budget:
+${[
+  'policy_version',
+  'queued_seconds',
+  'normalizing_seconds',
+  'recognizing_seconds',
+  'locating_seconds',
+  'rendering_seconds',
+  'projecting_seconds',
+]
+  .filter((field) => budget[field] !== undefined)
+  .map((field) => `    ${field}: ${budget[field]}`)
+  .join('\n')}
+${
+  budget.assessing_buckets === undefined
+    ? ''
+    : `    assessing_buckets:
+${budget.assessing_buckets
+  .map(
+    ({ max_problems: maxProblems, seconds }) =>
+      `      - max_problems: ${maxProblems}${
+        seconds === undefined ? '' : `\n        seconds: ${seconds}`
+      }`,
+  )
+  .join('\n')}`
+}
+${budget.item_concurrency === undefined ? '' : `    item_concurrency: ${budget.item_concurrency}`}
+`
+  return Buffer.from(`server:
+  host: ${overrides.host ?? '127.0.0.1'}
+  port: ${overrides.port ?? 18081}
+${budgetBlock}
+`)
+}
+
+function releaseAttestationBytes(overrides = {}) {
+  return Buffer.from(
+    JSON.stringify({
+      schema_version: 1,
+      release_version: '0.5.0-beta',
+      package_file: '/tmp/HexClaw.dmg',
+      package_sha256: '1'.repeat(64),
+      sidecar_file: paths.binary,
+      sidecar_sha256: binarySHA,
+      installed_app_file: '/Applications/HexClaw.app',
+      installed_app_sha256: 'e'.repeat(64),
+      dist_manifest_file: '/tmp/dist-manifest.json',
+      dist_manifest_sha256: '2'.repeat(64),
+      dist_file_count: 10,
+      dist_total_bytes: 100,
+      ...overrides,
+    }),
+  )
+}
+
+const configSHA = sha256(sidecarConfigBytes())
+const attestationSHA = sha256(releaseAttestationBytes())
 
 function controllerConfig(overrides = {}) {
   return {
@@ -95,22 +164,17 @@ function validationContext(config = controllerConfig(), overrides = {}) {
       executable: path === config.binary_path,
       symlink: false,
     }),
-    fileSHA256: (path) => path === config.binary_path
-      ? config.binary_sha256
-      : path.endsWith('/release-attestation.json')
-        ? config.release_attestation_sha256
-        : config.sidecar_config_sha256,
-    readSidecarBinding: () => ({
-      host: config.host,
-      port: config.port,
-      gradingBudget: completeGradingBudget(),
-    }),
-    verifyReleaseAttestation: () => ({
-      releaseVersion: config.expected_version,
-      sidecarSHA256: config.binary_sha256,
-      installedAppSHA256: 'e'.repeat(64),
-      attestationSHA256: config.release_attestation_sha256,
-    }),
+    fileSHA256: () => config.binary_sha256,
+    readSidecarConfigBytes: () =>
+      sidecarConfigBytes({
+        host: config.host,
+        port: config.port,
+      }),
+    readReleaseAttestationBytes: () =>
+      releaseAttestationBytes({
+        release_version: config.expected_version,
+        sidecar_sha256: config.binary_sha256,
+      }),
     ...overrides,
   }
 }
@@ -145,13 +209,7 @@ function runningSnapshot(config = controllerConfig(), pid = 4242) {
     process: {
       pid,
       executablePath: binaryPath,
-      argv: [
-        binaryPath,
-        'serve',
-        '--desktop',
-        '--config',
-        sidecarConfigPath,
-      ],
+      argv: [binaryPath, 'serve', '--desktop', '--config', sidecarConfigPath],
       binarySHA256,
     },
     listenerPID: pid,
@@ -189,10 +247,7 @@ test('controller contract freezes one module, exact CLI and exact 13-field confi
   assert.deepEqual(contract.config.exactFields, fields)
   assert.deepEqual(contract.config.forbiddenPorts, [18080])
   assert.equal(contract.config.forbidUserProfile, true)
-  assert.deepEqual(contract.config.explicitOrigins, [
-    'sidecar_url',
-    'release_ui_url',
-  ])
+  assert.deepEqual(contract.config.explicitOrigins, ['sidecar_url', 'release_ui_url'])
   assert.equal(contract.config.releaseUIRequiresAttestation, true)
   assert.deepEqual(contract.permissions, {
     privateDirectory: '0700',
@@ -202,19 +257,16 @@ test('controller contract freezes one module, exact CLI and exact 13-field confi
 })
 
 test('CLI and config reject drift, production port/profile and mismatched sidecar binding', async () => {
-  const {
-    parseControllerCLI,
-    validateControllerConfig,
-  } = await loadController()
+  const { parseControllerCLI, validateControllerConfig } = await loadController()
 
-  assert.deepEqual(
-    parseControllerCLI(['start', '--config', paths.controllerConfig]),
-    { action: 'start', configPath: paths.controllerConfig },
-  )
-  assert.deepEqual(
-    parseControllerCLI(['stop', '--config', paths.controllerConfig]),
-    { action: 'stop', configPath: paths.controllerConfig },
-  )
+  assert.deepEqual(parseControllerCLI(['start', '--config', paths.controllerConfig]), {
+    action: 'start',
+    configPath: paths.controllerConfig,
+  })
+  assert.deepEqual(parseControllerCLI(['stop', '--config', paths.controllerConfig]), {
+    action: 'stop',
+    configPath: paths.controllerConfig,
+  })
   for (const argv of [
     [],
     ['restart', '--config', paths.controllerConfig],
@@ -252,41 +304,124 @@ test('CLI and config reject drift, production port/profile and mismatched sideca
     )
   }
   assert.throws(() =>
-    validateControllerConfig(JSON.stringify(raw), validationContext(raw, {
-      readSidecarBinding: () => ({ host: '127.0.0.1', port: 19000 }),
-    })),
-  )
-  assert.throws(() =>
-    validateControllerConfig(JSON.stringify(raw), validationContext(raw, {
-      verifyReleaseAttestation: () => ({
-        releaseVersion: raw.expected_version,
-        sidecarSHA256: raw.binary_sha256,
-        installedAppSHA256: 'e'.repeat(64),
-        attestationSHA256: '0'.repeat(64),
+    validateControllerConfig(
+      JSON.stringify(raw),
+      validationContext(raw, {
+        readSidecarConfigBytes: () => sidecarConfigBytes({ port: 19000 }),
       }),
-    })),
+    ),
   )
   assert.throws(() =>
-    validateControllerConfig(JSON.stringify(raw), validationContext(raw, {
-      fileSHA256: () => '0'.repeat(64),
-    })),
+    validateControllerConfig(
+      JSON.stringify(raw),
+      validationContext(raw, {
+        readReleaseAttestationBytes: () =>
+          releaseAttestationBytes({ package_sha256: '0'.repeat(64) }),
+      }),
+    ),
+  )
+  assert.throws(() =>
+    validateControllerConfig(
+      JSON.stringify(raw),
+      validationContext(raw, {
+        fileSHA256: () => '0'.repeat(64),
+      }),
+    ),
   )
 })
 
-test('frozen sidecar binding requires one structurally complete K12 grading budget', async () => {
-  const {
-    parseSidecarBinding,
-    validateControllerConfig,
-  } = await loadController()
+test('controller validator consumes one Sidecar and attestation byte snapshot without legacy readers', async () => {
+  const { validateControllerConfig } = await loadController()
   const raw = controllerConfig()
-  const validateBinding = (gradingBudget) =>
-    validateControllerConfig(JSON.stringify(raw), validationContext(raw, {
-      readSidecarBinding: () => ({
-        host: raw.host,
-        port: raw.port,
-        ...(gradingBudget === undefined ? {} : { gradingBudget }),
+  let sidecarReads = 0
+  let attestationReads = 0
+  let legacySidecarReads = 0
+  let legacyAttestationReads = 0
+  const config = validateControllerConfig(
+    JSON.stringify(raw),
+    validationContext(raw, {
+      readSidecarConfigBytes: () => {
+        sidecarReads += 1
+        return sidecarConfigBytes()
+      },
+      readReleaseAttestationBytes: () => {
+        attestationReads += 1
+        return releaseAttestationBytes()
+      },
+      readSidecarBinding: () => {
+        legacySidecarReads += 1
+        return {
+          host: raw.host,
+          port: raw.port,
+          gradingBudget: completeGradingBudget(),
+        }
+      },
+      verifyReleaseAttestation: () => {
+        legacyAttestationReads += 1
+        return {
+          releaseVersion: raw.expected_version,
+          sidecarSHA256: raw.binary_sha256,
+          installedAppSHA256: 'f'.repeat(64),
+          attestationSHA256: raw.release_attestation_sha256,
+        }
+      },
+    }),
+  )
+
+  assert.equal(sidecarReads, 1)
+  assert.equal(attestationReads, 1)
+  assert.equal(legacySidecarReads, 0)
+  assert.equal(legacyAttestationReads, 0)
+  assert.equal(config.releaseInstalledAppSHA256, 'e'.repeat(64))
+})
+
+test('controller validator rejects duplicate keys from raw Sidecar and attestation snapshots', async () => {
+  const { validateControllerConfig } = await loadController()
+  const raw = controllerConfig()
+  const duplicateSidecar = Buffer.from(
+    String(sidecarConfigBytes()).replace(
+      '    recognizing_seconds: 13',
+      '    recognizing_seconds: 99\n    recognizing_seconds: 13',
+    ),
+  )
+  const duplicateAttestation = Buffer.from(
+    String(releaseAttestationBytes()).replace(
+      `"package_sha256":"${'1'.repeat(64)}"`,
+      `"package_sha256":"${'9'.repeat(64)}","package_sha256":"${'1'.repeat(64)}"`,
+    ),
+  )
+
+  for (const mutation of [
+    { readSidecarConfigBytes: () => duplicateSidecar },
+    { readReleaseAttestationBytes: () => duplicateAttestation },
+  ]) {
+    assert.throws(
+      () => validateControllerConfig(JSON.stringify(raw), validationContext(raw, mutation)),
+      /duplicate/i,
+    )
+  }
+})
+
+test('frozen sidecar binding requires one structurally complete K12 grading budget', async () => {
+  const { parseSidecarBinding, validateControllerConfig } = await loadController()
+  const raw = controllerConfig()
+  const validateBinding = (gradingBudget) => {
+    const bytes = sidecarConfigBytes({
+      host: raw.host,
+      port: raw.port,
+      gradingBudget,
+    })
+    const bound = {
+      ...raw,
+      sidecar_config_sha256: sha256(bytes),
+    }
+    return validateControllerConfig(
+      JSON.stringify(bound),
+      validationContext(bound, {
+        readSidecarConfigBytes: () => bytes,
       }),
-    }))
+    )
+  }
 
   assert.throws(() => validateBinding(undefined), /frozen K12 grading budget/)
   assert.throws(
@@ -308,9 +443,12 @@ test('frozen sidecar binding requires one structurally complete K12 grading budg
   }
 
   assert.throws(
-    () => validateBinding(completeGradingBudget({
-      assessing_buckets: completeGradingBudget().assessing_buckets.slice(0, 3),
-    })),
+    () =>
+      validateBinding(
+        completeGradingBudget({
+          assessing_buckets: completeGradingBudget().assessing_buckets.slice(0, 3),
+        }),
+      ),
     /assessing_buckets/,
   )
   const missingBucketSeconds = completeGradingBudget().assessing_buckets.map((bucket) => ({
@@ -318,9 +456,12 @@ test('frozen sidecar binding requires one structurally complete K12 grading budg
   }))
   delete missingBucketSeconds[2].seconds
   assert.throws(
-    () => validateBinding(completeGradingBudget({
-      assessing_buckets: missingBucketSeconds,
-    })),
+    () =>
+      validateBinding(
+        completeGradingBudget({
+          assessing_buckets: missingBucketSeconds,
+        }),
+      ),
     /assessing_buckets/,
   )
   const missingConcurrency = completeGradingBudget()
@@ -360,7 +501,7 @@ k12:
     },
   )
 
-  const nestedLookalike = parseSidecarBinding(`
+  const nestedLookalikeRaw = `
 server:
   host: 127.0.0.1
   port: 18081
@@ -384,12 +525,21 @@ k12:
         - max_problems: 32
           seconds: 24
       item_concurrency: 7
-`)
+`
+  const nestedLookalike = parseSidecarBinding(nestedLookalikeRaw)
   assert.equal(nestedLookalike.gradingBudget, undefined)
+  const nestedBound = {
+    ...raw,
+    sidecar_config_sha256: sha256(nestedLookalikeRaw),
+  }
   assert.throws(
-    () => validateControllerConfig(JSON.stringify(raw), validationContext(raw, {
-      readSidecarBinding: () => nestedLookalike,
-    })),
+    () =>
+      validateControllerConfig(
+        JSON.stringify(nestedBound),
+        validationContext(nestedBound, {
+          readSidecarConfigBytes: () => Buffer.from(nestedLookalikeRaw),
+        }),
+      ),
     /frozen K12 grading budget/,
   )
 })
@@ -421,10 +571,7 @@ test('running identity requires exact PID, argv, SHA, listener, lock, health and
 })
 
 test('start and stop preserve exact command order and refuse to signal foreign identity', async () => {
-  const {
-    startIsolatedSidecar,
-    stopIsolatedSidecar,
-  } = await loadController()
+  const { startIsolatedSidecar, stopIsolatedSidecar } = await loadController()
   const config = validateReadyConfig(controllerConfig())
   const startEvents = []
   const pid = await startIsolatedSidecar(config, {
@@ -500,26 +647,24 @@ test('start and stop preserve exact command order and refuse to signal foreign i
 })
 
 test('startup failure and signals use guarded single-flight cleanup without replacing root error', async () => {
-  const {
-    installControllerSignalCleanup,
-    startIsolatedSidecar,
-  } = await loadController()
+  const { installControllerSignalCleanup, startIsolatedSidecar } = await loadController()
   const config = validateReadyConfig(controllerConfig())
   const root = new Error('health mismatch')
   const events = []
   await assert.rejects(
-    () => startIsolatedSidecar(config, {
-      inspectState: async () => stoppedSnapshot(),
-      spawnSidecar: async () => ({ pid: 4242 }),
-      writePIDFile: async () => undefined,
-      waitForRunning: async () => {
-        throw root
-      },
-      cleanupStartedProcess: async (pid) => {
-        events.push(['cleanup', pid])
-        throw new Error('cleanup detail')
-      },
-    }),
+    () =>
+      startIsolatedSidecar(config, {
+        inspectState: async () => stoppedSnapshot(),
+        spawnSidecar: async () => ({ pid: 4242 }),
+        writePIDFile: async () => undefined,
+        waitForRunning: async () => {
+          throw root
+        },
+        cleanupStartedProcess: async (pid) => {
+          events.push(['cleanup', pid])
+          throw new Error('cleanup detail')
+        },
+      }),
     (error) => error === root,
   )
   assert.deepEqual(events, [['cleanup', 4242]])

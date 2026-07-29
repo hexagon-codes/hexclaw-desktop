@@ -32,7 +32,6 @@ const SRC = resolve(__dirname, '..')
 const CHAT_THINKING_TIMER_TS = readSrc('stores/chat-thinking-timer.ts')
 const CHAT_STREAM_COMPLETION_TS = readSrc('stores/chat-stream-completion.ts')
 const CHAT_STREAM_CANCEL_TS = readSrc('stores/chat-stream-cancel.ts')
-const CHAT_SEND_WEBSOCKET_DELIVERY_TS = readSrc('stores/chat-send-websocket-delivery.ts')
 
 function readSrc(path: string): string {
   return readFileSync(resolve(SRC, path), 'utf-8')

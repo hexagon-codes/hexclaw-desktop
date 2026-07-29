@@ -47,19 +47,35 @@ test('versioned release contract freezes C01-C10 and serial no-retry execution',
     'HEX_K12_LIVE_SIDECAR_CONTROL',
     'HEX_K12_LIVE_SIDECAR_CONTROL_SHA256',
     'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
+    'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
+    'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
   ]) {
     assert.ok(contract.requiredEnvironment.values.includes(name))
   }
 })
 
+test('versioned release calibration approval rejects duplicate JSON keys', async () => {
+  const runner = await loadRunner()
+  assert.equal(typeof runner.parseReal10xReleaseContract, 'function')
+  const canonical = await readFile(
+    repoFile('tests/live/k12-real-10x-release.contract.json'),
+    'utf8',
+  )
+  const duplicate = canonical.replace(
+    '"status": "blocked"',
+    '"status": "approved",\n    "status": "blocked"',
+  )
+
+  assert.throws(
+    () => runner.parseReal10xReleaseContract(duplicate),
+    /real 10x release contract.*duplicate/i,
+  )
+})
+
 test('preflight trusts all repository hooks but blocks on missing caller-owned C10 inputs', async () => {
   const contract = await loadContract()
   const { preflightReleaseGate } = await loadRunner()
-  const existing = new Set(
-    contract.cycles
-      .map(({ hook }) => hook?.module)
-      .filter(Boolean),
-  )
+  const existing = new Set(contract.cycles.map(({ hook }) => hook?.module).filter(Boolean))
   const result = preflightReleaseGate(contract, {
     env: {
       HEX_K12_REAL_10X_RUN_ID: 'release-run',
@@ -71,7 +87,19 @@ test('preflight trusts all repository hooks but blocks on missing caller-owned C
     hookExists: (module) => existing.has(module),
   })
 
-  assert.deepEqual(result.blockers.filter(({ kind }) => kind === 'missing-hook'), [])
+  assert.deepEqual(
+    result.blockers.filter(({ kind }) => kind === 'missing-hook'),
+    [],
+  )
+  assert.deepEqual(
+    result.blockers.filter(({ kind }) => kind === 'grading-calibration-approval'),
+    [
+      {
+        kind: 'grading-calibration-approval',
+        reason: 'approved calibration artifact and release config digests are required',
+      },
+    ],
+  )
   assert.deepEqual(
     result.blockers
       .filter(({ kind, cycle }) => kind === 'environment' && cycle === 'C10')

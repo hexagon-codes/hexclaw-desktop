@@ -1,8 +1,10 @@
-import { defineConfig, devices } from '@playwright/test'
+import { defineConfig } from '@playwright/test'
+
+const RUN_ROOT = '/tmp/hexclaw-chat-interactions-playwright'
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: '**/branch-ui-general-modals-matrix.spec.ts',
+  testMatch: '**/branch-ui-chat-interactions-matrix.spec.ts',
   timeout: 45_000,
   expect: {
     timeout: 5_000,
@@ -10,13 +12,14 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   fullyParallel: false,
-  outputDir: '/tmp/hexclaw-branch-ui-general-modals-playwright',
+  outputDir: `${RUN_ROOT}/results`,
   reporter: [
     ['list'],
+    ['json', { outputFile: `${RUN_ROOT}/playwright-results.json` }],
     [
       'html',
       {
-        outputFolder: '/tmp/hexclaw-branch-ui-general-modals-report',
+        outputFolder: `${RUN_ROOT}/report`,
         open: 'never',
       },
     ],
@@ -30,17 +33,19 @@ export default defineConfig({
     reducedMotion: 'reduce',
     actionTimeout: 5_000,
     navigationTimeout: 12_000,
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     trace: 'retain-on-failure',
   },
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
-    },
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } },
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 1440, height: 900 },
+        deviceScaleFactor: 1,
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+      },
     },
   ],
 })

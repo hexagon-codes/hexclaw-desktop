@@ -266,7 +266,8 @@ export function normalizeRuntimeSnapshotMetadata(
       if (!isRecord(candidate)) continue
       const sequence = Number(candidate.sequence)
       if (!Number.isSafeInteger(sequence) || sequence <= 0 || sequence > lastSequence) continue
-      const { sequence: _sequence, ...wire } = candidate
+      const { sequence: omittedSequence, ...wire } = candidate
+      void omittedSequence
       const normalized = normalizeRuntimeEvent(wire, sequence)
       if (!normalized || eventIds.has(normalized.event_id) || eventSequences.has(sequence)) continue
       eventIds.add(normalized.event_id)

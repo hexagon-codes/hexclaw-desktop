@@ -47,6 +47,7 @@ class RuntimeWireWebSocket {
   sent: string[] = []
 
   constructor(_url: string) {
+    void _url
     RuntimeWireWebSocket.instances.push(this)
   }
 

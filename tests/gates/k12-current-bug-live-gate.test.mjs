@@ -74,6 +74,24 @@ test('dedicated contract freezes exact provider, four fixtures, six submissions 
   assert.ok(contract.forbiddenRequestPathPrefixes.length > 0)
 })
 
+test('versioned calibration approval contract rejects duplicate JSON keys', async () => {
+  const runner = await loadRunner()
+  assert.equal(typeof runner.parseCurrentBugLiveContract, 'function')
+  const canonical = await readFile(
+    repoFile('tests/live/k12-current-bug-real-matrix.contract.json'),
+    'utf8',
+  )
+  const duplicate = canonical.replace(
+    '"status": "blocked"',
+    '"status": "approved",\n    "status": "blocked"',
+  )
+
+  assert.throws(
+    () => runner.parseCurrentBugLiveContract(duplicate),
+    /current-bug LIVE contract.*duplicate/i,
+  )
+})
+
 test('dedicated config, runner and package scripts exist without a managed server', async () => {
   assert.equal(existsSync(repoFile('playwright.k12.current-bug-live.config.ts')), true)
   const config = await readFile(repoFile('playwright.k12.current-bug-live.config.ts'), 'utf8')
@@ -104,26 +122,83 @@ test('strict environment requires exact provider/model and explicit fixture orch
   const env = {
     ...contract.requiredStrictEnvironment,
     ...Object.fromEntries(contract.requiredStrictValues.map((name) => [name, `value-${name}`])),
+    HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: '/tmp/grading-calibration.json',
+    HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: 'c'.repeat(64),
   }
-  assert.deepEqual(strictEnvironmentBlockers(env), [])
+  assert.match(strictEnvironmentBlockers(env).join(','), /grading calibration approval/i)
+  const approvedContract = structuredClone(contract)
+  approvedContract.gradingCalibrationApproval = {
+    status: 'approved',
+    approval_ref: 'unit-test:synthetic-calibration',
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    artifact_sha256: 'c'.repeat(64),
+    release_config_sha256: 'b'.repeat(64),
+  }
+  assert.deepEqual(strictEnvironmentBlockers(env, approvedContract), [])
   assert.match(
-    strictEnvironmentBlockers({ ...env, HEX_K12_LIVE_EXPECTED_PROVIDER_DISPLAY: 'hexclaw-gpt' }).join(
-      ',',
-    ),
+    strictEnvironmentBlockers(
+      { ...env, HEX_K12_LIVE_EXPECTED_PROVIDER_DISPLAY: 'hexclaw-gpt' },
+      approvedContract,
+    ).join(','),
     /HexClaw-GPT/,
   )
   assert.equal(
-    strictEnvironmentBlockers({
-      ...env,
-      HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: '',
-      HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: '',
-    }).length,
+    strictEnvironmentBlockers(
+      {
+        ...env,
+        HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: '',
+        HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: '',
+      },
+      approvedContract,
+    ).length,
     0,
   )
   assert.match(
-    strictEnvironmentBlockers({ ...env, HEXCLAW_LOCAL_SRC: '' }).join(','),
+    strictEnvironmentBlockers({ ...env, HEXCLAW_LOCAL_SRC: '' }, approvedContract).join(','),
     /HEXCLAW_LOCAL_SRC/,
   )
+  for (const name of [
+    'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
+    'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
+  ]) {
+    assert.match(
+      strictEnvironmentBlockers({ ...env, [name]: '' }, approvedContract).join(','),
+      new RegExp(name),
+    )
+  }
+})
+
+test('blocked calibration approval exits before fixture, Sidecar or browser child creation', async () => {
+  const { runGate } = await loadRunner()
+  const contract = JSON.parse(
+    await readFile(repoFile('tests/live/k12-current-bug-real-matrix.contract.json'), 'utf8'),
+  )
+  const env = {
+    ...contract.requiredStrictEnvironment,
+    ...Object.fromEntries(contract.requiredStrictValues.map((name) => [name, `value-${name}`])),
+  }
+  const events = []
+  const stderr = []
+  const processLike = {
+    exitCode: undefined,
+    stderr: {
+      write: (value) => stderr.push(value),
+    },
+  }
+
+  await runGate(['--strict'], {
+    env,
+    processLike,
+    validateEnvironment: () => events.push('validate-environment'),
+    createRuntime: () => events.push('create-runtime'),
+    runLifecycle: () => events.push('run-lifecycle'),
+    runPlaywrightGate: () => events.push('run-browser'),
+  })
+
+  assert.equal(processLike.exitCode, 2)
+  assert.deepEqual(events, [])
+  assert.match(stderr.join(''), /grading calibration approval/i)
 })
 
 test('report audit rejects skips, incomplete runs, wrong browser and exact-set drift', async () => {

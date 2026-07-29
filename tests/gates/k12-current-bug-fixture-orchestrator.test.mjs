@@ -1,12 +1,29 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+import {
+  syntheticArtifactSHA256,
+  syntheticGradingBudget,
+  syntheticGradingCalibrationApproval,
+  syntheticGradingCalibrationArtifact,
+  syntheticGradingCalibrationBytes,
+  syntheticGradingCalibrationEnvironment,
+  syntheticSidecarConfigSHA256,
+} from './helpers/k12-grading-calibration-synthetic.mjs'
 
 const repoFile = (path) => new URL(`../../${path}`, import.meta.url)
 
 async function loadOrchestrator() {
   return import(repoFile('scripts/ci/k12-current-bug-fixture-orchestrator.mjs'))
+}
+
+function sha256(raw) {
+  return createHash('sha256').update(raw).digest('hex')
 }
 
 function environment() {
@@ -18,6 +35,7 @@ function environment() {
     HEX_K12_LIVE_SIDECAR_CONTROL: '/opt/hexclaw-test/sidecar-control',
     HEX_K12_LIVE_SIDECAR_CONTROL_SHA256: 'a'.repeat(64),
     HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG: '/tmp/hexclaw-current-bug/control.json',
+    ...syntheticGradingCalibrationEnvironment('/tmp/hexclaw-current-bug/grading-calibration.json'),
     HEX_K12_LIVE_APP_URL: 'http://localhost:16060',
     HEX_K12_LIVE_SIDECAR_URL: 'http://127.0.0.1:16129',
     HEX_K12_LIVE_APP_SHA256: 'e'.repeat(64),
@@ -28,10 +46,7 @@ function environment() {
 }
 
 function pathAdapters(env = environment()) {
-  const directories = new Set([
-    env.HEXCLAW_LOCAL_SRC,
-    env.HEX_K12_LIVE_FIXTURE_PROFILE,
-  ])
+  const directories = new Set([env.HEXCLAW_LOCAL_SRC, env.HEX_K12_LIVE_FIXTURE_PROFILE])
   return {
     inspectPath: (path) => ({
       kind: directories.has(path)
@@ -43,12 +58,41 @@ function pathAdapters(env = environment()) {
       executable: path === env.HEX_K12_LIVE_SIDECAR_CONTROL,
       mode: path === env.HEX_K12_LIVE_FIXTURE_PROFILE ? 0o700 : 0o600,
     }),
-    fileSHA256: () => env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
+    fileSHA256: (path) =>
+      path.endsWith('/grading-calibration.json')
+        ? syntheticArtifactSHA256
+        : env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
     readControllerRuntimeContract: () => ({
       releaseUIURL: env.HEX_K12_LIVE_APP_URL,
       sidecarURL: env.HEX_K12_LIVE_SIDECAR_URL,
       installedAppSHA256: env.HEX_K12_LIVE_APP_SHA256,
+      gradingBudget: syntheticGradingBudget(),
+      sidecarConfigSHA256: syntheticSidecarConfigSHA256,
     }),
+    readGradingCalibrationBytes: () => syntheticGradingCalibrationBytes(),
+    gradingCalibrationApproval: syntheticGradingCalibrationApproval(),
+  }
+}
+
+function rawCalibrationAdapters(env, raw) {
+  const adapters = pathAdapters(env)
+  const digest = sha256(raw)
+  return {
+    ...adapters,
+    fileSHA256: (path) =>
+      path.endsWith('/grading-calibration.json') ? digest : env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
+    readGradingCalibrationBytes: () => Buffer.from(raw),
+    readGradingCalibrationArtifact: () => JSON.parse(raw),
+    gradingCalibrationApproval: syntheticGradingCalibrationApproval({
+      artifact_sha256: digest,
+    }),
+  }
+}
+
+function environmentForRawCalibration(raw) {
+  return {
+    ...environment(),
+    HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: sha256(raw),
   }
 }
 
@@ -101,6 +145,8 @@ test('fixture orchestration contract freezes explicit inputs, exact sequence and
     'HEX_K12_LIVE_RETRYABLE_DISPATCH_ID',
     'HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID',
   ])
+  assert.ok(contract.requiredEnvironment.includes('HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT'))
+  assert.ok(contract.requiredEnvironment.includes('HEX_K12_LIVE_GRADING_CALIBRATION_SHA256'))
   assert.equal(contract.subprocess.shell, false)
   assert.equal(contract.subprocess.dingTalkLiveSend, '0')
 })
@@ -129,7 +175,10 @@ test('environment validation rejects implicit source, unsafe paths, stale manife
       ...pathAdapters(env),
       inspectPath: (path) => ({
         ...pathAdapters(env).inspectPath(path),
-        kind: path === env.HEX_K12_LIVE_FIXTURE_MANIFEST ? 'file' : pathAdapters(env).inspectPath(path).kind,
+        kind:
+          path === env.HEX_K12_LIVE_FIXTURE_MANIFEST
+            ? 'file'
+            : pathAdapters(env).inspectPath(path).kind,
       }),
     }),
   )
@@ -138,6 +187,209 @@ test('environment validation rejects implicit source, unsafe paths, stale manife
       ...pathAdapters(env),
       fileSHA256: () => '0'.repeat(64),
     }),
+  )
+})
+
+test('environment validation blocks the REAL child when approved grading calibration identity is absent', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const env = environment()
+  for (const mutation of [
+    { HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: '' },
+    { HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: '' },
+  ]) {
+    const changed = { ...env, ...mutation }
+    assert.throws(
+      () => validateFixtureEnvironment(changed, pathAdapters(changed)),
+      /GRADING_CALIBRATION|grading calibration/i,
+    )
+  }
+})
+
+test('environment validation requires a trusted approval root bound to artifact and release config digests', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const env = environment()
+  for (const gradingCalibrationApproval of [
+    undefined,
+    syntheticGradingCalibrationApproval({
+      artifact_sha256: '0'.repeat(64),
+    }),
+    syntheticGradingCalibrationApproval({
+      release_config_sha256: '0'.repeat(64),
+    }),
+  ]) {
+    assert.throws(
+      () =>
+        validateFixtureEnvironment(env, {
+          ...pathAdapters(env),
+          gradingCalibrationApproval,
+        }),
+      /grading calibration/i,
+    )
+  }
+})
+
+test('environment validation rejects mock, incomplete and release-drifted grading calibration artifacts', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const env = environment()
+  const mutations = [
+    { approval_status: 'draft' },
+    { provider: 'other-provider' },
+    { model: 'other-model' },
+    {
+      grading_budget: {
+        ...syntheticGradingBudget(),
+        item_concurrency: 3,
+      },
+    },
+    {
+      measurements: syntheticGradingCalibrationArtifact().measurements.slice(0, 3),
+    },
+    {
+      measurements: syntheticGradingCalibrationArtifact().measurements.map((measurement, index) =>
+        index === 0 ? { ...measurement, p95_ms: 17_001 } : measurement,
+      ),
+    },
+    { unknown_field: true },
+  ]
+  for (const mutation of mutations) {
+    assert.throws(
+      () =>
+        validateFixtureEnvironment(env, {
+          ...pathAdapters(env),
+          readGradingCalibrationBytes: () => syntheticGradingCalibrationBytes(mutation),
+        }),
+      /grading calibration/i,
+    )
+  }
+})
+
+test('environment validation rejects ordinary and Unicode-equivalent duplicate calibration keys', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const canonical = JSON.stringify(syntheticGradingCalibrationArtifact())
+  const duplicateArtifacts = [
+    canonical.replace(
+      '"provider":"hexclaw-gpt"',
+      '"provider":"unreviewed-provider","provider":"hexclaw-gpt"',
+    ),
+    canonical.replace(
+      '"provider":"hexclaw-gpt"',
+      '"pro\\u0076ider":"unreviewed-provider","provider":"hexclaw-gpt"',
+    ),
+  ]
+
+  for (const raw of duplicateArtifacts) {
+    const env = environmentForRawCalibration(raw)
+    assert.throws(
+      () => validateFixtureEnvironment(env, rawCalibrationAdapters(env, raw)),
+      /grading calibration.*duplicate/i,
+    )
+  }
+})
+
+test('environment validation rejects duplicate keys nested in grading budget and measurements', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const canonical = JSON.stringify(syntheticGradingCalibrationArtifact())
+  const duplicateArtifacts = [
+    canonical.replace(
+      '"recognizing_seconds":13',
+      '"recognizing_seconds":999,"recognizing_seconds":13',
+    ),
+    canonical.replace('"complete":true', '"complete":false,"complete":true'),
+  ]
+
+  for (const raw of duplicateArtifacts) {
+    const env = environmentForRawCalibration(raw)
+    assert.throws(
+      () => validateFixtureEnvironment(env, rawCalibrationAdapters(env, raw)),
+      /grading calibration.*duplicate/i,
+    )
+  }
+})
+
+test('environment validation hashes and parses one calibration byte snapshot', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const attestedRaw = JSON.stringify(syntheticGradingCalibrationArtifact())
+  const replacedArtifact = syntheticGradingCalibrationArtifact({
+    evidence_sha256: '9'.repeat(64),
+  })
+  const env = environmentForRawCalibration(attestedRaw)
+  const adapters = rawCalibrationAdapters(env, attestedRaw)
+  let byteReads = 0
+  let legacyParsedReads = 0
+
+  validateFixtureEnvironment(env, {
+    ...adapters,
+    readGradingCalibrationBytes: () => {
+      byteReads += 1
+      return Buffer.from(attestedRaw)
+    },
+    readGradingCalibrationArtifact: () => {
+      legacyParsedReads += 1
+      return replacedArtifact
+    },
+  })
+
+  assert.equal(byteReads, 1)
+  assert.equal(legacyParsedReads, 0)
+})
+
+test('default calibration reader rechecks 0600 on the opened file descriptor', async (t) => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const raw = JSON.stringify(syntheticGradingCalibrationArtifact())
+  const directory = mkdtempSync(join(tmpdir(), 'hexclaw-calibration-mode-'))
+  const calibrationPath = join(directory, 'grading-calibration.json')
+  writeFileSync(calibrationPath, raw, { mode: 0o600 })
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+
+  const env = {
+    ...environmentForRawCalibration(raw),
+    HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: calibrationPath,
+  }
+  const adapters = rawCalibrationAdapters(env, raw)
+  delete adapters.readGradingCalibrationBytes
+  delete adapters.readGradingCalibrationArtifact
+  adapters.inspectPath = (path) =>
+    path === calibrationPath
+      ? { kind: 'file', canonicalPath: calibrationPath, mode: 0o600 }
+      : pathAdapters(env).inspectPath(path)
+  adapters.readControllerRuntimeContract = () => {
+    chmodSync(calibrationPath, 0o644)
+    return pathAdapters(env).readControllerRuntimeContract()
+  }
+
+  assert.throws(() => validateFixtureEnvironment(env, adapters), /grading calibration.*0600/i)
+})
+
+test('default calibration reader refuses a final-component symlink replacement', async (t) => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  const raw = JSON.stringify(syntheticGradingCalibrationArtifact())
+  const directory = mkdtempSync(join(tmpdir(), 'hexclaw-calibration-link-'))
+  const calibrationPath = join(directory, 'grading-calibration.json')
+  const replacementPath = join(directory, 'replacement.json')
+  writeFileSync(calibrationPath, raw, { mode: 0o600 })
+  writeFileSync(replacementPath, raw, { mode: 0o600 })
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+
+  const env = {
+    ...environmentForRawCalibration(raw),
+    HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: calibrationPath,
+  }
+  const adapters = rawCalibrationAdapters(env, raw)
+  delete adapters.readGradingCalibrationBytes
+  delete adapters.readGradingCalibrationArtifact
+  adapters.inspectPath = (path) =>
+    path === calibrationPath
+      ? { kind: 'file', canonicalPath: calibrationPath, mode: 0o600 }
+      : pathAdapters(env).inspectPath(path)
+  adapters.readControllerRuntimeContract = () => {
+    unlinkSync(calibrationPath)
+    symlinkSync(replacementPath, calibrationPath)
+    return pathAdapters(env).readControllerRuntimeContract()
+  }
+
+  assert.throws(
+    () => validateFixtureEnvironment(env, adapters),
+    /grading calibration.*(symbolic|secure)/i,
   )
 })
 
@@ -156,10 +408,7 @@ test('0600 exact manifest exposes only the two dispatch IDs', async () => {
     retryableDispatchID: 'opaque-retryable',
     outcomeUnknownDispatchID: 'opaque-unknown',
   })
-  assert.deepEqual(Object.keys(handoff), [
-    'retryableDispatchID',
-    'outcomeUnknownDispatchID',
-  ])
+  assert.deepEqual(Object.keys(handoff), ['retryableDispatchID', 'outcomeUnknownDispatchID'])
   for (const mutation of [
     { extra: 'forbidden' },
     { retryable_dispatch_id: '' },
@@ -283,10 +532,7 @@ test('signal handler cancels the active child then performs single-flight stop a
 })
 
 test('current-bug state case resolves fixture owner without manifest agent injection', async () => {
-  const source = await readFile(
-    repoFile('tests/live/k12-current-bug-real-matrix.spec.ts'),
-    'utf8',
-  )
+  const source = await readFile(repoFile('tests/live/k12-current-bug-real-matrix.spec.ts'), 'utf8')
   assert.match(source, /resolveFixtureAgent/)
   assert.match(source, /fixture ownership resolution failed/)
   assert.doesNotMatch(source, /HEX_K12_LIVE_FIXTURE_AGENT/)

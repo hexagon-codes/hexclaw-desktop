@@ -6,16 +6,15 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-const REFERENCE_URL =
-  process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
-const CURRENT_SOURCE_URL =
-  process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
+const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
+const CURRENT_SOURCE_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
 const AGENT = 'k12-chat-matrix-ming'
 const SESSION = 'k12-chat-matrix-session'
 const MESSAGE = 'k12-chat-matrix-message'
 const DISPATCH = 'k12-chat-matrix-dispatch'
 const NOW = '2026-07-29T11:32:00+08:00'
-const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-fidelity/evidence/k12-chat-matrix')
+const EVIDENCE_ROOT =
+  process.env.HEX_UI_EVIDENCE_ROOT?.trim() || `/tmp/hexclaw-k12-chat-evidence-${process.pid}`
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 
@@ -240,8 +239,7 @@ const matrices: MatrixState[] = [
     referenceMode: 'photo-grade',
     implementationMode: 'homework-completed',
     classification: 'NOT_COMPARABLE',
-    reason:
-      '两侧动作 exact-set 可观察，但最终产物内容和题目 fixture 不同；只记录结构与样式证据。',
+    reason: '两侧动作 exact-set 可观察，但最终产物内容和题目 fixture 不同；只记录结构与样式证据。',
     referenceSelector: '#k12-batch .grade-result__actions',
     implementationSelector: '[data-testid="image-task-final-artifact"]',
   },
@@ -271,8 +269,7 @@ const matrices: MatrixState[] = [
     referenceMode: 'unrendered-writing',
     implementationMode: 'writing-processing',
     classification: 'NOT_COMPARABLE',
-    reason:
-      '原型只有写作 result-surface 声明，没有可冻结的写作点评处理中画面。',
+    reason: '原型只有写作 result-surface 声明，没有可冻结的写作点评处理中画面。',
     implementationSelector: '[data-testid="writing-feedback-progress"]',
   },
   {
@@ -281,8 +278,7 @@ const matrices: MatrixState[] = [
     referenceMode: 'unrendered-writing',
     implementationMode: 'writing-result',
     classification: 'NOT_COMPARABLE',
-    reason:
-      '原型没有会话内可渲染写作点评结果，只声明 writing-feedback；不得用作品档案页替代。',
+    reason: '原型没有会话内可渲染写作点评结果，只声明 writing-feedback；不得用作品档案页替代。',
     implementationSelector: '[data-testid="writing-result-surface"]',
   },
   {
@@ -290,8 +286,9 @@ const matrices: MatrixState[] = [
     title: '美术作品点评处理中',
     referenceMode: 'artwork-processing',
     implementationMode: 'artwork-processing',
-    classification: 'COMPARABLE',
-    reason: '两侧均为「已识别出：美术作品 · 正在生成作品点评」同一公开状态。',
+    classification: 'NOT_COMPARABLE',
+    reason:
+      '原型证据实际渲染为最终五段点评，实现证据为「已识别出：美术作品 · 正在生成作品点评」处理中状态；生命周期不等价。',
     referenceSelector: '[data-artwork-review-output]',
     implementationSelector: '[data-testid="artwork-feedback-progress"]',
   },
@@ -1010,7 +1007,7 @@ async function openReference(page: Page, mode: ReferenceMode) {
     document
       .querySelectorAll<HTMLElement>('[data-prototype-only]')
       .forEach((node) => (node.style.display = 'none'))
-    for (const child of [...thread.children]) {
+    for (const child of thread.children) {
       if (child instanceof HTMLElement) child.style.display = 'none'
     }
     const show = (node: Element | null, display = 'block') => {
@@ -1062,6 +1059,10 @@ async function openCurrentSource(page: Page, mode: ImplementationMode) {
     { waitUntil: 'domcontentloaded' },
   )
   await expect(page.locator('.k12enh-tabs')).toBeVisible({ timeout: 20_000 })
+  await page.waitForURL((url) => url.pathname === '/chat' && url.search === '', {
+    waitUntil: 'domcontentloaded',
+    timeout: 5_000,
+  })
   if (mode !== 'empty') {
     await expect(page.getByTestId('recognize-guard')).toBeVisible({ timeout: 20_000 })
   }
@@ -1157,16 +1158,14 @@ async function scrollEvidenceIntoView(page: Page, selector?: string) {
   const visible = await locator.isVisible().catch(() => false)
   if (visible) {
     await locator.scrollIntoViewIfNeeded()
-    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    )
   }
   return visible
 }
 
-async function captureState(
-  browser: Browser,
-  state: MatrixState,
-  testInfo: TestInfo,
-) {
+async function captureState(browser: Browser, state: MatrixState, testInfo: TestInfo) {
   const project = testInfo.project.name || 'chromium'
   const outputDir = path.join(EVIDENCE_ROOT, project, state.name)
   await mkdir(outputDir, { recursive: true })
@@ -1194,10 +1193,7 @@ async function captureState(
     }
     await Promise.all([freezeVisualState(referencePage), freezeVisualState(currentSourcePage)])
 
-    referenceTargetVisible = await scrollEvidenceIntoView(
-      referencePage,
-      state.referenceSelector,
-    )
+    referenceTargetVisible = await scrollEvidenceIntoView(referencePage, state.referenceSelector)
     currentSourceTargetVisible = await scrollEvidenceIntoView(
       currentSourcePage,
       state.implementationSelector,
@@ -1230,7 +1226,9 @@ async function captureState(
   } catch (cause) {
     runtimeError = cause instanceof Error ? cause.stack || cause.message : String(cause)
     if (!(await referencePage.isClosed())) {
-      await referencePage.screenshot({ path: referencePath, animations: 'disabled' }).catch(() => {})
+      await referencePage
+        .screenshot({ path: referencePath, animations: 'disabled' })
+        .catch(() => {})
     }
     if (!(await currentSourcePage.isClosed())) {
       await currentSourcePage
@@ -1266,8 +1264,8 @@ async function captureState(
       : state.classification === 'NOT_COMPARABLE'
         ? 'NOT_COMPARABLE'
         : diffReport && diffReport.changed_pixel_ratio <= 0.001
-          ? 'MATCH'
-          : 'DRIFT'
+          ? 'PASS'
+          : 'RED'
   await writeFile(
     statusPath,
     JSON.stringify(
@@ -1287,7 +1285,7 @@ async function captureState(
         },
         pixelDiff: diffReport,
         runtimeError: runtimeError || null,
-        passClaimAllowed: status === 'MATCH',
+        passClaimAllowed: status === 'PASS',
       },
       null,
       2,
@@ -1298,9 +1296,30 @@ async function captureState(
     .soft(runtimeError, `${state.name} evidence capture must not crash; see ${statusPath}`)
     .toBe('')
   expect
-    .soft(missingExpectedSurface, `${state.name} expected surface must be visible; see ${statusPath}`)
+    .soft(
+      missingExpectedSurface,
+      `${state.name} expected surface must be visible; see ${statusPath}`,
+    )
     .toBe(false)
   expect.soft(diffReport, `${state.name} must emit a pixel ratio; see ${ratioPath}`).not.toBeNull()
+  return {
+    name: state.name,
+    title: state.title,
+    status,
+    classification: state.classification,
+    reason: state.reason,
+    referenceMode: state.referenceMode,
+    currentSourceMode: state.implementationMode,
+    expectedSurfaces: {
+      reference: state.referenceSelector ?? null,
+      currentSource: state.implementationSelector ?? null,
+      referenceVisible: referenceTargetVisible,
+      currentSourceVisible: currentSourceTargetVisible,
+    },
+    pixelDiff: diffReport,
+    runtimeError: runtimeError || null,
+    evidenceDir: outputDir,
+  }
 }
 
 test.describe('feat/v0.5.0-k12-parent-tutor · K12 chat authoritative state matrix', () => {
@@ -1308,10 +1327,32 @@ test.describe('feat/v0.5.0-k12-parent-tutor · K12 chat authoritative state matr
     browser,
   }, testInfo) => {
     test.setTimeout(15 * 60_000)
+    const results: Awaited<ReturnType<typeof captureState>>[] = []
     for (const state of matrices) {
       await test.step(state.name, async () => {
-        await captureState(browser, state, testInfo)
+        results.push(await captureState(browser, state, testInfo))
       })
     }
+    const project = testInfo.project.name || 'chromium'
+    const summaryDir = path.join(EVIDENCE_ROOT, project)
+    const statusCounts = results.reduce<Record<string, number>>((counts, result) => {
+      counts[result.status] = (counts[result.status] ?? 0) + 1
+      return counts
+    }, {})
+    await mkdir(summaryDir, { recursive: true })
+    await writeFile(
+      path.join(summaryDir, 'matrix-summary.json'),
+      JSON.stringify(
+        {
+          branch: 'feat/v0.5.0-k12-parent-tutor',
+          engine: project,
+          stateCount: matrices.length,
+          statusCounts,
+          results,
+        },
+        null,
+        2,
+      ),
+    )
   })
 })

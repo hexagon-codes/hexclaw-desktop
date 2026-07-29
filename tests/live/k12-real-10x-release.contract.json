@@ -7,6 +7,14 @@
     "model": "gpt-5.6-sol",
     "ragEmbeddingModel": "qwen3-embedding:8b"
   },
+  "gradingCalibrationApproval": {
+    "status": "blocked",
+    "approval_ref": null,
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "artifact_sha256": null,
+    "release_config_sha256": null
+  },
   "execution": {
     "workers": 1,
     "fullyParallel": false,
@@ -23,37 +31,33 @@
       "HEX_K12_RAG_EMBEDDING_MODEL": "qwen3-embedding:8b"
     },
     "values": [
-        "HEX_K12_REAL_10X_RUN_ID",
-        "HEXCLAW_LOCAL_SRC",
-        "HEX_K12_LIVE_FIXTURE_PROFILE",
-        "HEX_K12_LIVE_FIXTURE_STORE",
-        "HEX_K12_LIVE_FIXTURE_MANIFEST",
-        "HEX_K12_LIVE_SIDECAR_CONTROL",
-        "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
-        "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG"
+      "HEX_K12_REAL_10X_RUN_ID",
+      "HEXCLAW_LOCAL_SRC",
+      "HEX_K12_LIVE_FIXTURE_PROFILE",
+      "HEX_K12_LIVE_FIXTURE_STORE",
+      "HEX_K12_LIVE_FIXTURE_MANIFEST",
+      "HEX_K12_LIVE_SIDECAR_CONTROL",
+      "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
+      "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
+      "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
+      "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256"
     ]
   },
   "trustedLanes": [
     {
       "lane": "current-bug-live-strict",
       "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-      "args": [
-        "--strict"
-      ]
+      "args": ["--strict"]
     },
     {
       "lane": "fixtures-strict",
       "module": "scripts/ci/k12-fixtures-gate.mjs",
-      "args": [
-        "--strict"
-      ]
+      "args": ["--strict"]
     },
     {
       "lane": "c10-restart-recovery-strict",
       "module": "scripts/ci/k12-c10-restart-recovery-gate.mjs",
-      "args": [
-        "--strict"
-      ]
+      "args": ["--strict"]
     }
   ],
   "cycles": [
@@ -63,9 +67,7 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       },
       "fixture": "tests/live/k12-current-bug-real-matrix.contract.json#fixtures.problem",
       "requiredHook": "installed exact-model solve-image receipt hook",
@@ -82,9 +84,7 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -93,9 +93,7 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -104,9 +102,7 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -115,9 +111,7 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -126,9 +120,7 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       },
       "requiredHook": "installed exact-model art-review receipt hook",
       "supportingEvidence": [
@@ -156,9 +148,7 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -167,9 +157,7 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       }
     },
     {
@@ -178,9 +166,7 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       },
       "oracle": "tests/fixtures/local/k12-textbook-rag-oracle.v1.json",
       "requiredHook": "qwen3-embedding:8b grounded-RAG receipt hook",
@@ -207,9 +193,7 @@
       "hook": {
         "lane": "c10-restart-recovery-strict",
         "module": "scripts/ci/k12-c10-restart-recovery-gate.mjs",
-        "args": [
-          "--strict"
-        ]
+        "args": ["--strict"]
       },
       "restartContract": "tests/live/k12-c10-restart-hook.contract.json",
       "requiredHook": "caller-owned installed app and Sidecar restart hook with signed C07-C10 state handoff",
@@ -232,13 +216,7 @@
         {
           "lane": "native-isolation-smoke",
           "script": "tests/native/test-home-isolation-smoke.sh",
-          "provesOnly": [
-            "isolated_home",
-            "process_start",
-            "health",
-            "process_stop",
-            "port_release"
-          ]
+          "provesOnly": ["isolated_home", "process_start", "health", "process_stop", "port_release"]
         }
       ]
     }

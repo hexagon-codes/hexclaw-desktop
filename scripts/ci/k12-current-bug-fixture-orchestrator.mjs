@@ -2,22 +2,11 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import {
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  unlinkSync,
-} from 'node:fs'
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from 'node:path'
+import { lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readAttestedFileSnapshot } from './k12-attested-file.mjs'
+import { parseSidecarBinding } from './k12-current-bug-isolated-sidecar-control.mjs'
+import { parseStrictJSON } from './k12-strict-json.mjs'
 
 const REQUIRED_ENVIRONMENT = [
   'HEXCLAW_LOCAL_SRC',
@@ -27,6 +16,8 @@ const REQUIRED_ENVIRONMENT = [
   'HEX_K12_LIVE_SIDECAR_CONTROL',
   'HEX_K12_LIVE_SIDECAR_CONTROL_SHA256',
   'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
+  'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
+  'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
   'HEX_K12_LIVE_APP_URL',
   'HEX_K12_LIVE_SIDECAR_URL',
   'HEX_K12_LIVE_APP_SHA256',
@@ -56,6 +47,55 @@ const MANIFEST_FIELDS = [
   'schema_version',
 ]
 
+const GRADING_CALIBRATION_FIELDS = [
+  'approval_ref',
+  'approval_status',
+  'evidence_sha256',
+  'grading_budget',
+  'measurements',
+  'model',
+  'provider',
+  'schema_version',
+  'sidecar_config_sha256',
+]
+
+const GRADING_CALIBRATION_APPROVAL_FIELDS = [
+  'approval_ref',
+  'artifact_sha256',
+  'model',
+  'provider',
+  'release_config_sha256',
+  'status',
+]
+
+const GRADING_BUDGET_FIELDS = [
+  'assessing_buckets',
+  'item_concurrency',
+  'locating_seconds',
+  'normalizing_seconds',
+  'policy_version',
+  'projecting_seconds',
+  'queued_seconds',
+  'recognizing_seconds',
+  'rendering_seconds',
+]
+
+const GRADING_BUDGET_BUCKET_FIELDS = ['max_problems', 'seconds']
+
+const GRADING_CALIBRATION_MEASUREMENT_FIELDS = [
+  'complete',
+  'logical_operations',
+  'max_problems',
+  'p50_ms',
+  'p95_ms',
+  'physical_provider_calls',
+  'result_digest',
+  'sample_count',
+  'success_count',
+]
+
+const GRADING_CALIBRATION_BUCKETS = [1, 8, 16, 32]
+
 const FIXTURE_ENVIRONMENT = [
   'HEX_K12_LIVE_RETRYABLE_DISPATCH_ID',
   'HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID',
@@ -66,10 +106,12 @@ function fail(message) {
 }
 
 function canonicalTmp(pathname) {
-  return pathname === '/tmp'
-    || pathname.startsWith(`/tmp${sep}`)
-    || pathname === '/private/tmp'
-    || pathname.startsWith(`/private/tmp${sep}`)
+  return (
+    pathname === '/tmp' ||
+    pathname.startsWith(`/tmp${sep}`) ||
+    pathname === '/private/tmp' ||
+    pathname.startsWith(`/private/tmp${sep}`)
+  )
 }
 
 function isInside(parent, child) {
@@ -107,6 +149,193 @@ function defaultFileSHA256(pathname) {
   return createHash('sha256').update(readFileSync(pathname)).digest('hex')
 }
 
+function exactObjectFields(value, fields) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return false
+  const actual = Object.keys(value).sort()
+  return actual.length === fields.length && actual.every((field, index) => field === fields[index])
+}
+
+function canonicalJSON(value) {
+  if (Array.isArray(value)) return value.map(canonicalJSON)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalJSON(value[key])]),
+  )
+}
+
+function exactJSONEqual(left, right) {
+  return JSON.stringify(canonicalJSON(left)) === JSON.stringify(canonicalJSON(right))
+}
+
+function readGradingCalibrationSnapshot(pathname, adapters) {
+  let snapshot
+  try {
+    snapshot = readAttestedFileSnapshot(pathname, {
+      label: 'grading calibration artifact',
+      readBytes: adapters.readGradingCalibrationBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  let artifact
+  try {
+    artifact = parseStrictJSON(snapshot.bytes, { label: 'grading calibration artifact' })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  return Object.freeze({
+    artifact,
+    sha256: snapshot.sha256,
+  })
+}
+
+function validateGradingBudget(budget) {
+  if (!exactObjectFields(budget, GRADING_BUDGET_FIELDS)) {
+    fail('grading calibration budget fields do not match the exact schema')
+  }
+  for (const field of [
+    'policy_version',
+    'queued_seconds',
+    'normalizing_seconds',
+    'recognizing_seconds',
+    'locating_seconds',
+    'rendering_seconds',
+    'projecting_seconds',
+  ]) {
+    if (!Number.isSafeInteger(budget[field]) || budget[field] <= 0) {
+      fail(`grading calibration budget ${field} must be a positive integer`)
+    }
+  }
+  if (
+    !Number.isSafeInteger(budget.item_concurrency) ||
+    budget.item_concurrency < 1 ||
+    budget.item_concurrency > 32
+  ) {
+    fail('grading calibration budget item_concurrency must be from 1 through 32')
+  }
+  if (
+    !Array.isArray(budget.assessing_buckets) ||
+    budget.assessing_buckets.length !== GRADING_CALIBRATION_BUCKETS.length
+  ) {
+    fail('grading calibration budget requires exact ordered 1/8/16/32 buckets')
+  }
+  for (const [index, maxProblems] of GRADING_CALIBRATION_BUCKETS.entries()) {
+    const bucket = budget.assessing_buckets[index]
+    if (
+      !exactObjectFields(bucket, GRADING_BUDGET_BUCKET_FIELDS) ||
+      bucket.max_problems !== maxProblems ||
+      !Number.isSafeInteger(bucket.seconds) ||
+      bucket.seconds <= 0
+    ) {
+      fail('grading calibration budget requires exact ordered 1/8/16/32 buckets')
+    }
+  }
+}
+
+export function validateGradingCalibrationApproval(
+  approval,
+  { provider, model, artifactSHA256, releaseConfigSHA256 } = {},
+) {
+  if (!exactObjectFields(approval, GRADING_CALIBRATION_APPROVAL_FIELDS)) {
+    fail('grading calibration approval fields do not match the exact schema')
+  }
+  if (
+    approval.status !== 'approved' ||
+    typeof approval.approval_ref !== 'string' ||
+    approval.approval_ref.trim() === '' ||
+    approval.provider !== provider ||
+    approval.model !== model ||
+    typeof approval.artifact_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approval.artifact_sha256) ||
+    typeof approval.release_config_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approval.release_config_sha256)
+  ) {
+    fail('grading calibration approval is blocked or invalid')
+  }
+  if (artifactSHA256 !== undefined && approval.artifact_sha256 !== artifactSHA256) {
+    fail('grading calibration approval artifact SHA-256 mismatch')
+  }
+  if (releaseConfigSHA256 !== undefined && approval.release_config_sha256 !== releaseConfigSHA256) {
+    fail('grading calibration approval release config SHA-256 mismatch')
+  }
+  return approval
+}
+
+function validateGradingCalibrationArtifact(
+  artifact,
+  { provider, model, gradingBudget, sidecarConfigSHA256, approval },
+) {
+  if (!exactObjectFields(artifact, GRADING_CALIBRATION_FIELDS)) {
+    fail('grading calibration fields do not match the exact schema')
+  }
+  if (artifact.schema_version !== 1) {
+    fail('grading calibration schema is stale')
+  }
+  if (
+    artifact.approval_status !== 'approved' ||
+    typeof artifact.approval_ref !== 'string' ||
+    artifact.approval_ref.trim() === '' ||
+    artifact.approval_ref !== approval.approval_ref
+  ) {
+    fail('grading calibration is not explicitly approved')
+  }
+  if (artifact.provider !== provider || artifact.model !== model) {
+    fail('grading calibration provider/model drift')
+  }
+  if (
+    typeof artifact.evidence_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(artifact.evidence_sha256)
+  ) {
+    fail('grading calibration evidence SHA-256 is invalid')
+  }
+  if (
+    typeof artifact.sidecar_config_sha256 !== 'string' ||
+    artifact.sidecar_config_sha256 !== sidecarConfigSHA256
+  ) {
+    fail('grading calibration release config SHA-256 mismatch')
+  }
+
+  validateGradingBudget(artifact.grading_budget)
+  validateGradingBudget(gradingBudget)
+  if (!exactJSONEqual(artifact.grading_budget, gradingBudget)) {
+    fail('grading calibration budget does not match the attested Sidecar config')
+  }
+
+  if (
+    !Array.isArray(artifact.measurements) ||
+    artifact.measurements.length !== GRADING_CALIBRATION_BUCKETS.length
+  ) {
+    fail('grading calibration measurements require exact ordered 1/8/16/32 buckets')
+  }
+  for (const [index, maxProblems] of GRADING_CALIBRATION_BUCKETS.entries()) {
+    const measurement = artifact.measurements[index]
+    const budget = artifact.grading_budget.assessing_buckets[index]
+    if (
+      !exactObjectFields(measurement, GRADING_CALIBRATION_MEASUREMENT_FIELDS) ||
+      measurement.max_problems !== maxProblems ||
+      !Number.isSafeInteger(measurement.sample_count) ||
+      measurement.sample_count <= 0 ||
+      measurement.success_count !== measurement.sample_count ||
+      !Number.isSafeInteger(measurement.p50_ms) ||
+      measurement.p50_ms <= 0 ||
+      !Number.isSafeInteger(measurement.p95_ms) ||
+      measurement.p95_ms < measurement.p50_ms ||
+      measurement.p95_ms > budget.seconds * 1_000 ||
+      !Number.isSafeInteger(measurement.logical_operations) ||
+      measurement.logical_operations <= 0 ||
+      !Number.isSafeInteger(measurement.physical_provider_calls) ||
+      measurement.physical_provider_calls <= 0 ||
+      measurement.complete !== true ||
+      typeof measurement.result_digest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(measurement.result_digest)
+    ) {
+      fail(`grading calibration measurement for ${maxProblems} problems is invalid`)
+    }
+  }
+}
+
 function inspect(adapters, pathname, options) {
   const result = (adapters.inspectPath ?? defaultInspectPath)(pathname, options)
   if (!result || typeof result !== 'object') fail('path inspection failed')
@@ -124,11 +353,11 @@ function requireAbsolute(value, name) {
 
 function requireDirectory(result, name) {
   if (
-    result.exists === false
-    || result.kind === 'missing'
-    || result.kind === 'file'
-    || result.directory === false
-    || result.regularFile === true
+    result.exists === false ||
+    result.kind === 'missing' ||
+    result.kind === 'file' ||
+    result.directory === false ||
+    result.regularFile === true
   ) {
     fail(`${name} must be an existing directory`)
   }
@@ -141,11 +370,11 @@ function requirePrivateDirectory(result, name) {
 
 function requireRegularFile(result, name) {
   if (
-    result.exists === false
-    || result.kind === 'missing'
-    || result.kind === 'directory'
-    || result.regularFile === false
-    || result.directory === true
+    result.exists === false ||
+    result.kind === 'missing' ||
+    result.kind === 'directory' ||
+    result.regularFile === false ||
+    result.directory === true
   ) {
     fail(`${name} must be an existing regular file`)
   }
@@ -160,10 +389,7 @@ function opaque(seed, namespace) {
   return createHash('sha256').update(`${namespace}\0${seed}`).digest('hex')
 }
 
-function exactLoopbackOrigin(value, name, {
-  hostname,
-  port,
-} = {}) {
+function exactLoopbackOrigin(value, name, { hostname, port } = {}) {
   let parsed
   try {
     parsed = new URL(value)
@@ -171,14 +397,14 @@ function exactLoopbackOrigin(value, name, {
     fail(`${name} must be an absolute HTTP origin`)
   }
   if (
-    parsed.protocol !== 'http:'
-    || parsed.username !== ''
-    || parsed.password !== ''
-    || parsed.pathname !== '/'
-    || parsed.search !== ''
-    || parsed.hash !== ''
-    || (hostname !== undefined && parsed.hostname !== hostname)
-    || (port !== undefined && parsed.port !== String(port))
+    parsed.protocol !== 'http:' ||
+    parsed.username !== '' ||
+    parsed.password !== '' ||
+    parsed.pathname !== '/' ||
+    parsed.search !== '' ||
+    parsed.hash !== '' ||
+    (hostname !== undefined && parsed.hostname !== hostname) ||
+    (port !== undefined && parsed.port !== String(port))
   ) {
     fail(`${name} must be the exact approved loopback origin`)
   }
@@ -186,11 +412,22 @@ function exactLoopbackOrigin(value, name, {
 }
 
 function defaultReadControllerRuntimeContract(controllerConfigPath, adapters = {}) {
+  let controllerSnapshot
+  try {
+    controllerSnapshot = readAttestedFileSnapshot(controllerConfigPath, {
+      label: 'sidecar controller config',
+      readBytes: adapters.readControllerConfigBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
   let controller
   try {
-    controller = JSON.parse(readFileSync(controllerConfigPath, 'utf8'))
-  } catch {
-    fail('sidecar controller config is not valid JSON')
+    controller = parseStrictJSON(controllerSnapshot.bytes, {
+      label: 'sidecar controller config',
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
   }
   if (!controller || Array.isArray(controller) || typeof controller !== 'object') {
     fail('sidecar controller config must be an object')
@@ -203,6 +440,8 @@ function defaultReadControllerRuntimeContract(controllerConfigPath, adapters = {
     'release_attestation_sha256',
     'expected_version',
     'binary_sha256',
+    'sidecar_config_path',
+    'sidecar_config_sha256',
   ]) {
     if (typeof controller[field] !== 'string' || controller[field].trim() === '') {
       fail(`sidecar controller config ${field} is invalid`)
@@ -212,42 +451,75 @@ function defaultReadControllerRuntimeContract(controllerConfigPath, adapters = {
   const attestationFile = inspect(adapters, controller.release_attestation_path)
   requirePrivateFile(attestationFile, 'release_attestation_path')
   const attestationPath = realPathOf(attestationFile, controller.release_attestation_path)
-  const attestationSHA256 = (adapters.fileSHA256 ?? defaultFileSHA256)(attestationPath).toLowerCase()
-  if (
-    !/^[a-f0-9]{64}$/.test(controller.release_attestation_sha256)
-    || attestationSHA256 !== controller.release_attestation_sha256
-  ) {
-    fail('release attestation SHA-256 mismatch')
+  if (!/^[a-f0-9]{64}$/.test(controller.release_attestation_sha256)) {
+    fail('release attestation SHA-256 is invalid')
   }
-
+  let attestationSnapshot
+  try {
+    attestationSnapshot = readAttestedFileSnapshot(attestationPath, {
+      label: 'release attestation',
+      readBytes: adapters.readReleaseAttestationBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
   let receipt
   try {
-    receipt = JSON.parse(readFileSync(attestationPath, 'utf8'))
-  } catch {
-    fail('release attestation is not valid JSON')
+    receipt = parseStrictJSON(attestationSnapshot.bytes, {
+      label: 'release attestation',
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
   }
-  const fields = receipt && !Array.isArray(receipt) && typeof receipt === 'object'
-    ? Object.keys(receipt).sort()
-    : []
+  if (attestationSnapshot.sha256 !== controller.release_attestation_sha256) {
+    fail('release attestation SHA-256 mismatch')
+  }
+  const fields =
+    receipt && !Array.isArray(receipt) && typeof receipt === 'object'
+      ? Object.keys(receipt).sort()
+      : []
   if (
-    fields.length !== RELEASE_ATTESTATION_FIELDS.length
-    || fields.some((field, index) => field !== RELEASE_ATTESTATION_FIELDS[index])
-    || receipt.schema_version !== 1
+    fields.length !== RELEASE_ATTESTATION_FIELDS.length ||
+    fields.some((field, index) => field !== RELEASE_ATTESTATION_FIELDS[index]) ||
+    receipt.schema_version !== 1
   ) {
     fail('release attestation fields do not match the exact schema')
   }
   if (
-    receipt.release_version !== controller.expected_version
-    || receipt.sidecar_sha256 !== controller.binary_sha256
-    || typeof receipt.installed_app_sha256 !== 'string'
-    || !/^[a-f0-9]{64}$/.test(receipt.installed_app_sha256)
+    receipt.release_version !== controller.expected_version ||
+    receipt.sidecar_sha256 !== controller.binary_sha256 ||
+    typeof receipt.installed_app_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(receipt.installed_app_sha256)
   ) {
     fail('release attestation identity does not match controller config')
+  }
+
+  requireAbsolute(controller.sidecar_config_path, 'sidecar_config_path')
+  const sidecarConfigFile = inspect(adapters, controller.sidecar_config_path)
+  requirePrivateFile(sidecarConfigFile, 'sidecar_config_path')
+  const sidecarConfigPath = realPathOf(sidecarConfigFile, controller.sidecar_config_path)
+  if (!/^[a-f0-9]{64}$/.test(controller.sidecar_config_sha256)) {
+    fail('sidecar config SHA-256 is invalid')
+  }
+  let sidecarConfigSnapshot
+  try {
+    sidecarConfigSnapshot = readAttestedFileSnapshot(sidecarConfigPath, {
+      label: 'sidecar config',
+      readBytes: adapters.readSidecarConfigBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  const sidecarBinding = parseSidecarBinding(String(sidecarConfigSnapshot.bytes))
+  if (sidecarConfigSnapshot.sha256 !== controller.sidecar_config_sha256) {
+    fail('sidecar config SHA-256 mismatch')
   }
   return {
     sidecarURL: controller.sidecar_url,
     releaseUIURL: controller.release_ui_url,
     installedAppSHA256: receipt.installed_app_sha256,
+    gradingBudget: sidecarBinding.gradingBudget,
+    sidecarConfigSHA256: sidecarConfigSnapshot.sha256,
   }
 }
 
@@ -262,6 +534,7 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifestInput = env.HEX_K12_LIVE_FIXTURE_MANIFEST.trim()
   const controllerInput = env.HEX_K12_LIVE_SIDECAR_CONTROL.trim()
   const controllerConfigInput = env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG.trim()
+  const gradingCalibrationInput = env.HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT.trim()
   const releaseUIURL = exactLoopbackOrigin(
     env.HEX_K12_LIVE_APP_URL.trim(),
     'HEX_K12_LIVE_APP_URL',
@@ -287,6 +560,7 @@ export function validateFixtureEnvironment(env, adapters = {}) {
     [manifestInput, 'HEX_K12_LIVE_FIXTURE_MANIFEST'],
     [controllerInput, 'HEX_K12_LIVE_SIDECAR_CONTROL'],
     [controllerConfigInput, 'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG'],
+    [gradingCalibrationInput, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT'],
   ]) {
     requireAbsolute(value, name)
   }
@@ -297,12 +571,14 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifest = inspect(adapters, manifestInput, { allowMissing: true })
   const controller = inspect(adapters, controllerInput)
   const controllerConfig = inspect(adapters, controllerConfigInput)
+  const gradingCalibration = inspect(adapters, gradingCalibrationInput)
 
   requireDirectory(source, 'HEXCLAW_LOCAL_SRC')
   requirePrivateDirectory(profile, 'HEX_K12_LIVE_FIXTURE_PROFILE')
   requirePrivateFile(store, 'HEX_K12_LIVE_FIXTURE_STORE')
   requireRegularFile(controller, 'HEX_K12_LIVE_SIDECAR_CONTROL')
   requirePrivateFile(controllerConfig, 'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG')
+  requirePrivateFile(gradingCalibration, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT')
   if (controller.executable === false) fail('sidecar controller must be executable')
   if (manifest.exists !== false && manifest.kind !== 'missing') {
     fail('fixture manifest path must not already exist')
@@ -314,26 +590,57 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifestPath = realPathOf(manifest, manifestInput)
   const controllerPath = realPathOf(controller, controllerInput)
   const controllerConfigPath = realPathOf(controllerConfig, controllerConfigInput)
+  const gradingCalibrationPath = realPathOf(gradingCalibration, gradingCalibrationInput)
 
   if (!canonicalTmp(profilePath)) fail('fixture profile must resolve below /tmp')
   if (!canonicalTmp(controllerConfigPath)) fail('sidecar controller config must resolve below /tmp')
   if (!isInside(profilePath, storePath)) fail('fixture store must resolve inside fixture profile')
-  if (!isInside(profilePath, manifestPath)) fail('fixture manifest must resolve inside fixture profile')
+  if (!isInside(profilePath, manifestPath))
+    fail('fixture manifest must resolve inside fixture profile')
 
   const expectedSHA = env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256.trim().toLowerCase()
-  if (!/^[a-f0-9]{64}$/.test(expectedSHA)) fail('sidecar controller SHA-256 must be 64 lowercase hex characters')
+  if (!/^[a-f0-9]{64}$/.test(expectedSHA))
+    fail('sidecar controller SHA-256 must be 64 lowercase hex characters')
   const actualSHA = (adapters.fileSHA256 ?? defaultFileSHA256)(controllerPath).toLowerCase()
   if (actualSHA !== expectedSHA) fail('sidecar controller SHA-256 mismatch')
-  const readControllerRuntimeContract = adapters.readControllerRuntimeContract
-    ?? defaultReadControllerRuntimeContract
+  const expectedCalibrationSHA = env.HEX_K12_LIVE_GRADING_CALIBRATION_SHA256.trim().toLowerCase()
+  if (!/^[a-f0-9]{64}$/.test(expectedCalibrationSHA)) {
+    fail('grading calibration SHA-256 must be 64 lowercase hex characters')
+  }
+  const readControllerRuntimeContract =
+    adapters.readControllerRuntimeContract ?? defaultReadControllerRuntimeContract
   const controllerRuntime = readControllerRuntimeContract(controllerConfigPath, adapters)
   if (
-    controllerRuntime?.releaseUIURL !== releaseUIURL
-    || controllerRuntime?.sidecarURL !== sidecarURL
-    || controllerRuntime?.installedAppSHA256 !== installedAppSHA256
+    controllerRuntime?.releaseUIURL !== releaseUIURL ||
+    controllerRuntime?.sidecarURL !== sidecarURL ||
+    controllerRuntime?.installedAppSHA256 !== installedAppSHA256
   ) {
     fail('fixture environment does not match attested controller runtime')
   }
+  const gradingCalibrationSnapshot = readGradingCalibrationSnapshot(
+    gradingCalibrationPath,
+    adapters,
+  )
+  const actualCalibrationSHA = gradingCalibrationSnapshot.sha256
+  if (actualCalibrationSHA !== expectedCalibrationSHA) {
+    fail('grading calibration SHA-256 mismatch')
+  }
+  const gradingCalibrationApproval = validateGradingCalibrationApproval(
+    adapters.gradingCalibrationApproval,
+    {
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      artifactSHA256: actualCalibrationSHA,
+      releaseConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+    },
+  )
+  validateGradingCalibrationArtifact(gradingCalibrationSnapshot.artifact, {
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    gradingBudget: controllerRuntime?.gradingBudget,
+    sidecarConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+    approval: gradingCalibrationApproval,
+  })
 
   const runSeed = String(env.HEX_K12_REAL_10X_RUN_ID ?? 'isolated-current-bug')
   return Object.freeze({
@@ -346,6 +653,8 @@ export function validateFixtureEnvironment(env, adapters = {}) {
     controllerPath,
     controllerSHA256: actualSHA,
     controllerConfigPath,
+    gradingCalibrationPath,
+    gradingCalibrationSHA256: actualCalibrationSHA,
     releaseUIURL,
     sidecarURL,
     installedAppSHA256,
@@ -369,9 +678,7 @@ export function readOpaqueManifest(raw, metadata = {}) {
 
   let manifest
   try {
-    manifest = typeof raw === 'string' || Buffer.isBuffer(raw)
-      ? JSON.parse(String(raw))
-      : raw
+    manifest = typeof raw === 'string' || Buffer.isBuffer(raw) ? JSON.parse(String(raw)) : raw
   } catch {
     fail('fixture manifest is not valid JSON')
   }
@@ -379,11 +686,19 @@ export function readOpaqueManifest(raw, metadata = {}) {
     fail('fixture manifest must be an object')
   }
   const fields = Object.keys(manifest).sort()
-  if (fields.length !== MANIFEST_FIELDS.length || fields.some((field, index) => field !== MANIFEST_FIELDS[index])) {
+  if (
+    fields.length !== MANIFEST_FIELDS.length ||
+    fields.some((field, index) => field !== MANIFEST_FIELDS[index])
+  ) {
     fail('fixture manifest fields do not match the contract')
   }
   if (manifest.schema_version !== 1) fail('unsupported fixture manifest schema')
-  for (const field of ['ownership', 'agent_name', 'retryable_dispatch_id', 'outcome_unknown_dispatch_id']) {
+  for (const field of [
+    'ownership',
+    'agent_name',
+    'retryable_dispatch_id',
+    'outcome_unknown_dispatch_id',
+  ]) {
     if (typeof manifest[field] !== 'string' || manifest[field].trim() === '') {
       fail('fixture manifest contains an invalid opaque value')
     }
@@ -391,12 +706,15 @@ export function readOpaqueManifest(raw, metadata = {}) {
   if (manifest.retryable_dispatch_id === manifest.outcome_unknown_dispatch_id) {
     fail('fixture dispatch IDs must be distinct')
   }
-  const lease = typeof manifest.lease_expires_at === 'number'
-    ? manifest.lease_expires_at * 1000
-    : Date.parse(manifest.lease_expires_at)
-  const nowMilliseconds = metadata.nowMilliseconds
-    ?? (metadata.nowSeconds === undefined ? Date.now() : metadata.nowSeconds * 1000)
-  if (!Number.isFinite(lease) || lease <= nowMilliseconds) fail('fixture lease is expired or invalid')
+  const lease =
+    typeof manifest.lease_expires_at === 'number'
+      ? manifest.lease_expires_at * 1000
+      : Date.parse(manifest.lease_expires_at)
+  const nowMilliseconds =
+    metadata.nowMilliseconds ??
+    (metadata.nowSeconds === undefined ? Date.now() : metadata.nowSeconds * 1000)
+  if (!Number.isFinite(lease) || lease <= nowMilliseconds)
+    fail('fixture lease is expired or invalid')
 
   return Object.freeze({
     retryableDispatchID: manifest.retryable_dispatch_id,
@@ -436,17 +754,17 @@ export async function removeCanonicalManifest(config, adapters = {}) {
   const requestedCanonical = realPathOf(requested, requestedPath)
   const targetCanonical = realPathOf(target, canonicalTarget)
   if (
-    requestedCanonical !== targetCanonical
-    || targetCanonical !== canonicalTarget
-    || !isInside(profilePath, targetCanonical)
+    requestedCanonical !== targetCanonical ||
+    targetCanonical !== canonicalTarget ||
+    !isInside(profilePath, targetCanonical)
   ) {
     fail('fixture manifest canonical identity mismatch')
   }
   if (
-    requested.regularFile === false
-    || requested.directory === true
-    || target.regularFile === false
-    || target.directory === true
+    requested.regularFile === false ||
+    requested.directory === true ||
+    target.regularFile === false ||
+    target.directory === true
   ) {
     fail('fixture manifest must be a regular file')
   }
@@ -518,10 +836,12 @@ export async function runFixtureLifecycle(config, deps) {
     await deps.startFixture(config)
     const ids = await deps.readManifest(config)
     await deps.startSidecar(config)
-    result = await deps.runStrictGate(Object.freeze({
-      [FIXTURE_ENVIRONMENT[0]]: ids.retryableDispatchID,
-      [FIXTURE_ENVIRONMENT[1]]: ids.outcomeUnknownDispatchID,
-    }))
+    result = await deps.runStrictGate(
+      Object.freeze({
+        [FIXTURE_ENVIRONMENT[0]]: ids.retryableDispatchID,
+        [FIXTURE_ENVIRONMENT[1]]: ids.outcomeUnknownDispatchID,
+      }),
+    )
   } catch (error) {
     rootError = error
   }
@@ -596,38 +916,37 @@ export function createFixtureRuntime(config, options = {}) {
   let activeChild
   let cleanupPromise
 
-  const run = (command, args, spawnOptions = {}) => new Promise((resolvePromise, rejectPromise) => {
-    let child
-    try {
-      child = spawnProcess(command, args, {
-        shell: false,
-        stdio: 'ignore',
-        ...spawnOptions,
-        env: subprocessEnvironment(spawnOptions.env),
-      })
-    } catch (error) {
-      rejectPromise(error)
-      return
-    }
-    activeChild = child
-    child.once('error', (error) => {
-      if (activeChild === child) activeChild = undefined
-      rejectPromise(error)
-    })
-    child.once('exit', (code, signal) => {
-      if (activeChild === child) activeChild = undefined
-      if (code === 0) {
-        resolvePromise()
-      } else {
-        rejectPromise(new Error(`K12 fixture subprocess failed (${signal ?? code ?? 'unknown'})`))
+  const run = (command, args, spawnOptions = {}) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      let child
+      try {
+        child = spawnProcess(command, args, {
+          shell: false,
+          stdio: 'ignore',
+          ...spawnOptions,
+          env: subprocessEnvironment(spawnOptions.env),
+        })
+      } catch (error) {
+        rejectPromise(error)
+        return
       }
+      activeChild = child
+      child.once('error', (error) => {
+        if (activeChild === child) activeChild = undefined
+        rejectPromise(error)
+      })
+      child.once('exit', (code, signal) => {
+        if (activeChild === child) activeChild = undefined
+        if (code === 0) {
+          resolvePromise()
+        } else {
+          rejectPromise(new Error(`K12 fixture subprocess failed (${signal ?? code ?? 'unknown'})`))
+        }
+      })
     })
-  })
 
-  const controller = (action) => run(
-    config.controllerPath,
-    [action, '--config', config.controllerConfigPath],
-  )
+  const controller = (action) =>
+    run(config.controllerPath, [action, '--config', config.controllerConfigPath])
 
   const builder = (action) => {
     const common = [
@@ -664,9 +983,7 @@ export function createFixtureRuntime(config, options = {}) {
     cleanupFixtureRecords: () => builder('cleanup'),
     removeManifest: () => removeCanonicalManifest(config),
     emitReceipt: (receipt) => {
-      process.stderr.write(
-        `K12 fixture manifest cleanup receipt: ${JSON.stringify(receipt)}\n`,
-      )
+      process.stderr.write(`K12 fixture manifest cleanup receipt: ${JSON.stringify(receipt)}\n`)
     },
   })
 

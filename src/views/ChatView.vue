@@ -498,17 +498,6 @@ function isEmptyReply(content: string): boolean {
 // sanitizeMessageContent 抽到 @/utils/messageContent（纯函数，可单测）：只截断真正的图像 base64
 // （data:image;base64,… 或 600+ 连续裸 base64 run），保留周围正常文字，不误伤长英文/代码回复。
 
-function formatThinkingDuration(seconds?: unknown): string {
-  const s = Number(seconds)
-  if (!s || s <= 0) return ''
-  if (s >= 60) {
-    const m = Math.floor(s / 60)
-    const r = s % 60
-    return r > 0 ? `${m}m ${r}s` : `${m}m`
-  }
-  return `${s}s`
-}
-
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []

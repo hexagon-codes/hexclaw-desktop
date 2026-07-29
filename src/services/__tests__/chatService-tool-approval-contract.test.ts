@@ -30,6 +30,7 @@ class ContractWebSocket {
   onclose: ((event: CloseEvent) => void) | null = null
 
   constructor(_url: string) {
+    void _url
     ContractWebSocket.instances.push(this)
   }
 

@@ -11,7 +11,7 @@ import type { SessionStreamState } from '../chat-stream-helpers'
  *  - 本地流计时可用（reasoningStartTime>0）→ 用本地实测覆盖（更贴近用户观感）；
  *  - 本地计时缺失（如 provider 的 reasoning 未走增量、恢复流等）→ 必须保留后端值，
  *    不得把它抹掉——否则「A2 读回」修复在 live finalize 一刻就没数据可读。
- * 渲染端 formatThinkingDuration 用 Number() 归一，字符串安全。
+ * 渲染入口 messageThinkingElapsed 用 Number() 归一，ThinkingProgress 再格式化，字符串安全。
  */
 function buildController(streamState: SessionStreamState | null, appendMessageToSession: (sessionId: string, message: ChatMessage) => void) {
   return createChatStreamCompletionController({

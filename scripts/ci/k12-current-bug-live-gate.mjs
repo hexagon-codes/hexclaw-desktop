@@ -9,12 +9,18 @@ import {
   createFixtureRuntime,
   installFixtureSignalCleanup,
   runFixtureLifecycle,
+  validateGradingCalibrationApproval,
   validateFixtureEnvironment,
 } from './k12-current-bug-fixture-orchestrator.mjs'
+import { parseStrictJSON } from './k12-strict-json.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
-const contract = JSON.parse(
+export function parseCurrentBugLiveContract(raw) {
+  return parseStrictJSON(raw, { label: 'K12 current-bug LIVE contract' })
+}
+
+const contract = parseCurrentBugLiveContract(
   readFileSync(
     new URL('../../tests/live/k12-current-bug-real-matrix.contract.json', import.meta.url),
     'utf8',
@@ -54,7 +60,9 @@ export function auditCurrentBugLiveReport(report) {
         results.length === 0 ||
         results.some(({ status }) => status !== 'passed')
       ) {
-        invalid.push(`${spec.title ?? test.title ?? 'unnamed'} [${test.projectName ?? 'no-project'}]`)
+        invalid.push(
+          `${spec.title ?? test.title ?? 'unnamed'} [${test.projectName ?? 'no-project'}]`,
+        )
       }
     }
   }
@@ -83,13 +91,21 @@ export function validateCurrentBugLiveArguments({ strict, playwrightArgs }) {
   }
 }
 
-export function strictEnvironmentBlockers(env) {
+export function strictEnvironmentBlockers(env, contractValue = contract) {
   const blockers = []
-  for (const [name, expected] of Object.entries(contract.requiredStrictEnvironment)) {
+  for (const [name, expected] of Object.entries(contractValue.requiredStrictEnvironment)) {
     if ((env[name] ?? '').trim() !== expected) blockers.push(`${name}=${expected}`)
   }
-  for (const name of contract.requiredStrictValues) {
+  for (const name of contractValue.requiredStrictValues) {
     if (!(env[name] ?? '').trim()) blockers.push(name)
+  }
+  try {
+    validateGradingCalibrationApproval(contractValue.gradingCalibrationApproval, {
+      provider: contractValue.provider?.identity,
+      model: contractValue.provider?.model,
+    })
+  } catch {
+    blockers.push('grading calibration approval')
   }
   return blockers
 }
@@ -113,10 +129,8 @@ let activeStrictPlaywright
 
 function redactedWriter(stream, target, secrets) {
   let pending = ''
-  const redact = (value) => secrets.reduce(
-    (result, secret) => result.split(secret).join('[opaque fixture id]'),
-    value,
-  )
+  const redact = (value) =>
+    secrets.reduce((result, secret) => result.split(secret).join('[opaque fixture id]'), value)
   stream.setEncoding('utf8')
   stream.on('data', (chunk) => {
     pending += chunk
@@ -135,21 +149,17 @@ function redactedWriter(stream, target, secrets) {
 function runStrictPlaywright(playwrightArgs, fixtureEnvironment) {
   const secrets = Object.values(fixtureEnvironment)
   return new Promise((resolvePromise) => {
-    const child = spawn(
-      'pnpm',
-      [...playwrightCommand, ...playwrightArgs],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          DINGTALK_LIVE_SEND: '0',
-          HEX_K12_CURRENT_BUG_LIVE_REQUIRED: '1',
-          ...fixtureEnvironment,
-        },
-        shell: false,
-        stdio: ['inherit', 'pipe', 'pipe'],
+    const child = spawn('pnpm', [...playwrightCommand, ...playwrightArgs], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        DINGTALK_LIVE_SEND: '0',
+        HEX_K12_CURRENT_BUG_LIVE_REQUIRED: '1',
+        ...fixtureEnvironment,
       },
-    )
+      shell: false,
+      stdio: ['inherit', 'pipe', 'pipe'],
+    })
     activeStrictPlaywright = child
     const flushStdout = redactedWriter(child.stdout, process.stdout, secrets)
     const flushStderr = redactedWriter(child.stderr, process.stderr, secrets)
@@ -163,7 +173,7 @@ function runStrictPlaywright(playwrightArgs, fixtureEnvironment) {
       flushStderr()
       resolvePromise({
         error: startError,
-        status: startError ? 1 : (Number.isInteger(code) ? code : 1),
+        status: startError ? 1 : Number.isInteger(code) ? code : 1,
       })
     })
   })
@@ -192,7 +202,9 @@ async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment) {
   await rm(absoluteReportPath, { force: true })
   const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment)
   if (playwright.error) {
-    process.stderr.write(`K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`)
+    process.stderr.write(
+      `K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`,
+    )
   }
 
   let auditPassed = false
@@ -211,46 +223,60 @@ async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment) {
   return { playwrightStatus: playwright.status, auditPassed }
 }
 
-async function runGate(argv) {
+export async function runGate(
+  argv,
+  {
+    env = process.env,
+    processLike = process,
+    contractValue = contract,
+    validateEnvironment = validateFixtureEnvironment,
+    createRuntime = createFixtureRuntime,
+    installSignalCleanup = installFixtureSignalCleanup,
+    runLifecycle = runFixtureLifecycle,
+    runPlaywrightGate = runStrictPlaywrightGate,
+    removeReport = rm,
+    spawnPlaywright = spawnSync,
+  } = {},
+) {
   const { strict, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
   let fixtureConfig
   try {
     validateCurrentBugLiveArguments({ strict, playwrightArgs })
     if (strict) {
-      const blockers = strictEnvironmentBlockers(process.env)
+      const blockers = strictEnvironmentBlockers(env, contractValue)
       if (blockers.length > 0) {
         throw new Error(
           `K12 current-bug LIVE strict gate missing exact authorization: ${blockers.join(', ')}`,
         )
       }
-      fixtureConfig = validateFixtureEnvironment(process.env)
+      fixtureConfig = validateEnvironment(env, {
+        gradingCalibrationApproval: contractValue.gradingCalibrationApproval,
+      })
     }
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-    process.exitCode = 2
+    processLike.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    processLike.exitCode = 2
     return
   }
 
   if (!strict) {
-    await rm(absoluteReportPath, { force: true })
-    const playwright = spawnSync(
-      'pnpm',
-      [...playwrightCommand, ...playwrightArgs],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          DINGTALK_LIVE_SEND: '0',
-        },
-        shell: false,
-        stdio: 'inherit',
+    await removeReport(absoluteReportPath, { force: true })
+    const playwright = spawnPlaywright('pnpm', [...playwrightCommand, ...playwrightArgs], {
+      cwd: repoRoot,
+      env: {
+        ...env,
+        DINGTALK_LIVE_SEND: '0',
       },
-    )
+      shell: false,
+      stdio: 'inherit',
+    })
     const playwrightStatus = playwright.error ? 1 : playwright.status
     if (playwright.error) {
-      process.stderr.write(`K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`)
+      processLike.stderr.write(
+        `K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`,
+      )
     }
-    process.exitCode = currentBugLiveExitCode({
+    processLike.exitCode = currentBugLiveExitCode({
       playwrightStatus,
       strict: false,
       auditPassed: false,
@@ -258,26 +284,27 @@ async function runGate(argv) {
     return
   }
 
-  const runtime = createFixtureRuntime(fixtureConfig)
+  const runtime = createRuntime(fixtureConfig)
   let lifecyclePromise
-  const uninstallSignalCleanup = installFixtureSignalCleanup(process, {
+  const uninstallSignalCleanup = installSignalCleanup(processLike, {
     cancelActive: async () => {
       await cancelStrictPlaywright()
       await runtime.cancelActive()
     },
-    cleanup: () => lifecyclePromise
-      ? lifecyclePromise.then(() => undefined, () => undefined)
-      : runtime.cleanup(),
+    cleanup: () =>
+      lifecyclePromise
+        ? lifecyclePromise.then(
+            () => undefined,
+            () => undefined,
+          )
+        : runtime.cleanup(),
   })
-  lifecyclePromise = runFixtureLifecycle(fixtureConfig, {
+  lifecyclePromise = runLifecycle(fixtureConfig, {
     stopSidecar: runtime.stopSidecar,
     startFixture: runtime.startFixture,
     readManifest: runtime.readManifest,
     startSidecar: runtime.startSidecar,
-    runStrictGate: (fixtureEnvironment) => runStrictPlaywrightGate(
-      playwrightArgs,
-      fixtureEnvironment,
-    ),
+    runStrictGate: (fixtureEnvironment) => runPlaywrightGate(playwrightArgs, fixtureEnvironment),
     cleanupFixture: runtime.cleanupFixture,
   })
 
@@ -291,15 +318,18 @@ async function runGate(argv) {
   await uninstallSignalCleanup.wait()
   uninstallSignalCleanup()
 
-  if (process.exitCode === 130 || process.exitCode === 143) return
+  if (processLike.exitCode === 130 || processLike.exitCode === 143) return
   if (lifecycleError) {
-    process.stderr.write(
+    processLike.stderr.write(
       `${lifecycleError instanceof Error ? lifecycleError.message : String(lifecycleError)}\n`,
     )
-    process.exitCode = 1
+    processLike.exitCode = 1
     return
   }
-  process.exitCode = currentBugLiveExitCode({ ...gateResult, strict: true })
+  processLike.exitCode = currentBugLiveExitCode({
+    ...gateResult,
+    strict: true,
+  })
 }
 
 if (resolve(process.argv[1] ?? '') === resolve(scriptPath)) {

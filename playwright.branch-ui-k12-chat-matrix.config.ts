@@ -1,22 +1,25 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const runID = `${process.pid}`
+
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: '**/branch-ui-general-modals-matrix.spec.ts',
-  timeout: 45_000,
+  testMatch: '**/branch-ui-k12-chat-matrix.spec.ts',
+  timeout: 15 * 60_000,
   expect: {
-    timeout: 5_000,
+    timeout: 15_000,
   },
   retries: 0,
   workers: 1,
   fullyParallel: false,
-  outputDir: '/tmp/hexclaw-branch-ui-general-modals-playwright',
+  outputDir: process.env.HEX_UI_PW_OUTPUT?.trim() || `/tmp/hexclaw-k12-chat-playwright-${runID}`,
   reporter: [
     ['list'],
     [
       'html',
       {
-        outputFolder: '/tmp/hexclaw-branch-ui-general-modals-report',
+        outputFolder:
+          process.env.HEX_UI_REPORT_ROOT?.trim() || `/tmp/hexclaw-k12-chat-report-${runID}`,
         open: 'never',
       },
     ],
@@ -28,8 +31,6 @@ export default defineConfig({
     timezoneId: 'Asia/Shanghai',
     colorScheme: 'light',
     reducedMotion: 'reduce',
-    actionTimeout: 5_000,
-    navigationTimeout: 12_000,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },

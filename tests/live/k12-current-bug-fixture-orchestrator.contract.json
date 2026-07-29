@@ -9,13 +9,7 @@
     "sidecar_stop",
     "fixture_cleanup"
   ],
-  "builderCommand": [
-    "go",
-    "run",
-    "-tags",
-    "testtools",
-    "./cmd/k12-live-fixture-testtools"
-  ],
+  "builderCommand": ["go", "run", "-tags", "testtools", "./cmd/k12-live-fixture-testtools"],
   "manifestExactFields": [
     "schema_version",
     "ownership",
@@ -36,6 +30,8 @@
     "HEX_K12_LIVE_SIDECAR_CONTROL",
     "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
     "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
+    "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
+    "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256",
     "HEX_K12_LIVE_APP_URL",
     "HEX_K12_LIVE_SIDECAR_URL",
     "HEX_K12_LIVE_APP_SHA256"

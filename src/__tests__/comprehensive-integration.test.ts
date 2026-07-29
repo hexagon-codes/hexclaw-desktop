@@ -904,7 +904,6 @@ describe('Scenario 7: Tool approval chain', () => {
   it('multiple initApprovalListener calls do not register duplicate callbacks', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
-    const { hexclawWS } = await import('@/api/websocket')
 
     store.initApprovalListener()
     store.initApprovalListener()

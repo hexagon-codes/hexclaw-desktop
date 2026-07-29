@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {
+  syntheticArtifactSHA256,
+  syntheticGradingBudget,
+  syntheticGradingCalibrationApproval,
+  syntheticGradingCalibrationBytes,
+  syntheticGradingCalibrationEnvironment,
+  syntheticSidecarConfigSHA256,
+} from './helpers/k12-grading-calibration-synthetic.mjs'
 
 const repoFile = (path) => new URL(`../../${path}`, import.meta.url)
 
@@ -9,9 +17,11 @@ function environment() {
     HEX_K12_LIVE_FIXTURE_PROFILE: '/tmp/k12-path-policy/profile',
     HEX_K12_LIVE_FIXTURE_STORE: '/tmp/k12-path-policy/profile/.hexclaw/data.db',
     HEX_K12_LIVE_FIXTURE_MANIFEST: '/tmp/k12-path-policy/profile/manifest.json',
-    HEX_K12_LIVE_SIDECAR_CONTROL: '/work/hexclaw-desktop/scripts/ci/k12-current-bug-isolated-sidecar-control.mjs',
+    HEX_K12_LIVE_SIDECAR_CONTROL:
+      '/work/hexclaw-desktop/scripts/ci/k12-current-bug-isolated-sidecar-control.mjs',
     HEX_K12_LIVE_SIDECAR_CONTROL_SHA256: 'a'.repeat(64),
     HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG: '/tmp/k12-path-policy/controller.json',
+    ...syntheticGradingCalibrationEnvironment('/tmp/k12-path-policy/grading-calibration.json'),
     HEX_K12_LIVE_APP_URL: 'http://localhost:16060',
     HEX_K12_LIVE_SIDECAR_URL: 'http://127.0.0.1:16129',
     HEX_K12_LIVE_APP_SHA256: 'e'.repeat(64),
@@ -20,26 +30,25 @@ function environment() {
 }
 
 function adapters(env, overrides = {}) {
-  const directories = new Set([
-    env.HEXCLAW_LOCAL_SRC,
-    env.HEX_K12_LIVE_FIXTURE_PROFILE,
-  ])
+  const directories = new Set([env.HEXCLAW_LOCAL_SRC, env.HEX_K12_LIVE_FIXTURE_PROFILE])
   const modes = {
     [env.HEXCLAW_LOCAL_SRC]: 0o755,
     [env.HEX_K12_LIVE_FIXTURE_PROFILE]: 0o700,
     [env.HEX_K12_LIVE_FIXTURE_STORE]: 0o600,
     [env.HEX_K12_LIVE_SIDECAR_CONTROL]: 0o755,
     [env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG]: 0o600,
+    [env.HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT]: 0o600,
   }
   return {
     inspectPath: (path) => {
       const override = overrides[path] ?? {}
       return {
-        kind: path === env.HEX_K12_LIVE_FIXTURE_MANIFEST
-          ? 'missing'
-          : directories.has(path)
-            ? 'directory'
-            : 'file',
+        kind:
+          path === env.HEX_K12_LIVE_FIXTURE_MANIFEST
+            ? 'missing'
+            : directories.has(path)
+              ? 'directory'
+              : 'file',
         canonicalPath: path.replace(/^\/tmp\//, '/private/tmp/'),
         mode: modes[path],
         executable: path === env.HEX_K12_LIVE_SIDECAR_CONTROL,
@@ -47,12 +56,19 @@ function adapters(env, overrides = {}) {
         ...override,
       }
     },
-    fileSHA256: () => env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
+    fileSHA256: (path) =>
+      path.endsWith('/grading-calibration.json')
+        ? syntheticArtifactSHA256
+        : env.HEX_K12_LIVE_SIDECAR_CONTROL_SHA256,
     readControllerRuntimeContract: () => ({
       releaseUIURL: env.HEX_K12_LIVE_APP_URL,
       sidecarURL: env.HEX_K12_LIVE_SIDECAR_URL,
       installedAppSHA256: env.HEX_K12_LIVE_APP_SHA256,
+      gradingBudget: syntheticGradingBudget(),
+      sidecarConfigSHA256: syntheticSidecarConfigSHA256,
     }),
+    readGradingCalibrationBytes: () => syntheticGradingCalibrationBytes(),
+    gradingCalibrationApproval: syntheticGradingCalibrationApproval(),
   }
 }
 
@@ -69,9 +85,7 @@ test('path policy accepts a 0755 source while private assets remain 0700/0600', 
     [env.HEX_K12_LIVE_FIXTURE_STORE, { mode: 0o644 }],
     [env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG, { mode: 0o644 }],
   ]) {
-    assert.throws(() =>
-      validateFixtureEnvironment(env, adapters(env, { [path]: override })),
-    )
+    assert.throws(() => validateFixtureEnvironment(env, adapters(env, { [path]: override })))
   }
 })
 
@@ -87,18 +101,27 @@ test('path policy rejects relative, missing and symlink source without weakening
     ),
   )
   assert.throws(() =>
-    validateFixtureEnvironment(env, adapters(env, {
-      [env.HEXCLAW_LOCAL_SRC]: { kind: 'missing' },
-    })),
+    validateFixtureEnvironment(
+      env,
+      adapters(env, {
+        [env.HEXCLAW_LOCAL_SRC]: { kind: 'missing' },
+      }),
+    ),
   )
   assert.throws(() =>
-    validateFixtureEnvironment(env, adapters(env, {
-      [env.HEXCLAW_LOCAL_SRC]: { symlink: true },
-    })),
+    validateFixtureEnvironment(
+      env,
+      adapters(env, {
+        [env.HEXCLAW_LOCAL_SRC]: { symlink: true },
+      }),
+    ),
   )
   assert.throws(() =>
-    validateFixtureEnvironment(env, adapters(env, {
-      [env.HEX_K12_LIVE_SIDECAR_CONTROL]: { executable: false },
-    })),
+    validateFixtureEnvironment(
+      env,
+      adapters(env, {
+        [env.HEX_K12_LIVE_SIDECAR_CONTROL]: { executable: false },
+      }),
+    ),
   )
 })
