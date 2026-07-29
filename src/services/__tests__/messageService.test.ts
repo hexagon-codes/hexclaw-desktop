@@ -187,7 +187,8 @@ describe('messageService', () => {
       listSessionMessages.mockResolvedValueOnce({ messages: [backendMessage], total: 1 })
       const msgs = await loadMessages('s1')
       // 修复后：顶层 reasoning 被正确赋值
-      expect(msgs[0]!.reasoning).toBe('这是思考过程')
+      expect(msgs[0]!.reasoning).toBeUndefined()
+      expect(msgs[0]!.metadata?.reasoning_visibility).toBe('not_exposed')
     })
   })
 
@@ -202,7 +203,7 @@ describe('messageService', () => {
       total: 1,
     })
     const msgs = await loadMessages('s1')
-    expect(msgs[0]!.reasoning).toBe('这是思考过程')
+    expect(msgs[0]!.reasoning).toBeUndefined()
     expect(msgs[0]!.metadata?.thinking_duration).toBe(5)
   })
 
@@ -285,7 +286,7 @@ describe('messageService', () => {
       total: 1,
     })
     const msgs = await loadMessages('s1')
-    expect(msgs[0]!.reasoning).toBe('字符串形式的思考')
+    expect(msgs[0]!.reasoning).toBeUndefined()
     expect(msgs[0]!.agent_name).toBe('Coder')
   })
 
@@ -319,7 +320,7 @@ describe('messageService', () => {
       total: 1,
     })
     const msgs = await loadMessages('s1')
-    expect(msgs[0]!.reasoning).toBe('顶层思考')
+    expect(msgs[0]!.reasoning).toBeUndefined()
   })
 
   it('reasoning is undefined when neither top-level nor metadata has it', async () => {
@@ -425,7 +426,7 @@ describe('messageService', () => {
 
       const msgs = await loadMessages('sess-2')
       expect(msgs[0]!.content).toBe('根据记忆，您去年买了一个表。')
-      expect(msgs[0]!.reasoning).toBe('用户问了去年买了什么，让我想想...')
+      expect(msgs[0]!.reasoning).toBeUndefined()
     })
 
     it('修复后: 已有 reasoning 时，<think> 内容追加而非覆盖', async () => {
@@ -441,8 +442,7 @@ describe('messageService', () => {
 
       const msgs = await loadMessages('sess-3')
       expect(msgs[0]!.content).toBe('回复内容')
-      expect(msgs[0]!.reasoning).toContain('后端返回的 reasoning')
-      expect(msgs[0]!.reasoning).toContain('content 内嵌的思考')
+      expect(msgs[0]!.reasoning).toBeUndefined()
     })
 
     it('修复后: 无 <think> 标签的消息不受影响', async () => {
@@ -485,7 +485,7 @@ describe('messageService', () => {
 
       const msgs = await loadMessages('sess-6')
       expect(msgs[0]!.content).toBe('最终答案')
-      expect(msgs[0]!.reasoning).toBe('深度思考内容')
+      expect(msgs[0]!.reasoning).toBeUndefined()
     })
 
     it('修复后: 历史消息若只有 reasoning 没有正文，仍显示兜底提示', async () => {
@@ -502,7 +502,7 @@ describe('messageService', () => {
 
       const msgs = await loadMessages('sess-7')
       expect(msgs[0]!.content).toBe('模型只完成了思考，没有输出最终回答，请重试一次。')
-      expect(msgs[0]!.reasoning).toBe('只有思考过程，没有最终答案')
+      expect(msgs[0]!.reasoning).toBeUndefined()
     })
   })
 })

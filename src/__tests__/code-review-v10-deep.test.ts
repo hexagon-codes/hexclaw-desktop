@@ -13,7 +13,6 @@
  *   5. BudgetPanel division by zero (FIXED)
  *   6. LogsView i18n (FIXED)
  *   7. DashboardView dashTab dead code (DOCUMENTED)
- *   8. ResearchProgress doneLabelKey same as labelKey (DOCUMENTED)
  *   9. SettingsSecurity ARIA attribute (DOCUMENTED)
  *  10. ChatExportMenu filename sanitization (DOCUMENTED)
  *  11. ErrorBoundary uses Tailwind instead of BEM (DOCUMENTED)
@@ -203,42 +202,6 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
     // \u65f6\u95f4\u6233\u76f4\u63a5 formatLogTime(entry.timestamp) \u6e32\u67d3\uff0c\u65e0 now.value \u5b9a\u65f6\u5668\uff08\u907f\u514d\u6bcf\u79d2\u6574\u5217\u91cd\u6e32\uff09
     expect(src).toContain('formatLogTime(entry.timestamp)')
     expect(src).not.toContain('now.value')
-  })
-})
-
-// ════════════════════════════════════════════════════════════
-// 8. ResearchProgress doneLabelKey same as labelKey (DOCUMENTED)
-// ════════════════════════════════════════════════════════════
-
-describe('Issue #8 [DOCUMENTED]: ResearchProgress doneLabelKey duplicates labelKey', () => {
-  const src = readSrc('components/chat/ResearchProgress.vue')
-
-  it('defines a phases array with doneLabelKey property', () => {
-    expect(src).toContain('doneLabelKey')
-  })
-
-  it('[SMELL] search phase has doneLabelKey identical to labelKey', () => {
-    expect(src).toMatch(/key:\s*'search'.*labelKey:\s*'research\.searching'.*doneLabelKey:\s*'research\.searching'/)
-  })
-
-  it('[SMELL] analyze phase has doneLabelKey identical to labelKey', () => {
-    expect(src).toMatch(/key:\s*'analyze'.*labelKey:\s*'research\.analyzing'.*doneLabelKey:\s*'research\.analyzing'/)
-  })
-
-  it('[SMELL] all four phases have matching labelKey and doneLabelKey', () => {
-    // Extract phase definitions
-    const phasesMatch = src.match(/const\s+phases[^=]*=\s*\[([\s\S]*?)\]/)
-    expect(phasesMatch).not.toBeNull()
-    const phasesBlock = phasesMatch![1]!
-    // Count labelKey and doneLabelKey pairs
-    const labelKeys = [...phasesBlock.matchAll(/labelKey:\s*'([^']+)'/g)].map(m => m[1])
-    const doneKeys = [...phasesBlock.matchAll(/doneLabelKey:\s*'([^']+)'/g)].map(m => m[1])
-    expect(labelKeys.length).toBe(4)
-    expect(doneKeys.length).toBe(4)
-    // All doneLabelKeys match their corresponding labelKeys
-    for (let i = 0; i < labelKeys.length; i++) {
-      expect(doneKeys[i]).toBe(labelKeys[i])
-    }
   })
 })
 

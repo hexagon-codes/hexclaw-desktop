@@ -1054,6 +1054,13 @@ describe('services/messageService', () => {
           tool_calls: [{ id: 'tc1', name: 'search', arguments: '{}', result: 'ok' }],
           agent_name: 'Agent007',
           reasoning: 'I thought about it',
+          reasoning_disclosure: {
+            visibility: 'visible',
+            source: 'provider',
+            dialect: 'reasoning',
+            provider: 'test-provider',
+            model: 'test-model',
+          },
           extra_field: 'preserved',
         }),
       }
@@ -1153,6 +1160,15 @@ describe('services/messageService', () => {
         tool_calls: [{ id: 'tc1', name: 'fn', arguments: '{}' }],
         agent_name: 'Agent',
         reasoning: 'because...',
+        metadata: {
+          reasoning_disclosure: {
+            visibility: 'visible' as const,
+            source: 'provider',
+            dialect: 'reasoning',
+            provider: 'test-provider',
+            model: 'test-model',
+          },
+        },
       }
       const result = serializeMessageMetadata(msg)
       expect(result).toBeDefined()
@@ -1194,8 +1210,15 @@ describe('services/messageService', () => {
         tool_calls: [] as import('@/types/chat').ToolCall[],
       }
       const result = serializeMessageMetadata(msg)
-      // Empty tool_calls.length is 0, so if-check fails => not added
-      expect(result).toBeUndefined()
+      expect(result).toMatchObject({
+        assistant_message_id: '4',
+        message_id: '4',
+        assistant_message_aliases: [],
+        last_sequence: 0,
+        reasoning_visibility: 'not_exposed',
+        runtime_events: [],
+      })
+      expect(result).not.toHaveProperty('tool_calls')
     })
 
     it('preserves existing metadata fields alongside tool_calls', () => {
@@ -1204,7 +1227,17 @@ describe('services/messageService', () => {
         role: 'assistant' as const,
         content: '',
         timestamp: '2024-01-01T00:00:00Z',
-        metadata: { provider: 'openai', model: 'gpt-4' },
+        metadata: {
+          provider: 'openai',
+          model: 'gpt-4',
+          reasoning_disclosure: {
+            visibility: 'visible' as const,
+            source: 'provider',
+            dialect: 'reasoning',
+            provider: 'test-provider',
+            model: 'test-model',
+          },
+        },
         tool_calls: [{ id: 'x', name: 'y', arguments: '{}' }],
         reasoning: 'think',
       }

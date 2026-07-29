@@ -113,17 +113,29 @@ function setupStreaming(reasoning: string, content = '') {
   const store = useChatStore()
   streamingReasoning.value = reasoning
   streamingContent.value = content
-  Object.defineProperty(store, 'isCurrentStreaming', { configurable: true, get: () => true })
-  Object.defineProperty(store, 'isCurrentStreamingReasoning', {
-    configurable: true,
-    get: () => streamingReasoning.value,
-  })
-  Object.defineProperty(store, 'isCurrentStreamingContent', {
-    configurable: true,
-    get: () => streamingContent.value,
-  })
   store.currentSessionId = 'reasoning-session'
   store.messages.push({ id: 'u1', role: 'user', content: '516−356=', timestamp: '' })
+  store.activeStreams = {
+    'reasoning-session': {
+      sessionId: 'reasoning-session',
+      requestId: 'reasoning-request',
+      assistantMessageId: 'reasoning-assistant',
+      rawContent: content,
+      content,
+      explicitReasoning: reasoning,
+      reasoning,
+      reasoningStartTime: 0,
+      reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
+      thinkingEnabled: true,
+      startedAt: Date.now() - 1_000,
+      state: 'running',
+      visibility: 'visible',
+    },
+  }
 }
 
 function mountChatView(setup?: () => void) {
@@ -144,7 +156,6 @@ function mountChatView(setup?: () => void) {
         MessageActions: { template: '<div />' },
         ChatSearchDialog: { template: '<div />' },
         ChatExportMenu: { template: '<div />' },
-        ResearchProgress: { template: '<div />' },
         ArtifactsPanel: { template: '<div />' },
         ContextMenu: { template: '<div />' },
       },
@@ -254,6 +265,70 @@ describe('BUG-20260724: Main Chat reasoning uses the safe Markdown renderer', ()
     expect(reasoning.find('a[href^="javascript:"]').exists()).toBe(false)
     expect(reasoning.find('.artifact-renderer').exists()).toBe(false)
     expect(reasoning.text()).not.toContain('Preview')
+    wrapper.unmount()
+  })
+
+  it('keeps exactly one assistant DOM host from live streaming through persisted reconciliation', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    store.messages.push({ id: 'u-live', role: 'user', content: '问题', timestamp: '' })
+    store.activeStreams = {
+      s1: {
+        sessionId: 's1',
+        requestId: 'request-live',
+        assistantMessageId: 'assistant-live',
+        rawContent: '',
+        content: '',
+        explicitReasoning: '',
+        reasoning: '',
+        reasoningStartTime: 0,
+        assistantMessageAliases: [],
+        lastSequence: 0,
+        runtimeEvents: [],
+        acceptedRuntimeFrames: {},
+        reasoningEndTime: 0,
+        thinkingEnabled: true,
+        startedAt: Date.now() - 1_000,
+        state: 'running',
+        visibility: 'not_exposed',
+        agentDisplayName: '小明的辅导老师',
+        recipientDisplayName: '小明',
+      },
+    } as typeof store.activeStreams
+    await flushPromises()
+
+    const liveHosts = wrapper.findAll('[data-assistant-message-id="assistant-live"]')
+    expect(liveHosts).toHaveLength(1)
+    const liveHost = liveHosts[0]!.element
+
+    store.activeStreams.s1!.reasoning = '公开进度'
+    store.activeStreams.s1!.visibility = 'visible'
+    store.activeStreams.s1!.content = '首个答案 token'
+    await flushPromises()
+    expect(wrapper.findAll('[data-assistant-message-id="assistant-live"]')).toHaveLength(1)
+    expect(wrapper.get('[data-assistant-message-id="assistant-live"]').element).toBe(liveHost)
+
+    store.messages.push({
+      id: 'assistant-live',
+      role: 'assistant',
+      content: '最终答案',
+      reasoning: '公开进度',
+      timestamp: '',
+      agent_name: '小明的辅导老师',
+      metadata: {
+        thinking_state: 'completed',
+        thinking_duration: 2,
+        reasoning_visibility: 'visible',
+        recipient_display_name: '小明',
+      },
+    })
+    delete store.activeStreams.s1
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-assistant-message-id="assistant-live"]')).toHaveLength(1)
+    expect(wrapper.get('[data-assistant-message-id="assistant-live"]').element).toBe(liveHost)
     wrapper.unmount()
   })
 })

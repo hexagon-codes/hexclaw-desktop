@@ -44,6 +44,7 @@ describe('BUG-20260703 B3: finalize 思考时长双源（本地实测 vs 后端 
       {
         sessionId: 's1', requestId: 'r1', rawContent: '', content: '答案',
         explicitReasoning: '', reasoning: '思考…', reasoningStartTime: 0, reasoningEndTime: 0,
+        assistantMessageAliases: [], lastSequence: 0, runtimeEvents: [], acceptedRuntimeFrames: {},
       },
       append,
     )
@@ -56,7 +57,7 @@ describe('BUG-20260703 B3: finalize 思考时长双源（本地实测 vs 后端 
       draftSending: ref(false),
     })
     const msg = captured[0]
-    expect(msg?.metadata?.thinking_duration, 'B3: 后端时长被 finalize 抹掉——切会话前徽标就丢').toBe('7')
+    expect(msg?.metadata?.thinking_duration, 'B3: 后端时长被 finalize 抹掉——切会话前徽标就丢').toBe(7)
     expect(Number(msg?.metadata?.thinking_duration)).toBeGreaterThan(0)
   })
 
@@ -68,6 +69,7 @@ describe('BUG-20260703 B3: finalize 思考时长双源（本地实测 vs 后端 
         sessionId: 's1', requestId: 'r1', rawContent: '', content: '答案',
         explicitReasoning: '', reasoning: '思考…',
         reasoningStartTime: Date.now() - 5000, reasoningEndTime: Date.now() - 1000,
+        assistantMessageAliases: [], lastSequence: 0, runtimeEvents: [], acceptedRuntimeFrames: {},
       },
       append,
     )

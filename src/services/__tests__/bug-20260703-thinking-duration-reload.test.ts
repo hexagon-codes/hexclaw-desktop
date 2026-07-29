@@ -45,7 +45,7 @@ describe('BUG-20260703 思考时长切会话重载丢失', () => {
 
     const msgs = await loadMessages('s1')
     expect(msgs).toHaveLength(1)
-    expect(msgs[0]?.reasoning).toBe('让我想想……')
+    expect(msgs[0]?.reasoning).toBeUndefined()
     expect(msgs[0]?.metadata?.thinking_duration).toBe(12)
   })
 

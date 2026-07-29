@@ -52,4 +52,28 @@ describe('chat edit route snapshot', () => {
     expect(Object.isFrozen(sourceSnapshot)).toBe(true)
     expect(Object.isFrozen(sourceSnapshot.chatParams)).toBe(true)
   })
+
+  it.each([
+    ['ordinary Agent', '法务助手', '法务助手'],
+    ['K12 TutorAgent', '小明的辅导老师', '小明'],
+  ])('freezes the %s Agent and recipient display names', (_, agentDisplayName, recipientDisplayName) => {
+    const input = {
+      agentRole: 'agent-at-send',
+      chatParams: { model: 'gpt-5.6-sol' },
+      thinkingEnabled: true,
+      agentDisplayName,
+      recipientDisplayName,
+    }
+
+    const snapshot = freezeChatRouteSnapshot(input)
+    input.agentDisplayName = '切换后的 Agent'
+    input.recipientDisplayName = '切换后的收件人'
+
+    expect(snapshot).toMatchObject({
+      agentRole: 'agent-at-send',
+      thinkingEnabled: true,
+      agentDisplayName,
+      recipientDisplayName,
+    })
+  })
 })

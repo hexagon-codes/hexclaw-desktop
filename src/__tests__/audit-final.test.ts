@@ -220,7 +220,14 @@ describe('1. messageService edge cases after DB removal', () => {
 
   it('normalizeLoadedMessage: null metadata yields undefined fields', () => {
     const msg = normalizeLoadedMessage({ id: 'x1', role: 'assistant', content: 'hello', timestamp: '2026-01-01', metadata: null })
-    expect(msg.metadata).toBeUndefined()
+    expect(msg.metadata).toMatchObject({
+      assistant_message_id: 'x1',
+      message_id: 'x1',
+      assistant_message_aliases: [],
+      last_sequence: 0,
+      reasoning_visibility: 'not_exposed',
+      runtime_events: [],
+    })
     expect(msg.tool_calls).toBeUndefined()
     expect(msg.reasoning).toBeUndefined()
   })
@@ -230,6 +237,13 @@ describe('1. messageService edge cases after DB removal', () => {
       tool_calls: [{ id: 'tc1', name: 'search', arguments: '{}' }],
       reasoning: 'because X',
       agent_name: 'coder',
+      reasoning_disclosure: {
+        visibility: 'visible',
+        source: 'provider',
+        dialect: 'reasoning',
+        provider: 'test-provider',
+        model: 'test-model',
+      },
     })
     const msg = normalizeLoadedMessage({ id: 'x2', role: 'assistant', content: 'done', timestamp: '2026-01-01', metadata })
     expect(msg.reasoning).toBe('because X')

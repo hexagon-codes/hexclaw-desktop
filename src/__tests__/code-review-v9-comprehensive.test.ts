@@ -483,6 +483,7 @@ describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', 
   const chatStoreTs = readFileSync(resolve(SRC, 'stores/chat.ts'), 'utf-8')
   const chatStoreStateTs = readFileSync(resolve(SRC, 'stores/chat-store-state.ts'), 'utf-8')
   const chatStreamHelpersTs = readFileSync(resolve(SRC, 'stores/chat-stream-helpers.ts'), 'utf-8')
+  const chatStreamStateTs = readFileSync(resolve(SRC, 'stores/chat-stream-state.ts'), 'utf-8')
 
   it('streamingReasoningStartTime is declared as a ref in the store', () => {
     expect(chatStoreStateTs).toMatch(/streamingReasoningStartTime:\s*ref\(0\)/)
@@ -498,12 +499,17 @@ describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', 
 
   it('streamingReasoningStartTime is used to calculate thinking duration', () => {
     expect(CHAT_THINKING_TIMER_TS).toContain('streamingReasoningStartTime.value')
-    expect(CHAT_STREAM_COMPLETION_TS).toContain('endTime - streamState.reasoningStartTime')
+    expect(CHAT_STREAM_COMPLETION_TS).toContain('getStreamThinkingDuration(streamState)')
+    expect(CHAT_STREAM_COMPLETION_TS).toMatch(
+      /import\s*\{[^}]*getStreamThinkingDuration[^}]*\}\s*from\s*['"]\.\/chat-stream-helpers['"]/s,
+    )
   })
 
-  it('streamingReasoningStartTime is reset to 0 on cancel/done', () => {
-    expect(CHAT_STREAM_CANCEL_TS).toContain('streamingReasoningStartTime.value = 0')
-    expect(CHAT_SEND_WEBSOCKET_DELIVERY_TS).toContain('reasoningStartTime: 0')
+  it('streamingReasoningStartTime is reset through canonical stream teardown', () => {
+    expect(CHAT_STREAM_CANCEL_TS).toContain('resetSessionStream(targetSessionId')
+    expect(chatStreamStateTs).toContain(
+      'streamingReasoningStartTime.value = next.streamingReasoningStartTime',
+    )
     expect(chatStreamHelpersTs).toContain('streamingReasoningStartTime: 0')
   })
 })

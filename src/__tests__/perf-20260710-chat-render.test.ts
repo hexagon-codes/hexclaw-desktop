@@ -55,10 +55,16 @@ describe('A · useThrottledText(流式节流)', () => {
 })
 
 describe('B · 消息区窗口化(源锁,行为由 ChatView 集成测试与 live 门守)', () => {
-  it('★ChatView 消息循环走 visibleMessages 窗口而非全量 messages', () => {
+  it('★ChatView 消息循环走 visibleMessages 派生窗口而非全量 messages', () => {
     const body = fs.readFileSync(path.join(SRC, 'views/ChatView.vue'), 'utf8')
-    expect(body).toContain('v-for="(msg, idx) in visibleMessages"')
     expect(body).toContain('const visibleMessages = computed')
+    const renderedStart = body.indexOf('const renderedMessages = computed')
+    const renderedEnd = body.indexOf('function isLiveAssistantMessage', renderedStart)
+    const renderedBlock = body.slice(renderedStart, renderedEnd)
+    expect(renderedStart).toBeGreaterThan(-1)
+    expect(renderedBlock).toContain('visibleMessages.value')
+    expect(renderedBlock).toContain('return [...visibleMessages.value, live]')
+    expect(body).toContain('v-for="(msg, idx) in renderedMessages"')
     // 「显示更早」入口 + 切会话重置
     expect(body).toContain('data-testid="chat-show-earlier"')
     expect(body).toMatch(/messageWindow\.value = MESSAGE_WINDOW_INITIAL/)
@@ -67,7 +73,12 @@ describe('B · 消息区窗口化(源锁,行为由 ChatView 集成测试与 live
   it('★流式气泡使用节流镜像而非原始流内容直喂 MarkdownRenderer', () => {
     const body = fs.readFileSync(path.join(SRC, 'views/ChatView.vue'), 'utf8')
     expect(body).toContain('useThrottledText')
-    expect(body).toContain('<MarkdownRenderer :content="throttledStreamContent"')
+    const liveStart = body.indexOf('const liveAssistantMessage = computed')
+    const liveEnd = body.indexOf('const renderedMessages = computed', liveStart)
+    const liveProjection = body.slice(liveStart, liveEnd)
+    expect(liveStart).toBeGreaterThan(-1)
+    expect(liveProjection).toContain('content: throttledStreamContent.value')
+    expect(body).toContain('v-for="(msg, idx) in renderedMessages"')
     expect(body).not.toContain('<MarkdownRenderer :content="chatStore.isCurrentStreamingContent"')
   })
 })

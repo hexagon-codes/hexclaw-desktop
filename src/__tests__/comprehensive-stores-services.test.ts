@@ -44,6 +44,7 @@ const mockMsgSvc = {
   loadMessages: vi.fn().mockResolvedValue([]),
   loadArtifacts: vi.fn().mockResolvedValue([]),
   persistMessage: vi.fn().mockResolvedValue(true),
+  persistCancelledReply: vi.fn().mockResolvedValue(undefined),
   removeMessage: vi.fn().mockResolvedValue(undefined),
   saveArtifact: vi.fn().mockResolvedValue(undefined),
   updateSessionTitle: vi.fn().mockResolvedValue(undefined),
@@ -393,7 +394,7 @@ describe('Chat Store', () => {
   // ── stopStreaming ──
 
   describe('stopStreaming()', () => {
-    it('persists partial content if non-empty', async () => {
+    it('persists partial content through the canonical cancellation path', async () => {
       const store = await getChatStore()
       store.streaming = true
       store.streamingSessionId = 'sess1'
@@ -405,7 +406,13 @@ describe('Chat Store', () => {
       const partialMsg = store.messages.find((m) => m.content === 'partial answer')
       expect(partialMsg).toBeDefined()
       expect(partialMsg!.role).toBe('assistant')
-      expect(mockMsgSvc.persistMessage).toHaveBeenCalled()
+      expect(mockMsgSvc.persistCancelledReply).toHaveBeenCalledWith(
+        'sess1',
+        expect.objectContaining({
+          role: 'assistant',
+          content: 'partial answer',
+        }),
+      )
     })
 
     it('sends cancel message to backend', async () => {
@@ -435,7 +442,7 @@ describe('Chat Store', () => {
   // ── finalizeAssistantMessage ──
 
   describe('finalizeAssistantMessage()', () => {
-    it('empty content with reasoning -> shows a non-empty fallback message', async () => {
+    it('reasoning without an authorized runtime frame stays fail-closed', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
       mockChatSvc.openWebSocketStream.mockImplementation(
         (
@@ -458,8 +465,12 @@ describe('Chat Store', () => {
       const msg = await store.sendMessage('hello')
 
       expect(msg).not.toBeNull()
-      expect(msg?.content).toBe('模型只完成了思考，没有输出最终回答，请重试一次。')
-      expect(msg?.reasoning).toBe('thought about it')
+      expect(msg?.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
+      expect(msg?.reasoning).toBeUndefined()
+      expect(msg?.metadata).toMatchObject({
+        reasoning_visibility: 'not_exposed',
+        runtime_events: [],
+      })
     })
 
     it('empty content without reasoning -> shows "(空回复)"', async () => {
@@ -1406,7 +1417,16 @@ describe('Message Service', () => {
         role: 'assistant',
         content: 'answer',
         timestamp: '2026-01-01T00:00:00Z',
-        metadata: JSON.stringify({ reasoning: 'I thought about this carefully' }),
+        metadata: JSON.stringify({
+          reasoning: 'I thought about this carefully',
+          reasoning_disclosure: {
+            visibility: 'visible',
+            source: 'provider',
+            dialect: 'reasoning',
+            provider: 'test-provider',
+            model: 'test-model',
+          },
+        }),
       }
       const msg = normalizeLoadedMessage(row)
       expect(msg.reasoning).toBe('I thought about this carefully')
@@ -1439,6 +1459,15 @@ describe('Message Service', () => {
         tool_calls: [{ id: 't1', name: 'fn', arguments: '{}', result: 'ok' }],
         agent_name: 'coder',
         reasoning: 'deep thought',
+        metadata: {
+          reasoning_disclosure: {
+            visibility: 'visible' as const,
+            source: 'provider',
+            dialect: 'reasoning',
+            provider: 'test-provider',
+            model: 'test-model',
+          },
+        },
       }
       const result = serializeMessageMetadata(msg)
       expect(result).toBeDefined()

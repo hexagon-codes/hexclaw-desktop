@@ -318,7 +318,6 @@ function mountChatView(options?: {
         MessageActions: { template: '<div />' },
         ChatSearchDialog: { template: '<div />' },
         ChatExportMenu: { template: '<div />' },
-        ResearchProgress: { template: '<div />' },
         ArtifactsPanel: { template: '<div />' },
         ContextMenu: { template: '<div />' },
       },
@@ -596,9 +595,25 @@ describe('ChatView — E2E 关键路径', () => {
 
     // 模拟流式输出状态
     store.currentSessionId = 'stream-session'
-    store.streaming = true
-    store.streamingSessionId = 'stream-session'
-    store.streamingContent = ''
+    store.activeStreams['stream-session'] = {
+      sessionId: 'stream-session',
+      requestId: 'stream-request',
+      assistantMessageId: 'stream-assistant',
+      rawContent: '',
+      content: '',
+      explicitReasoning: '',
+      reasoning: '',
+      reasoningStartTime: 0,
+      reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
+      thinkingEnabled: false,
+      startedAt: Date.now(),
+      state: 'running',
+      visibility: 'not_exposed',
+    }
     // 需要至少有条消息才不走空状态分支
     store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
     await flushPromises()
@@ -619,8 +634,25 @@ describe('ChatView — E2E 关键路径', () => {
 
     store.currentSessionId = 'pending-session'
     store.sending = true
-    store.streaming = false
-    store.streamingContent = ''
+    store.activeStreams['pending-session'] = {
+      sessionId: 'pending-session',
+      requestId: 'pending-request',
+      assistantMessageId: 'pending-assistant',
+      rawContent: '',
+      content: '',
+      explicitReasoning: '',
+      reasoning: '',
+      reasoningStartTime: 0,
+      reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
+      thinkingEnabled: false,
+      startedAt: Date.now(),
+      state: 'running',
+      visibility: 'not_exposed',
+    }
     store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
     await flushPromises()
 
@@ -638,9 +670,25 @@ describe('ChatView — E2E 关键路径', () => {
     const store = useChatStore()
 
     store.currentSessionId = 'stream-session'
-    store.streaming = true
-    store.streamingSessionId = 'stream-session'
-    store.streamingContent = '正在生成的内容...'
+    store.activeStreams['stream-session'] = {
+      sessionId: 'stream-session',
+      requestId: 'stream-content-request',
+      assistantMessageId: 'stream-content-assistant',
+      rawContent: '正在生成的内容...',
+      content: '正在生成的内容...',
+      explicitReasoning: '',
+      reasoning: '',
+      reasoningStartTime: 0,
+      reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
+      thinkingEnabled: false,
+      startedAt: Date.now(),
+      state: 'running',
+      visibility: 'not_exposed',
+    }
     store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
     await flushPromises()
 

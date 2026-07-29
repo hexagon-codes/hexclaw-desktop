@@ -7,7 +7,11 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { ref, nextTick } from 'vue'
-import { mergeStreamChunkState, type SessionStreamState } from '@/stores/chat-stream-helpers'
+import {
+  getStreamThinkingDuration,
+  mergeStreamChunkState,
+  type SessionStreamState,
+} from '@/stores/chat-stream-helpers'
 import { createChatThinkingTimerController } from '@/stores/chat-thinking-timer'
 import { readFileSync } from 'fs'
 
@@ -25,7 +29,24 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
     reasoning: '',
     reasoningStartTime: 0,
     reasoningEndTime: 0,
+    assistantMessageAliases: [],
+    lastSequence: 0,
+    runtimeEvents: [],
+    acceptedRuntimeFrames: {},
   }
+
+  const visibleRuntimeFrame = (sequence: number) => ({
+    assistantMessageId: 'assistant-runtime-1',
+    messageId: 'assistant-runtime-1',
+    sequence,
+    reasoningDisclosure: {
+      visibility: 'visible' as const,
+      source: 'provider_adapter',
+      dialect: 'reasoning_summary',
+      provider: 'test',
+      model: 'test-model',
+    },
+  })
 
   it('修复前行为（复现）: reasoningEndTime 不存在时，计时器会一直跑到输出结束', () => {
     // 模拟旧行为：只有 reasoningStartTime，无 reasoningEndTime
@@ -38,7 +59,12 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
 
   it('修复后: mergeStreamChunkState 在 reasoning→content 转换时设置 reasoningEndTime', () => {
     // 阶段1：收到 reasoning chunk
-    const afterReasoning = mergeStreamChunkState(baseState, undefined, '正在思考...')
+    const afterReasoning = mergeStreamChunkState(
+      baseState,
+      undefined,
+      '正在思考...',
+      visibleRuntimeFrame(1),
+    )
     expect(afterReasoning.reasoningStartTime).toBeGreaterThan(0)
     expect(afterReasoning.reasoningEndTime).toBe(0) // 思考未结束
 
@@ -55,14 +81,14 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
   })
 
   it('修复后: reasoning 持续到来时，endTime 保持为 0', () => {
-    const s1 = mergeStreamChunkState(baseState, undefined, '思考第一步')
-    const s2 = mergeStreamChunkState(s1, undefined, '思考第二步')
+    const s1 = mergeStreamChunkState(baseState, undefined, '思考第一步', visibleRuntimeFrame(1))
+    const s2 = mergeStreamChunkState(s1, undefined, '思考第二步', visibleRuntimeFrame(2))
     expect(s2.reasoningStartTime).toBeGreaterThan(0)
     expect(s2.reasoningEndTime).toBe(0) // 仍在思考
   })
 
   it('修复后: endTime 一旦设置，后续 content chunk 不再改变它', () => {
-    const s1 = mergeStreamChunkState(baseState, undefined, '思考中')
+    const s1 = mergeStreamChunkState(baseState, undefined, '思考中', visibleRuntimeFrame(1))
     const s2 = mergeStreamChunkState(s1, '回答第一段', undefined)
     const firstEndTime = s2.reasoningEndTime
     expect(firstEndTime).toBeGreaterThan(0)
@@ -110,13 +136,12 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
     vi.useRealTimers()
   })
 
-  it('修复后: chat-stream-completion 使用 reasoningEndTime 计算最终 duration', () => {
-    const source = readFileSync('src/stores/chat-stream-completion.ts', 'utf-8')
-    // 修复后：用 endTime 而非 Date.now()
-    expect(source).toContain('streamState?.reasoningEndTime')
-    expect(source).toContain('endTime - streamState.reasoningStartTime')
-    // 不再直接用 Date.now() - startTime
-    expect(source).not.toContain('Date.now() - streamState.reasoningStartTime')
+  it('修复后: completion 共用 helper 按 reasoningEndTime 计算最终 duration', () => {
+    expect(getStreamThinkingDuration({
+      ...baseState,
+      reasoningStartTime: 1_000,
+      reasoningEndTime: 4_000,
+    }, 99_000)).toBe(3)
   })
 })
 

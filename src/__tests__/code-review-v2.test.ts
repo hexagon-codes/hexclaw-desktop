@@ -1,48 +1,22 @@
 /**
  * Code Review V2 — 基于测试暴露的真实 Bug
  *
- * Bug A: WebSocket sendApprovalResponse 三元运算符优先级（安全漏洞）
+ * Bug A: WebSocket 全局审批 sender 绕过 request owner（安全漏洞）
  * Bug B: apiSSE 跨 chunk 行断裂丢失数据（功能链路 bug）
  * Bug C: deleteWebhook 缺少 URI 编码（安全 + 边界）
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// ─── Bug A: sendApprovalResponse 三元运算符优先级错误 ─────
+// ─── Bug A: 全局审批 sender 不得成为第二条发送路径 ─────
 
-describe('Bug A: sendApprovalResponse — remember + denied 应发送 denied_remember', () => {
-  it('所有 approved/remember 组合应产生正确的 content', () => {
-    // 直接测试逻辑表达式，不需要实例化 WebSocket
-    function buildContent(approved: boolean, remember: boolean): string {
-      // 修复后的逻辑
-      const base = approved ? 'approved' : 'denied'
-      return remember ? `${base}_remember` : base
-    }
-
-    // 修复前的逻辑（旧代码）
-    function buildContentOld(approved: boolean, remember: boolean): string {
-      return remember ? 'approved_remember' : approved ? 'approved' : 'denied'
-    }
-
-    // 验证旧逻辑的 bug：denied + remember → 'approved_remember'（错误！）
-    expect(buildContentOld(false, true)).toBe('approved_remember') // 旧代码的 bug
-    expect(buildContentOld(false, true)).not.toBe('denied_remember') // 旧代码错误
-
-    // 验证新逻辑的正确性
-    expect(buildContent(true, false)).toBe('approved')
-    expect(buildContent(true, true)).toBe('approved_remember')
-    expect(buildContent(false, false)).toBe('denied')
-    expect(buildContent(false, true)).toBe('denied_remember') // 核心修复
-  })
-
-  it('修复后的源码应使用 base 变量而非嵌套三元', async () => {
+describe('Bug A: approval response 只经 request-owned transport', () => {
+  it('全局 WebSocket 不再暴露 legacy approval sender', async () => {
     const { readFileSync } = await import('fs')
     const source = readFileSync('src/api/websocket.ts', 'utf-8')
 
-    // 修复后不应包含 remember ? 'approved_remember' 这种硬编码
-    expect(source).not.toContain("remember ? 'approved_remember'")
-    // 应该包含 base 变量模式
-    expect(source).toContain('_remember')
+    expect(source).not.toContain('sendApprovalResponse(')
+    expect(source).not.toContain('denied_remember')
   })
 })
 

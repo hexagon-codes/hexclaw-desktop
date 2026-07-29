@@ -353,6 +353,104 @@ describe('chatService', () => {
     })
   })
 
+  it('hydrates a resumed sequence snapshot atomically and accepts the next frame', async () => {
+    const onSnapshot = vi.fn()
+    const onChunk = vi.fn()
+    const handle = resumeWebSocketStream('s1', 'req-gap', { onSnapshot, onChunk })
+    const socket = socketInstances[0]
+
+    socket!.readyState = MockRequestWebSocket.OPEN
+    socket!.onopen?.()
+
+    try {
+      socket!.onmessage?.({
+        data: JSON.stringify({
+          type: 'stream_snapshot',
+          content: 'already resumed',
+          session_id: 's1',
+          request_id: 'req-gap',
+          done: false,
+          assistant_message_id: 'assistant-backend-gap',
+          message_id: 'assistant-backend-gap',
+          last_sequence: 3,
+          runtime_events: [
+            {
+              version: 1,
+              sequence: 1,
+              event_id: 'event-1',
+              kind: 'tool_started',
+              tool_call_id: 'call-1',
+              tool_name: 'web_search',
+            },
+            {
+              version: 1,
+              sequence: 2,
+              event_id: 'event-2',
+              kind: 'tool_completed',
+              tool_call_id: 'call-1',
+              tool_name: 'web_search',
+            },
+            {
+              version: 1,
+              sequence: 3,
+              event_id: 'event-3',
+              kind: 'terminal',
+              terminal_status: 'completed',
+            },
+          ],
+          reasoning_disclosure: {
+            visibility: 'visible',
+            source: 'provider_adapter',
+            dialect: 'reasoning_summary',
+            provider: 'openai',
+            model: 'gpt-5.6-sol',
+          },
+        }),
+      })
+
+      expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        content: 'already resumed',
+        metadata: expect.objectContaining({
+          assistant_message_id: 'assistant-backend-gap',
+          last_sequence: 3,
+          runtime_events: [
+            expect.objectContaining({ event_id: 'event-1', sequence: 1 }),
+            expect.objectContaining({ event_id: 'event-2', sequence: 2 }),
+            expect.objectContaining({ event_id: 'event-3', sequence: 3 }),
+          ],
+        }),
+      }))
+
+      socket!.onmessage?.({
+        data: JSON.stringify({
+          type: 'chunk',
+          content: ' next',
+          session_id: 's1',
+          request_id: 'req-gap',
+          assistant_message_id: 'assistant-backend-gap',
+          message_id: 'assistant-backend-gap',
+          sequence: 4,
+          reasoning_disclosure: {
+            visibility: 'not_exposed',
+            source: 'provider_adapter',
+            dialect: 'reasoning_summary',
+            provider: 'openai',
+            model: 'gpt-5.6-sol',
+          },
+        }),
+      })
+
+      expect(onChunk).toHaveBeenCalledWith(
+        ' next',
+        undefined,
+        expect.objectContaining({ sequence: 4 }),
+      )
+    } finally {
+      handle.cancel()
+      await handle.done
+    }
+  })
+
   // ─── ChatRequestError ───
   it('ChatRequestError has noFallback property', () => {
     const err = new ChatRequestError('timeout', true)

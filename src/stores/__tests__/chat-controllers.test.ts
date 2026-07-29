@@ -35,7 +35,7 @@ describe('chat controller modules', () => {
     expect(runtime.cancelledSessions.size).toBe(0)
   })
 
-  it('stores, resolves, and clears pending approvals by request id', () => {
+  it('stores, resolves, and clears pending approvals by request id', async () => {
     const nowSpy = vi.spyOn(Date, 'now')
       .mockReturnValueOnce(1_000)
       .mockReturnValueOnce(2_000)
@@ -44,10 +44,19 @@ describe('chat controller modules', () => {
       onApprovalRequest: vi.fn().mockReturnValue(() => {}),
       sendApprovalResponse: vi.fn(),
     }
+    const approvalTransport = {
+      sendApprovalResponse: vi.fn((decision: RedApprovalDecision) => Promise.resolve({
+        type: 'tool_approval_ack' as const,
+        request_id: decision.request_id,
+        decision_id: decision.decision_id,
+        status: 'accepted' as const,
+      })),
+    }
     const controller = createChatApprovalController({
       pendingApprovals,
       approvalCleanup: ref(null),
       ws: ws as any,
+      approvalTransport,
     })
 
     controller.storePendingApproval({
@@ -68,8 +77,9 @@ describe('chat controller modules', () => {
     expect(controller.hasSessionPendingApproval('s-1')).toBe(true)
     expect(controller.getPendingApprovalForSession('s-1')?.requestId).toBe('req-2')
 
-    controller.respondApproval('req-2', true, false)
-    expect(ws.sendApprovalResponse).toHaveBeenCalledWith('req-2', true, false)
+    await controller.respondApproval('req-2', true, false)
+    expect(approvalTransport.sendApprovalResponse).toHaveBeenCalledTimes(1)
+    expect(ws.sendApprovalResponse).not.toHaveBeenCalled()
     expect(controller.getPendingApprovalForSession('s-1')?.requestId).toBe('req-1')
 
     controller.clearPendingApproval('req-1')
@@ -361,6 +371,10 @@ describe('chat controller modules', () => {
         s1: {
           sessionId: 's1',
           requestId: 'req-1',
+          assistantMessageAliases: [],
+          lastSequence: 0,
+          runtimeEvents: [],
+          acceptedRuntimeFrames: {},
           rawContent: '',
           content: '最终回答',
           explicitReasoning: '',
@@ -420,12 +434,17 @@ describe('chat controller modules', () => {
         s1: {
           sessionId: 's1',
           requestId: 'req-1',
+          assistantMessageAliases: [],
+          lastSequence: 0,
+          runtimeEvents: [],
+          acceptedRuntimeFrames: {},
           rawContent: '',
           content: '半截回答',
           explicitReasoning: '',
           reasoning: '半截思考',
           reasoningStartTime: 0,
           reasoningEndTime: 0,
+          visibility: 'visible',
         },
       }),
       currentSessionId: ref('s1'),
@@ -505,7 +524,7 @@ describe('chat controller modules', () => {
       's1',
       expect.objectContaining({ session_id: 's1', request_id: 'req-1' }),
     )
-    expect(updateStreamChunk).toHaveBeenCalledWith('s1', '追加内容', '补充推理')
+    expect(updateStreamChunk).toHaveBeenCalledWith('s1', '追加内容', '补充推理', undefined)
     expect(finalizeAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
@@ -551,6 +570,10 @@ describe('chat controller modules', () => {
       reasoning: '推理中',
       reasoningStartTime: 123,
       reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
     })
 
     expect(streaming.value).toBe(true)
@@ -639,6 +662,10 @@ describe('chat controller modules', () => {
           reasoning: '流式思考',
           reasoningStartTime: 1,
           reasoningEndTime: 0,
+          assistantMessageAliases: [],
+          lastSequence: 0,
+          runtimeEvents: [],
+          acceptedRuntimeFrames: {},
         },
       }),
       currentSessionId: ref<string | null>('s1'),
@@ -1109,5 +1136,243 @@ describe('chat controller modules', () => {
     expect(sendController.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined)
     expect(boundStreamController.stopStreaming).toHaveBeenCalledWith('s2')
     expect(sessionController.deleteSession).toHaveBeenCalledWith('s2')
+  })
+})
+
+// RED contract for the approved tool-approval transport lifecycle.
+type RedApprovalDecision = {
+  request_id: string
+  decision_id: string
+  decision: 'approved_once' | 'approved_remember' | 'denied'
+  idempotency_key: string
+  reason?: string
+}
+
+type RedApprovalAck = {
+  type: 'tool_approval_ack'
+  request_id: string
+  decision_id: string
+  status: 'accepted' | 'send_failed'
+}
+
+function redApprovalRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    requestId: 'approval-request-1',
+    sessionId: 'session-1',
+    toolName: 'filesystem.write',
+    risk: 'high',
+    reason: 'Writes a generated file',
+    deadlineAt: '2026-07-29T04:01:00.000Z',
+    ...overrides,
+  }
+}
+
+function redDeferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+async function createRedApprovalHarness(
+  responder?: (decision: RedApprovalDecision) => Promise<RedApprovalAck>,
+) {
+  const [{ ref }, approvalModule] = await Promise.all([
+    import('vue'),
+    import('../chat-approval-controller'),
+  ])
+  const pendingApprovals = ref<Record<string, Record<string, unknown>>>({})
+  const globalSendApprovalResponse = vi.fn()
+  const ownerSendApprovalResponse = vi.fn(
+    responder ??
+      ((decision: RedApprovalDecision) =>
+        Promise.resolve({
+          type: 'tool_approval_ack' as const,
+          request_id: decision.request_id,
+          decision_id: decision.decision_id,
+          status: 'accepted' as const,
+        })),
+  )
+  const globalWebSocket = { sendApprovalResponse: globalSendApprovalResponse }
+  const state = {
+    pendingApprovals,
+    pendingToolApprovals: pendingApprovals,
+  }
+  const dependencies = {
+    ...state,
+    state,
+    ws: globalWebSocket,
+    websocket: globalWebSocket,
+    approvalTransport: { sendApprovalResponse: ownerSendApprovalResponse },
+  }
+  const factory = (approvalModule as Record<string, unknown>)
+    .createChatApprovalController as (...args: unknown[]) => Record<string, unknown>
+  const controller =
+    factory.length >= 2
+      ? factory(state, globalWebSocket, dependencies.approvalTransport)
+      : factory(dependencies)
+
+  const storePendingApproval =
+    controller.storePendingApproval ??
+    controller.handleApprovalRequest ??
+    controller.handleToolApprovalRequest
+  if (typeof storePendingApproval !== 'function') {
+    throw new Error('Chat approval controller has no request registration method')
+  }
+  const respondApproval = controller.respondApproval
+  if (typeof respondApproval !== 'function') {
+    throw new Error('Chat approval controller has no response method')
+  }
+
+  return {
+    pendingApprovals,
+    globalSendApprovalResponse,
+    ownerSendApprovalResponse,
+    store(request: Record<string, unknown>) {
+      return storePendingApproval.call(controller, request)
+    },
+    respond(requestId: string, approved: boolean, remember: boolean) {
+      return respondApproval.call(controller, requestId, approved, remember)
+    },
+  }
+}
+
+describe('chat approval transport lifecycle RED contract', () => {
+  it('sends the decision through the owning request transport, not the global websocket', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+
+    await Promise.resolve(harness.respond('approval-request-1', true, false))
+
+    expect(harness.ownerSendApprovalResponse).toHaveBeenCalledTimes(1)
+    expect(harness.globalSendApprovalResponse).not.toHaveBeenCalled()
+  })
+
+  it('retains the pending request until the matching acknowledgement arrives', async () => {
+    const acknowledgement = redDeferred<RedApprovalAck>()
+    const harness = await createRedApprovalHarness(() => acknowledgement.promise)
+    harness.store(redApprovalRequest())
+
+    const response = Promise.resolve(
+      harness.respond('approval-request-1', true, false),
+    )
+    await Promise.resolve()
+
+    expect(harness.ownerSendApprovalResponse).toHaveBeenCalledTimes(1)
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+    const decision = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
+
+    acknowledgement.resolve({
+      type: 'tool_approval_ack',
+      request_id: decision.request_id,
+      decision_id: decision.decision_id,
+      status: 'accepted',
+    })
+    await response
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+  })
+
+  it('retains the pending request after owner-transport send failure', async () => {
+    const harness = await createRedApprovalHarness(() =>
+      Promise.reject(new Error('request socket closed')),
+    )
+    harness.store(redApprovalRequest())
+
+    await Promise.resolve(
+      harness.respond('approval-request-1', false, false),
+    ).catch(() => undefined)
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it('reuses one stable decision_id when retrying the same user decision', async () => {
+    let attempt = 0
+    const harness = await createRedApprovalHarness((decision) => {
+      attempt += 1
+      if (attempt === 1) return Promise.reject(new Error('request socket closed'))
+      return Promise.resolve({
+        type: 'tool_approval_ack',
+        request_id: decision.request_id,
+        decision_id: decision.decision_id,
+        status: 'accepted',
+      })
+    })
+    harness.store(redApprovalRequest())
+
+    await Promise.resolve(
+      harness.respond('approval-request-1', true, false),
+    ).catch(() => undefined)
+    await Promise.resolve(harness.respond('approval-request-1', true, false))
+
+    expect(harness.ownerSendApprovalResponse).toHaveBeenCalledTimes(2)
+    const first = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
+    const second = harness.ownerSendApprovalResponse.mock.calls[1]?.[0] as RedApprovalDecision
+    expect(first.decision_id).toEqual(expect.any(String))
+    expect(second.decision_id).toBe(first.decision_id)
+    expect(first.idempotency_key).toEqual(expect.any(String))
+    expect(second.idempotency_key).toBe(first.idempotency_key)
+    expect(first.decision).toBe('approved_once')
+    expect(second.decision).toBe('approved_once')
+  })
+
+  it.each([
+    { approved: true, remember: false, expected: 'approved_once' },
+    { approved: true, remember: true, expected: 'approved_remember' },
+    { approved: false, remember: true, expected: 'denied' },
+  ] as const)(
+    'maps approved=$approved remember=$remember to canonical $expected',
+    async ({ approved, remember, expected }) => {
+      const harness = await createRedApprovalHarness()
+      harness.store(redApprovalRequest())
+
+      await Promise.resolve(harness.respond('approval-request-1', approved, remember))
+
+      const decision = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
+      expect(decision.decision).toBe(expected)
+      expect(decision.idempotency_key).toEqual(expect.any(String))
+    },
+  )
+
+  it('treats an identical duplicate request as a no-op without resetting its deadline', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-29T04:00:00.000Z'))
+    try {
+      const harness = await createRedApprovalHarness()
+      const request = redApprovalRequest()
+      harness.store(request)
+      const original = harness.pendingApprovals.value['approval-request-1']
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      harness.store({ ...request })
+
+      const duplicate = harness.pendingApprovals.value['approval-request-1']
+      expect(duplicate).toBe(original)
+      expect(duplicate?.deadlineAt).toBe('2026-07-29T04:01:00.000Z')
+      expect(duplicate?.receivedAt).toBe(original?.receivedAt)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves the original request when a duplicate id carries conflicting data', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    const original = harness.pendingApprovals.value['approval-request-1']
+
+    harness.store(
+      redApprovalRequest({
+        toolName: 'shell.exec',
+        deadlineAt: '2026-07-29T04:02:00.000Z',
+      }),
+    )
+
+    const stored = harness.pendingApprovals.value['approval-request-1']
+    expect(stored).toBe(original)
+    expect(stored?.toolName).toBe('filesystem.write')
+    expect(stored?.deadlineAt).toBe('2026-07-29T04:01:00.000Z')
   })
 })

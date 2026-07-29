@@ -39,6 +39,10 @@ describe('F-01 stopStreaming 不得停掉另一并发会话', () => {
           reasoning: '',
           reasoningStartTime: 0,
           reasoningEndTime: 0,
+          assistantMessageAliases: [],
+          lastSequence: 0,
+          runtimeEvents: [],
+          acceptedRuntimeFrames: {},
         },
       }),
       currentSessionId: vueRef('A'), // 用户正看 A（A 无流）

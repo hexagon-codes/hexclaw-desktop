@@ -589,9 +589,8 @@ describe('WebSocket 链路', () => {
     }
   })
 
-  it('sendApprovalResponse 应支持 remember 选项', () => {
-    expect(wsSrc).toContain("approved ? 'approved' : 'denied'")
-    expect(wsSrc).toContain('`${base}_remember`')
+  it('审批 response 不得保留全局 legacy sender', () => {
+    expect(wsSrc).not.toContain('sendApprovalResponse(')
   })
 
   it('cleanupConnection 应取消所有事件处理器', () => {

@@ -87,11 +87,17 @@ describe('BUG-20260725 切回会话不重复投影已持久化助手消息', () 
     })
 
     expect(completed.id).toBe('assistant-local-random')
-    expect(completed.metadata?.backend_message_id).toBe('assistant-backend')
+    expect(completed.metadata).toMatchObject({
+      backend_message_id: 'assistant-backend',
+      assistant_message_aliases: [],
+      last_sequence: 0,
+      reasoning_visibility: 'not_exposed',
+      runtime_events: [],
+    })
     expect(appendMessageToSession).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({
-        metadata: { backend_message_id: 'assistant-backend' },
+        metadata: expect.objectContaining({ backend_message_id: 'assistant-backend' }),
       }),
     )
   })

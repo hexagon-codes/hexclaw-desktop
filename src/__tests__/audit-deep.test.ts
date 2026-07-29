@@ -1288,6 +1288,13 @@ describe('11. Message Service Edge Cases', () => {
         tool_calls: [{ id: 'tc1', name: 'search', arguments: '{}' }],
         agent_name: 'researcher',
         reasoning: 'I think...',
+        reasoning_disclosure: {
+          visibility: 'visible',
+          source: 'provider',
+          dialect: 'reasoning',
+          provider: 'test-provider',
+          model: 'test-model',
+        },
       }),
     }
 
@@ -1338,6 +1345,15 @@ describe('11. Message Service Edge Cases', () => {
       tool_calls: [{ id: 'tc1', name: 'search', arguments: '{}' }],
       agent_name: 'bot',
       reasoning: 'because',
+      metadata: {
+        reasoning_disclosure: {
+          visibility: 'visible' as const,
+          source: 'provider',
+          dialect: 'reasoning',
+          provider: 'test-provider',
+          model: 'test-model',
+        },
+      },
     }
 
     const result = actual.serializeMessageMetadata(msg)

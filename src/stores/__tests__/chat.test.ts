@@ -31,7 +31,6 @@ const {
   sendRaw,
   triggerError,
   onApprovalRequest,
-  sendApprovalResponse,
   approvalListeners,
 } = vi.hoisted(() => ({
   loadAllSessions: vi.fn().mockResolvedValue([
@@ -68,7 +67,24 @@ const {
   listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
   sendRaw: vi.fn(),
   triggerError: vi.fn(),
-  approvalListeners: [] as Array<(req: { requestId: string; sessionId: string; toolName: string; risk: string; reason: string }) => void>,
+  approvalListeners: [] as Array<(req: {
+    requestId: string
+    sessionId: string
+    toolName: string
+    risk: string
+    reason: string
+    respondApproval?: (decision: {
+      request_id: string
+      decision_id: string
+      decision: 'approved_once' | 'approved_remember' | 'denied'
+      idempotency_key: string
+    }) => Promise<{
+      type: 'tool_approval_ack'
+      request_id: string
+      decision_id: string
+      status: 'accepted'
+    }>
+  }) => void>,
   onApprovalRequest: vi.fn().mockImplementation((cb) => {
     approvalListeners.push(cb)
     return () => {
@@ -76,7 +92,6 @@ const {
       if (idx >= 0) approvalListeners.splice(idx, 1)
     }
   }),
-  sendApprovalResponse: vi.fn(),
 }))
 
 vi.mock('@/services/messageService', () => ({
@@ -128,7 +143,6 @@ vi.mock('@/api/websocket', () => ({
     sendRaw,
     triggerError,
     onApprovalRequest,
-    sendApprovalResponse,
   },
 }))
 
@@ -845,7 +859,7 @@ describe('useChatStore', () => {
     )
   })
 
-  it('shows a fallback message when websocket returns reasoning only', async () => {
+  it('shows the generic empty-answer fallback for unauthorized reasoning-only chunks', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
     openWebSocketStream.mockImplementation(
       (_text, _sid, _params, _role, _att, callbacks) => {
@@ -859,11 +873,15 @@ describe('useChatStore', () => {
 
     const msg = await store.sendMessage('去年的今天我们在哪里？')
 
-    expect(msg?.content).toBe('模型只完成了思考，没有输出最终回答，请重试一次。')
-    expect(msg?.reasoning).toBe('只有思考，没有答案')
+    expect(msg?.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
+    expect(msg?.reasoning).toBeUndefined()
+    expect(msg?.metadata).toMatchObject({
+      reasoning_visibility: 'not_exposed',
+      runtime_events: [],
+    })
   })
 
-  it('strips leaked closing think tags from websocket reasoning chunks', async () => {
+  it('sanitizes final content and hides leaked closing think-tag reasoning without disclosure', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
     openWebSocketStream.mockImplementation(
       (_text, _sid, _params, _role, _att, callbacks) => {
@@ -878,7 +896,8 @@ describe('useChatStore', () => {
     const msg = await store.sendMessage('你想吃点什么？')
 
     expect(msg?.content).toBe('好的，我直接回答。')
-    expect(msg?.reasoning).toBe('用户再次提问')
+    expect(msg?.content).not.toContain('</think>')
+    expect(msg?.reasoning).toBeUndefined()
   })
 
   it('sends only the pinned-agent lock when thinkingEnabled is off (default)', async () => {
@@ -993,6 +1012,17 @@ describe('useChatStore', () => {
     const store = useChatStore()
     store.currentSessionId = 's1'
     store.initApprovalListener()
+    const createResponder = () => vi.fn(async (decision: {
+      request_id: string
+      decision_id: string
+    }) => ({
+      type: 'tool_approval_ack' as const,
+      request_id: decision.request_id,
+      decision_id: decision.decision_id,
+      status: 'accepted' as const,
+    }))
+    const respondS1 = createResponder()
+    const respondS2 = createResponder()
 
     for (const listener of approvalListeners) {
       listener({
@@ -1001,6 +1031,7 @@ describe('useChatStore', () => {
         toolName: 'tool-a',
         risk: 'sensitive',
         reason: 'session 1 approval',
+        respondApproval: respondS1,
       })
       listener({
         requestId: 'req-s2',
@@ -1008,6 +1039,7 @@ describe('useChatStore', () => {
         toolName: 'tool-b',
         risk: 'dangerous',
         reason: 'session 2 approval',
+        respondApproval: respondS2,
       })
     }
 
@@ -1015,9 +1047,14 @@ describe('useChatStore', () => {
     expect(store.hasSessionPendingApproval('s1')).toBe(true)
     expect(store.hasSessionPendingApproval('s2')).toBe(true)
 
-    store.respondApproval('req-s1', true, false)
+    await store.respondApproval('req-s1', true, false)
 
-    expect(sendApprovalResponse).toHaveBeenCalledWith('req-s1', true, false)
+    expect(respondS1).toHaveBeenCalledWith(expect.objectContaining({
+      request_id: 'req-s1',
+      decision: 'approved_once',
+      idempotency_key: expect.any(String),
+    }))
+    expect(respondS2).not.toHaveBeenCalled()
     expect(store.pendingApproval).toBeNull()
     expect(store.hasSessionPendingApproval('s1')).toBe(false)
     expect(store.hasSessionPendingApproval('s2')).toBe(true)
@@ -1078,8 +1115,8 @@ describe('useChatStore', () => {
     expect(store.messages.some((m) => m.role === 'user')).toBe(true)
     expect(store.messages[store.messages.length - 1]?.role).toBe('user')
     expect(backendText).toHaveBeenCalled()
-    // 流式尚未开始（upsertStreamState 在 backendText 之后的 deliver 里）
-    expect(store.isCurrentStreaming).toBe(false)
+    // 请求拥有的 assistant identity 在 backendText 解析前已创建，后续 token/terminal 复用同一状态。
+    expect(store.isCurrentStreaming).toBe(true)
     // ★核心：Auto-RAG 在途时就应进入挂起态（sending=true），否则小蟹气泡要等 1-2s。
     expect(store.sending, 'Auto-RAG 解析期间 sending 应已为 true（否则小蟹挂起气泡延迟 1-2s）').toBe(true)
 

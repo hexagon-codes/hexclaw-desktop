@@ -170,7 +170,6 @@ function mountChatView() {
         MessageActions: { template: '<div />' },
         ChatSearchDialog: { template: '<div />' },
         ChatExportMenu: { template: '<div />' },
-        ResearchProgress: { template: '<div />' },
         ArtifactsPanel: { template: '<div />' },
         ContextMenu: { template: '<div />' },
       },

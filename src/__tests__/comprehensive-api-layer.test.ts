@@ -997,27 +997,9 @@ describe('websocket.ts', () => {
     })
   })
 
-  describe('sendApprovalResponse()', () => {
-    it('sends approved_remember format', async () => {
-      await connectAndCapture()
-
-      hexclawWS.sendApprovalResponse('req-1', true, true)
-
-      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1]!)
-      expect(sent.type).toBe('tool_approval_response')
-      expect(sent.content).toBe('approved_remember')
-      expect(sent.metadata.request_id).toBe('req-1')
-    })
-
-    it('sends denied format (no remember)', async () => {
-      await connectAndCapture()
-
-      hexclawWS.sendApprovalResponse('req-2', false, false)
-
-      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1]!)
-      expect(sent.type).toBe('tool_approval_response')
-      expect(sent.content).toBe('denied')
-      expect(sent.metadata.request_id).toBe('req-2')
+  describe('tool approval transport ownership', () => {
+    it('does not expose the removed global approval sender', () => {
+      expect('sendApprovalResponse' in hexclawWS).toBe(false)
     })
   })
 

@@ -36,6 +36,7 @@ const {
   resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
+  approvalResponder,
   // api/chat
   updateMessageFeedback,
   // api/knowledge
@@ -86,6 +87,14 @@ const {
     })),
     sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
     clearWebSocketCallbacks: vi.fn(),
+    approvalResponder: vi.fn((decision: { request_id: string; decision_id: string }) =>
+      Promise.resolve({
+        type: 'tool_approval_ack' as const,
+        request_id: decision.request_id,
+        decision_id: decision.decision_id,
+        status: 'accepted' as const,
+      }),
+    ),
 
     updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 
@@ -831,26 +840,36 @@ describe('Scenario 7: Tool approval chain', () => {
       risk: 'high',
       reason: 'The tool wants to run arbitrary code',
       sessionId: 'session-A',
+      respondApproval: approvalResponder,
     }
 
     // Trigger the approval callback
     wsCallbacks.approval!.forEach((cb) => cb(approvalReq))
 
     // Pending approval should be set
-    expect(store.pendingApproval).toEqual(expect.objectContaining(approvalReq))
+    expect(store.pendingApproval).toEqual(expect.objectContaining({
+      requestId: approvalReq.requestId,
+      toolName: approvalReq.toolName,
+      risk: approvalReq.risk,
+      reason: approvalReq.reason,
+      sessionId: approvalReq.sessionId,
+    }))
     expect(store.pendingApproval?.requestId).toBe('req-001')
     expect(store.pendingApproval?.toolName).toBe('execute_code')
     expect(store.pendingApproval?.risk).toBe('high')
 
     // Respond with approval
-    const { hexclawWS } = await import('@/api/websocket')
-    store.respondApproval('req-001', true, false)
+    await store.respondApproval('req-001', true, false)
 
     // Pending approval cleared
     expect(store.pendingApproval).toBeNull()
 
-    // WS approval response sent
-    expect(hexclawWS.sendApprovalResponse).toHaveBeenCalledWith('req-001', true, false)
+    // The request-bound owner receives the correlated decision; the global socket is never used.
+    expect(approvalResponder).toHaveBeenCalledWith(expect.objectContaining({
+      request_id: 'req-001',
+      decision: 'approved_once',
+      idempotency_key: expect.any(String),
+    }))
   })
 
   it('respondApproval with deny sends denied response', async () => {
@@ -860,16 +879,26 @@ describe('Scenario 7: Tool approval chain', () => {
 
     store.initApprovalListener()
     wsCallbacks.approval!.forEach((cb) =>
-      cb({ requestId: 'req-002', toolName: 'file_write', risk: 'sensitive', reason: 'Writing to disk', sessionId: 's1' }),
+      cb({
+        requestId: 'req-002',
+        toolName: 'file_write',
+        risk: 'sensitive',
+        reason: 'Writing to disk',
+        sessionId: 's1',
+        respondApproval: approvalResponder,
+      }),
     )
 
     expect(store.pendingApproval?.requestId).toBe('req-002')
 
-    const { hexclawWS } = await import('@/api/websocket')
-    store.respondApproval('req-002', false, true)
+    await store.respondApproval('req-002', false, true)
 
     expect(store.pendingApproval).toBeNull()
-    expect(hexclawWS.sendApprovalResponse).toHaveBeenCalledWith('req-002', false, true)
+    expect(approvalResponder).toHaveBeenCalledWith(expect.objectContaining({
+      request_id: 'req-002',
+      decision: 'denied',
+      idempotency_key: expect.any(String),
+    }))
   })
 
   it('multiple initApprovalListener calls do not register duplicate callbacks', async () => {
@@ -881,8 +910,8 @@ describe('Scenario 7: Tool approval chain', () => {
     store.initApprovalListener()
     store.initApprovalListener()
 
-    // onApprovalRequest should have been called only once (guard in store)
-    expect(hexclawWS.onApprovalRequest).toHaveBeenCalledTimes(1)
+    // Re-registration disposes the previous callback, so only one active listener remains.
+    expect(wsCallbacks.approval).toHaveLength(1)
   })
 })
 

@@ -8,6 +8,10 @@ import { resolve } from 'path'
  * 这里用源码顺序锚点钉死：工具卡块出现在 thinking 块之后、回答气泡之前。
  */
 const chatView = readFileSync(resolve(__dirname, '../views/ChatView.vue'), 'utf-8')
+const thinkingProgress = readFileSync(
+  resolve(__dirname, '../components/chat/ThinkingProgress.vue'),
+  'utf-8',
+)
 
 describe('ChatView 工具卡因果位（P0-1）', () => {
   it('工具卡块在回答气泡（bubble-wrap）之前', () => {
@@ -19,8 +23,9 @@ describe('ChatView 工具卡因果位（P0-1）', () => {
   })
 
   it('工具卡块在 thinking 块之后（think → act 顺序）', () => {
-    const thinkingIdx = chatView.indexOf('hc-thinking__details')
+    const thinkingIdx = chatView.indexOf('<ThinkingProgress')
     const toolsIdx = chatView.indexOf('class="hc-msg__tools"')
+    expect(thinkingProgress).toContain('<ActivityTimeline')
     expect(thinkingIdx).toBeGreaterThan(-1)
     expect(thinkingIdx).toBeLessThan(toolsIdx)
   })

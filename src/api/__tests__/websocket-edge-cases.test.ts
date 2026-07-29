@@ -127,26 +127,8 @@ describe('WebSocket Edge Cases', () => {
       })
     })
 
-    it('sendApprovalResponse sends correct format (approved + remember)', async () => {
-      const connectPromise = hexclawWS.connect()
-      await vi.advanceTimersByTimeAsync(10)
-      await connectPromise
-
-      hexclawWS.sendApprovalResponse('req-123', true, true)
-      const sent = JSON.parse(wsInstance!.sent[wsInstance!.sent.length - 1]!)
-      expect(sent.type).toBe('tool_approval_response')
-      expect(sent.content).toBe('approved_remember')
-      expect(sent.metadata.request_id).toBe('req-123')
-    })
-
-    it('sendApprovalResponse sends correct format (denied)', async () => {
-      const connectPromise = hexclawWS.connect()
-      await vi.advanceTimersByTimeAsync(10)
-      await connectPromise
-
-      hexclawWS.sendApprovalResponse('req-456', false, false)
-      const sent = JSON.parse(wsInstance!.sent[wsInstance!.sent.length - 1]!)
-      expect(sent.content).toBe('denied')
+    it('does not expose the removed global approval sender', () => {
+      expect('sendApprovalResponse' in hexclawWS).toBe(false)
     })
   })
 

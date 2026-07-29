@@ -128,7 +128,6 @@ function mountChatView(setup?: () => void) {
         MessageActions: { template: '<div />' },
         ChatSearchDialog: { template: '<div />' },
         ChatExportMenu: { template: '<div />' },
-        ResearchProgress: { template: '<div />' },
         ArtifactsPanel: { template: '<div />' },
         ContextMenu: { template: '<div />' },
       },
@@ -156,11 +155,29 @@ function setupStreamingReasoning(initial: string) {
   const store = useChatStore()
   reasoningRef.value = initial
   contentRef.value = ''
-  Object.defineProperty(store, 'isCurrentStreaming', { configurable: true, get: () => true })
-  Object.defineProperty(store, 'isCurrentStreamingContent', { configurable: true, get: () => contentRef.value })
-  Object.defineProperty(store, 'isCurrentStreamingReasoning', { configurable: true, get: () => reasoningRef.value })
   store.currentSessionId = 'think-session'
   store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
+  store.activeStreams = {
+    'think-session': {
+      sessionId: 'think-session',
+      requestId: 'think-request',
+      assistantMessageId: 'think-assistant',
+      rawContent: '',
+      content: '',
+      explicitReasoning: initial,
+      reasoning: initial,
+      reasoningStartTime: 0,
+      reasoningEndTime: 0,
+      assistantMessageAliases: [],
+      lastSequence: 0,
+      runtimeEvents: [],
+      acceptedRuntimeFrames: {},
+      thinkingEnabled: true,
+      startedAt: Date.now() - 1_000,
+      state: 'running',
+      visibility: 'visible',
+    },
+  }
 }
 
 beforeAll(() => {
@@ -202,7 +219,14 @@ describe('BUG-20260626: 思考流式时不得把思考框从用户上滚处拽�
     setGeometry(box!, { scrollHeight: 1000, clientHeight: 200, scrollTop: 100 })
 
     // 又来一个 reasoning chunk → 触发 watcher
-    reasoningRef.value += '\n刚刚追加的一段新思考'
+    const store = useChatStore()
+    store.activeStreams = {
+      ...store.activeStreams,
+      'think-session': {
+        ...store.activeStreams['think-session']!,
+        reasoning: store.activeStreams['think-session']!.reasoning + '\n刚刚追加的一段新思考',
+      },
+    }
     await flushPromises()
 
     // 不变量：scrollTop 仍停在用户上滚处（100），绝不被拽到 scrollHeight(1000)
@@ -219,7 +243,14 @@ describe('BUG-20260626: 思考流式时不得把思考框从用户上滚处拽�
     // 用户贴底：scrollTop=790，距底 1000-790-200=10px（视作已在底部）
     setGeometry(box!, { scrollHeight: 1000, clientHeight: 200, scrollTop: 790 })
 
-    reasoningRef.value += '\n继续思考'
+    const store = useChatStore()
+    store.activeStreams = {
+      ...store.activeStreams,
+      'think-session': {
+        ...store.activeStreams['think-session']!,
+        reasoning: store.activeStreams['think-session']!.reasoning + '\n继续思考',
+      },
+    }
     await flushPromises()
 
     // 贴底态应继续跟随到最新底部
