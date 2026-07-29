@@ -51,6 +51,7 @@ export interface ChatSendDeps {
     assistantMessage: ChatMessage | null
     attachment?: { fileName: string; parsedText?: string } | null
   }) => Promise<void>
+  captureRouteSnapshot?: () => ChatRouteSnapshot
 }
 
 /**
@@ -184,6 +185,7 @@ export function useChatSend(deps: ChatSendDeps) {
     clearAttachmentPreview,
     scrollToBottom,
     attachConversationAutomationActions,
+    captureRouteSnapshot,
   } = deps
 
   /** File -> Base64 */
@@ -428,7 +430,7 @@ export function useChatSend(deps: ChatSendDeps) {
       skillNames,
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,
-      routeSnapshot: options?.routeSnapshot,
+      routeSnapshot: options?.routeSnapshot ?? captureRouteSnapshot?.(),
     }
     const sendPromise = chatStore.sendMessage(
       finalText,

@@ -1,7 +1,7 @@
 import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
-import type { ToolCall, ContentBlock } from '@/types'
+import type { ToolCall, ContentBlock, ReasoningDisclosure, RuntimeEvent } from '@/types'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 type ChunkCallback = (message: WsServerMessage) => void
@@ -75,7 +75,7 @@ interface WsUsage {
 }
 
 interface WsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved' | 'desktop_notification'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'memory_saved' | 'desktop_notification'
   content: string
   message_content?: MessageContent
   render_manifest?: RenderManifest
@@ -84,6 +84,13 @@ interface WsServerMessage {
   session_id?: string
   /** 后端若回填请求 ID，可据此把回调按 request 分流防串（BUG-20260718）。 */
   request_id?: string
+  owner_id?: string
+  invocation_id?: string
+  tool_name?: string
+  arguments?: Record<string, unknown>
+  arguments_digest?: string
+  security_scope_digest?: string
+  deadline_at?: string
   usage?: WsUsage
   tool_calls?: ToolCall[]
   blocks?: ContentBlock[]
@@ -91,14 +98,25 @@ interface WsServerMessage {
   // U9：后端结构化 RAG/记忆命中（顶层字段，Metadata 是 string map 无法承载对象数组）。
   knowledge_hits?: Record<string, unknown>[]
   memory_hits?: Record<string, unknown>[]
+  assistant_message_id?: string
+  message_id?: string
+  sequence?: number
+  reasoning_disclosure?: ReasoningDisclosure
+  runtime_event?: Omit<RuntimeEvent, 'sequence'>
 }
 
 export interface ToolApprovalRequest {
   requestId: string
+  ownerId?: string
+  invocationId?: string
   toolName: string
+  arguments?: Record<string, unknown>
+  argumentsDigest?: string
+  securityScopeDigest?: string
   risk: string
   reason: string
   sessionId: string
+  deadlineAt?: string
 }
 
 type ApprovalCallback = (req: ToolApprovalRequest) => void
@@ -297,17 +315,6 @@ class HexClawWS {
     return () => { this.reconnectCallbacks = this.reconnectCallbacks.filter((cb) => cb !== callback) }
   }
 
-  /** Send tool approval response back to backend */
-  sendApprovalResponse(requestId: string, approved: boolean, remember: boolean): void {
-    const base = approved ? 'approved' : 'denied'
-    const content = remember ? `${base}_remember` : base
-    this.sendRaw({
-      type: 'tool_approval_response',
-      content,
-      metadata: { request_id: requestId },
-    })
-  }
-
   /** Send a raw JSON message to the backend */
   sendRaw(data: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
@@ -359,12 +366,19 @@ class HexClawWS {
         this.lastPongTime = Date.now()
         break
       case 'tool_approval_request':
+      case 'tool_permission_request':
         this.approvalCallbacks.forEach((cb) => cb({
-          requestId: (msg.metadata?.request_id as string) || '',
-          toolName: (msg.metadata?.tool_name as string) || '',
+          requestId: msg.request_id || (msg.metadata?.request_id as string) || '',
+          ownerId: msg.owner_id || (msg.metadata?.owner_id as string) || undefined,
+          invocationId: msg.invocation_id || (msg.metadata?.invocation_id as string) || undefined,
+          toolName: msg.tool_name || (msg.metadata?.tool_name as string) || '',
+          arguments: msg.arguments,
+          argumentsDigest: msg.arguments_digest || (msg.metadata?.arguments_digest as string) || undefined,
+          securityScopeDigest: msg.security_scope_digest || (msg.metadata?.security_scope_digest as string) || undefined,
           risk: (msg.metadata?.risk as string) || 'sensitive',
           reason: msg.content || '',
           sessionId: msg.session_id || '',
+          deadlineAt: msg.deadline_at || (msg.metadata?.deadline_at as string) || undefined,
         }))
         break
       case 'memory_saved':

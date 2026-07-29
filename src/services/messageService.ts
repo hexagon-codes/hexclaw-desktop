@@ -19,6 +19,7 @@ import { DEFAULT_SESSION_TITLE } from '@/constants'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
 import type { ChatMessage, ChatSession, Artifact } from '@/types'
+import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
 
 // ─── 消息序列化（保留，供外部 normalize 使用） ───────
 
@@ -38,14 +39,19 @@ export function normalizeLoadedMessage(row: {
   timestamp: string
   metadata: string | null
 }): ChatMessage {
-  const metadata = parseMessageMetadata(row.metadata)
-  const toolCalls = Array.isArray(metadata?.tool_calls) ? metadata.tool_calls : undefined
+  const parsedMetadata = parseMessageMetadata(row.metadata)
+  const toolCalls = Array.isArray(parsedMetadata?.tool_calls) ? parsedMetadata.tool_calls : undefined
   // 重载有序内容块：多步 ReAct 切会话/重启后仍按真实交错序渲染（后端 meta.blocks 已落库）。
-  const blocks = Array.isArray(metadata?.blocks) ? metadata.blocks : undefined
-  const agentName = typeof metadata?.agent_name === 'string' ? metadata.agent_name : undefined
-  const reasoning = typeof metadata?.reasoning === 'string'
-    ? normalizeAssistantReasoning(metadata.reasoning) || undefined
+  const blocks = Array.isArray(parsedMetadata?.blocks) ? parsedMetadata.blocks : undefined
+  const agentName = typeof parsedMetadata?.agent_name === 'string' ? parsedMetadata.agent_name : undefined
+  const rawReasoning = typeof parsedMetadata?.reasoning === 'string'
+    ? normalizeAssistantReasoning(parsedMetadata.reasoning) || undefined
     : undefined
+  const runtimeMetadata = row.role === 'assistant'
+    ? normalizeRuntimeSnapshotMetadata(parsedMetadata, row.id)
+    : parsedMetadata
+  const metadata = normalizeThinkingMetadata(runtimeMetadata, rawReasoning)
+  const reasoning = metadata?.reasoning_disclosure?.visibility === 'visible' ? rawReasoning : undefined
 
   return {
     id: row.id,
@@ -61,15 +67,18 @@ export function normalizeLoadedMessage(row: {
 }
 
 export function serializeMessageMetadata(msg: ChatMessage): Record<string, unknown> | undefined {
-  const metadata: Record<string, unknown> = { ...msg.metadata }
+  const metadata: Record<string, unknown> = msg.role === 'assistant'
+    ? normalizeRuntimeSnapshotMetadata(msg.metadata, msg.id)
+    : { ...msg.metadata }
   if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls
   if (msg.blocks?.length) metadata.blocks = msg.blocks
   if (msg.agent_name) metadata.agent_name = msg.agent_name
-  if (msg.reasoning) {
+  if (msg.reasoning && metadata.reasoning_disclosure
+    && (metadata.reasoning_disclosure as { visibility?: unknown }).visibility === 'visible') {
     const reasoning = normalizeAssistantReasoning(msg.reasoning)
     if (reasoning) metadata.reasoning = reasoning
   }
-  return Object.keys(metadata).length > 0 ? metadata : undefined
+  return normalizeThinkingMetadata(metadata, msg.reasoning)
 }
 
 // ─── 会话操作 ──────────────────────────────────────
@@ -136,9 +145,12 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
         ? parseMessageMetadata(m.metadata)
         : (m.metadata ?? undefined)
       // reasoning 存储在 meta 字段（扩展元数据）中
-      const metaExt = typeof (m as unknown as Record<string, unknown>).meta === 'string'
-        ? parseMessageMetadata((m as unknown as Record<string, unknown>).meta as string)
-        : undefined
+      const rawMetaExt = (m as unknown as Record<string, unknown>).meta
+      const metaExt = typeof rawMetaExt === 'string'
+        ? parseMessageMetadata(rawMetaExt)
+        : rawMetaExt && typeof rawMetaExt === 'object'
+          ? rawMetaExt as Record<string, unknown>
+          : undefined
       const rawReasoning = m.reasoning
         || (typeof metaExt?.reasoning === 'string' ? metaExt.reasoning : undefined)
         || (typeof meta?.reasoning === 'string' ? meta.reasoning : undefined)
@@ -177,12 +189,35 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
       if (mergedMeta.thinking_duration == null && metaExt?.thinking_duration != null) {
         mergedMeta.thinking_duration = metaExt.thinking_duration
       }
+      if (mergedMeta.thinking_state == null && metaExt?.thinking_state != null) {
+        mergedMeta.thinking_state = metaExt.thinking_state
+      }
+      if (mergedMeta.reasoning_visibility == null && metaExt?.reasoning_visibility != null) {
+        mergedMeta.reasoning_visibility = metaExt.reasoning_visibility
+      }
+      for (const key of [
+        'assistant_message_id',
+        'message_id',
+        'assistant_message_aliases',
+        'reasoning_disclosure',
+        'runtime_events',
+        'last_sequence',
+      ]) {
+        if (mergedMeta[key] == null && metaExt?.[key] != null) mergedMeta[key] = metaExt[key]
+      }
       const rawFeedback = (m as unknown as Record<string, unknown>).feedback
       if (rawFeedback === 'like' || rawFeedback === 'dislike') {
         mergedMeta.user_feedback = rawFeedback
       }
       if (m.id) mergedMeta.backend_message_id = m.id
-      const finalMeta = Object.keys(mergedMeta).length > 0 ? mergedMeta : undefined
+      const runtimeMeta = m.role === 'assistant'
+        ? normalizeRuntimeSnapshotMetadata(mergedMeta, m.id)
+        : mergedMeta
+      const finalMeta = normalizeThinkingMetadata(runtimeMeta, mergedReasoning)
+      if (finalMeta?.reasoning_disclosure?.visibility !== 'visible') {
+        mergedReasoning = undefined
+        if (finalMeta) delete finalMeta.reasoning
+      }
 
       return {
         ...m,
@@ -214,17 +249,33 @@ export async function persistMessage(_msg: ChatMessage, _sessionId: string): Pro
  * （LLM 调用已报错、没有正常 assistant 轮次可存）。显式追加一条，保证切会话重载后
  * 错误仍可见、可重试。best-effort：落库失败不抛出，气泡已在内存中展示。
  */
-export async function persistErrorReply(sessionId: string, message: ChatMessage): Promise<void> {
+async function persistTerminalReply(
+  sessionId: string,
+  message: ChatMessage,
+  metadata: Record<string, unknown> | undefined,
+): Promise<void> {
   try {
     await appendSessionMessage(sessionId, {
       id: message.id,
       role: 'assistant',
       content: message.content,
-      metadata: { ...(message.metadata ?? {}), is_error: true },
+      metadata,
     })
   } catch {
     // 落库失败不阻塞 UI
   }
+}
+
+export async function persistErrorReply(sessionId: string, message: ChatMessage): Promise<void> {
+  await persistTerminalReply(
+    sessionId,
+    message,
+    { ...(serializeMessageMetadata(message) ?? {}), is_error: true },
+  )
+}
+
+export async function persistCancelledReply(sessionId: string, message: ChatMessage): Promise<void> {
+  await persistTerminalReply(sessionId, message, serializeMessageMetadata(message))
 }
 
 export async function removeMessage(id: string): Promise<void> {

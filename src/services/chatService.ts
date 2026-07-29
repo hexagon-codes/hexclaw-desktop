@@ -12,9 +12,15 @@ import { sendChatViaBackend } from '@/api/chat'
 import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
 import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
+import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { DESKTOP_USER_ID, USER_CANCELLED_MESSAGE } from '@/constants'
-import type { ChatMessage, ChatAttachment } from '@/types'
+import type { ChatMessage, ChatAttachment, RuntimeWireFrame, RuntimeWireSnapshot } from '@/types'
+import {
+  createRuntimeWireSnapshot,
+  mergeRuntimeWireFrame,
+  normalizeRuntimeSnapshotMetadata,
+} from '@/types/chat'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 // Real cloud models can spend more than two minutes in provider queueing before
@@ -46,15 +52,15 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 // ─── WebSocket 流式发送 ──────────────────────────────
 
 export interface StreamCallbacks {
-  onChunk?: (content: string, reasoning?: string) => void
+  onChunk?: (content: string, reasoning?: string, runtimeFrame?: RuntimeWireFrame) => void
   onDone?: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string, messageContent?: MessageContent) => void
   onApprovalRequest?: (request: ToolApprovalRequest) => void
-  onSnapshot?: (snapshot: { content: string; reasoning?: string; metadata?: Record<string, unknown>; done?: boolean; messageContent?: MessageContent }) => void
+  onSnapshot?: (snapshot: { content: string; reasoning?: string; metadata?: Record<string, unknown>; done?: boolean; messageContent?: MessageContent; runtimeFrame?: RuntimeWireFrame }) => void
   onMemorySaved?: (content: string) => void
 }
 
 interface StreamWsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved' | 'stream_snapshot'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'memory_saved' | 'stream_snapshot'
   content: string
   message_content?: MessageContent
   render_manifest?: RenderManifest
@@ -62,6 +68,13 @@ interface StreamWsServerMessage {
   done?: boolean
   session_id?: string
   request_id?: string
+  owner_id?: string
+  invocation_id?: string
+  tool_name?: string
+  arguments?: Record<string, unknown>
+  arguments_digest?: string
+  security_scope_digest?: string
+  deadline_at?: string
   usage?: unknown
   tool_calls?: ChatMessage['tool_calls']
   blocks?: ChatMessage['blocks']
@@ -69,6 +82,47 @@ interface StreamWsServerMessage {
   // U9：后端结构化 RAG/记忆命中（顶层字段，非 metadata 内——后端 Metadata 是 string map）。
   knowledge_hits?: Record<string, unknown>[]
   memory_hits?: Record<string, unknown>[]
+  assistant_message_id?: string
+  message_id?: string
+  sequence?: number
+  reasoning_disclosure?: unknown
+  runtime_event?: unknown
+  runtime_events?: unknown
+  last_sequence?: number
+}
+
+function runtimeMetadata(
+  metadata: Record<string, unknown> | undefined,
+  snapshot: RuntimeWireSnapshot,
+): Record<string, unknown> | undefined {
+  if (
+    snapshot.lastSequence === 0
+    && !snapshot.assistantMessageId
+    && !snapshot.reasoningDisclosure
+    && snapshot.runtimeEvents.length === 0
+  ) {
+    if (!metadata) return undefined
+    const legacyMetadata = { ...metadata }
+    delete legacyMetadata.reasoning
+    delete legacyMetadata.reasoning_disclosure
+    return legacyMetadata
+  }
+  const next = { ...(metadata ?? {}) }
+  delete next.reasoning
+  delete next.reasoning_disclosure
+  delete next.runtime_events
+  delete next.last_sequence
+  delete next.assistant_message_id
+  delete next.message_id
+  next.reasoning_visibility = snapshot.reasoningDisclosure?.visibility ?? 'not_exposed'
+  next.runtime_events = snapshot.runtimeEvents
+  next.last_sequence = snapshot.lastSequence
+  if (snapshot.reasoningDisclosure) next.reasoning_disclosure = snapshot.reasoningDisclosure
+  if (snapshot.assistantMessageId) {
+    next.assistant_message_id = snapshot.assistantMessageId
+    next.message_id = snapshot.assistantMessageId
+  }
+  return next
 }
 
 // U9 契约对齐：后端把 RAG/记忆命中作为 done chunk / reply 的**顶层**结构化数组回传
@@ -103,6 +157,98 @@ export interface WebSocketStreamHandle {
   done: Promise<WebSocketStreamResult | null>
 }
 
+export interface ToolApprovalDecisionWire {
+  request_id: string
+  decision_id: string
+  invocation_id?: string
+  arguments_digest?: string
+  security_scope_digest?: string
+  decision: 'approved_once' | 'approved_remember' | 'denied'
+  idempotency_key: string
+  reason?: string
+}
+
+export interface ToolApprovalAckWire {
+  type: 'tool_approval_ack'
+  request_id: string
+  decision_id: string
+  status: 'accepted' | 'already_accepted' | 'expired' | 'rejected'
+}
+
+interface ApprovalAckWaiter {
+  socket: WebSocket
+  requestId: string
+  resolve: (ack: ToolApprovalAckWire) => void
+  reject: (error: Error) => void
+}
+
+const approvalAckWaiters = new Map<string, ApprovalAckWaiter>()
+
+function releaseApprovalSocket(socket: WebSocket, reason: string) {
+  for (const [decisionId, waiter] of approvalAckWaiters) {
+    if (waiter.socket !== socket) continue
+    approvalAckWaiters.delete(decisionId)
+    waiter.reject(new Error(reason))
+  }
+}
+
+function consumeToolApprovalAck(data: Record<string, unknown>): boolean {
+  if (data.type !== 'tool_approval_ack') return false
+  const decisionId = String(data.decision_id || '')
+  const requestId = String(data.request_id || '')
+  const status = String(data.status || '')
+  const waiter = approvalAckWaiters.get(decisionId)
+  if (!waiter || waiter.requestId !== requestId) return true
+  if (!['accepted', 'already_accepted', 'expired', 'rejected'].includes(status)) return true
+  approvalAckWaiters.delete(decisionId)
+  waiter.resolve({
+    type: 'tool_approval_ack',
+    request_id: requestId,
+    decision_id: decisionId,
+    status: status as ToolApprovalAckWire['status'],
+  })
+  return true
+}
+
+function sendToolApprovalResponse(
+  socket: WebSocket,
+  decision: ToolApprovalDecisionWire,
+): Promise<ToolApprovalAckWire> {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error('Owning approval request socket is not connected'))
+  }
+
+  return new Promise<ToolApprovalAckWire>((resolve, reject) => {
+    approvalAckWaiters.set(decision.decision_id, {
+      socket,
+      requestId: decision.request_id,
+      resolve,
+      reject,
+    })
+    try {
+      socket.send(JSON.stringify({
+        type: 'tool_approval_response',
+        content: decision.decision,
+        request_id: decision.request_id,
+        decision_id: decision.decision_id,
+        invocation_id: decision.invocation_id,
+        metadata: {
+          request_id: decision.request_id,
+          decision_id: decision.decision_id,
+          invocation_id: decision.invocation_id,
+          decision: decision.decision,
+          idempotency_key: decision.idempotency_key,
+          arguments_digest: decision.arguments_digest,
+          security_scope_digest: decision.security_scope_digest,
+        },
+      }))
+    } catch (error) {
+      approvalAckWaiters.delete(decision.decision_id)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
 export function sendViaWebSocket(
   text: string,
   sessionId: string,
@@ -118,6 +264,7 @@ export function sendViaWebSocket(
 
     let settled = false
     let accumulatedContent = ''
+    let runtimeSnapshot = createRuntimeWireSnapshot()
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fail(new ChatRequestError('Assistant reply timed out — no response received.', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
@@ -148,15 +295,22 @@ export function sendViaWebSocket(
     // 异源（其它请求）的迟到 chunk/reply；未回填时一律投递（零回归）。
     const streamScope = requestId ? { requestId } : undefined
     hexclawWS.onChunk((chunk) => {
+      const merged = mergeRuntimeWireFrame(runtimeSnapshot, chunk, chatParams)
+      if (!merged.accepted || (chunk.sequence && !merged.frame)) return
+      if (merged.frame) runtimeSnapshot = merged.snapshot
       markActivity()
       if (chunk.content) accumulatedContent += chunk.content
-      callbacks?.onChunk?.(chunk.content, chunk.reasoning)
+      const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
+        ? chunk.reasoning
+        : undefined
+      if (merged.frame?.sequence) callbacks?.onChunk?.(chunk.content, publicReasoning, merged.frame)
+      else callbacks?.onChunk?.(chunk.content, publicReasoning)
       if (chunk.done && !settled) {
         settled = true
         clearTimers()
         callbacks?.onDone?.(
           accumulatedContent,
-          foldRetrievalHits(chunk.metadata, chunk),
+          runtimeMetadata(foldRetrievalHits(chunk.metadata, chunk), runtimeSnapshot),
           chunk.tool_calls,
           typeof chunk.metadata?.agent_name === 'string' ? chunk.metadata.agent_name : undefined,
           chunk.message_content,
@@ -167,12 +321,15 @@ export function sendViaWebSocket(
 
     hexclawWS.onReply((reply) => {
       if (settled) return
+      const merged = mergeRuntimeWireFrame(runtimeSnapshot, reply, chatParams)
+      if (!merged.accepted || (reply.sequence && !merged.frame)) return
+      if (merged.frame) runtimeSnapshot = merged.snapshot
       markActivity()
       settled = true
       clearTimers()
       callbacks?.onDone?.(
         reply.content,
-        foldRetrievalHits(reply.metadata, reply),
+        runtimeMetadata(foldRetrievalHits(reply.metadata, reply), runtimeSnapshot),
         reply.tool_calls,
         typeof reply.metadata?.agent_name === 'string' ? reply.metadata.agent_name : undefined,
         reply.message_content,
@@ -213,12 +370,14 @@ function openRequestSocket(
   requestId: string | undefined,
   callbacks: StreamCallbacks | undefined,
   buildPayload: () => Record<string, unknown>,
+  route?: { provider?: string; model?: string },
 ): WebSocketStreamHandle {
   const url = `${env.wsBase}/ws`
   const ws = new WebSocket(url)
 
   let settled = false
   let accumulatedContent = ''
+  let runtimeSnapshot = createRuntimeWireSnapshot()
   let firstReplyTimer: ReturnType<typeof setTimeout> | null = null
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
   let resolveDone!: (value: WebSocketStreamResult | null) => void
@@ -242,6 +401,7 @@ function openRequestSocket(
 
   function cleanup() {
     clearTimers()
+    releaseApprovalSocket(ws, 'Approval request socket closed')
     ws.onopen = null
     ws.onmessage = null
     ws.onerror = null
@@ -306,51 +466,104 @@ function openRequestSocket(
       return
     }
 
+    if (consumeToolApprovalAck(msg as unknown as Record<string, unknown>)) {
+      markActivity()
+      return
+    }
+
     switch (msg.type) {
       case 'chunk':
+        {
+        const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+        if (!merged.accepted || (msg.sequence && !merged.frame)) break
+        if (merged.frame) runtimeSnapshot = merged.snapshot
         markActivity()
         if (msg.content) accumulatedContent += msg.content
-        callbacks?.onChunk?.(msg.content, msg.reasoning)
+        const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
+          ? msg.reasoning
+          : undefined
+        if (merged.frame?.sequence) callbacks?.onChunk?.(msg.content, publicReasoning, merged.frame)
+        else callbacks?.onChunk?.(msg.content, publicReasoning)
         if (msg.done) {
           settleResolve({
             content: accumulatedContent,
             messageContent: msg.message_content,
-            metadata: foldRetrievalHits(msg.metadata, msg),
+            metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
         }
         break
+        }
       case 'stream_snapshot':
+        {
+        const hasAtomicRuntimeSnapshot = msg.last_sequence !== undefined
+          || msg.metadata?.last_sequence !== undefined
+          || Array.isArray(msg.runtime_events)
+          || Array.isArray(msg.metadata?.runtime_events)
+        let runtimeFrame: RuntimeWireFrame | undefined
+        if (hasAtomicRuntimeSnapshot) {
+          const snapshotMetadata = normalizeRuntimeSnapshotMetadata({
+            ...(msg.metadata ?? {}),
+            assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
+            message_id: msg.message_id ?? msg.metadata?.message_id,
+            reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
+            runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
+            last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
+          }, undefined, route)
+          runtimeSnapshot = {
+            assistantMessageId: snapshotMetadata.assistant_message_id,
+            aliases: snapshotMetadata.assistant_message_aliases ?? [],
+            lastSequence: Number(snapshotMetadata.last_sequence) || 0,
+            runtimeEvents: snapshotMetadata.runtime_events ?? [],
+            reasoningDisclosure: snapshotMetadata.reasoning_disclosure,
+            acceptedFrames: {},
+          }
+        } else {
+          const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+          if (!merged.accepted || (msg.sequence && !merged.frame)) break
+          if (merged.frame) runtimeSnapshot = merged.snapshot
+          runtimeFrame = merged.frame
+        }
         markActivity()
+        const publicReasoning = runtimeSnapshot.reasoningDisclosure?.visibility === 'visible'
+          ? msg.reasoning
+          : undefined
         callbacks?.onSnapshot?.({
           content: msg.content,
-          reasoning: msg.reasoning,
-          metadata: msg.metadata,
+          reasoning: publicReasoning,
+          metadata: runtimeMetadata(msg.metadata, runtimeSnapshot),
           done: msg.done,
           messageContent: msg.message_content,
+          runtimeFrame,
         })
         if (msg.done) {
           settleResolve({
             content: msg.content,
             messageContent: msg.message_content,
-            metadata: foldRetrievalHits(msg.metadata, msg),
+            metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
         }
         break
+        }
       case 'reply':
+        {
+        const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+        if (!merged.accepted || (msg.sequence && !merged.frame)) break
+        if (merged.frame) runtimeSnapshot = merged.snapshot
         markActivity()
         settleResolve({
           content: msg.content,
           messageContent: msg.message_content,
-          metadata: foldRetrievalHits(msg.metadata, msg),
+          metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
           toolCalls: msg.tool_calls,
           agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
         })
         break
+        }
       case 'error':
         if (msg.content === USER_CANCELLED_MESSAGE) {
           settleResolve(null)
@@ -359,16 +572,55 @@ function openRequestSocket(
         settleReject(new ChatRequestError(msg.content || 'WebSocket request failed', true))
         break
       case 'tool_approval_request':
-        callbacks?.onApprovalRequest?.({
-          requestId: typeof msg.request_id === 'string'
-            ? msg.request_id
-            : (typeof msg.metadata?.request_id === 'string' ? msg.metadata.request_id : ''),
-          toolName: typeof msg.metadata?.tool_name === 'string' ? msg.metadata.tool_name : '',
+      case 'tool_permission_request':
+        {
+        clearTimers()
+        const approvalMessage = msg as unknown as {
+          request_id?: unknown
+          deadline_at?: unknown
+          metadata?: Record<string, unknown>
+        }
+        const approvalRequestId = typeof approvalMessage.request_id === 'string'
+          ? approvalMessage.request_id
+          : (typeof approvalMessage.metadata?.request_id === 'string'
+              ? approvalMessage.metadata.request_id
+              : '')
+        const approvalRequest = {
+          requestId: approvalRequestId,
+          ownerId: typeof msg.owner_id === 'string'
+            ? msg.owner_id
+            : (typeof msg.metadata?.owner_id === 'string' ? msg.metadata.owner_id : undefined),
+          invocationId: typeof msg.invocation_id === 'string'
+            ? msg.invocation_id
+            : (typeof msg.metadata?.invocation_id === 'string' ? msg.metadata.invocation_id : undefined),
+          toolName: typeof msg.tool_name === 'string'
+            ? msg.tool_name
+            : (typeof msg.metadata?.tool_name === 'string' ? msg.metadata.tool_name : ''),
+          arguments: msg.arguments,
+          argumentsDigest: typeof msg.arguments_digest === 'string'
+            ? msg.arguments_digest
+            : (typeof msg.metadata?.arguments_digest === 'string'
+                ? msg.metadata.arguments_digest
+                : undefined),
+          securityScopeDigest: typeof msg.security_scope_digest === 'string'
+            ? msg.security_scope_digest
+            : (typeof msg.metadata?.security_scope_digest === 'string'
+                ? msg.metadata.security_scope_digest
+                : undefined),
           risk: typeof msg.metadata?.risk === 'string' ? msg.metadata.risk : 'sensitive',
           reason: msg.content || '',
           sessionId: msg.session_id || sessionId,
-        })
+          deadlineAt: typeof approvalMessage.deadline_at === 'string'
+            ? approvalMessage.deadline_at
+            : (typeof approvalMessage.metadata?.deadline_at === 'string'
+                ? approvalMessage.metadata.deadline_at
+                : undefined),
+          respondApproval: (decision: ToolApprovalDecisionWire) =>
+            sendToolApprovalResponse(ws, decision),
+        }
+        callbacks?.onApprovalRequest?.(approvalRequest)
         break
+        }
       case 'memory_saved':
         callbacks?.onMemorySaved?.(msg.content)
         break
@@ -430,7 +682,7 @@ export function openWebSocketStream(
     temperature: chatParams.temperature,
     max_tokens: chatParams.maxTokens,
     metadata: resolvedMetadata,
-  }))
+  }), chatParams)
 }
 
 export function resumeWebSocketStream(
@@ -457,7 +709,9 @@ export async function sendViaBackend(
   metadata?: Record<string, string>,
   requestId?: string,
 ): Promise<{ reply: string; message_content?: MessageContent; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls']; blocks?: ChatMessage['blocks'] }> {
-  return withTimeout(
+  let sseRuntimeSnapshot = createRuntimeWireSnapshot()
+  let publicSseReasoning = ''
+  const result = await withTimeout(
     sendChatViaBackend(text, {
       sessionId,
       role: agentRole || undefined,
@@ -468,10 +722,52 @@ export async function sendViaBackend(
       requestId,
       metadata: withModelReasoningDefaults(chatParams.model, metadata),
       attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
+      onStreamFrame: (frame) => {
+        const merged = mergeRuntimeWireFrame(sseRuntimeSnapshot, frame, chatParams)
+        if (!merged.accepted || (Number(frame.sequence) > 0 && !merged.frame)) return
+        sseRuntimeSnapshot = merged.snapshot
+        if (
+          merged.frame?.reasoningDisclosure.visibility === 'visible'
+          && typeof frame.reasoning === 'string'
+        ) {
+          publicSseReasoning = normalizeAssistantReasoning(
+            publicSseReasoning + frame.reasoning,
+            { trim: false },
+          )
+        }
+      },
     }),
     BACKEND_REPLY_TIMEOUT_MS,
     'Backend request timed out — no response received.',
   )
+  const normalizedMetadata = normalizeRuntimeSnapshotMetadata({
+    ...(result.metadata ?? {}),
+    assistant_message_id: sseRuntimeSnapshot.assistantMessageId
+      ?? result.assistant_message_id
+      ?? result.metadata?.assistant_message_id,
+    message_id: sseRuntimeSnapshot.assistantMessageId
+      ?? result.message_id
+      ?? result.metadata?.message_id,
+    reasoning_disclosure: sseRuntimeSnapshot.reasoningDisclosure
+      ?? result.reasoning_disclosure
+      ?? result.metadata?.reasoning_disclosure,
+    runtime_events: sseRuntimeSnapshot.lastSequence > 0
+      ? sseRuntimeSnapshot.runtimeEvents
+      : result.runtime_events ?? result.metadata?.runtime_events,
+    last_sequence: sseRuntimeSnapshot.lastSequence
+      || result.last_sequence
+      || result.sequence
+      || result.metadata?.last_sequence,
+  }, undefined, chatParams)
+  if (
+    normalizedMetadata.reasoning_disclosure?.visibility === 'visible'
+    && publicSseReasoning.trim()
+  ) {
+    normalizedMetadata.reasoning = publicSseReasoning
+  } else if (normalizedMetadata.reasoning_disclosure?.visibility !== 'visible') {
+    delete normalizedMetadata.reasoning
+  }
+  return { ...result, metadata: normalizedMetadata }
 }
 
 // ─── WebSocket 连接管理 ──────────────────────────────

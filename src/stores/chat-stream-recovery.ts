@@ -17,7 +17,7 @@ export function createChatStreamRecoveryController(params: {
     sessionId: string,
     snapshot: Parameters<typeof import('./chat-stream-helpers').buildRecoveredStreamState>[1],
   ) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
+  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string, runtimeFrame?: import('@/types').RuntimeWireFrame) => boolean
   finalizeAssistantMessage: (args: {
     content: string
     sessionId: string
@@ -39,6 +39,7 @@ export function createChatStreamRecoveryController(params: {
     sessionId: string | null | undefined,
     sending: Ref<boolean>,
     draftSending: Ref<boolean>,
+    streamState?: SessionStreamState,
   ) => void
 }) {
   const {
@@ -72,11 +73,12 @@ export function createChatStreamRecoveryController(params: {
               content: current.content,
               reasoning: current.reasoning,
               done: !!current.done,
+              ...(current.metadata ?? {}),
             })
           },
-          onChunk: (content, reasoning) => {
+          onChunk: (content, reasoning, runtimeFrame) => {
             // 退化熔断：恢复路径也要在判失控复读时 cancel 后端流（与 live 投递路径一致，省 token/停转圈）。
-            if (updateStreamChunk(snapshot.session_id, content, reasoning)) {
+            if (updateStreamChunk(snapshot.session_id, content, reasoning, runtimeFrame)) {
               streamHandles.get(snapshot.session_id)?.cancel()
             }
           },
@@ -124,7 +126,13 @@ export function createChatStreamRecoveryController(params: {
           })
           .catch((resumeError) => {
             streamHandles.delete(snapshot.session_id)
-            handleSendError(resumeError, snapshot.session_id, sending, draftSending)
+            handleSendError(
+              resumeError,
+              snapshot.session_id,
+              sending,
+              draftSending,
+              activeStreams.value[snapshot.session_id],
+            )
           })
       }
     } catch (recoveryError) {

@@ -102,6 +102,7 @@ export function createChatSendDeliveryController(params: {
   const backendDelivery = createChatSendBackendDeliveryController({
     chatParams,
     agentRole,
+    activeStreams,
     chatSvc,
     isSessionCancelled,
     resetSessionStream,
@@ -138,6 +139,8 @@ export function createChatSendDeliveryController(params: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
       thinkingEnabled: boolean
+      agentDisplayName?: string
+      recipientDisplayName?: string
     }
   }): Promise<ChatMessage | null> {
     const {

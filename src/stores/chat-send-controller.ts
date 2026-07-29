@@ -9,6 +9,7 @@ import {
   resolveChatRouteSnapshot,
   type ChatRouteSnapshot,
 } from './chat-route-snapshot'
+import { buildSessionStreamState } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
@@ -174,6 +175,11 @@ export function createChatSendController(params: {
     refreshSendingState(sending, draftSending)
     try {
       const requestId = createId()
+      const samplingSnapshot = resolveChatRouteSnapshot(options?.routeSnapshot, {
+        agentRole: agentRole.value,
+        chatParams: { ...chatParams.value },
+        thinkingEnabled: thinkingEnabled.value,
+      })
       const skillNames = options?.skillNames ?? []
       const userMeta: Record<string, unknown> = {}
       if (attachments?.length) userMeta.attachments = attachments
@@ -215,11 +221,13 @@ export function createChatSendController(params: {
       // upsertStreamState 交棒给 isCurrentStreaming，pending 由收尾逻辑清除，无双清风险。
       // U4：点击瞬间快照采样参数——buildRequestMetadata 在下方 Auto-RAG 之后才读，期间用户
       // 切会话会改共享 ref，快照保证在途请求带的是本次发送时的 agent/model/thinking。
-      const samplingSnapshot = resolveChatRouteSnapshot(options?.routeSnapshot, {
-        agentRole: agentRole.value,
-        chatParams: { ...chatParams.value },
-        thinkingEnabled: thinkingEnabled.value,
-      })
+      upsertStreamState(sessionId, buildSessionStreamState({
+        sessionId,
+        requestId,
+        thinkingEnabled: samplingSnapshot.thinkingEnabled,
+        agentDisplayName: samplingSnapshot.agentDisplayName,
+        recipientDisplayName: samplingSnapshot.recipientDisplayName,
+      }))
       setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
       const backendText =

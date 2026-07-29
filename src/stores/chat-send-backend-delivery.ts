@@ -2,12 +2,14 @@ import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import type { SessionStreamState } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 
 export function createChatSendBackendDeliveryController(params: {
   chatParams: Ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>
   agentRole: Ref<string>
+  activeStreams: Ref<Record<string, SessionStreamState>>
   chatSvc: ChatServiceModule
   isSessionCancelled: (sessionId: string) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
@@ -28,11 +30,13 @@ export function createChatSendBackendDeliveryController(params: {
     sessionId: string | null | undefined,
     sending: Ref<boolean>,
     draftSending: Ref<boolean>,
+    streamState?: SessionStreamState,
   ) => void
 }) {
   const {
     chatParams,
     agentRole,
+    activeStreams,
     chatSvc,
     isSessionCancelled,
     resetSessionStream,
@@ -49,6 +53,9 @@ export function createChatSendBackendDeliveryController(params: {
     samplingSnapshot?: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+      thinkingEnabled?: boolean
+      agentDisplayName?: string
+      recipientDisplayName?: string
     }
     sending: Ref<boolean>
     draftSending: Ref<boolean>
@@ -91,7 +98,7 @@ export function createChatSendBackendDeliveryController(params: {
         draftSending,
       })
     } catch (httpError) {
-      handleSendError(httpError, sessionId, sending, draftSending)
+      handleSendError(httpError, sessionId, sending, draftSending, activeStreams.value[sessionId])
       return null
     }
   }

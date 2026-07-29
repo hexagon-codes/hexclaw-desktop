@@ -1,7 +1,8 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
+import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
-import type { SessionStreamState } from './chat-stream-helpers'
+import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -57,18 +58,48 @@ export function createChatStreamCancelController(params: {
     const current = activeStreams.value[sessionId]
     if (!current) return false
 
-    if (preservePartial && (current.content.trim() || current.reasoning.trim())) {
-      const normalizedReasoning = current.reasoning
+    if (
+      preservePartial
+      && (current.thinkingEnabled || current.content.trim() || current.reasoning.trim())
+    ) {
+      const normalizedReasoning = current.visibility === 'visible' && current.reasoning
         ? normalizeAssistantReasoning(current.reasoning) || undefined
         : undefined
       const partialMessage: ChatMessage = {
-        id: createId(),
+        id: current.assistantMessageId || createId(),
         role: 'assistant',
-        content: getAssistantDisplayContent(current.content, normalizedReasoning),
+        content: current.content.trim() || normalizedReasoning
+          ? getAssistantDisplayContent(current.content, normalizedReasoning)
+          : '',
         timestamp: new Date().toISOString(),
         reasoning: normalizedReasoning,
+        metadata: normalizeThinkingMetadata(
+          normalizeRuntimeSnapshotMetadata({
+            thinking_duration: getStreamThinkingDuration(current),
+            reasoning_visibility: current.thinkingEnabled
+              ? current.visibility ?? 'not_exposed'
+              : undefined,
+            reasoning_disclosure: current.reasoningDisclosure?.visibility === current.visibility
+              ? current.reasoningDisclosure
+              : undefined,
+            assistant_message_id: current.assistantMessageId,
+            message_id: current.assistantMessageId,
+            assistant_message_aliases: current.assistantMessageAliases,
+            runtime_events: current.runtimeEvents,
+            last_sequence: current.lastSequence,
+            recipient_display_name: current.recipientDisplayName,
+          }, current.assistantMessageId),
+          normalizedReasoning,
+          'cancelled',
+        ),
+        agent_name: current.agentDisplayName,
       }
       appendMessageToSession(sessionId, partialMessage)
+      try {
+        void msgSvc.persistCancelledReply(sessionId, partialMessage)
+      } catch {
+        // 部分测试 mock 或落库启动异常不阻塞本地取消。
+      }
     }
 
     streamHandles.get(sessionId)?.cancel()
@@ -107,18 +138,37 @@ export function createChatStreamCancelController(params: {
     }
 
     if (streamingContent.value.trim() || streamingReasoning.value.trim()) {
-      const reasoning = streamingReasoning.value
-        ? normalizeAssistantReasoning(streamingReasoning.value) || undefined
-        : undefined
+      const reasoning = undefined
       const partialMessage: ChatMessage = {
         id: createId(),
         role: 'assistant',
         content: getAssistantDisplayContent(streamingContent.value, reasoning),
         timestamp: new Date().toISOString(),
         reasoning,
+        metadata: normalizeThinkingMetadata(
+          {
+            thinking_duration: streamingReasoningStartTime.value
+              ? Math.max(
+                  0,
+                  Math.round(
+                    ((streamingReasoningEndTime.value || Date.now())
+                      - streamingReasoningStartTime.value) / 1000,
+                  ),
+                )
+              : undefined,
+          },
+          reasoning,
+          'cancelled',
+        ),
       }
       messages.value.push(partialMessage)
-      if (currentSessionId.value) msgSvc.persistMessage(partialMessage, currentSessionId.value)
+      if (currentSessionId.value) {
+        try {
+          void msgSvc.persistCancelledReply(currentSessionId.value, partialMessage)
+        } catch {
+          // 部分测试 mock 或落库启动异常不阻塞本地取消。
+        }
+      }
     }
 
     sendCancel(streamingSessionId.value)

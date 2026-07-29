@@ -104,12 +104,17 @@ export function createChatStreamStateController(params: {
   /**
    * 累积一个流式 chunk。返回值 = 本次是否「刚触发退化熔断」，调用方据此 cancel 后端流以省 token。
    */
-  function updateStreamChunk(sessionId: string, content?: string, reasoning?: string): boolean {
+  function updateStreamChunk(
+    sessionId: string,
+    content?: string,
+    reasoning?: string,
+    runtimeFrame?: import('@/types').RuntimeWireFrame,
+  ): boolean {
     const current = activeStreams.value[sessionId]
     if (!current) return false
     // 退化熔断：已判失控复读 → 冻结，丢弃后续复读 chunk，墙不再长（BUG-20260625 模型塌缩）。
     if (current.degenerated) return false
-    const merged = mergeStreamChunkState(current, content, reasoning)
+    const merged = mergeStreamChunkState(current, content, reasoning, runtimeFrame)
     // 在原始流（含 reasoning）上检测；命中即裁掉复读尾、追加提示、置熔断位。
     const probe = merged.content || merged.rawContent
     if (isDegenerateTail(probe)) {

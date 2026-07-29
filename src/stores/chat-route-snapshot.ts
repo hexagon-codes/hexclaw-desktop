@@ -9,6 +9,8 @@ export interface ChatRouteSnapshot {
   readonly agentRole: string
   readonly chatParams: ChatRouteParams
   readonly thinkingEnabled: boolean
+  readonly agentDisplayName?: string
+  readonly recipientDisplayName?: string
 }
 
 interface SessionRouteModel {
@@ -20,6 +22,8 @@ export function freezeChatRouteSnapshot(input: {
   agentRole: string
   chatParams: ChatRouteParams
   thinkingEnabled: boolean
+  agentDisplayName?: string
+  recipientDisplayName?: string
   sessionModel?: SessionRouteModel | null
 }): ChatRouteSnapshot {
   const chatParams: {
@@ -41,6 +45,8 @@ export function freezeChatRouteSnapshot(input: {
     agentRole: input.agentRole,
     chatParams: Object.freeze(chatParams),
     thinkingEnabled: input.thinkingEnabled,
+    ...(input.agentDisplayName ? { agentDisplayName: input.agentDisplayName } : {}),
+    ...(input.recipientDisplayName ? { recipientDisplayName: input.recipientDisplayName } : {}),
   })
 }
 
@@ -50,6 +56,8 @@ export function resolveChatRouteSnapshot(
     agentRole: string
     chatParams: ChatRouteParams
     thinkingEnabled: boolean
+    agentDisplayName?: string
+    recipientDisplayName?: string
   },
 ): ChatRouteSnapshot {
   return explicitSnapshot ?? freezeChatRouteSnapshot(currentRoute)

@@ -1,9 +1,10 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
-import type { SessionStreamState } from './chat-stream-helpers'
+import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -59,27 +60,89 @@ export function createChatStreamCompletionController(params: {
     const rawReasoning = parsed.reasoning
       ? (args.reasoning ? args.reasoning + '\n' + parsed.reasoning : parsed.reasoning)
       : (args.reasoning || undefined)
-    const finalReasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
-
     const streamState = activeStreams.value[args.sessionId]
-    const endTime = streamState?.reasoningEndTime || Date.now()
-    const thinkingDuration = streamState?.reasoningStartTime
-      ? Math.round((endTime - streamState.reasoningStartTime) / 1000)
-      : 0
-    const metadata = { ...args.metadata } as Record<string, unknown>
-    if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration
+    const incomingRuntimeMetadata = normalizeRuntimeSnapshotMetadata(args.metadata)
+    const incomingDisclosure = incomingRuntimeMetadata.reasoning_disclosure
+    const explicitVisibility = streamState?.reasoningDisclosure?.visibility
+      ?? incomingDisclosure?.visibility
+      ?? streamState?.visibility
+      ?? incomingRuntimeMetadata.reasoning_visibility
+    const finalReasoning = explicitVisibility === 'visible' && rawReasoning
+      ? normalizeAssistantReasoning(rawReasoning) || undefined
+      : undefined
+    const thinkingDuration = getStreamThinkingDuration(streamState)
+    const metadata = { ...incomingRuntimeMetadata } as Record<string, unknown>
+    if (streamState) {
+      const hasLiveRuntimeSnapshot = streamState.lastSequence > 0
+      const canonicalAssistantMessageId = streamState.canonicalAssistantMessageId
+        ?? incomingRuntimeMetadata.assistant_message_id
+      const runtimeAssistantMessageId = canonicalAssistantMessageId
+        ?? streamState.assistantMessageId
+      metadata.assistant_message_id = runtimeAssistantMessageId
+      metadata.message_id = runtimeAssistantMessageId
+      if (
+        canonicalAssistantMessageId
+        && canonicalAssistantMessageId !== streamState.assistantMessageId
+      ) {
+        metadata.backend_message_id = canonicalAssistantMessageId
+      }
+      metadata.assistant_message_aliases = Array.from(new Set([
+        ...streamState.assistantMessageAliases,
+        ...(Array.isArray(incomingRuntimeMetadata.assistant_message_aliases)
+          ? incomingRuntimeMetadata.assistant_message_aliases
+          : []),
+        ...(runtimeAssistantMessageId
+        && streamState.assistantMessageId !== runtimeAssistantMessageId
+          ? [streamState.assistantMessageId!]
+          : []),
+      ]))
+      metadata.runtime_events = hasLiveRuntimeSnapshot
+        ? streamState.runtimeEvents
+        : incomingRuntimeMetadata.runtime_events
+      metadata.last_sequence = hasLiveRuntimeSnapshot
+        ? streamState.lastSequence
+        : incomingRuntimeMetadata.last_sequence
+      metadata.reasoning_disclosure = streamState.reasoningDisclosure?.visibility === streamState.visibility
+        ? streamState.reasoningDisclosure
+        : incomingDisclosure
+    }
+    if (thinkingDuration != null) metadata.thinking_duration = thinkingDuration
+    if (streamState?.thinkingEnabled) {
+      metadata.reasoning_visibility = streamState.visibility ?? 'not_exposed'
+      if (streamState.recipientDisplayName) {
+        metadata.recipient_display_name = streamState.recipientDisplayName
+      }
+    }
+    const hasDeliverableOutput = !!(
+      finalContent.trim()
+      || args.messageContent
+      || args.toolCalls?.length
+      || args.blocks?.length
+    )
+    const terminalState = streamState?.thinkingEnabled && !hasDeliverableOutput
+      ? 'failed'
+      : 'completed'
+    const normalizedRuntimeMetadata = normalizeRuntimeSnapshotMetadata(
+      metadata,
+      streamState?.canonicalAssistantMessageId ?? streamState?.assistantMessageId,
+    )
+    const finalMetadata = normalizeThinkingMetadata(normalizedRuntimeMetadata, finalReasoning, terminalState)
 
     const assistantMessage: ChatMessage = {
-      id: createId(),
+      id: streamState?.assistantMessageId
+        || normalizedRuntimeMetadata.assistant_message_id
+        || createId(),
       role: 'assistant',
-      content: getAssistantDisplayContent(finalContent, finalReasoning),
+      content: terminalState === 'failed' && !hasDeliverableOutput
+        ? ''
+        : getAssistantDisplayContent(finalContent, finalReasoning),
       message_content: args.messageContent,
       timestamp: new Date().toISOString(),
       reasoning: finalReasoning,
-      metadata,
+      metadata: finalMetadata,
       tool_calls: args.toolCalls,
       blocks: args.blocks,
-      agent_name: args.agentName,
+      agent_name: streamState?.agentDisplayName || args.agentName,
     }
 
     appendMessageToSession(args.sessionId, assistantMessage)

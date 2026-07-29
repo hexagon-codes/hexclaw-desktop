@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import { buildSessionStreamState, type SessionStreamState } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 
@@ -14,8 +15,8 @@ export function createChatSendWebSocketDeliveryController(params: {
   chatSvc: ChatServiceModule
   isSessionCancelled: (sessionId: string) => boolean
   setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
-  upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
+  upsertStreamState: (sessionId: string, nextState: SessionStreamState | null) => void
+  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string, runtimeFrame?: import('@/types').RuntimeWireFrame) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
@@ -34,6 +35,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     sessionId: string | null | undefined,
     sending: Ref<boolean>,
     draftSending: Ref<boolean>,
+    streamState?: SessionStreamState,
   ) => void
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
@@ -63,6 +65,9 @@ export function createChatSendWebSocketDeliveryController(params: {
     samplingSnapshot?: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+      thinkingEnabled?: boolean
+      agentDisplayName?: string
+      recipientDisplayName?: string
     }
     sending: Ref<boolean>
     draftSending: Ref<boolean>
@@ -78,16 +83,16 @@ export function createChatSendWebSocketDeliveryController(params: {
       draftSending,
     } = args
 
-    upsertStreamState(sessionId, {
-      sessionId,
-      requestId,
-      rawContent: '',
-      content: '',
-      explicitReasoning: '',
-      reasoning: '',
-      reasoningStartTime: 0,
-      reasoningEndTime: 0,
-    })
+    if (!activeStreams.value[sessionId]) {
+      upsertStreamState(sessionId, buildSessionStreamState({
+        sessionId,
+        requestId,
+        thinkingEnabled: samplingSnapshot?.thinkingEnabled
+          ?? requestMetadata?.thinking_enabled === 'true',
+        agentDisplayName: samplingSnapshot?.agentDisplayName,
+        recipientDisplayName: samplingSnapshot?.recipientDisplayName,
+      }))
+    }
     setSessionPending(sessionId, false, sending, draftSending)
 
     let memorySavedContent: string | undefined
@@ -98,9 +103,9 @@ export function createChatSendWebSocketDeliveryController(params: {
       samplingSnapshot?.agentRole ?? agentRole.value,
       attachments,
       {
-        onChunk: (content, reasoning) => {
+        onChunk: (content, reasoning, runtimeFrame) => {
           // 退化熔断：本次刚判失控复读 → 取消后端流，停止生成、省 token、立刻停转圈。
-          if (updateStreamChunk(sessionId, content, reasoning)) {
+          if (updateStreamChunk(sessionId, content, reasoning, runtimeFrame)) {
             streamHandles.get(sessionId)?.cancel()
           }
         },
@@ -169,7 +174,7 @@ export function createChatSendWebSocketDeliveryController(params: {
         })
       }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
-        handleSendError(wsError, sessionId, sending, draftSending)
+        handleSendError(wsError, sessionId, sending, draftSending, activeStreams.value[sessionId])
         return null
       }
       resetSessionStream(sessionId, sending, draftSending)

@@ -1,7 +1,7 @@
 import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
 import { apiPost, apiGet, apiPatch, apiPut, apiDelete } from './client'
-import type { ChatMessage, ChatSession, ChatRequest } from '@/types'
+import type { ChatMessage, ChatSession, ChatRequest, ReasoningDisclosure, RuntimeEvent } from '@/types'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 // ─── 会话 API 辅助函数 ─────────────────────────────────
@@ -62,6 +62,13 @@ export interface BackendChatResponse {
   tool_calls?: import('@/types').ToolCall[]
   blocks?: import('@/types').ContentBlock[]
   metadata?: Record<string, unknown>
+  assistant_message_id?: string
+  message_id?: string
+  sequence?: number
+  reasoning_disclosure?: ReasoningDisclosure
+  runtime_event?: Omit<RuntimeEvent, 'sequence'>
+  runtime_events?: RuntimeEvent[]
+  last_sequence?: number
   usage?: {
     /** 后端实际返回 input_tokens (非 OpenAI prompt_tokens)，同时兼容两种命名 */
     input_tokens?: number; output_tokens?: number; total_tokens?: number
@@ -83,12 +90,35 @@ export interface ActiveStreamSnapshot {
   blocks?: import('@/types').ContentBlock[]
   started_at?: string
   updated_at?: string
+  assistant_message_id?: string
+  message_id?: string
+  sequence?: number
+  reasoning_disclosure?: ReasoningDisclosure
+  runtime_events?: RuntimeEvent[]
+  last_sequence?: number
 }
 
 export interface SessionMessageSearchResult {
   message: ChatMessage & { session_id: string }
   session_title: string
   rank?: number
+}
+
+export function parseBackendStreamFrame(data: string): Record<string, unknown> | null {
+  const dataLines = data
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).replace(/^ /, ''))
+  const payload = (dataLines.length > 0 ? dataLines.join('\n') : data).trim()
+  if (!payload || payload === '[DONE]') return null
+  try {
+    const parsed = JSON.parse(payload)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
 }
 
 export interface SessionTitleSuggestionResponse {
@@ -120,6 +150,7 @@ export async function sendChatViaBackend(
     requestId?: string
     metadata?: Record<string, string>
     attachments?: { type: string; name: string; mime: string; data: string }[]
+    onStreamFrame?: (frame: Record<string, unknown>) => void
   },
 ): Promise<BackendChatResponse> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -151,6 +182,10 @@ export async function sendChatViaBackend(
           case 'chunk':
             chunkCount += 1
             logger.debug(`[backend_chat] chunk #${chunkCount} +${gap}ms data_len=${p.data.length}`)
+            {
+              const frame = parseBackendStreamFrame(p.data)
+              if (frame) options?.onStreamFrame?.(frame)
+            }
             break
           case 'done':
             logger.debug(`[backend_chat] [DONE] chunks=${chunkCount} elapsed=${Math.round(now - t0)}ms`)

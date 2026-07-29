@@ -1,6 +1,8 @@
 import type { Ref } from 'vue'
 import type { ChatMessage, ApiError } from '@/types'
+import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
 import { fromNativeError } from '@/utils/errors'
+import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
 type LoggerModule = typeof import('@/utils/logger').logger
 
@@ -36,6 +38,7 @@ export function createChatStreamErrorController(params: {
     sessionId: string | null | undefined,
     sending: Ref<boolean>,
     draftSending: Ref<boolean>,
+    streamState?: SessionStreamState,
   ) {
     logger.error('发送消息失败', errorValue)
     const apiError = fromNativeError(errorValue)
@@ -43,11 +46,32 @@ export function createChatStreamErrorController(params: {
     const targetSessionId = sessionId ?? streamingSessionId.value ?? currentSessionId.value
     resetSessionStream(targetSessionId, sending, draftSending)
     const errorMessage: ChatMessage = {
-      id: createId(),
+      id: streamState?.assistantMessageId || createId(),
       role: 'assistant',
       content: apiError.message || '发送失败，请检查 hexclaw 引擎是否运行',
       timestamp: new Date().toISOString(),
-      metadata: { is_error: true },
+      reasoning: streamState?.visibility === 'visible' ? streamState.reasoning || undefined : undefined,
+      metadata: normalizeThinkingMetadata(
+        normalizeRuntimeSnapshotMetadata({
+          is_error: true,
+          thinking_duration: getStreamThinkingDuration(streamState),
+          reasoning_visibility: streamState?.thinkingEnabled
+            ? streamState.visibility ?? 'not_exposed'
+            : undefined,
+          reasoning_disclosure: streamState?.reasoningDisclosure?.visibility === streamState?.visibility
+            ? streamState?.reasoningDisclosure
+            : undefined,
+          assistant_message_id: streamState?.assistantMessageId,
+          message_id: streamState?.assistantMessageId,
+          assistant_message_aliases: streamState?.assistantMessageAliases,
+          runtime_events: streamState?.runtimeEvents,
+          last_sequence: streamState?.lastSequence,
+          recipient_display_name: streamState?.recipientDisplayName,
+        }, streamState?.assistantMessageId),
+        streamState?.visibility === 'visible' ? streamState.reasoning : undefined,
+        'failed',
+      ),
+      agent_name: streamState?.agentDisplayName,
     }
     if (targetSessionId) {
       appendMessageToSession(targetSessionId, errorMessage)
