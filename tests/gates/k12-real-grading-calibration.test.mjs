@@ -132,6 +132,30 @@ test('K12-LIVE-BUDGET-REAL-002 writes only private new candidate files and never
   }
 })
 
+test('K12-LIVE-BUDGET-REAL-002 CLI only compiles caller-supplied private receipts and has no real execution path', async () => {
+  const { runCalibrationCLI } = await loadRunner()
+  const directory = mkdtempSync(join(tmpdir(), 'hexclaw-grading-calibration-cli-'))
+  chmodSync(directory, 0o700)
+  const receiptsPath = join(directory, 'receipts.json')
+  const evidencePath = join(directory, 'candidate-evidence.json')
+  const summaryPath = join(directory, 'candidate-summary.json')
+  try {
+    writeFileSync(receiptsPath, JSON.stringify(completeReceipts()), { mode: 0o600 })
+    const result = await runCalibrationCLI([
+      '--receipts',
+      receiptsPath,
+      '--evidence',
+      evidencePath,
+      '--summary',
+      summaryPath,
+    ])
+    assert.equal(result.evidenceSHA256, sha256(readFileSync(evidencePath)))
+    assert.equal(result.summarySHA256, sha256(readFileSync(summaryPath)))
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('K12-LIVE-BUDGET-REAL-002 refuses real execution without caller-owned authority before any hook spawn', async () => {
   const { assertRealExecutionAuthority } = await loadRunner()
   let spawned = 0

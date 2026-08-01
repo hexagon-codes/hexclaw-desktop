@@ -32,14 +32,6 @@ const RECEIPT_FIELDS = [
   'result_digest',
   'status',
 ]
-const ATTEMPT_FIELDS = [
-  'attempt_digest',
-  'latency_ms',
-  'logical_operations',
-  'physical_provider_calls',
-  'result_digest',
-]
-
 function fail(message) {
   throw new Error(`K12 real grading calibration: ${message}`)
 }
