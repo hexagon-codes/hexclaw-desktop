@@ -6,6 +6,7 @@ import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readKnowledgeLineage } from './k12-knowledge-lineage.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
@@ -16,7 +17,9 @@ const contract = JSON.parse(
   ),
 )
 const oracle = JSON.parse(
-  readFileSync(new URL('../../tests/fixtures/local/k12-textbook-rag-oracle.v1.json', import.meta.url)),
+  readFileSync(
+    new URL('../../tests/fixtures/local/k12-textbook-rag-oracle.v1.json', import.meta.url),
+  ),
 )
 const reportPath = resolve(repoRoot, 'test-results/k12-c10-restart-recovery/evidence.json')
 const valueEnvironment = [
@@ -40,7 +43,8 @@ function fail(message) {
 }
 
 function object(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} must be an object`)
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    fail(`${label} must be an object`)
   return value
 }
 
@@ -177,9 +181,49 @@ export function auditRestartHandoff(beforeValue, afterValue) {
   }
 }
 
+/**
+ * A valid C10 envelope is not sufficient on its own: it must be the direct
+ * successor of the private C09 state produced in this parent-owned run.
+ */
+export function auditC09LineageHandoff(beforeValue, lineageValue, { parentRunId, cycleRunId }) {
+  const before = object(beforeValue, 'before payload')
+  const lineage = object(lineageValue, 'C09 lineage')
+  validateHandoffPayload(before, 'before')
+  if (before.run_id !== cycleRunId) fail('before run_id must match the runner-owned C10 run id')
+  if (typeof parentRunId !== 'string' || !parentRunId.trim())
+    fail('parent run ID must be non-empty')
+  if (lineage.phase !== 'C09') fail('C09 lineage phase must equal C09')
+  if (lineage.parent_run_sha256 !== sha256(parentRunId))
+    fail('C09 lineage parent run digest mismatch')
+  if (typeof lineage.chunk_id !== 'string' || !lineage.chunk_id.trim()) {
+    fail('C09 lineage chunk_id must be non-empty')
+  }
+  for (const field of [
+    'document_id',
+    'source_digest',
+    'active_revision_id',
+    'profile_id',
+    'profile_config_hash',
+    'query_model',
+    'query_digest',
+    'citation_digest',
+  ]) {
+    if (before[field] !== lineage[field]) fail(`${field} drifted from C09 lineage`)
+  }
+  if (before.hit_document_id !== lineage.document_id) {
+    fail('hit_document_id drifted from C09 document lineage')
+  }
+  return {
+    documentId: before.document_id,
+    activeRevisionId: before.active_revision_id,
+    profileConfigHash: before.profile_config_hash,
+    citationDigest: before.citation_digest,
+  }
+}
+
 export function executeCallerRestart(restartPath, { env = process.env, spawn = spawnSync } = {}) {
   const args = contract.callerRestart.args.map((value) =>
-    value === '$HEX_K12_C10_DRIVER_CONFIG' ? env.HEX_K12_C10_DRIVER_CONFIG : value
+    value === '$HEX_K12_C10_DRIVER_CONFIG' ? env.HEX_K12_C10_DRIVER_CONFIG : value,
   )
   const child = spawn(restartPath, args, {
     env: { ...env, DINGTALK_LIVE_SEND: '0' },
@@ -210,20 +254,59 @@ export function c10EnvironmentBlockers(env = process.env) {
     if (path && !isAbsolute(path)) blockers.push(`${name}(absolute path)`)
   }
   const restartPath = (env.HEX_K12_C10_RESTART_HOOK ?? '').trim()
-  if (
-    restartPath &&
-    resolve(restartPath) !== resolve(repoRoot, contract.isolatedDriver.module)
-  ) {
+  if (restartPath && resolve(restartPath) !== resolve(repoRoot, contract.isolatedDriver.module)) {
     blockers.push('HEX_K12_C10_RESTART_HOOK(contract-owned isolated driver)')
   }
-  for (const name of [
-    'HEX_K12_C10_RESTART_HOOK_SHA256',
-    'HEX_K12_C10_HANDOFF_PUBLIC_KEY_SHA256',
-  ]) {
+  for (const name of ['HEX_K12_C10_RESTART_HOOK_SHA256', 'HEX_K12_C10_HANDOFF_PUBLIC_KEY_SHA256']) {
     const digest = (env[name] ?? '').trim()
     if (digest && !/^[a-f0-9]{64}$/.test(digest)) blockers.push(`${name}(sha256 hex)`)
   }
   return blockers
+}
+
+export function parseC10GateArguments(argv) {
+  const values = [...argv]
+  const strict = values.shift() === '--strict'
+  if (values.length === 0) return { strict }
+  if (values.length === 2 && values[0] === '--cycle') {
+    return { strict, parentOwnedCycle: values[1] }
+  }
+  return { strict, invalid: true }
+}
+
+export function validateC10GateArguments({ strict, parentOwnedCycle, invalid }, env = process.env) {
+  if (!strict || invalid)
+    fail(
+      'K12 C10 restart recovery gate accepts only --strict or parent-injected --strict --cycle C10',
+    )
+  if (parentOwnedCycle === undefined) return
+  if (parentOwnedCycle !== 'C10') fail('K12 C10 parent-owned mode accepts only C10')
+  if (
+    env.HEX_K12_REAL_10X_CYCLE_ID !== 'C10' ||
+    env.HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE !== '1'
+  ) {
+    fail('K12 C10 parent-owned mode must match the parent-injected C10 marker')
+  }
+  if (!isAbsolute(env.HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH ?? '')) {
+    fail('K12 C10 parent-owned knowledge lineage path must be absolute')
+  }
+  if (!(env.HEX_K12_REAL_10X_PARENT_RUN_ID ?? '').trim()) {
+    fail('K12 C10 parent-owned lineage must include the parent run ID')
+  }
+}
+
+async function parentOwnedC09Lineage(env) {
+  const path = env.HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH
+  const parentRunId = env.HEX_K12_REAL_10X_PARENT_RUN_ID
+  const lineage = await readKnowledgeLineage(
+    {
+      root: dirname(path),
+      path,
+      parentRunSha256: sha256(parentRunId),
+    },
+    { expectedPhase: 'C09' },
+  )
+  return { lineage, parentRunId }
 }
 
 function verifiedInputFile(path, expectedDigest, label, { executable = false } = {}) {
@@ -240,8 +323,11 @@ async function writeEvidence(value) {
 }
 
 async function runGate(argv) {
-  if (JSON.stringify(argv) !== JSON.stringify(['--strict'])) {
-    process.stderr.write('K12 C10 restart recovery gate accepts only --strict\n')
+  const args = parseC10GateArguments(argv)
+  try {
+    validateC10GateArguments(args)
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 2
     return
   }
@@ -273,6 +359,13 @@ async function runGate(argv) {
     const before = verifySignedHandoff(beforeEnvelope, publicKey)
     if (before.run_id !== process.env.HEX_K12_REAL_10X_CYCLE_RUN_ID) {
       fail('before run_id must match the runner-owned C10 run id')
+    }
+    if (args.parentOwnedCycle === 'C10') {
+      const { lineage, parentRunId } = await parentOwnedC09Lineage(process.env)
+      auditC09LineageHandoff(before, lineage, {
+        parentRunId,
+        cycleRunId: process.env.HEX_K12_REAL_10X_CYCLE_RUN_ID,
+      })
     }
 
     rmSync(afterPath, { force: true })

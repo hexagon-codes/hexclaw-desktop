@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import test from 'node:test'
 
 const repoFile = (path) => new URL(`../../${path}`, import.meta.url)
@@ -39,6 +39,32 @@ function handoff(phase, overrides = {}) {
     page_start: 10,
     page_end: 10,
     ...overrides,
+  }
+}
+
+function c09Lineage() {
+  return {
+    schema_version: 1,
+    phase: 'C09',
+    parent_run_sha256: createHash('sha256').update('release-run').digest('hex'),
+    document_id: 'doc-1',
+    job_id: 'job-1',
+    source_digest: '657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83',
+    bytes: 14_621_452,
+    pages: 131,
+    document_generation: 3,
+    active_revision_id: 'rev-1',
+    profile_id: 'profile-1',
+    profile_config_hash: 'a'.repeat(64),
+    hit_revision_id: 'rev-1',
+    chunk_id: 'chunk-1',
+    citation_digest: 'b'.repeat(64),
+    query_digest: `sha256:${'c'.repeat(64)}`,
+    query_model: 'qwen3-embedding:8b',
+    source_offset_start: 12,
+    source_offset_end: 98,
+    raw_source_span_normalized_length: 58,
+    raw_source_span_normalized_sha256: 'd'.repeat(64),
   }
 }
 
@@ -85,6 +111,75 @@ test('restart audit requires real PID turnover and stable revision/query/citatio
   ]) {
     assert.throws(() => auditRestartHandoff(before, handoff('after', mutation)))
   }
+})
+
+test('BUG-TEST-INFRA-K12-REAL-10X C10 rejects a signed handoff that drifts from C09 lineage', async () => {
+  const { auditC09LineageHandoff } = await loadGate()
+  const lineage = c09Lineage()
+  const before = handoff('before', {
+    run_id: 'release-run-C10',
+    profile_config_hash: lineage.profile_config_hash,
+    query_digest: lineage.query_digest,
+    citation_digest: lineage.citation_digest,
+  })
+
+  assert.doesNotThrow(() =>
+    auditC09LineageHandoff(before, lineage, {
+      parentRunId: 'release-run',
+      cycleRunId: 'release-run-C10',
+    }),
+  )
+  for (const mutation of [
+    { document_id: 'doc-2', hit_document_id: 'doc-2' },
+    { active_revision_id: 'rev-2' },
+    { profile_id: 'profile-2' },
+    { profile_config_hash: 'd'.repeat(64) },
+    { query_digest: 'e'.repeat(64) },
+    { citation_digest: 'f'.repeat(64) },
+  ]) {
+    assert.throws(() =>
+      auditC09LineageHandoff(handoff('before', { ...before, ...mutation }), lineage, {
+        parentRunId: 'release-run',
+        cycleRunId: 'release-run-C10',
+      }),
+    )
+  }
+  assert.throws(
+    () =>
+      auditC09LineageHandoff(before, lineage, {
+        parentRunId: 'other-run',
+        cycleRunId: 'release-run-C10',
+      }),
+    /parent run/i,
+  )
+})
+
+test('BUG-TEST-INFRA-K12-REAL-10X C10 accepts lineage only from its parent-owned cycle mode', async () => {
+  const { parseC10GateArguments, validateC10GateArguments } = await loadGate()
+  const parsed = parseC10GateArguments(['--strict', '--cycle', 'C10'])
+  assert.deepEqual(parsed, { strict: true, parentOwnedCycle: 'C10' })
+  assert.doesNotThrow(() =>
+    validateC10GateArguments(parsed, {
+      HEX_K12_REAL_10X_CYCLE_ID: 'C10',
+      HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+      HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH: '/tmp/hexclaw-k12/knowledge-lineage.json',
+      HEX_K12_REAL_10X_PARENT_RUN_ID: 'release-run',
+    }),
+  )
+  assert.throws(
+    () =>
+      validateC10GateArguments(parsed, {
+        HEX_K12_REAL_10X_CYCLE_ID: 'C10',
+        HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+        HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH: 'relative/knowledge-lineage.json',
+        HEX_K12_REAL_10X_PARENT_RUN_ID: 'release-run',
+      }),
+    /absolute/i,
+  )
+  assert.throws(
+    () => validateC10GateArguments(parseC10GateArguments(['--strict', '--cycle', 'C09']), {}),
+    /only.*C10|invalid/i,
+  )
 })
 
 test('caller restart is invoked exactly once without a shell and DingTalk stays disabled', async () => {

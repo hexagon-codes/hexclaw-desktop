@@ -8,28 +8,29 @@ async function readJSON(path) {
   return JSON.parse(await readFile(repoFile(path), 'utf8'))
 }
 
-const currentBugHook = {
+const currentBugHook = (cycle) => ({
   lane: 'current-bug-live-strict',
   module: 'scripts/ci/k12-current-bug-live-gate.mjs',
   args: ['--strict'],
-}
+  cycle_selector: cycle,
+})
 
-const fixturesHook = {
+const fixturesHook = (cycle) => ({
   lane: 'fixtures-strict',
   module: 'scripts/ci/k12-fixtures-gate.mjs',
   args: ['--strict'],
-}
+  cycle_selector: cycle,
+})
 
-const restartHook = {
+const restartHook = (cycle) => ({
   lane: 'c10-restart-recovery-strict',
   module: 'scripts/ci/k12-c10-restart-recovery-gate.mjs',
   args: ['--strict'],
-}
+  cycle_selector: cycle,
+})
 
 test('C01 freezes the real solve image and uses the exact-model current-bug hook', async () => {
-  const fixtureContract = await readJSON(
-    'tests/live/k12-current-bug-real-matrix.contract.json',
-  )
+  const fixtureContract = await readJSON('tests/live/k12-current-bug-real-matrix.contract.json')
   const releaseContract = await readJSON('tests/live/k12-real-10x-release.contract.json')
   const cycle = releaseContract.cycles.find(({ id }) => id === 'C01')
 
@@ -41,7 +42,7 @@ test('C01 freezes the real solve image and uses the exact-model current-bug hook
     width: 936,
     height: 1280,
   })
-  assert.deepEqual(cycle.hook, currentBugHook)
+  assert.deepEqual(cycle.hook, currentBugHook('C01'))
   assert.deepEqual(cycle.requiredProof, [
     'attachment_digest',
     'dispatch_id',
@@ -51,9 +52,7 @@ test('C01 freezes the real solve image and uses the exact-model current-bug hook
 })
 
 test('C06 freezes the real art image and uses one exact-model canonical-work hook', async () => {
-  const fixtureContract = await readJSON(
-    'tests/live/k12-current-bug-real-matrix.contract.json',
-  )
+  const fixtureContract = await readJSON('tests/live/k12-current-bug-real-matrix.contract.json')
   const releaseContract = await readJSON('tests/live/k12-real-10x-release.contract.json')
   const cycle = releaseContract.cycles.find(({ id }) => id === 'C06')
 
@@ -65,7 +64,7 @@ test('C06 freezes the real art image and uses one exact-model canonical-work hoo
     width: 1254,
     height: 1254,
   })
-  assert.deepEqual(cycle.hook, currentBugHook)
+  assert.deepEqual(cycle.hook, currentBugHook('C06'))
   assert.deepEqual(cycle.supportingEvidence, [
     {
       lane: 'fixtures-strict',
@@ -98,8 +97,7 @@ test('C09 freezes a locally extracted page oracle and uses the strict grounding 
     query: '在整数除法中，什么情况下说除数是被除数的因数，被除数是除数的倍数？',
     citation: {
       physicalPage: 10,
-      normalizedTextSha256:
-        '7740d0dbfd9cb464d2d22f695d4bf2bcba3bbfe6dc83e0df2a673465f890e0ed',
+      normalizedTextSha256: '7740d0dbfd9cb464d2d22f695d4bf2bcba3bbfe6dc83e0df2a673465f890e0ed',
       normalizedLength: 58,
       wholePdfExactOccurrences: 1,
     },
@@ -108,11 +106,13 @@ test('C09 freezes a locally extracted page oracle and uses the strict grounding 
       normalization: 'NFKC then remove all whitespace',
     },
   })
-  assert.deepEqual(cycle.hook, fixturesHook)
+  assert.deepEqual(cycle.hook, fixturesHook('C09'))
   assert.equal(cycle.oracle, 'tests/fixtures/local/k12-textbook-rag-oracle.v1.json')
   assert.deepEqual(cycle.requiredProof, [
     'document_id',
     'physical_page',
+    'source_offset_range',
+    'raw_source_span_normalized_sha256',
     'chunk_id',
     'citation_digest',
     'qwen3_embedding_query_receipt',
@@ -124,30 +124,17 @@ test('C10 contract requires a real PID change and signed state handoff, never br
   const release = await readJSON('tests/live/k12-real-10x-release.contract.json')
   const cycle = release.cycles.find(({ id }) => id === 'C10')
 
-  assert.deepEqual(cycle.hook, restartHook)
+  assert.deepEqual(cycle.hook, restartHook('C10'))
   assert.equal(cycle.restartContract, 'tests/live/k12-c10-restart-hook.contract.json')
   assert.deepEqual(cycle.requiredEnvironment, {
     exact: {
-      HEX_K12_C10_RESTART_AUTHORIZED: '1',
+      HEX_K12_C10_PREPARE_AUTHORIZED: '1',
     },
-    values: [
-      'HEX_K12_C10_RESTART_HOOK',
-      'HEX_K12_C10_RESTART_HOOK_SHA256',
-      'HEX_K12_C10_HANDOFF_PUBLIC_KEY',
-      'HEX_K12_C10_HANDOFF_PUBLIC_KEY_SHA256',
-      'HEX_K12_C10_BEFORE_HANDOFF',
-      'HEX_K12_C10_AFTER_HANDOFF',
-      'HEX_K12_C10_AFTER_HANDOFF_PUBLIC_KEY',
-      'HEX_K12_C10_DRIVER_CONFIG',
-    ],
+    values: ['HEX_K12_C10_PREPARE_HOOK', 'HEX_K12_C10_PREPARE_HOOK_SHA256'],
   })
   assert.deepEqual(restart.isolatedDriver, {
     module: 'scripts/ci/k12-c10-isolated-restart-driver.mjs',
-    cli: [
-      '--restart-k12-sidecar',
-      '--config',
-      '$HEX_K12_C10_DRIVER_CONFIG',
-    ],
+    cli: ['--restart-k12-sidecar', '--config', '$HEX_K12_C10_DRIVER_CONFIG'],
   })
   assert.deepEqual(restart.signedEnvelope, {
     algorithm: 'Ed25519',

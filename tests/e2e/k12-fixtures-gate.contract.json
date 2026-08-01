@@ -7,6 +7,11 @@
     "managesWebServer": false,
     "managesSidecar": false
   },
+  "parentOwnedChildEnvironment": [
+    "HEX_K12_REAL_10X_CYCLE_ID",
+    "HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH",
+    "HEX_K12_REAL_10X_PARENT_RUN_ID"
+  ],
   "specs": [
     {
       "file": "ftue-dynamic.spec.ts",

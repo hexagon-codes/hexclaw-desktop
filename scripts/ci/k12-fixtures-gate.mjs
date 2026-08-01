@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { basename, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const scriptPath = fileURLToPath(import.meta.url)
@@ -17,6 +17,41 @@ export const K12_FIXTURE_REPORT_PATH = contract.reportPath
 export const K12_FIXTURE_SPEC_FILES = Object.freeze(contract.specs.map(({ file }) => file))
 
 const absoluteReportPath = resolve(repoRoot, K12_FIXTURE_REPORT_PATH)
+const real10xCycleScenarios = Object.freeze({
+  C03: Object.freeze({
+    file: 'grading-real-fixtures.spec.ts',
+    title: 'messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross',
+  }),
+  C04: Object.freeze({
+    file: 'grading-real-fixtures.spec.ts',
+    title: 'blank sheet stays solve-only and does not create a mistake projection',
+  }),
+  C07: Object.freeze({
+    file: 'grounding-pdf.spec.ts',
+    title: 'C07 accepts the frozen 131-page textbook once and persists its private lineage',
+    requiresKnowledgeLineage: true,
+  }),
+  C08: Object.freeze({
+    file: 'grounding-pdf.spec.ts',
+    title: 'C08 indexes exactly the C07 textbook lineage and persists active revision',
+    requiresKnowledgeLineage: true,
+  }),
+  C09: Object.freeze({
+    file: 'grounding-pdf.spec.ts',
+    title: 'C09 retrieves the C08 textbook lineage through the frozen oracle',
+    requiresKnowledgeLineage: true,
+  }),
+})
+
+function real10xScenario(cycle) {
+  return real10xCycleScenarios[cycle]
+}
+
+export function real10xScenarioGrep(cycle) {
+  const scenario = real10xScenario(cycle)
+  if (!scenario) return undefined
+  return `.*${scenario.title.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`
+}
 
 function collectSpecs(suites, target = []) {
   for (const suite of suites ?? []) {
@@ -35,7 +70,7 @@ function sortedLikeContract(files) {
   })
 }
 
-export function auditK12FixturesReport(report, { expectedProject } = {}) {
+export function auditK12FixturesReport(report, { expectedProject, cycle } = {}) {
   if (!report || typeof report !== 'object') {
     throw new Error('K12 Fixture strict gate: report is not an object')
   }
@@ -53,9 +88,13 @@ export function auditK12FixturesReport(report, { expectedProject } = {}) {
   if (collectedTestCount === 0) {
     throw new Error('K12 Fixture strict gate: zero tests collected')
   }
+  const scenario = cycle === undefined ? undefined : real10xScenario(cycle)
+  if (cycle !== undefined && !scenario) {
+    throw new Error(`K12 Fixture strict gate: unsupported real-10x cycle ${cycle}`)
+  }
   const actualFiles = new Set(specs.map(({ file }) => basename(String(file ?? ''))).filter(Boolean))
-  const expectedFiles = new Set(K12_FIXTURE_SPEC_FILES)
-  const missing = K12_FIXTURE_SPEC_FILES.filter((file) => !actualFiles.has(file))
+  const expectedFiles = new Set(scenario ? [scenario.file] : K12_FIXTURE_SPEC_FILES)
+  const missing = [...expectedFiles].filter((file) => !actualFiles.has(file))
   const unexpected = [...actualFiles].filter((file) => !expectedFiles.has(file)).sort()
 
   if (missing.length > 0 || unexpected.length > 0) {
@@ -91,6 +130,9 @@ export function auditK12FixturesReport(report, { expectedProject } = {}) {
       if (test.expectedStatus !== 'passed' || results.some(({ status }) => status !== 'passed')) {
         nonPassing.push(label)
       }
+      if (scenario && spec.title !== scenario.title) {
+        nonPassing.push(`${label} (unexpected real-10x scenario)`)
+      }
     }
   }
 
@@ -118,10 +160,11 @@ export function auditK12FixturesReport(report, { expectedProject } = {}) {
     )
   }
 
-  return {
-    total,
-    files: sortedLikeContract(actualFiles),
+  if (scenario && total !== 1) {
+    throw new Error(`K12 Fixture strict gate: ${cycle} expected 1 completed result, got ${total}`)
   }
+
+  return { total, files: sortedLikeContract(actualFiles), ...(scenario ? { cycle } : {}) }
 }
 
 export function gateExitCode({ playwrightStatus, strict, auditPassed }) {
@@ -136,42 +179,89 @@ export function normalizeGateArguments(argv) {
   const strict = playwrightArgs[0] === '--strict'
   if (strict) playwrightArgs.shift()
   if (playwrightArgs[0] === '--') playwrightArgs.shift()
-  return { strict, playwrightArgs }
+  let cycle
+  if (strict && playwrightArgs[0] === '--cycle') {
+    cycle = playwrightArgs[1]
+    playwrightArgs.splice(0, 2)
+  }
+  return { strict, ...(cycle === undefined ? {} : { cycle }), playwrightArgs }
 }
 
-export function validateGateArguments({ strict, playwrightArgs }) {
+export function validateGateArguments({ strict, cycle, playwrightArgs }, env = process.env) {
   if (strict && playwrightArgs.length > 0) {
     throw new Error(
       'K12 Fixture strict gate does not accept Playwright filters or overrides; run the frozen seven-file exact set',
     )
   }
+  if (cycle === undefined) return
+  if (!strict || typeof cycle !== 'string' || !real10xScenario(cycle)) {
+    throw new Error('K12 Fixture strict gate accepts only a supported parent-injected cycle')
+  }
+  if (
+    env.HEX_K12_REAL_10X_CYCLE_ID !== cycle ||
+    env.HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE !== '1'
+  ) {
+    throw new Error('K12 Fixture strict gate cycle must match the parent-injected cycle')
+  }
+  const scenario = real10xScenario(cycle)
+  if (scenario.requiresKnowledgeLineage) {
+    const lineagePath = env.HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH ?? ''
+    const parentRunID = env.HEX_K12_REAL_10X_PARENT_RUN_ID ?? ''
+    if (!lineagePath.trim() || !isAbsolute(lineagePath)) {
+      throw new Error(
+        'K12 Fixture strict gate knowledge lineage path must be parent-injected and absolute',
+      )
+    }
+    if (!parentRunID.trim()) {
+      throw new Error('K12 Fixture strict gate knowledge parent run ID must be parent-injected')
+    }
+  }
 }
 
-async function runGate(argv) {
-  const { strict, playwrightArgs } = normalizeGateArguments(argv)
+export async function runGate(
+  argv,
+  {
+    env = process.env,
+    processLike = process,
+    spawnPlaywright = spawnSync,
+    removeReport = rm,
+    readReport = readFile,
+  } = {},
+) {
+  const { strict, cycle, playwrightArgs } = normalizeGateArguments(argv)
   try {
-    validateGateArguments({ strict, playwrightArgs })
+    validateGateArguments({ strict, cycle, playwrightArgs }, env)
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-    process.exitCode = 2
+    processLike.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    processLike.exitCode = 2
     return
   }
 
-  await rm(absoluteReportPath, { force: true })
+  await removeReport(absoluteReportPath, { force: true })
+  const scenario = cycle === undefined ? undefined : real10xScenario(cycle)
+  const cycleArgs = scenario ? ['--grep', real10xScenarioGrep(cycle)] : []
 
-  const playwright = spawnSync(
+  const playwright = spawnPlaywright(
     'pnpm',
-    ['exec', 'playwright', 'test', '-c', 'playwright.k12.fixtures.config.ts', ...playwrightArgs],
+    [
+      'exec',
+      'playwright',
+      'test',
+      '-c',
+      'playwright.k12.fixtures.config.ts',
+      ...cycleArgs,
+      ...playwrightArgs,
+    ],
     {
       cwd: repoRoot,
-      env: process.env,
+      env: { ...env, DINGTALK_LIVE_SEND: '0' },
       stdio: 'inherit',
     },
   )
 
   const playwrightStatus = playwright.error ? 1 : playwright.status
   if (playwright.error) {
-    process.stderr.write(
+    processLike.stderr.write(
       `K12 Fixture gate: could not start Playwright: ${playwright.error.message}\n`,
     )
   }
@@ -179,18 +269,20 @@ async function runGate(argv) {
   let auditPassed = false
   if (strict && playwrightStatus === 0) {
     try {
-      const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
-      const audit = auditK12FixturesReport(report, { expectedProject: 'chromium' })
+      const report = JSON.parse(await readReport(absoluteReportPath, 'utf8'))
+      const audit = auditK12FixturesReport(report, { expectedProject: 'chromium', cycle })
       auditPassed = true
-      process.stdout.write(
-        `K12 Fixture strict gate: ${audit.total} executed result(s), 7/7 files, zero skipped\n`,
+      processLike.stdout.write(
+        cycle
+          ? `K12 Fixture strict gate: ${cycle} ${audit.total}/1 executed result, zero skipped\n`
+          : `K12 Fixture strict gate: ${audit.total} executed result(s), 7/7 files, zero skipped\n`,
       )
     } catch (error) {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+      processLike.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     }
   }
 
-  process.exitCode = gateExitCode({ playwrightStatus, strict, auditPassed })
+  processLike.exitCode = gateExitCode({ playwrightStatus, strict, auditPassed })
 }
 
 if (resolve(process.argv[1] ?? '') === resolve(scriptPath)) {

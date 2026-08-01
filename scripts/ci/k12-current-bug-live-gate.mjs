@@ -27,6 +27,30 @@ const contract = parseCurrentBugLiveContract(
   ),
 )
 const absoluteReportPath = resolve(repoRoot, contract.reportPath)
+const real10xCycleScenarios = Object.freeze({
+  C01: Object.freeze({
+    title: 'C01 solve image preserves one durable receipt and attachment identity',
+  }),
+  C02: Object.freeze({
+    title: 'C02 clear homework preserves one durable grading result',
+  }),
+  C05: Object.freeze({
+    title: 'C05 writing review preserves one canonical work',
+  }),
+  C06: Object.freeze({
+    title: 'C06 art review preserves one canonical work',
+  }),
+})
+
+function real10xScenario(cycle) {
+  return real10xCycleScenarios[cycle]
+}
+
+export function real10xScenarioGrep(cycle) {
+  const scenario = real10xScenario(cycle)
+  if (!scenario) return undefined
+  return `.*${scenario.title.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`
+}
 
 function collectSpecs(suites, target = []) {
   for (const suite of suites ?? []) {
@@ -36,7 +60,7 @@ function collectSpecs(suites, target = []) {
   return target
 }
 
-export function auditCurrentBugLiveReport(report) {
+export function auditCurrentBugLiveReport(report, { cycle } = {}) {
   if (!report || typeof report !== 'object') {
     throw new Error('K12 current-bug LIVE strict gate: report is not an object')
   }
@@ -48,6 +72,11 @@ export function auditCurrentBugLiveReport(report) {
   if (files.size !== 1 || !files.has(contract.specFile)) {
     throw new Error('K12 current-bug LIVE strict gate: spec exact-set mismatch')
   }
+  const scenario = cycle === undefined ? undefined : real10xScenario(cycle)
+  if (cycle !== undefined && !scenario) {
+    throw new Error(`K12 current-bug LIVE strict gate: unsupported real-10x cycle ${cycle}`)
+  }
+  const expectedTotal = scenario ? 1 : 3
   let total = 0
   const invalid = []
   for (const spec of specs) {
@@ -58,7 +87,8 @@ export function auditCurrentBugLiveReport(report) {
         test.projectName !== contract.project ||
         test.expectedStatus !== 'passed' ||
         results.length === 0 ||
-        results.some(({ status }) => status !== 'passed')
+        results.some(({ status }) => status !== 'passed') ||
+        (scenario && spec.title !== scenario.title)
       ) {
         invalid.push(
           `${spec.title ?? test.title ?? 'unnamed'} [${test.projectName ?? 'no-project'}]`,
@@ -66,15 +96,17 @@ export function auditCurrentBugLiveReport(report) {
       }
     }
   }
-  if (total !== 3) {
-    throw new Error(`K12 current-bug LIVE strict gate: expected 3 executed tests, got ${total}`)
+  if (total !== expectedTotal) {
+    throw new Error(
+      `K12 current-bug LIVE strict gate: expected ${expectedTotal} executed test(s), got ${total}`,
+    )
   }
   if (invalid.length > 0) {
     throw new Error(
       `K12 current-bug LIVE strict gate: skipped/incomplete/non-passing results\n - ${invalid.join('\n - ')}`,
     )
   }
-  return { total, file: contract.specFile, project: contract.project }
+  return { total, file: contract.specFile, project: contract.project, ...(scenario ? { cycle } : {}) }
 }
 
 export function normalizeCurrentBugLiveArguments(argv) {
@@ -82,12 +114,30 @@ export function normalizeCurrentBugLiveArguments(argv) {
   const strict = playwrightArgs[0] === '--strict'
   if (strict) playwrightArgs.shift()
   if (playwrightArgs[0] === '--') playwrightArgs.shift()
-  return { strict, playwrightArgs }
+  let cycle
+  if (strict && playwrightArgs[0] === '--cycle') {
+    cycle = playwrightArgs[1]
+    playwrightArgs.splice(0, 2)
+  }
+  return { strict, ...(cycle === undefined ? {} : { cycle }), playwrightArgs }
 }
 
-export function validateCurrentBugLiveArguments({ strict, playwrightArgs }) {
+export function validateCurrentBugLiveArguments(
+  { strict, cycle, playwrightArgs },
+  env = process.env,
+) {
   if (strict && playwrightArgs.length > 0) {
     throw new Error('K12 current-bug LIVE strict gate does not accept Playwright filters')
+  }
+  if (cycle === undefined) return
+  if (!strict || typeof cycle !== 'string' || !real10xScenario(cycle)) {
+    throw new Error('K12 current-bug LIVE strict gate accepts only a supported parent-injected cycle')
+  }
+  if (
+    env.HEX_K12_REAL_10X_CYCLE_ID !== cycle ||
+    env.HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE !== '1'
+  ) {
+    throw new Error('K12 current-bug LIVE strict gate cycle must match the parent-injected cycle')
   }
 }
 
@@ -146,10 +196,12 @@ function redactedWriter(stream, target, secrets) {
   }
 }
 
-function runStrictPlaywright(playwrightArgs, fixtureEnvironment) {
+function runStrictPlaywright(playwrightArgs, fixtureEnvironment, { cycle } = {}) {
   const secrets = Object.values(fixtureEnvironment)
+  const scenario = cycle === undefined ? undefined : real10xScenario(cycle)
+  const cycleArgs = scenario ? ['--grep', real10xScenarioGrep(cycle)] : []
   return new Promise((resolvePromise) => {
-    const child = spawn('pnpm', [...playwrightCommand, ...playwrightArgs], {
+    const child = spawn('pnpm', [...playwrightCommand, ...cycleArgs, ...playwrightArgs], {
       cwd: repoRoot,
       env: {
         ...process.env,
@@ -198,9 +250,9 @@ async function cancelStrictPlaywright() {
   })
 }
 
-async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment) {
+async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment, { cycle } = {}) {
   await rm(absoluteReportPath, { force: true })
-  const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment)
+  const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment, { cycle })
   if (playwright.error) {
     process.stderr.write(
       `K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`,
@@ -211,10 +263,12 @@ async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment) {
   if (playwright.status === 0) {
     try {
       const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
-      const audit = auditCurrentBugLiveReport(report)
+      const audit = auditCurrentBugLiveReport(report, { cycle })
       auditPassed = true
       process.stdout.write(
-        `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and six-submission matrix passed\n`,
+        cycle
+          ? `K12 current-bug LIVE strict gate: ${cycle} ${audit.total}/1 executed, zero skipped\n`
+          : `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and six-submission matrix passed\n`,
       )
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
@@ -238,10 +292,10 @@ export async function runGate(
     spawnPlaywright = spawnSync,
   } = {},
 ) {
-  const { strict, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
+  const { strict, cycle, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
   let fixtureConfig
   try {
-    validateCurrentBugLiveArguments({ strict, playwrightArgs })
+    validateCurrentBugLiveArguments({ strict, cycle, playwrightArgs }, env)
     if (strict) {
       const blockers = strictEnvironmentBlockers(env, contractValue)
       if (blockers.length > 0) {
@@ -249,9 +303,11 @@ export async function runGate(
           `K12 current-bug LIVE strict gate missing exact authorization: ${blockers.join(', ')}`,
         )
       }
-      fixtureConfig = validateEnvironment(env, {
-        gradingCalibrationApproval: contractValue.gradingCalibrationApproval,
-      })
+      if (!cycle) {
+        fixtureConfig = validateEnvironment(env, {
+          gradingCalibrationApproval: contractValue.gradingCalibrationApproval,
+        })
+      }
     }
   } catch (error) {
     processLike.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
@@ -281,6 +337,21 @@ export async function runGate(
       strict: false,
       auditPassed: false,
     })
+    return
+  }
+
+  if (cycle) {
+    const fixtureEnvironment = {
+      HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: env.HEX_K12_LIVE_RETRYABLE_DISPATCH_ID,
+      HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: env.HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID,
+    }
+    if (Object.values(fixtureEnvironment).some((value) => typeof value !== 'string' || !value.trim())) {
+      processLike.stderr.write('K12 current-bug LIVE strict gate parent fixture IDs are required\n')
+      processLike.exitCode = 2
+      return
+    }
+    const gateResult = await runPlaywrightGate(playwrightArgs, fixtureEnvironment, { cycle })
+    processLike.exitCode = currentBugLiveExitCode({ ...gateResult, strict: true })
     return
   }
 

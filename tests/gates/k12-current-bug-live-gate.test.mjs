@@ -247,3 +247,225 @@ test('strict runner rejects filters and cannot hide Playwright or audit failures
   assert.equal(currentBugLiveExitCode({ playwrightStatus: 0, strict: true, auditPassed: false }), 1)
   assert.equal(currentBugLiveExitCode({ playwrightStatus: 0, strict: true, auditPassed: true }), 0)
 })
+
+test('BUG-TEST-INFRA-K12-REAL-10X parent-owned C01 mode accepts only its injected cycle and one exact scenario', async () => {
+  const {
+    auditCurrentBugLiveReport,
+    normalizeCurrentBugLiveArguments,
+    real10xScenarioGrep,
+    validateCurrentBugLiveArguments,
+  } = await loadRunner()
+  assert.equal(
+    real10xScenarioGrep('C01'),
+    '.*C01 solve image preserves one durable receipt and attachment identity$',
+  )
+  const parsed = normalizeCurrentBugLiveArguments(['--strict', '--cycle', 'C01'])
+  assert.deepEqual(parsed, { strict: true, cycle: 'C01', playwrightArgs: [] })
+  assert.doesNotThrow(() =>
+    validateCurrentBugLiveArguments(parsed, {
+      HEX_K12_REAL_10X_CYCLE_ID: 'C01',
+      HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+    }),
+  )
+  assert.throws(
+    () =>
+      validateCurrentBugLiveArguments(parsed, {
+        HEX_K12_REAL_10X_CYCLE_ID: 'C02',
+        HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+      }),
+    /parent-injected cycle/i,
+  )
+  assert.throws(
+    () =>
+      validateCurrentBugLiveArguments(
+        { strict: true, cycle: 'C01', playwrightArgs: ['--grep', 'anything'] },
+        {
+          HEX_K12_REAL_10X_CYCLE_ID: 'C01',
+          HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+        },
+      ),
+    /does not accept Playwright filters/i,
+  )
+  assert.deepEqual(
+    auditCurrentBugLiveReport(
+      {
+        errors: [],
+        suites: [
+          {
+            specs: [
+              {
+                title: 'C01 solve image preserves one durable receipt and attachment identity',
+                file: `/workspace/tests/live/${specFile}`,
+                tests: [
+                  {
+                    projectName: 'chromium',
+                    expectedStatus: 'passed',
+                    results: [{ status: 'passed' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { cycle: 'C01' },
+    ),
+    {
+      total: 1,
+      file: specFile,
+      project: 'chromium',
+      cycle: 'C01',
+    },
+  )
+})
+
+test('BUG-TEST-INFRA-K12-REAL-10X parent-owned C01 mode never creates a nested fixture lifecycle', async () => {
+  const { runGate } = await loadRunner()
+  const contract = JSON.parse(
+    await readFile(repoFile('tests/live/k12-current-bug-real-matrix.contract.json'), 'utf8'),
+  )
+  const approvedContract = structuredClone(contract)
+  approvedContract.gradingCalibrationApproval = {
+    status: 'approved',
+    approval_ref: 'unit-test:synthetic-calibration',
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    artifact_sha256: 'c'.repeat(64),
+    release_config_sha256: 'b'.repeat(64),
+  }
+  const env = {
+    ...approvedContract.requiredStrictEnvironment,
+    ...Object.fromEntries(approvedContract.requiredStrictValues.map((name) => [name, `value-${name}`])),
+    HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: '/tmp/grading-calibration.json',
+    HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: 'c'.repeat(64),
+    HEX_K12_REAL_10X_CYCLE_ID: 'C01',
+    HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+    HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: 'opaque-retryable',
+    HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: 'opaque-unknown',
+  }
+  const processLike = { exitCode: undefined, stderr: { write() {} } }
+  let observed
+
+  await runGate(['--strict', '--cycle', 'C01'], {
+    env,
+    processLike,
+    contractValue: approvedContract,
+    validateEnvironment: () => {
+      throw new Error('child must not validate or own the parent fixture lifecycle')
+    },
+    createRuntime: () => {
+      throw new Error('child must not create a nested runtime')
+    },
+    runLifecycle: () => {
+      throw new Error('child must not run a nested lifecycle')
+    },
+    runPlaywrightGate: async (args, fixtureEnvironment, options) => {
+      observed = { args, fixtureEnvironment, options }
+      return { playwrightStatus: 0, auditPassed: true }
+    },
+  })
+
+  assert.deepEqual(observed, {
+    args: [],
+    fixtureEnvironment: {
+      HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: 'opaque-retryable',
+      HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: 'opaque-unknown',
+    },
+    options: { cycle: 'C01' },
+  })
+  assert.equal(processLike.exitCode, 0)
+})
+
+test('BUG-TEST-INFRA-K12-REAL-10X parent-owned C02 mode accepts one exact clear-homework scenario', async () => {
+  const {
+    auditCurrentBugLiveReport,
+    normalizeCurrentBugLiveArguments,
+    validateCurrentBugLiveArguments,
+  } = await loadRunner()
+  const parsed = normalizeCurrentBugLiveArguments(['--strict', '--cycle', 'C02'])
+  assert.deepEqual(parsed, { strict: true, cycle: 'C02', playwrightArgs: [] })
+  assert.doesNotThrow(() =>
+    validateCurrentBugLiveArguments(parsed, {
+      HEX_K12_REAL_10X_CYCLE_ID: 'C02',
+      HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+    }),
+  )
+  assert.deepEqual(
+    auditCurrentBugLiveReport(
+      {
+        errors: [],
+        suites: [
+          {
+            specs: [
+              {
+                title: 'C02 clear homework preserves one durable grading result',
+                file: `/workspace/tests/live/${specFile}`,
+                tests: [
+                  {
+                    projectName: 'chromium',
+                    expectedStatus: 'passed',
+                    results: [{ status: 'passed' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { cycle: 'C02' },
+    ),
+    {
+      total: 1,
+      file: specFile,
+      project: 'chromium',
+      cycle: 'C02',
+    },
+  )
+})
+
+for (const [cycle, title] of [
+  ['C05', 'C05 writing review preserves one canonical work'],
+  ['C06', 'C06 art review preserves one canonical work'],
+]) {
+  test(`BUG-TEST-INFRA-K12-REAL-10X parent-owned ${cycle} mode accepts one exact creative scenario`, async () => {
+    const {
+      auditCurrentBugLiveReport,
+      normalizeCurrentBugLiveArguments,
+      validateCurrentBugLiveArguments,
+    } = await loadRunner()
+    const parsed = normalizeCurrentBugLiveArguments(['--strict', '--cycle', cycle])
+    assert.deepEqual(parsed, { strict: true, cycle, playwrightArgs: [] })
+    assert.doesNotThrow(() =>
+      validateCurrentBugLiveArguments(parsed, {
+        HEX_K12_REAL_10X_CYCLE_ID: cycle,
+        HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+      }),
+    )
+    assert.deepEqual(
+      auditCurrentBugLiveReport(
+        {
+          errors: [],
+          suites: [
+            {
+              specs: [
+                {
+                  title,
+                  file: `/workspace/tests/live/${specFile}`,
+                  tests: [
+                    {
+                      projectName: 'chromium',
+                      expectedStatus: 'passed',
+                      results: [{ status: 'passed' }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        { cycle },
+      ),
+      { total: 1, file: specFile, project: 'chromium', cycle },
+    )
+  })
+}

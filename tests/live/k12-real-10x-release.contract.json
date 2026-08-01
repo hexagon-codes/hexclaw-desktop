@@ -67,7 +67,8 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C01"
       },
       "fixture": "tests/live/k12-current-bug-real-matrix.contract.json#fixtures.problem",
       "requiredHook": "installed exact-model solve-image receipt hook",
@@ -84,7 +85,8 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C02"
       }
     },
     {
@@ -93,7 +95,8 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C03"
       }
     },
     {
@@ -102,7 +105,8 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C04"
       }
     },
     {
@@ -111,7 +115,8 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C05"
       }
     },
     {
@@ -120,7 +125,8 @@
       "hook": {
         "lane": "current-bug-live-strict",
         "module": "scripts/ci/k12-current-bug-live-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C06"
       },
       "requiredHook": "installed exact-model art-review receipt hook",
       "supportingEvidence": [
@@ -148,7 +154,8 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C07"
       }
     },
     {
@@ -157,7 +164,8 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C08"
       }
     },
     {
@@ -166,7 +174,8 @@
       "hook": {
         "lane": "fixtures-strict",
         "module": "scripts/ci/k12-fixtures-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C09"
       },
       "oracle": "tests/fixtures/local/k12-textbook-rag-oracle.v1.json",
       "requiredHook": "qwen3-embedding:8b grounded-RAG receipt hook",
@@ -174,14 +183,14 @@
         {
           "lane": "fixtures-strict",
           "spec": "grounding-pdf.spec.ts",
-          "cases": [
-            "131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval"
-          ]
+          "cases": ["C09 retrieves the C08 textbook lineage through the frozen oracle"]
         }
       ],
       "requiredProof": [
         "document_id",
         "physical_page",
+        "source_offset_range",
+        "raw_source_span_normalized_sha256",
         "chunk_id",
         "citation_digest",
         "qwen3_embedding_query_receipt"
@@ -193,23 +202,18 @@
       "hook": {
         "lane": "c10-restart-recovery-strict",
         "module": "scripts/ci/k12-c10-restart-recovery-gate.mjs",
-        "args": ["--strict"]
+        "args": ["--strict"],
+        "cycle_selector": "C10"
       },
       "restartContract": "tests/live/k12-c10-restart-hook.contract.json",
       "requiredHook": "caller-owned installed app and Sidecar restart hook with signed C07-C10 state handoff",
       "requiredEnvironment": {
         "exact": {
-          "HEX_K12_C10_RESTART_AUTHORIZED": "1"
+          "HEX_K12_C10_PREPARE_AUTHORIZED": "1"
         },
         "values": [
-          "HEX_K12_C10_RESTART_HOOK",
-          "HEX_K12_C10_RESTART_HOOK_SHA256",
-          "HEX_K12_C10_HANDOFF_PUBLIC_KEY",
-          "HEX_K12_C10_HANDOFF_PUBLIC_KEY_SHA256",
-          "HEX_K12_C10_BEFORE_HANDOFF",
-          "HEX_K12_C10_AFTER_HANDOFF",
-          "HEX_K12_C10_AFTER_HANDOFF_PUBLIC_KEY",
-          "HEX_K12_C10_DRIVER_CONFIG"
+          "HEX_K12_C10_PREPARE_HOOK",
+          "HEX_K12_C10_PREPARE_HOOK_SHA256"
         ]
       },
       "supportingEvidence": [

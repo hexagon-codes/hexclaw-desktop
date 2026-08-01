@@ -67,6 +67,11 @@ test('dedicated config and environment contract freeze exactly seven Fixture spe
   assert.deepEqual(contract.currentSource.endpoints, ['HEX_E2E_BASE_URL', 'HEX_E2E_SIDECAR_URL'])
   assert.equal(contract.currentSource.managesWebServer, false)
   assert.equal(contract.currentSource.managesSidecar, false)
+  assert.deepEqual(contract.parentOwnedChildEnvironment, [
+    'HEX_K12_REAL_10X_CYCLE_ID',
+    'HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH',
+    'HEX_K12_REAL_10X_PARENT_RUN_ID',
+  ])
 
   const gatesBySpec = Object.fromEntries(
     contract.specs.map(({ file, zeroSkipGates }) => [file, zeroSkipGates]),
@@ -123,7 +128,11 @@ test('environment contract stays aligned with the switches referenced by every s
         (match) => match[1],
       ),
     )
-    const declared = new Set([...zeroSkipGates, ...fixtureOverrides])
+    const declared = new Set([
+      ...zeroSkipGates,
+      ...fixtureOverrides,
+      ...contract.parentOwnedChildEnvironment.filter((name) => referenced.has(name)),
+    ])
 
     assert.deepEqual(
       [...referenced].sort(),
@@ -211,5 +220,150 @@ test('runner removes only the pnpm argument separator before forwarding Playwrig
   assert.throws(
     () => validateGateArguments({ strict: true, playwrightArgs: ['--grep', 'fixture'] }),
     /strict gate does not accept playwright filters/i,
+  )
+})
+
+for (const [cycle, file, title] of [
+  [
+    'C03',
+    'grading-real-fixtures.spec.ts',
+    'messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross',
+  ],
+  [
+    'C04',
+    'grading-real-fixtures.spec.ts',
+    'blank sheet stays solve-only and does not create a mistake projection',
+  ],
+  [
+    'C07',
+    'grounding-pdf.spec.ts',
+    'C07 accepts the frozen 131-page textbook once and persists its private lineage',
+  ],
+  [
+    'C08',
+    'grounding-pdf.spec.ts',
+    'C08 indexes exactly the C07 textbook lineage and persists active revision',
+  ],
+  [
+    'C09',
+    'grounding-pdf.spec.ts',
+    'C09 retrieves the C08 textbook lineage through the frozen oracle',
+  ],
+]) {
+  test(`BUG-TEST-INFRA-K12-REAL-10X parent-owned ${cycle} mode accepts one exact grading fixture`, async () => {
+    const {
+      auditK12FixturesReport,
+      normalizeGateArguments,
+      real10xScenarioGrep,
+      validateGateArguments,
+    } = await loadGateModule()
+    assert.equal(real10xScenarioGrep(cycle), `.*${title}$`)
+    const parsed = normalizeGateArguments(['--strict', '--cycle', cycle])
+    assert.deepEqual(parsed, { strict: true, cycle, playwrightArgs: [] })
+    assert.doesNotThrow(() =>
+      validateGateArguments(parsed, {
+        HEX_K12_REAL_10X_CYCLE_ID: cycle,
+        HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+        ...(cycle >= 'C07'
+          ? {
+              HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH:
+                '/tmp/private-lineage/knowledge-lineage.json',
+              HEX_K12_REAL_10X_PARENT_RUN_ID: 'parent-run',
+            }
+          : {}),
+      }),
+    )
+    assert.deepEqual(
+      auditK12FixturesReport(
+        {
+          errors: [],
+          suites: [
+            {
+              specs: [
+                {
+                  title,
+                  file: `/workspace/tests/e2e/${file}`,
+                  tests: [
+                    {
+                      projectName: 'chromium',
+                      expectedStatus: 'passed',
+                      results: [{ status: 'passed' }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        { expectedProject: 'chromium', cycle },
+      ),
+      { total: 1, files: [file], cycle },
+    )
+  })
+}
+
+test('BUG-TEST-INFRA-K12-REAL-10X parent-owned C03 gate runs only its internal scenario filter', async () => {
+  const { runGate } = await loadGateModule()
+  const processLike = { exitCode: undefined, stdout: { write() {} }, stderr: { write() {} } }
+  let spawnArguments
+
+  await runGate(['--strict', '--cycle', 'C03'], {
+    env: {
+      HEX_K12_REAL_10X_CYCLE_ID: 'C03',
+      HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+      DINGTALK_LIVE_SEND: '1',
+    },
+    processLike,
+    removeReport: async () => undefined,
+    spawnPlaywright: (_command, args, options) => {
+      spawnArguments = { args, options }
+      return { status: 0 }
+    },
+    readReport: async () =>
+      JSON.stringify({
+        errors: [],
+        suites: [
+          {
+            specs: [
+              {
+                title:
+                  'messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross',
+                file: '/workspace/tests/e2e/grading-real-fixtures.spec.ts',
+                tests: [
+                  {
+                    projectName: 'chromium',
+                    expectedStatus: 'passed',
+                    results: [{ status: 'passed' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+  })
+
+  assert.deepEqual(spawnArguments.args.slice(-2), [
+    '--grep',
+    '.*messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross$',
+  ])
+  assert.equal(spawnArguments.options.env.DINGTALK_LIVE_SEND, '0')
+  assert.equal(processLike.exitCode, 0)
+})
+
+test('BUG-TEST-INFRA-K12-REAL-10X C07-C09 reject a caller-relative lineage path before Playwright', async () => {
+  const { validateGateArguments } = await loadGateModule()
+  assert.throws(
+    () =>
+      validateGateArguments(
+        { strict: true, cycle: 'C07', playwrightArgs: [] },
+        {
+          HEX_K12_REAL_10X_CYCLE_ID: 'C07',
+          HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+          HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH: 'relative/knowledge-lineage.json',
+          HEX_K12_REAL_10X_PARENT_RUN_ID: 'parent-run',
+        },
+      ),
+    /path.*absolute/i,
   )
 })

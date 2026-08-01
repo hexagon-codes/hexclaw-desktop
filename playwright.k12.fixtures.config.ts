@@ -11,6 +11,7 @@ interface K12FixtureGateContract {
     managesWebServer: boolean
     managesSidecar: boolean
   }
+  parentOwnedChildEnvironment: string[]
   specs: Array<{
     file: string
     zeroSkipGates: string[]
@@ -24,7 +25,9 @@ const contract = JSON.parse(
 
 if (
   contract.schemaVersion !== 1 ||
-  contract.reportPath !== 'test-results/k12-fixtures/report.json'
+  contract.reportPath !== 'test-results/k12-fixtures/report.json' ||
+  JSON.stringify(contract.parentOwnedChildEnvironment) !==
+    '["HEX_K12_REAL_10X_CYCLE_ID","HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH","HEX_K12_REAL_10X_PARENT_RUN_ID"]'
 ) {
   throw new Error('invalid K12 Fixture gate contract version or report path')
 }

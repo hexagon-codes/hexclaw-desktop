@@ -79,6 +79,7 @@ const blockers = [
     (name) => !envValue(name),
   ),
 ]
+const real10xCycle = envValue('HEX_K12_REAL_10X_CYCLE_ID')
 
 function fixture(key: FixtureKey) {
   const frozen = contract.fixtures[key]
@@ -991,16 +992,18 @@ function assertHomeworkResult(payload: Json): void {
   }
 }
 
-test('fixture manifest freezes four user-supplied source images and the submission budget', () => {
-  for (const key of ['writing', 'homework', 'problem', 'art'] as const) {
-    expect(existsSync(fixture(key).path)).toBe(true)
-    verifyFixture(key)
-  }
-  expect(contract.submissions.plannedTopLevel).toBe(6)
-  expect(contract.submissions.plannedTopLevel).toBeLessThanOrEqual(
-    contract.submissions.maximumTopLevel,
-  )
-})
+if (!real10xCycle) {
+  test('fixture manifest freezes four user-supplied source images and the submission budget', () => {
+    for (const key of ['writing', 'homework', 'problem', 'art'] as const) {
+      expect(existsSync(fixture(key).path)).toBe(true)
+      verifyFixture(key)
+    }
+    expect(contract.submissions.plannedTopLevel).toBe(6)
+    expect(contract.submissions.plannedTopLevel).toBeLessThanOrEqual(
+      contract.submissions.maximumTopLevel,
+    )
+  })
+}
 
 test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
   test.skip(
@@ -1027,6 +1030,245 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
     sessionTitle = ''
   })
 
+  if (real10xCycle === 'C01') {
+    test('C01 solve image preserves one durable receipt and attachment identity', async ({
+      page,
+      request,
+    }, testInfo: TestInfo) => {
+      await assertLiveRuntime(page, request, testInfo)
+      const llm = await liveJSON<{ providers?: Record<string, Json> }>(
+        request,
+        'GET',
+        '/api/v1/config/llm',
+      )
+      const configured = llm.providers?.[contract.provider.identity]
+      expect(configured?.display_name).toBe(contract.provider.displayName)
+      expect([
+        configured?.model,
+        ...(Array.isArray(configured?.models) ? configured.models : []),
+      ]).toContain(contract.provider.model)
+
+      sessionTitle = `LIVE-K12-C01-${randomUUID().slice(0, 8)}`
+      await page.goto(
+        liveAppURL(
+          `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
+        ),
+        { waitUntil: 'domcontentloaded' },
+      )
+      expect(new URL(page.url()).pathname, 'authorized profile must not enter onboarding').not.toBe(
+        '/welcome',
+      )
+      await expect(page.getByTestId('chat-input')).toBeVisible()
+      sessionID = await findLiveSessionByTitle(request, sessionTitle)
+
+      const forbiddenRequests: string[] = []
+      page.on('request', (outgoing) => {
+        const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
+        if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
+          forbiddenRequests.push(`${outgoing.method()} ${path}`)
+        }
+      })
+
+      const problem = await submitImage(page, 'problem', true)
+      const problemDispatchId = await dispatchID(problem.shell)
+      await confirmRecognizedRowsIfRequired(page, problem.shell, testInfo, 'problem', problem.trace!)
+      const problemResult = await waitForTaskOperation(page, problemDispatchId, 'solve')
+      const problemDispatch = await loadDispatch(page, problemDispatchId)
+      assertProblemStructure(recognizedQuestions(problemDispatch, 'blank worksheet'))
+      const solveReceipt = assertTaskSourceAndReceipt(problemResult, 'problem', 'solve')
+      const problemPayload = record(
+        record(problemResult.result, 'solve terminal result').payload,
+        'blank worksheet payload',
+      )
+      assertBlankWorksheetResult(problemPayload)
+      const problemHistory = (await listHistory(request, sessionID)).find(
+        (message) => record(message, 'history message').id === problem.sourceId,
+      )
+      expect(problemHistory).toBeTruthy()
+      const persistedProblemBytes = attachmentBytes(problemHistory!)
+      expect(persistedProblemBytes.length).toBe(contract.fixtures.problem.bytes)
+      expect(sha256(persistedProblemBytes)).toBe(contract.fixtures.problem.sha256)
+      expect(forbiddenRequests).toEqual([])
+      await attachJSON(testInfo, 'k12-real-10x-C01-receipt', {
+        cycle: 'C01',
+        dispatch_id_sha256: sha256Text(problemDispatchId),
+        source_digest: contract.fixtures.problem.sha256,
+        provider: contract.provider.identity,
+        model: contract.provider.model,
+        invocation_id_sha256: sha256Text(String(solveReceipt.invocation_id)),
+        result_digest: solveReceipt.result_digest,
+      })
+    })
+  }
+
+  if (real10xCycle === 'C02') {
+    test('C02 clear homework preserves one durable grading result', async ({
+      page,
+      request,
+    }, testInfo: TestInfo) => {
+      await assertLiveRuntime(page, request, testInfo)
+      const llm = await liveJSON<{ providers?: Record<string, Json> }>(
+        request,
+        'GET',
+        '/api/v1/config/llm',
+      )
+      const configured = llm.providers?.[contract.provider.identity]
+      expect(configured?.display_name).toBe(contract.provider.displayName)
+      expect([
+        configured?.model,
+        ...(Array.isArray(configured?.models) ? configured.models : []),
+      ]).toContain(contract.provider.model)
+
+      sessionTitle = `LIVE-K12-C02-${randomUUID().slice(0, 8)}`
+      await page.goto(
+        liveAppURL(
+          `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
+        ),
+        { waitUntil: 'domcontentloaded' },
+      )
+      expect(new URL(page.url()).pathname, 'authorized profile must not enter onboarding').not.toBe(
+        '/welcome',
+      )
+      await expect(page.getByTestId('chat-input')).toBeVisible()
+      sessionID = await findLiveSessionByTitle(request, sessionTitle)
+
+      const forbiddenRequests: string[] = []
+      page.on('request', (outgoing) => {
+        const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
+        if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
+          forbiddenRequests.push(`${outgoing.method()} ${path}`)
+        }
+      })
+
+      const homework = await submitImage(page, 'homework', true)
+      const guard = await confirmRecognizedRowsIfRequired(
+        page,
+        homework.shell,
+        testInfo,
+        'homework',
+        homework.trace!,
+      )
+      const homeworkDispatchId = await dispatchID(homework.shell)
+      const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
+      const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
+      expect(homeworkQuestions).toHaveLength(homeworkGroundTruth.length)
+      expect(homeworkQuestions.map((question) => question.display_label)).toEqual(sourceLabels)
+      const rows = guard.getByTestId('rq-item')
+      await expect(rows).toHaveCount(sourceLabels.length)
+      const gradeAll = guard.getByTestId('recognize-grade-all')
+      if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
+      const overlay = guard.getByTestId('photo-grade-overlay')
+      await expect(overlay).toBeVisible({ timeout: 12 * 60_000 })
+      expect(
+        await overlay
+          .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
+          .count(),
+        'every answered source item must expose one visible positioned or degraded annotation',
+      ).toBe(homeworkGroundTruth.length)
+
+      const homeworkResult = await liveJSON<Json>(
+        request,
+        'GET',
+        `/api/k12/image-tasks/${encodeURIComponent(homeworkDispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
+      )
+      const homeworkPayload = record(
+        record(homeworkResult.result, 'homework result').payload,
+        'homework payload',
+      )
+      assertHomeworkResult(homeworkPayload)
+      const history = await listHistory(request, sessionID)
+      expect(history.filter((message) => message.role === 'user')).toHaveLength(1)
+      const homeworkHistory = history.find(
+        (message) => record(message, 'history message').id === homework.sourceId,
+      )
+      expect(homeworkHistory).toBeTruthy()
+      const persistedHomeworkBytes = attachmentBytes(homeworkHistory!)
+      expect(persistedHomeworkBytes.length).toBe(contract.fixtures.homework.bytes)
+      expect(sha256(persistedHomeworkBytes)).toBe(contract.fixtures.homework.sha256)
+      expect(forbiddenRequests).toEqual([])
+      await attachJSON(testInfo, 'k12-real-10x-C02-receipt', {
+        cycle: 'C02',
+        dispatch_id_sha256: sha256Text(homeworkDispatchId),
+        source_digest: contract.fixtures.homework.sha256,
+        provider: contract.provider.identity,
+        model: contract.provider.model,
+        homework_items: homeworkGroundTruth.length,
+      })
+    })
+  }
+
+  if (real10xCycle === 'C05' || real10xCycle === 'C06') {
+    const creativeCycle = real10xCycle
+    const intent: CreativeIntent = creativeCycle === 'C05' ? 'writing' : 'art'
+    const sourceKey: 'writing' | 'art' = intent
+    test(
+      creativeCycle === 'C05'
+        ? 'C05 writing review preserves one canonical work'
+        : 'C06 art review preserves one canonical work',
+      async ({ page, request }, testInfo: TestInfo) => {
+        await assertLiveRuntime(page, request, testInfo)
+        const llm = await liveJSON<{ providers?: Record<string, Json> }>(
+          request,
+          'GET',
+          '/api/v1/config/llm',
+        )
+        const configured = llm.providers?.[contract.provider.identity]
+        expect(configured?.display_name).toBe(contract.provider.displayName)
+        expect([
+          configured?.model,
+          ...(Array.isArray(configured?.models) ? configured.models : []),
+        ]).toContain(contract.provider.model)
+
+        sessionTitle = `LIVE-K12-${creativeCycle}-${randomUUID().slice(0, 8)}`
+        await page.goto(
+          liveAppURL(
+            `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
+          ),
+          { waitUntil: 'domcontentloaded' },
+        )
+        expect(new URL(page.url()).pathname, 'authorized profile must not enter onboarding').not.toBe(
+          '/welcome',
+        )
+        await expect(page.getByTestId('chat-input')).toBeVisible()
+        sessionID = await findLiveSessionByTitle(request, sessionTitle)
+
+        const forbiddenRequests: string[] = []
+        page.on('request', (outgoing) => {
+          const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
+          if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
+            forbiddenRequests.push(`${outgoing.method()} ${path}`)
+          }
+        })
+
+        const source = await submitImage(page, sourceKey)
+        const creative = await waitForCreativeResult(source.shell, intent)
+        createdWorkIDs.push(creative.workId)
+        await assertCanonicalWork(page, testInfo, creative, intent, sourceKey)
+        const history = await listHistory(request, sessionID)
+        expect(history.filter((message) => message.role === 'user')).toHaveLength(1)
+        const sourceHistory = history.find(
+          (message) => record(message, 'history message').id === source.sourceId,
+        )
+        expect(sourceHistory).toBeTruthy()
+        const persistedBytes = attachmentBytes(sourceHistory!)
+        expect(persistedBytes.length).toBe(contract.fixtures[sourceKey].bytes)
+        expect(sha256(persistedBytes)).toBe(contract.fixtures[sourceKey].sha256)
+        expect(forbiddenRequests).toEqual([])
+        await attachJSON(testInfo, `k12-real-10x-${creativeCycle}-receipt`, {
+          cycle: creativeCycle,
+          dispatch_id_sha256: sha256Text(creative.dispatchId),
+          source_digest: contract.fixtures[sourceKey].sha256,
+          provider: contract.provider.identity,
+          model: contract.provider.model,
+          work_id_sha256: sha256Text(creative.workId),
+          generation_id_sha256: sha256Text(creative.generationId),
+          feedback_id_sha256: sha256Text(creative.feedbackId),
+        })
+      },
+    )
+  }
+
+  if (!real10xCycle) {
   test('six real submissions preserve solve/creative receipts, attachment, source order and provider display', async ({
     page,
     request,
@@ -1291,4 +1533,5 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       outcome_unknown_retry_rejected_before_provider: true,
     })
   })
+  }
 })

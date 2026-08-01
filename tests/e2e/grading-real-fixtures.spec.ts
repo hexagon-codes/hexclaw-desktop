@@ -7,6 +7,7 @@ import { cleanupK12Child } from './live-fixture-cleanup'
 
 /** PHOTO-001..005 + E2E-GRADE-001/002 + E2E-SOLVE-001. */
 const LIVE = process.env.HEX_K12_ACCEPTANCE_LIVE === '1' && process.env.HEX_K12_REAL_MODEL === '1'
+const real10xCycle = process.env.HEX_K12_REAL_10X_CYCLE_ID || ''
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
 const FIXTURES = {
   clear: {
@@ -248,13 +249,15 @@ async function attachOverlayEvidence(
   await testInfo.attach(attachmentName, { body: screenshot, contentType: 'image/png' })
 }
 
-test('§1.2 grading manifest has all three immutable image identities', () => {
-  const missing = Object.values(FIXTURES)
-    .filter((fixture) => !existsSync(fixture.path))
-    .map((fixture) => fixture.id)
-  test.skip(missing.length > 0, `NOT RUN: private fixture(s) absent: ${missing.join(', ')}`)
-  for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
-})
+if (!real10xCycle) {
+  test('§1.2 grading manifest has all three immutable image identities', () => {
+    const missing = Object.values(FIXTURES)
+      .filter((fixture) => !existsSync(fixture.path))
+      .map((fixture) => fixture.id)
+    test.skip(missing.length > 0, `NOT RUN: private fixture(s) absent: ${missing.join(', ')}`)
+    for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
+  })
+}
 
 test.describe('real grading/solving fixture oracle', () => {
   test.setTimeout(15 * 60_000)
@@ -269,6 +272,77 @@ test.describe('real grading/solving fixture oracle', () => {
     for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
   })
 
+  if (real10xCycle === 'C03') {
+    test('messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross', async ({
+      page,
+    }, testInfo) => {
+      childName = `凌乱卷-${e2eMarker('child')}`
+      const owner = await createTutor(page, childName)
+      const guard = await uploadAndConfirm(page, owner, FIXTURES.messy)
+      const answerableRows = guard.locator(
+        '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+      )
+      expect(await answerableRows.count(), 'messy fixture contains exactly 16 answerable items').toBe(
+        16,
+      )
+      const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
+      expect(answers.filter((answer) => answer.trim()).length).toBe(15)
+      await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(1)
+      await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
+      await guard.getByTestId('recognize-grade-all').click()
+      const overlay = guard.getByTestId('photo-grade-overlay')
+      await expect(overlay).toBeVisible({ timeout: 10 * 60_000 })
+      const verdicts = [
+        ...(await overlay.locator('[data-testid^="overlay-sym-"]').allTextContents()),
+        ...(await overlay.locator('.pg-overlay__degraded-verdict').allTextContents()),
+      ]
+      expect(verdicts.filter((value) => value.includes('✓')).length).toBe(12)
+      expect(verdicts.filter((value) => value.includes('✗')).length).toBe(3)
+      expect(verdicts).toHaveLength(15)
+      await expect(guard).toContainText(/0\.5\s*\+\s*1\/3/)
+      await expect(guard).toContainText(/88/)
+      await expect(guard).toContainText(/225\s*(?:kg|千克)/)
+      await testInfo.attach('k12-real-10x-C03-receipt.json', {
+        body: JSON.stringify({ cycle: 'C03', fixture_sha256: FIXTURES.messy.sha256, verdicts: [12, 3, 1] }),
+        contentType: 'application/json',
+      })
+    })
+  }
+
+  if (real10xCycle === 'C04') {
+    test('blank sheet stays solve-only and does not create a mistake projection', async ({
+      page,
+    }, testInfo) => {
+      childName = `空白卷-${e2eMarker('child')}`
+      const owner = await createTutor(page, childName)
+      const before = await backupRecordCount(page, owner)
+      const guard = await uploadAndConfirm(page, owner, FIXTURES.blank)
+      const answerableRows = guard.locator(
+        '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+      )
+      const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
+      expect(answers.length).toBeGreaterThan(0)
+      expect(
+        await answerableRows.count(),
+        'every blank-fixture question must have one answer input',
+      ).toBe(answers.length)
+      expect(answers.every((answer) => answer.trim() === '')).toBe(true)
+      await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(answers.length)
+      await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
+      await expect(guard.getByTestId('recognize-grade-all')).toHaveCount(0)
+      await expect(guard.getByTestId('recognize-solve-all')).toBeVisible()
+      await guard.getByTestId('recognize-solve-all').click()
+      await expect(guard.getByTestId('recognize-solve-all')).toHaveCount(0, { timeout: 8 * 60_000 })
+      await expect(guard.getByTestId('photo-grade-overlay')).toHaveCount(0)
+      expect(await backupRecordCount(page, owner)).toBe(before)
+      await testInfo.attach('k12-real-10x-C04-receipt.json', {
+        body: JSON.stringify({ cycle: 'C04', fixture_sha256: FIXTURES.blank.sha256 }),
+        contentType: 'application/json',
+      })
+    })
+  }
+
+  if (!real10xCycle) {
   test('clear sheet preserves the correct result plus process error and visible annotation evidence', async ({
     page,
   }, testInfo) => {
@@ -366,4 +440,5 @@ test.describe('real grading/solving fixture oracle', () => {
     await expect(guard.getByTestId('photo-grade-overlay')).toHaveCount(0)
     expect(await backupRecordCount(page, owner)).toBe(before)
   })
+  }
 })
