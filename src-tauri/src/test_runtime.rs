@@ -6,6 +6,34 @@ use std::sync::OnceLock;
 pub const TEST_MODE_ENV: &str = "HEXCLAW_TEST_MODE";
 pub const TEST_HOME_ENV: &str = "HEXCLAW_TEST_HOME";
 pub const TEST_SIDECAR_PORT_ENV: &str = "HEXCLAW_SIDECAR_PORT";
+pub const TEST_LLM_CONFIG_MODE_ENV: &str = "HEXCLAW_TEST_LLM_CONFIG_MODE";
+pub const TEST_PROFILE_CATCHUP_ENV: &str = "HEXCLAW_TEST_PROFILE_CATCHUP";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestLLMConfigMode {
+    Missing,
+    ExplicitEmpty,
+}
+
+fn test_llm_config_mode(value: Option<&str>) -> Result<TestLLMConfigMode, String> {
+    match value.unwrap_or("missing") {
+        "missing" => Ok(TestLLMConfigMode::Missing),
+        "explicit-empty" => Ok(TestLLMConfigMode::ExplicitEmpty),
+        invalid => Err(format!(
+            "{TEST_LLM_CONFIG_MODE_ENV} must be missing or explicit-empty, got {invalid:?}"
+        )),
+    }
+}
+
+fn test_profile_catchup_enabled(value: Option<&str>) -> Result<bool, String> {
+    match value.unwrap_or("0") {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        invalid => Err(format!(
+            "{TEST_PROFILE_CATCHUP_ENV} must be 0 or 1, got {invalid:?}"
+        )),
+    }
+}
 
 static SYSTEM_USER_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -298,10 +326,14 @@ pub fn prepare_shell_path_isolation() -> Result<Option<TestRunContext>, String> 
 }
 
 pub fn render_test_config(ctx: &TestRunContext) -> String {
+    render_test_config_with_llm_mode(ctx, TestLLMConfigMode::Missing)
+}
+
+fn render_test_config_with_llm_mode(ctx: &TestRunContext, llm_mode: TestLLMConfigMode) -> String {
     let sqlite_path = ctx.home.join(".hexclaw").join("data.db");
     let sqlite_path = serde_json::to_string(&sqlite_path.to_string_lossy())
         .expect("serializing a filesystem path cannot fail");
-    format!(
+    let mut yaml = format!(
         "server:\n  host: 127.0.0.1\n  port: {}\n\
 storage:\n  driver: sqlite\n  sqlite:\n    path: {}\n\
 heartbeat:\n  enabled: false\n\
@@ -310,20 +342,50 @@ skills:\n  enabled: false\n\
 voice:\n  enabled: false\n\
 skill:\n  sandbox:\n    enabled: false\n  builtin:\n    search: false\n    weather: false\n    browser: false\n    code_exec: false\n    file_ops: false\n",
         ctx.sidecar_port, sqlite_path
-    )
+    );
+    if llm_mode == TestLLMConfigMode::ExplicitEmpty {
+        yaml.push_str("llm:\n  providers: {}\n");
+    }
+    yaml
 }
 
 pub fn write_test_config(ctx: &TestRunContext) -> Result<(), String> {
     ensure_sandbox_dirs(ctx)?;
     let path = ctx.config_path();
-    std::fs::write(&path, render_test_config(ctx))
+    let llm_mode = test_llm_config_mode(std::env::var(TEST_LLM_CONFIG_MODE_ENV).ok().as_deref())?;
+    std::fs::write(&path, render_test_config_with_llm_mode(ctx, llm_mode))
         .map_err(|err| format!("failed to write test config {}: {err}", path.display()))?;
+    if test_profile_catchup_enabled(std::env::var(TEST_PROFILE_CATCHUP_ENV).ok().as_deref())? {
+        prepare_profile_catchup_fixture(ctx)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|err| format!("failed to protect test config {}: {err}", path.display()))?;
     }
+    Ok(())
+}
+
+fn prepare_profile_catchup_fixture(ctx: &TestRunContext) -> Result<(), String> {
+    let memory_dir = ctx.home.join(".hexclaw").join("memory");
+    let global_dir = memory_dir.join("_global");
+    std::fs::create_dir_all(&global_dir)
+        .map_err(|err| format!("failed to create profile catch-up fixture directory: {err}"))?;
+    std::fs::write(
+        global_dir.join("MEMORY.md"),
+        concat!(
+            "- [09:00] [fact:manual] 用户偏好用中文交流。\n",
+            "- [09:01] [fact:manual] 用户的项目使用本地测试。\n",
+            "- [09:02] [fact:manual] 用户习惯先验证后再提交。\n",
+        ),
+    )
+    .map_err(|err| format!("failed to write profile catch-up facts: {err}"))?;
+    std::fs::write(
+        memory_dir.join(".phase_state.json"),
+        "{\n  \"profile\": \"2000-01-01T00:00:00Z\"\n}\n",
+    )
+    .map_err(|err| format!("failed to write profile catch-up clock: {err}"))?;
     Ok(())
 }
 
@@ -425,6 +487,49 @@ mod tests {
         assert!(yaml.contains("mcp:\n  enabled: false"));
         assert!(yaml.contains("skills:\n  enabled: false"));
         assert!(yaml.contains("voice:\n  enabled: false"));
+    }
+
+    #[test]
+    fn test_runtime_explicit_empty_llm_mode_is_an_explicit_empty_provider_map() {
+        let ctx = TestRunContext {
+            home: PathBuf::from("/tmp/hexclaw-test/run-42"),
+            sidecar_port: 16061,
+        };
+
+        let yaml = render_test_config_with_llm_mode(&ctx, TestLLMConfigMode::ExplicitEmpty);
+        assert!(yaml.contains("llm:\n  providers: {}\n"));
+        assert!(!yaml.contains("llm:\n  providers:\n"));
+        assert_eq!(
+            test_llm_config_mode(Some("explicit-empty")).expect("explicit empty mode"),
+            TestLLMConfigMode::ExplicitEmpty
+        );
+        assert!(test_llm_config_mode(Some("provider-from-host")).is_err());
+    }
+
+    #[test]
+    fn test_runtime_profile_catchup_fixture_has_three_facts_and_an_overdue_clock() {
+        let root = std::env::temp_dir().join(format!(
+            "hexclaw-profile-catchup-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctx = TestRunContext {
+            home: root.clone(),
+            sidecar_port: 16061,
+        };
+
+        prepare_profile_catchup_fixture(&ctx).expect("write profile catch-up fixture");
+        let memory = std::fs::read_to_string(root.join(".hexclaw/memory/_global/MEMORY.md"))
+            .expect("read profile facts");
+        assert_eq!(memory.matches("[fact:manual]").count(), 3);
+        assert_eq!(
+            std::fs::read_to_string(root.join(".hexclaw/memory/.phase_state.json"))
+                .expect("read profile clock"),
+            "{\n  \"profile\": \"2000-01-01T00:00:00Z\"\n}\n"
+        );
+        assert!(test_profile_catchup_enabled(Some("1")).expect("enabled"));
+        assert!(test_profile_catchup_enabled(Some("true")).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
