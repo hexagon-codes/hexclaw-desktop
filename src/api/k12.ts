@@ -1982,12 +1982,52 @@ export type ImageTaskResultProjection =
   | { kind: 'writing'; payload: ImageTaskCreativeResultPayload }
   | { kind: 'artwork'; payload: ImageTaskCreativeResultPayload }
 
-export interface ImageTaskResultResp {
+export interface ImageTaskSourceAttachmentReceipt {
+  digest: string
+  size_bytes: number
+}
+
+export interface ImageTaskRequestPolicyReceipt {
+  policy_version: string
+  stage: string
+  thinking: string
+  reasoning_effort: string
+}
+
+export interface ImageTaskOperationReceipt {
+  invocation_id: string
+  operation: string
+  provider: string
+  model: string
+  status: string
+  attempt: number
+  /** Empty only when the durable terminal operation has no provider result. */
+  result_digest: string
+  parent_invocation_id?: string
+  physical_unit?: string
+  request_policy_digest?: string
+  request_policy?: ImageTaskRequestPolicyReceipt
+}
+
+interface ImageTaskResultRespBase {
   dispatch_id: string
   task_intent: ImageTaskIntent
   status: ImageTaskDispatchStatus
   result: ImageTaskResultProjection | null
 }
+
+/**
+ * Current Sidecars expose the audit envelope. A legacy installed Sidecar may
+ * expose no audit fields at all; partial audit envelopes are rejected at the
+ * wire boundary below.
+ */
+export type ImageTaskResultResp =
+  | ImageTaskResultRespBase
+  | (ImageTaskResultRespBase & {
+      source_digest: string
+      source_attachments: ImageTaskSourceAttachmentReceipt[]
+      operation_receipts: ImageTaskOperationReceipt[]
+    })
 
 type ImageTaskWireRecord = Record<string, unknown>
 
@@ -2117,6 +2157,115 @@ function assertImageTaskKeys(
     Object.keys(value).some((key) => !allowed.has(key))
   ) {
     throw new Error(message)
+  }
+}
+
+function isImageTaskNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && !!value.trim()
+}
+
+function assertImageTaskResultSourceAttachment(value: unknown, message: string) {
+  const attachment = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(attachment, ['digest', 'size_bytes'], [], message)
+  if (
+    !isImageTaskNonEmptyString(attachment.digest) ||
+    !Number.isSafeInteger(attachment.size_bytes) ||
+    (attachment.size_bytes as number) <= 0
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskResultRequestPolicy(value: unknown, message: string) {
+  const policy = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    policy,
+    ['policy_version', 'stage', 'thinking', 'reasoning_effort'],
+    [],
+    message,
+  )
+  if (
+    !isImageTaskNonEmptyString(policy.policy_version) ||
+    !isImageTaskNonEmptyString(policy.stage) ||
+    !isImageTaskNonEmptyString(policy.thinking) ||
+    !isImageTaskNonEmptyString(policy.reasoning_effort)
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskResultOperationReceipt(value: unknown, message: string) {
+  const receipt = imageTaskWireRecord(value, message)
+  const required = [
+    'invocation_id',
+    'operation',
+    'provider',
+    'model',
+    'status',
+    'attempt',
+    'result_digest',
+  ]
+  assertImageTaskKeys(
+    receipt,
+    required,
+    ['parent_invocation_id', 'physical_unit', 'request_policy_digest', 'request_policy'],
+    message,
+  )
+  if (
+    !isImageTaskNonEmptyString(receipt.invocation_id) ||
+    !isImageTaskNonEmptyString(receipt.operation) ||
+    !isImageTaskNonEmptyString(receipt.provider) ||
+    !isImageTaskNonEmptyString(receipt.model) ||
+    !isImageTaskNonEmptyString(receipt.status) ||
+    !Number.isSafeInteger(receipt.attempt) ||
+    (receipt.attempt as number) < 1 ||
+    typeof receipt.result_digest !== 'string'
+  ) {
+    throw new Error(message)
+  }
+
+  const hasPhysicalIdentity = receipt.parent_invocation_id !== undefined
+  if (hasPhysicalIdentity !== (receipt.physical_unit !== undefined)) throw new Error(message)
+  if (
+    hasPhysicalIdentity &&
+    (!isImageTaskNonEmptyString(receipt.parent_invocation_id) ||
+      !isImageTaskNonEmptyString(receipt.physical_unit))
+  ) {
+    throw new Error(message)
+  }
+
+  const hasRequestPolicy = receipt.request_policy_digest !== undefined
+  if (hasRequestPolicy !== (receipt.request_policy !== undefined)) throw new Error(message)
+  if (hasRequestPolicy) {
+    if (!isImageTaskNonEmptyString(receipt.request_policy_digest)) throw new Error(message)
+    assertImageTaskResultRequestPolicy(receipt.request_policy, message)
+  }
+}
+
+function assertImageTaskResultAuditEnvelope(
+  response: ImageTaskWireRecord,
+  message: string,
+) {
+  const baseKeys = ['dispatch_id', 'task_intent', 'status', 'result']
+  const auditKeys = ['source_digest', 'source_attachments', 'operation_receipts']
+  const hasAnyAuditKey = auditKeys.some((key) =>
+    Object.prototype.hasOwnProperty.call(response, key),
+  )
+  assertImageTaskKeys(response, hasAnyAuditKey ? [...baseKeys, ...auditKeys] : baseKeys, [], message)
+  if (!hasAnyAuditKey) return
+  if (
+    !isImageTaskNonEmptyString(response.source_digest) ||
+    !Array.isArray(response.source_attachments) ||
+    response.source_attachments.length === 0 ||
+    !Array.isArray(response.operation_receipts)
+  ) {
+    throw new Error(message)
+  }
+  for (const attachment of response.source_attachments) {
+    assertImageTaskResultSourceAttachment(attachment, message)
+  }
+  for (const receipt of response.operation_receipts) {
+    assertImageTaskResultOperationReceipt(receipt, message)
   }
 }
 
@@ -3226,7 +3375,7 @@ function assertImageTaskCreateResp(value: unknown): asserts value is ImageTaskCr
 function assertImageTaskResultResp(value: unknown): asserts value is ImageTaskResultResp {
   const message = 'invalid image task result response'
   const response = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(response, ['dispatch_id', 'task_intent', 'status', 'result'], [], message)
+  assertImageTaskResultAuditEnvelope(response, message)
   if (
     typeof response.dispatch_id !== 'string' ||
     !response.dispatch_id.trim() ||

@@ -556,6 +556,112 @@ describe('K12 ImageTaskDispatch public facade', () => {
     )
   })
 
+  it('BUG-20260728-018 accepts the complete current result audit envelope', async () => {
+    client.apiGet.mockResolvedValue({
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: 'sha256:source-image',
+      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      operation_receipts: [
+        {
+          invocation_id: 'inv-assessing',
+          operation: 'assessing',
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          status: 'succeeded',
+          attempt: 1,
+          result_digest: 'sha256:assessing-result',
+        },
+        {
+          invocation_id: 'physical-recognizing-whole-page',
+          parent_invocation_id: 'inv-recognizing',
+          physical_unit: 'whole_page',
+          operation: 'recognizing',
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          status: 'succeeded',
+          attempt: 1,
+          result_digest: 'sha256:recognizing-result',
+          request_policy_digest: 'sha256:recognizing-policy',
+          request_policy: {
+            policy_version: 'dd036-recognizing-v1',
+            stage: 'recognizing',
+            thinking: 'off',
+            reasoning_effort: 'none',
+          },
+        },
+      ],
+    })
+
+    await expect(
+      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
+    ).resolves.toMatchObject({
+      source_digest: 'sha256:source-image',
+      operation_receipts: [
+        { invocation_id: 'inv-assessing' },
+        {
+          invocation_id: 'physical-recognizing-whole-page',
+          parent_invocation_id: 'inv-recognizing',
+          request_policy: { reasoning_effort: 'none' },
+        },
+      ],
+      result: { kind: 'completed_homework' },
+    })
+  })
+
+  it.each([
+    [
+      'a partial audit envelope',
+      {
+        ...homeworkResult('completed_homework', {
+          question: recognizedQuestion,
+          status: 'wrong',
+          result_kind: 'assessment',
+          grade: wrongGrade,
+          parent_guide: parentGuide,
+        }),
+        source_digest: 'sha256:source-image',
+      },
+    ],
+    [
+      'a receipt with a transport identifier',
+      {
+        ...homeworkResult('completed_homework', {
+          question: recognizedQuestion,
+          status: 'wrong',
+          result_kind: 'assessment',
+          grade: wrongGrade,
+          parent_guide: parentGuide,
+        }),
+        source_digest: 'sha256:source-image',
+        source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+        operation_receipts: [
+          {
+            invocation_id: 'inv-recognizing',
+            operation: 'recognizing',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            status: 'succeeded',
+            attempt: 1,
+            result_digest: 'sha256:recognizing-result',
+            external_request_id: 'must-not-cross-public-api',
+          },
+        ],
+      },
+    ],
+  ])('rejects %s', async (_case, response) => {
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
+  })
+
   it('accepts the exact creative confirmation snapshot and durable feedback wire', async () => {
     client.apiGet
       .mockResolvedValueOnce({
