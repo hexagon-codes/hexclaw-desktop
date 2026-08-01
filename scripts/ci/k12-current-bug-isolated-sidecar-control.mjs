@@ -394,7 +394,10 @@ export function parseControllerCLI(argv) {
   return Object.freeze({ action: argv[0], configPath: argv[2] })
 }
 
-export function validateControllerConfig(raw, context = {}) {
+export function validateControllerConfig(raw, context = {}, { sidecarConfigMode = 'start' } = {}) {
+  if (!['start', 'stop'].includes(sidecarConfigMode)) {
+    fail('sidecar config validation mode is invalid')
+  }
   const value = parseExactConfig(raw)
   if (!isAbsolute(context.configPath ?? '') || !canonicalTmp(resolve(context.configPath))) {
     fail('controller config path must be absolute and below /tmp')
@@ -505,23 +508,25 @@ export function validateControllerConfig(raw, context = {}) {
 
   const fileSHA256 = context.fileSHA256 ?? defaultFileSHA256
   if (fileSHA256(binaryPath).toLowerCase() !== value.binary_sha256) fail('binary SHA-256 mismatch')
-  let sidecarConfigSnapshot
-  try {
-    sidecarConfigSnapshot = readAttestedFileSnapshot(sidecarConfigPath, {
-      label: 'sidecar config',
-      readBytes: context.readSidecarConfigBytes,
-    })
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error))
+  if (sidecarConfigMode === 'start') {
+    let sidecarConfigSnapshot
+    try {
+      sidecarConfigSnapshot = readAttestedFileSnapshot(sidecarConfigPath, {
+        label: 'sidecar config',
+        readBytes: context.readSidecarConfigBytes,
+      })
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error))
+    }
+    const binding = parseSidecarBinding(String(sidecarConfigSnapshot.bytes))
+    if (sidecarConfigSnapshot.sha256 !== value.sidecar_config_sha256) {
+      fail('sidecar config SHA-256 mismatch')
+    }
+    if (binding?.host !== value.host || binding?.port !== value.port) {
+      fail('sidecar config host/port drift')
+    }
+    requireFrozenGradingBudget(binding)
   }
-  const binding = parseSidecarBinding(String(sidecarConfigSnapshot.bytes))
-  if (sidecarConfigSnapshot.sha256 !== value.sidecar_config_sha256) {
-    fail('sidecar config SHA-256 mismatch')
-  }
-  if (binding?.host !== value.host || binding?.port !== value.port) {
-    fail('sidecar config host/port drift')
-  }
-  requireFrozenGradingBudget(binding)
   let releaseAttestationSnapshot
   try {
     releaseAttestationSnapshot = readAttestedFileSnapshot(releaseAttestationPath, {
@@ -1191,10 +1196,14 @@ export async function runControllerCLI(argv, context = {}) {
     fail(error instanceof Error ? error.message : String(error))
   }
   const raw = controllerConfigSnapshot.bytes
-  const config = validateControllerConfig(raw, {
-    ...context,
-    configPath: parsed.configPath,
-  })
+  const config = validateControllerConfig(
+    raw,
+    {
+      ...context,
+      configPath: parsed.configPath,
+    },
+    { sidecarConfigMode: parsed.action },
+  )
   const runtime = context.runtime ?? createSystemControllerRuntime(config)
   const uninstall = installControllerSignalCleanup(context.processLike ?? process, {
     cancelActive: runtime.cancelActive,

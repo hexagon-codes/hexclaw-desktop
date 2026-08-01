@@ -646,6 +646,43 @@ test('start and stop preserve exact command order and refuse to signal foreign i
   assert.equal(signalled, false)
 })
 
+test('stop permits an owned Sidecar after its isolated YAML changes without weakening start attestation', async () => {
+  const { runControllerCLI } = await loadController()
+  const raw = controllerConfig()
+  const runtimeMutatedYAML = Buffer.concat([
+    sidecarConfigBytes({ host: raw.host, port: raw.port }),
+    Buffer.from('# persisted by the owned isolated Sidecar\n'),
+  ])
+  let sidecarConfigReads = 0
+  const signals = []
+  const events = []
+  const processLike = new EventEmitter()
+  processLike.exitCode = 0
+
+  await runControllerCLI(['stop', '--config', paths.controllerConfig], {
+    ...validationContext(raw, {
+      readSidecarConfigBytes: () => {
+        sidecarConfigReads += 1
+        return runtimeMutatedYAML
+      },
+    }),
+    readControllerConfigBytes: () => Buffer.from(JSON.stringify(raw)),
+    processLike,
+    runtime: {
+      inspectState: async (activeConfig) => runningSnapshot(activeConfig),
+      signalProcess: async (pid, signal) => signals.push([pid, signal]),
+      waitForStopped: async () => stoppedSnapshot(),
+      removePIDFile: async (pathname) => events.push(['remove', pathname]),
+      cancelActive: async () => events.push(['cancel']),
+      cleanup: async () => events.push(['cleanup']),
+    },
+  })
+
+  assert.deepEqual(signals, [[4242, 'SIGTERM']])
+  assert.deepEqual(events, [['remove', '/private/tmp/k12-controller/run/profile/.hexclaw/.k12-sidecar.pid']])
+  assert.equal(sidecarConfigReads, 0)
+})
+
 test('startup failure and signals use guarded single-flight cleanup without replacing root error', async () => {
   const { installControllerSignalCleanup, startIsolatedSidecar } = await loadController()
   const config = validateReadyConfig(controllerConfig())
