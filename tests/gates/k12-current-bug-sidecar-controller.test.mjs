@@ -683,6 +683,15 @@ test('stop permits an owned Sidecar after its isolated YAML changes without weak
   assert.equal(sidecarConfigReads, 0)
 })
 
+test('stale lock release accepts only a disappeared target lock after Sidecar exit', async () => {
+  const { classifyOwnedStaleLock } = await loadController()
+
+  assert.equal(classifyOwnedStaleLock(null, 4242, false), 'released')
+  assert.equal(classifyOwnedStaleLock(4242, 4242, false), 'remove')
+  assert.throws(() => classifyOwnedStaleLock(9999, 4242, false))
+  assert.throws(() => classifyOwnedStaleLock(4242, 4242, true))
+})
+
 test('startup failure and signals use guarded single-flight cleanup without replacing root error', async () => {
   const { installControllerSignalCleanup, startIsolatedSidecar } = await loadController()
   const config = validateReadyConfig(controllerConfig())

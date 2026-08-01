@@ -655,6 +655,19 @@ function matchesOwnedProcess(config, snapshot, expectedPID) {
   }
 }
 
+export function classifyOwnedStaleLock(lockPID, expectedPID, targetAlive) {
+  if (lockPID === null) return 'released'
+  if (
+    !positivePID(lockPID) ||
+    !positivePID(expectedPID) ||
+    lockPID !== expectedPID ||
+    targetAlive
+  ) {
+    fail('stale lock ownership changed')
+  }
+  return 'remove'
+}
+
 function stalePIDReceipt({
   pidFileExisted,
   pidAlive,
@@ -994,14 +1007,6 @@ function atomicPIDWrite(pathname, value) {
   renameSync(temporary, pathname)
 }
 
-function removeFile(pathname) {
-  try {
-    unlinkSync(pathname)
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-  }
-}
-
 function removeControllerPIDFile(pathname, identity = {}) {
   let first
   try {
@@ -1066,8 +1071,12 @@ export function createSystemControllerRuntime(config) {
 
   const removeOwnedStaleLock = async (pathname, expectedPID) => {
     const lockPID = readPIDFile(pathname)
-    if (lockPID !== expectedPID || alive(expectedPID)) fail('stale lock ownership changed')
-    removeFile(pathname)
+    if (classifyOwnedStaleLock(lockPID, expectedPID, alive(expectedPID)) === 'released') return
+    removeControllerPIDFile(pathname, {
+      expectedPID,
+      expectedMode: PRIVATE_FILE_MODE,
+      rejectSymlink: true,
+    })
   }
 
   const waitForRunning = async (_config, pid) => {
