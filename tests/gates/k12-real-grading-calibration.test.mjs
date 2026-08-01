@@ -70,7 +70,7 @@ test('K12-LIVE-BUDGET-REAL-002 rejects incomplete, duplicate, non-real and inval
     {
       name: 'duplicate attempt',
       receipts: [...base, { ...base[0] }],
-      reason: /duplicate attempt/i,
+      reason: /duplicate.*attempt/i,
     },
     {
       name: 'failed terminal',
