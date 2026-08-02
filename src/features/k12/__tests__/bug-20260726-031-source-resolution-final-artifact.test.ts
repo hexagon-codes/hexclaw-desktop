@@ -110,12 +110,9 @@ function imageTaskDispatch(options: DispatchOptions) {
   const coverage = options.coverage ?? {
     state: 'incomplete' as const,
     total: options.problems.length,
-    processed: options.problems.filter(
-      (problem) => problem.disposition_state === 'result',
-    ).length,
-    skipped: options.problems.filter(
-      (problem) => problem.disposition_state === 'skipped_by_parent',
-    ).length,
+    processed: options.problems.filter((problem) => problem.disposition_state === 'result').length,
+    skipped: options.problems.filter((problem) => problem.disposition_state === 'skipped_by_parent')
+      .length,
   }
   return {
     created: true,
@@ -220,8 +217,8 @@ function buttonByName(root: Element, name: string): HTMLButtonElement | null {
 }
 
 function slotByLabel(root: Element, label: string): HTMLElement {
-  const slot = [...root.querySelectorAll<HTMLElement>('[role="listitem"]')].find(
-    (candidate) => candidate.textContent?.includes(label),
+  const slot = [...root.querySelectorAll<HTMLElement>('[role="listitem"]')].find((candidate) =>
+    candidate.textContent?.includes(label),
   )
   if (!slot) throw new Error(`missing progressive slot: ${label}`)
   return slot
@@ -359,27 +356,36 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
         structure_version: 2,
         snapshot_revision: 9,
         problem_progress: [
-          problemProgress('problem-1', '一. 1', ['一', '1']),
-          problemProgress('problem-3-1', '三、1', ['三', '1'], {
-            ...dependency,
-            operation_state: 'skipped',
-            disposition_state: 'skipped_by_parent',
+          {
+            problem_id: 'problem-1',
+            status: 'correct',
             input_revision: 1,
-            command_available: true,
-          }),
-          problemProgress('problem-3-2', '三、2', ['三', '2'], {
-            ...dependency,
-            operation_state: 'skipped',
-            disposition_state: 'skipped_by_parent',
+            published_revision: 1,
+            current_disposition: 'current',
+          },
+          {
+            problem_id: 'problem-3-1',
+            status: 'skipped',
             input_revision: 1,
-            command_available: true,
-          }),
+            published_revision: 1,
+            current_disposition: 'current',
+          },
+          {
+            problem_id: 'problem-3-2',
+            status: 'skipped',
+            input_revision: 1,
+            published_revision: 1,
+            current_disposition: 'current',
+          },
         ],
         coverage: {
-          state: 'with_skips',
           total: 3,
-          processed: 1,
+          published: 1,
           skipped: 2,
+          awaiting: 0,
+          failed: 0,
+          status: 'complete',
+          projection_revision: 9,
         },
       },
     })
@@ -499,7 +505,10 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     )
     const partialShell = partial.get('[data-testid="recognize-guard"]').element
     for (const action of ['打印', '导出 PDF', '发送到手机']) {
-      expect(buttonByName(partialShell, action), `${action} must not consume partial results`).toBeNull()
+      expect(
+        buttonByName(partialShell, action),
+        `${action} must not consume partial results`,
+      ).toBeNull()
     }
     partial.unmount()
 
@@ -528,7 +537,10 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     const finalShell = final.get('[data-testid="recognize-guard"]').element
     for (const action of ['打印', '导出 PDF', '发送到手机']) {
       const button = buttonByName(finalShell, action)
-      expect(button, `${action} must be exposed only by the final canonical artifact`).not.toBeNull()
+      expect(
+        button,
+        `${action} must be exposed only by the final canonical artifact`,
+      ).not.toBeNull()
       expect(button!.disabled).toBe(false)
       expect(button!.closest('[data-testid="recognize-guard"]')).toBe(finalShell)
     }

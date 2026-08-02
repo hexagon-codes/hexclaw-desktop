@@ -65,4 +65,22 @@ describe('BUG-20260802-022 · generated source-action raw-wire contract', () => 
     mutate(response)
     expect(() => assertK12ImageTaskProblemSourceActionResponse(response)).toThrow()
   })
+
+  it('fails the semantic boundary when coverage counters contradict problem states', () => {
+    const response = canonicalExample()
+    const coverage = progressive(response).coverage as MutableRecord
+    coverage.published = 1
+    coverage.skipped = 0
+
+    expect(() => assertK12ImageTaskProblemSourceActionResponse(response)).not.toThrow()
+    expect(() =>
+      assertImageTaskProblemSourceActionSemantics(response, {
+        dispatchId: String(response.dispatch_id),
+        problemId: String(response.problem_id),
+        action: String(response.action),
+        structureVersion: Number(response.structure_version),
+        expectedInputRevision: Number(response.input_revision),
+      }),
+    ).toThrow(/counters derived from problem statuses/)
+  })
 })

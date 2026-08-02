@@ -9,7 +9,6 @@ import {
   assertImageTaskProblemSourceActionSemantics,
   assertImageTaskResultSemantics,
   normalizeImageTaskDispatchEnvelope,
-  normalizeImageTaskProblemSourceActionSnapshot,
 } from '@/contracts/k12-image-task-semantics'
 /**
  * K12 家长辅导助手后端契约（/api/k12/*）。
@@ -1795,28 +1794,6 @@ export type ImageTaskProblemSourceActionReq =
     })
 
 export type ImageTaskProblemSourceActionResp = K12ImageTaskProblemSourceActionResponse
-
-export interface ImageTaskProblemSourceActionViewSnapshot {
-  structure_version: number
-  snapshot_revision: number
-  problem_progress: ImageTaskProblemProgressDTO[]
-  coverage: ImageTaskCoverageDTO
-}
-
-/**
- * Projects the compact durable source-action receipt into the existing
- * renderer DTO while retaining source labels and anchors from the current
- * view. This is the same mapper used by the GET facade projection.
- */
-export function projectImageTaskProblemSourceActionSnapshot(
-  response: ImageTaskProblemSourceActionResp,
-  currentProblems: readonly ImageTaskProblemProgressDTO[],
-): ImageTaskProblemSourceActionViewSnapshot {
-  return normalizeImageTaskProblemSourceActionSnapshot(
-    response,
-    currentProblems,
-  ) as unknown as ImageTaskProblemSourceActionViewSnapshot
-}
 
 export interface CreativeConflictDTO {
   segment_id: string

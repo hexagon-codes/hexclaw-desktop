@@ -141,7 +141,7 @@ function createResponse(problem: Record<string, unknown> = problemProgress()) {
 
 function sourceActionResponse(
   options: {
-    action?: 'skip' | 'resume'
+    action?: 'correct_text' | 'skip' | 'resume'
     structureVersion?: number
     inputRevision?: number
     snapshotRevision?: number
@@ -157,7 +157,7 @@ function sourceActionResponse(
   } = {},
 ) {
   const action = options.action ?? 'skip'
-  const inputRevision = options.inputRevision ?? (action === 'resume' ? 3 : 2)
+  const inputRevision = options.inputRevision ?? (action === 'skip' ? 2 : 3)
   return {
     command_receipt_id: `receipt-${action}-1`,
     dispatch_id: 'dispatch-progressive-wave-3',
@@ -171,7 +171,8 @@ function sourceActionResponse(
       problem_progress: [
         {
           problem_id: 'problem-1',
-          status: action === 'skip' ? 'skipped' : 'awaiting_source',
+          status:
+            action === 'skip' ? 'skipped' : action === 'resume' ? 'awaiting_source' : 'processing',
           input_revision: inputRevision,
           published_revision: action === 'skip' ? 1 : 0,
           current_disposition: 'current',
@@ -343,9 +344,58 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     expect(wrapper.get('[data-problem-id="problem-1"]').text()).not.toContain('已跳过 · 未判断对错')
   })
 
+  it.each([
+    ['422 domain rejection', Object.assign(new Error('invalid source action'), { status: 422 })],
+    ['schema or identity rejection', new Error('Invalid source-action response identity')],
+  ])('PROG-026 keeps the existing projection after %s', async (_name, cause) => {
+    h.sourceAction.mockRejectedValue(cause)
+    const wrapper = await renderTask()
+    const backgroundGetCalls = h.get.mock.calls.length
+
+    ;(await openSkipConfirmation(wrapper)).click()
+    await flushPromises()
+    await flushPromises()
+
+    const problem = wrapper.get('[data-problem-id="problem-1"]')
+    expect(problem.text()).toContain('等待处理题源问题')
+    expect(problem.text()).not.toContain('已跳过 · 未判断对错')
+    expect(h.sourceAction).toHaveBeenCalledTimes(1)
+    expect(h.get).toHaveBeenCalledTimes(backgroundGetCalls)
+    expect(buttonByName(resolver(wrapper), '跳过这题')?.disabled).toBe(false)
+  })
+
+  it('PROG-026 aborts the in-flight source command when the TaskShell unmounts', async () => {
+    h.sourceAction.mockReturnValue(new Promise(() => {}))
+    const wrapper = await renderTask()
+
+    ;(await openSkipConfirmation(wrapper)).click()
+    await nextTick()
+    const signal = h.sourceAction.mock.calls[0]?.[4] as AbortSignal
+    expect(signal.aborted).toBe(false)
+
+    wrapper.unmount()
+
+    expect(signal.aborted).toBe(true)
+    expect(h.sourceAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('PROG-026D keeps reselect and retake unwired until their concrete UI journeys are approved', async () => {
+    const wrapper = await renderTask()
+
+    for (const action of ['重新选择区域', '重新拍摄']) {
+      buttonByName(resolver(wrapper), action)!.click()
+      await nextTick()
+    }
+
+    expect(h.sourceAction).not.toHaveBeenCalled()
+    expect(wrapper.emitted('sourceIssueIntent')).toBeUndefined()
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('等待处理题源问题')
+  })
+
   it('PROG-026 applies only the post-commit server snapshot and uses its structure/input revision for the next action', async () => {
     const first = deferred<ReturnType<typeof sourceActionResponse>>()
-    h.sourceAction.mockReturnValueOnce(first.promise).mockReturnValueOnce(new Promise(() => {}))
+    const second = deferred<ReturnType<typeof sourceActionResponse>>()
+    h.sourceAction.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
     const wrapper = await renderTask()
 
     ;(await openSkipConfirmation(wrapper)).click()
@@ -385,5 +435,61 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
       expected_input_revision: 2,
       payload: {},
     })
+
+    second.resolve(
+      sourceActionResponse({
+        action: 'resume',
+        structureVersion: 4,
+        inputRevision: 3,
+        snapshotRevision: 12,
+      }),
+    )
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('等待处理题源问题')
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('一. 1')
+    expect(buttonByName(resolver(wrapper), '纠正识别')).not.toBeNull()
+  })
+
+  it('PROG-026 applies the correct_text post-commit processing snapshot without local optimism', async () => {
+    const committed = deferred<ReturnType<typeof sourceActionResponse>>()
+    h.sourceAction.mockReturnValueOnce(committed.promise)
+    const wrapper = await renderTask()
+
+    buttonByName(resolver(wrapper), '纠正识别')!.click()
+    await nextTick()
+    await wrapper.get('textarea').setValue('8 的四分之一是多少？')
+    buttonByName(resolver(wrapper), '保存并重新处理')!.click()
+    await nextTick()
+
+    expect(h.sourceAction).toHaveBeenCalledWith(
+      'dispatch-progressive-wave-3',
+      'problem-1',
+      {
+        action: 'correct_text',
+        structure_version: 4,
+        expected_input_revision: 2,
+        payload: { question_canonical_markdown: '8 的四分之一是多少？' },
+      },
+      expect.any(String),
+      expect.anything(),
+    )
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('等待处理题源问题')
+
+    committed.resolve(
+      sourceActionResponse({
+        action: 'correct_text',
+        structureVersion: 4,
+        inputRevision: 3,
+        snapshotRevision: 12,
+      }),
+    )
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('处理中')
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('一. 1')
+    expect(wrapper.find('[data-source-issue-resolver]').exists()).toBe(false)
   })
 })

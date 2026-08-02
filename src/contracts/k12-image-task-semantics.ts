@@ -405,8 +405,13 @@ function normalizeProblemSourceProgress(
   const skipped = status === 'skipped'
   const awaitingResolution = status === 'awaiting_source'
   return {
-    ...displaySource,
     problem_id: problemID,
+    ...(typeof displaySource.parent_problem_id === 'string'
+      ? { parent_problem_id: displaySource.parent_problem_id }
+      : {}),
+    ...(typeof displaySource.dependency_group_id === 'string'
+      ? { dependency_group_id: displaySource.dependency_group_id }
+      : {}),
     source_number_path: displaySource.source_number_path ?? [],
     display_label: displaySource.display_label ?? '',
     source_section_path: displaySource.source_section_path ?? [],
@@ -1247,6 +1252,9 @@ export function assertImageTaskProblemSourceActionSemantics(
     '$.progressive_snapshot.problem_progress',
   )
   const seen = new Set<string>()
+  let published = 0
+  let skipped = 0
+  let awaiting = 0
   rawProblems.forEach((value, index) => {
     const problem = record(value, `$.progressive_snapshot.problem_progress[${index}]`)
     const problemID = stringValue(
@@ -1257,7 +1265,17 @@ export function assertImageTaskProblemSourceActionSemantics(
       fail(`$.progressive_snapshot.problem_progress[${index}].problem_id`, 'unique problem id')
     }
     seen.add(problemID)
+    const status = stringValue(
+      problem.status,
+      `$.progressive_snapshot.problem_progress[${index}].status`,
+    )
+    if (status === 'skipped') skipped += 1
+    else if (status === 'awaiting_source' || status === 'processing') awaiting += 1
+    else if (PROBLEM_SOURCE_TERMINAL_STATUSES.has(status)) published += 1
   })
+  if (!seen.has(expected.problemId)) {
+    fail('$.progressive_snapshot.problem_progress', 'command problem in current exact-set')
+  }
   const coverage = normalizeProblemSourceCoverage(
     snapshot.coverage,
     '$.progressive_snapshot.coverage',
@@ -1265,6 +1283,14 @@ export function assertImageTaskProblemSourceActionSemantics(
   ).raw
   if (coverage.projection_revision !== snapshotRevision) {
     fail('$.progressive_snapshot.coverage.projection_revision', 'snapshot revision')
+  }
+  if (
+    coverage.published !== published ||
+    coverage.skipped !== skipped ||
+    coverage.awaiting !== awaiting ||
+    coverage.failed !== 0
+  ) {
+    fail('$.progressive_snapshot.coverage', 'counters derived from problem statuses')
   }
 }
 

@@ -48,7 +48,7 @@ function postCommitResponse() {
       problem_progress: [
         {
           problem_id: 'problem/一.1',
-          status: 'awaiting_source',
+          status: 'processing',
           input_revision: 3,
           published_revision: 0,
           current_disposition: 'current',
