@@ -107,7 +107,8 @@ function makeNode(type: CanvasNode['type']): CanvasNode {
 
 /** 线性链：清空既有边，按 store.nodes 顺序串 from→to。 */
 function rebuildLinearEdges() {
-  for (const e of [...store.edges]) store.removeEdge(e.id)
+  const existingEdges = store.edges.slice()
+  for (const e of existingEdges) store.removeEdge(e.id)
   for (let i = 0; i < store.nodes.length - 1; i++) {
     const a = store.nodes[i]!, b = store.nodes[i + 1]!
     store.addEdge({ id: `e-${a.id}-${b.id}`, from: a.id, to: b.id })

@@ -613,7 +613,8 @@ function stopRunWatch(jobId: string) {
 }
 
 function stopAllRunWatches() {
-  for (const jobId of [...runWatches.keys()]) stopRunWatch(jobId)
+  const jobIds = Array.from(runWatches.keys())
+  for (const jobId of jobIds) stopRunWatch(jobId)
 }
 onUnmounted(stopAllRunWatches)
 

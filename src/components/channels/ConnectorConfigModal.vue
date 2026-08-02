@@ -211,7 +211,7 @@ async function handleSave() {
     saving.value = true
     try {
       const created = await createConnector(formType.value, name, formToken.value.trim())
-      addInstance({
+      await addInstance({
         type: formType.value,
         name: created.name || name,
         config: { connector_id: created.id },
@@ -261,9 +261,9 @@ async function handleSave() {
       }
       const nextConfig = { ...formConfig.value, mcp_server: name }
       if (mode.value === 'create') {
-        addInstance({ type: formType.value, name, config: nextConfig, enabled: true })
+        await addInstance({ type: formType.value, name, config: nextConfig, enabled: true })
       } else if (props.instance) {
-        updateInstance(props.instance.id, { name, config: nextConfig, enabled: true })
+        await updateInstance(props.instance.id, { name, config: nextConfig, enabled: true })
       }
       // 暖装秒连 → 已就绪；冷装首次下载组件 → 后端转后台重连，诚实提示"后台连接中"。
       if (res?.connected === false) {
@@ -286,14 +286,14 @@ async function handleSave() {
   saving.value = true
   try {
     if (mode.value === 'create') {
-      addInstance({
+      await addInstance({
         type: formType.value,
         name,
         config: { ...formConfig.value },
         enabled: formEnabled.value,
       })
     } else if (props.instance) {
-      updateInstance(props.instance.id, {
+      await updateInstance(props.instance.id, {
         name,
         config: { ...formConfig.value },
         enabled: formEnabled.value,

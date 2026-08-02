@@ -448,7 +448,7 @@ async function handleEditAgent() {
       skills: [...editSkills.value],
       // 头像（原型对齐批次）：合并进原 metadata（后端 map 整体覆盖语义），未选不动原值。
       ...(editAvatar.value
-        ? { metadata: { ...(editingAgent.value.metadata ?? {}), avatar: editAvatar.value } }
+        ? { metadata: { ...editingAgent.value.metadata, avatar: editAvatar.value } }
         : {}),
     })
     closeEditAgentDialog()
@@ -721,7 +721,7 @@ async function handleRegisterAgent(andChat = false) {
       ...(tokenRaw !== '' ? { max_tokens: Math.trunc(Number(tokenRaw)) } : {}),
       ...(newAgentSkills.value.length ? { skills: [...newAgentSkills.value] } : {}),
       ...(newAgentAvatar.value
-        ? { metadata: { ...(newAgent.value.metadata ?? {}), avatar: newAgentAvatar.value } }
+        ? { metadata: { ...newAgent.value.metadata, avatar: newAgentAvatar.value } }
         : {}),
     }
     const createdName = payload.name.trim()

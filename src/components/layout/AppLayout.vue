@@ -8,8 +8,10 @@ import EngineBanner from './EngineBanner.vue'
 import InspectorContext from '@/components/inspector/InspectorContext.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import { useAppStore } from '@/stores/app'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const appStore = useAppStore()
+const globalPresentationExtensions = scenarioRegistry.globalPresentationExtensions
 
 async function probeIMChannelsBackendWhenReady() {
   try {
@@ -99,6 +101,11 @@ onUnmounted(() => {
 
 <template>
   <div class="hc-app">
+    <component
+      :is="extension"
+      v-for="(extension, index) in globalPresentationExtensions"
+      :key="index"
+    />
     <TitleBar />
     <div class="hc-app__body">
       <Sidebar />

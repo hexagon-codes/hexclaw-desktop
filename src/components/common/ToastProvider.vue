@@ -6,9 +6,15 @@ import type { Toast } from '@/types'
 const toasts = ref<Toast[]>([])
 let nextId = 0
 
-function addToast(type: Toast['type'], message: string, duration = 3000) {
+function addToast(
+  type: Toast['type'],
+  message: string,
+  duration = 3000,
+  actionLabel?: string,
+  onAction?: () => void,
+) {
   const id = nextId++
-  toasts.value.push({ id, type, message })
+  toasts.value.push({ id, type, message, actionLabel, onAction })
   if (duration > 0) {
     setTimeout(() => removeToast(id), duration)
   }
@@ -16,6 +22,11 @@ function addToast(type: Toast['type'], message: string, duration = 3000) {
 
 function removeToast(id: number) {
   toasts.value = toasts.value.filter((t) => t.id !== id)
+}
+
+function runAction(toast: Toast) {
+  removeToast(toast.id)
+  toast.onAction?.()
 }
 
 const iconMap = {
@@ -37,6 +48,8 @@ defineExpose({
   error: (msg: string) => addToast('error', msg),
   warning: (msg: string) => addToast('warning', msg),
   info: (msg: string) => addToast('info', msg),
+  action: (msg: string, actionLabel: string, onAction: () => void, duration = 8000) =>
+    addToast('info', msg, duration, actionLabel, onAction),
 })
 </script>
 
@@ -61,6 +74,14 @@ defineExpose({
             class="hc-toast__icon"
           />
           <span class="hc-toast__msg">{{ toast.message }}</span>
+          <button
+            v-if="toast.actionLabel"
+            type="button"
+            class="hc-toast__action"
+            @click="runAction(toast)"
+          >
+            {{ toast.actionLabel }}
+          </button>
           <button class="hc-toast__close" @click="removeToast(toast.id)">
             <X :size="13" />
           </button>
@@ -107,6 +128,25 @@ defineExpose({
   font-size: 13px;
   color: var(--hc-text-primary);
   line-height: 1.4;
+}
+
+.hc-toast__action {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border: none;
+  border-radius: var(--hc-radius-sm);
+  background: transparent;
+  color: var(--hc-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.hc-toast__action:hover,
+.hc-toast__action:focus-visible {
+  background: var(--hc-accent-subtle);
+  outline: none;
 }
 
 .hc-toast__close {

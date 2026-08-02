@@ -10,6 +10,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import ChatInput from '../ChatInput.vue'
 
 vi.mock('@/composables/useVoice', () => ({
   useVoice: () => ({ isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }),
@@ -24,18 +25,23 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
 })
 
 const onDragDropEvent = vi.fn()
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onDragDropEvent }) }))
+const listen = vi.fn()
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ onDragDropEvent, listen }),
+}))
 
-const readLocalFileAsFile = vi.fn(
-  async (p: string) => new File([new Uint8Array([1, 2, 3])], p.split('/').pop() ?? 'f', { type: 'image/png' }),
-)
-vi.mock('@/api/desktop', () => ({ readLocalFileAsFile: (p: string) => readLocalFileAsFile(p) }))
+const fileFromNativeGrant = vi.fn((grant: unknown) => {
+  void grant
+  return new File([], 'photo.png', { type: 'image/png' })
+})
+vi.mock('@/api/desktop', () => ({
+  fileFromNativeGrant: (grant: unknown) => fileFromNativeGrant(grant),
+}))
 
 function i18n() {
   return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })
 }
 async function mountChatInput(props: Record<string, unknown> = {}) {
-  const ChatInput = (await import('../ChatInput.vue')).default
   return mount(ChatInput, {
     props,
     global: { plugins: [i18n()], stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } } },
@@ -45,7 +51,9 @@ async function mountChatInput(props: Record<string, unknown> = {}) {
 beforeEach(() => {
   onDragDropEvent.mockReset()
   onDragDropEvent.mockResolvedValue(() => {})
-  readLocalFileAsFile.mockClear()
+  listen.mockReset()
+  listen.mockResolvedValue(() => {})
+  fileFromNativeGrant.mockClear()
 })
 
 describe('BUG-20260622 ChatInput Tauri 原生拖拽上传', () => {
@@ -55,13 +63,23 @@ describe('BUG-20260622 ChatInput Tauri 原生拖拽上传', () => {
     expect(onDragDropEvent).toHaveBeenCalled()
   })
 
-  it('drop 时把路径读为 File 并加入附件区', async () => {
+  it('drop 时只消费 Rust 签发的 opaque grant 并加入附件区', async () => {
     const w = await mountChatInput()
     await flushPromises()
-    const cb = onDragDropEvent.mock.calls[0]![0] as (e: { payload: { type: string; paths?: string[] } }) => void
-    cb({ payload: { type: 'drop', paths: ['/tmp/photo.png'] } })
+    const grant = {
+      grantId: 'native-drop-grant',
+      operationId: 'native-drop:test',
+      purpose: 'attachment_upload',
+      name: 'photo.png',
+      mime: 'image/png',
+      size: 3,
+      sourceSha256: 'a'.repeat(64),
+    }
+    const cb = listen.mock.calls.find((call) => call[0] === 'native-file-drop-grants')![1] as
+      (event: { payload: unknown[] }) => void
+    cb({ payload: [grant] })
     await flushPromises()
-    expect(readLocalFileAsFile).toHaveBeenCalledWith('/tmp/photo.png')
+    expect(fileFromNativeGrant).toHaveBeenCalledWith(grant)
     expect(w.find('.hc-composer__files').exists()).toBe(true)
     // 图片附件渲染为缩略图（无文件名文本），按附件元素计数断言
     expect(w.findAll('.hc-composer__file').length).toBe(1)
@@ -70,10 +88,11 @@ describe('BUG-20260622 ChatInput Tauri 原生拖拽上传', () => {
   it('生成模式/禁用态不接收拖拽', async () => {
     const w = await mountChatInput({ disabled: true })
     await flushPromises()
-    const cb = onDragDropEvent.mock.calls[0]![0] as (e: { payload: { type: string; paths?: string[] } }) => void
-    cb({ payload: { type: 'drop', paths: ['/tmp/photo.png'] } })
+    const cb = listen.mock.calls.find((call) => call[0] === 'native-file-drop-grants')![1] as
+      (event: { payload: unknown[] }) => void
+    cb({ payload: [{ grantId: 'ignored' }] })
     await flushPromises()
-    expect(readLocalFileAsFile).not.toHaveBeenCalled()
+    expect(fileFromNativeGrant).not.toHaveBeenCalled()
     expect(w.find('.hc-composer__files').exists()).toBe(false)
   })
 })

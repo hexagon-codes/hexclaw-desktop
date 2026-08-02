@@ -23,13 +23,17 @@ vi.mock('shiki', () => ({
 }))
 
 const saveDialog = vi.fn()
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  save: (...args: unknown[]) => saveDialog(...args),
+const nativeFiles = vi.hoisted(() => ({
+  createOperation: vi.fn<(...args: unknown[]) => string>(() => 'save-artifact-source:test'),
+  stageBlob: vi.fn(),
+  copyGrant: vi.fn(),
 }))
-
-const tauriInvoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => tauriInvoke(...args),
+vi.mock('@/api/native-files', () => ({
+  createNativeFileOperation: (...args: unknown[]) => nativeFiles.createOperation(...args),
+  pickSaveFileGrant: (defaultPath: string, purpose: string, operationId: string) =>
+    saveDialog({ defaultPath, purpose, operationId }),
+  stageBlob: (...args: unknown[]) => nativeFiles.stageBlob(...args),
+  copyGrantedFile: (...args: unknown[]) => nativeFiles.copyGrant(...args),
 }))
 
 const toastSuccess = vi.fn()
@@ -80,6 +84,7 @@ function mountView(overrides: {
 describe('ArtifactCodeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    nativeFiles.createOperation.mockReturnValue('save-artifact-source:test')
   })
 
   it('copy action should fail gracefully when clipboard API is unavailable', async () => {
@@ -163,7 +168,7 @@ describe('ArtifactCodeView', () => {
       const arg = saveDialog.mock.calls[0]![0] as { defaultPath: string }
       // 危险字符 → '-'，stem 形如 'a-b-c-d-e-f-g-h-i-j'，加 -HHmm 后缀
       expect(arg.defaultPath).toMatch(/^a-b-c-d-e-f-g-h-i-j-\d{4}\.md$/)
-      expect(arg.defaultPath).not.toMatch(/[\/\\:*?"<>|]/)
+      expect(arg.defaultPath).not.toMatch(/[/\\:*?"<>|]/)
     })
 
     it('infers base name from first H1 in content when title is empty', async () => {
@@ -196,7 +201,7 @@ describe('ArtifactCodeView', () => {
 
       const arg = saveDialog.mock.calls[0]![0] as { defaultPath: string }
       expect(arg.defaultPath).toMatch(/^用-Go-实现一个-webhook-server.+-\d{4}\.md$/)
-      expect(arg.defaultPath).not.toMatch(/[\/\\:*?"<>|]/)
+      expect(arg.defaultPath).not.toMatch(/[/\\:*?"<>|]/)
     })
 
     it('falls back to untitled-{HHmm} when both title and content are empty', async () => {
@@ -226,7 +231,7 @@ describe('ArtifactCodeView', () => {
       expect(arg.defaultPath).toMatch(/^a{80}-\d{4}\.md$/)
     })
 
-    it('user cancel: does not invoke save_bytes_to_path and does not toast', async () => {
+    it('user cancel: does not stage/copy any bytes and does not toast', async () => {
       saveDialog.mockResolvedValueOnce(null)
       const wrapper = mountView()
       await flushPromises()
@@ -234,14 +239,24 @@ describe('ArtifactCodeView', () => {
       await wrapper.findAll('.hc-code-view__action')[0]!.trigger('click')
       await flushPromises()
 
-      expect(tauriInvoke).not.toHaveBeenCalled()
+      expect(nativeFiles.stageBlob).not.toHaveBeenCalled()
+      expect(nativeFiles.copyGrant).not.toHaveBeenCalled()
       expect(toastSuccess).not.toHaveBeenCalled()
       expect(toastError).not.toHaveBeenCalled()
     })
 
-    it('user confirm: invokes save_bytes_to_path with base64 content + chosen path, toasts success', async () => {
-      saveDialog.mockResolvedValueOnce('/tmp/out.md')
-      tauriInvoke.mockResolvedValueOnce(11)
+    it('user confirm: stages a Blob and copies between opaque grants, then toasts success', async () => {
+      const destination = {
+        grantId: 'destination-grant', operationId: 'save-artifact-source:test',
+        purpose: 'save_copy', name: 'out.md', mime: 'text/markdown', size: 0,
+      }
+      const source = {
+        grantId: 'source-grant', operationId: 'save-artifact-source:test',
+        purpose: 'save_copy', name: 'note.md', mime: 'text/markdown', size: 6,
+      }
+      saveDialog.mockResolvedValueOnce(destination)
+      nativeFiles.stageBlob.mockResolvedValueOnce(source)
+      nativeFiles.copyGrant.mockResolvedValueOnce(6)
 
       const wrapper = mountView({
         title: 'note.md',
@@ -253,20 +268,31 @@ describe('ArtifactCodeView', () => {
       await wrapper.findAll('.hc-code-view__action')[0]!.trigger('click')
       await flushPromises()
 
-      expect(tauriInvoke).toHaveBeenCalledOnce()
-      const [cmd, payload] = tauriInvoke.mock.calls[0]! as [string, { base64Data: string; path: string }]
-      expect(cmd).toBe('save_bytes_to_path')
-      expect(payload.path).toBe('/tmp/out.md')
-      // base64 of UTF-8 "你好" = 5L2g5aW9
-      expect(payload.base64Data).toBe('5L2g5aW9')
+      expect(saveDialog).toHaveBeenCalledWith({
+        defaultPath: expect.stringMatching(/^note-\d{4}\.md$/),
+        purpose: 'save_copy',
+        operationId: 'save-artifact-source:test',
+      })
+      expect(nativeFiles.stageBlob).toHaveBeenCalledWith(
+        expect.any(Blob),
+        expect.stringMatching(/^note-\d{4}\.md$/),
+        { purpose: 'save_copy', operationId: 'save-artifact-source:test' },
+      )
+      expect(nativeFiles.copyGrant).toHaveBeenCalledWith(source, destination)
 
       expect(toastSuccess).toHaveBeenCalledOnce()
-      expect(toastSuccess.mock.calls[0]![0]).toContain('/tmp/out.md')
+      expect(toastSuccess.mock.calls[0]![0]).toContain('out.md')
     })
 
     it('failure path: invoke rejects → toast.error called, no throw', async () => {
-      saveDialog.mockResolvedValueOnce('/tmp/out.md')
-      tauriInvoke.mockRejectedValueOnce(new Error('disk full'))
+      const destination = {
+        grantId: 'destination-grant', operationId: 'save-artifact-source:test',
+        purpose: 'save_copy', name: 'out.md', mime: 'text/markdown', size: 0,
+      }
+      const source = { ...destination, grantId: 'source-grant', name: 'test.ts', size: 11 }
+      saveDialog.mockResolvedValueOnce(destination)
+      nativeFiles.stageBlob.mockResolvedValueOnce(source)
+      nativeFiles.copyGrant.mockRejectedValueOnce(new Error('disk full'))
 
       const wrapper = mountView()
       await flushPromises()

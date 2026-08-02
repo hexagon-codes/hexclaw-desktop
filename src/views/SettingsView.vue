@@ -65,6 +65,7 @@ import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
 import AutomationPermissionsPanel from '@/components/settings/AutomationPermissionsPanel.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -72,7 +73,8 @@ const settingsStore = useSettingsStore()
 const thirdPartyAiServicesHref = computed(() => thirdPartyAiServicesUrl(locale.value))
 
 const catalogStore = useModelCatalogStore()
-const { setTheme } = useTheme()
+const { themeMode, setTheme } = useTheme()
+const appearanceSettingsExtensions = scenarioRegistry.appearanceSettingsExtensions
 const activeSection = ref('llm')
 const saved = ref(false)
 const saveFailed = ref(false)
@@ -157,6 +159,22 @@ function handleLocaleChange(locale: string) {
 function handleThemeSelect(mode: ThemeMode) {
   setTheme(mode)
   autoSave()
+}
+
+const themeOptions = computed(() => [
+  { key: 'light' as ThemeMode, label: t('settings.appearance.light') },
+  { key: 'dark' as ThemeMode, label: t('settings.appearance.dark') },
+  { key: 'system' as ThemeMode, label: t('settings.appearance.system') },
+])
+
+function handleThemeKeydown(event: KeyboardEvent, index: number) {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+  event.preventDefault()
+  const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1
+  const target = (index + delta + themeOptions.value.length) % themeOptions.value.length
+  handleThemeSelect(themeOptions.value[target]!.key)
+  const group = (event.currentTarget as HTMLElement).closest('[role="radiogroup"]')
+  group?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[target]?.focus()
 }
 
 // U5: 开机自启开关——之前只落 Store（假开关），现桥接到 Rust set_autostart command，
@@ -2152,35 +2170,32 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <span class="hc-settings__sep-label">{{ t('settings.appearance.title') }}</span>
                 <span class="hc-settings__sep-line"></span>
               </div>
-              <div class="hc-settings__theme-grid">
+              <div
+                class="hc-settings__theme-segmented"
+                role="radiogroup"
+                :aria-label="t('settings.appearance.title')"
+              >
                 <button
-                  v-for="opt in [
-                    {
-                      key: 'light' as ThemeMode,
-                      label: t('settings.appearance.light'),
-                      desc: t('settings.appearance.lightDesc'),
-                    },
-                    {
-                      key: 'dark' as ThemeMode,
-                      label: t('settings.appearance.dark'),
-                      desc: t('settings.appearance.darkDesc'),
-                    },
-                    {
-                      key: 'system' as ThemeMode,
-                      label: t('settings.appearance.system'),
-                      desc: t('settings.appearance.systemDesc'),
-                    },
-                  ]"
+                  v-for="(opt, index) in themeOptions"
                   :key="opt.key"
-                  class="hc-settings__theme-card"
+                  type="button"
+                  role="radio"
+                  class="hc-settings__theme-segment"
+                  :class="{ 'is-selected': themeMode === opt.key }"
+                  :aria-checked="themeMode === opt.key"
+                  :tabindex="themeMode === opt.key ? 0 : -1"
                   @click="handleThemeSelect(opt.key)"
+                  @keydown="handleThemeKeydown($event, index)"
                 >
-                  <span class="hc-settings__theme-copy">
-                    <span class="hc-settings__theme-label">{{ opt.label }}</span>
-                    <span class="hc-settings__theme-desc">{{ opt.desc }}</span>
-                  </span>
+                  {{ opt.label }}
                 </button>
               </div>
+
+              <component
+                :is="extension"
+                v-for="(extension, index) in appearanceSettingsExtensions"
+                :key="index"
+              />
 
               <div class="hc-settings__row">
                 <span class="hc-settings__row-label">{{ t('settings.general.language') }}</span>
@@ -2936,68 +2951,42 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: inline;
 }
 
-/* ─── Theme Cards ───── */
-.hc-settings__theme-grid {
+/* ─── Appearance segmented control ───── */
+.hc-settings__theme-segmented {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 8px 0 14px;
+  gap: 2px;
+  height: 44px;
+  margin: 6px 0 16px;
+  padding: 3px;
+  border: 1px solid var(--hc-border);
+  border-radius: 11px;
+  background: var(--hc-bg-input);
 }
 
-.hc-settings__theme-card {
-  position: relative;
-  overflow: hidden;
+.hc-settings__theme-segment {
   min-width: 0;
-  min-height: 60px;
-  padding: 10px 12px;
-  border: 1.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-primary);
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s,
-    transform 0.15s var(--hc-ease-smooth);
-}
-
-.hc-settings__theme-card:hover {
-  border-color: var(--hc-border-hl);
-  transform: translateY(-1px);
-}
-
-.hc-settings__theme-card:focus-visible {
-  outline: 2px solid var(--hc-accent);
-  outline-offset: 2px;
-}
-
-.hc-settings__theme-copy {
-  position: relative;
-  z-index: 1;
-  display: block;
-  min-width: 0;
-}
-
-.hc-settings__theme-label {
-  display: block;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--hc-text-primary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hc-settings__theme-desc {
-  display: block;
-  overflow: hidden;
-  font-size: 11px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--hc-text-muted);
-  margin-top: 2px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hc-settings__theme-segment:hover,
+.hc-settings__theme-segment:focus-visible {
+  color: var(--hc-text-primary);
+  outline: none;
+}
+
+.hc-settings__theme-segment.is-selected {
+  background: var(--hc-bg-elevated);
+  color: var(--hc-accent);
+  box-shadow: var(--hc-shadow-sm), inset 0 0 0 0.5px var(--hc-border);
 }
 
 /* ─── Info Display ───── */

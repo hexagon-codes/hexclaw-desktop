@@ -53,6 +53,11 @@ vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
   loadSecureValue: vi.fn().mockResolvedValue(null),
   removeSecureValue: vi.fn().mockResolvedValue(undefined),
+  credentialPresent: vi.fn().mockResolvedValue(true),
+  credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
+    key.ownerKind === 'provider'
+      ? `llm_provider/${key.ownerId}/api_key`
+      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => {

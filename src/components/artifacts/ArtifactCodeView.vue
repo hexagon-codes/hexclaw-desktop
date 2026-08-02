@@ -66,7 +66,8 @@ const LANG_EXT: Record<string, string> = {
 }
 
 // 文件系统不安全字符：/ \ : * ? " < > | + 控制字符（覆盖 macOS / Linux / Windows）
-const FS_UNSAFE = /[\/\\:*?"<>|\x00-\x1f]/g
+// oxlint-disable-next-line no-control-regex -- the explicit C0 range is part of the filename safety boundary
+const FS_UNSAFE = /[/\\:*?"<>|\x00-\x1f]/g
 
 /** 清洗文件名 base：危险字符替换、空白折叠、头尾修剪、80 字符截断。 */
 function sanitizeBase(s: string): string {
@@ -139,40 +140,28 @@ function deriveFilename(): string {
 }
 
 /**
- * UTF-8 安全的 base64 编码 — TextEncoder 把字符串按 UTF-8 编码成字节，
- * 再分块拼成 binary string 后 btoa。
- *
- * - 直接 btoa 处理含多字节字符（中文/维语）的字符串会抛 InvalidCharacterError
- * - 老套路 btoa(unescape(encodeURIComponent(s))) 里 unescape 已废弃
- * - 一次性 String.fromCharCode(...bytes) 长串会栈溢出，所以分块
- */
-function utf8ToBase64(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize)
-    binary += String.fromCharCode.apply(null, Array.from(chunk))
-  }
-  return btoa(binary)
-}
-
-/**
  * 默认下载（保留 markdown 行为）：把 artifact 内容原样保存为 .md。
  * Tauri WKWebView 下 <a download> 不可靠，走原生 Save 对话框 + Rust 写盘。
  */
 async function downloadCode() {
   const filename = deriveFilename()
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog')
-    const { invoke } = await import('@tauri-apps/api/core')
-
-    const chosen = await save({ defaultPath: filename })
-    if (!chosen) return
-
-    const base64 = utf8ToBase64(props.artifact.content)
-    await invoke<number>('save_bytes_to_path', { base64Data: base64, path: chosen })
-    toast.success?.(t('common.savedTo', { path: chosen }))
+    const {
+      copyGrantedFile,
+      createNativeFileOperation,
+      pickSaveFileGrant,
+      stageBlob,
+    } = await import('@/api/native-files')
+    const operationId = createNativeFileOperation('save-artifact-source')
+    const destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
+    if (!destination) return
+    const source = await stageBlob(
+      new Blob([props.artifact.content], { type: 'text/markdown' }),
+      filename,
+      { purpose: 'save_copy', operationId },
+    )
+    await copyGrantedFile(source, destination)
+    toast.success?.(t('common.savedTo', { path: destination.name }))
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e)
     toast.error?.(t('common.downloadFailed', { reason }))
@@ -224,22 +213,23 @@ async function exportAs(format: ExportFormat, ext: string) {
   exportingFormat.value = format
   const filename = deriveExportFilename(ext)
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog')
     const { invoke } = await import('@tauri-apps/api/core')
-
-    const chosen = await save({ defaultPath: filename })
-    if (!chosen) {
+    const { createNativeFileOperation, pickSaveFileGrant } = await import('@/api/native-files')
+    const operationId = createNativeFileOperation('render-artifact')
+    const destination = await pickSaveFileGrant(filename, 'render_artifact', operationId)
+    if (!destination) {
       exportingFormat.value = null
       return
     }
 
-    await invoke<number>('render_artifact_to_path', {
+    await invoke<number>('render_artifact_to_grant', {
+      grantId: destination.grantId,
+      operationId: destination.operationId,
       content: props.artifact.content,
       format,
-      targetPath: chosen,
       title: props.artifact.title || '',
     })
-    toast.success?.(t('common.savedTo', { path: chosen }))
+    toast.success?.(t('common.savedTo', { path: destination.name }))
   } catch (e) {
     handleRenderError(e)
   } finally {

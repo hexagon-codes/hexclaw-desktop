@@ -130,7 +130,7 @@ async function confirmDeleteConnector() {
       try { await removeMcpServer(serverName) } catch { /* server 可能已不在，忽略 */ }
     }
   }
-  removeInstance(target.id)
+  await removeInstance(target.id)
   if (target.type === 'localFolder') {
     try {
       await syncLocalFolderAllowedPaths(getEnabledLocalFolderAllowedPaths(connectorInstances.value))
@@ -446,7 +446,7 @@ function closeResources() {
 
 // 停用 / 启用：直接改 store（本地态，立即持久化）。
 async function toggleConnector(inst: ConnectorInstance) {
-  updateInstance(inst.id, { enabled: !inst.enabled })
+  await updateInstance(inst.id, { enabled: !inst.enabled })
   if (inst.type === 'localFolder') {
     try {
       await syncLocalFolderAllowedPaths(getEnabledLocalFolderAllowedPaths(connectorInstances.value))

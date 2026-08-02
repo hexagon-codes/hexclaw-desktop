@@ -74,6 +74,7 @@ function getGroupItems(group: NavGroup) {
           :key="item.id"
           :to="item.path"
           :aria-label="t(item.i18nKey)"
+          :data-nav-id="item.id"
           class="hc-sidebar__item"
           :class="{ 'hc-sidebar__item--active': isNavActive(item.path, route.path) }"
         >

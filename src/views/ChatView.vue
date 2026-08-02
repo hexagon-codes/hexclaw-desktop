@@ -264,10 +264,27 @@ watch(
   },
   { flush: 'sync' },
 )
-const sidebarWidth = ref(260)
+const SIDEBAR_DEFAULT_WIDTH = 256
+const SIDEBAR_COMPACT_WIDTH = 220
+const SIDEBAR_COMPACT_BREAKPOINT = 1040
+const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
 const SIDEBAR_WIDTH_STORAGE_KEY = 'hexclaw_chat_sidebar_width'
-const SIDEBAR_MIN_WIDTH = 260
+const SIDEBAR_MIN_WIDTH = SIDEBAR_DEFAULT_WIDTH
 const SIDEBAR_MAX_WIDTH = 420
+const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
+const effectiveSidebarWidth = computed(() =>
+  viewportWidth.value <= SIDEBAR_COMPACT_BREAKPOINT
+    ? SIDEBAR_COMPACT_WIDTH
+    : sidebarWidth.value,
+)
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth
+}
+onMounted(() => {
+  updateViewportWidth()
+  window.addEventListener('resize', updateViewportWidth)
+})
+onUnmounted(() => window.removeEventListener('resize', updateViewportWidth))
 const sidebarResizing = ref(false)
 let sidebarDragging = false
 let sidebarDragStartX = 0
@@ -2584,7 +2601,7 @@ function stopSidebarResize() {
 }
 
 function startSidebarResize(event: MouseEvent) {
-  if (event.button !== 0) return
+  if (event.button !== 0 || viewportWidth.value <= SIDEBAR_COMPACT_BREAKPOINT) return
   sidebarDragging = true
   sidebarResizing.value = true
   sidebarDragStartX = event.clientX
@@ -2611,11 +2628,11 @@ function startSidebarResize(event: MouseEvent) {
         'hc-chat__sidebar--resizing': sidebarResizing,
         'hc-chat__sidebar--hidden': !showSessions,
       }"
-      :style="{ width: showSessions ? `${sidebarWidth}px` : '0px' }"
+      :style="{ width: showSessions ? `${effectiveSidebarWidth}px` : '0px' }"
       :aria-hidden="!showSessions"
       :inert="!showSessions"
     >
-      <div class="hc-chat__sidebar-content" :style="{ width: `${sidebarWidth}px` }">
+      <div class="hc-chat__sidebar-content" :style="{ width: `${effectiveSidebarWidth}px` }">
         <!-- 品牌化「新建会话」主操作（对齐原型 .newconv，去掉冗余「会话」标题头） -->
         <div class="hc-chat__sidebar-header">
           <button class="hc-chat__newconv" :title="t('chat.newSession')" @click="newSession">

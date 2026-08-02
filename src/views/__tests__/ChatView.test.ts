@@ -764,25 +764,41 @@ describe('ChatView — E2E 关键路径', () => {
     expect(sessionList.exists()).toBe(true)
   })
 
-  it('supports a draggable session sidebar width like ChatGPT', async () => {
+  it('uses one responsive session-sidebar width contract for regular and K12 chats', async () => {
+    const originalWidth = window.innerWidth
+    localStorage.removeItem('hexclaw_chat_sidebar_width')
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+
     const wrapper = mountChatView()
-    await flushPromises()
+    try {
+      await flushPromises()
 
-    const sidebar = wrapper.find('.hc-chat__sidebar')
-    const resizer = wrapper.find('[role="separator"]')
-    expect(sidebar.exists()).toBe(true)
-    expect(resizer.exists()).toBe(true)
-    expect(sidebar.attributes('style')).toContain('width: 260px;')
+      const sidebar = wrapper.find('.hc-chat__sidebar')
+      const resizer = wrapper.find('[role="separator"]')
+      expect(sidebar.exists()).toBe(true)
+      expect(resizer.exists()).toBe(true)
+      expect(sidebar.attributes('style')).toContain('width: 256px;')
 
-    await resizer.trigger('mousedown', { button: 0, clientX: 260 })
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 360 }))
-    await new Promise(resolve => requestAnimationFrame(resolve))
-    await flushPromises()
+      await resizer.trigger('mousedown', { button: 0, clientX: 256 })
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 356 }))
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      await flushPromises()
 
-    expect(wrapper.find('.hc-chat__sidebar').attributes('style')).toContain('width: 360px;')
+      expect(wrapper.find('.hc-chat__sidebar').attributes('style')).toContain('width: 356px;')
 
-    document.dispatchEvent(new MouseEvent('mouseup'))
-    expect(localStorage.getItem('hexclaw_chat_sidebar_width')).toBe('360')
+      document.dispatchEvent(new MouseEvent('mouseup'))
+      expect(localStorage.getItem('hexclaw_chat_sidebar_width')).toBe('356')
+
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1040 })
+      window.dispatchEvent(new Event('resize'))
+      await flushPromises()
+      expect(wrapper.find('.hc-chat__sidebar').attributes('style')).toContain('width: 220px;')
+    } finally {
+      wrapper.unmount()
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth })
+      window.dispatchEvent(new Event('resize'))
+      localStorage.removeItem('hexclaw_chat_sidebar_width')
+    }
   })
 
   it('copying a message should fail gracefully when clipboard API is unavailable', async () => {

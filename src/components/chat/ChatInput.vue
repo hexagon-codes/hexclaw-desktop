@@ -2,7 +2,8 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useI18n } from 'vue-i18n'
-import { readLocalFileAsFile } from '@/api/desktop'
+import { fileFromNativeGrant } from '@/api/desktop'
+import type { NativeFileGrant } from '@/api/native-files'
 import {
   ArrowUp,
   Square,
@@ -695,17 +696,10 @@ function handleDrop(e: DragEvent) {
 // Tauri 原生拖拽：dragDropEnabled 默认 true 会拦截 webview 的 HTML drop 事件，桌面端
 // 必须监听原生 onDragDropEvent（浏览器 dev 模式下导入失败，自动回退到上面的 HTML @drop）。
 let unlistenNativeDrop: (() => void) | null = null
-async function handleNativeDrop(paths: string[]) {
-  if (!canAcceptFiles() || !paths?.length) return
-  const loaded: File[] = []
-  for (const path of paths) {
-    try {
-      loaded.push(await readLocalFileAsFile(path))
-    } catch (err) {
-      logger.error('[ChatInput] 读取拖入文件失败', path, err)
-    }
-  }
-  if (loaded.length) addFiles(loaded)
+let unlistenNativeGrantDrop: (() => void) | null = null
+function handleNativeGrantDrop(grants: NativeFileGrant[]) {
+  if (!canAcceptFiles() || !grants?.length) return
+  addFiles(grants.map(fileFromNativeGrant))
 }
 onMounted(() => {
   // 浏览器 dev 模式下 getCurrentWindow().onDragDropEvent 不可用 → try/catch 回退到 HTML @drop
@@ -719,11 +713,20 @@ onMounted(() => {
           dragDepth.value = 0
         } else if (p.type === 'drop') {
           dragDepth.value = 0
-          void handleNativeDrop(p.paths)
         }
       })
       .then((unlisten) => {
         unlistenNativeDrop = unlisten
+      })
+      .catch(() => {
+        /* 非 Tauri（浏览器 dev）→ 走 HTML @drop */
+      })
+    getCurrentWindow()
+      .listen<NativeFileGrant[]>('native-file-drop-grants', (event) => {
+        handleNativeGrantDrop(event.payload)
+      })
+      .then((unlisten) => {
+        unlistenNativeGrantDrop = unlisten
       })
       .catch(() => {
         /* 非 Tauri（浏览器 dev）→ 走 HTML @drop */
@@ -734,6 +737,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   unlistenNativeDrop?.()
+  unlistenNativeGrantDrop?.()
 })
 
 function addFiles(files: File[]) {

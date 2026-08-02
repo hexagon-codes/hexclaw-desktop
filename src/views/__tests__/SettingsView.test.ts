@@ -113,6 +113,11 @@ vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
   loadSecureValue: vi.fn().mockResolvedValue(null),
   removeSecureValue: vi.fn().mockResolvedValue(undefined),
+  credentialPresent: vi.fn().mockResolvedValue(true),
+  credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
+    key.ownerKind === 'provider'
+      ? `llm_provider/${key.ownerId}/api_key`
+      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
 }))
 
 // Mock Tauri Store（isTauri=true 时 settings store 会 import 它）
@@ -1398,10 +1403,15 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(mockedUpdateLLMConfig).toHaveBeenCalled()
     const backendPayload = mockedUpdateLLMConfig.mock.calls[
       mockedUpdateLLMConfig.mock.calls.length - 1
-    ]?.[0] as {
-      providers: Record<string, { api_key: string }>
-    }
-    expect(backendPayload.providers.openai?.api_key).toBe('sk-fresh-key')
+    ]?.[0]
+    expect(backendPayload?.providers.openai).not.toHaveProperty('api_key', 'sk-fresh-key')
+    const credentialReplacements = mockedUpdateLLMConfig.mock.calls[
+      mockedUpdateLLMConfig.mock.calls.length - 1
+    ]?.[1]
+    expect(credentialReplacements).toContainEqual({
+      providerKey: 'openai',
+      secret: 'sk-fresh-key',
+    })
 
     wrapper.unmount()
   })

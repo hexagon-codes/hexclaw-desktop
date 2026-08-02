@@ -25,6 +25,7 @@ import {
   getKnowledgeConfig,
   putKnowledgeConfig,
   MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES,
+  listKnowledgeOperations,
 } from '@/api/knowledge'
 import type { KnowledgeSourceCount } from '@/api/knowledge'
 import type { KnowledgeSearchFilter, KnowledgeConfig } from '@/api/knowledge'
@@ -513,6 +514,11 @@ onUnmounted(() => {
 
 onMounted(async () => {
   isMounted = true
+  try {
+    uploadsStore.reconcileRecoverableOperations(await listKnowledgeOperations())
+  } catch (error) {
+    logger.warn('[Knowledge] durable upload recovery failed', error)
+  }
   await loadDocs()
   void loadRagConfig()
   // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
@@ -850,6 +856,7 @@ async function handleReindex(doc: KnowledgeDoc) {
             name: doc.title,
             progress: 100,
             status: 'processing',
+            operationId: accepted.operation_id,
             documentId: accepted.document_id,
             jobId: accepted.job_id,
             stage: accepted.text_index_state === 'ready' ? 'embedding' : 'extracting',
@@ -1045,7 +1052,12 @@ async function processFiles(files: FileList) {
             },
             { signal: uploadController.signal },
           )
-          uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)
+          uploadsStore.attachJob(
+            entry,
+            accepted.document_id,
+            accepted.job_id,
+            accepted.operation_id,
+          )
           uploadedAny = true
         } catch (e) {
           if (uploadController.signal.aborted) {
@@ -1214,679 +1226,710 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
           />
 
           <div class="knowledge-page__active-panel">
-        <!-- 仅“全部”面板的第一项：健康态默认折叠；切换回来时重新按默认态挂载。 -->
-        <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
+            <!-- 仅“全部”面板的第一项：健康态默认折叠；切换回来时重新按默认态挂载。 -->
+            <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
 
-        <!-- Upload progress list -->
-        <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
-          <div
-            v-for="(uf, idx) in uploadingFiles"
-            :key="idx"
-            data-testid="knowledge-upload-job"
-            class="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
-            :style="{
-              background: 'var(--hc-bg-card)',
-              borderColor:
-                uf.status === 'error'
-                  ? '#ef4444'
-                  : uf.status === 'pending-response'
-                    ? '#f59e0b'
-                    : uf.status === 'done'
-                      ? '#10b981'
-                      : 'var(--hc-border)',
-            }"
-          >
-            <Upload
-              :size="14"
-              :class="{ 'animate-pulse': uf.status === 'uploading' || uf.status === 'processing' }"
-              :style="{
-                color:
-                  uf.status === 'error'
-                    ? '#ef4444'
-                    : uf.status === 'done'
-                      ? '#10b981'
-                      : 'var(--hc-accent)',
-              }"
-            />
-            <div class="flex-1 min-w-0">
+            <!-- Upload progress list -->
+            <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
               <div
-                class="text-xs font-medium truncate"
-                :style="{ color: 'var(--hc-text-primary)' }"
+                v-for="(uf, idx) in uploadingFiles"
+                :key="idx"
+                data-testid="knowledge-upload-job"
+                class="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
+                :style="{
+                  background: 'var(--hc-bg-card)',
+                  borderColor:
+                    uf.status === 'error'
+                      ? '#ef4444'
+                      : uf.status === 'pending-response'
+                        ? '#f59e0b'
+                        : uf.status === 'done'
+                          ? '#10b981'
+                          : 'var(--hc-border)',
+                }"
               >
-                {{ uf.name }}
-              </div>
-              <div
-                v-if="uf.status === 'uploading'"
-                class="mt-1 h-1 rounded-full overflow-hidden"
-                :style="{ background: 'var(--hc-bg-hover)' }"
-              >
-                <div
-                  class="h-full rounded-full transition-[width]"
-                  :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
+                <Upload
+                  :size="14"
+                  :class="{
+                    'animate-pulse': uf.status === 'uploading' || uf.status === 'processing',
+                  }"
+                  :style="{
+                    color:
+                      uf.status === 'error'
+                        ? '#ef4444'
+                        : uf.status === 'done'
+                          ? '#10b981'
+                          : 'var(--hc-accent)',
+                  }"
                 />
-              </div>
-              <div
-                v-else-if="uf.status === 'processing'"
-                class="text-xs mt-0.5 animate-pulse"
-                :style="{ color: 'var(--hc-accent)' }"
-                data-testid="upload-processing"
-              >
-                {{ t('knowledge.processing') }}
-              </div>
-              <div
-                v-else-if="uf.status === 'pending-response'"
-                class="text-xs mt-0.5"
-                style="color: #b45309"
-                data-testid="knowledge-upload-pending-response"
-              >
-                {{
-                  uf.error ||
-                  t('knowledge.uploadAwaitingAcceptance', '等待服务器确认；可重新选择同一文件恢复')
-                }}
-              </div>
-              <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">
-                {{ uf.error }}
-              </div>
-              <div
-                v-else-if="uf.status === 'cancelled'"
-                class="text-xs mt-0.5"
-                :style="{ color: 'var(--hc-text-muted)' }"
-                data-testid="knowledge-upload-cancelled"
-              >
-                {{ t('knowledge.semanticIndex.cancelled') }}
-              </div>
-              <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
-                {{ uf.warning }}
-              </div>
-              <div
-                v-else-if="uf.status === 'done'"
-                class="text-xs mt-0.5"
-                :style="{ color: 'var(--hc-text-muted)' }"
-              >
-                {{ t('knowledge.indexing') }}
+                <div class="flex-1 min-w-0">
+                  <div
+                    class="text-xs font-medium truncate"
+                    :style="{ color: 'var(--hc-text-primary)' }"
+                  >
+                    {{ uf.name }}
+                  </div>
+                  <div
+                    v-if="uf.status === 'uploading'"
+                    class="mt-1 h-1 rounded-full overflow-hidden"
+                    :style="{ background: 'var(--hc-bg-hover)' }"
+                  >
+                    <div
+                      class="h-full rounded-full transition-[width]"
+                      :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
+                    />
+                  </div>
+                  <div
+                    v-else-if="uf.status === 'processing'"
+                    class="text-xs mt-0.5 animate-pulse"
+                    :style="{ color: 'var(--hc-accent)' }"
+                    data-testid="upload-processing"
+                  >
+                    {{ t('knowledge.processing') }}
+                  </div>
+                  <div
+                    v-else-if="uf.status === 'pending-response'"
+                    class="text-xs mt-0.5"
+                    style="color: #b45309"
+                    data-testid="knowledge-upload-pending-response"
+                  >
+                    {{
+                      uf.error ||
+                      t(
+                        'knowledge.uploadAwaitingAcceptance',
+                        '等待服务器确认；可重新选择同一文件恢复',
+                      )
+                    }}
+                  </div>
+                  <div
+                    v-else-if="uf.status === 'error'"
+                    class="text-xs mt-0.5"
+                    style="color: #ef4444"
+                  >
+                    {{ uf.error }}
+                  </div>
+                  <div
+                    v-else-if="uf.status === 'cancelled'"
+                    class="text-xs mt-0.5"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    data-testid="knowledge-upload-cancelled"
+                  >
+                    {{ t('knowledge.semanticIndex.cancelled') }}
+                  </div>
+                  <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
+                    {{ uf.warning }}
+                  </div>
+                  <div
+                    v-else-if="uf.status === 'done'"
+                    class="text-xs mt-0.5"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                  >
+                    {{ t('knowledge.indexing') }}
+                  </div>
+                </div>
+                <button
+                  v-if="canCancelUpload(uf)"
+                  type="button"
+                  class="text-xs px-2 py-1 rounded border"
+                  :disabled="uf.cancelling"
+                  data-testid="knowledge-upload-cancel"
+                  @click="cancelUploadJob(uf)"
+                >
+                  {{ t('common.cancel') }}
+                </button>
+                <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{
+                    uf.status === 'uploading'
+                      ? uf.progress + '%'
+                      : uf.status === 'processing'
+                        ? '⋯'
+                        : uf.status === 'done'
+                          ? '✓'
+                          : '✗'
+                  }}
+                </span>
               </div>
             </div>
-            <button
-              v-if="canCancelUpload(uf)"
-              type="button"
-              class="text-xs px-2 py-1 rounded border"
-              :disabled="uf.cancelling"
-              data-testid="knowledge-upload-cancel"
-              @click="cancelUploadJob(uf)"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-              {{
-                uf.status === 'uploading'
-                  ? uf.progress + '%'
-                  : uf.status === 'processing'
-                    ? '⋯'
-                    : uf.status === 'done'
-                      ? '✓'
-                      : '✗'
-              }}
-            </span>
-          </div>
-        </div>
 
-        <LoadingState v-if="loading" />
+            <LoadingState v-if="loading" />
 
-        <!-- 文档标签 -->
-        <template v-else-if="activeTab === 'documents'">
-          <EmptyState
-            v-if="docs.length === 0"
-            :icon="BookOpen"
-            :title="t('knowledge.noDocs')"
-            :description="t('knowledge.noDocsDesc')"
-          >
-            <p
-              v-if="knowledgeEnabled"
-              class="text-xs mt-2 mb-2"
-              :style="{ color: 'var(--hc-text-secondary)' }"
-            >
-              {{ t('knowledge.modeHint') }}
-            </p>
-            <p class="text-xs mt-2 mb-4" :style="{ color: 'var(--hc-text-muted)' }">
-              {{ t('knowledge.dragHint') }}
-            </p>
-          </EmptyState>
-
-          <template v-else>
-            <div
-              v-if="revalidating"
-              class="max-w-2xl mb-3 flex items-center gap-1.5 text-xs"
-              :style="{ color: 'var(--hc-text-muted)' }"
-            >
-              <RefreshCw :size="12" class="animate-spin" />
-              <span>{{ t('knowledge.syncing') }}</span>
-            </div>
-
-            <!-- 来源分组过滤：每个 source 一颗 chip（#5），快照按来源折叠筛选 -->
-            <div
-              v-if="sourceFacet.length > 1"
-              data-testid="knowledge-source-filters"
-              class="knowledge-page__source-filters flex flex-wrap items-center gap-2 mb-4"
-            >
-              <button
-                type="button"
-                data-testid="kb-source-chip-all"
-                :aria-pressed="selectedSource === null"
-                class="text-xs px-2.5 py-1 rounded-full border transition-colors"
-                :style="
-                  selectedSource === null
-                    ? {
-                        background: 'var(--hc-accent)',
-                        borderColor: 'var(--hc-accent)',
-                        color: '#fff',
-                      }
-                    : {
-                        background: 'var(--hc-bg-card)',
-                        borderColor: 'var(--hc-border)',
-                        color: 'var(--hc-text-secondary)',
-                      }
-                "
-                @click="selectSource(null)"
+            <!-- 文档标签 -->
+            <template v-else-if="activeTab === 'documents'">
+              <EmptyState
+                v-if="docs.length === 0"
+                :icon="BookOpen"
+                :title="t('knowledge.noDocs')"
+                :description="t('knowledge.noDocsDesc')"
               >
-                {{ t('knowledge.allSources') }} ({{
-                  sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs
-                }})
-              </button>
-              <button
-                v-for="f in sourceFacet"
-                :key="f.source"
-                type="button"
-                :data-testid="`kb-source-chip-${f.source}`"
-                :aria-pressed="selectedSource === f.source"
-                class="text-xs px-2.5 py-1 rounded-full border transition-colors max-w-[14rem] truncate"
-                :style="
-                  selectedSource === f.source
-                    ? {
-                        background: 'var(--hc-accent)',
-                        borderColor: 'var(--hc-accent)',
-                        color: '#fff',
-                      }
-                    : {
-                        background: 'var(--hc-bg-card)',
-                        borderColor: 'var(--hc-border)',
-                        color: 'var(--hc-text-secondary)',
-                      }
-                "
-                :title="f.source"
-                @click="selectSource(f.source)"
-              >
-                {{ f.source }} ({{ f.count }})
-              </button>
-            </div>
+                <p
+                  v-if="knowledgeEnabled"
+                  class="text-xs mt-2 mb-2"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                >
+                  {{ t('knowledge.modeHint') }}
+                </p>
+                <p class="text-xs mt-2 mb-4" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{ t('knowledge.dragHint') }}
+                </p>
+              </EmptyState>
 
-            <!-- 文档列表 -->
-            <div data-testid="knowledge-doc-list" class="knowledge-page__document-list space-y-3">
-              <template v-if="filteredDocs.length > 0">
+              <template v-else>
                 <div
-                  v-for="doc in windowedDocs"
-                  :key="doc.id"
-                  data-testid="knowledge-doc-card"
-                  class="knowledge-page__document-card hc-card-interactive group flex items-center gap-3 rounded-2xl border px-4 py-3.5"
-                  :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+                  v-if="revalidating"
+                  class="max-w-2xl mb-3 flex items-center gap-1.5 text-xs"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                >
+                  <RefreshCw :size="12" class="animate-spin" />
+                  <span>{{ t('knowledge.syncing') }}</span>
+                </div>
+
+                <!-- 来源分组过滤：每个 source 一颗 chip（#5），快照按来源折叠筛选 -->
+                <div
+                  v-if="sourceFacet.length > 1"
+                  data-testid="knowledge-source-filters"
+                  class="knowledge-page__source-filters flex flex-wrap items-center gap-2 mb-4"
                 >
                   <button
-                    class="knowledge-page__document-main flex-1 min-w-0 text-left py-0.5"
-                    @click="openDocDetail(doc)"
+                    type="button"
+                    data-testid="kb-source-chip-all"
+                    :aria-pressed="selectedSource === null"
+                    class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+                    :style="
+                      selectedSource === null
+                        ? {
+                            background: 'var(--hc-accent)',
+                            borderColor: 'var(--hc-accent)',
+                            color: '#fff',
+                          }
+                        : {
+                            background: 'var(--hc-bg-card)',
+                            borderColor: 'var(--hc-border)',
+                            color: 'var(--hc-text-secondary)',
+                          }
+                    "
+                    @click="selectSource(null)"
                   >
-                    <div class="flex items-center gap-2">
-                      <span
-                        class="text-sm font-medium truncate"
-                        :style="{ color: 'var(--hc-text-primary)' }"
-                      >
-                        {{ doc.title }}
-                      </span>
-                      <span
-                        class="text-[10px] px-2 py-0.5 rounded-full"
-                        :style="getDocStatusStyle(doc)"
-                      >
-                        {{ getDocStatusLabel(doc) }}
-                      </span>
-                    </div>
-                    <div
-                      class="knowledge-page__document-meta flex items-center gap-3 mt-1 text-xs"
-                      :style="{ color: 'var(--hc-text-muted)' }"
-                    >
-                      <span>{{ doc.chunk_count }} chunk{{ doc.chunk_count === 1 ? '' : 's' }}</span>
-                      <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
-                      <span>{{
-                        new Date(doc.updated_at || doc.created_at).toLocaleString(locale)
-                      }}</span>
-                    </div>
-                    <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
-                      {{ doc.error_message }}
-                    </p>
-                    <p
-                      v-if="getVectorStatusLabel(doc)"
-                      data-testid="knowledge-vector-status"
-                      class="text-[11px] mt-2"
-                      :style="{
-                        color:
-                          doc.vector_index_state === 'failed' || doc.vector_outcome_unknown
-                            ? '#b45309'
-                            : 'var(--hc-text-muted)',
-                      }"
-                    >
-                      {{ getVectorStatusLabel(doc) }}
-                      <span v-if="getVectorProgress(doc)"> · {{ getVectorProgress(doc) }}</span>
-                      <span v-if="doc.vector_error"> · {{ doc.vector_error }}</span>
-                    </p>
+                    {{ t('knowledge.allSources') }} ({{
+                      sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs
+                    }})
                   </button>
-                  <div
-                    data-testid="knowledge-doc-actions"
-                    class="knowledge-page__document-actions shrink-0 flex items-center gap-1"
+                  <button
+                    v-for="f in sourceFacet"
+                    :key="f.source"
+                    type="button"
+                    :data-testid="`kb-source-chip-${f.source}`"
+                    :aria-pressed="selectedSource === f.source"
+                    class="text-xs px-2.5 py-1 rounded-full border transition-colors max-w-[14rem] truncate"
+                    :style="
+                      selectedSource === f.source
+                        ? {
+                            background: 'var(--hc-accent)',
+                            borderColor: 'var(--hc-accent)',
+                            color: '#fff',
+                          }
+                        : {
+                            background: 'var(--hc-bg-card)',
+                            borderColor: 'var(--hc-border)',
+                            color: 'var(--hc-text-secondary)',
+                          }
+                    "
+                    :title="f.source"
+                    @click="selectSource(f.source)"
                   >
-                    <button
-                      v-if="canReindexDocument(doc)"
-                      :data-testid="
-                        hasRetryableVectorFailure(doc) ? 'knowledge-vector-retry' : undefined
-                      "
-                      class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
-                      :style="{
-                        color: 'var(--hc-text-secondary)',
-                        background: 'var(--hc-bg-hover)',
-                      }"
-                      :disabled="
-                        !knowledgeEnabled ||
-                        reindexingDocIds.has(doc.id) ||
-                        getDocStatus(doc) === 'processing'
-                      "
-                      @click="handleReindex(doc)"
-                    >
-                      <RefreshCw
-                        :size="12"
-                        :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }"
-                      />
-                      {{
-                        getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)
-                          ? t('knowledge.retryIndex')
-                          : t('knowledge.reindex')
-                      }}
-                    </button>
-                    <button
-                      v-if="canCancelVectorJob(doc)"
-                      data-testid="knowledge-vector-cancel"
-                      class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
-                      :style="{
-                        color: '#b45309',
-                        background: 'color-mix(in srgb, #f59e0b 10%, transparent)',
-                      }"
-                      :title="t('knowledge.vectorCancel', '取消语义增强')"
-                      :disabled="
-                        !knowledgeEnabled || cancellingVectorJobIds.has(doc.vector_job_id || '')
-                      "
-                      @click="cancelDocumentVectorJob(doc)"
-                    >
-                      <RefreshCw
-                        v-if="cancellingVectorJobIds.has(doc.vector_job_id || '')"
-                        :size="12"
-                        class="animate-spin"
-                      />
-                      <X v-else :size="12" />
-                      {{ t('knowledge.vectorCancel', '取消语义增强') }}
-                    </button>
-                    <button
-                      class="p-1.5 rounded-lg transition-colors"
-                      :style="{
-                        color: 'var(--hc-error)',
-                        background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
-                      }"
-                      :title="t('common.delete')"
-                      :disabled="!knowledgeEnabled"
-                      @click="confirmDelete(doc)"
-                    >
-                      <Trash2 :size="16" />
-                    </button>
-                  </div>
-                </div>
-              </template>
-              <EmptyState
-                v-else
-                :icon="Search"
-                :title="t('knowledge.noResults')"
-                :description="t('knowledge.noResultsDesc')"
-              />
-            </div>
-
-            <!-- 分页：渲染窗口未覆盖全部时显示「加载更多」(#5) -->
-            <div
-              v-if="hasMoreDocs"
-              data-testid="knowledge-load-more"
-              class="knowledge-page__load-more mt-3 flex items-center justify-center gap-3 text-xs"
-            >
-              <button
-                type="button"
-                class="px-3 py-1.5 rounded-lg border transition-colors"
-                :style="{
-                  borderColor: 'var(--hc-border)',
-                  color: 'var(--hc-text-secondary)',
-                  background: 'var(--hc-bg-card)',
-                }"
-                @click="loadMoreDocs"
-              >
-                {{ t('knowledge.loadMore') }}
-              </button>
-              <span :style="{ color: 'var(--hc-text-muted)' }">
-                {{
-                  t('knowledge.shownOfTotal', {
-                    shown: windowedDocs.length,
-                    total: displayedTotalDocs,
-                  })
-                }}
-              </span>
-            </div>
-          </template>
-        </template>
-
-        <!-- 检索测试标签 -->
-        <template v-else>
-          <div class="knowledge-page__search">
-            <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
-              {{ t('knowledge.searchDesc') }}
-            </p>
-
-            <!-- 检索质量参数（高级）：折叠面板（默认展开），全局持久化（写 yaml + 热更新 KB Manager）。
-               即时生效：rerank/查询扩展/情境增强 开关、min_score、candidate_k；换 rerank 模型需重启 sidecar。 -->
-            <HcSettingsDisclosure
-              v-model="ragPanelOpen"
-              body-id="kb-rag-body"
-              trigger-test-id="kb-rag-toggle"
-              panel-test-id="kb-rag-body"
-              data-testid="kb-rag-panel"
-              class="knowledge-page__rag-disclosure mb-5"
-            >
-              <template #icon><Settings2 :size="13" /></template>
-              <template #title>{{ t('knowledge.ragTitle') }}</template>
-              <template #actions>
-                <button
-                  type="button"
-                  data-testid="kb-rag-reset"
-                  class="knowledge-page__rag-reset"
-                  :disabled="!knowledgeEnabled || !ragConfig || ragSaving"
-                  @click="resetRagConfig"
-                >
-                  {{ t('knowledge.ragReset') }}
-                </button>
-              </template>
-
-              <div class="knowledge-page__rag-body">
-                <template v-if="ragConfig">
-                  <!-- 重排 cross-encoder + 模型下拉 -->
-                  <div class="flex items-center gap-2.5 flex-wrap">
-                    <span
-                      class="text-[13px] flex-1 min-w-0"
-                      :style="{ color: 'var(--hc-text-primary)' }"
-                    >
-                      {{ t('knowledge.ragRerank') }}
-                    </span>
-                    <input
-                      type="checkbox"
-                      data-testid="kb-rag-rerank"
-                      class="hc-toggle"
-                      :checked="ragConfig.rerank"
-                      :disabled="!knowledgeEnabled || ragSaving"
-                      :aria-label="t('knowledge.ragRerank')"
-                      @change="toggleRagBool('rerank')"
-                    />
-                    <div class="w-[208px] shrink-0">
-                      <HcSelect
-                        data-testid="kb-rag-rerank-model"
-                        :model-value="ragConfig.rerank_model"
-                        :options="rerankModelSelectOptions"
-                        :disabled="!knowledgeEnabled || !ragConfig.rerank || ragSaving"
-                        @update:model-value="onRerankModelPick"
-                      />
-                    </div>
-                  </div>
-
-                  <!-- 查询扩展 -->
-                  <div class="flex items-center gap-2.5">
-                    <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
-                      {{ t('knowledge.ragQueryExpand') }}
-                    </span>
-                    <input
-                      type="checkbox"
-                      data-testid="kb-rag-query-expand"
-                      class="hc-toggle"
-                      :checked="ragConfig.query_expand"
-                      :disabled="!knowledgeEnabled || ragSaving"
-                      :aria-label="t('knowledge.ragQueryExpand')"
-                      @change="toggleRagBool('query_expand')"
-                    />
-                  </div>
-
-                  <!-- 入库情境增强 Contextual（改后需重建索引） -->
-                  <div class="flex items-center gap-2.5">
-                    <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
-                      {{ t('knowledge.ragContextual') }}
-                      <span
-                        class="text-[11px] ml-1"
-                        :style="{ color: 'var(--hc-text-muted)' }"
-                        :title="t('knowledge.ragNeedRebuild')"
-                      >
-                        ⓘ {{ t('knowledge.ragNeedRebuild') }}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      data-testid="kb-rag-contextual"
-                      class="hc-toggle"
-                      :checked="ragConfig.contextual"
-                      :disabled="!knowledgeEnabled || ragSaving"
-                      :aria-label="t('knowledge.ragContextual')"
-                      @change="toggleRagBool('contextual')"
-                    />
-                  </div>
-
-                  <!-- 相关度地板 min_score -->
-                  <div class="flex items-center gap-2.5">
-                    <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
-                      {{ t('knowledge.ragMinScore') }}
-                    </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      data-testid="kb-rag-min-score"
-                      :value="ragConfig.min_score"
-                      :disabled="!knowledgeEnabled || ragSaving"
-                      style="width: 170px; accent-color: var(--hc-accent)"
-                      :aria-label="t('knowledge.ragMinScore')"
-                      @input="
-                        ragConfig.min_score = Number(($event.target as HTMLInputElement).value)
-                      "
-                      @change="onMinScoreChange"
-                    />
-                    <span
-                      class="text-xs tabular-nums w-9 text-right"
-                      :style="{ color: 'var(--hc-text-secondary)' }"
-                    >
-                      {{ Number(ragConfig.min_score).toFixed(2) }}
-                    </span>
-                  </div>
-
-                  <!-- 宽召回候选池 candidate_k -->
-                  <div class="flex items-center gap-2.5">
-                    <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
-                      {{ t('knowledge.ragCandidateK') }}
-                    </span>
-                    <div class="w-[88px] shrink-0">
-                      <HcSelect
-                        data-testid="kb-rag-candidate-k"
-                        :model-value="String(ragConfig.candidate_k)"
-                        :options="candidateKSelectOptions"
-                        :disabled="!knowledgeEnabled || ragSaving"
-                        @update:model-value="onCandidateKPick"
-                      />
-                    </div>
-                  </div>
-
-                  <p
-                    class="text-[11px] border-t pt-2.5 m-0"
-                    :style="{ color: 'var(--hc-text-muted)', borderColor: 'var(--hc-border)' }"
-                  >
-                    {{ t('knowledge.ragFootnote') }}
-                  </p>
-                  <p
-                    v-if="ragRestartHint"
-                    data-testid="kb-rag-restart-hint"
-                    class="text-[11px] m-0"
-                    style="color: #f59e0b"
-                  >
-                    {{ t('knowledge.ragRestartHint') }}
-                  </p>
-                </template>
-                <div
-                  v-else-if="ragLoadState === 'error'"
-                  data-testid="kb-rag-load-error"
-                  class="text-xs flex items-center justify-between gap-3"
-                  style="color: #b45309"
-                  role="alert"
-                >
-                  <span>{{ t('knowledge.ragLoadFailed') }}</span>
-                  <button type="button" class="underline shrink-0" @click="loadRagConfig">
-                    {{ t('common.retry', '重试') }}
+                    {{ f.source }} ({{ f.count }})
                   </button>
                 </div>
+
+                <!-- 文档列表 -->
                 <div
-                  v-else
-                  data-testid="kb-rag-loading"
-                  class="text-xs"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                  role="status"
+                  data-testid="knowledge-doc-list"
+                  class="knowledge-page__document-list space-y-3"
                 >
-                  {{ t('common.loading', '加载中…') }}
+                  <template v-if="filteredDocs.length > 0">
+                    <div
+                      v-for="doc in windowedDocs"
+                      :key="doc.id"
+                      data-testid="knowledge-doc-card"
+                      class="knowledge-page__document-card hc-card-interactive group flex items-center gap-3 rounded-2xl border px-4 py-3.5"
+                      :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+                    >
+                      <button
+                        class="knowledge-page__document-main flex-1 min-w-0 text-left py-0.5"
+                        @click="openDocDetail(doc)"
+                      >
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="text-sm font-medium truncate"
+                            :style="{ color: 'var(--hc-text-primary)' }"
+                          >
+                            {{ doc.title }}
+                          </span>
+                          <span
+                            class="text-[10px] px-2 py-0.5 rounded-full"
+                            :style="getDocStatusStyle(doc)"
+                          >
+                            {{ getDocStatusLabel(doc) }}
+                          </span>
+                        </div>
+                        <div
+                          class="knowledge-page__document-meta flex items-center gap-3 mt-1 text-xs"
+                          :style="{ color: 'var(--hc-text-muted)' }"
+                        >
+                          <span
+                            >{{ doc.chunk_count }} chunk{{ doc.chunk_count === 1 ? '' : 's' }}</span
+                          >
+                          <span v-if="doc.source"
+                            >{{ t('knowledge.source') }}: {{ doc.source }}</span
+                          >
+                          <span>{{
+                            new Date(doc.updated_at || doc.created_at).toLocaleString(locale)
+                          }}</span>
+                        </div>
+                        <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
+                          {{ doc.error_message }}
+                        </p>
+                        <p
+                          v-if="getVectorStatusLabel(doc)"
+                          data-testid="knowledge-vector-status"
+                          class="text-[11px] mt-2"
+                          :style="{
+                            color:
+                              doc.vector_index_state === 'failed' || doc.vector_outcome_unknown
+                                ? '#b45309'
+                                : 'var(--hc-text-muted)',
+                          }"
+                        >
+                          {{ getVectorStatusLabel(doc) }}
+                          <span v-if="getVectorProgress(doc)"> · {{ getVectorProgress(doc) }}</span>
+                          <span v-if="doc.vector_error"> · {{ doc.vector_error }}</span>
+                        </p>
+                      </button>
+                      <div
+                        data-testid="knowledge-doc-actions"
+                        class="knowledge-page__document-actions shrink-0 flex items-center gap-1"
+                      >
+                        <button
+                          v-if="canReindexDocument(doc)"
+                          :data-testid="
+                            hasRetryableVectorFailure(doc) ? 'knowledge-vector-retry' : undefined
+                          "
+                          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                          :style="{
+                            color: 'var(--hc-text-secondary)',
+                            background: 'var(--hc-bg-hover)',
+                          }"
+                          :disabled="
+                            !knowledgeEnabled ||
+                            reindexingDocIds.has(doc.id) ||
+                            getDocStatus(doc) === 'processing'
+                          "
+                          @click="handleReindex(doc)"
+                        >
+                          <RefreshCw
+                            :size="12"
+                            :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }"
+                          />
+                          {{
+                            getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)
+                              ? t('knowledge.retryIndex')
+                              : t('knowledge.reindex')
+                          }}
+                        </button>
+                        <button
+                          v-if="canCancelVectorJob(doc)"
+                          data-testid="knowledge-vector-cancel"
+                          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                          :style="{
+                            color: '#b45309',
+                            background: 'color-mix(in srgb, #f59e0b 10%, transparent)',
+                          }"
+                          :title="t('knowledge.vectorCancel', '取消语义增强')"
+                          :disabled="
+                            !knowledgeEnabled || cancellingVectorJobIds.has(doc.vector_job_id || '')
+                          "
+                          @click="cancelDocumentVectorJob(doc)"
+                        >
+                          <RefreshCw
+                            v-if="cancellingVectorJobIds.has(doc.vector_job_id || '')"
+                            :size="12"
+                            class="animate-spin"
+                          />
+                          <X v-else :size="12" />
+                          {{ t('knowledge.vectorCancel', '取消语义增强') }}
+                        </button>
+                        <button
+                          class="p-1.5 rounded-lg transition-colors"
+                          :style="{
+                            color: 'var(--hc-error)',
+                            background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
+                          }"
+                          :title="t('common.delete')"
+                          :disabled="!knowledgeEnabled"
+                          @click="confirmDelete(doc)"
+                        >
+                          <Trash2 :size="16" />
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+                  <EmptyState
+                    v-else
+                    :icon="Search"
+                    :title="t('knowledge.noResults')"
+                    :description="t('knowledge.noResultsDesc')"
+                  />
                 </div>
-              </div>
-            </HcSettingsDisclosure>
 
-            <div class="flex gap-2 mb-3">
-              <SearchInput
-                v-model="searchQuery"
-                class="flex-1"
-                :fluid="true"
-                :disabled="!knowledgeEnabled"
-                :placeholder="t('knowledge.searchPlaceholder')"
-                @submit="handleSearch"
-              />
-              <button
-                class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-                :style="{ background: 'var(--hc-accent)' }"
-                :disabled="!knowledgeEnabled || searching || !searchQuery.trim()"
-                @click="handleSearch"
-              >
-                <Search :size="14" />
-                {{ searching ? t('knowledge.searching') : t('common.search') }}
-              </button>
-            </div>
-
-            <!-- 元数据过滤：源类型 chip（多选）+ 创建日期区间 -->
-            <div
-              data-testid="knowledge-search-filters"
-              class="flex flex-wrap items-center gap-2 mb-6"
-            >
-              <span class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('knowledge.filterType')
-              }}</span>
-              <button
-                v-for="tp in SOURCE_TYPES"
-                :key="tp"
-                type="button"
-                :data-testid="`kb-type-chip-${tp}`"
-                :aria-pressed="selectedTypes.includes(tp)"
-                class="text-xs px-2.5 py-1 rounded-full border transition-colors"
-                :style="
-                  selectedTypes.includes(tp)
-                    ? {
-                        background: 'var(--hc-accent)',
-                        borderColor: 'var(--hc-accent)',
-                        color: '#fff',
-                      }
-                    : {
-                        background: 'var(--hc-bg-card)',
-                        borderColor: 'var(--hc-border)',
-                        color: 'var(--hc-text-secondary)',
-                      }
-                "
-                :disabled="!knowledgeEnabled"
-                @click="toggleType(tp)"
-              >
-                {{ t(`knowledge.sourceType.${tp}`) }}
-              </button>
-
-              <span class="w-px h-4 mx-1 shrink-0" :style="{ background: 'var(--hc-border)' }" />
-
-              <label class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('knowledge.filterDate')
-              }}</label>
-              <HcDateRangePicker
-                v-model:from="filterAfter"
-                v-model:to="filterBefore"
-                :disabled="!knowledgeEnabled"
-                :from-label="t('knowledge.filterDateFrom')"
-                :to-label="t('knowledge.filterDateTo')"
-                from-testid="kb-filter-after"
-                to-testid="kb-filter-before"
-              />
-
-              <button
-                v-if="hasActiveFilter"
-                type="button"
-                data-testid="kb-filter-clear"
-                class="text-xs underline shrink-0"
-                :style="{ color: 'var(--hc-text-muted)' }"
-                @click="clearFilters"
-              >
-                {{ t('knowledge.clearFilter') }}
-              </button>
-            </div>
-
-            <div v-if="searchResults.length > 0" class="space-y-3">
-              <div
-                v-for="(result, idx) in searchResults"
-                :key="idx"
-                class="rounded-xl border p-4"
-                :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <div class="min-w-0">
-                    <div
-                      class="text-sm font-medium truncate"
-                      :style="{ color: 'var(--hc-text-primary)' }"
-                    >
-                      {{ resultTitle(result) }}
-                    </div>
-                    <div
-                      v-if="resultMeta(result)"
-                      class="text-[11px] mt-1"
-                      :style="{ color: 'var(--hc-text-muted)' }"
-                    >
-                      {{ resultMeta(result) }}
-                    </div>
-                  </div>
-                  <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-                    {{ t('knowledge.similarity', { score: formatScore(result.score) }) }}
+                <!-- 分页：渲染窗口未覆盖全部时显示「加载更多」(#5) -->
+                <div
+                  v-if="hasMoreDocs"
+                  data-testid="knowledge-load-more"
+                  class="knowledge-page__load-more mt-3 flex items-center justify-center gap-3 text-xs"
+                >
+                  <button
+                    type="button"
+                    class="px-3 py-1.5 rounded-lg border transition-colors"
+                    :style="{
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-secondary)',
+                      background: 'var(--hc-bg-card)',
+                    }"
+                    @click="loadMoreDocs"
+                  >
+                    {{ t('knowledge.loadMore') }}
+                  </button>
+                  <span :style="{ color: 'var(--hc-text-muted)' }">
+                    {{
+                      t('knowledge.shownOfTotal', {
+                        shown: windowedDocs.length,
+                        total: displayedTotalDocs,
+                      })
+                    }}
                   </span>
                 </div>
-                <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
-                  {{ result.content }}
-                </p>
-              </div>
-            </div>
+              </template>
+            </template>
 
-            <EmptyState
-              v-else-if="!searching && searchQuery"
-              :icon="Search"
-              :title="t('knowledge.noResults')"
-              :description="t('knowledge.noResultsDesc')"
-            />
-          </div>
-        </template>
+            <!-- 检索测试标签 -->
+            <template v-else>
+              <div class="knowledge-page__search">
+                <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
+                  {{ t('knowledge.searchDesc') }}
+                </p>
+
+                <!-- 检索质量参数（高级）：折叠面板（默认展开），全局持久化（写 yaml + 热更新 KB Manager）。
+               即时生效：rerank/查询扩展/情境增强 开关、min_score、candidate_k；换 rerank 模型需重启 sidecar。 -->
+                <HcSettingsDisclosure
+                  v-model="ragPanelOpen"
+                  body-id="kb-rag-body"
+                  trigger-test-id="kb-rag-toggle"
+                  panel-test-id="kb-rag-body"
+                  data-testid="kb-rag-panel"
+                  class="knowledge-page__rag-disclosure mb-5"
+                >
+                  <template #icon><Settings2 :size="13" /></template>
+                  <template #title>{{ t('knowledge.ragTitle') }}</template>
+                  <template #actions>
+                    <button
+                      type="button"
+                      data-testid="kb-rag-reset"
+                      class="knowledge-page__rag-reset"
+                      :disabled="!knowledgeEnabled || !ragConfig || ragSaving"
+                      @click="resetRagConfig"
+                    >
+                      {{ t('knowledge.ragReset') }}
+                    </button>
+                  </template>
+
+                  <div class="knowledge-page__rag-body">
+                    <template v-if="ragConfig">
+                      <!-- 重排 cross-encoder + 模型下拉 -->
+                      <div class="flex items-center gap-2.5 flex-wrap">
+                        <span
+                          class="text-[13px] flex-1 min-w-0"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ t('knowledge.ragRerank') }}
+                        </span>
+                        <input
+                          type="checkbox"
+                          data-testid="kb-rag-rerank"
+                          class="hc-toggle"
+                          :checked="ragConfig.rerank"
+                          :disabled="!knowledgeEnabled || ragSaving"
+                          :aria-label="t('knowledge.ragRerank')"
+                          @change="toggleRagBool('rerank')"
+                        />
+                        <div class="w-[208px] shrink-0">
+                          <HcSelect
+                            data-testid="kb-rag-rerank-model"
+                            :model-value="ragConfig.rerank_model"
+                            :options="rerankModelSelectOptions"
+                            :disabled="!knowledgeEnabled || !ragConfig.rerank || ragSaving"
+                            @update:model-value="onRerankModelPick"
+                          />
+                        </div>
+                      </div>
+
+                      <!-- 查询扩展 -->
+                      <div class="flex items-center gap-2.5">
+                        <span
+                          class="text-[13px] flex-1"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ t('knowledge.ragQueryExpand') }}
+                        </span>
+                        <input
+                          type="checkbox"
+                          data-testid="kb-rag-query-expand"
+                          class="hc-toggle"
+                          :checked="ragConfig.query_expand"
+                          :disabled="!knowledgeEnabled || ragSaving"
+                          :aria-label="t('knowledge.ragQueryExpand')"
+                          @change="toggleRagBool('query_expand')"
+                        />
+                      </div>
+
+                      <!-- 入库情境增强 Contextual（改后需重建索引） -->
+                      <div class="flex items-center gap-2.5">
+                        <span
+                          class="text-[13px] flex-1"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ t('knowledge.ragContextual') }}
+                          <span
+                            class="text-[11px] ml-1"
+                            :style="{ color: 'var(--hc-text-muted)' }"
+                            :title="t('knowledge.ragNeedRebuild')"
+                          >
+                            ⓘ {{ t('knowledge.ragNeedRebuild') }}
+                          </span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          data-testid="kb-rag-contextual"
+                          class="hc-toggle"
+                          :checked="ragConfig.contextual"
+                          :disabled="!knowledgeEnabled || ragSaving"
+                          :aria-label="t('knowledge.ragContextual')"
+                          @change="toggleRagBool('contextual')"
+                        />
+                      </div>
+
+                      <!-- 相关度地板 min_score -->
+                      <div class="flex items-center gap-2.5">
+                        <span
+                          class="text-[13px] flex-1"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ t('knowledge.ragMinScore') }}
+                        </span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          data-testid="kb-rag-min-score"
+                          :value="ragConfig.min_score"
+                          :disabled="!knowledgeEnabled || ragSaving"
+                          style="width: 170px; accent-color: var(--hc-accent)"
+                          :aria-label="t('knowledge.ragMinScore')"
+                          @input="
+                            ragConfig.min_score = Number(($event.target as HTMLInputElement).value)
+                          "
+                          @change="onMinScoreChange"
+                        />
+                        <span
+                          class="text-xs tabular-nums w-9 text-right"
+                          :style="{ color: 'var(--hc-text-secondary)' }"
+                        >
+                          {{ Number(ragConfig.min_score).toFixed(2) }}
+                        </span>
+                      </div>
+
+                      <!-- 宽召回候选池 candidate_k -->
+                      <div class="flex items-center gap-2.5">
+                        <span
+                          class="text-[13px] flex-1"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ t('knowledge.ragCandidateK') }}
+                        </span>
+                        <div class="w-[88px] shrink-0">
+                          <HcSelect
+                            data-testid="kb-rag-candidate-k"
+                            :model-value="String(ragConfig.candidate_k)"
+                            :options="candidateKSelectOptions"
+                            :disabled="!knowledgeEnabled || ragSaving"
+                            @update:model-value="onCandidateKPick"
+                          />
+                        </div>
+                      </div>
+
+                      <p
+                        class="text-[11px] border-t pt-2.5 m-0"
+                        :style="{ color: 'var(--hc-text-muted)', borderColor: 'var(--hc-border)' }"
+                      >
+                        {{ t('knowledge.ragFootnote') }}
+                      </p>
+                      <p
+                        v-if="ragRestartHint"
+                        data-testid="kb-rag-restart-hint"
+                        class="text-[11px] m-0"
+                        style="color: #f59e0b"
+                      >
+                        {{ t('knowledge.ragRestartHint') }}
+                      </p>
+                    </template>
+                    <div
+                      v-else-if="ragLoadState === 'error'"
+                      data-testid="kb-rag-load-error"
+                      class="text-xs flex items-center justify-between gap-3"
+                      style="color: #b45309"
+                      role="alert"
+                    >
+                      <span>{{ t('knowledge.ragLoadFailed') }}</span>
+                      <button type="button" class="underline shrink-0" @click="loadRagConfig">
+                        {{ t('common.retry', '重试') }}
+                      </button>
+                    </div>
+                    <div
+                      v-else
+                      data-testid="kb-rag-loading"
+                      class="text-xs"
+                      :style="{ color: 'var(--hc-text-muted)' }"
+                      role="status"
+                    >
+                      {{ t('common.loading', '加载中…') }}
+                    </div>
+                  </div>
+                </HcSettingsDisclosure>
+
+                <div class="flex gap-2 mb-3">
+                  <SearchInput
+                    v-model="searchQuery"
+                    class="flex-1"
+                    :fluid="true"
+                    :disabled="!knowledgeEnabled"
+                    :placeholder="t('knowledge.searchPlaceholder')"
+                    @submit="handleSearch"
+                  />
+                  <button
+                    class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+                    :style="{ background: 'var(--hc-accent)' }"
+                    :disabled="!knowledgeEnabled || searching || !searchQuery.trim()"
+                    @click="handleSearch"
+                  >
+                    <Search :size="14" />
+                    {{ searching ? t('knowledge.searching') : t('common.search') }}
+                  </button>
+                </div>
+
+                <!-- 元数据过滤：源类型 chip（多选）+ 创建日期区间 -->
+                <div
+                  data-testid="knowledge-search-filters"
+                  class="flex flex-wrap items-center gap-2 mb-6"
+                >
+                  <span class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
+                    t('knowledge.filterType')
+                  }}</span>
+                  <button
+                    v-for="tp in SOURCE_TYPES"
+                    :key="tp"
+                    type="button"
+                    :data-testid="`kb-type-chip-${tp}`"
+                    :aria-pressed="selectedTypes.includes(tp)"
+                    class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+                    :style="
+                      selectedTypes.includes(tp)
+                        ? {
+                            background: 'var(--hc-accent)',
+                            borderColor: 'var(--hc-accent)',
+                            color: '#fff',
+                          }
+                        : {
+                            background: 'var(--hc-bg-card)',
+                            borderColor: 'var(--hc-border)',
+                            color: 'var(--hc-text-secondary)',
+                          }
+                    "
+                    :disabled="!knowledgeEnabled"
+                    @click="toggleType(tp)"
+                  >
+                    {{ t(`knowledge.sourceType.${tp}`) }}
+                  </button>
+
+                  <span
+                    class="w-px h-4 mx-1 shrink-0"
+                    :style="{ background: 'var(--hc-border)' }"
+                  />
+
+                  <label class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
+                    t('knowledge.filterDate')
+                  }}</label>
+                  <HcDateRangePicker
+                    v-model:from="filterAfter"
+                    v-model:to="filterBefore"
+                    :disabled="!knowledgeEnabled"
+                    :from-label="t('knowledge.filterDateFrom')"
+                    :to-label="t('knowledge.filterDateTo')"
+                    from-testid="kb-filter-after"
+                    to-testid="kb-filter-before"
+                  />
+
+                  <button
+                    v-if="hasActiveFilter"
+                    type="button"
+                    data-testid="kb-filter-clear"
+                    class="text-xs underline shrink-0"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    @click="clearFilters"
+                  >
+                    {{ t('knowledge.clearFilter') }}
+                  </button>
+                </div>
+
+                <div v-if="searchResults.length > 0" class="space-y-3">
+                  <div
+                    v-for="(result, idx) in searchResults"
+                    :key="idx"
+                    class="rounded-xl border p-4"
+                    :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+                  >
+                    <div class="flex items-center justify-between mb-2">
+                      <div class="min-w-0">
+                        <div
+                          class="text-sm font-medium truncate"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ resultTitle(result) }}
+                        </div>
+                        <div
+                          v-if="resultMeta(result)"
+                          class="text-[11px] mt-1"
+                          :style="{ color: 'var(--hc-text-muted)' }"
+                        >
+                          {{ resultMeta(result) }}
+                        </div>
+                      </div>
+                      <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
+                        {{ t('knowledge.similarity', { score: formatScore(result.score) }) }}
+                      </span>
+                    </div>
+                    <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
+                      {{ result.content }}
+                    </p>
+                  </div>
+                </div>
+
+                <EmptyState
+                  v-else-if="!searching && searchQuery"
+                  :icon="Search"
+                  :title="t('knowledge.noResults')"
+                  :description="t('knowledge.noResultsDesc')"
+                />
+              </div>
+            </template>
           </div>
         </div>
       </div>
