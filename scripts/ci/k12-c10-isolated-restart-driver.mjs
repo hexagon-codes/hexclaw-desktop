@@ -439,12 +439,17 @@ async function requestJSON(config, { method, path, body }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 2_000)
   try {
-    const response = await fetch(`http://127.0.0.1:${config.port}${path}`, {
+    const request = {
       method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
-    })
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+    }
+    const response = await fetch(`http://127.0.0.1:${config.port}${path}`, request)
     if (!response.ok) fail(`HTTP ${method} endpoint returned non-success`)
     try {
       return await response.json()

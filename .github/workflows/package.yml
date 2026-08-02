@@ -18,15 +18,15 @@ concurrency:
 jobs:
   checks:
     name: Lint, Type Check & Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -52,14 +52,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-26
             target: aarch64-apple-darwin
             go_os: darwin
             go_arch: arm64
             sidecar_name: hexclaw-aarch64-apple-darwin
             render_target: darwin-arm64
             tauri_args: --target aarch64-apple-darwin
-          - platform: macos-latest
+          - platform: macos-26
             target: x86_64-apple-darwin
             go_os: darwin
             go_arch: amd64
@@ -73,7 +73,7 @@ jobs:
             sidecar_name: hexclaw-x86_64-unknown-linux-gnu
             render_target: linux-x86_64
             tauri_args: ''
-          - platform: windows-latest
+          - platform: windows-2025
             target: x86_64-pc-windows-msvc
             go_os: windows
             go_arch: amd64
@@ -83,7 +83,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref }}
 
@@ -95,7 +95,7 @@ jobs:
           echo "Resolved HEXCLAW_REF=${REF}"
 
       - name: Checkout hexclaw backend
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: hexagon-codes/hexclaw
           ref: ${{ steps.sidecar_ref.outputs.ref }}
@@ -103,7 +103,7 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.25'
           cache-dependency-path: hexclaw/go.sum
@@ -159,19 +159,19 @@ jobs:
           ./release/scripts/render-bundle.sh src-tauri/binaries
           ls -lh src-tauri/binaries/pandoc-* src-tauri/binaries/typst-*
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-26' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri -> target
 
@@ -206,7 +206,7 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Build Tauri packages
-        uses: tauri-apps/tauri-action@action-v0.6.0
+        uses: tauri-apps/tauri-action@19b93bb55601e3e373a93cfb6eb4242e45f5af20 # action-v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -216,7 +216,7 @@ jobs:
           retryAttempts: 2
 
       - name: Upload packaged artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hexclaw-${{ matrix.target }}
           if-no-files-found: error

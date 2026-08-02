@@ -47,7 +47,9 @@
     "lint:eslint:fix": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/",
     "release:check": "node ./scripts/ci/verify-release.mjs",
-    "test:webkit-feel": "playwright test -c playwright.webkit.config.ts"
+    "test:webkit-feel": "playwright test -c playwright.webkit.config.ts",
+    "contracts:generate": "go run ../hexclaw/cmd/contractgen -schema ../hexclaw/api/view_contracts/k12-image-task.v1.schema.json -out src/contracts/generated/k12-image-task.v1.ts",
+    "contracts:check": "go run ../hexclaw/cmd/contractgen -schema ../hexclaw/api/view_contracts/k12-image-task.v1.schema.json -out src/contracts/generated/k12-image-task.v1.ts -check"
   },
   "dependencies": {
     "@mdit/plugin-tex": "^1.0.1",
