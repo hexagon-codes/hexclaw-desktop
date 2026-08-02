@@ -100,18 +100,16 @@ describe('M11 session write wrappers inject user_id into query AND body', () => 
     expect(url.match(/user_id=/g)?.length).toBe(1)
   })
 
-  it('structural guard: sessionPost/sessionPatch/sessionPut all route the URL through withUserIdQuery, and withUserIdQuery appends an encoded user_id', async () => {
+  it('structural guard: all session writes route through the shared ownedPath helper', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
 
-    // Every write wrapper must pass its URL through withUserIdQuery so a
-    // future sessionPost against a query-only endpoint still carries user_id.
-    for (const fn of ['sessionPost', 'sessionPatch', 'sessionPut']) {
-      const re = new RegExp(`function ${fn}<T>\\(url: string[^)]*\\)\\s*\\{\\s*return api(Post|Patch|Put)<T>\\(withUserIdQuery\\(url\\)`)
-      expect(re.test(source), `${fn} must wrap its URL with withUserIdQuery()`).toBe(true)
+    expect(source).toMatch(/const ownedPath[\s\S]{0,180}user_id=\$\{encodeURIComponent\(DESKTOP_USER_ID\)\}/)
+    for (const fn of ['createSession', 'updateSessionTitle', 'forkSession', 'suggestSessionTitle']) {
+      const start = source.indexOf(`function ${fn}`)
+      expect(start, `${fn} must exist`).toBeGreaterThan(-1)
+      expect(source.slice(start, start + 650), `${fn} must use ownedPath()`).toContain('ownedPath(')
     }
-    // And the helper itself must append an encoded user_id query param.
-    expect(source).toMatch(/function withUserIdQuery[\s\S]{0,400}user_id=\$\{encodeURIComponent\(DESKTOP_USER_ID\)\}/)
   })
 })

@@ -1,3 +1,16 @@
+import {
+  assertK12ImageTaskCreateResponse,
+  assertK12ImageTaskDispatchResponse,
+  assertK12ImageTaskProblemSourceActionResponse,
+  assertK12ImageTaskResultResponse,
+} from '@/contracts/generated/k12-image-task.v1'
+import type { K12ImageTaskProblemSourceActionResponse } from '@/contracts/generated/k12-image-task.v1'
+import {
+  assertImageTaskProblemSourceActionSemantics,
+  assertImageTaskResultSemantics,
+  normalizeImageTaskDispatchEnvelope,
+  normalizeImageTaskProblemSourceActionSnapshot,
+} from '@/contracts/k12-image-task-semantics'
 /**
  * K12 家长辅导助手后端契约（/api/k12/*）。
  * DTO 与后端 scenarios/k12/apihttp/handler.go 的 json tag 1:1 对齐（前端类型即契约）。
@@ -9,6 +22,13 @@ import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+import { isTauri } from '@/utils/platform'
+import {
+  createNativeFileOperation,
+  stageBlob,
+  uploadGrantedFile,
+  type NativeFileGrant,
+} from './native-files'
 
 const BASE = '/api/k12'
 
@@ -750,10 +770,7 @@ export interface ProfileBundleResp {
   replayed: boolean
 }
 
-export type WeeklyPracticeSection =
-  | 'due_review'
-  | 'textbook_consolidation'
-  | 'arithmetic_warmup'
+export type WeeklyPracticeSection = 'due_review' | 'textbook_consolidation' | 'arithmetic_warmup'
 export type WeeklyPracticeTrackStatus = 'ready' | 'disabled' | 'failed' | 'stale'
 export type WeeklyPracticePlanStatus = 'draft' | 'frozen' | 'archived' | 'expired_unused'
 export type WeeklyManualTrackAvailability =
@@ -973,11 +990,7 @@ export interface WeeklyPracticeSaveResp {
   replayed: boolean
 }
 
-export function k12GetCurriculumCatalog(
-  agent: string,
-  textbookEdition: string,
-  volume: string,
-) {
+export function k12GetCurriculumCatalog(agent: string, textbookEdition: string, volume: string) {
   return apiGet<CurriculumCatalogDTO>(`${BASE}/curriculum-catalog`, {
     agent,
     subject: 'math',
@@ -1019,11 +1032,7 @@ export function k12GetCurrentWeeklyPracticePlan(agent: string) {
   return apiGet<WeeklyPracticeCurrentResp>(`${BASE}/weekly-practice/plans/current`, { agent })
 }
 
-export function k12GetWeeklyPracticeHistory(
-  agent: string,
-  cursor?: string,
-  limit = 20,
-) {
+export function k12GetWeeklyPracticeHistory(agent: string, cursor?: string, limit = 20) {
   return apiGet<WeeklyPracticeHistoryResp>(`${BASE}/weekly-practice/plans/history`, {
     agent,
     cursor,
@@ -1341,6 +1350,10 @@ export interface HexbakProblem {
   subproblem_no?: string
   source_number_path?: string[]
   display_label?: string
+  source_section_path?: string[]
+  source_section_label?: string
+  system_section_ordinal?: number
+  system_display_label?: string
   subject?: string
   stem_raw: string
   stem_markdown: string
@@ -1542,6 +1555,12 @@ export interface RecognizedQuestion {
   source_number_path?: string[]
   /** 原卷题号的冻结展示值。 */
   display_label?: string
+  /** 原卷可见的大题标题；与题号本体分离保存。 */
+  source_section_path?: string[]
+  source_section_label?: string
+  /** 无印刷子题号时服务端派生的显式序号，绝不等同原卷题号。 */
+  system_section_ordinal?: number
+  system_display_label?: string
   page_asset_id?: string
   /** compound_parent 无 Attempt；standalone/subproblem 各自拥有独立 Attempt。 */
   attempt_id?: string
@@ -1725,6 +1744,10 @@ export interface ImageTaskProblemProgressDTO {
   dependency_group_id?: string
   source_number_path: string[]
   display_label: string
+  source_section_path: string[]
+  source_section_label: string
+  system_section_ordinal: number
+  system_display_label: string
   source_state: string
   anchor_state: string
   operation_state: string
@@ -1771,19 +1794,28 @@ export type ImageTaskProblemSourceActionReq =
       payload: Record<string, never>
     })
 
-export interface ImageTaskProblemSourceActionResp {
-  command_receipt_id: string
-  dispatch_id: string
-  problem_id: string
-  action: ImageTaskProblemSourceActionReq['action']
+export type ImageTaskProblemSourceActionResp = K12ImageTaskProblemSourceActionResponse
+
+export interface ImageTaskProblemSourceActionViewSnapshot {
   structure_version: number
-  input_revision: number
-  progressive_snapshot: {
-    structure_version: number
-    snapshot_revision: number
-    problem_progress: ImageTaskProblemProgressDTO[]
-    coverage: ImageTaskCoverageDTO
-  }
+  snapshot_revision: number
+  problem_progress: ImageTaskProblemProgressDTO[]
+  coverage: ImageTaskCoverageDTO
+}
+
+/**
+ * Projects the compact durable source-action receipt into the existing
+ * renderer DTO while retaining source labels and anchors from the current
+ * view. This is the same mapper used by the GET facade projection.
+ */
+export function projectImageTaskProblemSourceActionSnapshot(
+  response: ImageTaskProblemSourceActionResp,
+  currentProblems: readonly ImageTaskProblemProgressDTO[],
+): ImageTaskProblemSourceActionViewSnapshot {
+  return normalizeImageTaskProblemSourceActionSnapshot(
+    response,
+    currentProblems,
+  ) as unknown as ImageTaskProblemSourceActionViewSnapshot
 }
 
 export interface CreativeConflictDTO {
@@ -2029,1428 +2061,18 @@ export type ImageTaskResultResp =
       operation_receipts: ImageTaskOperationReceipt[]
     })
 
-type ImageTaskWireRecord = Record<string, unknown>
-
-const IMAGE_TASK_INTENTS = new Set<ImageTaskIntent>([
-  'completed_homework',
-  'blank_worksheet',
-  'writing',
-  'artwork',
-  'unknown',
-])
-const IMAGE_TASK_STATUSES = new Set<ImageTaskDispatchStatus>([
-  'routing',
-  'awaiting_confirmation',
-  'routed',
-  'failed',
-  'cancelled',
-])
-const IMAGE_TASK_HOMEWORK_STAGES = new Set<ImageTaskHomeworkStage>([
-  'queued',
-  'normalizing',
-  'recognizing',
-  'locating',
-  'awaiting_confirmation',
-  'assessing',
-  'rendering',
-  'projecting',
-  'completed',
-  'cancelled',
-  'recovering',
-  'failed_retryable',
-  'failed_terminal',
-])
-const IMAGE_TASK_CREATIVE_STATUSES = new Set<CreativeWorkIntakeStatus>([
-  'preparing',
-  'awaiting_confirmation',
-  'ready',
-  'promoted',
-  'failed',
-  'cancelled',
-])
-const IMAGE_TASK_PROGRESS_OPERATIONS = new Set<ImageTaskProgressDTO['operation']>([
-  'classification',
-  'homework',
-  'writing_ocr',
-  'promotion',
-])
-const IMAGE_TASK_CREATIVE_FEEDBACK_STATES = new Set<ImageTaskCreativeFeedbackState>([
-  'feedback_pending',
-  'feedback_ready',
-  'feedback_failed',
-  'recovering',
-])
-const IMAGE_TASK_PROBLEM_KINDS = new Set<ProblemKind>([
-  'standalone',
-  'compound_parent',
-  'subproblem',
-])
-const IMAGE_TASK_ANSWER_STATES = new Set<AnswerState>(['blank', 'present', 'unclear'])
-const IMAGE_TASK_CONFIRMATION_REASONS = new Set<OCRConfirmationReason>([
-  'fraction',
-  'decimal_point',
-  'negative_sign',
-  'unit',
-  'erasure',
-  'evidence_conflict',
-  'low_confidence',
-  'unclear_handwriting',
-  'subject_undetermined',
-  'canonical_parse_failed',
-])
-const IMAGE_TASK_PHOTO_STATUSES = new Set<PhotoJobItemDTO['status']>([
-  'correct',
-  'wrong',
-  'unanswered',
-  'answer_unclear',
-  'blank_solved',
-  'out_of_scope',
-  'untrusted',
-  'failed',
-])
-const IMAGE_TASK_PHOTO_RESULT_KINDS = new Set<PhotoJobResultKind>([
-  'assessment',
-  'parent_teaching_guide',
-  'unanswered',
-  'needs_review',
-  'out_of_scope',
-  'failed',
-])
-const IMAGE_TASK_GRADE_VERDICTS = new Set<GradeVerdict>([
-  'agree',
-  'disagree',
-  'unverifiable',
-  'out_of_scope',
-  'verbatim',
-])
-const IMAGE_TASK_GRADE_BADGES = new Set<GradeBadge>([
-  'verified-strong',
-  'verified-weak',
-  'disagree',
-  'out-of-scope',
-  'unverifiable',
-  'verbatim-recall',
-])
-const IMAGE_TASK_EVIDENCE_TYPES = new Set<EvidenceType>([
-  'numeric_exec',
-  'symbolic_exec',
-  'heterogeneous_model',
-  'heuristic',
-  'verbatim',
-  'none',
-])
-
-function imageTaskWireRecord(value: unknown, message: string): ImageTaskWireRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message)
-  return value as ImageTaskWireRecord
-}
-
-function assertImageTaskKeys(
-  value: ImageTaskWireRecord,
-  required: readonly string[],
-  optional: readonly string[],
-  message: string,
-) {
-  const allowed = new Set([...required, ...optional])
-  if (
-    required.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) ||
-    Object.keys(value).some((key) => !allowed.has(key))
-  ) {
-    throw new Error(message)
-  }
-}
-
-function isImageTaskNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && !!value.trim()
-}
-
-function assertImageTaskResultSourceAttachment(value: unknown, message: string) {
-  const attachment = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(attachment, ['digest', 'size_bytes'], [], message)
-  if (
-    !isImageTaskNonEmptyString(attachment.digest) ||
-    !Number.isSafeInteger(attachment.size_bytes) ||
-    (attachment.size_bytes as number) <= 0
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskResultRequestPolicy(value: unknown, message: string) {
-  const policy = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    policy,
-    ['policy_version', 'stage', 'thinking', 'reasoning_effort'],
-    [],
-    message,
-  )
-  if (
-    !isImageTaskNonEmptyString(policy.policy_version) ||
-    !isImageTaskNonEmptyString(policy.stage) ||
-    !isImageTaskNonEmptyString(policy.thinking) ||
-    !isImageTaskNonEmptyString(policy.reasoning_effort)
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskResultOperationReceipt(value: unknown, message: string) {
-  const receipt = imageTaskWireRecord(value, message)
-  const required = [
-    'invocation_id',
-    'operation',
-    'provider',
-    'model',
-    'status',
-    'attempt',
-    'result_digest',
-  ]
-  assertImageTaskKeys(
-    receipt,
-    required,
-    ['parent_invocation_id', 'physical_unit', 'request_policy_digest', 'request_policy'],
-    message,
-  )
-  if (
-    !isImageTaskNonEmptyString(receipt.invocation_id) ||
-    !isImageTaskNonEmptyString(receipt.operation) ||
-    !isImageTaskNonEmptyString(receipt.provider) ||
-    !isImageTaskNonEmptyString(receipt.model) ||
-    !isImageTaskNonEmptyString(receipt.status) ||
-    !Number.isSafeInteger(receipt.attempt) ||
-    (receipt.attempt as number) < 1 ||
-    typeof receipt.result_digest !== 'string'
-  ) {
-    throw new Error(message)
-  }
-
-  const hasPhysicalIdentity = receipt.parent_invocation_id !== undefined
-  if (hasPhysicalIdentity !== (receipt.physical_unit !== undefined)) throw new Error(message)
-  if (
-    hasPhysicalIdentity &&
-    (!isImageTaskNonEmptyString(receipt.parent_invocation_id) ||
-      !isImageTaskNonEmptyString(receipt.physical_unit))
-  ) {
-    throw new Error(message)
-  }
-
-  const hasRequestPolicy = receipt.request_policy_digest !== undefined
-  if (hasRequestPolicy !== (receipt.request_policy !== undefined)) throw new Error(message)
-  if (hasRequestPolicy) {
-    if (!isImageTaskNonEmptyString(receipt.request_policy_digest)) throw new Error(message)
-    assertImageTaskResultRequestPolicy(receipt.request_policy, message)
-  }
-}
-
-function assertImageTaskResultAuditEnvelope(
-  response: ImageTaskWireRecord,
-  message: string,
-) {
-  const baseKeys = ['dispatch_id', 'task_intent', 'status', 'result']
-  const auditKeys = ['source_digest', 'source_attachments', 'operation_receipts']
-  const hasAnyAuditKey = auditKeys.some((key) =>
-    Object.prototype.hasOwnProperty.call(response, key),
-  )
-  assertImageTaskKeys(response, hasAnyAuditKey ? [...baseKeys, ...auditKeys] : baseKeys, [], message)
-  if (!hasAnyAuditKey) return
-  if (
-    !isImageTaskNonEmptyString(response.source_digest) ||
-    !Array.isArray(response.source_attachments) ||
-    response.source_attachments.length === 0 ||
-    !Array.isArray(response.operation_receipts)
-  ) {
-    throw new Error(message)
-  }
-  for (const attachment of response.source_attachments) {
-    assertImageTaskResultSourceAttachment(attachment, message)
-  }
-  for (const receipt of response.operation_receipts) {
-    assertImageTaskResultOperationReceipt(receipt, message)
-  }
-}
-
-function isImageTaskStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
-}
-
-function isImageTaskNonEmptyStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every((item) => typeof item === 'string' && !!item.trim())
-  )
-}
-
-function assertImageTaskBBox(value: unknown, message: string) {
-  const bbox = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(bbox, ['x', 'y', 'w', 'h'], [], message)
-  if (
-    !['x', 'y', 'w', 'h'].every(
-      (key) => typeof bbox[key] === 'number' && Number.isFinite(bbox[key]),
-    )
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskRecognizedQuestion(
-  value: unknown,
-  message: string,
-): asserts value is RecognizedQuestion {
-  const question = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    question,
-    [
-      'problem_id',
-      'problem_kind',
-      'page_asset_id',
-      'question',
-      'raw_transcription',
-      'canonical_markdown',
-      'canonical_valid',
-      'canonical_version',
-      'knowledge_points',
-      'student_answer',
-      'answer_canonical_valid',
-      'answer_state',
-      'confirmation_required',
-      'confirmed_version',
-    ],
-    [
-      'parent_problem_id',
-      'subproblem_no',
-      'source_number_path',
-      'display_label',
-      'attempt_id',
-      'answer_raw_transcription',
-      'answer_canonical_markdown',
-      'subject',
-      'recognition_confidence',
-      'confirmation_reasons',
-      'input_digest',
-      'bbox',
-    ],
-    message,
-  )
-  if (
-    typeof question.problem_id !== 'string' ||
-    !IMAGE_TASK_PROBLEM_KINDS.has(question.problem_kind as ProblemKind) ||
-    typeof question.page_asset_id !== 'string' ||
-    typeof question.question !== 'string' ||
-    typeof question.raw_transcription !== 'string' ||
-    typeof question.canonical_markdown !== 'string' ||
-    typeof question.canonical_valid !== 'boolean' ||
-    !Number.isInteger(question.canonical_version) ||
-    Number(question.canonical_version) < 1 ||
-    !isImageTaskStringArray(question.knowledge_points) ||
-    typeof question.student_answer !== 'string' ||
-    typeof question.answer_canonical_valid !== 'boolean' ||
-    !IMAGE_TASK_ANSWER_STATES.has(question.answer_state as AnswerState) ||
-    typeof question.confirmation_required !== 'boolean' ||
-    !Number.isInteger(question.confirmed_version) ||
-    Number(question.confirmed_version) < 0
-  ) {
-    throw new Error(message)
-  }
-  for (const key of [
-    'parent_problem_id',
-    'subproblem_no',
-    'attempt_id',
-    'answer_raw_transcription',
-    'answer_canonical_markdown',
-    'subject',
-    'input_digest',
-  ]) {
-    if (question[key] !== undefined && typeof question[key] !== 'string') {
-      throw new Error(message)
-    }
-  }
-  if (
-    question.source_number_path !== undefined &&
-    !isImageTaskStringArray(question.source_number_path)
-  ) {
-    throw new Error(message)
-  }
-  if (
-    question.display_label !== undefined &&
-    typeof question.display_label !== 'string'
-  ) {
-    throw new Error(message)
-  }
-  if (
-    question.recognition_confidence !== undefined &&
-    (typeof question.recognition_confidence !== 'number' ||
-      !Number.isFinite(question.recognition_confidence))
-  ) {
-    throw new Error(message)
-  }
-  if (
-    question.confirmation_reasons !== undefined &&
-    (!Array.isArray(question.confirmation_reasons) ||
-      !question.confirmation_reasons.every((reason) =>
-        IMAGE_TASK_CONFIRMATION_REASONS.has(reason as OCRConfirmationReason),
-      ))
-  ) {
-    throw new Error(message)
-  }
-  if (question.bbox !== undefined) assertImageTaskBBox(question.bbox, message)
-}
-
-function assertImageTaskGrade(value: unknown, message: string): asserts value is GradeResp {
-  const grade = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    grade,
-    [
-      'solution',
-      'verdict',
-      'evidence_type',
-      'badge',
-      'out_of_scope',
-      'record_created',
-      'solve_only',
-    ],
-    ['wrong_step', 'error_cause', 'out_of_scope_kp', 'record_id', 'curriculum_unmapped'],
-    message,
-  )
-  if (
-    typeof grade.solution !== 'string' ||
-    !IMAGE_TASK_GRADE_VERDICTS.has(grade.verdict as GradeVerdict) ||
-    !IMAGE_TASK_EVIDENCE_TYPES.has(grade.evidence_type as EvidenceType) ||
-    !IMAGE_TASK_GRADE_BADGES.has(grade.badge as GradeBadge) ||
-    typeof grade.out_of_scope !== 'boolean' ||
-    typeof grade.record_created !== 'boolean' ||
-    typeof grade.solve_only !== 'boolean'
-  ) {
-    throw new Error(message)
-  }
-  for (const key of ['wrong_step', 'error_cause', 'out_of_scope_kp', 'record_id']) {
-    if (grade[key] !== undefined && typeof grade[key] !== 'string') throw new Error(message)
-  }
-  if (
-    grade.curriculum_unmapped !== undefined &&
-    !isImageTaskStringArray(grade.curriculum_unmapped)
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskParentGuide(
-  value: unknown,
-  message: string,
-): asserts value is ParentTeachingGuideDTO {
-  const guide = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    guide,
-    [
-      'answer',
-      'full_solution_steps',
-      'grade_level_method',
-      'likely_mistakes',
-      'parent_teaching_sequence',
-      'follow_up_questions',
-      'checking_method',
-    ],
-    [],
-    message,
-  )
-  if (
-    typeof guide.answer !== 'string' ||
-    !guide.answer.trim() ||
-    !isImageTaskNonEmptyStringArray(guide.full_solution_steps) ||
-    typeof guide.grade_level_method !== 'string' ||
-    !guide.grade_level_method.trim() ||
-    !isImageTaskNonEmptyStringArray(guide.likely_mistakes) ||
-    !isImageTaskNonEmptyStringArray(guide.parent_teaching_sequence) ||
-    !isImageTaskNonEmptyStringArray(guide.follow_up_questions) ||
-    typeof guide.checking_method !== 'string' ||
-    !guide.checking_method.trim()
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskPhotoPayload(
-  value: ImageTaskWireRecord,
-  intent: 'completed_homework' | 'blank_worksheet',
-  message: string,
-) {
-  assertImageTaskKeys(
-    value,
-    ['mode', 'task_intent', 'result_surface', 'items', 'markdown', 'image_warning'],
-    ['annotated_image'],
-    message,
-  )
-  const expectedSurface =
-    intent === 'completed_homework' ? 'annotated_homework' : 'parent_teaching_guide'
-  if (
-    (value.mode !== 'grade' && value.mode !== 'solve') ||
-    value.task_intent !== intent ||
-    value.result_surface !== expectedSurface ||
-    !Array.isArray(value.items) ||
-    typeof value.markdown !== 'string' ||
-    typeof value.image_warning !== 'string'
-  ) {
-    throw new Error(message)
-  }
-  for (const itemValue of value.items) {
-    const item = imageTaskWireRecord(itemValue, message)
-    assertImageTaskKeys(
-      item,
-      ['question', 'status', 'result_kind'],
-      ['warning', 'grade', 'parent_guide'],
-      message,
-    )
-    assertImageTaskRecognizedQuestion(item.question, message)
-    if (
-      !IMAGE_TASK_PHOTO_STATUSES.has(item.status as PhotoJobItemDTO['status']) ||
-      !IMAGE_TASK_PHOTO_RESULT_KINDS.has(item.result_kind as PhotoJobResultKind) ||
-      (item.warning !== undefined && typeof item.warning !== 'string')
-    ) {
-      throw new Error(message)
-    }
-    if (item.grade !== undefined) assertImageTaskGrade(item.grade, message)
-    if (item.parent_guide !== undefined) assertImageTaskParentGuide(item.parent_guide, message)
-
-    if (intent === 'blank_worksheet') {
-      if (
-        item.status !== 'blank_solved' ||
-        item.result_kind !== 'parent_teaching_guide' ||
-        item.parent_guide === undefined
-      ) {
-        throw new Error(message)
-      }
-      continue
-    }
-    if (
-      (item.status === 'correct' || item.status === 'wrong') &&
-      (item.result_kind !== 'assessment' || item.grade === undefined)
-    ) {
-      throw new Error(message)
-    }
-    if (item.status === 'wrong' && item.parent_guide === undefined) throw new Error(message)
-    if (item.status === 'correct' && item.parent_guide !== undefined) throw new Error(message)
-  }
-  if (value.annotated_image !== undefined) {
-    const image = imageTaskWireRecord(value.annotated_image, message)
-    assertImageTaskKeys(image, ['mime', 'data_base64', 'digest'], [], message)
-    if (
-      typeof image.mime !== 'string' ||
-      !image.mime.trim() ||
-      typeof image.data_base64 !== 'string' ||
-      !image.data_base64.trim() ||
-      typeof image.digest !== 'string' ||
-      !image.digest.startsWith('sha256:')
-    ) {
-      throw new Error(message)
-    }
-  }
-}
-
-function assertImageTaskTarget(value: unknown) {
-  const message = 'invalid image task dispatch response'
-  const target = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(target, ['type', 'id'], [], message)
-  if (
-    (target.type !== 'homework_submission' && target.type !== 'creative_work_intake') ||
-    typeof target.id !== 'string' ||
-    !target.id.trim()
-  ) {
-    throw new Error(message)
-  }
-}
-
-function normalizeImageTaskWireProgress(
-  value: unknown,
-  questions: RecognizedQuestion[],
-  projectionAnchorState: ImageTaskHomeworkProjectionDTO['anchor_state'],
-  message: string,
-): ImageTaskProblemProgressDTO {
-  const problem = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    problem,
-    [
-      'problem_id',
-      'status',
-      'input_revision',
-      'published_revision',
-      'current_disposition',
-    ],
-    [],
-    message,
-  )
-  if (
-    typeof problem.problem_id !== 'string'
-    || !problem.problem_id.trim()
-    || typeof problem.status !== 'string'
-    || !problem.status.trim()
-    || !Number.isInteger(problem.input_revision)
-    || (problem.input_revision as number) < 0
-    || !Number.isInteger(problem.published_revision)
-    || (problem.published_revision as number) < 0
-    || typeof problem.current_disposition !== 'string'
-    || !problem.current_disposition.trim()
-  ) {
-    throw new Error(message)
-  }
-  const question = questions.find(candidate => candidate.problem_id === problem.problem_id)
-  if (
-    !question
-    || (
-      question.source_number_path !== undefined
-      && question.source_number_path.some(part => !part.trim())
-    )
-  ) {
-    throw new Error(message)
-  }
-  const status = problem.status as string
-  const isResult = [
-    'correct',
-    'wrong',
-    'unanswered',
-    'answer_unclear',
-    'blank_solved',
-    'out_of_scope',
-    'untrusted',
-  ].includes(status)
-  return {
-    problem_id: problem.problem_id as string,
-    ...(question.parent_problem_id
-      ? {
-          parent_problem_id: question.parent_problem_id,
-          dependency_group_id: question.parent_problem_id,
-        }
-      : {}),
-    source_number_path: [...(question.source_number_path ?? [])],
-    display_label: question.display_label ?? '',
-    source_state: status === 'awaiting_source' ? 'awaiting_resolution' : 'ready',
-    anchor_state: projectionAnchorState,
-    operation_state: status,
-    disposition_state:
-      status === 'skipped'
-        ? 'skipped_by_parent'
-        : isResult
-          ? 'result'
-          : (problem.current_disposition as string),
-    result_projection: null,
-    published_revision: problem.published_revision as number,
-    input_revision: problem.input_revision as number,
-  }
-}
-
-function normalizeImageTaskWireCoverage(
-  value: unknown,
-  message: string,
-): ImageTaskCoverageDTO & { projectionRevision: number } {
-  const coverage = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    coverage,
-    [
-      'total',
-      'published',
-      'skipped',
-      'awaiting',
-      'failed',
-      'status',
-      'projection_revision',
-    ],
-    [],
-    message,
-  )
-  const countKeys = ['total', 'published', 'skipped', 'awaiting', 'failed'] as const
-  if (
-    countKeys.some(
-      key => !Number.isInteger(coverage[key]) || (coverage[key] as number) < 0,
-    )
-    || !['empty', 'incomplete', 'in_progress', 'complete'].includes(
-      String(coverage.status),
-    )
-    || !Number.isInteger(coverage.projection_revision)
-    || (coverage.projection_revision as number) < 0
-    || (coverage.published as number)
-      + (coverage.skipped as number)
-      + (coverage.awaiting as number)
-      + (coverage.failed as number)
-      > (coverage.total as number)
-  ) {
-    throw new Error(message)
-  }
-  return {
-    state:
-      coverage.status === 'complete'
-        ? (coverage.skipped as number) > 0
-          ? 'with_skips'
-          : 'full'
-        : 'incomplete',
-    total: coverage.total as number,
-    processed: coverage.published as number,
-    skipped: coverage.skipped as number,
-    projectionRevision: coverage.projection_revision as number,
-  }
-}
-
-interface NormalizedGradingFinalArtifactWire {
-  artifact: GradingFinalArtifactDTO | null
-  structureVersion: number | null
-}
-
-function normalizeGradingFinalArtifactWire(
-  value: unknown,
-  message: string,
-): NormalizedGradingFinalArtifactWire {
-  if (value === null) {
-    return { artifact: null, structureVersion: null }
-  }
-  const artifact = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    artifact,
-    [
-      'artifact_id',
-      'agent_name',
-      'job_id',
-      'structure_version',
-      'coverage_status',
-      'total_count',
-      'published_count',
-      'skipped_count',
-      'ordered_current_digests_json',
-      'canonical_markdown',
-      'artifact_digest',
-      'summary_invocation_id',
-      'created_at',
-      'updated_at',
-    ],
-    ['title'],
-    message,
-  )
-  const countKeys = ['total_count', 'published_count', 'skipped_count'] as const
-  if (
-    typeof artifact.artifact_id !== 'string'
-    || !artifact.artifact_id.trim()
-    || typeof artifact.agent_name !== 'string'
-    || !artifact.agent_name.trim()
-    || typeof artifact.job_id !== 'string'
-    || !artifact.job_id.trim()
-    || !Number.isInteger(artifact.structure_version)
-    || (artifact.structure_version as number) < 1
-    || (
-      artifact.coverage_status !== 'complete'
-      && artifact.coverage_status !== 'with_skips'
-    )
-    || countKeys.some(
-      key => !Number.isInteger(artifact[key]) || (artifact[key] as number) < 0,
-    )
-    || (artifact.total_count as number) < 1
-    || (artifact.published_count as number) + (artifact.skipped_count as number)
-      !== (artifact.total_count as number)
-    || (
-      artifact.coverage_status === 'complete'
-      && (artifact.skipped_count as number) !== 0
-    )
-    || (
-      artifact.coverage_status === 'with_skips'
-      && (artifact.skipped_count as number) === 0
-    )
-    || typeof artifact.ordered_current_digests_json !== 'string'
-    || !artifact.ordered_current_digests_json.trim()
-    || typeof artifact.canonical_markdown !== 'string'
-    || !artifact.canonical_markdown.trim()
-    || typeof artifact.artifact_digest !== 'string'
-    || !artifact.artifact_digest.trim()
-    || typeof artifact.summary_invocation_id !== 'string'
-    || !artifact.summary_invocation_id.trim()
-    || !Number.isInteger(artifact.created_at)
-    || (artifact.created_at as number) < 0
-    || !Number.isInteger(artifact.updated_at)
-    || (artifact.updated_at as number) < (artifact.created_at as number)
-    || (
-      artifact.title !== undefined
-      && (typeof artifact.title !== 'string' || !artifact.title.trim())
-    )
-  ) {
-    throw new Error(message)
-  }
-  return {
-    structureVersion: artifact.structure_version as number,
-    artifact: {
-      artifact_id: artifact.artifact_id as string,
-      artifact_digest: artifact.artifact_digest as string,
-      ...(artifact.title === undefined ? {} : { title: artifact.title as string }),
-      canonical_markdown: artifact.canonical_markdown as string,
-      coverage_status: artifact.coverage_status as GradingFinalArtifactDTO['coverage_status'],
-      total_count: artifact.total_count as number,
-      published_count: artifact.published_count as number,
-      skipped_count: artifact.skipped_count as number,
-      created_at: artifact.created_at as number,
-      updated_at: artifact.updated_at as number,
-    },
-  }
-}
-
-function assertFinalArtifactMatchesProgressive(
-  finalArtifact: NormalizedGradingFinalArtifactWire,
-  structureVersion: number,
-  problems: ImageTaskProblemProgressDTO[],
-  coverage: ImageTaskCoverageDTO,
-  message: string,
-) {
-  const artifact = finalArtifact.artifact
-  if (artifact === null) return
-  if (
-    finalArtifact.structureVersion !== structureVersion
-    || artifact.total_count !== coverage.total
-    || artifact.published_count !== coverage.processed
-    || artifact.skipped_count !== coverage.skipped
-    || artifact.total_count !== problems.length
-    || (
-      artifact.coverage_status === 'complete'
-      ? coverage.state !== 'full'
-      : coverage.state !== 'with_skips'
-    )
-  ) {
-    throw new Error(message)
-  }
-}
-
-function parseImageTaskHomeworkProjection(
-  value: ImageTaskWireRecord,
-): ImageTaskHomeworkProjectionDTO {
-  const message = 'invalid image task dispatch response'
-  assertImageTaskKeys(
-    value,
-    ['kind', 'stage', 'confirmation_state', 'anchor_state'],
-    [
-      'recognition',
-      'structure_version',
-      'problems',
-      'coverage',
-      'projection_revision',
-      'final_artifact',
-      'progressive',
-    ],
-    message,
-  )
-  if (
-    value.kind !== 'homework' ||
-    !IMAGE_TASK_HOMEWORK_STAGES.has(value.stage as ImageTaskHomeworkStage) ||
-    (value.confirmation_state !== 'pending' && value.confirmation_state !== 'confirmed') ||
-    !['pending', 'located', 'degraded'].includes(String(value.anchor_state))
-  ) {
-    throw new Error(message)
-  }
-  let questions: RecognizedQuestion[] = []
-  if (value.recognition !== undefined) {
-    const recognition = imageTaskWireRecord(value.recognition, message)
-    assertImageTaskKeys(recognition, ['questions'], ['subject'], message)
-    if (
-      !Array.isArray(recognition.questions) ||
-      (recognition.subject !== undefined && typeof recognition.subject !== 'string')
-    ) {
-      throw new Error(message)
-    }
-    for (const question of recognition.questions) {
-      assertImageTaskRecognizedQuestion(question, message)
-    }
-    questions = recognition.questions as RecognizedQuestion[]
-  }
-
-  const legacyProgressiveFields = [
-    'structure_version',
-    'problems',
-    'coverage',
-    'projection_revision',
-  ] as const
-  const hasLegacyProgressive = legacyProgressiveFields.some(
-    key => value[key] !== undefined,
-  )
-  const hasCurrentProgressive = value.progressive !== undefined
-  const finalArtifact = value.final_artifact === undefined
-    ? undefined
-    : normalizeGradingFinalArtifactWire(value.final_artifact, message)
-  if (hasLegacyProgressive && hasCurrentProgressive) {
-    throw new Error(message)
-  }
-  if (hasCurrentProgressive) {
-    const progressive = imageTaskWireRecord(value.progressive, message)
-    assertImageTaskKeys(
-      progressive,
-      ['structure_version', 'snapshot_revision', 'problem_progress', 'coverage'],
-      [],
-      message,
-    )
-    if (
-      !Number.isInteger(progressive.structure_version)
-      || (progressive.structure_version as number) < 0
-      || !Number.isInteger(progressive.snapshot_revision)
-      || (progressive.snapshot_revision as number) < 0
-      || !Array.isArray(progressive.problem_progress)
-    ) {
-      throw new Error(message)
-    }
-    const coverage = normalizeImageTaskWireCoverage(progressive.coverage, message)
-    const problems = progressive.problem_progress.map(problem =>
-      normalizeImageTaskWireProgress(
-        problem,
-        questions,
-        value.anchor_state as ImageTaskHomeworkProjectionDTO['anchor_state'],
-        message,
-      ),
-    )
-    const { projectionRevision, ...normalizedCoverage } = coverage
-    if (finalArtifact !== undefined) {
-      assertFinalArtifactMatchesProgressive(
-        finalArtifact,
-        progressive.structure_version as number,
-        problems,
-        normalizedCoverage,
-        message,
-      )
-    }
-    return {
-      kind: 'homework',
-      stage: value.stage as ImageTaskHomeworkStage,
-      confirmation_state:
-        value.confirmation_state as ImageTaskHomeworkProjectionDTO['confirmation_state'],
-      anchor_state: value.anchor_state as ImageTaskHomeworkProjectionDTO['anchor_state'],
-      ...(value.recognition === undefined
-        ? {}
-        : { recognition: value.recognition as unknown as ImageTaskHomeworkRecognition }),
-      structure_version: progressive.structure_version as number,
-      problems,
-      coverage: normalizedCoverage,
-      projection_revision: projectionRevision,
-      ...(finalArtifact === undefined
-        ? {}
-        : { final_artifact: finalArtifact.artifact }),
-    }
-  }
-
-  if (!hasLegacyProgressive) {
-    if (finalArtifact?.artifact) throw new Error(message)
-    return {
-      ...(value as unknown as ImageTaskHomeworkProjectionDTO),
-      ...(finalArtifact === undefined ? {} : { final_artifact: finalArtifact.artifact }),
-    }
-  }
-  if (!legacyProgressiveFields.every(key => value[key] !== undefined)) {
-    throw new Error(message)
-  }
-  if (!Number.isInteger(value.structure_version) || (value.structure_version as number) < 1) {
-    throw new Error(message)
-  }
-  if (!Array.isArray(value.problems)) {
-    throw new Error(message)
-  }
-  for (const problem of value.problems) {
-    assertImageTaskProblemProgress(problem, message)
-  }
-  assertImageTaskCoverage(value.coverage, message)
-  if (
-    !Number.isInteger(value.projection_revision)
-    || (value.projection_revision as number) < 0
-  ) {
-    throw new Error(message)
-  }
-  if (finalArtifact !== undefined) {
-    assertFinalArtifactMatchesProgressive(
-      finalArtifact,
-      value.structure_version as number,
-      value.problems as ImageTaskProblemProgressDTO[],
-      value.coverage as ImageTaskCoverageDTO,
-      message,
-    )
-  }
-  return {
-    ...(value as unknown as ImageTaskHomeworkProjectionDTO),
-    ...(finalArtifact === undefined ? {} : { final_artifact: finalArtifact.artifact }),
-  }
-}
-
-function assertImageTaskProblemProgress(value: unknown, message: string) {
-  const problem = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    problem,
-    [
-      'problem_id',
-      'source_number_path',
-      'display_label',
-      'source_state',
-      'anchor_state',
-      'operation_state',
-      'disposition_state',
-      'result_projection',
-      'published_revision',
-    ],
-    [
-      'parent_problem_id',
-      'dependency_group_id',
-      'input_revision',
-      'command_available',
-    ],
-    message,
-  )
-  if (
-    typeof problem.problem_id !== 'string'
-    || !problem.problem_id.trim()
-    || !Array.isArray(problem.source_number_path)
-    || !problem.source_number_path.every(
-      (part) => typeof part === 'string' && part.trim().length > 0,
-    )
-    || typeof problem.display_label !== 'string'
-    || !problem.display_label.trim()
-    || typeof problem.source_state !== 'string'
-    || !problem.source_state.trim()
-    || typeof problem.anchor_state !== 'string'
-    || !problem.anchor_state.trim()
-    || typeof problem.operation_state !== 'string'
-    || !problem.operation_state.trim()
-    || typeof problem.disposition_state !== 'string'
-    || !problem.disposition_state.trim()
-    || !Number.isInteger(problem.published_revision)
-    || (problem.published_revision as number) < 0
-    || (problem.parent_problem_id !== undefined
-      && (typeof problem.parent_problem_id !== 'string'
-        || !problem.parent_problem_id.trim()))
-    || (problem.dependency_group_id !== undefined
-      && (typeof problem.dependency_group_id !== 'string'
-        || !problem.dependency_group_id.trim()))
-    || (problem.input_revision !== undefined
-      && (!Number.isInteger(problem.input_revision)
-        || (problem.input_revision as number) < 0))
-    || (problem.command_available !== undefined
-      && typeof problem.command_available !== 'boolean')
-  ) {
-    throw new Error(message)
-  }
-  if (problem.result_projection !== null) {
-    imageTaskWireRecord(problem.result_projection, message)
-  }
-}
-
-function assertImageTaskCoverage(value: unknown, message: string) {
-  const coverage = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    coverage,
-    ['state', 'total', 'processed', 'skipped'],
-    [],
-    message,
-  )
-  if (
-    !['full', 'with_skips', 'incomplete'].includes(String(coverage.state))
-    || !Number.isInteger(coverage.total)
-    || (coverage.total as number) < 0
-    || !Number.isInteger(coverage.processed)
-    || (coverage.processed as number) < 0
-    || !Number.isInteger(coverage.skipped)
-    || (coverage.skipped as number) < 0
-    || (coverage.processed as number) + (coverage.skipped as number)
-      > (coverage.total as number)
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskProblemSourceActionResp(
-  value: unknown,
-  expected: {
-    dispatchId: string
-    problemId: string
-    action: ImageTaskProblemSourceActionReq['action']
-  },
-): asserts value is ImageTaskProblemSourceActionResp {
-  const message = 'invalid image task problem source-action response'
-  const response = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    response,
-    [
-      'command_receipt_id',
-      'dispatch_id',
-      'problem_id',
-      'action',
-      'structure_version',
-      'input_revision',
-      'progressive_snapshot',
-    ],
-    [],
-    message,
-  )
-  if (
-    typeof response.command_receipt_id !== 'string'
-    || !response.command_receipt_id.trim()
-    || response.dispatch_id !== expected.dispatchId
-    || response.problem_id !== expected.problemId
-    || response.action !== expected.action
-    || !Number.isInteger(response.structure_version)
-    || (response.structure_version as number) < 1
-    || !Number.isInteger(response.input_revision)
-    || (response.input_revision as number) < 1
-  ) {
-    throw new Error(message)
-  }
-  const snapshot = imageTaskWireRecord(response.progressive_snapshot, message)
-  assertImageTaskKeys(
-    snapshot,
-    ['structure_version', 'snapshot_revision', 'problem_progress', 'coverage'],
-    [],
-    message,
-  )
-  if (
-    snapshot.structure_version !== response.structure_version
-    || !Number.isInteger(snapshot.snapshot_revision)
-    || (snapshot.snapshot_revision as number) < 0
-    || !Array.isArray(snapshot.problem_progress)
-  ) {
-    throw new Error(message)
-  }
-  for (const problem of snapshot.problem_progress) {
-    assertImageTaskProblemProgress(problem, message)
-  }
-  assertImageTaskCoverage(snapshot.coverage, message)
-}
-
-function assertImageTaskCreativeProjection(value: ImageTaskWireRecord) {
-  const message = 'invalid image task dispatch response'
-  assertImageTaskKeys(
-    value,
-    ['kind', 'intake_id', 'work_type', 'status'],
-    [
-      'entry_kind',
-      'promotion_policy',
-      'routing_provenance',
-      'commit_required',
-      'commit_state',
-      'promoted_work_id',
-      'promoted_version_id',
-      'canonical_version',
-      'canonical_content',
-      'conflicts',
-      'work',
-    ],
-    message,
-  )
-  if (
-    value.kind !== 'creative' ||
-    typeof value.intake_id !== 'string' ||
-    !value.intake_id.trim() ||
-    (value.work_type !== 'writing' && value.work_type !== 'art') ||
-    !IMAGE_TASK_CREATIVE_STATUSES.has(value.status as CreativeWorkIntakeStatus)
-  ) {
-    throw new Error(message)
-  }
-  if (
-    (value.entry_kind !== undefined &&
-      value.entry_kind !== 'auto' &&
-      value.entry_kind !== 'new_work' &&
-      value.entry_kind !== 'revision') ||
-    (value.promotion_policy !== undefined &&
-      value.promotion_policy !== 'automatic' &&
-      value.promotion_policy !== 'explicit_commit') ||
-    (value.routing_provenance !== undefined &&
-      value.routing_provenance !== 'model_classified' &&
-      value.routing_provenance !== 'parent_selected') ||
-    (value.commit_required !== undefined && typeof value.commit_required !== 'boolean') ||
-    (value.commit_state !== undefined &&
-      value.commit_state !== 'pending' &&
-      value.commit_state !== 'committed') ||
-    (value.promoted_work_id !== undefined && typeof value.promoted_work_id !== 'string') ||
-    (value.promoted_version_id !== undefined && typeof value.promoted_version_id !== 'string')
-  ) {
-    throw new Error(message)
-  }
-  if (
-    (value.canonical_version !== undefined &&
-      (!Number.isInteger(value.canonical_version) || Number(value.canonical_version) < 1)) ||
-    (value.canonical_content !== undefined && typeof value.canonical_content !== 'string')
-  ) {
-    throw new Error(message)
-  }
-  if (value.conflicts !== undefined) {
-    if (
-      !Array.isArray(value.conflicts) ||
-      !value.conflicts.every((conflict) => {
-        const item = imageTaskWireRecord(conflict, message)
-        assertImageTaskKeys(item, ['segment_id'], ['raw_text', 'canonical_text', 'reason'], message)
-        return typeof item.segment_id === 'string' && !!item.segment_id.trim()
-      })
-    ) {
-      throw new Error(message)
-    }
-  }
-  if (value.work !== undefined) {
-    const work = imageTaskWireRecord(value.work, message)
-    assertImageTaskKeys(work, ['work_id', 'display_name'], [], message)
-    if (
-      typeof work.work_id !== 'string' ||
-      !work.work_id.trim() ||
-      typeof work.display_name !== 'string'
-    ) {
-      throw new Error(message)
-    }
-  }
-}
-
-function assertImageTaskStructuredFeedback(
-  value: unknown,
-  message: string,
-): asserts value is ImageTaskStructuredFeedbackDTO {
-  const feedback = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    feedback,
-    [
-      'feedback_id',
-      'version_id',
-      'feedback_type',
-      'evidence_refs',
-      'observations',
-      'source_snapshot',
-      'limitations',
-      'suggestions',
-      'projection_markdown',
-    ],
-    [],
-    message,
-  )
-  if (
-    typeof feedback.feedback_id !== 'string' ||
-    !feedback.feedback_id.trim() ||
-    typeof feedback.version_id !== 'string' ||
-    !feedback.version_id.trim() ||
-    (feedback.feedback_type !== 'writing' && feedback.feedback_type !== 'art') ||
-    !isImageTaskStringArray(feedback.evidence_refs) ||
-    !Array.isArray(feedback.observations) ||
-    typeof feedback.limitations !== 'string' ||
-    !isImageTaskStringArray(feedback.suggestions) ||
-    typeof feedback.projection_markdown !== 'string' ||
-    !feedback.projection_markdown.trim()
-  ) {
-    throw new Error(message)
-  }
-  for (const observationValue of feedback.observations) {
-    const observation = imageTaskWireRecord(observationValue, message)
-    assertImageTaskKeys(observation, ['dimension', 'evidence'], [], message)
-    if (
-      typeof observation.dimension !== 'string' ||
-      !observation.dimension.trim() ||
-      typeof observation.evidence !== 'string' ||
-      !observation.evidence.trim()
-    ) {
-      throw new Error(message)
-    }
-  }
-  const source = imageTaskWireRecord(feedback.source_snapshot, message)
-  assertImageTaskKeys(source, ['source', 'method_ref', 'capability'], [], message)
-  if (
-    (source.source !== 'ai' && source.source !== 'parent') ||
-    typeof source.method_ref !== 'string' ||
-    typeof source.capability !== 'string'
-  ) {
-    throw new Error(message)
-  }
-}
-
-function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDispatchDTO {
-  const message = 'invalid image task dispatch response'
-  const dispatch = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(
-    dispatch,
-    [
-      'dispatch_id',
-      'task_intent',
-      'status',
-      'intent_evidence',
-      'intent_confidence',
-      'confirmation_candidates',
-      'progress',
-      'version',
-      'created_at',
-      'updated_at',
-    ],
-    [
-      'target',
-      'target_projection',
-      'provider_display_name',
-      'model_id',
-      'retryable',
-      'automatic_budget_seconds',
-      'automatic_started_at',
-      'automatic_deadline_at',
-      'automatic_remaining_seconds',
-      'operation_deadline_at',
-    ],
-    message,
-  )
-  if (
-    typeof dispatch.dispatch_id !== 'string' ||
-    !dispatch.dispatch_id.trim() ||
-    !IMAGE_TASK_INTENTS.has(dispatch.task_intent as ImageTaskIntent) ||
-    !IMAGE_TASK_STATUSES.has(dispatch.status as ImageTaskDispatchStatus) ||
-    (dispatch.provider_display_name !== undefined &&
-      dispatch.provider_display_name !== null &&
-      typeof dispatch.provider_display_name !== 'string') ||
-    (dispatch.model_id !== undefined &&
-      dispatch.model_id !== null &&
-      typeof dispatch.model_id !== 'string') ||
-    (dispatch.retryable !== undefined && typeof dispatch.retryable !== 'boolean') ||
-    !isImageTaskStringArray(dispatch.intent_evidence) ||
-    typeof dispatch.intent_confidence !== 'number' ||
-    !Number.isFinite(dispatch.intent_confidence) ||
-    !Array.isArray(dispatch.confirmation_candidates) ||
-    !dispatch.confirmation_candidates.every((candidate) =>
-      IMAGE_TASK_INTENTS.has(candidate as ImageTaskIntent),
-    ) ||
-    !Number.isInteger(dispatch.version) ||
-    (dispatch.automatic_budget_seconds !== undefined &&
-      (typeof dispatch.automatic_budget_seconds !== 'number' ||
-        !Number.isInteger(dispatch.automatic_budget_seconds) ||
-        dispatch.automatic_budget_seconds < 0)) ||
-    (dispatch.automatic_started_at !== undefined &&
-      (typeof dispatch.automatic_started_at !== 'number' ||
-        !Number.isInteger(dispatch.automatic_started_at) ||
-        dispatch.automatic_started_at < 0)) ||
-    (dispatch.automatic_deadline_at !== undefined &&
-      (typeof dispatch.automatic_deadline_at !== 'number' ||
-        !Number.isInteger(dispatch.automatic_deadline_at) ||
-        dispatch.automatic_deadline_at < 0)) ||
-    (dispatch.automatic_remaining_seconds !== undefined &&
-      (typeof dispatch.automatic_remaining_seconds !== 'number' ||
-        !Number.isInteger(dispatch.automatic_remaining_seconds) ||
-        dispatch.automatic_remaining_seconds < 0)) ||
-    (dispatch.operation_deadline_at !== undefined &&
-      (typeof dispatch.operation_deadline_at !== 'number' ||
-        !Number.isInteger(dispatch.operation_deadline_at) ||
-        dispatch.operation_deadline_at < 0)) ||
-    typeof dispatch.created_at !== 'number' ||
-    !Number.isFinite(dispatch.created_at) ||
-    typeof dispatch.updated_at !== 'number' ||
-    !Number.isFinite(dispatch.updated_at)
-  ) {
-    throw new Error(message)
-  }
-
-  const progress = imageTaskWireRecord(dispatch.progress, message)
-  assertImageTaskKeys(progress, ['operation', 'state'], [], message)
-  if (
-    !IMAGE_TASK_PROGRESS_OPERATIONS.has(progress.operation as ImageTaskProgressDTO['operation']) ||
-    typeof progress.state !== 'string' ||
-    !progress.state.trim()
-  ) {
-    throw new Error(message)
-  }
-  const validProgressState =
-    (progress.operation === 'classification' &&
-      IMAGE_TASK_STATUSES.has(progress.state as ImageTaskDispatchStatus)) ||
-    (progress.operation === 'homework' &&
-      IMAGE_TASK_HOMEWORK_STAGES.has(progress.state as ImageTaskHomeworkStage)) ||
-    (progress.operation === 'writing_ocr' &&
-      IMAGE_TASK_CREATIVE_STATUSES.has(progress.state as CreativeWorkIntakeStatus)) ||
-    (progress.operation === 'promotion' &&
-      (IMAGE_TASK_CREATIVE_STATUSES.has(progress.state as CreativeWorkIntakeStatus) ||
-        IMAGE_TASK_CREATIVE_FEEDBACK_STATES.has(progress.state as ImageTaskCreativeFeedbackState)))
-  if (!validProgressState) throw new Error(message)
-  if (dispatch.target !== undefined) assertImageTaskTarget(dispatch.target)
-  if (dispatch.target_projection !== undefined) {
-    const projection = imageTaskWireRecord(dispatch.target_projection, message)
-    if (projection.kind === 'homework') {
-      dispatch.target_projection = parseImageTaskHomeworkProjection(projection)
-    }
-    else if (projection.kind === 'creative') assertImageTaskCreativeProjection(projection)
-    else throw new Error(message)
-  }
-}
-
-function assertImageTaskDispatchResp(value: unknown): asserts value is ImageTaskDispatchResp {
-  const message = 'invalid image task dispatch response'
-  const response = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(response, ['dispatch'], [], message)
-  assertImageTaskDispatch(response.dispatch)
-}
-
-function assertImageTaskCreateResp(value: unknown): asserts value is ImageTaskCreateResp {
-  const message = 'invalid image task dispatch response'
-  const response = imageTaskWireRecord(value, message)
-  assertImageTaskKeys(response, ['created', 'dispatch'], [], message)
-  if (typeof response.created !== 'boolean') throw new Error(message)
-  assertImageTaskDispatch(response.dispatch)
-}
-
-function assertImageTaskResultResp(value: unknown): asserts value is ImageTaskResultResp {
-  const message = 'invalid image task result response'
-  const response = imageTaskWireRecord(value, message)
-  assertImageTaskResultAuditEnvelope(response, message)
-  if (
-    typeof response.dispatch_id !== 'string' ||
-    !response.dispatch_id.trim() ||
-    !IMAGE_TASK_INTENTS.has(response.task_intent as ImageTaskIntent) ||
-    !IMAGE_TASK_STATUSES.has(response.status as ImageTaskDispatchStatus)
-  ) {
-    throw new Error(message)
-  }
-  if (response.result === null) return
-  const result = imageTaskWireRecord(response.result, message)
-  assertImageTaskKeys(result, ['kind', 'payload'], [], message)
-  if (
-    !['completed_homework', 'blank_worksheet', 'writing', 'artwork'].includes(
-      String(result.kind),
-    ) ||
-    result.kind !== response.task_intent
-  ) {
-    throw new Error(message)
-  }
-  const payload = imageTaskWireRecord(result.payload, message)
-  if (result.kind === 'completed_homework' || result.kind === 'blank_worksheet') {
-    assertImageTaskPhotoPayload(payload, result.kind, message)
-    return
-  }
-  assertImageTaskKeys(payload, ['intake'], ['work', 'feedback'], message)
-  const intake = imageTaskWireRecord(payload.intake, message)
-  assertImageTaskKeys(intake, ['intake_id', 'status'], [], message)
-  if (
-    typeof intake.intake_id !== 'string' ||
-    !intake.intake_id.trim() ||
-    !IMAGE_TASK_CREATIVE_STATUSES.has(intake.status as CreativeWorkIntakeStatus)
-  ) {
-    throw new Error(message)
-  }
-  if (payload.work !== undefined) {
-    const work = imageTaskWireRecord(payload.work, message)
-    assertImageTaskKeys(work, ['work_id', 'display_name'], [], message)
-    if (
-      typeof work.work_id !== 'string' ||
-      !work.work_id.trim() ||
-      typeof work.display_name !== 'string'
-    ) {
-      throw new Error(message)
-    }
-  }
-  if (payload.feedback !== undefined) {
-    const feedback = imageTaskWireRecord(payload.feedback, message)
-    assertImageTaskKeys(
-      feedback,
-      ['generation_id', 'structured_feedback', 'projection_markdown'],
-      [],
-      message,
-    )
-    assertImageTaskStructuredFeedback(feedback.structured_feedback, message)
-    if (
-      typeof feedback.generation_id !== 'string' ||
-      !feedback.generation_id.trim() ||
-      typeof feedback.projection_markdown !== 'string' ||
-      !feedback.projection_markdown.trim() ||
-      feedback.projection_markdown !==
-        (feedback.structured_feedback as ImageTaskStructuredFeedbackDTO).projection_markdown
-    ) {
-      throw new Error(message)
-    }
-  }
-}
-
-/** 固化原图资产后创建唯一图片任务；响应即回，不等待分类或子链完成。 */
 export async function k12CreateImageTask(req: CreateImageTaskReq, signal?: AbortSignal) {
   const response = await apiPost<unknown>(`${BASE}/image-tasks`, req, {
     timeout: 60_000,
     signal,
   })
-  assertImageTaskCreateResp(response)
-  return response
+  try {
+    assertK12ImageTaskCreateResponse(response)
+    normalizeImageTaskDispatchEnvelope(response)
+    return response as unknown as ImageTaskCreateResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task create response'), { cause })
+  }
 }
 /** 查询分流、公开子链停点与最小冲突；内部 invocation/provider 不在该 DTO 中。 */
 export async function k12GetImageTask(agent: string, dispatchId: string, signal?: AbortSignal) {
@@ -3459,8 +2081,13 @@ export async function k12GetImageTask(agent: string, dispatchId: string, signal?
     { agent },
     { signal },
   )
-  assertImageTaskDispatchResp(response)
-  return response
+  try {
+    assertK12ImageTaskDispatchResponse(response)
+    normalizeImageTaskDispatchEnvelope(response)
+    return response as unknown as ImageTaskDispatchResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task dispatch response'), { cause })
+  }
 }
 /** 读取同一 dispatch 的四类判别式终态结果，不从状态文案推断领域类型。 */
 export async function k12GetImageTaskResult(
@@ -3473,8 +2100,13 @@ export async function k12GetImageTaskResult(
     { agent },
     { signal },
   )
-  assertImageTaskResultResp(response)
-  return response
+  try {
+    assertK12ImageTaskResultResponse(response)
+    assertImageTaskResultSemantics(response)
+    return response as unknown as ImageTaskResultResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task result response'), { cause })
+  }
 }
 /** 只提交当前 dispatch 版本声明的意图或目标子链最小冲突。 */
 export async function k12ConfirmImageTask(
@@ -3487,8 +2119,13 @@ export async function k12ConfirmImageTask(
     req,
     { timeout: 60_000, signal },
   )
-  assertImageTaskDispatchResp(response)
-  return response
+  try {
+    assertK12ImageTaskDispatchResponse(response)
+    normalizeImageTaskDispatchEnvelope(response)
+    return response as unknown as ImageTaskDispatchResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task dispatch response'), { cause })
+  }
 }
 /** 安全重试只沿服务端冻结的 operation snapshot/checkpoint 恢复。 */
 export async function k12RetryImageTask(
@@ -3501,8 +2138,13 @@ export async function k12RetryImageTask(
     req,
     { timeout: 60_000, signal },
   )
-  assertImageTaskDispatchResp(response)
-  return response
+  try {
+    assertK12ImageTaskDispatchResponse(response)
+    normalizeImageTaskDispatchEnvelope(response)
+    return response as unknown as ImageTaskDispatchResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task dispatch response'), { cause })
+  }
 }
 /** 显式取消 facade；TaskShell close、切会话或 AbortSignal 都不能隐式调用。 */
 export async function k12CancelImageTask(
@@ -3515,8 +2157,13 @@ export async function k12CancelImageTask(
     req,
     { timeout: 60_000, signal },
   )
-  assertImageTaskDispatchResp(response)
-  return response
+  try {
+    assertK12ImageTaskDispatchResponse(response)
+    normalizeImageTaskDispatchEnvelope(response)
+    return response as unknown as ImageTaskDispatchResp
+  } catch (cause) {
+    throw Object.assign(new Error('Invalid image task dispatch response'), { cause })
+  }
 }
 
 /** 提交题目级来源命令；身份只由服务端 scope/持久 dispatch 解析。 */
@@ -3538,10 +2185,13 @@ export async function k12SubmitImageTaskProblemSourceAction(
       headers: { 'Idempotency-Key': key },
     },
   )
-  assertImageTaskProblemSourceActionResp(response, {
+  assertK12ImageTaskProblemSourceActionResponse(response)
+  assertImageTaskProblemSourceActionSemantics(response, {
     dispatchId,
     problemId,
     action: req.action,
+    structureVersion: req.structure_version,
+    expectedInputRevision: req.expected_input_revision,
   })
   return response
 }
@@ -3991,9 +2641,7 @@ export interface PreparePrintableArtifactResp {
   replayed?: boolean
 }
 
-export function k12PrepareGradingFinalArtifactOutput(
-  req: PrepareGradingFinalArtifactOutputReq,
-) {
+export function k12PrepareGradingFinalArtifactOutput(req: PrepareGradingFinalArtifactOutputReq) {
   if (
     !req.agent.trim() ||
     !req.final_artifact_id.trim() ||
@@ -4586,6 +3234,29 @@ export function k12UploadAsset(
   onProgress?: (percent: number) => void,
   signal?: AbortSignal,
 ): Promise<AssetUploadResp> {
+  if (isTauri()) {
+    return (async () => {
+      const nativeFile = file as File & { nativeFileGrant?: NativeFileGrant }
+      const grant =
+        nativeFile.nativeFileGrant?.purpose === 'attachment_upload'
+          ? nativeFile.nativeFileGrant
+          : await stageBlob(file, file.name, {
+              purpose: 'attachment_upload',
+              operationId: createNativeFileOperation('k12-asset-upload'),
+            })
+      const idempotencyKey = `k12-asset:${globalThis.crypto.randomUUID()}`
+      const receipt = await uploadGrantedFile<AssetUploadResp>({
+        grant,
+        url: `${env.apiBase}${BASE}/assets?agent=${encodeURIComponent(agent)}`,
+        idempotencyKey,
+        fieldName: 'file',
+        signal,
+        onProgress,
+      })
+      if (!receipt.body) throw new Error('Native upload returned no receipt body')
+      return receipt.body
+    })()
+  }
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const cleanup = () => signal?.removeEventListener('abort', onAbort)
@@ -4638,4 +3309,19 @@ export function k12UploadAsset(
     signal?.addEventListener('abort', onAbort, { once: true })
     xhr.send(form)
   })
+}
+
+export interface RecoverableImageTask {
+  source_session: string
+  source_message_id: string
+  dispatch: ImageTaskDispatchDTO
+}
+
+/** Sidecar-owned restart projection; renderer storage is never consulted. */
+export async function k12ListRecoverableImageTasks(agent: string) {
+  const response = await apiGet<{ items: RecoverableImageTask[] }>(
+    '/api/k12/image-tasks/recoverable',
+    { agent },
+  )
+  return response.items
 }

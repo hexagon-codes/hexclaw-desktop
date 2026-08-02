@@ -172,14 +172,14 @@ function completedHomeworkDispatch() {
               status: 'correct',
               input_revision: 1,
               published_revision: 1,
-              current_disposition: 'result',
+              current_disposition: 'current',
             },
             {
               problem_id: 'problem-2',
               status: 'wrong',
               input_revision: 1,
               published_revision: 1,
-              current_disposition: 'result',
+              current_disposition: 'current',
             },
           ],
           coverage: {
@@ -329,6 +329,78 @@ describe('K12 ImageTaskDispatch public facade', () => {
       },
       projection_revision: 0,
     })
+  })
+
+  it('[K12-FACADE-PROGRESSIVE-STATUS-001] accepts the current Sidecar in_progress snapshot only at the shared boundary', async () => {
+    const problemProgress = Array.from({ length: 16 }, (_, index) => ({
+      problem_id: `problem-${index + 1}`,
+      status: index < 5 ? 'correct' : 'processing',
+      input_revision: 1,
+      published_revision: index < 5 ? 1 : 0,
+      current_disposition: 'current',
+    }))
+    const currentInProgressWire = {
+      dispatch: {
+        dispatch_id: 'dispatch-current-in-progress',
+        task_intent: 'completed_homework',
+        status: 'routed',
+        provider_display_name: 'HexClaw-GPT',
+        model_id: 'gpt-5.6-sol',
+        retryable: false,
+        intent_evidence: ['已作答作业'],
+        intent_confidence: 0.99,
+        confirmation_candidates: [],
+        target: { type: 'homework_submission', id: 'submission-current-in-progress' },
+        progress: { operation: 'homework', state: 'assessing' },
+        target_projection: {
+          kind: 'homework',
+          stage: 'assessing',
+          confirmation_state: 'confirmed',
+          anchor_state: 'located',
+          progressive: {
+            structure_version: 1,
+            snapshot_revision: 1,
+            problem_progress: problemProgress,
+            coverage: {
+              total: 16,
+              published: 5,
+              skipped: 0,
+              awaiting: 11,
+              failed: 0,
+              status: 'in_progress',
+              projection_revision: 1,
+            },
+          },
+        },
+        version: 1,
+        created_at: 1_785_234_467,
+        updated_at: 1_785_234_467,
+        automatic_budget_seconds: 300,
+        automatic_started_at: 1_785_234_467,
+        automatic_deadline_at: 1_785_234_767,
+        automatic_remaining_seconds: 300,
+      },
+    }
+    const unknownCoverageWire = structuredClone(currentInProgressWire)
+    unknownCoverageWire.dispatch.target_projection.progressive.coverage.status = 'provider_private_state'
+    client.apiGet.mockResolvedValueOnce(currentInProgressWire)
+
+    await expect(
+      k12Api.k12GetImageTask('tutor/小明', 'dispatch-current-in-progress'),
+    ).resolves.toMatchObject({
+      dispatch: {
+        target_projection: {
+          kind: 'homework',
+          coverage: { state: 'incomplete', total: 16, processed: 5, skipped: 0 },
+          projection_revision: 1,
+        },
+      },
+    })
+
+    client.apiGet.mockResolvedValueOnce(unknownCoverageWire)
+    await expect(
+      k12Api.k12GetImageTask('tutor/小明', 'dispatch-current-in-progress'),
+    ).rejects.toThrow(/invalid image task dispatch response/i)
   })
 
   it('[BUG-20260728-018] accepts only a final artifact consistent with the current progressive projection', async () => {

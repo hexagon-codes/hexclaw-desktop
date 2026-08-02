@@ -26,40 +26,56 @@ function progressiveSnapshot() {
         stage: 'assessing',
         confirmation_state: 'confirmed',
         anchor_state: 'located',
-        structure_version: 4,
-        recognition: { subject: '数学', questions: [] },
-        problems: [
-          {
-            problem_id: 'problem-1',
-            source_number_path: ['一', '1'],
-            display_label: '一. 1',
-            source_state: 'ready',
-            anchor_state: 'located',
-            operation_state: 'published',
-            disposition_state: 'result',
-            result_projection: null,
-            published_revision: 9,
-          },
-          {
-            problem_id: 'problem-2',
-            source_number_path: ['一', '2'],
-            display_label: '一. 2',
-            source_state: 'ready',
-            anchor_state: 'located',
-            operation_state: 'assessing',
-            disposition_state: 'pending',
-            result_projection: null,
-            published_revision: 0,
-          },
-        ],
-        coverage: {
-          state: 'incomplete',
-          total: 2,
-          processed: 1,
-          skipped: 0,
+        recognition: {
+          subject: '数学',
+          questions: [
+            {
+              problem_id: 'problem-1',
+              source_number_path: ['一', '1'],
+              display_label: '一. 1',
+              question: '第一题',
+              knowledge_points: [],
+              answer_state: 'present',
+            },
+            {
+              problem_id: 'problem-2',
+              source_number_path: ['一', '2'],
+              display_label: '一. 2',
+              question: '第二题',
+              knowledge_points: [],
+              answer_state: 'present',
+            },
+          ],
         },
-        projection_revision: 9,
-        final_artifact: null,
+        progressive: {
+          structure_version: 4,
+          snapshot_revision: 9,
+          problem_progress: [
+            {
+              problem_id: 'problem-1',
+              status: 'correct',
+              input_revision: 3,
+              published_revision: 9,
+              current_disposition: 'current',
+            },
+            {
+              problem_id: 'problem-2',
+              status: 'processing',
+              input_revision: 1,
+              published_revision: 0,
+              current_disposition: 'current',
+            },
+          ],
+          coverage: {
+            total: 2,
+            published: 1,
+            skipped: 0,
+            awaiting: 1,
+            failed: 0,
+            status: 'in_progress',
+            projection_revision: 9,
+          },
+        },
       },
       progress: { operation: 'homework', state: 'assessing' },
       version: 7,
@@ -114,7 +130,7 @@ describe('BUG-20260726-031 · ImageTask progressive snapshot public contract', (
         skipped: 0,
       },
       projection_revision: 9,
-      final_artifact: null,
     })
+    expect(projection).not.toHaveProperty('final_artifact')
   })
 })

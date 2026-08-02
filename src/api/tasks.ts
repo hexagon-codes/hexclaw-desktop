@@ -1,5 +1,6 @@
 import { apiGet, apiPost } from './client'
 import { env } from '@/config/env'
+import { sidecarStreamFetch } from './native-sidecar-stream'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { CronJob, CronJobInput, JobSpec } from '@/types'
 
@@ -221,7 +222,7 @@ export async function createCronJobSSE(
   try {
     // D1.2 后端把 SSE 创建拆到 /api/v1/cron/jobs/stream 单独路径
     const response = await Promise.race([
-      fetch(`${env.apiBase}/api/v1/cron/jobs/stream`, {
+      sidecarStreamFetch(`${env.apiBase}/api/v1/cron/jobs/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

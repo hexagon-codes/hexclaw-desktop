@@ -9,32 +9,113 @@ import { ofetch } from 'ofetch'
 import { env } from '@/config/env'
 import { fromHttpStatus, fromNativeError, type ApiError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
+import { isTauri } from '@/utils/platform'
+import { NativeSidecarWebSocket } from './native-sidecar-websocket'
+import { sidecarStreamFetch } from './native-sidecar-stream'
+
+interface NativeSidecarFetchResponse {
+  status: number
+  headers: Record<string, string>
+  body: number[]
+}
+
+function managedSidecarPath(input: RequestInfo | URL): string | null {
+  const raw = input instanceof Request ? input.url : input.toString()
+  const url = new URL(raw, env.apiBase)
+  const base = new URL(env.apiBase)
+  if (url.origin !== base.origin || url.username || url.password || url.hash) return null
+  return `${url.pathname}${url.search}`
+}
+
+/**
+ * Production Desktop transport: the WebView supplies only an HTTP shape and
+ * relative path. Rust resolves the managed port and attaches the process-only
+ * Sidecar bearer; the capability never enters renderer memory.
+ */
+export async function sidecarFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const path = managedSidecarPath(input)
+  if (!isTauri() || !path) return globalThis.fetch(input, init)
+
+  const managedUrl = new URL(path, env.apiBase)
+  const request = new Request(input instanceof Request ? input : managedUrl.toString(), init)
+  if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
+  const headers: Record<string, string> = {}
+  request.headers.forEach((value, name) => {
+    headers[name] = value
+  })
+  const body = ['GET', 'HEAD'].includes(request.method)
+    ? []
+    : Array.from(new Uint8Array(await request.arrayBuffer()))
+  if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
+  const { Channel, invoke } = await import('@tauri-apps/api/core')
+  const cancellationId = `sidecar-fetch:${globalThis.crypto.randomUUID()}`
+  let registered = false
+  let cancellationPending = false
+  const cancelNative = () => {
+    if (!registered) {
+      cancellationPending = true
+      return
+    }
+    void invoke('sidecar_fetch_cancel', { cancellationId }).catch(() => undefined)
+  }
+  const onRegistered = new Channel<null>(() => {
+    registered = true
+    if (cancellationPending) cancelNative()
+  })
+  request.signal.addEventListener('abort', cancelNative, { once: true })
+  try {
+    const response = await invoke<NativeSidecarFetchResponse>('sidecar_fetch', {
+      method: request.method,
+      path,
+      headers,
+      body,
+      cancellationId,
+      onRegistered,
+    })
+    if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
+    return new Response(new Uint8Array(response.body), {
+      status: response.status,
+      headers: response.headers,
+    })
+  } catch (error) {
+    if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
+    throw error
+  } finally {
+    request.signal.removeEventListener('abort', cancelNative)
+  }
+}
 
 // ─── HTTP 客户端 (ofetch) ────────────────────────────
 
 /** 创建预配置的 HTTP 客户端 */
-export const api = ofetch.create({
-  baseURL: env.apiBase,
-  timeout: env.timeout,
-  headers: {
-    'Content-Type': 'application/json',
+export const api = ofetch.create(
+  {
+    baseURL: env.apiBase,
+    timeout: env.timeout,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    onRequest({ request, options }) {
+      logger.debug(`→ ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`)
+    },
+    onResponse({ request, response, options }) {
+      logger.debug(
+        `← ${response.status} ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`,
+      )
+    },
+    onResponseError({ response }) {
+      const serverMsg = (response._data as Record<string, unknown> | undefined)?.error as
+        | string
+        | undefined
+      const err = fromHttpStatus(response.status, serverMsg ?? response.statusText)
+      logger.error(`API error: [${err.code}] ${err.message}`)
+    },
   },
-  onRequest({ request, options }) {
-    logger.debug(`→ ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`)
-  },
-  onResponse({ request, response, options }) {
-    logger.debug(
-      `← ${response.status} ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`,
-    )
-  },
-  onResponseError({ response }) {
-    const serverMsg = (response._data as Record<string, unknown> | undefined)?.error as
-      | string
-      | undefined
-    const err = fromHttpStatus(response.status, serverMsg ?? response.statusText)
-    logger.error(`API error: [${err.code}] ${err.message}`)
-  },
-})
+  { fetch: sidecarFetch },
+)
 
 // ─── 封装方法 ────────────────────────────────────────
 
@@ -68,11 +149,7 @@ export interface ApiGetOptions {
 }
 
 /** GET 请求；轮询类调用可透传 AbortSignal，离开页面时立即释放在途连接。 */
-export function apiGet<T>(
-  url: string,
-  query?: Record<string, unknown>,
-  options?: ApiGetOptions,
-) {
+export function apiGet<T>(url: string, query?: Record<string, unknown>, options?: ApiGetOptions) {
   const opts: Record<string, unknown> = { method: 'GET', query }
   if (options?.timeout === false) opts.timeout = 0
   else if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
@@ -88,6 +165,8 @@ export interface ApiPostOptions {
   signal?: AbortSignal
   /** Additional request headers (for example Idempotency-Key on durable creates). */
   headers?: Record<string, string>
+  /** Optional exact success status for protocol-bound commands such as async creates. */
+  expectedStatus?: number
 }
 
 /** POST 请求 */
@@ -107,7 +186,14 @@ export function apiPost<T>(
         : options?.timeout && options.timeout > 0
           ? options.timeout
           : env.timeout
-    return uploadFormData<T>(url, body, tm, options?.signal, options?.headers)
+    return uploadFormData<T>(
+      url,
+      body,
+      tm,
+      options?.signal,
+      options?.headers,
+      options?.expectedStatus,
+    )
   }
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
@@ -124,6 +210,7 @@ async function uploadFormData<T>(
   timeoutMs: number | false,
   callerSignal?: AbortSignal,
   headers?: Record<string, string>,
+  expectedStatus?: number,
 ): Promise<T> {
   const fullUrl = `${env.apiBase}${url}`
   logger.debug(`→ POST ${fullUrl} (multipart)`)
@@ -143,7 +230,7 @@ async function uploadFormData<T>(
       signal: controller.signal,
     }
     if (headers) requestInit.headers = headers
-    const response = await fetch(fullUrl, requestInit)
+    const response = await sidecarFetch(fullUrl, requestInit)
     logger.debug(`← ${response.status} POST ${fullUrl}`)
     if (!response.ok) {
       // 与 ofetch onResponseError 对齐：优先抽取 server body.error 字段（不只 statusText）
@@ -163,6 +250,9 @@ async function uploadFormData<T>(
       err.status = response.status
       err.code = apiErr.code
       throw err
+    }
+    if (expectedStatus !== undefined && response.status !== expectedStatus) {
+      throw new Error('Invalid response')
     }
     return (await response.json()) as T
   } finally {
@@ -198,7 +288,7 @@ export async function apiSSE(
 ): Promise<ReadableStream<string>> {
   logger.debug(`→ SSE POST ${url}`)
 
-  const response = await fetch(`${env.apiBase}${url}`, {
+  const response = await sidecarStreamFetch(`${env.apiBase}${url}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: body ? JSON.stringify(body) : undefined,
@@ -226,6 +316,13 @@ export async function apiSSE(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let lineBuffer = ''
+  let wrapperCancelled = false
+  let nativeReleased = false
+  const releaseNative = async (reason?: unknown) => {
+    if (nativeReleased) return
+    nativeReleased = true
+    await reader.cancel(reason).catch(() => undefined)
+  }
 
   // 解析单行 SSE：剥除 CRLF 的尾随 \r（SSE 规范允许 \r\n），匹配 data: / [DONE]。
   const handleLine = (
@@ -248,7 +345,9 @@ export async function apiSSE(
         // 部分实现（jsdom）下消费者 read() 会永久挂起。
         while (true) {
           const { done, value } = await reader.read()
+          if (wrapperCancelled) return
           if (done) {
+            nativeReleased = true
             // flush 末行：最后一条 data 可能未以 \n 结尾，done 时残留在 lineBuffer，
             // 不补处理会被静默丢弃。
             const tail = lineBuffer
@@ -264,6 +363,7 @@ export async function apiSSE(
           for (const line of lines) {
             const r = handleLine(line, controller)
             if (r === 'done') {
+              await releaseNative()
               controller.close()
               return
             }
@@ -276,16 +376,20 @@ export async function apiSSE(
         controller.error(apiErr)
       }
     },
+    cancel(reason) {
+      wrapperCancelled = true
+      lineBuffer = ''
+      return releaseNative(reason)
+    },
   })
 }
 
 // ─── WebSocket ───────────────────────────────────────
 
 /** WebSocket 连接 */
-export function apiWebSocket(path: string): WebSocket {
-  const url = `${env.wsBase}${path}`
-  logger.debug(`→ WS ${url}`)
-  return new WebSocket(url)
+export function apiWebSocket(path: string): NativeSidecarWebSocket {
+  logger.debug(`→ WS ${path}`)
+  return new NativeSidecarWebSocket(path)
 }
 
 // ─── 健康检查 ────────────────────────────────────────

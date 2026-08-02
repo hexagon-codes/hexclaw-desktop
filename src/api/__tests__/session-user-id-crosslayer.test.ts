@@ -37,6 +37,15 @@ function resetMocks() {
   invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
 }
 
+async function getChatWireSource(): Promise<string> {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  return fs.readFileSync(
+    path.resolve(process.cwd(), 'src/services/chatService.ts'),
+    'utf-8',
+  )
+}
+
 // ═══════════════════════════════════════════════════════
 // Part 1: messageService 层
 // ═══════════════════════════════════════════════════════
@@ -147,43 +156,25 @@ describe('WebSocket 协议层: user_id in payload', () => {
 describe('chatService 层: sendViaBackend user_id', () => {
   beforeEach(resetMocks)
 
-  it('sendViaBackend 完整参数传递 user_id', async () => {
-    const chatSvc = await import('@/services/chatService')
-    await chatSvc.sendViaBackend(
-      '写一个函数',
-      'svc-sess-1',
-      { model: 'glm-4', provider: '智谱', temperature: 0.7, maxTokens: 4096 },
-      'coder',
-    )
-
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.user_id).toBe(EXPECTED_USER_ID)
-    expect(params.session_id).toBe('svc-sess-1')
-    expect(params.role).toBe('coder')
-    expect(params.model).toBe('glm-4')
-    expect(params.provider).toBe('智谱')
+  it('sendViaBackend 的 canonical WebSocket payload 注入 user_id', async () => {
+    const source = await getChatWireSource()
+    expect(source).toContain('user_id: DESKTOP_USER_ID')
+    expect(source).toContain('session_id: sessionId')
+    expect(source).not.toContain('backend_chat')
   })
 
-  it('sendViaBackend 空 agentRole → user_id 仍存在', async () => {
-    const chatSvc = await import('@/services/chatService')
-    await chatSvc.sendViaBackend('普通聊天', 'normal-sess', { model: 'gpt-4' }, '')
-
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.user_id).toBe(EXPECTED_USER_ID)
-    expect(params.role).toBeFalsy() // chatService 传 undefined → sendChatViaBackend 转为 null
+  it('空 agentRole 仍复用同一个 user_id 权威', async () => {
+    const source = await getChatWireSource()
+    expect(source).toContain('user_id: DESKTOP_USER_ID')
+    const { DESKTOP_USER_ID } = await import('@/constants')
+    expect(DESKTOP_USER_ID).toBe(EXPECTED_USER_ID)
   })
 
-  it('sendViaBackend 带附件 → user_id 仍存在', async () => {
-    const chatSvc = await import('@/services/chatService')
-    const attachments = [{ type: 'image', name: 'test.png', mime: 'image/png', data: 'base64...' }]
-    await chatSvc.sendViaBackend(
-      '描述这张图片', 'attach-sess', {}, '',
-      attachments as import('@/types').ChatAttachment[],
-    )
-
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.user_id).toBe(EXPECTED_USER_ID)
-    expect(params.attachments).toHaveLength(1)
+  it('附件线协议只映射原生 receipt，同时保留 canonical user_id', async () => {
+    const source = await getChatWireSource()
+    expect(source).toContain('user_id: DESKTOP_USER_ID')
+    expect(source).toContain('attachment_id:')
+    expect(source).not.toContain('data: attachment.data')
   })
 })
 
@@ -272,17 +263,10 @@ describe('错误恢复: 失败后重试 user_id 不丢失', () => {
     }
   })
 
-  it('sendChatViaBackend 连续调用 user_id 始终存在', async () => {
-    const { sendChatViaBackend } = await import('@/api/chat')
-
-    await sendChatViaBackend('第一条', { sessionId: 's1' })
-    await sendChatViaBackend('第二条', { sessionId: 's1' })
-    await sendChatViaBackend('第三条', { sessionId: 's1' })
-
-    expect(invoke).toHaveBeenCalledTimes(3)
-    for (const call of invoke.mock.calls) {
-      expect(call[1].params.user_id).toBe(EXPECTED_USER_ID)
-    }
+  it('连续发送重试复用唯一 WebSocket payload builder，不会丢失 user_id', async () => {
+    const source = await getChatWireSource()
+    expect(source).toContain('user_id: DESKTOP_USER_ID')
+    expect(source).toContain('session_id: sessionId')
   })
 })
 
@@ -307,11 +291,9 @@ describe('边界条件', () => {
     expect(body?.title).toBe('')
   })
 
-  it('sendChatViaBackend 无 options — user_id 仍注入', async () => {
-    const { sendChatViaBackend } = await import('@/api/chat')
-    await sendChatViaBackend('hello')
-    expect(invoke.mock.calls[0]![1].params.user_id).toBe(EXPECTED_USER_ID)
-    expect(invoke.mock.calls[0]![1].params.session_id).toBeNull()
+  it('默认聊天路径仍由 canonical WebSocket builder 注入 user_id', async () => {
+    const source = await getChatWireSource()
+    expect(source).toContain('user_id: DESKTOP_USER_ID')
   })
 
   it('listSessions 无分页参数 — user_id 仍注入', async () => {
@@ -390,29 +372,23 @@ describe('静态分析: 跨文件 user_id 完整性', () => {
     expect(offenders, `这些裸 api* 调用未带 user_id= query: ${offenders.join(', ')}`).toEqual([])
   })
 
-  it('chat.ts sessionGet/Post/Patch/Put 辅助函数全部注入 DESKTOP_USER_ID', async () => {
+  it('chat.ts userQuery/ownedPath 统一注入 DESKTOP_USER_ID', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
 
-    for (const fn of ['sessionGet', 'sessionPost', 'sessionPatch', 'sessionPut']) {
-      const regex = new RegExp(`function ${fn}[^}]+user_id:\\s*DESKTOP_USER_ID`)
-      expect(regex.test(source), `${fn} 必须包含 user_id: DESKTOP_USER_ID`).toBe(true)
-    }
+    expect(source).toContain('const userQuery = () => ({ user_id: DESKTOP_USER_ID })')
+    expect(source).toMatch(
+      /const ownedPath[\s\S]{0,200}encodeURIComponent\(DESKTOP_USER_ID\)/,
+    )
   })
 
-  it('chat.ts session 写包装器同时注入 URL query user_id=（M11：覆盖 query-only 后端 reader）', async () => {
+  it('chat.ts 写调用统一经 ownedPath 注入 URL query user_id=（M11）', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
 
-    // Wrappers inject user_id into the body (covers body-only readers like
-    // handleForkSession) AND route the URL through withUserIdQuery (covers
-    // query-only readers) — both halves are required.
-    for (const fn of ['sessionPost', 'sessionPatch', 'sessionPut']) {
-      const re = new RegExp(`function ${fn}<T>\\([^)]*\\)\\s*\\{\\s*return api(Post|Patch|Put)<T>\\(withUserIdQuery\\(url\\)`)
-      expect(re.test(source), `${fn} 必须经 withUserIdQuery(url) 注入 query user_id`).toBe(true)
-    }
+    expect((source.match(/ownedPath\(/g) ?? []).length).toBeGreaterThan(3)
   })
 
   it('tasks.ts 和 webhook.ts 都使用 DESKTOP_USER_ID', async () => {

@@ -13,6 +13,7 @@ import type {
   LLMConnectionTestResponse,
   PrivateNetworkAccess,
   ProviderLocality,
+  ProviderCredentialReplacement,
   ProviderType,
 } from '@/types/settings'
 
@@ -99,6 +100,10 @@ function assertExternalBaseUrlAllowed(
  * 从后端获取 LLM 配置（API Key 已脱敏）
  */
 export async function getLLMConfig(): Promise<BackendLLMConfig> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<BackendLLMConfig>('get_llm_config_with_credentials')
+  }
   const text = await proxyApiRequestText('GET', '/api/v1/config/llm', null)
   return safeJsonParse<BackendLLMConfig>(text, 'getLLMConfig')
 }
@@ -106,7 +111,16 @@ export async function getLLMConfig(): Promise<BackendLLMConfig> {
 /**
  * 更新后端 LLM 配置（持久化到 ~/.hexclaw/hexclaw.yaml）
  */
-export async function updateLLMConfig(config: BackendLLMConfig): Promise<void> {
+export async function updateLLMConfig(
+  config: BackendLLMConfig,
+  replacements: ProviderCredentialReplacement[] = [],
+): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('apply_llm_config_with_credentials', { config, replacements })
+    logger.debug('LLM config updated by native credential coordinator')
+    return
+  }
   const text = await proxyApiRequestText('PUT', '/api/v1/config/llm', JSON.stringify(config))
   const result = safeJsonParse(text, 'updateLLMConfig')
   logger.debug('LLM config updated:', result)

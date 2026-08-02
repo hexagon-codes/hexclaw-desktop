@@ -68,6 +68,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12InsightReport',
   'k12ListAccumulation',
   'k12ListCreativeWorks',
+  'k12ListRecoverableImageTasks',
   'k12ListMistakes',
   'k12ListPracticeSets',
   'k12MarkMastered',

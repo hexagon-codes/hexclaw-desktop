@@ -323,7 +323,7 @@ describe('WebSocket Edge Cases', () => {
         'session-1',
         'gpt-4',
         'coder',
-        [{ type: 'image', name: 'test.png', mime: 'image/png', data: 'base64' }],
+        [{ attachment_id: 'att_test_receipt' }],
         'openai',
         0.5,
         2048,
@@ -340,6 +340,7 @@ describe('WebSocket Edge Cases', () => {
       expect(sent.max_tokens).toBe(2048)
       expect(sent.metadata).toEqual({ custom: 'value' })
       expect(sent.attachments).toHaveLength(1)
+      expect(sent.attachments[0]).toEqual({ attachment_id: 'att_test_receipt' })
     })
 
     it('omits attachments when empty array', async () => {

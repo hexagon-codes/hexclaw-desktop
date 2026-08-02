@@ -1,5 +1,6 @@
 import { env, OLLAMA_BASE } from '@/config/env'
 import { apiPost, apiDelete } from './client'
+import { sidecarStreamFetch } from './native-sidecar-stream'
 
 /** 轻量错误消息提取（不引入额外依赖，避免测试 mock 面扩大）。 */
 function errMessage(e: unknown): string {
@@ -176,7 +177,7 @@ export async function pullOllamaModel(
   onProgress: (p: OllamaPullProgress) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const resp = await fetch(`${env.apiBase}/api/v1/ollama/pull`, {
+  const resp = await sidecarStreamFetch(`${env.apiBase}/api/v1/ollama/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model }),

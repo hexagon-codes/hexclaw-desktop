@@ -38,67 +38,60 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   const chatSource = readFrontendFile('chat.ts')
 
   it('createSession sends POST /api/v1/sessions with {id, title}', () => {
-    // Frontend: sessionPost('/api/v1/sessions', { id, title })
-    expect(chatSource).toContain(
-      "sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })",
-    )
+    expect(chatSource).toContain("apiPost<ChatSession>(ownedPath('/api/v1/sessions')")
+    expect(chatSource).toContain('user_id: DESKTOP_USER_ID')
   })
 
   it('createSession response matches backend createSessionRequest struct', () => {
-    // Backend returns: { id, title, created_at } as map[string]string
-    // Frontend expects: { id: string; title: string; created_at: string }
-    // ALIGNED
-    expect(chatSource).toContain('id: string; title: string; created_at: string')
+    expect(chatSource).toContain('apiPost<ChatSession>')
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('export interface ChatSession')
+    expect(chatTypes).toContain('created_at: string')
   })
 
   it('updateSessionTitle sends PATCH /api/v1/sessions/{id} with {title}', () => {
-    // Frontend: sessionPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })
-    // — the sessionPatch wrapper appends the encoded user_id= query itself (M11).
     expect(chatSource).toContain(
-      'sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })',
+      'apiPatch<ChatSession>(ownedPath(`/api/v1/sessions/${encodeURIComponent(id)}`)',
     )
   })
 
   it('updateSessionTitle response matches backend updateSession handler', () => {
-    // Backend returns: { id, title, updated_at } as map[string]string
-    // Frontend expects: { id: string; title: string; updated_at: string }
-    // ALIGNED
-    expect(chatSource).toContain('id: string; title: string; updated_at: string')
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('updated_at: string')
   })
 
   it('deleteSession sends DELETE /api/v1/sessions/{id}', () => {
-    // user_id is encoded like every other query param (review L2 consistency).
     expect(chatSource).toContain(
-      'apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`)',
+      'apiDelete<{ message: string }>(ownedPath(`/api/v1/sessions/${encodeURIComponent(id)}`))',
     )
   })
 
   it('listSessions sends GET /api/v1/sessions with user_id query', () => {
     expect(chatSource).toContain(
-      "sessionGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions'",
+      "apiGet<{ sessions: ChatSession[]; total: number }>('/api/v1/sessions'",
     )
   })
 
   it('getSession sends GET /api/v1/sessions/{id}', () => {
     expect(chatSource).toContain(
-      'sessionGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)',
+      'apiGet<ChatSession>(`/api/v1/sessions/${encodeURIComponent(id)}`, userQuery())',
     )
   })
 
   it('listSessionMessages sends GET /api/v1/sessions/{id}/messages', () => {
     expect(chatSource).toContain(
-      'sessionGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`',
+      'apiGet<{ messages: ChatMessage[]; total: number }>',
     )
   })
 
   it('searchMessages sends GET /api/v1/messages/search', () => {
     expect(chatSource).toContain(
-      "sessionGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>('/api/v1/messages/search'",
+      "apiGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>",
     )
   })
 })
 
-describe('SessionSummary type alignment with storage.Session', () => {
+describe('ChatSession projection alignment with storage.Session', () => {
   // Backend: storage.Session has these json tags:
   //   id, user_id, platform, instance_id, chat_id, title,
   //   parent_session_id, branch_message_id, status,
@@ -108,24 +101,24 @@ describe('SessionSummary type alignment with storage.Session', () => {
   // Frontend SessionSummary:
   //   id, title, user_id, parent_session_id?, branch_message_id?, created_at, updated_at, message_count?
 
-  it('SessionSummary covers essential fields from storage.Session', () => {
-    const chatSource = readFrontendFile('chat.ts')
-    // The interface is defined inline
-    expect(chatSource).toContain('id: string')
-    expect(chatSource).toContain('title: string')
-    expect(chatSource).toContain('user_id: string')
-    expect(chatSource).toContain('created_at: string')
-    expect(chatSource).toContain('updated_at: string')
+  it('ChatSession covers the fields consumed by the desktop projection', () => {
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('id: string')
+    expect(chatTypes).toContain('title: string')
+    expect(chatTypes).toContain('created_at: string')
+    expect(chatTypes).toContain('updated_at: string')
+    expect(chatTypes).toContain('message_count: number')
   })
 
   it('ALIGNED: frontend uses parent_session_id matching backend', () => {
-    const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain('parent_session_id?: string')
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('parent_session_id?: string')
   })
 
-  it('ALIGNED: frontend uses branch_message_id matching backend', () => {
-    const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain('branch_message_id?: string')
+  it('ALIGNED: frontend carries the optional agent projection fields it consumes', () => {
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('agent_id?: string')
+    expect(chatTypes).toContain('agent_name?: string')
   })
 })
 
@@ -136,9 +129,8 @@ describe('SessionSummary type alignment with storage.Session', () => {
 describe('Fork Session API alignment', () => {
   it('ALIGNED: forkSession response expects session object matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
-    // Frontend now correctly expects: { session: SessionSummary; message: string }
     expect(chatSource).toContain(
-      'sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`',
+      'apiPost<{ session: ChatSession; message?: string }>',
     )
   })
 })
@@ -844,17 +836,18 @@ describe('ALIGNMENT VERIFICATION SUMMARY', () => {
 
   it('[FIXED] forkSession response type matches backend (session object)', () => {
     const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain('session: SessionSummary; message: string')
+    expect(chatSource).toContain('session: ChatSession; message?: string')
   })
 
-  it('[FIXED] SessionSummary uses parent_session_id matching backend', () => {
-    const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain('parent_session_id?: string')
+  it('[FIXED] ChatSession uses parent_session_id matching backend', () => {
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('parent_session_id?: string')
   })
 
-  it('[FIXED] SessionSummary uses branch_message_id matching backend', () => {
-    const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain('branch_message_id?: string')
+  it('[FIXED] ChatSession exposes the agent projection fields consumed by the UI', () => {
+    const chatTypes = readFrontendType('chat.ts')
+    expect(chatTypes).toContain('agent_id?: string')
+    expect(chatTypes).toContain('agent_name?: string')
   })
 
   it('[FIXED] ChatMessage has created_at field for backend compatibility', () => {

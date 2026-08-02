@@ -1,5 +1,5 @@
-import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
+import { NativeSidecarWebSocket } from './native-sidecar-websocket'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { ToolCall, ContentBlock, ReasoningDisclosure, RuntimeEvent } from '@/types'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
@@ -43,11 +43,7 @@ function scopeAllows(msg: WsServerMessage, scope?: CallbackScope): boolean {
 }
 
 interface WsAttachment {
-  type: string
-  name: string
-  mime: string
-  data?: string
-  url?: string
+  attachment_id: string
 }
 
 interface WsMessage {
@@ -135,8 +131,7 @@ export interface DesktopNotificationEvent {
 type DesktopNotificationCallback = (n: DesktopNotificationEvent) => void
 
 class HexClawWS {
-  private ws: WebSocket | null = null
-  private url = `${env.wsBase}/ws`
+  private ws: NativeSidecarWebSocket | null = null
 
   private chunkCallbacks: ScopedCallback<ChunkCallback>[] = []
   private replyCallbacks: ScopedCallback<ReplyCallback>[] = []
@@ -161,7 +156,7 @@ class HexClawWS {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (this.ws && this.ws.readyState === NativeSidecarWebSocket.OPEN) {
         resolve()
         return
       }
@@ -173,7 +168,7 @@ class HexClawWS {
       this.connectResolved = false
 
       try {
-        this.ws = new WebSocket(this.url)
+        this.ws = new NativeSidecarWebSocket('/ws')
       } catch (e) {
         reject(e)
         return
@@ -229,7 +224,7 @@ class HexClawWS {
   }
 
   isConnected(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN
+    return this.ws !== null && this.ws.readyState === NativeSidecarWebSocket.OPEN
   }
 
   sendMessage(
@@ -244,7 +239,7 @@ class HexClawWS {
     metadata?: Record<string, string>,
     requestId?: string,
   ): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== NativeSidecarWebSocket.OPEN) {
       this.errorCallbacks.forEach((c) => c.cb('WebSocket is not connected'))
       return
     }
@@ -317,7 +312,7 @@ class HexClawWS {
 
   /** Send a raw JSON message to the backend */
   sendRaw(data: Record<string, unknown>): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    if (!this.ws || this.ws.readyState !== NativeSidecarWebSocket.OPEN) return
     this.ws.send(JSON.stringify(data))
   }
 
@@ -401,7 +396,7 @@ class HexClawWS {
   private startHeartbeat(): void {
     this.stopHeartbeat()
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (this.ws && this.ws.readyState === NativeSidecarWebSocket.OPEN) {
         // 检查 pong 超时：如果上次 pong 距今超过阈值，认为连接已死
         if (this.lastPongTime > 0 && Date.now() - this.lastPongTime > this.heartbeatInterval + this.pongTimeoutMs) {
           logger.warn('WebSocket pong timeout, closing connection')
@@ -458,7 +453,10 @@ class HexClawWS {
       this.ws.onmessage = null
       this.ws.onclose = null
       this.ws.onerror = null
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+      if (
+        this.ws.readyState === NativeSidecarWebSocket.OPEN
+        || this.ws.readyState === NativeSidecarWebSocket.CONNECTING
+      ) {
         this.ws.close()
       }
       this.ws = null

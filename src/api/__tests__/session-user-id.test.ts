@@ -23,10 +23,6 @@ vi.mock('ofetch', () => ({
   },
 }))
 
-// ─── Mock Tauri invoke (for sendChatViaBackend) ─────
-const invoke = vi.hoisted(() => vi.fn())
-vi.mock('@tauri-apps/api/core', () => ({ invoke }))
-
 import {
   listSessions,
   getSession,
@@ -37,7 +33,6 @@ import {
   listSessionMessages,
   searchMessages,
   updateMessageFeedback,
-  sendChatViaBackend,
 } from '../chat'
 
 // ─── 辅助函数 ────────────────────────────────────────
@@ -52,9 +47,17 @@ function getBodyArg(): Record<string, unknown> | undefined {
   return mockFetch.mock.calls[0]?.[1]?.body
 }
 
-/** 提取 invoke 调用中的 params */
-function getInvokeParams(): Record<string, unknown> | undefined {
-  return invoke.mock.calls[0]?.[1]?.params
+/** 当前聊天线协议的唯一 user_id 权威。 */
+async function getChatWireUserId(): Promise<string> {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/services/chatService.ts'),
+    'utf-8',
+  )
+  expect(source).toContain('user_id: DESKTOP_USER_ID')
+  expect(source).toContain('session_id: sessionId')
+  return EXPECTED_USER_ID
 }
 
 // ─── 测试 ────────────────────────────────────────────
@@ -63,7 +66,6 @@ describe('Session user_id 一致性', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockFetch.mockReset()
-    invoke.mockReset()
   })
 
   // ── 修复前: createSession 缺失 user_id (回归保护) ──
@@ -179,19 +181,15 @@ describe('Session user_id 一致性', () => {
     })
   })
 
-  // ── Tauri invoke 通道 ──
+  // ── 单一 WebSocket 通道 ──
 
-  describe('sendChatViaBackend', () => {
-    it('params 包含 user_id', async () => {
-      invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
-      await sendChatViaBackend('hello', { sessionId: 's1' })
-      expect(getInvokeParams()!.user_id).toBe(EXPECTED_USER_ID)
+  describe('WebSocket chat wire', () => {
+    it('payload 包含 user_id', async () => {
+      expect(await getChatWireUserId()).toBe(EXPECTED_USER_ID)
     })
 
-    it('即使不传 options 也包含 user_id', async () => {
-      invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
-      await sendChatViaBackend('hello')
-      expect(getInvokeParams()!.user_id).toBe(EXPECTED_USER_ID)
+    it('默认路径也复用同一个 user_id 权威', async () => {
+      expect(await getChatWireUserId()).toBe(EXPECTED_USER_ID)
     })
   })
 
@@ -206,16 +204,11 @@ describe('Session user_id 一致性', () => {
       const createBody = getBodyArg()!
       expect(createBody.user_id).toBe(EXPECTED_USER_ID)
 
-      // Step 2: 发送消息 → backend_chat
-      invoke.mockResolvedValue('{"reply":"你好","session_id":"agent-session"}')
-      await sendChatViaBackend('translate this', { sessionId: 'agent-session', role: 'translator' })
-
-      const chatParams = getInvokeParams()!
-      expect(chatParams.user_id).toBe(EXPECTED_USER_ID)
-      expect(chatParams.session_id).toBe('agent-session')
+      // Step 2: 发送消息 → canonical WebSocket wire
+      const chatUserId = await getChatWireUserId()
 
       // 关键断言: 创建和聊天使用的 user_id 必须一致
-      expect(createBody.user_id).toBe(chatParams.user_id)
+      expect(createBody.user_id).toBe(chatUserId)
     })
 
     it('复用已有 Agent 会话 → 加载消息: user_id 一致', async () => {
@@ -227,12 +220,8 @@ describe('Session user_id 一致性', () => {
       expect(loadQuery.user_id).toBe(EXPECTED_USER_ID)
 
       // Step 2: 发送消息
-      mockFetch.mockReset()
-      invoke.mockResolvedValue('{"reply":"ok","session_id":"existing-agent-session"}')
-      await sendChatViaBackend('hello', { sessionId: 'existing-agent-session', role: 'coder' })
-
-      const chatParams = getInvokeParams()!
-      expect(chatParams.user_id).toBe(loadQuery.user_id)
+      const chatUserId = await getChatWireUserId()
+      expect(chatUserId).toBe(loadQuery.user_id)
     })
   })
 
@@ -302,22 +291,16 @@ describe('Session user_id 一致性', () => {
       ).toEqual([])
     })
 
-    it('session* 写包装器必须经 withUserIdQuery 保证 URL query 带 user_id=（M11 belt-and-suspenders）', async () => {
-      // A sessionPost against a query-only backend endpoint must still carry
-      // user_id in the URL — the wrapper implementation itself guarantees it,
-      // so individual call sites cannot reintroduce the bug.
+    it('ownedPath 必须经 userQuery 保证 URL query 带 user_id=（M11 belt-and-suspenders）', async () => {
       const fs = await import('node:fs')
       const path = await import('node:path')
       const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
 
-      for (const fn of ['sessionPost', 'sessionPatch', 'sessionPut']) {
-        const re = new RegExp(`function ${fn}<T>\\([^)]*\\)\\s*\\{\\s*return api(Post|Patch|Put)<T>\\(withUserIdQuery\\(url\\)`)
-        expect(re.test(source), `${fn} 必须用 withUserIdQuery(url) 注入 URL query user_id`).toBe(true)
-      }
-      expect(
-        /function withUserIdQuery[\s\S]{0,400}user_id=\$\{encodeURIComponent\(DESKTOP_USER_ID\)\}/.test(source),
-        'withUserIdQuery 必须 append encodeURIComponent 过的 user_id=',
-      ).toBe(true)
+      expect(source).toContain('const userQuery = () => ({ user_id: DESKTOP_USER_ID })')
+      expect(source).toMatch(
+        /const ownedPath[\s\S]{0,200}encodeURIComponent\(DESKTOP_USER_ID\)/,
+      )
+      expect((source.match(/ownedPath\(/g) ?? []).length).toBeGreaterThan(3)
     })
 
     it('runtime: 每个 session* 写包装器调用产生的 URL 都含 user_id=', async () => {

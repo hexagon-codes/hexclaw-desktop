@@ -1,62 +1,70 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const invoke = vi.hoisted(() => vi.fn().mockResolvedValue('{"reply":"ok","session_id":"s1"}'))
+const sendViaBackend = vi.hoisted(() => vi.fn())
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke }))
+vi.mock('@/services/chat-service-compat', () => ({ sendViaBackend }))
 
 import { sendChatViaBackend } from '../chat'
 
-describe('sendChatViaBackend', () => {
+describe('sendChatViaBackend WebSocket compatibility adapter', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
+    sendViaBackend.mockReset()
+    sendViaBackend.mockResolvedValue({ reply: 'ok', session_id: 's1' })
   })
 
-  it('invokes backend_chat with correct params', async () => {
-    const result = await sendChatViaBackend('hello', { sessionId: 's1', provider: '智谱', model: 'glm-5' })
-    expect(invoke).toHaveBeenCalledWith('backend_chat', {
-      params: expect.objectContaining({
-        message: 'hello',
-        session_id: 's1',
-        provider: '智谱',
-        model: 'glm-5',
-      }),
+  it('maps the compatibility request into the shared WebSocket service', async () => {
+    const result = await sendChatViaBackend('hello', {
+      sessionId: 's1',
+      provider: '智谱',
+      model: 'glm-5',
     })
+
+    expect(sendViaBackend).toHaveBeenCalledWith(
+      'hello',
+      's1',
+      { provider: '智谱', model: 'glm-5', temperature: undefined, maxTokens: undefined },
+      '',
+      undefined,
+      undefined,
+      undefined,
+    )
     expect(result.reply).toBe('ok')
   })
 
-  it('passes temperature and maxTokens when provided', async () => {
-    await sendChatViaBackend('hi', { temperature: 0.8, maxTokens: 2048 })
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.temperature).toBe(0.8)
-    expect(params.max_tokens).toBe(2048)
+  it('maps temperature and maxTokens when provided', async () => {
+    await sendChatViaBackend('hi', { sessionId: 's1', temperature: 0.8, maxTokens: 2048 })
+    expect(sendViaBackend.mock.calls[0]![2]).toMatchObject({ temperature: 0.8, maxTokens: 2048 })
   })
 
-  it('passes metadata when provided', async () => {
-    await sendChatViaBackend('hi', { metadata: { thinking: 'off' } })
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.metadata).toEqual({ thinking: 'off' })
+  it('passes metadata without renderer serialization', async () => {
+    await sendChatViaBackend('hi', { sessionId: 's1', metadata: { thinking: 'off' } })
+    expect(sendViaBackend.mock.calls[0]![5]).toEqual({ thinking: 'off' })
   })
 
-  it('passes null for temperature/maxTokens when not provided', async () => {
-    await sendChatViaBackend('hi')
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.temperature).toBeNull()
-    expect(params.max_tokens).toBeNull()
+  it('keeps omitted optional values undefined', async () => {
+    await sendChatViaBackend('hi', { sessionId: 's1' })
+    expect(sendViaBackend.mock.calls[0]![2]).toEqual({
+      provider: undefined,
+      model: undefined,
+      temperature: undefined,
+      maxTokens: undefined,
+    })
   })
 
-  it('includes attachments in params', async () => {
-    const attachments = [{ type: 'image', name: 'test.png', mime: 'image/png', data: 'base64data' }]
-    await sendChatViaBackend('describe', { attachments })
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.attachments).toEqual(attachments)
+  it('passes opaque attachment receipts to the shared service', async () => {
+    const attachments = [{
+      type: 'image' as const,
+      name: 'test.png',
+      mime: 'image/png',
+      attachmentId: 'attachment-1',
+    }]
+    await sendChatViaBackend('describe', { sessionId: 's1', attachments })
+    expect(sendViaBackend.mock.calls[0]![4]).toEqual(attachments)
   })
 
-  it('parses JSON response correctly', async () => {
-    invoke.mockResolvedValueOnce('{"reply":"hello","session_id":"s2","metadata":{"model":"gpt-4"}}')
-    const result = await sendChatViaBackend('test')
-    expect(result.reply).toBe('hello')
-    expect(result.session_id).toBe('s2')
-    expect(result.metadata?.model).toBe('gpt-4')
+  it('returns the normalized WebSocket response unchanged', async () => {
+    const response = { reply: 'hello', session_id: 's2', metadata: { model: 'gpt-4' } }
+    sendViaBackend.mockResolvedValueOnce(response)
+    await expect(sendChatViaBackend('test', { sessionId: 's2' })).resolves.toBe(response)
   })
 })

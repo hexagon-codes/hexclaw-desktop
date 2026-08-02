@@ -25,6 +25,7 @@ describe('Knowledge asynchronous document upload contract', () => {
 
   it('hashes the browser ArrayBuffer without allocating a second full-file Uint8Array', async () => {
     apiPost.mockResolvedValueOnce({
+      operation_id: 'operation-zero-copy',
       document_id: 'doc-zero-copy',
       job_id: 'job-zero-copy',
       text_index_state: 'pending',
@@ -45,7 +46,9 @@ describe('Knowledge asynchronous document upload contract', () => {
 
     await uploadDocument(file)
 
-    expect(digest).toHaveBeenCalledTimes(1)
+    // One digest attests the immutable source and one derives the semantic
+    // idempotency identity from that digest plus filename/media metadata.
+    expect(digest).toHaveBeenCalledTimes(2)
     const digestInput = digest.mock.calls[0]?.[1] as ArrayBufferView
     expect(ArrayBuffer.isView(digestInput)).toBe(true)
     expect(digestInput.buffer).toBe(sourceBuffer)
@@ -58,7 +61,12 @@ describe('Knowledge asynchronous document upload contract', () => {
     const firstAccepted = new Promise<ReturnType<typeof uploadResponse>>((resolve) => {
       acceptFirst = resolve
     })
-    apiPost.mockImplementationOnce(() => firstAccepted).mockResolvedValueOnce(uploadResponse('two'))
+    let uploadCalls = 0
+    apiPost.mockImplementation((path: string) => {
+      if (path.includes('/knowledge/operations/')) return undefined
+      uploadCalls += 1
+      return uploadCalls === 1 ? firstAccepted : uploadResponse('two')
+    })
     const digest = vi.fn().mockResolvedValue(new Uint8Array(32).buffer)
     vi.stubGlobal('crypto', {
       subtle: { digest },
@@ -80,23 +88,24 @@ describe('Knowledge asynchronous document upload contract', () => {
     })
 
     const first = uploadDocument(firstFile)
-    await vi.waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(uploadCalls).toBe(1))
     const second = uploadDocument(secondFile)
 
     expect(firstRead).toHaveBeenCalledTimes(1)
     expect(secondRead).not.toHaveBeenCalled()
-    expect(digest).toHaveBeenCalledTimes(1)
-    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(digest).toHaveBeenCalledTimes(2)
+    expect(uploadCalls).toBe(1)
 
     acceptFirst(uploadResponse('one'))
     await first
     await second
-    expect(digest).toHaveBeenCalledTimes(2)
-    expect(apiPost).toHaveBeenCalledTimes(2)
+    expect(digest).toHaveBeenCalledTimes(4)
+    expect(uploadCalls).toBe(2)
   })
 
   it('posts a 57,313,616-byte PDF once to the owner-scoped documents endpoint', async () => {
     apiPost.mockResolvedValueOnce({
+      operation_id: 'operation-57m',
       document_id: 'doc-57m',
       job_id: 'job-57m',
       text_index_state: 'pending',
@@ -108,19 +117,24 @@ describe('Knowledge asynchronous document upload contract', () => {
 
     const result = await uploadDocument(file)
 
-    expect(apiPost).toHaveBeenCalledTimes(1)
+    const documentCalls = apiPost.mock.calls.filter((call) =>
+      String(call[0]).startsWith('/api/v1/knowledge/documents'),
+    )
+    expect(documentCalls).toHaveLength(1)
     expect(apiPost).toHaveBeenCalledWith(
       '/api/v1/knowledge/documents?user_id=desktop-user',
       expect.any(FormData),
       {
         headers: { 'Idempotency-Key': expect.stringMatching(/^knowledge-upload:/) },
         timeout: false,
+        expectedStatus: 202,
       },
     )
-    const form = apiPost.mock.calls[0]?.[1] as FormData
+    const form = documentCalls[0]?.[1] as FormData
     expect(form.get('corpus_id')).toBe('default')
     expect(form.get('file')).toBe(file)
     expect(result).toEqual({
+      operation_id: 'operation-57m',
       document_id: 'doc-57m',
       job_id: 'job-57m',
       text_index_state: 'pending',
@@ -133,6 +147,7 @@ describe('Knowledge asynchronous document upload contract', () => {
     class FakeXMLHttpRequest {
       status = 202
       responseText = JSON.stringify({
+        operation_id: 'operation-xhr',
         document_id: 'doc-xhr',
         job_id: 'job-xhr',
         text_index_state: 'pending',
@@ -187,9 +202,7 @@ describe('Knowledge asynchronous document upload contract', () => {
       addEventListener(name: string, listener: () => void) {
         this.listeners[name] = listener
       }
-      send() {
-        setTimeout(() => this.listeners.error?.(), 100)
-      }
+      send() {}
       abort() {
         abortCalls += 1
         this.listeners.abort?.()
@@ -215,6 +228,7 @@ describe('Knowledge asynchronous document upload contract', () => {
 
 function uploadResponse(id: string) {
   return {
+    operation_id: `operation-${id}`,
     document_id: `doc-${id}`,
     job_id: `job-${id}`,
     text_index_state: 'pending' as const,

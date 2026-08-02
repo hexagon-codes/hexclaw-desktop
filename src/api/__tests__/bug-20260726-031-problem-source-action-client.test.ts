@@ -41,31 +41,28 @@ function postCommitResponse() {
     dispatch_id: 'dispatch / 1',
     problem_id: 'problem/一.1',
     action: 'correct_text',
-    structure_version: 5,
+    structure_version: 4,
     input_revision: 3,
     progressive_snapshot: {
-      structure_version: 5,
+      structure_version: 4,
       snapshot_revision: 11,
       problem_progress: [
         {
           problem_id: 'problem/一.1',
-          source_number_path: ['一', '1'],
-          display_label: '一. 1',
-          source_state: 'ready',
-          anchor_state: 'located',
-          operation_state: 'prepared',
-          disposition_state: 'open',
-          result_projection: null,
-          published_revision: 0,
+          status: 'awaiting_source',
           input_revision: 3,
-          command_available: false,
+          published_revision: 0,
+          current_disposition: 'current',
         },
       ],
       coverage: {
-        state: 'incomplete',
         total: 1,
-        processed: 0,
+        published: 0,
         skipped: 0,
+        awaiting: 1,
+        failed: 0,
+        status: 'in_progress',
+        projection_revision: 11,
       },
     },
   }
@@ -125,4 +122,32 @@ describe('BUG-20260726-031 · problem source-action Desktop client contract', ()
     expect(body).not.toHaveProperty('dependency_group_id')
     expect(result).toEqual(response)
   })
+
+  it.each([
+    ['dispatch_id', 'another-dispatch'],
+    ['problem_id', 'another-problem'],
+    ['action', 'skip'],
+  ] as const)(
+    'rejects a source-action response whose %s is not bound to the request',
+    async (field, mismatchedValue) => {
+      client.apiPost.mockResolvedValue({
+        ...postCommitResponse(),
+        [field]: mismatchedValue,
+      })
+
+      await expect(
+        submitProblemSourceAction()(
+          'dispatch / 1',
+          'problem/一.1',
+          {
+            action: 'correct_text',
+            structure_version: 4,
+            expected_input_revision: 2,
+            payload: { question_canonical_markdown: '8 的四分之一是多少？' },
+          },
+          `source-action-mismatch-${field}`,
+        ),
+      ).rejects.toThrow(`$.${field}`)
+    },
+  )
 })

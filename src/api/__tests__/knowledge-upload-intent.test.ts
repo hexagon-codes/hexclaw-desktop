@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { apiPost } = vi.hoisted(() => ({ apiPost: vi.fn() }))
+const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }))
 
 vi.mock('../client', () => ({
-  apiGet: vi.fn(),
+  apiGet,
   apiPost,
   apiDelete: vi.fn(),
   apiPut: vi.fn(),
@@ -11,11 +11,22 @@ vi.mock('../client', () => ({
 
 function uploadResult(id: string) {
   return {
+    operation_id: `operation-${id}`,
     document_id: `doc-${id}`,
     job_id: `job-${id}`,
     text_index_state: 'pending',
     vector_index_state: 'disabled',
   }
+}
+
+function uploadCalls(): unknown[][] {
+  return apiPost.mock.calls.filter((call) =>
+    String(call[0]).startsWith('/api/v1/knowledge/documents'),
+  )
+}
+
+function acknowledgementCalls(): unknown[][] {
+  return apiPost.mock.calls.filter((call) => String(call[0]).includes('/knowledge/operations/'))
 }
 
 function requestKey(call: unknown[]): string {
@@ -25,82 +36,122 @@ function requestKey(call: unknown[]): string {
   return key
 }
 
-function sameReselectedFile(): File {
-  return new File(['durable upload bytes'], 'lesson.txt', {
+function file(bytes = 'durable upload bytes'): File {
+  return new File([bytes], 'lesson.txt', {
     type: 'text/plain',
     lastModified: 1_726_531_200_000,
   })
 }
 
-describe('Knowledge upload intent idempotency', () => {
+describe('Knowledge upload content-addressed idempotency', () => {
   beforeEach(() => {
+    apiGet.mockReset()
     apiPost.mockReset()
     localStorage.clear()
     vi.resetModules()
   })
 
-  it('persists the key before sending and reuses it after a network-unknown response', async () => {
-    let persistedDuringRequest = ''
-    apiPost.mockImplementationOnce((_path, _body, options) => {
-      const key = (options as { headers: Record<string, string> }).headers['Idempotency-Key']
-      persistedDuringRequest = localStorage.getItem('hexclaw:knowledge-upload-intents:v2') || ''
-      expect(persistedDuringRequest).toContain(key)
-      expect(persistedDuringRequest).toMatch(/[0-9a-f]{64}/)
-      return Promise.reject(new Error('Network error'))
-    })
+  it('recomputes the same key after a network-unknown renderer restart', async () => {
+    apiPost.mockRejectedValueOnce(new Error('Network error'))
     const firstModule = await import('../knowledge')
-    await expect(firstModule.uploadDocument(sameReselectedFile())).rejects.toThrow('Network error')
-    const firstKey = requestKey(apiPost.mock.calls[0]!)
+    await expect(firstModule.uploadDocument(file())).rejects.toThrow('Network error')
+    const firstKey = requestKey(uploadCalls()[0]!)
 
-    // Simulate a renderer refresh: module memory is gone, durable browser
-    // storage remains, and the user reselects the same immutable file intent.
     vi.resetModules()
     apiPost.mockResolvedValueOnce(uploadResult('recovered'))
-    const refreshedModule = await import('../knowledge')
-    await refreshedModule.uploadDocument(sameReselectedFile())
-    const recoveredKey = requestKey(apiPost.mock.calls[1]!)
+    const restartedModule = await import('../knowledge')
+    await restartedModule.uploadDocument(file())
 
-    expect(recoveredKey).toBe(firstKey)
-    expect(localStorage.getItem('hexclaw:knowledge-upload-intents:v2')).toBeNull()
+    expect(requestKey(uploadCalls()[1]!)).toBe(firstKey)
+    expect(firstKey).toMatch(/^knowledge-upload:v3:[0-9a-f]{64}$/)
+    expect(localStorage.length).toBe(0)
   })
 
-  it('releases an acknowledged intent so an explicit later upload gets a new generation key', async () => {
-    apiPost
-      .mockResolvedValueOnce(uploadResult('first'))
-      .mockResolvedValueOnce(uploadResult('second'))
+  it('uses the same immutable source identity after acknowledgement', async () => {
+    const uploads = [uploadResult('first'), uploadResult('second')]
+    apiPost.mockImplementation((path: string) =>
+      path.startsWith('/api/v1/knowledge/documents') ? uploads.shift() : undefined,
+    )
     const { uploadDocument } = await import('../knowledge')
 
-    await uploadDocument(sameReselectedFile())
-    await uploadDocument(sameReselectedFile())
+    await uploadDocument(file())
+    await uploadDocument(file())
 
-    expect(requestKey(apiPost.mock.calls[1]!)).not.toBe(requestKey(apiPost.mock.calls[0]!))
+    expect(requestKey(uploadCalls()[1]!)).toBe(requestKey(uploadCalls()[0]!))
   })
 
-  it('releases a definitively rejected conflict but retains transport-unknown failures', async () => {
-    const conflict = Object.assign(new Error('idempotency conflict'), { status: 409 })
-    apiPost.mockRejectedValueOnce(conflict)
-    const { uploadDocument } = await import('../knowledge')
-
-    await expect(uploadDocument(sameReselectedFile())).rejects.toThrow('idempotency conflict')
-
-    expect(localStorage.getItem('hexclaw:knowledge-upload-intents:v2')).toBeNull()
-  })
-
-  it('does not reuse an unknown-response key for different bytes with identical file metadata', async () => {
+  it('does not alias different bytes with identical metadata', async () => {
     apiPost
       .mockRejectedValueOnce(new Error('Network error'))
       .mockResolvedValueOnce(uploadResult('different-content'))
     const { uploadDocument } = await import('../knowledge')
-    const metadata = {
-      type: 'text/plain',
-      lastModified: 1_726_531_200_000,
+
+    await expect(uploadDocument(file('alpha'))).rejects.toThrow('Network error')
+    await uploadDocument(file('bravo'))
+
+    expect(requestKey(uploadCalls()[1]!)).not.toBe(requestKey(uploadCalls()[0]!))
+  })
+
+  it('exposes the source digest to the runtime projection without persisting it', async () => {
+    apiPost.mockResolvedValueOnce(uploadResult('accepted'))
+    const onIntent = vi.fn()
+    const { uploadDocument } = await import('../knowledge')
+
+    await uploadDocument(file(), undefined, onIntent)
+
+    expect(onIntent).toHaveBeenCalledWith({
+      idempotencyKey: expect.stringMatching(/^knowledge-upload:v3:[0-9a-f]{64}$/),
+      sourceSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+    expect(localStorage.length).toBe(0)
+  })
+
+  it('acknowledges only after the accepted response reaches the client boundary', async () => {
+    apiPost.mockResolvedValueOnce(uploadResult('delivered')).mockResolvedValueOnce(undefined)
+    const { uploadDocument } = await import('../knowledge')
+
+    await expect(uploadDocument(file())).resolves.toMatchObject({
+      operation_id: 'operation-delivered',
+      document_id: 'doc-delivered',
+    })
+
+    expect(acknowledgementCalls()).toEqual([
+      ['/api/v1/knowledge/operations/operation-delivered/ack?corpus_id=default'],
+    ])
+  })
+
+  it('keeps an accepted upload successful when its best-effort acknowledgement is unknown', async () => {
+    apiPost
+      .mockResolvedValueOnce(uploadResult('ack-unknown'))
+      .mockRejectedValueOnce(new Error('ack transport unknown'))
+    const { uploadDocument } = await import('../knowledge')
+
+    await expect(uploadDocument(file())).resolves.toMatchObject({
+      operation_id: 'operation-ack-unknown',
+      job_id: 'job-ack-unknown',
+    })
+  })
+
+  it('re-acknowledges pending-response recovery projections without mutating the read result', async () => {
+    const pending = {
+      ...uploadResult('pending'),
+      title: 'lesson.txt',
+      display_name: 'lesson.txt',
+      content_digest: 'a'.repeat(64),
+      state: 'pending_response',
+      stage: 'pending_response',
+      terminal: false,
+      created_at: '2026-08-02T00:00:00Z',
+      updated_at: '2026-08-02T00:00:00Z',
     }
+    const queued = { ...pending, operation_id: 'operation-queued', state: 'queued' }
+    apiGet.mockResolvedValueOnce({ operations: [pending, queued] })
+    apiPost.mockRejectedValueOnce(new Error('ack transport unknown'))
+    const { listKnowledgeOperations } = await import('../knowledge')
 
-    await expect(uploadDocument(new File(['alpha'], 'same.txt', metadata))).rejects.toThrow(
-      'Network error',
-    )
-    await uploadDocument(new File(['bravo'], 'same.txt', metadata))
-
-    expect(requestKey(apiPost.mock.calls[1]!)).not.toBe(requestKey(apiPost.mock.calls[0]!))
+    await expect(listKnowledgeOperations()).resolves.toEqual([pending, queued])
+    expect(acknowledgementCalls()).toEqual([
+      ['/api/v1/knowledge/operations/operation-pending/ack?corpus_id=default'],
+    ])
   })
 })

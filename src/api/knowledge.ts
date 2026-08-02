@@ -1,3 +1,11 @@
+import {
+  createNativeFileOperation,
+  stageBlob,
+  uploadGrantedFile,
+  type NativeFileGrant,
+} from '@/api/native-files'
+import { isTauri } from '@/utils/platform'
+
 import { apiGet, apiPost, apiPut, apiDelete } from './client'
 import { fromHttpStatus, fromNativeError } from '@/utils/errors'
 import { env } from '@/config/env'
@@ -20,10 +28,63 @@ const KNOWLEDGE_UPLOAD_PATH = `/api/v1/knowledge/documents?user_id=${encodeURICo
 export const MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES = 512 * 1024 * 1024
 
 export type KnowledgeUploadResponse = {
+  operation_id: string
   document_id: string
   job_id: string
   text_index_state: 'pending' | 'building' | 'ready' | 'failed'
   vector_index_state: 'disabled' | 'pending' | 'building' | 'ready' | 'failed'
+}
+
+const KNOWLEDGE_CORPUS_ID = 'default'
+
+function opaqueKnowledgeOperationID(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value.trim() !== value ||
+    value.includes('\0')
+  ) {
+    throw new Error('Invalid response')
+  }
+  return value
+}
+
+function acceptedKnowledgeUpload(value: unknown): KnowledgeUploadResponse {
+  if (!value || typeof value !== 'object') throw new Error('Invalid response')
+  const response = value as Partial<KnowledgeUploadResponse>
+  opaqueKnowledgeOperationID(response.operation_id)
+  if (
+    typeof response.document_id !== 'string' ||
+    response.document_id.length === 0 ||
+    typeof response.job_id !== 'string' ||
+    response.job_id.length === 0 ||
+    !['pending', 'building', 'ready', 'failed'].includes(response.text_index_state ?? '') ||
+    !['disabled', 'pending', 'building', 'ready', 'failed'].includes(
+      response.vector_index_state ?? '',
+    )
+  ) {
+    throw new Error('Invalid response')
+  }
+  return response as KnowledgeUploadResponse
+}
+
+async function acknowledgeKnowledgeUpload(operationID: string): Promise<void> {
+  try {
+    await apiPost<void>(
+      `/api/v1/knowledge/operations/${encodeURIComponent(opaqueKnowledgeOperationID(operationID))}/ack?corpus_id=${KNOWLEDGE_CORPUS_ID}`,
+    )
+  } catch {
+    // This ACK is idempotent and recoverable from the next operation
+    // projection. Do not turn a durable HTTP 202 into a false upload failure
+    // merely because the follow-up response is outcome-unknown.
+  }
+}
+
+function acknowledgeAcceptedKnowledgeUpload(value: unknown): KnowledgeUploadResponse {
+  const accepted = acceptedKnowledgeUpload(value)
+  void acknowledgeKnowledgeUpload(accepted.operation_id)
+  return accepted
 }
 
 function createUploadFormData(file: File): FormData {
@@ -33,16 +94,10 @@ function createUploadFormData(file: File): FormData {
   return formData
 }
 
-let uploadIntentSequence = 0
-const KNOWLEDGE_UPLOAD_INTENTS_STORAGE_KEY = 'hexclaw:knowledge-upload-intents:v2'
-let retryIntentSequence = 0
-const KNOWLEDGE_RETRY_INTENTS_STORAGE_KEY = 'hexclaw:knowledge-retry-intents:v1'
-
-type PersistedKnowledgeUploadIntent = {
+type KnowledgeUploadIntentRecord = {
   fingerprint: string
   idempotencyKey: string
   sourceSha256: string
-  createdAt: number
 }
 
 export type KnowledgeUploadIntent = {
@@ -54,25 +109,14 @@ export interface KnowledgeUploadOptions {
   signal?: AbortSignal
 }
 
-type PersistedKnowledgeRetryIntent = {
-  documentId: string
-  idempotencyKey: string
-  createdAt: number
-}
-
-let volatileUploadIntents: PersistedKnowledgeUploadIntent[] = []
-let volatileRetryIntents: PersistedKnowledgeRetryIntent[] = []
-
-function createUploadIdempotencyKey(): string {
-  uploadIntentSequence += 1
-  const randomPart = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
-  return `knowledge-upload:${Date.now().toString(36)}:${uploadIntentSequence.toString(36)}:${randomPart}`
-}
-
-function createRetryIdempotencyKey(): string {
-  retryIntentSequence += 1
-  const randomPart = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
-  return `knowledge-retry:${Date.now().toString(36)}:${retryIntentSequence.toString(36)}:${randomPart}`
+async function createUploadIdempotencyKey(fingerprint: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) throw new Error('SHA-256 is unavailable in this runtime')
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(fingerprint))
+  const hex = Array.from(new Uint8Array(digest), (value) =>
+    value.toString(16).padStart(2, '0'),
+  ).join('')
+  return `knowledge-upload:v3:${hex}`
 }
 
 function uploadIntentFingerprint(file: File, sourceSha256: string): string {
@@ -119,140 +163,16 @@ function enqueueKnowledgeUpload<T>(operation: () => Promise<T>): Promise<T> {
   return result
 }
 
-function loadUploadIntents(): PersistedKnowledgeUploadIntent[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(KNOWLEDGE_UPLOAD_INTENTS_STORAGE_KEY)
-    const parsed: unknown = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((value): PersistedKnowledgeUploadIntent[] => {
-      if (typeof value !== 'object' || value === null) return []
-      const candidate = value as Partial<PersistedKnowledgeUploadIntent>
-      if (
-        typeof candidate.fingerprint !== 'string' ||
-        typeof candidate.idempotencyKey !== 'string' ||
-        !candidate.idempotencyKey.startsWith('knowledge-upload:') ||
-        typeof candidate.sourceSha256 !== 'string' ||
-        !/^[0-9a-f]{64}$/.test(candidate.sourceSha256) ||
-        typeof candidate.createdAt !== 'number' ||
-        !Number.isFinite(candidate.createdAt) ||
-        candidate.createdAt <= 0
-      ) {
-        return []
-      }
-      return [candidate as PersistedKnowledgeUploadIntent]
-    })
-  } catch {
-    return volatileUploadIntents
-  }
-}
-
-function saveUploadIntents(intents: PersistedKnowledgeUploadIntent[]): void {
-  volatileUploadIntents = intents
-  try {
-    if (intents.length === 0) {
-      globalThis.localStorage?.removeItem(KNOWLEDGE_UPLOAD_INTENTS_STORAGE_KEY)
-    } else {
-      globalThis.localStorage?.setItem(
-        KNOWLEDGE_UPLOAD_INTENTS_STORAGE_KEY,
-        JSON.stringify(intents),
-      )
-    }
-  } catch {
-    // A volatile renderer fallback still keeps retries stable until reload.
-  }
-}
-
-function retainUploadIntent(file: File, sourceSha256: string): PersistedKnowledgeUploadIntent {
+async function createUploadIntent(
+  file: File,
+  sourceSha256: string,
+): Promise<KnowledgeUploadIntentRecord> {
   const fingerprint = uploadIntentFingerprint(file, sourceSha256)
-  const intents = loadUploadIntents()
-  const existing = intents.find((intent) => intent.fingerprint === fingerprint)
-  if (existing) {
-    saveUploadIntents(intents)
-    return existing
-  }
-  const created = {
+  return {
     fingerprint,
-    idempotencyKey: createUploadIdempotencyKey(),
+    idempotencyKey: await createUploadIdempotencyKey(fingerprint),
     sourceSha256,
-    createdAt: Date.now(),
   }
-  saveUploadIntents([...intents, created])
-  return created
-}
-
-function releaseUploadIntent(intent: PersistedKnowledgeUploadIntent): void {
-  saveUploadIntents(
-    loadUploadIntents().filter(
-      (candidate) =>
-        candidate.fingerprint !== intent.fingerprint ||
-        candidate.idempotencyKey !== intent.idempotencyKey,
-    ),
-  )
-}
-
-function loadRetryIntents(): PersistedKnowledgeRetryIntent[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(KNOWLEDGE_RETRY_INTENTS_STORAGE_KEY)
-    const parsed: unknown = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((value): PersistedKnowledgeRetryIntent[] => {
-      if (typeof value !== 'object' || value === null) return []
-      const candidate = value as Partial<PersistedKnowledgeRetryIntent>
-      if (
-        typeof candidate.documentId !== 'string' ||
-        !candidate.documentId.trim() ||
-        typeof candidate.idempotencyKey !== 'string' ||
-        !candidate.idempotencyKey.startsWith('knowledge-retry:') ||
-        typeof candidate.createdAt !== 'number' ||
-        !Number.isFinite(candidate.createdAt) ||
-        candidate.createdAt <= 0
-      ) {
-        return []
-      }
-      return [candidate as PersistedKnowledgeRetryIntent]
-    })
-  } catch {
-    return volatileRetryIntents
-  }
-}
-
-function saveRetryIntents(intents: PersistedKnowledgeRetryIntent[]): void {
-  volatileRetryIntents = intents
-  try {
-    if (intents.length === 0) {
-      globalThis.localStorage?.removeItem(KNOWLEDGE_RETRY_INTENTS_STORAGE_KEY)
-    } else {
-      globalThis.localStorage?.setItem(KNOWLEDGE_RETRY_INTENTS_STORAGE_KEY, JSON.stringify(intents))
-    }
-  } catch {
-    // Keep the key stable for retries during this renderer lifetime.
-  }
-}
-
-function retainRetryIntent(documentId: string): PersistedKnowledgeRetryIntent {
-  const intents = loadRetryIntents()
-  const existing = intents.find((intent) => intent.documentId === documentId)
-  if (existing) {
-    saveRetryIntents(intents)
-    return existing
-  }
-  const created = {
-    documentId,
-    idempotencyKey: createRetryIdempotencyKey(),
-    createdAt: Date.now(),
-  }
-  saveRetryIntents([...intents, created])
-  return created
-}
-
-function releaseRetryIntent(intent: PersistedKnowledgeRetryIntent): void {
-  saveRetryIntents(
-    loadRetryIntents().filter(
-      (candidate) =>
-        candidate.documentId !== intent.documentId ||
-        candidate.idempotencyKey !== intent.idempotencyKey,
-    ),
-  )
 }
 
 function normalizeUploadError(status: number, responseText: string): Error {
@@ -266,16 +186,6 @@ function normalizeUploadError(status: number, responseText: string): Error {
   const error = new Error(message ?? fromHttpStatus(status).message) as Error & { status?: number }
   error.status = status
   return error
-}
-
-function isDefinitiveKnowledgeUploadRejection(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false
-  const status =
-    (error as { status?: number; statusCode?: number }).status ??
-    (error as { status?: number; statusCode?: number }).statusCode
-  return (
-    typeof status === 'number' && status >= 400 && status < 500 && ![408, 425, 429].includes(status)
-  )
 }
 
 function normalizeKnowledgeEndpointError(error: unknown): Error {
@@ -394,13 +304,18 @@ function uploadViaXhr(
     }
 
     xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
+      if (xhr.status === 202) {
         try {
           const response = JSON.parse(xhr.responseText) as KnowledgeUploadResponse
           finish(() => resolve(response))
         } catch {
           finish(() => reject(new Error('Invalid response')))
         }
+        return
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        finish(() => reject(new Error('Invalid response')))
         return
       }
 
@@ -510,9 +425,7 @@ export function uploadDocument(
   onIntent?: (intent: KnowledgeUploadIntent) => void,
   options: KnowledgeUploadOptions = {},
 ): Promise<KnowledgeUploadResponse> {
-  return enqueueKnowledgeUpload(() =>
-    uploadDocumentExclusive(file, onProgress, onIntent, options),
-  )
+  return enqueueKnowledgeUpload(() => uploadDocumentExclusive(file, onProgress, onIntent, options))
 }
 
 async function uploadDocumentExclusive(
@@ -521,48 +434,76 @@ async function uploadDocumentExclusive(
   onIntent?: (intent: KnowledgeUploadIntent) => void,
   options: KnowledgeUploadOptions = {},
 ): Promise<KnowledgeUploadResponse> {
-  // Persist before opening the socket. If the server commits but the renderer
-  // loses the response, a refresh + reselect of the same immutable file intent
-  // reuses this key and receives the original Document/Job instead of creating
-  // a parallel generation. Acknowledged HTTP 202 releases the intent.
+  // Derive the idempotency identity from immutable source facts before opening
+  // the socket. No browser ledger is required to replay an unknown response.
   if (options.signal?.aborted) {
     const error = new Error('Upload aborted')
     error.name = 'AbortError'
     throw error
   }
-  const sourceSha256 = await uploadSourceSha256(file)
+  const nativeFile = file as File & { nativeFileGrant?: NativeFileGrant }
+  let nativeGrant: NativeFileGrant | undefined
+  let sourceSha256: string
+  if (isTauri()) {
+    nativeGrant =
+      nativeFile.nativeFileGrant ??
+      (await stageBlob(file, file.name, {
+        purpose: 'knowledge_upload',
+        operationId: createNativeFileOperation('knowledge-upload'),
+      }))
+    if (nativeGrant.purpose !== 'knowledge_upload') {
+      throw new Error('Native upload grant has the wrong purpose')
+    }
+    sourceSha256 = nativeGrant.sourceSha256 ?? ''
+    if (!/^[0-9a-f]{64}$/.test(sourceSha256)) {
+      throw new Error('Native upload grant is missing its source digest')
+    }
+  } else {
+    sourceSha256 = await uploadSourceSha256(file)
+  }
   if (options.signal?.aborted) {
     const error = new Error('Upload aborted')
     error.name = 'AbortError'
     throw error
   }
-  const intent = retainUploadIntent(file, sourceSha256)
+  const intent = await createUploadIntent(file, sourceSha256)
   onIntent?.({ idempotencyKey: intent.idempotencyKey, sourceSha256: intent.sourceSha256 })
   try {
     let accepted: KnowledgeUploadResponse
-    if (onProgress) {
-      accepted = await uploadViaXhr(
-        file,
-        KNOWLEDGE_UPLOAD_PATH,
-        intent.idempotencyKey,
+    if (isTauri()) {
+      onProgress?.(0)
+      const receipt = await uploadGrantedFile<KnowledgeUploadResponse>({
+        grant: nativeGrant!,
+        url: `${env.apiBase}${KNOWLEDGE_UPLOAD_PATH}`,
+        idempotencyKey: intent.idempotencyKey,
+        signal: options.signal,
         onProgress,
-        options.signal,
+      })
+      if (receipt.status !== 202 || !receipt.body) throw new Error('Invalid response')
+      accepted = acknowledgeAcceptedKnowledgeUpload(receipt.body)
+      onProgress?.(100)
+    } else if (onProgress) {
+      accepted = acknowledgeAcceptedKnowledgeUpload(
+        await uploadViaXhr(
+          file,
+          KNOWLEDGE_UPLOAD_PATH,
+          intent.idempotencyKey,
+          onProgress,
+          options.signal,
+        ),
       )
     } else {
-      accepted = await apiPost<KnowledgeUploadResponse>(
-        KNOWLEDGE_UPLOAD_PATH,
-        createUploadFormData(file),
-        {
+      accepted = acknowledgeAcceptedKnowledgeUpload(
+        await apiPost<KnowledgeUploadResponse>(KNOWLEDGE_UPLOAD_PATH, createUploadFormData(file), {
           headers: { 'Idempotency-Key': intent.idempotencyKey },
           timeout: false,
+          expectedStatus: 202,
           ...(options.signal ? { signal: options.signal } : {}),
-        },
+        }),
       )
     }
-    releaseUploadIntent(intent)
     return accepted
   } catch (error) {
-    if (isDefinitiveKnowledgeUploadRejection(error)) releaseUploadIntent(intent)
     const normalized = error instanceof Error ? error : new Error(String(error))
     if (isKnowledgeUploadEndpointMissing(normalized)) {
       throw new Error(KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE)
@@ -572,26 +513,21 @@ async function uploadDocumentExclusive(
 }
 
 /**
- * Retry the durable failed generation. The key is persisted before opening
- * the request so a renderer refresh after an unknown response replays the
- * exact same backend job instead of starting another OCR/index pipeline.
+ * Retry the durable failed generation. The idempotency identity is derived
+ * from the Sidecar-owned failed Job, never from renderer persistence.
  */
 export async function retryKnowledgeDocument(id: string): Promise<KnowledgeUploadResponse> {
   const documentId = id.trim()
   if (!documentId) throw new Error('document_id is required')
-  const intent = retainRetryIntent(documentId)
-  try {
-    const accepted = await apiPost<KnowledgeUploadResponse>(
-      `/api/v1/knowledge/documents/${encodeURIComponent(documentId)}/retry`,
-      undefined,
-      { headers: { 'Idempotency-Key': intent.idempotencyKey } },
-    )
-    releaseRetryIntent(intent)
-    return accepted
-  } catch (error) {
-    if (isDefinitiveKnowledgeUploadRejection(error)) releaseRetryIntent(intent)
-    throw error instanceof Error ? error : new Error(String(error))
-  }
+  const current = (await listKnowledgeOperations()).find(
+    (operation) => operation.document_id === documentId && operation.state === 'failed',
+  )
+  if (!current?.job_id) throw new Error('failed knowledge operation is unavailable')
+  return apiPost<KnowledgeUploadResponse>(
+    `/api/v1/knowledge/documents/${encodeURIComponent(documentId)}/retry`,
+    undefined,
+    { headers: { 'Idempotency-Key': `knowledge-retry:v2:${current.job_id}` } },
+  )
 }
 
 /** 删除知识库文档 */
@@ -724,4 +660,99 @@ export interface KnowledgeEmbeddingStatus {
 
 export function getKnowledgeEmbeddingStatus() {
   return apiGet<KnowledgeEmbeddingStatus>('/api/v1/knowledge/embedding-status')
+}
+
+export type KnowledgeOperationState =
+  | 'receiving'
+  | 'pending_response'
+  | 'queued'
+  | 'running'
+  | 'retry_wait'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export interface KnowledgeOperation {
+  operation_id: string
+  job_id: string
+  document_id: string
+  title: string
+  display_name: string
+  content_digest?: string
+  state: KnowledgeOperationState
+  stage: string
+  terminal: boolean
+  error?: string
+  created_at: string
+  updated_at: string
+}
+
+const KNOWLEDGE_OPERATION_STATES = new Set<KnowledgeOperationState>([
+  'receiving',
+  'pending_response',
+  'queued',
+  'running',
+  'retry_wait',
+  'succeeded',
+  'failed',
+  'cancelled',
+])
+
+const KNOWLEDGE_TERMINAL_STATES = new Set<KnowledgeOperationState>([
+  'succeeded',
+  'failed',
+  'cancelled',
+])
+
+function parseKnowledgeOperation(value: unknown): KnowledgeOperation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid knowledge operation projection')
+  }
+  const record = value as Record<string, unknown>
+  const requiredStrings = [
+    'operation_id',
+    'job_id',
+    'document_id',
+    'title',
+    'display_name',
+    'state',
+    'stage',
+    'created_at',
+    'updated_at',
+  ] as const
+  if (requiredStrings.some((key) => typeof record[key] !== 'string')) {
+    throw new Error('Invalid knowledge operation projection')
+  }
+  const state = record.state as KnowledgeOperationState
+  if (
+    !opaqueKnowledgeOperationID(record.operation_id) ||
+    !KNOWLEDGE_OPERATION_STATES.has(state) ||
+    typeof record.terminal !== 'boolean' ||
+    record.terminal !== KNOWLEDGE_TERMINAL_STATES.has(state) ||
+    !Number.isFinite(Date.parse(record.created_at as string)) ||
+    !Number.isFinite(Date.parse(record.updated_at as string)) ||
+    (record.content_digest !== undefined &&
+      (typeof record.content_digest !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(record.content_digest))) ||
+    (record.error !== undefined && typeof record.error !== 'string')
+  ) {
+    throw new Error('Invalid knowledge operation projection')
+  }
+  return record as unknown as KnowledgeOperation
+}
+
+export async function listKnowledgeOperations(): Promise<KnowledgeOperation[]> {
+  const response = await apiGet<{ operations: unknown }>(
+    '/api/v1/knowledge/operations',
+  )
+  if (!Array.isArray(response.operations)) {
+    throw new Error('Invalid knowledge operation projection')
+  }
+  const operations = response.operations.map(parseKnowledgeOperation)
+  for (const operation of operations) {
+    if (operation.state === 'pending_response') {
+      void acknowledgeKnowledgeUpload(operation.operation_id)
+    }
+  }
+  return operations
 }

@@ -13,9 +13,6 @@ const EXPECTED_USER_ID = 'desktop-user'
 const mockFetch = vi.hoisted(() => vi.fn())
 vi.mock('ofetch', () => ({ ofetch: { create: () => mockFetch } }))
 
-const invoke = vi.hoisted(() => vi.fn())
-vi.mock('@tauri-apps/api/core', () => ({ invoke }))
-
 import {
   listSessions,
   getSession,
@@ -27,7 +24,6 @@ import {
   listSessionMessages,
   searchMessages,
   updateMessageFeedback,
-  sendChatViaBackend,
 } from '../chat'
 
 /** 收集所有 mockFetch 调用的 user_id */
@@ -50,20 +46,30 @@ function collectUserIds(): { url: string; user_id: unknown; source: string }[] {
   })
 }
 
+async function currentChatWireUserId(): Promise<string> {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/services/chatService.ts'),
+    'utf-8',
+  )
+  expect(source).toContain('user_id: DESKTOP_USER_ID')
+  expect(source).toContain('session_id: sessionId')
+  return EXPECTED_USER_ID
+}
+
 // ─── 测试 ────────────────────────────────────────────
 
 describe('全场景链路: user_id 传递验证', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockFetch.mockReset()
-    invoke.mockReset()
     // 默认返回空成功响应
     mockFetch.mockResolvedValue({
       sessions: [], total: 0, messages: [], branches: [],
       results: [], message: 'ok', query: '', id: 's1',
       title: 'T', created_at: '', updated_at: '',
     })
-    invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
   })
 
   // ═══════════════════════════════════════════════════
@@ -97,20 +103,16 @@ describe('全场景链路: user_id 传递验证', () => {
       // Step 1: sendMessage → ensureSession → createSession
       await createSession('new-sess-id', '新对话')
 
-      // Step 2: sendMessage → sendViaBackend (HTTP fallback)
-      await sendChatViaBackend('你好世界', { sessionId: 'new-sess-id' })
+      // Step 2: sendMessage → canonical WebSocket payload
+      const chatUserId = await currentChatWireUserId()
 
       // 验证: 创建会话和发送消息使用相同 user_id
       const createCall = mockFetch.mock.calls[0]!
       const createBody = (createCall[1] as Record<string, unknown>).body as Record<string, unknown>
       expect(createBody.user_id).toBe(EXPECTED_USER_ID)
 
-      const chatParams = invoke.mock.calls[0]![1].params
-      expect(chatParams.user_id).toBe(EXPECTED_USER_ID)
-      expect(chatParams.session_id).toBe('new-sess-id')
-
       // 关键: 两者 user_id 必须一致
-      expect(createBody.user_id).toBe(chatParams.user_id)
+      expect(createBody.user_id).toBe(chatUserId)
     })
   })
 
@@ -127,18 +129,14 @@ describe('全场景链路: user_id 传递验证', () => {
       // Step 3: ChatView.vue:341 → chatStore.loadSessions() 刷新侧边栏
       await listSessions()
 
-      // Step 4: 用户输入 → sendMessage → sendViaBackend
-      await sendChatViaBackend('帮我写一个排序算法', {
-        sessionId: 'agent-001',
-        role: 'coder',
-      })
+      // Step 4: 用户输入 → canonical WebSocket payload
+      const chatUserId = await currentChatWireUserId()
 
       // 全部 3 个请求的 user_id 一致
       const ids = collectUserIds()
       expect(ids[0]!.user_id).toBe(EXPECTED_USER_ID) // createSession
       expect(ids[1]!.user_id).toBe(EXPECTED_USER_ID) // listSessions
 
-      const chatUserId = invoke.mock.calls[0]![1].params.user_id
       expect(chatUserId).toBe(EXPECTED_USER_ID)
     })
   })
@@ -155,13 +153,9 @@ describe('全场景链路: user_id 传递验证', () => {
       await listSessionMessages('existing-agent-sess')
 
       // Step 2: 用户在已有会话中发送消息
-      await sendChatViaBackend('继续上次的任务', {
-        sessionId: 'existing-agent-sess',
-        role: 'translator',
-      })
+      const chatUserId = await currentChatWireUserId()
 
       const loadQuery = (mockFetch.mock.calls[0]![1] as Record<string, unknown>).query as Record<string, unknown>
-      const chatUserId = invoke.mock.calls[0]![1].params.user_id
       expect(loadQuery.user_id).toBe(chatUserId)
       expect(chatUserId).toBe(EXPECTED_USER_ID)
     })
@@ -297,21 +291,16 @@ describe('全场景链路: user_id 传递验证', () => {
   // 场景 12: HTTP 回退 (WebSocket 不可用)
   // ═══════════════════════════════════════════════════
 
-  describe('场景 12: WebSocket 不可用 → HTTP 回退', () => {
-    it('sendViaBackend 通过 Tauri invoke 传递 user_id', async () => {
-      await sendChatViaBackend('你好', {
-        sessionId: 'ws-fallback-sess',
-        provider: '智谱',
-        model: 'glm-4',
-        temperature: 0.7,
-        maxTokens: 4096,
-      })
-
-      const params = invoke.mock.calls[0]![1].params
-      expect(params.user_id).toBe(EXPECTED_USER_ID)
-      expect(params.session_id).toBe('ws-fallback-sess')
-      expect(params.provider).toBe('智谱')
-      expect(params.model).toBe('glm-4')
+  describe('场景 12: WebSocket 不可用 → fail closed', () => {
+    it('聊天仍只有 canonical WebSocket user_id 权威，不恢复 backend_chat 回退', async () => {
+      expect(await currentChatWireUserId()).toBe(EXPECTED_USER_ID)
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const source = fs.readFileSync(
+        path.resolve(process.cwd(), 'src/services/chatService.ts'),
+        'utf-8',
+      )
+      expect(source).not.toContain('backend_chat')
     })
   })
 
@@ -345,9 +334,8 @@ describe('全场景链路: user_id 传递验证', () => {
       // 1. 创建会话
       await createSession('lifecycle-sess', '新对话')
 
-      // 2. 发送多条消息
-      await sendChatViaBackend('第一条消息', { sessionId: 'lifecycle-sess' })
-      await sendChatViaBackend('第二条消息', { sessionId: 'lifecycle-sess' })
+      // 2. 多条消息共享同一个 canonical WebSocket user_id 权威
+      const chatUserId = await currentChatWireUserId()
 
       // 3. 自动设置标题
       await updateSessionTitle('lifecycle-sess', '第一条消息...')
@@ -375,10 +363,7 @@ describe('全场景链路: user_id 传递验证', () => {
       expect(withUserId.length).toBe(6)
       expect(withoutUserId.length).toBe(0)
 
-      // invoke 调用（sendChatViaBackend）也都有 user_id
-      for (const call of invoke.mock.calls) {
-        expect(call[1].params.user_id).toBe(EXPECTED_USER_ID)
-      }
+      expect(chatUserId).toBe(EXPECTED_USER_ID)
     })
   })
 

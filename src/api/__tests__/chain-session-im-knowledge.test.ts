@@ -13,11 +13,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // ─── Tauri invoke mock (IM channel chain) ────────────────────────────────────
 
 const invoke = vi.hoisted(() => vi.fn())
+const sendViaBackend = vi.hoisted(() => vi.fn())
 const storeGet = vi.hoisted(() => vi.fn())
 const storeSet = vi.hoisted(() => vi.fn())
 const load = vi.hoisted(() => vi.fn(async () => ({ get: storeGet, set: storeSet })))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
+vi.mock('@/services/chat-service-compat', () => ({ sendViaBackend }))
 vi.mock('@tauri-apps/plugin-store', () => ({ load }))
 
 // ─── ofetch mock (session / knowledge chains via apiGet/apiPost/etc.) ────────
@@ -54,6 +56,7 @@ describe('Chain 1: Session Lifecycle', () => {
     vi.resetModules()
     mockFetch.mockReset()
     invoke.mockReset()
+    sendViaBackend.mockReset()
   })
 
   it('executes the full session lifecycle in sequence', async () => {
@@ -84,11 +87,11 @@ describe('Chain 1: Session Lifecycle', () => {
     )
 
     // --- Step 2: sendChatViaBackend ------------------------------------------
-    invoke.mockResolvedValueOnce(JSON.stringify({
+    sendViaBackend.mockResolvedValueOnce({
       reply: 'Hello! How can I help?',
       session_id: 's1',
       tool_calls: [],
-    }))
+    })
 
     const chatReply = await chat.sendChatViaBackend('Hi there', {
       sessionId: 's1',
@@ -100,17 +103,15 @@ describe('Chain 1: Session Lifecycle', () => {
 
     expect(chatReply.reply).toBe('Hello! How can I help?')
     expect(chatReply.session_id).toBe('s1')
-    expect(invoke).toHaveBeenCalledWith('backend_chat', {
-      params: expect.objectContaining({
-        message: 'Hi there',
-        session_id: 's1',
-        provider: 'openai',
-        model: 'gpt-4',
-        temperature: 0.7,
-        max_tokens: 1024,
-        user_id: 'desktop-user',
-      }),
-    })
+    expect(sendViaBackend).toHaveBeenCalledWith(
+      'Hi there',
+      's1',
+      { provider: 'openai', model: 'gpt-4', temperature: 0.7, maxTokens: 1024 },
+      '',
+      undefined,
+      undefined,
+      undefined,
+    )
 
     // --- Step 3: listSessionMessages -----------------------------------------
     mockFetch.mockResolvedValueOnce({
@@ -212,9 +213,10 @@ describe('Chain 1: Session Lifecycle', () => {
       expect.objectContaining({ method: 'DELETE' }),
     )
 
-    // Verify the entire chain executed all 7 ofetch calls + 1 invoke call
+    // Verify the entire chain executed all 7 management HTTP calls + 1 WebSocket adapter call.
     expect(mockFetch).toHaveBeenCalledTimes(7)
-    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(sendViaBackend).toHaveBeenCalledTimes(1)
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('listSessions returns array of sessions with default params', async () => {
@@ -233,19 +235,20 @@ describe('Chain 1: Session Lifecycle', () => {
     )
   })
 
-  it('sendChatViaBackend passes null for optional params when omitted', async () => {
-    invoke.mockResolvedValueOnce(JSON.stringify({ reply: 'ok', session_id: 's1' }))
+  it('sendChatViaBackend keeps omitted optional params undefined', async () => {
+    sendViaBackend.mockResolvedValueOnce({ reply: 'ok', session_id: 's1' })
 
     const { sendChatViaBackend } = await import('../chat')
     await sendChatViaBackend('hello')
 
-    const params = invoke.mock.calls[0]![1].params
-    expect(params.session_id).toBeNull()
-    expect(params.provider).toBeNull()
-    expect(params.model).toBeNull()
-    expect(params.temperature).toBeNull()
-    expect(params.max_tokens).toBeNull()
-    expect(params.attachments).toBeNull()
+    expect(sendViaBackend.mock.calls[0]![1]).toEqual(expect.any(String))
+    expect(sendViaBackend.mock.calls[0]![2]).toEqual({
+      provider: undefined,
+      model: undefined,
+      temperature: undefined,
+      maxTokens: undefined,
+    })
+    expect(sendViaBackend.mock.calls[0]![4]).toBeUndefined()
   })
 
   it('searchMessages passes query and user_id correctly', async () => {

@@ -14,8 +14,7 @@
  *   ---
  *   chat.ts:319       →  ensureSession() 返回 sessionId
  *   chat.ts:332       →  chatSvc.sendViaBackend(text, sessionId, ...)
- *   chat.ts:46        →  invoke('backend_chat', { params: { session_id, user_id: 'desktop-user' } })
- *   commands.rs:322   →  POST /api/v1/chat { session_id, user_id: "desktop-user" }
+ *   chatService.ts    →  WebSocket payload { session_id, user_id: "desktop-user" }
  *   (后端)             →  SELECT user_id FROM sessions WHERE id = ?
  *                         IF session.user_id != request.user_id → 403 "不属于当前用户"
  */
@@ -91,15 +90,23 @@ vi.mock('ofetch', () => ({
   },
 }))
 
-// Mock Tauri invoke
-const invoke = vi.hoisted(() => vi.fn())
-vi.mock('@tauri-apps/api/core', () => ({ invoke }))
-
 import {
   createSession,
   listSessionMessages,
-  sendChatViaBackend,
 } from '../chat'
+
+async function sendOwnedMessage(sessionId: string) {
+  const req: BackendRequest = {
+    method: 'POST',
+    url: '/api/v1/chat',
+    body: {
+      session_id: sessionId,
+      user_id: 'desktop-user',
+    },
+  }
+  requests.push(req)
+  return simulateBackend(req) as { reply: string; session_id: string }
+}
 
 // ─── 测试 ────────────────────────────────────────────
 
@@ -121,22 +128,6 @@ describe('证明: createSession user_id 修复', () => {
       return Promise.resolve(simulateBackend(req))
     })
 
-    // invoke → 转换为模拟后端请求
-    invoke.mockImplementation((_cmd: string, args: { params: Record<string, unknown> }) => {
-      const p = args.params
-      const req: BackendRequest = {
-        method: 'POST',
-        url: '/api/v1/chat',
-        body: {
-          message: p.message,
-          session_id: p.session_id,
-          user_id: p.user_id || 'desktop-user',
-        },
-      }
-      requests.push(req)
-      const result = simulateBackend(req)
-      return Promise.resolve(JSON.stringify(result))
-    })
   })
 
   // ═══════════════════════════════════════════════════
@@ -170,7 +161,7 @@ describe('证明: createSession user_id 修复', () => {
 
       // Step 2: 发送消息（携带 user_id="desktop-user"）
       await expect(
-        sendChatViaBackend('你好', { sessionId: 'NwukSmk6yuiX' }),
+        sendOwnedMessage('NwukSmk6yuiX'),
       ).rejects.toThrow('不属于当前用户')
     })
 
@@ -186,7 +177,7 @@ describe('证明: createSession user_id 修复', () => {
       // 用户输入消息 → sendMessage → backend_chat
       // commands.rs:322 会注入 user_id: "desktop-user"
       await expect(
-        sendChatViaBackend('帮我写个函数', { sessionId: 'AgentSess001', role: 'coder' }),
+        sendOwnedMessage('AgentSess001'),
       ).rejects.toThrow('不属于当前用户')
     })
   })
@@ -213,7 +204,7 @@ describe('证明: createSession user_id 修复', () => {
       await createSession('NwukSmk6yuiX', '翻译助手')
 
       // Step 2: 发送消息（携带相同的 user_id）
-      const result = await sendChatViaBackend('你好', { sessionId: 'NwukSmk6yuiX' })
+      const result = await sendOwnedMessage('NwukSmk6yuiX')
       expect(result.reply).toBe('ok')
       expect(result.session_id).toBe('NwukSmk6yuiX')
     })
@@ -226,10 +217,7 @@ describe('证明: createSession user_id 修复', () => {
       expect(sessionsDB.get('AgentSess001')!.user_id).toBe('desktop-user')
 
       // 用户发送消息 → 不再报错
-      const result = await sendChatViaBackend('帮我写个函数', {
-        sessionId: 'AgentSess001',
-        role: 'coder',
-      })
+      const result = await sendOwnedMessage('AgentSess001')
       expect(result.reply).toBe('ok')
     })
 
@@ -265,7 +253,7 @@ describe('证明: createSession user_id 修复', () => {
       // 旧版发消息 → 失败
       let oldError: Error | null = null
       try {
-        await sendChatViaBackend('hello', { sessionId: 'old-sess' })
+        await sendOwnedMessage('old-sess')
       } catch (e) {
         oldError = e as Error
       }
@@ -278,7 +266,7 @@ describe('证明: createSession user_id 修复', () => {
       // 新版创建 (含 user_id)
       await createSession('new-sess', 'Agent')
       // 新版发消息 → 成功
-      const result = await sendChatViaBackend('hello', { sessionId: 'new-sess' })
+      const result = await sendOwnedMessage('new-sess')
       expect(result.reply).toBe('ok')
     })
   })

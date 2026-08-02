@@ -19,6 +19,7 @@ describe('Knowledge API upload behavior', () => {
 
   it('uploads to the canonical knowledge upload endpoint', async () => {
     apiPost.mockResolvedValueOnce({
+      operation_id: 'operation-1',
       document_id: 'doc-1',
       job_id: 'job-1',
       text_index_state: 'pending',
@@ -71,7 +72,9 @@ describe('Knowledge API upload behavior', () => {
   it('classifies backend unsupported-format responses without starting a second upload path', async () => {
     const { isKnowledgeUploadUnsupportedFormat } = await import('../knowledge')
 
-    expect(isKnowledgeUploadUnsupportedFormat({ status: 415, message: 'Unsupported Media Type' })).toBe(true)
+    expect(
+      isKnowledgeUploadUnsupportedFormat({ status: 415, message: 'Unsupported Media Type' }),
+    ).toBe(true)
     expect(isKnowledgeUploadUnsupportedFormat(new Error('不支持的文件格式'))).toBe(true)
     expect(isKnowledgeUploadUnsupportedFormat(new Error('网络错误'))).toBe(false)
   })

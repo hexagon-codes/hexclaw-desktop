@@ -1,4 +1,5 @@
 import { apiGet, apiWebSocket } from './client'
+import type { NativeSidecarWebSocket } from './native-sidecar-websocket'
 import { logger } from '@/utils/logger'
 import type { LogEntry, LogQuery, LogStats } from '@/types'
 
@@ -24,7 +25,7 @@ export function getLogStats() {
 export function connectLogStream(
   onMessage: (entry: LogEntry) => void,
   onError?: (err: Event) => void,
-): WebSocket {
+): NativeSidecarWebSocket {
   const ws = apiWebSocket('/api/v1/logs/stream')
 
   ws.onmessage = (event) => {
