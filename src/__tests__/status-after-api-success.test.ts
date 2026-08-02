@@ -37,7 +37,7 @@ describe('API 成功后状态不应卡在中间态', () => {
     const src = readSrc('views/KnowledgeView.vue')
 
     it('HTTP 202 只绑定持久化 Job，只有 Job succeeded 才转 done', () => {
-      expect(src).toContain('uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)')
+      expect(src).toContain('accepted.operation_id')
       expect(src).toContain('uploadsStore.markSucceeded(entry)')
       expect(src).not.toContain("entry.status = 'done'")
     })

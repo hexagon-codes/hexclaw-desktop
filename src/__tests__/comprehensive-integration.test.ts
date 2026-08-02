@@ -387,47 +387,27 @@ describe('Scenario 1: Full chat send chain (WebSocket path)', () => {
 // Scenario 2: WebSocket Disconnect -> HTTP Fallback
 // ══════════════════════════════════════════════════════════════════
 
-describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
-  it('falls back to sendViaBackend when WebSocket is not connected', async () => {
+describe('Scenario 2: sole WebSocket transport failure', () => {
+  it('fails closed when WebSocket is not connected', async () => {
     ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockResolvedValue({
-      reply: 'HTTP fallback response',
-      session_id: 's1',
-      metadata: { via: 'http' },
-    })
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
-    const result = await store.sendMessage('Hello via HTTP')
+    const result = await store.sendMessage('Hello while unavailable')
 
     // WebSocket not used
     expect(sendViaWebSocket).not.toHaveBeenCalled()
 
-    // HTTP backend used
-    expect(sendViaBackend).toHaveBeenCalledWith(
-      'Hello via HTTP',
-      expect.any(String),
-      expect.any(Object),
-      '',
-      undefined,
-      expect.objectContaining({
-        pinned_agent: 'default',
-        user_locale: 'zh-CN',
-        locale: 'zh-CN',
-        producer_kind: 'chat',
-      }),
-      expect.any(String),
-    )
-
-    // Response finalized
-    expect(result).not.toBeNull()
-    expect(result?.content).toBe('HTTP fallback response')
+    expect(openWebSocketStream).not.toHaveBeenCalled()
+    expect(sendViaBackend).not.toHaveBeenCalled()
+    expect(result).toBeNull()
+    expect(store.error?.message).toContain('WebSocket transport unavailable')
     expect(store.messages).toHaveLength(2)
     expect(store.streaming).toBe(false)
   })
 
-  it('falls back to HTTP when WebSocket send throws a retryable error', async () => {
+  it('does not fall back when the WebSocket request fails', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     // Import ChatRequestError through the mock module
@@ -436,22 +416,17 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
       cancel: vi.fn(),
       done: Promise.reject(new ChatRequestError('WS send failed', false)),
     }))
-    sendViaBackend.mockResolvedValue({
-      reply: 'Fallback after WS error',
-      session_id: 's1',
-    })
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
-    const result = await store.sendMessage('Try WS then fallback')
+    const result = await store.sendMessage('Try the sole transport')
 
     // WS was attempted first
     expect(openWebSocketStream).toHaveBeenCalled()
-    // HTTP fallback was triggered
-    expect(sendViaBackend).toHaveBeenCalled()
-
-    expect(result?.content).toBe('Fallback after WS error')
+    expect(sendViaBackend).not.toHaveBeenCalled()
+    expect(result).toBeNull()
+    expect(store.error?.message).toContain('WebSocket transport unavailable')
     expect(store.streaming).toBe(false)
   })
 
@@ -1043,8 +1018,11 @@ describe('Scenario 8: Session management full chain', () => {
 
 describe('Scenario 9: Error recovery chain', () => {
   it('sendMessage failure sets error and adds error message to messages', async () => {
-    ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockRejectedValue(new Error('Server unavailable'))
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new Error('Server unavailable')),
+    })
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -1055,11 +1033,12 @@ describe('Scenario 9: Error recovery chain', () => {
 
     // Error state set
     expect(store.error).not.toBeNull()
-    expect(store.error?.message).toContain('Server unavailable')
+    expect(store.error?.message).toContain('WebSocket transport unavailable')
 
     // Error message added to messages
     const errorMsg = store.messages.find(
-      (m) => m.role === 'assistant' && m.content.includes('Server unavailable'),
+      (m) =>
+        m.role === 'assistant' && m.content.includes('WebSocket transport unavailable'),
     )
     expect(errorMsg).toBeDefined()
 
@@ -1095,13 +1074,19 @@ describe('Scenario 9: Error recovery chain', () => {
     const store = useChatStore()
 
     // First: failure
-    ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockRejectedValueOnce(new Error('Temporary failure'))
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new Error('Temporary failure')),
+    })
     await store.sendMessage('Fail first')
     expect(store.error).not.toBeNull()
 
     // Second: success
-    sendViaBackend.mockResolvedValueOnce({ reply: 'All good now', session_id: 's1' })
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'All good now' }),
+    })
     await store.sendMessage('Success now')
 
     // Error cleared during successful send

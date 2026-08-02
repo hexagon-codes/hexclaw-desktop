@@ -350,30 +350,30 @@ describe('Chat Store', () => {
       expect(mockChatSvc.sendViaBackend).not.toHaveBeenCalled()
     })
 
-    it('WS not connected -> falls back to HTTP backend', async () => {
+    it('WS not connected -> fails closed without a second transport', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(false)
-      mockChatSvc.sendViaBackend.mockResolvedValue({ reply: 'http-reply', metadata: {} })
 
       const store = await getChatStore()
       const msg = await store.sendMessage('hello')
 
-      expect(mockChatSvc.sendViaBackend).toHaveBeenCalled()
-      expect(msg).not.toBeNull()
+      expect(mockChatSvc.sendViaBackend).not.toHaveBeenCalled()
+      expect(msg).toBeNull()
+      expect(store.error?.message).toContain('WebSocket transport unavailable')
     })
 
-    it('WS fails -> falls back to HTTP backend', async () => {
+    it('WS fails -> fails closed without HTTP fallback', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
       mockChatSvc.openWebSocketStream.mockImplementation(() => ({
         cancel: vi.fn(),
         done: Promise.reject(new Error('ws broken')),
       }))
-      mockChatSvc.sendViaBackend.mockResolvedValue({ reply: 'fallback-reply', metadata: {} })
 
       const store = await getChatStore()
       const msg = await store.sendMessage('hello')
 
-      expect(mockChatSvc.sendViaBackend).toHaveBeenCalled()
-      expect(msg).not.toBeNull()
+      expect(mockChatSvc.sendViaBackend).not.toHaveBeenCalled()
+      expect(msg).toBeNull()
+      expect(store.error?.message).toContain('WebSocket transport unavailable')
     })
 
     it('ChatRequestError with noFallback=true -> no HTTP fallback', async () => {
@@ -474,8 +474,11 @@ describe('Chat Store', () => {
     })
 
     it('empty content without reasoning -> shows "(空回复)"', async () => {
-      mockChatSvc.ensureWebSocketConnected.mockResolvedValue(false)
-      mockChatSvc.sendViaBackend.mockResolvedValue({ reply: '', metadata: {} })
+      mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
+      mockChatSvc.openWebSocketStream.mockReturnValueOnce({
+        cancel: vi.fn(),
+        done: Promise.resolve({ content: '', metadata: {} }),
+      })
 
       const store = await getChatStore()
       const msg = await store.sendMessage('hello')
@@ -1300,8 +1303,8 @@ describe('Chat Service', () => {
       ]![0] as AnyFn
       chunkCb({ type: 'chunk', content: 'partial', done: false })
 
-      // Advance past inactivity timeout (300s，2026-07 从 120s 放宽)
-      vi.advanceTimersByTime(301_000)
+      // Advance past the short post-first-chunk inactivity timeout.
+      vi.advanceTimersByTime(61_000)
 
       await expect(p).rejects.toThrow('stalled')
     })
@@ -1318,11 +1321,10 @@ describe('Chat Service', () => {
 
       // First chunk starts inactivity timer
       chunkCb({ type: 'chunk', content: 'a', done: false })
-      // After 100s, send another chunk — resets timer
-      vi.advanceTimersByTime(100_000)
+      // Activity inside the 60s window resets the timer.
+      vi.advanceTimersByTime(30_000)
       chunkCb({ type: 'chunk', content: 'b', done: false })
-      // After another 100s (total 200s), still no timeout because reset
-      vi.advanceTimersByTime(100_000)
+      vi.advanceTimersByTime(30_000)
       chunkCb({ type: 'chunk', content: 'c', done: true, metadata: {} })
 
       await expect(p).resolves.toBeUndefined()

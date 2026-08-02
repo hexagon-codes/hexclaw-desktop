@@ -19,6 +19,9 @@ vi.mock('ofetch', () => {
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
+const mockCompatSend = vi.hoisted(() => vi.fn())
+vi.mock('@/services/chat-service-compat', () => ({ sendViaBackend: mockCompatSend }))
+
 vi.mock('@/config/env', () => ({
   env: {
     apiBase: 'http://localhost:16060',
@@ -108,6 +111,7 @@ class MockWebSocket {
   static OPEN = 1
   static CLOSING = 2
   static CLOSED = 3
+  static instances: MockWebSocket[] = []
 
   url: string
   readyState = MockWebSocket.CONNECTING
@@ -122,6 +126,7 @@ class MockWebSocket {
 
   constructor(url: string) {
     this.url = url
+    MockWebSocket.instances.push(this)
   }
 
   addEventListener(type: string, handler: EventListener, opts?: { once?: boolean } | boolean) {
@@ -694,6 +699,7 @@ describe('knowledge.ts', () => {
       // We cannot easily test XHR in jsdom without mocking XMLHttpRequest,
       // so we test the apiPost fallback path (no progress callback)
       mockedApiPost.mockResolvedValueOnce({
+        operation_id: 'operation-123',
         document_id: 'doc-123',
         job_id: 'job-123',
         text_index_state: 'pending',
@@ -881,8 +887,7 @@ describe('websocket.ts', () => {
   beforeEach(() => {
     // Disconnect any lingering state
     hexclawWS.disconnect()
-    // Capture the MockWebSocket instance created during connect()
-    vi.mocked(MockWebSocket as unknown as typeof WebSocket)
+    MockWebSocket.instances.length = 0
   })
 
   function connectAndCapture(): Promise<void> {
@@ -894,9 +899,7 @@ describe('websocket.ts', () => {
   }
 
   function getLastMockWs(): MockWebSocket {
-    // Since we stubbed WebSocket globally, new WebSocket(...) returns a MockWebSocket
-    // We hook into the class to capture instances
-    return (hexclawWS as unknown as { ws: MockWebSocket }).ws as MockWebSocket
+    return MockWebSocket.instances[MockWebSocket.instances.length - 1]!
   }
 
   describe('connect()', () => {
@@ -922,7 +925,7 @@ describe('websocket.ts', () => {
 
       hexclawWS.disconnect()
 
-      expect(getLastMockWs()).toBeNull()
+      expect(capturedWs.readyState).toBe(MockWebSocket.CLOSED)
       // Callbacks should have been cleared -- verify by checking internal state
       // After disconnect, sending a message should not trigger chunk callbacks
       // (we can't easily test this without reconnecting)
@@ -1067,13 +1070,13 @@ describe('websocket.ts', () => {
 
 describe('chat.ts', () => {
   describe('sendChatViaBackend()', () => {
-    it('returns parsed JSON response', async () => {
+    it('returns the normalized WebSocket response', async () => {
       const response = {
         reply: 'Hello!',
         session_id: 'sess-1',
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }
-      mockedInvoke.mockResolvedValueOnce(JSON.stringify(response))
+      mockCompatSend.mockResolvedValueOnce(response)
 
       const result = await sendChatViaBackend('Hi')
       expect(result.reply).toBe('Hello!')
@@ -1081,12 +1084,10 @@ describe('chat.ts', () => {
       expect(result.usage?.total_tokens).toBe(15)
     })
 
-    it('throws on non-JSON response with descriptive message', async () => {
-      mockedInvoke.mockResolvedValueOnce('not-json-at-all')
+    it('propagates the canonical WebSocket transport error', async () => {
+      mockCompatSend.mockRejectedValueOnce(new Error('WebSocket response failed'))
 
-      await expect(sendChatViaBackend('Hi')).rejects.toThrow(
-        'Backend returned a non-JSON response: not-json-at-all',
-      )
+      await expect(sendChatViaBackend('Hi')).rejects.toThrow('WebSocket response failed')
     })
   })
 

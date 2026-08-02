@@ -72,37 +72,33 @@ describe('Issue #1: Rust proxy_api_request HTTP method support', () => {
   const commandsRs = readRoot('src-tauri/src/commands.rs')
 
   it('proxy supports GET', () => {
-    expect(commandsRs).toContain('"GET" => client.get')
+    expect(commandsRs).toContain('"GET" => Ok(reqwest::Method::GET)')
   })
 
   it('proxy supports POST', () => {
-    expect(commandsRs).toContain('"POST" =>')
+    expect(commandsRs).toContain('"POST" => Ok(reqwest::Method::POST)')
   })
 
   it('proxy supports PUT', () => {
-    expect(commandsRs).toContain('"PUT" =>')
+    expect(commandsRs).toContain('"PUT" => Ok(reqwest::Method::PUT)')
   })
 
   it('proxy supports DELETE', () => {
-    expect(commandsRs).toContain('"DELETE" =>')
-    expect(commandsRs).toContain('client.delete')
+    expect(commandsRs).toContain('"DELETE" => Ok(reqwest::Method::DELETE)')
   })
 
   it('proxy supports PATCH', () => {
-    expect(commandsRs).toContain('"PATCH"')
-    expect(commandsRs).toContain('client.patch')
+    expect(commandsRs).toContain('"PATCH" => Ok(reqwest::Method::PATCH)')
   })
 
-  it('apiPatch exists in client.ts and is used by updateSessionTitle (via sessionPatch)', () => {
+  it('apiPatch exists in client.ts and is used directly by updateSessionTitle', () => {
     const clientTs = readSrc('api/client.ts')
     expect(clientTs).toContain('export function apiPatch')
 
     const chatTs = readSrc('api/chat.ts')
-    // chat.ts imports apiPatch and wraps it in sessionPatch helper
     expect(chatTs).toContain('apiPatch')
-    // updateSessionTitle uses sessionPatch (which internally calls apiPatch)
     const updateBlock = chatTs.slice(chatTs.indexOf('function updateSessionTitle'))
-    expect(updateBlock.slice(0, 200)).toContain('sessionPatch')
+    expect(updateBlock.slice(0, 250)).toContain('apiPatch<ChatSession>')
   })
 
   it('config.ts uses proxyApiRequest only with GET/POST/PUT — no PATCH', () => {
@@ -160,7 +156,7 @@ describe('Issue #3: Session API functions missing encodeURIComponent', () => {
     const idx = chatTs.indexOf('function deleteMessage')
     expect(idx).toBeGreaterThan(-1)
     const block = chatTs.slice(idx, idx + 200)
-    expect(block).toContain('encodeURIComponent(messageId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('forkSession URL-encodes sessionId', () => {
@@ -168,44 +164,44 @@ describe('Issue #3: Session API functions missing encodeURIComponent', () => {
     // 500-char window: the function body now carries a comment documenting the
     // backend body-only user_id reader (handler_session.go:547).
     const block = chatTs.slice(idx, idx + 500)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('getSessionBranches URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function getSessionBranches')
     const block = chatTs.slice(idx, idx + 250)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('getSession URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function getSession(')
     const block = chatTs.slice(idx, idx + 200)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('listSessionMessages URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function listSessionMessages')
     const block = chatTs.slice(idx, idx + 400)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('updateSessionTitle URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function updateSessionTitle')
     const block = chatTs.slice(idx, idx + 500)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('deleteSession URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function deleteSession')
     const block = chatTs.slice(idx, idx + 200)
-    expect(block).toContain('encodeURIComponent(sessionId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('updateMessageFeedback URL-encodes messageId', () => {
     const idx = chatTs.indexOf('function updateMessageFeedback')
     // Window widened past the BUG-20260611 comment block that now precedes the URL.
     const block = chatTs.slice(idx, idx + 400)
-    expect(block).toContain('encodeURIComponent(messageId)')
+    expect(block).toContain('encodeURIComponent(id)')
   })
 
   it('other API modules DO use encodeURIComponent for path params consistently', () => {
@@ -423,12 +419,9 @@ describe('Issue #7: API functions exported but never imported in production code
 describe('Issue #8: chat.ts — session IDs embedded raw in URL template literals', () => {
   const chatTs = readSrc('api/chat.ts')
 
-  // All session functions now use encodeURIComponent for sessionId
-  it('all session functions use encodeURIComponent(sessionId) in URL paths', () => {
-    // Functions: forkSession, getSessionBranches, getSession, listSessionMessages,
-    //            updateSessionTitle, deleteSession
-    const encodedSessionIdUsages = chatTs.match(/\$\{encodeURIComponent\(sessionId\)\}/g) || []
-    expect(encodedSessionIdUsages.length).toBeGreaterThanOrEqual(6)
+  it('all id-based session functions URL-encode their path parameter', () => {
+    const encodedIdUsages = chatTs.match(/\$\{encodeURIComponent\(id\)\}/g) || []
+    expect(encodedIdUsages.length).toBeGreaterThanOrEqual(8)
   })
 
   it('chat.ts uses encodeURIComponent for all path params (sessionId + messageId)', () => {
@@ -517,17 +510,13 @@ describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', 
 // 11. RUST PROXY DROPS DELETE BODY
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #11: Rust proxy DELETE does not forward body', () => {
+describe('Issue #11: Rust proxy methods share one bounded request pipeline', () => {
   const commandsRs = readRoot('src-tauri/src/commands.rs')
   const clientTs = readSrc('api/client.ts')
 
-  it('Rust proxy DELETE handler now forwards body (like POST/PUT/PATCH)', () => {
-    // The DELETE arm now attaches body just like POST/PUT
-    const deleteSection = commandsRs.slice(commandsRs.indexOf('"DELETE" =>'))
-    const nextArm = deleteSection.indexOf('\n        }')
-    const deleteArm = deleteSection.slice(0, nextArm + 10)
-    expect(deleteArm).toContain('client.delete')
-    expect(deleteArm).toContain('body')
+  it('Rust allowlists DELETE before dispatching through the shared request builder', () => {
+    expect(commandsRs).toContain('"DELETE" => Ok(reqwest::Method::DELETE)')
+    expect(commandsRs).toContain('client.renderer_request(proxy_method(&method)?, &path)?')
   })
 
   it('TypeScript apiDelete does not accept a body parameter (consistent)', () => {
@@ -539,15 +528,10 @@ describe('Issue #11: Rust proxy DELETE does not forward body', () => {
     expect(signature).not.toContain('body')
   })
 
-  it('Rust POST, PUT, and DELETE all forward body', () => {
-    // Confirm POST, PUT, and DELETE all handle the body
-    const postArm = commandsRs.match(/"POST"\s*=>[\s\S]*?(?="PUT")/)?.[0] || ''
-    expect(postArm).toContain('body')
-    const putArm = commandsRs.match(/"PUT"\s*=>[\s\S]*?(?="DELETE")/)?.[0] || ''
-    expect(putArm).toContain('body')
-    // DELETE now also forwards body (like POST/PUT/PATCH)
-    const deleteSection = commandsRs.slice(commandsRs.indexOf('"DELETE" =>'))
-    expect(deleteSection).toContain('body')
+  it('all body-capable methods use one bounded body attachment path', () => {
+    expect(commandsRs).toContain('if body.len() > MAX_PROXY_REQUEST_BYTES')
+    expect(commandsRs).toContain('if !body.is_empty()')
+    expect(commandsRs).toContain('request = request.body(body)')
   })
 })
 
@@ -594,9 +578,9 @@ describe('Issue #12: API functions that send user_id use DESKTOP_USER_ID constan
     }
   })
 
-  it('Rust backend_chat uses "desktop-user" as default — matches DESKTOP_USER_ID constant', () => {
+  it('direct Rust backend_chat identity injection is retired', () => {
     const commandsRs = readRoot('src-tauri/src/commands.rs')
-    expect(commandsRs).toContain('"desktop-user"')
+    expect(commandsRs).not.toMatch(/async fn backend_chat\b/)
     const constantsTs = readSrc('constants.ts')
     expect(constantsTs).toContain("'desktop-user'")
   })
@@ -849,12 +833,13 @@ describe('Rust proxy error format', () => {
 // 23. OLLAMA.TS: pullOllamaModel USES RAW FETCH (NOT apiPost)
 // ════════════════════════════════════════════════════════════
 
-describe('ollama.ts: pullOllamaModel uses raw fetch for streaming', () => {
+describe('ollama.ts: pullOllamaModel uses the native Sidecar stream coordinator', () => {
   const ollamaTs = readSrc('api/ollama.ts')
 
-  it('pullOllamaModel uses native fetch instead of apiPost (for streaming response)', () => {
+  it('pullOllamaModel uses sidecarStreamFetch instead of a renderer fetch', () => {
     const pullBlock = ollamaTs.match(/async function pullOllamaModel[\s\S]*?^}/m)?.[0] || ''
-    expect(pullBlock).toContain('fetch(')
+    expect(pullBlock).toContain('sidecarStreamFetch(')
+    expect(pullBlock).not.toContain('globalThis.fetch(')
     expect(pullBlock).not.toContain('apiPost')
   })
 
@@ -887,13 +872,12 @@ describe('ollama.ts: pullOllamaModel uses raw fetch for streaming', () => {
 // 24. CLIENT.TS: SSE USES RAW FETCH (NOT ofetch)
 // ════════════════════════════════════════════════════════════
 
-describe('client.ts: apiSSE uses native fetch (not ofetch) for streaming', () => {
+describe('client.ts: apiSSE uses the native Sidecar stream coordinator', () => {
   const clientTs = readSrc('api/client.ts')
 
-  it('apiSSE uses native fetch for streaming body access', () => {
+  it('apiSSE uses sidecarStreamFetch for streaming body access', () => {
     const sseBlock = clientTs.match(/async function apiSSE[\s\S]*?^}/m)?.[0] || ''
-    expect(sseBlock).toContain('await fetch(')
-    // ofetch doesn't support ReadableStream body access
+    expect(sseBlock).toContain('await sidecarStreamFetch(')
   })
 
   it('apiSSE correctly constructs the full URL with env.apiBase prefix', () => {
@@ -1016,24 +1000,26 @@ describe('mcp.ts: callMcpTool validates input before sending', () => {
 // 29. STREAM_CHAT: SECURITY CHECKS IN RUST
 // ════════════════════════════════════════════════════════════
 
-describe('commands.rs: stream_chat has security checks', () => {
+describe('native Sidecar transport security checks', () => {
   const commandsRs = readRoot('src-tauri/src/commands.rs')
+  const sidecarClientRs = readRoot('src-tauri/src/sidecar_client.rs')
+  const sidecarSocketRs = readRoot('src-tauri/src/sidecar_socket.rs')
 
-  it('blocks cloud metadata endpoint (SSRF protection)', () => {
-    expect(commandsRs).toContain('169.254.169.254')
-    expect(commandsRs).toContain('metadata.google.internal')
-    expect(commandsRs).toContain('Blocked: cloud metadata endpoint')
+  it('retires arbitrary provider URL chat commands', () => {
+    expect(commandsRs).not.toMatch(/async fn (?:stream_chat|backend_chat)\b/)
+    expect(sidecarSocketRs).toContain('matches!(without_query, "/ws" | "/api/v1/logs/stream")')
   })
 
-  it('validates URL scheme is http or https only', () => {
-    expect(commandsRs).toMatch(/scheme != "https" && scheme != "http"/)
-    expect(commandsRs).toContain('Unsupported scheme')
+  it('resolves all renderer paths against the exact managed Sidecar origin', () => {
+    expect(sidecarClientRs).toContain('validate_relative_path(relative_path)?')
+    expect(sidecarClientRs).toContain('validate_exact_sidecar_origin(&url)?')
+    expect(sidecarClientRs).toContain('Sidecar endpoint escaped the managed loopback origin')
   })
 
-  it('proxy_api_request validates path starts with / and blocks ..', () => {
-    expect(commandsRs).toContain("!path.starts_with('/')")
-    expect(commandsRs).toContain('path.contains("..")')
-    expect(commandsRs).toContain('Invalid API path')
+  it('legacy JSON proxy delegates to the same canonical path policy', () => {
+    expect(commandsRs).toContain('client.renderer_request(proxy_method(&method)?, &path)?')
+    expect(sidecarClientRs).toContain("!path.starts_with('/')")
+    expect(sidecarClientRs).toContain('matches!(segment, "." | "..")')
   })
 })
 
@@ -1044,32 +1030,23 @@ describe('commands.rs: stream_chat has security checks', () => {
 describe('timeout configuration across the stack', () => {
   const commandsRs = readRoot('src-tauri/src/commands.rs')
   const clientTs = readSrc('api/client.ts')
+  const chatCompatTs = readSrc('services/chat-service-compat.ts')
+  const sidecarSocketRs = readRoot('src-tauri/src/sidecar_socket.rs')
 
-  it('Rust proxy has 30s timeout', () => {
-    expect(commandsRs).toContain('timeout(std::time::Duration::from_secs(30))')
+  it('Rust Sidecar fetch has a bounded five-minute request timeout', () => {
+    expect(commandsRs).toContain('SidecarClient::new(Duration::from_secs(300))')
   })
 
-  // BUG-20260523-v1: stream_chat timeout 升 120→600s（claude/thinking 模型不够 2min）
-  it('Rust stream_chat has >=600s timeout (BUG-20260523-v1 fix)', () => {
-    const streamChatBlock = commandsRs.match(/async fn stream_chat[\s\S]*?^}/m)?.[0] || ''
-    expect(streamChatBlock).toContain('from_secs(600)')
-    expect(streamChatBlock).not.toContain('from_secs(120)')
+  it('native WebSocket bridge bounds active sockets, queue depth, and frame size', () => {
+    expect(sidecarSocketRs).toContain('MAX_SOCKET_MESSAGE_BYTES')
+    expect(sidecarSocketRs).toContain('MAX_ACTIVE_SOCKETS')
+    expect(sidecarSocketRs).toContain('SOCKET_COMMAND_BUFFER')
   })
 
-  // BUG-20260523-v2: backend_chat 改 SSE 流式架构。
-  // 总时长 timeout 仅保留为 zombie 兜底（>= 1800s）；真实卡死用 chunk-间 idle timeout 检测。
-  it('Rust backend_chat uses SSE streaming architecture (BUG-20260523-v2 fix)', () => {
-    const backendChatBlock = commandsRs.match(/async fn backend_chat[\s\S]*?^}/m)?.[0] || ''
-    // 契约 1：必须显式 Accept SSE
-    expect(backendChatBlock).toContain('text/event-stream')
-    // 契约 2：必须流式消费 body
-    expect(backendChatBlock).toContain('bytes_stream')
-    // 契约 3：必须 emit 增量 chunk 事件
-    expect(backendChatBlock).toContain('backend-chat-stream')
-    // 契约 4：必须有 chunk 间 idle timeout 检测
-    expect(backendChatBlock).toMatch(/idle|CHUNK_IDLE/)
-    // 契约 5：禁止回退到固定短 timeout（120s 是触发原 bug 的反模式）
-    expect(backendChatBlock).not.toContain('from_secs(120)')
+  it('chat compatibility path remains WebSocket-only', () => {
+    expect(commandsRs).not.toMatch(/async fn backend_chat\b/)
+    expect(chatCompatTs).toContain('openWebSocketStream')
+    expect(chatCompatTs).not.toContain('fetch(')
   })
 
   it('ofetch client uses env.timeout', () => {

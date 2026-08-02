@@ -41,6 +41,7 @@ describe('Bug B: apiSSE — SSE 行跨 chunk 边界时数据丢失', () => {
         }
         return Promise.resolve({ done: true, value: undefined })
       }),
+      cancel: vi.fn().mockResolvedValue(undefined),
     }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

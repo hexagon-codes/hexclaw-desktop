@@ -26,6 +26,7 @@ const {
   setLastSessionId,
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
   mockGetLLMConfig,
@@ -50,6 +51,10 @@ const {
   setLastSessionId: vi.fn().mockResolvedValue(undefined),
   ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  }),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
   mockGetLLMConfig: vi.fn().mockResolvedValue({
@@ -98,6 +103,7 @@ vi.mock('@/services/chatService', () => {
   return {
     ensureWebSocketConnected,
     sendViaWebSocket,
+    openWebSocketStream,
     sendViaBackend,
     clearWebSocketCallbacks,
     ChatRequestError,
@@ -187,6 +193,10 @@ beforeEach(() => {
   loadArtifacts.mockResolvedValue([])
   getLastSessionId.mockResolvedValue(null)
   ensureWebSocketConnected.mockResolvedValue(false)
+  openWebSocketStream.mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  })
   sendViaBackend.mockResolvedValue({ reply: 'Hello!', session_id: 's1' })
   mockGetLLMConfig.mockResolvedValue({
     default: 'openai',
@@ -206,6 +216,7 @@ afterEach(() => {
 
 describe('1. Chat Store Edge Cases', () => {
   it('1.1: sendMessage with no current session creates one — should not crash', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
@@ -245,6 +256,7 @@ describe('1. Chat Store Edge Cases', () => {
   })
 
   it('1.4: sendMessage with very long content (100KB) — should not crash', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
@@ -330,6 +342,7 @@ describe('1. Chat Store Edge Cases', () => {
   })
 
   it('1.9: sendMessage with empty text — should still work (backend decides rejection)', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 

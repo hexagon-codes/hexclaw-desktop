@@ -180,7 +180,9 @@ describe('Security: v-html is sanitized', () => {
 describe('Security: secure-store browser fallback', () => {
   it('fails closed in browser mode instead of persisting secrets to localStorage', () => {
     const code = readSrc('utils/secure-store.ts')
-    expect(code).toContain('volatileBrowserStore')
+    expect(code).toContain('browserSessionVault')
+    expect(code).not.toContain('localStorage')
+    expect(code).not.toContain('LazyStore')
     expect(code).not.toContain("enc.encode('hexclaw-desktop')")
     expect(code).not.toContain('DEVICE_SALT_KEY')
   })

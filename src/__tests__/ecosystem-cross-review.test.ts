@@ -51,7 +51,7 @@ function readHexagon(rel: string): string {
 describe('[alignment] Frontend ↔ Backend API Contract', () => {
   // ── CRITICAL ──────────────────────────────────────────────
 
-  it('CRITICAL: ChatRequest.temperature / max_tokens 被后端静默丢弃', () => {
+  it('CRITICAL: ChatRequest.temperature / max_tokens 由 WebSocket 兼容适配器显式映射', () => {
     // 前端发送 temperature, max_tokens, agent_id, role_id, provider_id
     const chatType = readType('chat.ts')
     expect(chatType).toContain('temperature?: number')
@@ -59,9 +59,10 @@ describe('[alignment] Frontend ↔ Backend API Contract', () => {
 
     // 后端 ChatRequest struct 无这些字段 → JSON decode 时静默忽略
     // 前端 sendChatViaBackend 确实传了这些参数
-    const chatApi = readSrc('api/chat.ts')
-    expect(chatApi).toContain('temperature: options?.temperature')
-    expect(chatApi).toContain('max_tokens: options?.maxTokens')
+    const chatApi = readSrc('api/chat-websocket-compat.ts')
+    expect(chatApi).toContain('temperature: options.temperature')
+    expect(chatApi).toContain('maxTokens: options.maxTokens ?? options.max_tokens')
+    expect(chatApi).toContain('sendViaBackend(')
 
     // BUG: 用户在 UI 设置的 temperature/max_tokens 完全无效
     // 后端 server.go ChatRequest 没有 temperature/max_tokens json tag
@@ -93,18 +94,16 @@ describe('[alignment] Frontend ↔ Backend API Contract', () => {
 
   // ── MEDIUM ────────────────────────────────────────────────
 
-  it('MEDIUM: Usage 字段名不对齐 — input_tokens vs prompt_tokens', () => {
-    const chatApi = readSrc('api/chat.ts')
-    // BackendChatResponse.usage 用 prompt_tokens / completion_tokens
+  it('MEDIUM: Usage 使用单一 prompt_tokens / completion_tokens 词汇', () => {
+    const chatApi = readSrc('services/chat-service-compat.ts')
+    const chatTypes = readType('chat.ts')
+    // WebSocket compatibility response exposes one canonical vocabulary.
     expect(chatApi).toContain('prompt_tokens')
     expect(chatApi).toContain('completion_tokens')
-    // ActiveStreamSnapshot.usage 用 input_tokens / output_tokens
-    expect(chatApi).toContain('input_tokens')
-    expect(chatApi).toContain('output_tokens')
-
-    // BUG: 后端 adapter.Usage json tag 是 input_tokens / output_tokens
-    // BackendChatResponse 期望 prompt_tokens → 永远是 undefined
-    // 两种前端类型使用不同字段名，造成同步路径 token 统计永远为 0
+    expect(chatApi).not.toContain('input_tokens')
+    expect(chatApi).not.toContain('output_tokens')
+    expect(chatTypes).not.toContain('input_tokens')
+    expect(chatTypes).not.toContain('output_tokens')
   })
 
   it('MEDIUM: tools_enabled / max_tools 后端 LLM config API 不包含', () => {

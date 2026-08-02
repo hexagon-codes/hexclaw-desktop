@@ -65,8 +65,11 @@ fs.writeFileSync(path.join(artifactDir, 'observed-env.json'), JSON.stringify({
   HEXCLAW_SIDECAR_PORT: process.env.HEXCLAW_SIDECAR_PORT,
 }))
 const server = http.createServer((request, response) => {
-  response.writeHead(request.url === '/health' ? 200 : 404, { 'content-type': 'application/json' })
-  response.end(request.url === '/health' ? '{"healthy":true}' : '{}')
+  const isHealth = request.url === '/health'
+  const isProtectedKnowledge = request.url?.startsWith('/api/v1/knowledge/operations?')
+  const status = isHealth ? 200 : isProtectedKnowledge ? 401 : 404
+  response.writeHead(status, { 'content-type': 'application/json' })
+  response.end(isHealth ? '{"healthy":true}' : '{}')
 })
 server.listen(port, '127.0.0.1')
 const stop = () => server.close(() => process.exit(0))

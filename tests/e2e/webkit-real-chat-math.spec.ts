@@ -136,7 +136,9 @@ async function installMathHistoryBackend(page: Page, state: MathBackendState) {
     if (path === '/api/v1/skills') return json(route, { skills: [], total: 0 })
     if (path === '/api/v1/streams/active') return json(route, { streams: [], total: 0 })
     if (method === 'GET' && path === '/api/v1/sessions') {
-      const sessions = [...state.sessions.values()].map((session) => sessionResponse(state, session))
+      const sessions = [...state.sessions.values()].map((session) =>
+        sessionResponse(state, session),
+      )
       return json(route, {
         sessions,
         total: sessions.length,
@@ -218,14 +220,16 @@ async function installMathHistoryBackend(page: Page, state: MathBackendState) {
   })
 }
 
-async function installTauriMathBackend(
-  page: Page,
-  state: MathBackendState,
-) {
+async function installTauriMathBackend(page: Page, state: MathBackendState) {
   await page.exposeFunction(
     'e2eMathBackendChat',
-    (params: { message?: unknown; session_id?: unknown; request_id?: unknown }) => {
-      const source = String(params.message ?? '')
+    (params: {
+      content?: unknown
+      message?: unknown
+      session_id?: unknown
+      request_id?: unknown
+    }) => {
+      const source = String(params.content ?? params.message ?? '')
       const sessionId = String(params.session_id ?? SESSION_ID)
       const messages = state.messagesBySession.get(sessionId)
       if (!messages) throw new Error(`unknown E2E math session: ${sessionId}`)
@@ -259,14 +263,22 @@ async function installTauriMathBackend(
   )
 
   await page.addInitScript(() => {
-    class RejectedWebSocket extends EventTarget {
+    const fixtureWindow = window as typeof window & {
+      e2eMathBackendChat: (params: Record<string, unknown>) => Promise<string>
+    }
+
+    // Browser E2E intentionally keeps `isTauri()` false so HTTP read fixtures
+    // continue through page.route. Model the same public Sidecar socket frame
+    // contract that NativeSidecarWebSocket uses in that browser branch instead
+    // of reviving the removed `backend_chat` transport.
+    class FixtureWebSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
       static readonly CLOSING = 2
       static readonly CLOSED = 3
 
       readonly url: string
-      readyState = RejectedWebSocket.CONNECTING
+      readyState = FixtureWebSocket.CONNECTING
       onopen: ((event: Event) => void) | null = null
       onmessage: ((event: MessageEvent<string>) => void) | null = null
       onerror: ((event: Event) => void) | null = null
@@ -276,24 +288,65 @@ async function installTauriMathBackend(
         super()
         this.url = String(url)
         queueMicrotask(() => {
-          this.readyState = RejectedWebSocket.CLOSED
-          const event = new Event('error')
-          this.onerror?.(event)
+          if (this.readyState !== FixtureWebSocket.CONNECTING) return
+          this.readyState = FixtureWebSocket.OPEN
+          const event = new Event('open')
+          this.onopen?.(event)
           this.dispatchEvent(event)
         })
       }
 
-      send() {}
+      send(data: string) {
+        let payload: Record<string, unknown>
+        try {
+          payload = JSON.parse(data) as Record<string, unknown>
+        } catch {
+          return
+        }
+        if (payload.type !== 'message') return
+
+        void (async () => {
+          try {
+            const response = JSON.parse(await fixtureWindow.e2eMathBackendChat(payload)) as {
+              reply?: unknown
+              session_id?: unknown
+              metadata?: Record<string, unknown>
+            }
+            if (this.readyState !== FixtureWebSocket.OPEN) return
+            const event = new MessageEvent<string>('message', {
+              data: JSON.stringify({
+                type: 'reply',
+                content: String(response.reply ?? ''),
+                session_id: String(response.session_id ?? payload.session_id ?? ''),
+                request_id: String(payload.request_id ?? ''),
+                metadata: response.metadata ?? {},
+              }),
+            })
+            this.onmessage?.(event)
+            this.dispatchEvent(event)
+          } catch {
+            if (this.readyState === FixtureWebSocket.CLOSED) return
+            this.readyState = FixtureWebSocket.CLOSED
+            const event = new Event('error')
+            this.onerror?.(event)
+            this.dispatchEvent(event)
+          }
+        })()
+      }
 
       close() {
-        this.readyState = RejectedWebSocket.CLOSED
+        if (this.readyState === FixtureWebSocket.CLOSED) return
+        this.readyState = FixtureWebSocket.CLOSED
+        const event = new CloseEvent('close')
+        this.onclose?.(event)
+        this.dispatchEvent(event)
       }
     }
 
     Object.defineProperty(window, 'WebSocket', {
       configurable: true,
       writable: true,
-      value: RejectedWebSocket,
+      value: FixtureWebSocket,
     })
 
     const callbacks: Record<number, (...args: unknown[]) => void> = {}
@@ -314,7 +367,7 @@ async function installTauriMathBackend(
       convertFileSrc(path: string) {
         return path
       },
-      async invoke(cmd: string, args?: Record<string, unknown>) {
+      async invoke(cmd: string, _args?: Record<string, unknown>) {
         if (cmd === 'plugin:event|listen') return nextCallbackId++
         if (cmd === 'plugin:event|unlisten') return null
         if (cmd === 'plugin:event|emit') return null
@@ -325,13 +378,6 @@ async function installTauriMathBackend(
             base_url: `${window.location.origin}/_hexclaw`,
             port: 0,
           }
-        }
-        if (cmd === 'backend_chat') {
-          return (
-            window as unknown as {
-              e2eMathBackendChat: (params: Record<string, unknown>) => Promise<string>
-            }
-          ).e2eMathBackendChat((args?.params ?? {}) as Record<string, unknown>)
         }
         return null
       },
@@ -581,9 +627,9 @@ test('real /chat send and history replay keep adjacent user and assistant formul
     clipboardData.setData('text/plain', source)
     clipboardData.setData(
       'text/html',
-      '<math><semantics><mfrac><mn>1</mn><mn>2</mn></mfrac>'
-        + '<annotation encoding="application/x-tex">1\\frac{1}{2}</annotation>'
-        + '</semantics></math>',
+      '<math><semantics><mfrac><mn>1</mn><mn>2</mn></mfrac>' +
+        '<annotation encoding="application/x-tex">1\\frac{1}{2}</annotation>' +
+        '</semantics></math>',
     )
     element.dispatchEvent(
       new ClipboardEvent('paste', {

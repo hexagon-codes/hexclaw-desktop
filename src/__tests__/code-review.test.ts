@@ -32,8 +32,8 @@ describe('Critical Fixes', () => {
     })
   })
 
-  describe('#CR-3: config.ts JSON.parse 使用 safeJsonParse', () => {
-    it('getLLMConfig 解析非 JSON 时抛出有意义的错误', async () => {
+  describe('#CR-3: config.ts 使用类型化原生凭据协调器', () => {
+    it('getLLMConfig 不在 renderer 中二次 JSON.parse', async () => {
       vi.resetModules()
       ;(globalThis as Record<string, unknown>).isTauri = true
       vi.doMock('@tauri-apps/api/core', () => ({
@@ -42,8 +42,7 @@ describe('Critical Fixes', () => {
 
       const { getLLMConfig } = await import('@/api/config')
 
-      // 修复后：safeJsonParse 包裹，错误消息更友好
-      await expect(getLLMConfig()).rejects.toThrow('getLLMConfig: backend returned a non-JSON payload')
+      await expect(getLLMConfig()).resolves.toBe('not-valid-json')
 
       vi.restoreAllMocks()
       delete (globalThis as Record<string, unknown>).isTauri

@@ -868,12 +868,11 @@ describe('7. API client robustness', () => {
     }
   })
 
-  it('updateSessionTitle calls sessionPatch (PATCH method via helper)', () => {
+  it('updateSessionTitle calls apiPatch through the owned session path', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    // updateSessionTitle uses sessionPatch (which wraps apiPatch with auto user_id)
-    const fnMatch = content.match(/function updateSessionTitle[\s\S]*?return sessionPatch/)
+    const fnMatch = content.match(/function updateSessionTitle[\s\S]*?return apiPatch/)
     expect(fnMatch).toBeTruthy()
   })
 
@@ -885,21 +884,19 @@ describe('7. API client robustness', () => {
     expect(fnMatch).toBeTruthy()
   })
 
-  it('createSession calls sessionPost (POST method via helper)', () => {
+  it('createSession calls apiPost through the owned session path', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    // createSession uses sessionPost (which wraps apiPost with auto user_id)
-    const fnMatch = content.match(/function createSession[\s\S]*?return sessionPost/)
+    const fnMatch = content.match(/function createSession[\s\S]*?return apiPost/)
     expect(fnMatch).toBeTruthy()
   })
 
-  it('listSessions calls sessionGet (GET method via helper)', () => {
+  it('listSessions calls the shared apiGet client', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    // listSessions uses sessionGet (which wraps apiGet with auto user_id)
-    const fnMatch = content.match(/function listSessions[\s\S]*?return sessionGet/)
+    const fnMatch = content.match(/function listSessions[\s\S]*?return apiGet/)
     expect(fnMatch).toBeTruthy()
   })
 

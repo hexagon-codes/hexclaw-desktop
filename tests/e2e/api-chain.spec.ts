@@ -146,7 +146,6 @@ test.describe.serial('Session lifecycle', () => {
       return
     }
 
-    let alternate = ''
     let r2: ChatResult | undefined
     let lastErr: unknown
     for (const candidate of liveCandidates) {
@@ -156,7 +155,6 @@ test.describe.serial('Session lifecycle', () => {
           model: providers[candidate]?.model,
           timeoutMs: 300_000,
         })
-        alternate = candidate
         break
       } catch (err) {
         lastErr = err

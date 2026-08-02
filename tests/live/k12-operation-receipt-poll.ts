@@ -10,3 +10,21 @@ export function classifyOperationReceiptPoll(status: unknown): OperationReceiptP
   }
   return { kind: 'continue' }
 }
+
+export function classifyK12TaskTerminalPoll(input: {
+  receiptStatus: unknown
+  dispatchStatus: unknown
+  projectionStage: unknown
+}): OperationReceiptPollDecision {
+  const dispatchTerminal = ['failed', 'cancelled'].includes(String(input.dispatchStatus))
+  const projectionTerminal = [
+    'recovering',
+    'failed_retryable',
+    'failed_terminal',
+    'cancelled',
+  ].includes(String(input.projectionStage))
+  if (dispatchTerminal || projectionTerminal) {
+    return { kind: 'terminal_failure', status: 'failed' }
+  }
+  return classifyOperationReceiptPoll(input.receiptStatus)
+}

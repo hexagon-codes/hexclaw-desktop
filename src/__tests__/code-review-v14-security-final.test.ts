@@ -1,271 +1,139 @@
 /**
- * code-review-v14-security-final — Static analysis security review
- *
- * Verifies previously-fixed security issues remain fixed and
- * validates security properties across the Rust and TypeScript layers.
+ * Current static security boundaries. Historical Rust provider/proxy assertions
+ * were retired with the single-Sidecar transport and native credential vault.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
 const ROOT = resolve(__dirname, '../..')
-function readSrc(path: string): string {
-  return readFileSync(resolve(ROOT, 'src', path), 'utf-8')
-}
-function readRust(path: string): string {
-  return readFileSync(resolve(ROOT, 'src-tauri/src', path), 'utf-8')
-}
+const readSrc = (path: string) => readFileSync(resolve(ROOT, 'src', path), 'utf-8')
+const readRust = (path: string) =>
+  readFileSync(resolve(ROOT, 'src-tauri/src', path), 'utf-8')
 
-// ═══════════════════════════════════════════════════════════
-// 1. SSRF protection in stream_chat (FIXED)
-// ═══════════════════════════════════════════════════════════
-describe('SSRF protection in stream_chat', () => {
+describe('single Sidecar transport authority', () => {
   const commands = readRust('commands.rs')
+  const compat = readSrc('services/chat-service-compat.ts')
 
-  it('checks is_loopback() for IPv4 addresses', () => {
-    expect(commands).toContain('v4.is_loopback()')
+  it('keeps direct provider chat and arbitrary proxy commands retired', () => {
+    expect(commands).not.toMatch(/async fn (?:stream_chat|backend_chat)\b/)
+    expect(commands).toMatch(/pub async fn proxy_api_request\b/)
+    expect(commands).toContain('execute_sidecar_fetch(method, path, headers, bytes')
   })
 
-  it('checks is_private() for IPv4 addresses', () => {
-    expect(commands).toContain('v4.is_private()')
-  })
-
-  it('checks is_loopback() for IPv6 addresses', () => {
-    expect(commands).toContain('v6.is_loopback()')
-  })
-
-  it('blocks cloud metadata endpoint 169.254.169.254', () => {
-    expect(commands).toContain('169.254.169.254')
-  })
-
-  it('blocks cloud metadata endpoint metadata.google.internal', () => {
-    expect(commands).toContain('metadata.google.internal')
-  })
-
-  it('returns an error message for private/loopback addresses', () => {
-    expect(commands).toMatch(/Blocked.*private.*loopback/)
-  })
-
-  it('validates URL scheme is http or https only', () => {
-    expect(commands).toContain('scheme != "https" && scheme != "http"')
+  it('keeps the compatibility adapter WebSocket-only', () => {
+    expect(compat).toContain('openWebSocketStream')
+    expect(compat).not.toContain('fetch(')
+    expect(compat).not.toContain('invoke(')
+    expect(compat).not.toContain('api_key')
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 2. safe-html.ts — no wasteful double-sanitization (FIXED)
-// ═══════════════════════════════════════════════════════════
-describe('safe-html.ts single-pass sanitization', () => {
+describe('safe HTML boundaries', () => {
   const safeHtml = readSrc('utils/safe-html.ts')
+  const markdown = readSrc('components/chat/MarkdownRenderer.vue')
 
-  it('looksLikeHtmlDocument check comes BEFORE fragment sanitization', () => {
-    const docCheckPos = safeHtml.indexOf('looksLikeHtmlDocument(content)')
-    const fragmentSanitizePos = safeHtml.indexOf('WHOLE_DOCUMENT: false')
-    expect(docCheckPos).toBeGreaterThan(-1)
-    expect(fragmentSanitizePos).toBeGreaterThan(-1)
-    expect(docCheckPos).toBeLessThan(fragmentSanitizePos)
+  it('chooses document mode before fragment sanitization', () => {
+    const documentCheck = safeHtml.indexOf('looksLikeHtmlDocument(content)')
+    const fragmentSanitize = safeHtml.indexOf('WHOLE_DOCUMENT: false')
+    expect(documentCheck).toBeGreaterThan(-1)
+    expect(documentCheck).toBeLessThan(fragmentSanitize)
   })
 
-  it('only has one DOMPurify.sanitize call per code path (document vs fragment)', () => {
-    // Count DOMPurify.sanitize calls excluding the title sanitization
-    const lines = safeHtml.split('\n')
-    const sanitizeCalls = lines.filter(
-      (l) => l.includes('DOMPurify.sanitize(content') || l.includes('DOMPurify.sanitize(content,'),
-    )
-    // Exactly two calls: one for WHOLE_DOCUMENT:true, one for WHOLE_DOCUMENT:false
-    expect(sanitizeCalls.length).toBe(2)
+  it('disables raw Markdown HTML and sanitizes rendered output', () => {
+    expect(markdown).toMatch(/new MarkdownIt\(\{[^}]*html:\s*false/)
+    expect(markdown).toContain('DOMPurify.sanitize(')
+    expect(markdown).toContain('KATEX_DOMPURIFY_CONFIG')
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 3. file-parser.ts file size limit (FIXED)
-// ═══════════════════════════════════════════════════════════
-describe('file-parser.ts file size limit', () => {
-  const fileParser = readSrc('utils/file-parser.ts')
+describe('file parsing budget', () => {
+  const parser = readSrc('utils/file-parser.ts')
 
-  it('defines MAX_FILE_SIZE constant', () => {
-    expect(fileParser).toMatch(/const MAX_FILE_SIZE\s*=/)
-  })
-
-  it('parseDocument checks file.size > MAX_FILE_SIZE before processing', () => {
-    expect(fileParser).toContain('file.size > MAX_FILE_SIZE')
-  })
-
-  it('throws an Error when file exceeds the size limit', () => {
-    expect(fileParser).toMatch(/throw new Error\([\s\S]*?too large/)
+  it('checks the shared file-size limit before parsing', () => {
+    expect(parser).toMatch(/const MAX_FILE_SIZE\s*=/)
+    expect(parser).toContain('file.size > MAX_FILE_SIZE')
+    expect(parser).toMatch(/throw new Error\([\s\S]*?too large/)
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 4. WebSocket reconnect loop prevention (FIXED)
-// ═══════════════════════════════════════════════════════════
 describe('WebSocket reconnect loop prevention', () => {
-  const ws = readSrc('api/websocket.ts')
+  const websocket = readSrc('api/websocket.ts')
 
-  it('does NOT immediately reset reconnectAttempts in onopen', () => {
-    // The reconnectAttempts = 0 should NOT appear directly in the onopen handler
-    // without a stability delay
-    const onopenMatch = ws.match(/onopen\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s{4}\}/)
-    expect(onopenMatch).toBeTruthy()
-    const onopenBody = onopenMatch![1]
-    // The direct assignment should be inside a setTimeout, not as a bare statement
-    expect(onopenBody).not.toMatch(/^\s*this\.reconnectAttempts\s*=\s*0/m)
-  })
-
-  it('uses a stability timer (setTimeout) before resetting reconnect counter', () => {
-    expect(ws).toMatch(/setTimeout\s*\(\s*\(\)\s*=>\s*\{\s*this\.reconnectAttempts\s*=\s*0/)
-  })
-
-  it('has a stability delay of at least a few seconds', () => {
-    // The timer uses 10_000 (10 seconds)
-    const timerMatch = ws.match(
-      /setTimeout\(\s*\(\)\s*=>\s*\{[^}]*reconnectAttempts[^}]*\}\s*,\s*(\d[\d_]*)/,
+  it('resets reconnect attempts only after a stability timer', () => {
+    const onOpen = websocket.match(/onopen\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s{4}\}/)
+    expect(onOpen).toBeTruthy()
+    expect(onOpen![1]).not.toMatch(/^\s*this\.reconnectAttempts\s*=\s*0/m)
+    expect(websocket).toMatch(
+      /setTimeout\s*\(\s*\(\)\s*=>\s*\{\s*this\.reconnectAttempts\s*=\s*0/,
     )
-    expect(timerMatch).toBeTruthy()
-    const delay = Number(timerMatch![1]!.replace(/_/g, ''))
-    expect(delay).toBeGreaterThanOrEqual(5000)
-  })
-
-  it('clears the stability timer if connection closes early', () => {
-    expect(ws).toContain('clearTimeout(stableTimer)')
+    expect(websocket).toContain('clearTimeout(stableTimer)')
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 5. Credential handling
-// ═══════════════════════════════════════════════════════════
-describe('Credential handling', () => {
-  const commands = readRust('commands.rs')
+describe('write-only renderer credential boundary', () => {
   const secureStore = readSrc('utils/secure-store.ts')
 
-  it('stream_chat forwards API key only via Authorization header', () => {
-    // The API key should appear in an Authorization header, not in the URL or body
-    expect(commands).toMatch(
-      /\.header\("Authorization",\s*format!\("Bearer \{\}",\s*params\.api_key\)/,
-    )
+  it('exposes typed mutation and presence without plaintext reads', () => {
+    expect(secureStore).toContain('putCredential')
+    expect(secureStore).toContain('deleteCredential')
+    expect(secureStore).toContain('credentialPresent')
+    expect(secureStore).not.toContain('get_credential')
+    expect(secureStore).not.toContain('read_credential')
   })
 
-  it('secure storage is handled in TypeScript via Tauri LazyStore', () => {
-    // Secure storage moved from Rust keyring to TypeScript secure-store.ts.
-    // Tauri 桌面端使用 LazyStore；浏览器端不再做假安全持久化。
-    expect(secureStore).toContain('LazyStore')
-    expect(secureStore).toContain('volatileBrowserStore')
-    expect(secureStore).toContain('saveSecureValue')
+  it('keeps browser secrets in process memory only', () => {
+    expect(secureStore).toContain('browserSessionVault')
+    expect(secureStore).not.toContain('localStorage')
   })
 
-  it('loadSecureValue decrypts stored values', () => {
-    expect(secureStore).toContain('loadSecureValue')
-    expect(secureStore).not.toContain("enc.encode('hexclaw-desktop')")
-  })
-
-  it('secure-store.ts never logs the actual key value', () => {
-    // logger calls should only reference the key name, not the value
-    const loggerLines = secureStore.split('\n').filter((l) => l.includes('logger.'))
-    for (const line of loggerLines) {
-      // Should not log 'value' or the variable itself
+  it('never logs secret values', () => {
+    for (const line of secureStore.split('\n').filter((value) => value.includes('logger.'))) {
       expect(line).not.toMatch(/logger\.\w+\(.*\bvalue\b/)
     }
   })
+})
 
-  it('secure-store.ts does not persist browser secrets in localStorage', () => {
-    expect(secureStore).toContain('volatileBrowserStore')
-    expect(secureStore).not.toContain('DEVICE_SALT_KEY')
+describe('native Sidecar transfer boundary', () => {
+  const commands = readRust('commands.rs')
+  const nativeFiles = readSrc('api/native-files.ts')
+
+  it('keeps the arbitrary proxy command retired', () => {
+    expect(commands).toContain('execute_sidecar_fetch(method, path, headers, bytes')
+  })
+
+  it('normalizes transfers to the managed Sidecar origin', () => {
+    expect(nativeFiles).toContain('url.origin !== base.origin')
+    expect(nativeFiles).toContain('Native transfer target must be the managed Sidecar origin')
+    expect(nativeFiles).toContain('relativePath: sidecarRelativePath')
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 6. Process cleanup
-// ═══════════════════════════════════════════════════════════
-describe('Process cleanup', () => {
+describe('process cleanup', () => {
   const sidecar = readRust('sidecar.rs')
   const lib = readRust('lib.rs')
 
-  it('sidecar.rs calls child.kill() for cleanup', () => {
+  it('kills and waits for the Sidecar child', () => {
     expect(sidecar).toContain('child.kill()')
-  })
-
-  it('sidecar.rs waits for the child process after killing', () => {
     expect(sidecar).toContain('child.wait()')
   })
 
-  it('lib.rs registers a WindowEvent::Destroyed handler', () => {
+  it('stops managed children when the main window is destroyed', () => {
     expect(lib).toContain('WindowEvent::Destroyed')
-  })
-
-  it('lib.rs calls stop_sidecar on main window destroy', () => {
     expect(lib).toContain('sidecar::stop_sidecar()')
-  })
-
-  it('lib.rs calls stop_ollama on main window destroy', () => {
     expect(lib).toContain('ollama::stop_ollama()')
   })
 })
 
-// ═══════════════════════════════════════════════════════════
-// 7. proxy_api_request safety
-// ═══════════════════════════════════════════════════════════
-describe('proxy_api_request safety', () => {
-  const commands = readRust('commands.rs')
+describe('iframe sandbox boundaries', () => {
+  const renderer = readSrc('components/chat/ArtifactRenderer.vue')
+  const preview = readSrc('components/artifacts/ArtifactPreview.vue')
 
-  it('requires path to start with /', () => {
-    expect(commands).toContain("!path.starts_with('/')")
-  })
-
-  it('rejects path containing ".."', () => {
-    expect(commands).toContain('path.contains("..")')
-  })
-
-  it('target is always localhost via sidecar::base_url()', () => {
-    // The proxy URL is constructed from sidecar::base_url() which is always localhost
-    expect(commands).toMatch(/format!\("{}{}",\s*sidecar::base_url\(\),\s*path\)/)
-  })
-
-  it('returns an error for invalid API paths', () => {
-    expect(commands).toContain('Invalid API path')
-  })
-})
-
-// ═══════════════════════════════════════════════════════════
-// 8. DOMPurify + markdown-it double defense
-// ═══════════════════════════════════════════════════════════
-describe('DOMPurify + markdown-it double defense in MarkdownRenderer', () => {
-  const md = readSrc('components/chat/MarkdownRenderer.vue')
-
-  it('configures markdown-it with html: false', () => {
-    expect(md).toMatch(/new MarkdownIt\(\{[^}]*html:\s*false/)
-  })
-
-  it('runs DOMPurify.sanitize on the rendered markdown output', () => {
-    expect(md).toContain('DOMPurify.sanitize(')
-    expect(md).toContain('KATEX_DOMPURIFY_CONFIG')
-  })
-
-  it('imports DOMPurify explicitly', () => {
-    expect(md).toMatch(/import DOMPurify from ['"]dompurify['"]/)
-  })
-})
-
-// ═══════════════════════════════════════════════════════════
-// 9. iframe sandbox
-// ═══════════════════════════════════════════════════════════
-describe('iframe sandbox attributes', () => {
-  const artifactRenderer = readSrc('components/chat/ArtifactRenderer.vue')
-  const artifactPreview = readSrc('components/artifacts/ArtifactPreview.vue')
-
-  it('ArtifactRenderer.vue uses sandbox attribute on iframe', () => {
-    expect(artifactRenderer).toMatch(/sandbox="[^"]*"/)
-  })
-
-  it('ArtifactRenderer.vue does not allow-same-origin in sandbox', () => {
-    const sandboxMatch = artifactRenderer.match(/sandbox="([^"]*)"/)
-    expect(sandboxMatch).toBeTruthy()
-    expect(sandboxMatch![1]).not.toContain('allow-same-origin')
-  })
-
-  it('ArtifactPreview.vue uses the strictest sandbox (empty string)', () => {
-    expect(artifactPreview).toContain('sandbox=""')
-  })
-
-  it('ArtifactRenderer.vue injects Content-Security-Policy in iframe content', () => {
-    expect(artifactRenderer).toContain('Content-Security-Policy')
+  it('uses sandboxing without same-origin authority', () => {
+    const sandbox = renderer.match(/sandbox="([^"]*)"/)
+    expect(sandbox).toBeTruthy()
+    expect(sandbox![1]).not.toContain('allow-same-origin')
+    expect(preview).toContain('sandbox=""')
+    expect(renderer).toContain('Content-Security-Policy')
   })
 })

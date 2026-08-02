@@ -41,11 +41,27 @@ vi.mock('@/services/messageService', () => msgSvc)
 const chatSvc = {
   sendViaWebSocket: vi.fn(),
   sendViaBackend: vi.fn(),
-  ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: '默认回复' }),
+  }),
+  ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
   clearWebSocketCallbacks: vi.fn(),
   ChatRequestError: class extends Error { noFallback = false },
 }
 vi.mock('@/services/chatService', () => chatSvc)
+
+const uploadChatAttachment = vi.fn().mockResolvedValue({ attachment_id: 'attachment-image-1' })
+const ensureChatAttachmentReceipt = vi.fn().mockImplementation(
+  async (attachment: { attachmentId?: string }) => ({
+    ...attachment,
+    attachmentId: attachment.attachmentId ?? 'attachment-image-1',
+  }),
+)
+vi.mock('@/api/attachments', () => ({
+  uploadChatAttachment,
+  ensureChatAttachmentReceipt,
+}))
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
@@ -110,16 +126,17 @@ describe('集成: 模型配置 → 模型选择 → 发消息', () => {
     chat.chatParams.provider = selected.providerKey || undefined
     chat.chatParams.model = selected.modelId
 
-    // Step 4: 发消息 — 验证 chatParams 传递到 sendViaBackend
-    chatSvc.sendViaBackend.mockResolvedValueOnce({
-      reply: '你好', metadata: { backend_message_id: 'msg-1' },
+    // Step 4: 发消息 — 验证 chatParams 传递到单一 WebSocket 运行时
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '你好', metadata: { backend_message_id: 'msg-1' } }),
     })
     await chat.sendMessage('你好')
 
-    expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
+    expect(chatSvc.openWebSocketStream).toHaveBeenCalledWith(
       '你好', expect.any(String),
       expect.objectContaining({ model: 'qwen3:8b', provider: expect.stringContaining('Ollama') }),
-      '', undefined, expect.objectContaining({
+      '', undefined, expect.any(Object), expect.objectContaining({
         pinned_agent: 'default',
         user_locale: 'zh-CN',
         locale: 'zh-CN',
@@ -149,7 +166,10 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     })
 
     // Mock 发消息
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '根据员工手册，年假为 15 天。', metadata: {} })
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '根据员工手册，年假为 15 天。', metadata: {} }),
+    })
 
     // 使用 useChatSend（需要构造 deps）
     const { useChatSend } = await import('@/composables/useChatSend')
@@ -165,11 +185,11 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     }
     const { handleSend } = useChatSend(deps as any)
     await handleSend('年假怎么请')
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalled())
 
     // 客户端 Auto-RAG 通道已删（BUG-20260712-M）：显式检索归一分设门槛无效（垃圾恒 1.0）
-    // 且与引擎注入重复；sendViaBackend 收到可见文本本体，知识注入由引擎 QueryHits 完成。
-    const backendCall = chatSvc.sendViaBackend.mock.calls[0]!
+    // 且与引擎注入重复；WebSocket 收到可见文本本体，知识注入由引擎 QueryHits 完成。
+    const backendCall = chatSvc.openWebSocketStream.mock.calls[0]!
     const backendText = backendCall[0] as string
     expect(backendText).not.toContain('[知识库参考信息')
     expect(backendText).toBe('年假怎么请')
@@ -183,7 +203,10 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     // 知识库搜索抛错
     mockApi.mockRejectedValueOnce(new Error('knowledge service unavailable'))
 
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '我可以帮你。', metadata: {} })
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '我可以帮你。', metadata: {} }),
+    })
 
     const { useChatSend } = await import('@/composables/useChatSend')
     const deps = {
@@ -194,10 +217,10 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     }
     const { handleSend } = useChatSend(deps as any)
     await handleSend('帮我查个东西')
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalled())
 
     // 对话正常进行，backendText 没有 RAG 注入
-    const backendText = chatSvc.sendViaBackend.mock.calls[0]![0] as string
+    const backendText = chatSvc.openWebSocketStream.mock.calls[0]![0] as string
     expect(backendText).not.toContain('[知识库参考信息')
     expect(backendText).toBe('帮我查个东西')
   })
@@ -216,9 +239,12 @@ describe('集成: 会话完整生命周期', () => {
     chat.chatParams.model = 'qwen3:8b'
 
     // Step 1: 新建会话 + 发消息
-    chatSvc.sendViaBackend.mockResolvedValueOnce({
-      reply: '```ts\nconst sum = (a: number, b: number) => a + b\n```',
-      metadata: {},
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: '```ts\nconst sum = (a: number, b: number) => a + b\n```',
+        metadata: {},
+      }),
     })
     await chat.sendMessage('写一个 TS 加法函数')
 
@@ -287,7 +313,10 @@ describe('集成: Agent 角色 → 对话', () => {
     chat.chatParams.model = 'gpt-5.6-sol'
     chat.chatMode = 'research'
     chat.agentRole = 'k12-tutor-mingming'
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '正在深入分析…', metadata: {} })
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '正在深入分析…', metadata: {} }),
+    })
 
     const { handleSend } = useChatSend({
       chatStore: chat,
@@ -299,15 +328,16 @@ describe('集成: Agent 角色 → 对话', () => {
     } as any)
 
     await handleSend('深入分析这道题')
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalled())
 
     expect(chat.agentRole).toBe('k12-tutor-mingming')
-    expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
+    expect(chatSvc.openWebSocketStream).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.any(Object),
       'k12-tutor-mingming',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         pinned_agent: 'k12-tutor-mingming',
         producer_kind: 'chat',
@@ -335,16 +365,19 @@ describe('集成: Agent 角色 → 对话', () => {
 
     // Step 1: 进入 research 模式
     chat.chatMode = 'research'
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '正在研究...', metadata: {} })
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '正在研究...', metadata: {} }),
+    })
     await handleSend('研究一下 Vue 4 的新特性')
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalled())
 
     // 验证 agentRole 被设置
     expect(chat.agentRole).toBe('researcher')
-    // 验证 sendViaBackend 收到了 role
-    expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
+    // 验证 WebSocket 收到了 role
+    expect(chatSvc.openWebSocketStream).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), 'researcher', undefined, expect.objectContaining({
+      expect.any(Object), 'researcher', undefined, expect.any(Object), expect.objectContaining({
         pinned_agent: 'researcher',
         user_locale: 'zh-CN',
         locale: 'zh-CN',
@@ -354,15 +387,18 @@ describe('集成: Agent 角色 → 对话', () => {
 
     // Step 2: 退出 research 模式
     chat.chatMode = 'chat'
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '普通回复', metadata: {} })
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '普通回复', metadata: {} }),
+    })
     await handleSend('普通聊天')
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalledTimes(2))
 
     // 验证 agentRole 被清除
     expect(chat.agentRole).toBe('')
-    expect(chatSvc.sendViaBackend).toHaveBeenLastCalledWith(
+    expect(chatSvc.openWebSocketStream).toHaveBeenLastCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), '', undefined, expect.objectContaining({
+      expect.any(Object), '', undefined, expect.any(Object), expect.objectContaining({
         pinned_agent: 'default',
         user_locale: 'zh-CN',
         locale: 'zh-CN',
@@ -373,25 +409,23 @@ describe('集成: Agent 角色 → 对话', () => {
 })
 
 // ═══════════════════════════════════════════════════
-// 集成 5: 发消息带附件（图片 + 视频 + 文档）
+// 集成 5: 发消息带原生回执图片附件
 // ═══════════════════════════════════════════════════
 
-describe('集成: 多类型附件处理', () => {
+describe('集成: 原生图片附件处理', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); mockApi.mockReset() })
 
-  it('图片作 image 类型、视频作 video 类型、文档解析为文本', async () => {
+  it('图片先取得原生 receipt，再以 image + attachmentId 进入 WebSocket', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const { useChatSend } = await import('@/composables/useChatSend')
     const chat = useChatStore()
     chat.chatParams.model = 'qwen3:8b'
 
     mockApi.mockResolvedValue({ result: [] }) // knowledge search
-    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '收到', metadata: {} })
-
-    // Mock parseDocument for document file
-    vi.doMock('@/utils/file-parser', () => ({
-      parseDocument: vi.fn().mockRejectedValue(new Error('unsupported')),
-    }))
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '收到', metadata: {} }),
+    })
 
     const deps = {
       chatStore: chat,
@@ -402,19 +436,17 @@ describe('集成: 多类型附件处理', () => {
     const { handleSend } = useChatSend(deps as any)
 
     const imgFile = new File(['img'], 'photo.png', { type: 'image/png' })
-    const vidFile = new File(['vid'], 'demo.mp4', { type: 'video/mp4' })
 
-    await handleSend('看看这些', [imgFile, vidFile])
-    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+    await handleSend('看看这张图', [imgFile])
+    await vi.waitFor(() => expect(chatSvc.openWebSocketStream).toHaveBeenCalled())
 
-    const sendCall = chatSvc.sendViaBackend.mock.calls[0]!
+    const sendCall = chatSvc.openWebSocketStream.mock.calls[0]!
     // attachments 是第 5 个参数
-    const attachments = sendCall[4] as { type: string; name: string }[]
-    expect(attachments).toHaveLength(2)
+    const attachments = sendCall[4] as { type: string; name: string; attachmentId?: string }[]
+    expect(attachments).toHaveLength(1)
     expect(attachments[0]!.type).toBe('image')
     expect(attachments[0]!.name).toBe('photo.png')
-    expect(attachments[1]!.type).toBe('video')
-    expect(attachments[1]!.name).toBe('demo.mp4')
+    expect(attachments[0]!.attachmentId).toBe('attachment-image-1')
   })
 })
 
@@ -425,7 +457,7 @@ describe('集成: 多类型附件处理', () => {
 describe('集成: 发送链路错误恢复', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); mockApi.mockReset() })
 
-  it('WS 连接失败 → 自动 fallback 到 HTTP → 正常回复', async () => {
+  it('WS 连接失败 → fail closed，不启用第二传输', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const chat = useChatStore()
     chat.chatParams.model = 'qwen3:8b'
@@ -433,33 +465,32 @@ describe('集成: 发送链路错误恢复', () => {
     // WS 连接失败
     chatSvc.ensureWebSocketConnected.mockResolvedValue(false)
 
-    // HTTP fallback 正常
-    chatSvc.sendViaBackend.mockResolvedValueOnce({
-      reply: 'HTTP 回复正常', metadata: {},
-    })
-
     await chat.sendMessage('测试 fallback')
 
-    expect(chatSvc.sendViaBackend).toHaveBeenCalled()
-    expect(chat.messages[1]!.content).toBe('HTTP 回复正常')
+    expect(chatSvc.sendViaBackend).not.toHaveBeenCalled()
+    expect(chatSvc.openWebSocketStream).not.toHaveBeenCalled()
+    expect(chat.error?.message).toContain('WebSocket transport unavailable')
   })
 
-  it('HTTP 也失败 → error 状态 + 错误消息', async () => {
+  it('WebSocket 请求失败 → error 状态 + 错误消息', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const chat = useChatStore()
     chat.chatParams.model = 'qwen3:8b'
 
-    chatSvc.ensureWebSocketConnected.mockResolvedValue(false)
-    chatSvc.sendViaBackend.mockRejectedValueOnce(new Error('后端服务不可达'))
+    chatSvc.ensureWebSocketConnected.mockResolvedValue(true)
+    chatSvc.openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new Error('后端服务不可达')),
+    })
 
     await chat.sendMessage('测试错误')
 
     expect(chat.error).not.toBeNull()
-    expect(chat.error!.message).toContain('后端服务不可达')
+    expect(chat.error!.message).toContain('WebSocket transport unavailable')
     // 错误消息被追加到消息列表
     const lastMsg = chat.messages[chat.messages.length - 1]!
     expect(lastMsg.role).toBe('assistant')
-    expect(lastMsg.content).toContain('不可达')
+    expect(lastMsg.content).toContain('WebSocket transport unavailable')
   })
 
   it('发送中重复调用 sendMessage 被阻止（sending 锁）', async () => {

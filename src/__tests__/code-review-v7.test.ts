@@ -179,18 +179,17 @@ describe('IM Channels — 实例名唯一性', () => {
 // ═══════════════════════════════════════════════════
 
 describe('安全 — 路径遍历防护', () => {
-  it('proxy_api_request 命令检查路径前缀和 .. 遍历', () => {
+  it('兼容 proxy_api_request 统一委托给受限 Sidecar 传输', () => {
     const source = readFileSync('src-tauri/src/commands.rs', 'utf-8')
-    // 路径前缀检查
-    expect(source).toContain("!path.starts_with('/')")
-    // .. 遍历防护
-    expect(source).toContain('path.contains("..")')
+    expect(source).toContain('execute_sidecar_fetch(method, path, headers, bytes')
   })
 
-  it('stream_chat 命令阻止 SSRF 到 cloud metadata', () => {
+  it('直连 provider 的 stream_chat 命令已退役', () => {
     const source = readFileSync('src-tauri/src/commands.rs', 'utf-8')
-    expect(source).toContain('169.254.169.254')
-    expect(source).toContain('metadata.google.internal')
+    expect(source).not.toMatch(/fn stream_chat\b/)
+    const compat = readFileSync('src/services/chat-service-compat.ts', 'utf-8')
+    expect(compat).toContain('openWebSocketStream')
+    expect(compat).not.toContain('fetch(')
   })
 })
 

@@ -327,6 +327,7 @@ afterEach(() => {
 
 describe('Chain 1: Chat Message Flow', () => {
   it('user message triggers knowledge search, injects context as backendText, and finalizes assistant message', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     // Knowledge search returns relevant hits
     mockSearchKnowledge.mockResolvedValueOnce({
       result: [
@@ -334,10 +335,12 @@ describe('Chain 1: Chat Message Flow', () => {
         { content: 'It uses RAG for context', score: 0.88, doc_title: 'Architecture' },
       ],
     })
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'Based on the knowledge base, HexClaw is an AI agent that uses RAG.',
-      session_id: 's1',
-      metadata: { knowledge_hits: 2 },
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: 'Based on the knowledge base, HexClaw is an AI agent that uses RAG.',
+        metadata: { knowledge_hits: 2 },
+      }),
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -357,12 +360,13 @@ describe('Chain 1: Chat Message Flow', () => {
 
     // Verify the chain
     expect(mockSearchKnowledge).toHaveBeenCalledWith(userText, 3)
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       backendText,
       expect.any(String),
       expect.any(Object),
       '',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         pinned_agent: 'default',
         user_locale: 'zh-CN',
@@ -378,10 +382,13 @@ describe('Chain 1: Chat Message Flow', () => {
   })
 
   it('knowledge search failure does not block chat - message still sent without RAG context', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     mockSearchKnowledge.mockRejectedValueOnce(new Error('Knowledge service unavailable'))
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'I can still answer without knowledge base.',
-      session_id: 's1',
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: 'I can still answer without knowledge base.',
+      }),
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -402,12 +409,13 @@ describe('Chain 1: Chat Message Flow', () => {
 
     expect(assistantMsg).not.toBeNull()
     expect(assistantMsg?.content).toBe('I can still answer without knowledge base.')
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       userText,
       expect.any(String),
       expect.any(Object),
       '',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         pinned_agent: 'default',
         user_locale: 'zh-CN',
@@ -419,10 +427,11 @@ describe('Chain 1: Chat Message Flow', () => {
   })
 
   it('empty knowledge results skip RAG injection - raw user text sent to backend', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     mockSearchKnowledge.mockResolvedValueOnce({ result: [] })
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'No knowledge base context available.',
-      session_id: 's1',
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'No knowledge base context available.' }),
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -444,10 +453,10 @@ describe('Chain 1: Chat Message Flow', () => {
   })
 
   it('assistant message is persisted to DB after finalization', async () => {
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'Persisted response',
-      session_id: 's1',
-      metadata: { model: 'gpt-4o' },
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'Persisted response', metadata: { model: 'gpt-4o' } }),
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -569,9 +578,12 @@ describe('Chain 3: Session Lifecycle', () => {
   })
 
   it('artifacts are extracted from code blocks in assistant responses', async () => {
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'Here is some code:\n```typescript\nconsole.log("hello world")\n```\nDone.',
-      session_id: 's1',
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: 'Here is some code:\n```typescript\nconsole.log("hello world")\n```\nDone.',
+      }),
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -670,7 +682,13 @@ describe('Chain 4: Conversation Automation', () => {
     const store = useChatStore()
 
     const { useConversationAutomation } = await import('@/composables/useConversationAutomation')
-    const toast = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+    const toast = {
+      success: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
+      action: vi.fn(),
+    }
     const automation = useConversationAutomation(store, toast)
 
     // Set up a message with a create_task action
@@ -717,7 +735,13 @@ describe('Chain 4: Conversation Automation', () => {
     const store = useChatStore()
 
     const { useConversationAutomation } = await import('@/composables/useConversationAutomation')
-    const toast = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+    const toast = {
+      success: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
+      action: vi.fn(),
+    }
     const automation = useConversationAutomation(store, toast)
 
     store.messages = [
@@ -795,17 +819,13 @@ describe('Chain 5: WebSocket Lifecycle', () => {
     expect(persistMessage).toHaveBeenCalled()
   })
 
-  it('WebSocket error triggers error callback and falls back to HTTP', async () => {
+  it('WebSocket error fails closed without HTTP fallback', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     await import('@/services/chatService')
     openWebSocketStream.mockReturnValueOnce({
       cancel: vi.fn(),
       done: Promise.reject(new Error('Connection lost')),
-    })
-    sendViaBackend.mockResolvedValueOnce({
-      reply: 'Fallback response',
-      session_id: 's1',
     })
 
     const { useChatStore } = await import('@/stores/chat')
@@ -814,9 +834,9 @@ describe('Chain 5: WebSocket Lifecycle', () => {
 
     const result = await store.sendMessage('test fallback')
 
-    // Should have fallen back to HTTP since the WS error was not ChatRequestError with noFallback
-    expect(sendViaBackend).toHaveBeenCalled()
-    expect(result?.content).toBe('Fallback response')
+    expect(sendViaBackend).not.toHaveBeenCalled()
+    expect(result).toBeNull()
+    expect(store.error?.message).toContain('WebSocket transport unavailable')
   })
 
   it('WebSocket noFallback error does NOT fall back to HTTP', async () => {
@@ -856,8 +876,8 @@ describe('Chain 5: WebSocket Lifecycle', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('Chain 6: Model Selection & Parameters', () => {
-  it('chatParams provider/model are passed through to sendViaBackend', async () => {
-    ensureWebSocketConnected.mockResolvedValue(false)
+  it('chatParams provider/model are passed through to the sole WebSocket transport', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -865,12 +885,13 @@ describe('Chain 6: Model Selection & Parameters', () => {
 
     await store.sendMessage('test model selection')
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'test model selection',
       expect.any(String),
       { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5, maxTokens: 2048 },
       '',
       undefined,
+      expect.any(Object),
       // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
       expect.objectContaining({
         agent_temperature: '0.5',
@@ -922,8 +943,8 @@ describe('Chain 6: Model Selection & Parameters', () => {
     )
   })
 
-  it('changing agentRole is passed through to backend', async () => {
-    ensureWebSocketConnected.mockResolvedValue(false)
+  it('changing agentRole is passed through to the WebSocket transport', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -932,12 +953,13 @@ describe('Chain 6: Model Selection & Parameters', () => {
 
     await store.sendMessage('research query')
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'research query',
       expect.any(String),
       { model: 'gpt-4o' },
       'researcher',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         pinned_agent: 'researcher',
         user_locale: 'zh-CN',

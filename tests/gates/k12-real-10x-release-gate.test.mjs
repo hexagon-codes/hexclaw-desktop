@@ -487,7 +487,7 @@ test('release CLI wires a preflight-passing contract through the parent-owned co
   assert.deepEqual(reports, [{ schemaVersion: 1, status: 'passed', cycles: [] }])
 })
 
-test('K12-REAL10X-C10-PREP-001 runs one parent-owned handoff prepare after C09 and before C10', async () => {
+test('K12-REAL10X-C10-HANDOFF-001 runs one parent-owned handoff prepare after C09 and before C10', async () => {
   const contract = await loadContract()
   const { executeReleasePlan } = await loadRunner()
   const runnable = structuredClone(contract)
@@ -547,7 +547,7 @@ test('K12-REAL10X-C10-PREP-001 runs one parent-owned handoff prepare after C09 a
   ])
 })
 
-test('K12-REAL10X-C10-PREP-002 accepts only the current C10 run and exact dynamic handoff environment', async () => {
+test('K12-REAL10X-C10-HANDOFF-002 accepts only the current C10 run and exact dynamic handoff environment', async () => {
   const { validatePreparedC10Handoff } = await loadRunner()
   const environment = {
     HEX_K12_C10_RESTART_HOOK: '/tmp/k12-c10/restart-driver',
@@ -592,7 +592,7 @@ test('K12-REAL10X-C10-PREP-002 accepts only the current C10 run and exact dynami
   )
 })
 
-test('K12-REAL10X-C10-PREP-001 executes only the SHA-pinned caller hook with a private current-run manifest', async () => {
+test('K12-REAL10X-C10-HANDOFF-001 executes only the SHA-pinned caller hook with a private current-run manifest', async () => {
   const { executeCallerC10HandoffPrepare } = await loadRunner()
   const root = mkdtempSync(join(tmpdir(), 'hexclaw-c10-prepare-'))
   try {

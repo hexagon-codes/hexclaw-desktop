@@ -292,18 +292,21 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
-    // Simulate: WS not available, falls back to HTTP backend
-    ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockResolvedValue({
-      reply: 'Here is a code snippet:\n```python\nprint("hello world")\n```\nDone!',
-      metadata: { backend_message_id: 'msg-123' },
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValue({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: 'Here is a code snippet:\n```python\nprint("hello world")\n```\nDone!',
+        metadata: { backend_message_id: 'msg-123' },
+      }),
     })
 
     const attachment = {
       type: 'file' as const,
       name: 'readme.txt',
       mime: 'text/plain',
-      data: 'base64data==',
+      data: 'cmVhZG1l',
+      attachmentId: 'attachment-receipt-1',
     }
 
     // 1. Verify initial state
@@ -390,14 +393,14 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
-    ensureWebSocketConnected.mockResolvedValue(false)
+    ensureWebSocketConnected.mockResolvedValue(true)
 
     // Use a deferred promise pattern to control timing
-    let resolveBackend!: (value: { reply: string; metadata: Record<string, unknown> }) => void
-    const backendPromise = new Promise<{ reply: string; metadata: Record<string, unknown> }>((resolve) => {
-      resolveBackend = resolve
+    let resolveStream!: (value: { content: string; metadata: Record<string, unknown> }) => void
+    const streamPromise = new Promise<{ content: string; metadata: Record<string, unknown> }>((resolve) => {
+      resolveStream = resolve
     })
-    sendViaBackend.mockReturnValue(backendPromise)
+    openWebSocketStream.mockReturnValue({ cancel: vi.fn(), done: streamPromise })
 
     // Start first send (will hang until we resolve the backend promise)
     const p1 = store.sendMessage('First')
@@ -412,7 +415,7 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
     expect(result2).toBeNull()
 
     // Complete first send
-    resolveBackend({ reply: 'Done', metadata: {} })
+    resolveStream({ content: 'Done', metadata: {} })
     await p1
 
     // Only the first message pair should exist

@@ -41,17 +41,24 @@ describe('BUG-20260710 · 知识库上传态跨挂载存活', () => {
 
   it('done 条目在文档列表未出现前保留（索引中窗口不消失），落地后 settle 移除', () => {
     const store = useKnowledgeUploadsStore()
-    const entry = store.track({ name: 'Go面试题new.pdf', progress: 100, status: 'uploading' })
+    const entry = store.track({
+      name: 'Go面试题new.pdf',
+      progress: 100,
+      status: 'uploading',
+      documentId: 'doc-go-interview',
+    })
     entry.status = 'done'
 
     // 索引尚未完成：getDocuments 里没有该文档 → 条目必须保留
-    store.settleAgainstDocs([{ source: 'upload:MySQL索引设计与最佳实践.pdf', title: 'MySQL索引设计与最佳实践' }])
+    store.settleAgainstDocs([
+      { id: 'doc-other', source: 'upload:Go面试题new.pdf', title: 'Go面试题new' },
+    ])
     expect(store.items, '索引窗口内条目不得消失（用户切页回来要能看到）').toHaveLength(1)
 
-    // 索引完成：文档以 upload:<文件名> 来源出现 → settle 移除
+    // 索引完成：同一稳定 document ID 出现 → settle 移除
     store.settleAgainstDocs([
-      { source: 'upload:MySQL索引设计与最佳实践.pdf', title: 'MySQL索引设计与最佳实践' },
-      { source: 'upload:Go面试题new.pdf', title: 'Go面试题new' },
+      { id: 'doc-other', source: 'upload:MySQL索引设计与最佳实践.pdf' },
+      { id: 'doc-go-interview', source: 'upload:renamed.pdf', title: 'renamed' },
     ])
     expect(store.items).toHaveLength(0)
   })
@@ -63,7 +70,7 @@ describe('BUG-20260710 · 知识库上传态跨挂载存活', () => {
     bad.status = 'error'
     bad.error = 'boom'
 
-    store.settleAgainstDocs([{ source: 'upload:a.pdf' }, { source: 'upload:b.pdf' }])
+    store.settleAgainstDocs([{ id: 'doc-a' }, { id: 'doc-b' }])
     expect(store.items.map((e) => e.name)).toEqual(['a.pdf', 'b.pdf'])
   })
 

@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { api, e2eMarker, e2eTextMarker, wsChat, USER_ID } from './helpers'
+import { api, e2eTextMarker, wsChat, USER_ID } from './helpers'
 import type { ChatResult } from './helpers'
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,6 @@ import type { ChatResult } from './helpers'
 
 let _availableSkills: string[] = []
 let availableProviders: Record<string, { model: string; has_key: boolean }> = {}
-let defaultProvider = ''
 let hasCloudProvider = false
 
 test.beforeAll(async () => {
@@ -32,7 +31,6 @@ test.beforeAll(async () => {
   try {
     const { data } = await api('GET', '/api/v1/config')
     const llm = (data as any).llm ?? {}
-    defaultProvider = llm.default ?? ''
     availableProviders = llm.providers ?? {}
     hasCloudProvider = Object.values(availableProviders).some((p: any) => p.has_key)
   } catch { /* ignore */ }

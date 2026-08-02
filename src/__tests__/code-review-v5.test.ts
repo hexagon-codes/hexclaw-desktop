@@ -156,7 +156,7 @@ describe('chat.ts — searchMessages 类型安全', () => {
   it('searchMessages 返回带 session_id 的消息', () => {
     const source = readFileSync('src/api/chat.ts', 'utf-8')
     // 后端 search 返回 { message, session_title, rank }，session_id 在 message 上。
-    expect(source).toContain('message: ChatMessage & { session_id: string }')
+    expect(source).toContain('message: ChatMessage & { session_id: string; session_title?: string }')
     expect(source).toContain('rank?: number')
   })
 

@@ -17,22 +17,23 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 describe('BUG-20260708 F3: 首 chunk 超时区别于 chunk 间空闲超时', () => {
-  const src = readFileSync(resolve(__dirname, '../../src-tauri/src/commands.rs'), 'utf-8')
+  const src = readFileSync(resolve(__dirname, '../services/chatService.ts'), 'utf-8')
 
-  it('存在独立的 FIRST_CHUNK_TIMEOUT_SECS 且 ≥ 240（容忍慢本地 ReAct 思考期）', () => {
-    const m = src.match(/FIRST_CHUNK_TIMEOUT_SECS\s*:\s*u64\s*=\s*(\d+)/)
+  it('存在独立的首响应超时且 ≥ 240s（容忍慢本地 ReAct 思考期）', () => {
+    const m = src.match(/WS_FIRST_REPLY_TIMEOUT_MS\s*=\s*([\d_]+)/)
     expect(m, '必须有独立的首 chunk 超时常量').not.toBeNull()
-    expect(Number(m![1])).toBeGreaterThanOrEqual(240)
+    expect(Number(m![1]!.replace(/_/g, ''))).toBeGreaterThanOrEqual(240_000)
   })
 
   it('chunk 间空闲超时仍短（60s 量级，防中途真卡死）', () => {
-    const m = src.match(/CHUNK_IDLE_TIMEOUT_SECS\s*:\s*u64\s*=\s*(\d+)/)
+    const m = src.match(/WS_INACTIVITY_TIMEOUT_MS\s*=\s*([\d_]+)/)
     expect(m).not.toBeNull()
-    expect(Number(m![1])).toBeLessThanOrEqual(90)
+    expect(Number(m![1]!.replace(/_/g, ''))).toBeLessThanOrEqual(90_000)
   })
 
-  it('首 chunk 超时据 chunk_count==0 选用（收到首 chunk 后切回短空闲超时）', () => {
-    // 循环里必须按「是否已收到首 chunk」在两个超时间切换
-    expect(src).toMatch(/chunk_count\s*==\s*0/)
+  it('收到首个可观测事件后切换为短空闲超时', () => {
+    expect(src).toContain('if (firstReplyTimer)')
+    expect(src).toContain('inactivityTimer = setTimeout')
+    expect(src).toContain('WS_INACTIVITY_TIMEOUT_MS')
   })
 })

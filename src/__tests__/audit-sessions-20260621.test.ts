@@ -39,6 +39,7 @@ function mockFetchSSE(chunks: string[]) {
       }
       return Promise.resolve({ done: true, value: undefined })
     }),
+    cancel: vi.fn().mockResolvedValue(undefined),
   }
   vi.stubGlobal(
     'fetch',

@@ -144,7 +144,11 @@ vi.mock('@/services/messageService', () => ({
 vi.mock('@/services/chatService', () => ({
   sendViaWebSocket: vi.fn(),
   sendViaBackend: vi.fn(),
-  ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!' }),
+  }),
+  ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
   clearWebSocketCallbacks: vi.fn(),
   ChatRequestError: class extends Error { noFallback = false },
 }))
@@ -171,12 +175,15 @@ describe('旅程 C: 对话全流程', () => {
 
   it('新建会话 → 发消息 → 回复含代码块 → 提取 artifact', async () => {
     const { useChatStore } = await import('@/stores/chat')
-    const { sendViaBackend } = await import('@/services/chatService')
+    const { openWebSocketStream } = await import('@/services/chatService')
     const store = useChatStore()
 
-    ;(sendViaBackend as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      reply: '示例代码：\n\n```python\ndef fib(n):\n    if n <= 1: return n\n    return fib(n-1) + fib(n-2)\n```\n\n这是递归实现。',
-      metadata: { backend_message_id: 'msg-001' },
+    ;(openWebSocketStream as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: '示例代码：\n\n```python\ndef fib(n):\n    if n <= 1: return n\n    return fib(n-1) + fib(n-2)\n```\n\n这是递归实现。',
+        metadata: { backend_message_id: 'msg-001' },
+      }),
     })
 
     store.chatParams.model = 'qwen3:8b'

@@ -7,12 +7,10 @@ import { createChatSendDeliveryController } from '@/stores/chat-send-delivery-co
 // 修复：deliverMessage 接收 documents，并经 metadata.documents（JSON）透传给后端（后端落库见
 // session/bug_20260626_documents_persist_test.go）。
 describe('BUG-20260626 文档卡片经 metadata.documents 透传给后端', () => {
-  it('deliverMessage(documents) → sendViaBackend 收到 metadata.documents(JSON)', async () => {
-    const sendViaBackend = vi.fn().mockResolvedValue({
-      reply: 'ok',
-      session_id: 's1',
-      metadata: { backend_message_id: 'm1' },
-      tool_calls: [],
+  it('deliverMessage(documents) → openWebSocketStream 收到 metadata.documents(JSON)', async () => {
+    const openWebSocketStream = vi.fn().mockReturnValue({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'ok', metadata: { backend_message_id: 'm1' } }),
     })
     const controller = createChatSendDeliveryController({
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
@@ -20,8 +18,8 @@ describe('BUG-20260626 文档卡片经 metadata.documents 透传给后端', () =
       thinkingEnabled: ref(false),
       activeStreams: ref({}),
       chatSvc: {
-        ensureWebSocketConnected: vi.fn().mockResolvedValue(false), // 走 backend 分支便于断言
-        sendViaBackend,
+        ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
+        openWebSocketStream,
       } as any,
       getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
       clearSessionCancelled: vi.fn(),
@@ -46,8 +44,8 @@ describe('BUG-20260626 文档卡片经 metadata.documents 透传给后端', () =
       documents,
     })
 
-    expect(sendViaBackend).toHaveBeenCalled()
-    const metaArg = sendViaBackend.mock.calls[0]![5] as Record<string, string> | undefined
+    expect(openWebSocketStream).toHaveBeenCalled()
+    const metaArg = openWebSocketStream.mock.calls[0]![6] as Record<string, string> | undefined
     const docsJson = metaArg?.documents
     expect(docsJson).toBeDefined()
     expect(JSON.parse(docsJson!)).toEqual(documents)

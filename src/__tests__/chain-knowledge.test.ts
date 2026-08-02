@@ -82,6 +82,7 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
   it('D2: uploadDocument posts to the durable asynchronous documents endpoint', async () => {
     // For uploadDocument without onProgress, it uses apiPost
     mockApiPost.mockResolvedValueOnce({
+      operation_id: 'operation-new',
       document_id: 'doc-new',
       job_id: 'job-new',
       text_index_state: 'pending',

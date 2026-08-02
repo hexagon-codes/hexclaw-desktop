@@ -27,7 +27,10 @@ import {
   waitForLiveAssistant,
   type HistoryMessage,
 } from './k12-live-helpers'
-import { classifyOperationReceiptPoll } from './k12-operation-receipt-poll'
+import {
+  classifyK12TaskTerminalPoll,
+  classifyOperationReceiptPoll,
+} from './k12-operation-receipt-poll'
 
 type Json = Record<string, unknown>
 type FixtureKey = 'writing' | 'homework' | 'problem' | 'art'
@@ -276,7 +279,7 @@ function traceImageTaskFacade(page: Page) {
   page.on('response', onResponse)
   return {
     async snapshots(dispatchId: string): Promise<FacadeSnapshot[]> {
-      await Promise.allSettled([...pending])
+      await Promise.allSettled(pending)
       return entries
         .filter((entry) => entry.dispatchId === dispatchId)
         .map((entry) => entry.snapshot)
@@ -443,6 +446,57 @@ async function waitForTaskOperation(
   }
 }
 
+function projectionStage(dispatch: Json): string {
+  const projection =
+    dispatch.target_projection &&
+    typeof dispatch.target_projection === 'object' &&
+    !Array.isArray(dispatch.target_projection)
+      ? (dispatch.target_projection as Json)
+      : {}
+  return String(projection.stage ?? '')
+}
+
+async function waitForHomeworkOverlayOrTerminalFailure(
+  page: Page,
+  guard: Locator,
+  dispatchId: string,
+): Promise<Locator> {
+  const deadline = Date.now() + 12 * 60_000
+  const intervals = [100, 250, 500, 1_000]
+  let intervalIndex = 0
+  const overlay = guard.getByTestId('photo-grade-overlay')
+
+  while (true) {
+    const [dispatch, result] = await Promise.all([
+      loadDispatch(page, dispatchId),
+      liveJSON<Json>(
+        page.request,
+        'GET',
+        `/api/k12/image-tasks/${encodeURIComponent(dispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
+      ),
+    ])
+    const decision = classifyK12TaskTerminalPoll({
+      receiptStatus: operationReceipt(result, 'solve')?.status,
+      dispatchStatus: dispatch.status,
+      projectionStage: projectionStage(dispatch),
+    })
+    if (decision.kind === 'terminal_failure') {
+      throw new Error(
+        `C02 grading reached terminal ${String(dispatch.status ?? '')}/${projectionStage(dispatch)} before visible overlay (${decision.status})`,
+      )
+    }
+    if (await overlay.isVisible().catch(() => false)) return overlay
+
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new Error('C02 grading must expose one visible overlay before its deadline')
+    }
+    const interval = intervals[Math.min(intervalIndex, intervals.length - 1)]!
+    intervalIndex += 1
+    await page.waitForTimeout(Math.min(interval, remaining))
+  }
+}
+
 async function resolveFixtureAgent(
   request: Page['request'],
   retryableID: string,
@@ -577,31 +631,92 @@ async function assertCanonicalWork(
   await page.locator('#k12-enh-tab-chat').click()
 }
 
-const homeworkGroundTruth = [
-  { label: '一、1', question: '4/0.5', answer: ['8'], status: 'correct' },
-  { label: '一、2', question: '10*0.01', answer: ['0.1'], status: 'correct' },
-  { label: '一、3', question: '4.7+2.3', answer: ['7'], status: 'correct' },
-  { label: '一、4', question: '1.8*50', answer: ['90'], status: 'correct' },
-  { label: '一、5', question: '3.25+0.75', answer: ['4'], status: 'correct' },
-  { label: '一、6', question: '5/7-1/5', answer: ['18/35'], status: 'correct' },
-  { label: '一、7', question: '7-5/7', answer: ['44/7', '6又2/7'], status: 'correct' },
-  { label: '一、8', question: '0.5+1/3', answer: ['5/6'], status: 'correct' },
-  { label: '一、9', question: '4/5+2/5', answer: ['6/5', '1又1/5'], status: 'correct' },
-  { label: '二、1', question: '8.7*17.4-8.7*7.4', answer: ['87'], status: 'correct' },
-  { label: '二、2', question: '15.02-6.8-1.02', answer: ['7.2'], status: 'correct' },
+type HomeworkSourceOracle = {
+  label: string
+  sourceNumberPath: string[]
+  displayLabel: string
+  sourceSectionPath: string[]
+  sourceSectionLabel: string
+  systemSectionOrdinal: number
+  systemDisplayLabel: string
+}
+
+function unnumberedHomeworkSource(
+  sourceSectionPath: string[],
+  sourceSectionLabel: string,
+  systemSectionOrdinal: number,
+): HomeworkSourceOracle {
+  const systemDisplayLabel = `第 ${systemSectionOrdinal} 题（系统序号）`
+  return {
+    label: `${sourceSectionLabel} · ${systemDisplayLabel}`,
+    sourceNumberPath: [],
+    displayLabel: '',
+    sourceSectionPath,
+    sourceSectionLabel,
+    systemSectionOrdinal,
+    systemDisplayLabel,
+  }
+}
+
+const homeworkSources = [
+  ...Array.from({ length: 9 }, (_, index) =>
+    unnumberedHomeworkSource(['一'], '一、直接写得数', index + 1),
+  ),
+  ...Array.from({ length: 3 }, (_, index) =>
+    unnumberedHomeworkSource(['二'], '二、计算下面各题，能简算的要简算', index + 1),
+  ),
   {
-    label: '二、3',
+    label: '三、列式计算 · 三、1',
+    sourceNumberPath: ['三', '1'],
+    displayLabel: '三、1',
+    sourceSectionPath: ['三'],
+    sourceSectionLabel: '三、列式计算',
+    systemSectionOrdinal: 0,
+    systemDisplayLabel: '',
+  },
+  {
+    label: '三、列式计算 · 三、2',
+    sourceNumberPath: ['三', '2'],
+    displayLabel: '三、2',
+    sourceSectionPath: ['三'],
+    sourceSectionLabel: '三、列式计算',
+    systemSectionOrdinal: 0,
+    systemDisplayLabel: '',
+  },
+  unnumberedHomeworkSource(['四'], '四、应用题', 1),
+  unnumberedHomeworkSource(['五'], '五、思维题', 1),
+] as const satisfies readonly HomeworkSourceOracle[]
+
+const homeworkGroundTruth = [
+  { source: homeworkSources[0], question: '4/0.5', answer: ['8'], status: 'correct' },
+  { source: homeworkSources[1], question: '10*0.01', answer: ['0.1'], status: 'correct' },
+  { source: homeworkSources[2], question: '4.7+2.3', answer: ['7'], status: 'correct' },
+  { source: homeworkSources[3], question: '1.8*50', answer: ['90'], status: 'correct' },
+  { source: homeworkSources[4], question: '3.25+0.75', answer: ['4'], status: 'correct' },
+  { source: homeworkSources[5], question: '5/7-1/5', answer: ['18/35'], status: 'correct' },
+  { source: homeworkSources[6], question: '7-5/7', answer: ['44/7', '6又2/7'], status: 'correct' },
+  { source: homeworkSources[7], question: '0.5+1/3', answer: ['5/6'], status: 'correct' },
+  { source: homeworkSources[8], question: '4/5+2/5', answer: ['6/5', '1又1/5'], status: 'correct' },
+  { source: homeworkSources[9], question: '8.7*17.4-8.7*7.4', answer: ['87'], status: 'correct' },
+  { source: homeworkSources[10], question: '15.02-6.8-1.02', answer: ['7.2'], status: 'correct' },
+  {
+    source: homeworkSources[11],
     question: '0.25+11/15+4/15+3/4',
     answer: ['2'],
     status: 'correct',
   },
-  { label: '三、1', question: '3/8是24', answer: ['64'], status: 'correct' },
-  { label: '三、2', question: '8的1/4的4/5', answer: ['8/5', '1又3/5'], status: 'correct' },
-  { label: '四、1', question: '周长是300米', answer: ['11250'], status: 'correct' },
-  { label: '五、1', question: '5,6,12,14,23,29', answer: ['29'], status: 'wrong' },
+  { source: homeworkSources[12], question: '3/8是24', answer: ['64'], status: 'correct' },
+  {
+    source: homeworkSources[13],
+    question: '8的1/4的4/5',
+    answer: ['8/5', '1又3/5'],
+    status: 'correct',
+  },
+  { source: homeworkSources[14], question: '周长是300米', answer: ['11250'], status: 'correct' },
+  { source: homeworkSources[15], question: '5,6,12,14,23,29', answer: ['29'], status: 'wrong' },
 ] as const
 
-const sourceLabels = homeworkGroundTruth.map((item) => item.label)
+const sourceLabels = homeworkSources.map((item) => item.label)
 
 type ProblemKind = 'standalone' | 'compound_parent' | 'subproblem'
 type ProblemOracle = {
@@ -860,6 +975,29 @@ function recognizedQuestions(dispatch: Json, label: string): Json[] {
   return array(recognition.questions, `${label} recognition questions`)
 }
 
+function assertHomeworkSourceFacts(questions: Json[], label: string): void {
+  expect(questions, `${label} question count`).toHaveLength(homeworkGroundTruth.length)
+  questions.forEach((question, index) => {
+    const expected = homeworkGroundTruth[index]!.source
+    expect(question.source_number_path, `${expected.label} source_number_path`).toEqual(
+      expected.sourceNumberPath,
+    )
+    expect(question.display_label, `${expected.label} display_label`).toBe(expected.displayLabel)
+    expect(question.source_section_path, `${expected.label} source_section_path`).toEqual(
+      expected.sourceSectionPath,
+    )
+    expect(question.source_section_label, `${expected.label} source_section_label`).toBe(
+      expected.sourceSectionLabel,
+    )
+    expect(question.system_section_ordinal, `${expected.label} system_section_ordinal`).toBe(
+      expected.systemSectionOrdinal,
+    )
+    expect(question.system_display_label, `${expected.label} system_display_label`).toBe(
+      expected.systemDisplayLabel,
+    )
+  })
+}
+
 async function loadDispatch(page: Page, dispatchId: string): Promise<Json> {
   const response = await liveJSON<{ dispatch: Json }>(
     page.request,
@@ -929,31 +1067,29 @@ function assertHomeworkResult(payload: Json): void {
   expect(typeof payload.image_warning).toBe('string')
   const items = array(payload.items, 'homework result items')
   expect(items).toHaveLength(homeworkGroundTruth.length)
-  expect(
-    items.map((item) => record(item.question, 'homework result question').display_label),
-  ).toEqual(sourceLabels)
+  assertHomeworkSourceFacts(
+    items.map((item) => record(item.question, 'homework result question')),
+    'homework result',
+  )
   items.forEach((item, index) => {
     const oracle = homeworkGroundTruth[index]!
-    const question = record(item.question, `${oracle.label} question`)
-    const grade = record(item.grade, `${oracle.label} grade`)
-    expectSemanticAlternative(question.question, [oracle.question], `${oracle.label} question`)
-    expectSemanticAlternative(
-      question.student_answer,
-      oracle.answer,
-      `${oracle.label} student answer`,
-    )
-    expect(item.result_kind, `${oracle.label} assessment kind`).toBe('assessment')
-    expect(item.status, `${oracle.label} judgment`).toBe(oracle.status)
-    expect(grade.solve_only, `${oracle.label} must remain grading, not solve-only`).toBe(false)
-    expect(grade.out_of_scope, `${oracle.label} must remain in-scope`).toBe(false)
-    expect(grade.verdict, `${oracle.label} verdict`).toBe(
+    const label = oracle.source.label
+    const question = record(item.question, `${label} question`)
+    const grade = record(item.grade, `${label} grade`)
+    expectSemanticAlternative(question.question, [oracle.question], `${label} question`)
+    expectSemanticAlternative(question.student_answer, oracle.answer, `${label} student answer`)
+    expect(item.result_kind, `${label} assessment kind`).toBe('assessment')
+    expect(item.status, `${label} judgment`).toBe(oracle.status)
+    expect(grade.solve_only, `${label} must remain grading, not solve-only`).toBe(false)
+    expect(grade.out_of_scope, `${label} must remain in-scope`).toBe(false)
+    expect(grade.verdict, `${label} verdict`).toBe(
       oracle.status === 'correct' ? 'agree' : 'disagree',
     )
-    expectSemanticAlternative(grade.solution, oracle.answer, `${oracle.label} canonical solution`)
+    expectSemanticAlternative(grade.solution, oracle.answer, `${label} canonical solution`)
     if (oracle.status === 'correct') {
       expect(
         item.parent_guide,
-        `${oracle.label} correct item must not invent parent guide`,
+        `${label} correct item must not invent parent guide`,
       ).toBeUndefined()
       return
     }
@@ -961,12 +1097,10 @@ function assertHomeworkResult(payload: Json): void {
       `${String(grade.wrong_step ?? '')} ${String(grade.error_cause ?? '')}`,
     )
     for (const token of ['42', '18', '2']) {
-      expect(diagnostic, `${oracle.label} process diagnosis must preserve ${token}`).toContain(
-        token,
-      )
+      expect(diagnostic, `${label} process diagnosis must preserve ${token}`).toContain(token)
     }
-    const guide = assertParentGuide(item.parent_guide, oracle.label)
-    expectSemanticAlternative(guide.answer, ['29'], `${oracle.label} correct final answer`)
+    const guide = assertParentGuide(item.parent_guide, label)
+    expectSemanticAlternative(guide.answer, ['29'], `${label} correct final answer`)
     const teaching = normalizeSemantic(
       [
         ...(guide.parent_teaching_sequence as string[]),
@@ -974,8 +1108,8 @@ function assertHomeworkResult(payload: Json): void {
         String(guide.checking_method),
       ].join(' '),
     )
-    expect(teaching, `${oracle.label} guide must teach the valid 40=20×2 partition`).toContain('40')
-    expect(teaching, `${oracle.label} guide must teach the valid 40=20×2 partition`).toContain('20')
+    expect(teaching, `${label} guide must teach the valid 40=20×2 partition`).toContain('40')
+    expect(teaching, `${label} guide must teach the valid 40=20×2 partition`).toContain('20')
   })
   if (payload.annotated_image !== undefined) {
     const annotated = record(payload.annotated_image, 'annotated homework image')
@@ -1071,7 +1205,13 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
 
       const problem = await submitImage(page, 'problem', true)
       const problemDispatchId = await dispatchID(problem.shell)
-      await confirmRecognizedRowsIfRequired(page, problem.shell, testInfo, 'problem', problem.trace!)
+      await confirmRecognizedRowsIfRequired(
+        page,
+        problem.shell,
+        testInfo,
+        'problem',
+        problem.trace!,
+      )
       const problemResult = await waitForTaskOperation(page, problemDispatchId, 'solve')
       const problemDispatch = await loadDispatch(page, problemDispatchId)
       assertProblemStructure(recognizedQuestions(problemDispatch, 'blank worksheet'))
@@ -1151,14 +1291,16 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       const homeworkDispatchId = await dispatchID(homework.shell)
       const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
       const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
-      expect(homeworkQuestions).toHaveLength(homeworkGroundTruth.length)
-      expect(homeworkQuestions.map((question) => question.display_label)).toEqual(sourceLabels)
+      assertHomeworkSourceFacts(homeworkQuestions, 'completed homework')
       const rows = guard.getByTestId('rq-item')
       await expect(rows).toHaveCount(sourceLabels.length)
       const gradeAll = guard.getByTestId('recognize-grade-all')
       if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
-      const overlay = guard.getByTestId('photo-grade-overlay')
-      await expect(overlay).toBeVisible({ timeout: 12 * 60_000 })
+      const overlay = await waitForHomeworkOverlayOrTerminalFailure(
+        page,
+        guard,
+        homeworkDispatchId,
+      )
       expect(
         await overlay
           .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
@@ -1226,9 +1368,10 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
           ),
           { waitUntil: 'domcontentloaded' },
         )
-        expect(new URL(page.url()).pathname, 'authorized profile must not enter onboarding').not.toBe(
-          '/welcome',
-        )
+        expect(
+          new URL(page.url()).pathname,
+          'authorized profile must not enter onboarding',
+        ).not.toBe('/welcome')
         await expect(page.getByTestId('chat-input')).toBeVisible()
         sessionID = await findLiveSessionByTitle(request, sessionTitle)
 
@@ -1269,269 +1412,283 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
   }
 
   if (!real10xCycle) {
-  test('six real submissions preserve solve/creative receipts, attachment, source order and provider display', async ({
-    page,
-    request,
-  }, testInfo: TestInfo) => {
-    await assertLiveRuntime(page, request, testInfo)
-    const llm = await liveJSON<{ providers?: Record<string, Json> }>(
-      request,
-      'GET',
-      '/api/v1/config/llm',
-    )
-    const configured = llm.providers?.[contract.provider.identity]
-    expect(configured?.display_name).toBe(contract.provider.displayName)
-    expect([
-      configured?.model,
-      ...(Array.isArray(configured?.models) ? configured.models : []),
-    ]).toContain(contract.provider.model)
-
-    sessionTitle = `LIVE-K12-BUG-${randomUUID().slice(0, 8)}`
-    await page.goto(
-      liveAppURL(
-        `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
-      ),
-      { waitUntil: 'domcontentloaded' },
-    )
-    expect(
-      new URL(page.url()).pathname,
-      'authorized installed profile must not fall into onboarding',
-    ).not.toBe('/welcome')
-    await expect(page.getByTestId('chat-input')).toBeVisible()
-    sessionID = await findLiveSessionByTitle(request, sessionTitle)
-
-    const forbiddenRequests: string[] = []
-    page.on('request', (outgoing) => {
-      const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
-      if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
-        forbiddenRequests.push(`${outgoing.method()} ${path}`)
-      }
-    })
-
-    const problem = await submitImage(page, 'problem', true)
-    const problemDispatchId = await dispatchID(problem.shell)
-    await confirmRecognizedRowsIfRequired(page, problem.shell, testInfo, 'problem', problem.trace!)
-    const problemResult = await waitForTaskOperation(page, problemDispatchId, 'solve')
-    const problemDispatch = await loadDispatch(page, problemDispatchId)
-    assertProblemStructure(recognizedQuestions(problemDispatch, 'blank worksheet'))
-    const solveReceipt = assertTaskSourceAndReceipt(problemResult, 'problem', 'solve')
-    const problemPayload = record(
-      record(problemResult.result, 'solve terminal result').payload,
-      'blank worksheet payload',
-    )
-    assertBlankWorksheetResult(problemPayload)
-    const problemHistory = (await listHistory(request, sessionID)).find(
-      (message) => record(message, 'history message').id === problem.sourceId,
-    )
-    expect(problemHistory).toBeTruthy()
-    const persistedProblemBytes = attachmentBytes(problemHistory!)
-    expect(persistedProblemBytes.length).toBe(contract.fixtures.problem.bytes)
-    expect(sha256(persistedProblemBytes)).toBe(contract.fixtures.problem.sha256)
-
-    const writing = await submitImage(page, 'writing')
-    await expect(
-      writing.shell.locator('[role="status"]').first(),
-      'the first image must expose processing feedback without reopening the conversation',
-    ).toBeVisible({ timeout: 30_000 })
-    const firstCreative = await waitForCreativeResult(writing.shell, 'writing')
-    createdWorkIDs.push(firstCreative.workId)
-    await assertCanonicalWork(page, testInfo, firstCreative, 'writing', 'writing')
-
-    const art = await submitImage(page, 'art')
-    const artCreative = await waitForCreativeResult(art.shell, 'art')
-    createdWorkIDs.push(artCreative.workId)
-    await assertCanonicalWork(page, testInfo, artCreative, 'art', 'art')
-
-    await writing.source.hover()
-    await writing.source.getByRole('button', { name: '编辑消息' }).click()
-    const editingImage = writing.source.locator('.hc-msg__edit-att-img')
-    await expect(editingImage).toBeVisible()
-    const editMarker = `作文图片编辑重发验收-${randomUUID().slice(0, 8)}`
-    await writing.source.locator('[contenteditable="true"]').fill(editMarker)
-    await writing.source.getByRole('button', { name: '发送', exact: true }).click()
-    const resent = page.getByTestId('chat-message-user').filter({ hasText: editMarker }).last()
-    await expect(resent.locator('.hc-msg__attachment-img')).toBeVisible()
-    const resentID = await sourceMessageID(resent)
-    const history = await listHistory(request, sessionID)
-    const resentRecord = history.find(
-      (message) => message.role === 'user' && message.content.includes(editMarker),
-    )
-    expect(resentRecord).toBeTruthy()
-    const resentBytes = attachmentBytes(resentRecord!)
-    expect(resentBytes.length).toBe(contract.fixtures.writing.bytes)
-    expect(sha256(resentBytes)).toBe(contract.fixtures.writing.sha256)
-    const resentShell = page
-      .getByTestId('k12-photo-assistant-message')
-      .filter({ has: page.locator(`[data-source-message-id="${resentID}"]`) })
-      .last()
-    const secondCreative = await waitForCreativeResult(resentShell, 'writing')
-    createdWorkIDs.push(secondCreative.workId)
-    expect(secondCreative.dispatchId).not.toBe(firstCreative.dispatchId)
-
-    const homework = await submitImage(page, 'homework', true)
-    const orderMarker = `LIVE-LATER-MATH-${randomUUID().slice(0, 8)}`
-    await page
-      .getByTestId('chat-input')
-      .fill(`逐字保留标记 ${orderMarker}，再回答：8 的 1/4 的 4/5 是多少？`)
-    await page.getByTestId('chat-send').click()
-    const laterUser = page.getByTestId('chat-message-user').filter({ hasText: orderMarker }).last()
-    await expect(laterUser).toBeVisible()
-    const laterAssistantRecord = await waitForLiveAssistant(request, sessionID, orderMarker)
-    expect(metadataOf(laterAssistantRecord).provider).toBe(contract.provider.identity)
-    expect(metadataOf(laterAssistantRecord).model).toBe(contract.provider.model)
-    const laterAssistant = page
-      .getByTestId('chat-message-assistant')
-      .filter({ hasText: orderMarker })
-      .last()
-    await expect(laterAssistant).toBeVisible({ timeout: 30_000 })
-    await expect(laterAssistant.locator('.hc-msg__meta')).toContainText(
-      `${contract.provider.displayName} · ${contract.provider.model}`,
-    )
-
-    const guard = await confirmRecognizedRowsIfRequired(
+    test('six real submissions preserve solve/creative receipts, attachment, source order and provider display', async ({
       page,
-      homework.shell,
-      testInfo,
-      'homework',
-      homework.trace!,
-    )
-    const homeworkDispatchId = await dispatchID(homework.shell)
-    const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
-    const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
-    expect(homeworkQuestions).toHaveLength(homeworkGroundTruth.length)
-    expect(homeworkQuestions.map((question) => question.display_label)).toEqual(sourceLabels)
-    homeworkQuestions.forEach((question, index) => {
-      const oracle = homeworkGroundTruth[index]!
-      expect(question.problem_kind).toBe('standalone')
-      expect(question.source_number_path).toEqual(oracle.label.split('、'))
-      expect(question.answer_state).toBe('present')
-      expectSemanticAlternative(question.question, [oracle.question], `${oracle.label} recognition`)
-      expectSemanticAlternative(
-        question.student_answer,
-        oracle.answer,
-        `${oracle.label} recognized answer`,
+      request,
+    }, testInfo: TestInfo) => {
+      await assertLiveRuntime(page, request, testInfo)
+      const llm = await liveJSON<{ providers?: Record<string, Json> }>(
+        request,
+        'GET',
+        '/api/v1/config/llm',
       )
+      const configured = llm.providers?.[contract.provider.identity]
+      expect(configured?.display_name).toBe(contract.provider.displayName)
+      expect([
+        configured?.model,
+        ...(Array.isArray(configured?.models) ? configured.models : []),
+      ]).toContain(contract.provider.model)
+
+      sessionTitle = `LIVE-K12-BUG-${randomUUID().slice(0, 8)}`
+      await page.goto(
+        liveAppURL(
+          `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
+        ),
+        { waitUntil: 'domcontentloaded' },
+      )
+      expect(
+        new URL(page.url()).pathname,
+        'authorized installed profile must not fall into onboarding',
+      ).not.toBe('/welcome')
+      await expect(page.getByTestId('chat-input')).toBeVisible()
+      sessionID = await findLiveSessionByTitle(request, sessionTitle)
+
+      const forbiddenRequests: string[] = []
+      page.on('request', (outgoing) => {
+        const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
+        if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
+          forbiddenRequests.push(`${outgoing.method()} ${path}`)
+        }
+      })
+
+      const problem = await submitImage(page, 'problem', true)
+      const problemDispatchId = await dispatchID(problem.shell)
+      await confirmRecognizedRowsIfRequired(
+        page,
+        problem.shell,
+        testInfo,
+        'problem',
+        problem.trace!,
+      )
+      const problemResult = await waitForTaskOperation(page, problemDispatchId, 'solve')
+      const problemDispatch = await loadDispatch(page, problemDispatchId)
+      assertProblemStructure(recognizedQuestions(problemDispatch, 'blank worksheet'))
+      const solveReceipt = assertTaskSourceAndReceipt(problemResult, 'problem', 'solve')
+      const problemPayload = record(
+        record(problemResult.result, 'solve terminal result').payload,
+        'blank worksheet payload',
+      )
+      assertBlankWorksheetResult(problemPayload)
+      const problemHistory = (await listHistory(request, sessionID)).find(
+        (message) => record(message, 'history message').id === problem.sourceId,
+      )
+      expect(problemHistory).toBeTruthy()
+      const persistedProblemBytes = attachmentBytes(problemHistory!)
+      expect(persistedProblemBytes.length).toBe(contract.fixtures.problem.bytes)
+      expect(sha256(persistedProblemBytes)).toBe(contract.fixtures.problem.sha256)
+
+      const writing = await submitImage(page, 'writing')
+      await expect(
+        writing.shell.locator('[role="status"]').first(),
+        'the first image must expose processing feedback without reopening the conversation',
+      ).toBeVisible({ timeout: 30_000 })
+      const firstCreative = await waitForCreativeResult(writing.shell, 'writing')
+      createdWorkIDs.push(firstCreative.workId)
+      await assertCanonicalWork(page, testInfo, firstCreative, 'writing', 'writing')
+
+      const art = await submitImage(page, 'art')
+      const artCreative = await waitForCreativeResult(art.shell, 'art')
+      createdWorkIDs.push(artCreative.workId)
+      await assertCanonicalWork(page, testInfo, artCreative, 'art', 'art')
+
+      await writing.source.hover()
+      await writing.source.getByRole('button', { name: '编辑消息' }).click()
+      const editingImage = writing.source.locator('.hc-msg__edit-att-img')
+      await expect(editingImage).toBeVisible()
+      const editMarker = `作文图片编辑重发验收-${randomUUID().slice(0, 8)}`
+      await writing.source.locator('[contenteditable="true"]').fill(editMarker)
+      await writing.source.getByRole('button', { name: '发送', exact: true }).click()
+      const resent = page.getByTestId('chat-message-user').filter({ hasText: editMarker }).last()
+      await expect(resent.locator('.hc-msg__attachment-img')).toBeVisible()
+      const resentID = await sourceMessageID(resent)
+      const history = await listHistory(request, sessionID)
+      const resentRecord = history.find(
+        (message) => message.role === 'user' && message.content.includes(editMarker),
+      )
+      expect(resentRecord).toBeTruthy()
+      const resentBytes = attachmentBytes(resentRecord!)
+      expect(resentBytes.length).toBe(contract.fixtures.writing.bytes)
+      expect(sha256(resentBytes)).toBe(contract.fixtures.writing.sha256)
+      const resentShell = page
+        .getByTestId('k12-photo-assistant-message')
+        .filter({ has: page.locator(`[data-source-message-id="${resentID}"]`) })
+        .last()
+      const secondCreative = await waitForCreativeResult(resentShell, 'writing')
+      createdWorkIDs.push(secondCreative.workId)
+      expect(secondCreative.dispatchId).not.toBe(firstCreative.dispatchId)
+
+      const homework = await submitImage(page, 'homework', true)
+      const orderMarker = `LIVE-LATER-MATH-${randomUUID().slice(0, 8)}`
+      await page
+        .getByTestId('chat-input')
+        .fill(`逐字保留标记 ${orderMarker}，再回答：8 的 1/4 的 4/5 是多少？`)
+      await page.getByTestId('chat-send').click()
+      const laterUser = page
+        .getByTestId('chat-message-user')
+        .filter({ hasText: orderMarker })
+        .last()
+      await expect(laterUser).toBeVisible()
+      const laterAssistantRecord = await waitForLiveAssistant(request, sessionID, orderMarker)
+      expect(metadataOf(laterAssistantRecord).provider).toBe(contract.provider.identity)
+      expect(metadataOf(laterAssistantRecord).model).toBe(contract.provider.model)
+      const laterAssistant = page
+        .getByTestId('chat-message-assistant')
+        .filter({ hasText: orderMarker })
+        .last()
+      await expect(laterAssistant).toBeVisible({ timeout: 30_000 })
+      await expect(laterAssistant.locator('.hc-msg__meta')).toContainText(
+        `${contract.provider.displayName} · ${contract.provider.model}`,
+      )
+
+      const guard = await confirmRecognizedRowsIfRequired(
+        page,
+        homework.shell,
+        testInfo,
+        'homework',
+        homework.trace!,
+      )
+      const homeworkDispatchId = await dispatchID(homework.shell)
+      const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
+      const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
+      assertHomeworkSourceFacts(homeworkQuestions, 'completed homework')
+      homeworkQuestions.forEach((question, index) => {
+        const oracle = homeworkGroundTruth[index]!
+        const source = oracle.source
+        expect(question.problem_kind).toBe('standalone')
+        expect(question.answer_state).toBe('present')
+        expectSemanticAlternative(
+          question.question,
+          [oracle.question],
+          `${source.label} recognition`,
+        )
+        expectSemanticAlternative(
+          question.student_answer,
+          oracle.answer,
+          `${source.label} recognized answer`,
+        )
+      })
+      const rows = guard.getByTestId('rq-item')
+      await expect(rows).toHaveCount(sourceLabels.length)
+      const rowText = await rows.locator('.rec-row__qtext').allInnerTexts()
+      expect(
+        rowText.map(
+          (text) => sourceLabels.find((label) => text.trim().startsWith(`${label}.`)) ?? '',
+        ),
+      ).toEqual(sourceLabels)
+      const gradeAll = guard.getByTestId('recognize-grade-all')
+      if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
+      const overlay = guard.getByTestId('photo-grade-overlay')
+      await expect(overlay).toBeVisible({ timeout: 12 * 60_000 })
+      expect(
+        await overlay
+          .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
+          .count(),
+        'every answered source item must expose one visible positioned or degraded annotation',
+      ).toBe(homeworkGroundTruth.length)
+
+      const taskNode = await homework.shell.elementHandle()
+      const laterNode = await laterUser.elementHandle()
+      expect(taskNode && laterNode).toBeTruthy()
+      expect(
+        await taskNode!.evaluate(
+          (node, later) =>
+            Boolean(node.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING),
+          laterNode,
+        ),
+        'the source-anchored homework result must remain before the later math turn',
+      ).toBe(true)
+
+      const homeworkResult = await liveJSON<Json>(
+        request,
+        'GET',
+        `/api/k12/image-tasks/${encodeURIComponent(homeworkDispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
+      )
+      const homeworkPayload = record(
+        record(homeworkResult.result, 'homework result').payload,
+        'homework payload',
+      )
+      const resultItems = Array.isArray(homeworkPayload.items) ? homeworkPayload.items : []
+      assertHomeworkResult(homeworkPayload)
+      assertHomeworkSourceFacts(
+        resultItems.map((item) => record(record(item, 'result item').question, 'result question')),
+        'homework final result',
+      )
+      expect(forbiddenRequests).toEqual([])
+      expect(
+        (await listHistory(request, sessionID)).filter((message) => message.role === 'user'),
+      ).toHaveLength(contract.submissions.plannedTopLevel)
+      await attachJSON(testInfo, 'current-bug-real-matrix-evidence', {
+        top_level_submissions: contract.submissions.plannedTopLevel,
+        provider_identity: contract.provider.identity,
+        provider_display_name: contract.provider.displayName,
+        model: contract.provider.model,
+        problem_fixture_sha256: contract.fixtures.problem.sha256,
+        writing_fixture_sha256: contract.fixtures.writing.sha256,
+        art_fixture_sha256: contract.fixtures.art.sha256,
+        homework_fixture_sha256: contract.fixtures.homework.sha256,
+        solve_invocation_sha256: sha256Text(String(solveReceipt.invocation_id)),
+        solve_result_digest: solveReceipt.result_digest,
+        problem_structural_nodes: problemGroundTruth.length,
+        problem_answerable_items: problemGroundTruth.filter(
+          (item) => item.kind !== 'compound_parent',
+        ).length,
+        problem_compound_parents: problemGroundTruth.filter(
+          (item) => item.kind === 'compound_parent',
+        ).length,
+        problem_source_labels: problemGroundTruth.map((item) => item.label),
+        problem_parent_guide_fields: parentGuideKeys,
+        exact_source_labels: sourceLabels,
+        homework_answerable_items: homeworkGroundTruth.length,
+        homework_expected_correct: homeworkGroundTruth.filter((item) => item.status === 'correct')
+          .length,
+        homework_expected_process_wrong: homeworkGroundTruth.filter(
+          (item) => item.status === 'wrong',
+        ).length,
+        homework_annotation_count: homeworkGroundTruth.length,
+        source_anchored_order: true,
+        forbidden_delivery_requests: forbiddenRequests,
+      })
     })
-    const rows = guard.getByTestId('rq-item')
-    await expect(rows).toHaveCount(sourceLabels.length)
-    const rowText = await rows.locator('.rec-row__qtext').allInnerTexts()
-    expect(
-      rowText.map(
-        (text) => sourceLabels.find((label) => text.trim().startsWith(`${label}.`)) ?? '',
-      ),
-    ).toEqual(sourceLabels)
-    const gradeAll = guard.getByTestId('recognize-grade-all')
-    if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
-    const overlay = guard.getByTestId('photo-grade-overlay')
-    await expect(overlay).toBeVisible({ timeout: 12 * 60_000 })
-    expect(
-      await overlay
-        .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
-        .count(),
-      'every answered source item must expose one visible positioned or degraded annotation',
-    ).toBe(homeworkGroundTruth.length)
 
-    const taskNode = await homework.shell.elementHandle()
-    const laterNode = await laterUser.elementHandle()
-    expect(taskNode && laterNode).toBeTruthy()
-    expect(
-      await taskNode!.evaluate(
-        (node, later) =>
-          Boolean(node.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING),
-        laterNode,
-      ),
-      'the source-anchored homework result must remain before the later math turn',
-    ).toBe(true)
-
-    const homeworkResult = await liveJSON<Json>(
+    test('real durable task fixtures distinguish retryable from outcome_unknown without duplicate POST', async ({
       request,
-      'GET',
-      `/api/k12/image-tasks/${encodeURIComponent(homeworkDispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
-    )
-    const homeworkPayload = record(
-      record(homeworkResult.result, 'homework result').payload,
-      'homework payload',
-    )
-    const resultItems = Array.isArray(homeworkPayload.items) ? homeworkPayload.items : []
-    assertHomeworkResult(homeworkPayload)
-    expect(
-      resultItems.map((item) =>
-        String(record(record(item, 'result item').question, 'result question').display_label),
-      ),
-    ).toEqual(sourceLabels)
-    expect(forbiddenRequests).toEqual([])
-    expect(
-      (await listHistory(request, sessionID)).filter((message) => message.role === 'user'),
-    ).toHaveLength(contract.submissions.plannedTopLevel)
-    await attachJSON(testInfo, 'current-bug-real-matrix-evidence', {
-      top_level_submissions: contract.submissions.plannedTopLevel,
-      provider_identity: contract.provider.identity,
-      provider_display_name: contract.provider.displayName,
-      model: contract.provider.model,
-      problem_fixture_sha256: contract.fixtures.problem.sha256,
-      writing_fixture_sha256: contract.fixtures.writing.sha256,
-      art_fixture_sha256: contract.fixtures.art.sha256,
-      homework_fixture_sha256: contract.fixtures.homework.sha256,
-      solve_invocation_sha256: sha256Text(String(solveReceipt.invocation_id)),
-      solve_result_digest: solveReceipt.result_digest,
-      problem_structural_nodes: problemGroundTruth.length,
-      problem_answerable_items: problemGroundTruth.filter((item) => item.kind !== 'compound_parent')
-        .length,
-      problem_compound_parents: problemGroundTruth.filter((item) => item.kind === 'compound_parent')
-        .length,
-      problem_source_labels: problemGroundTruth.map((item) => item.label),
-      problem_parent_guide_fields: parentGuideKeys,
-      exact_source_labels: sourceLabels,
-      homework_answerable_items: homeworkGroundTruth.length,
-      homework_expected_correct: homeworkGroundTruth.filter((item) => item.status === 'correct')
-        .length,
-      homework_expected_process_wrong: homeworkGroundTruth.filter((item) => item.status === 'wrong')
-        .length,
-      homework_annotation_count: homeworkGroundTruth.length,
-      source_anchored_order: true,
-      forbidden_delivery_requests: forbiddenRequests,
+    }, testInfo: TestInfo) => {
+      const retryableID = envValue('HEX_K12_LIVE_RETRYABLE_DISPATCH_ID')
+      const unknownID = envValue('HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID')
+      const agent = await resolveFixtureAgent(request, retryableID, unknownID)
+      const retryable = await liveJSON<{ dispatch: Json }>(
+        request,
+        'GET',
+        `/api/k12/image-tasks/${encodeURIComponent(retryableID)}?agent=${encodeURIComponent(agent)}`,
+      )
+      expect(retryable.dispatch.status).toBe('failed')
+      expect(retryable.dispatch.retryable).toBe(true)
+      const retried = await liveJSON<{ dispatch: Json }>(
+        request,
+        'POST',
+        `/api/k12/image-tasks/${encodeURIComponent(retryableID)}/retry`,
+        { agent, version: retryable.dispatch.version },
+      )
+      expect(retried.dispatch.dispatch_id).toBe(retryableID)
+
+      const unknown = await liveJSON<{ dispatch: Json }>(
+        request,
+        'GET',
+        `/api/k12/image-tasks/${encodeURIComponent(unknownID)}?agent=${encodeURIComponent(agent)}`,
+      )
+      expect(unknown.dispatch.retryable).not.toBe(true)
+      expect(JSON.stringify(unknown.dispatch)).toMatch(/outcome_unknown|recovering/)
+      const rejected = await request.post(
+        liveAppURL(`/_hexclaw/api/k12/image-tasks/${encodeURIComponent(unknownID)}/retry`),
+        { data: { agent, version: unknown.dispatch.version } },
+      )
+      expect([409, 422]).toContain(rejected.status())
+      await attachJSON(testInfo, 'task-state-evidence', {
+        retryable_dispatch_sha256: sha256Text(retryableID),
+        outcome_unknown_dispatch_sha256: sha256Text(unknownID),
+        retry_reused_same_dispatch: true,
+        outcome_unknown_retry_rejected_before_provider: true,
+      })
     })
-  })
-
-  test('real durable task fixtures distinguish retryable from outcome_unknown without duplicate POST', async ({
-    request,
-  }, testInfo: TestInfo) => {
-    const retryableID = envValue('HEX_K12_LIVE_RETRYABLE_DISPATCH_ID')
-    const unknownID = envValue('HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID')
-    const agent = await resolveFixtureAgent(request, retryableID, unknownID)
-    const retryable = await liveJSON<{ dispatch: Json }>(
-      request,
-      'GET',
-      `/api/k12/image-tasks/${encodeURIComponent(retryableID)}?agent=${encodeURIComponent(agent)}`,
-    )
-    expect(retryable.dispatch.status).toBe('failed')
-    expect(retryable.dispatch.retryable).toBe(true)
-    const retried = await liveJSON<{ dispatch: Json }>(
-      request,
-      'POST',
-      `/api/k12/image-tasks/${encodeURIComponent(retryableID)}/retry`,
-      { agent, version: retryable.dispatch.version },
-    )
-    expect(retried.dispatch.dispatch_id).toBe(retryableID)
-
-    const unknown = await liveJSON<{ dispatch: Json }>(
-      request,
-      'GET',
-      `/api/k12/image-tasks/${encodeURIComponent(unknownID)}?agent=${encodeURIComponent(agent)}`,
-    )
-    expect(unknown.dispatch.retryable).not.toBe(true)
-    expect(JSON.stringify(unknown.dispatch)).toMatch(/outcome_unknown|recovering/)
-    const rejected = await request.post(
-      liveAppURL(`/_hexclaw/api/k12/image-tasks/${encodeURIComponent(unknownID)}/retry`),
-      { data: { agent, version: unknown.dispatch.version } },
-    )
-    expect([409, 422]).toContain(rejected.status())
-    await attachJSON(testInfo, 'task-state-evidence', {
-      retryable_dispatch_sha256: sha256Text(retryableID),
-      outcome_unknown_dispatch_sha256: sha256Text(unknownID),
-      retry_reused_same_dispatch: true,
-      outcome_unknown_retry_rejected_before_provider: true,
-    })
-  })
   }
 })

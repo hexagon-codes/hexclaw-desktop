@@ -164,12 +164,16 @@ afterEach(() => {
 
 describe('Chain A: Chat -> Backend -> Response', () => {
   it('A1: sendMessage creates a user message in the store immediately', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
     // Use a slow backend to observe user message appears before reply
-    let resolveBackend: ((v: unknown) => void) | null = null
-    sendViaBackend.mockImplementation(() => new Promise((resolve) => { resolveBackend = resolve }))
+    let resolveStream: ((v: unknown) => void) | null = null
+    openWebSocketStream.mockReturnValue({
+      cancel: vi.fn(),
+      done: new Promise((resolve) => { resolveStream = resolve }),
+    })
 
     const promise = store.sendMessage('What is AI?')
 
@@ -177,16 +181,17 @@ describe('Chain A: Chat -> Backend -> Response', () => {
     await new Promise((r) => setTimeout(r, 10))
 
     // User message should already be in the store before backend responds
-    expect(store.messages.length).toBe(1)
-    expect(store.messages[0]!.role).toBe('user')
-    expect(store.messages[0]!.content).toBe('What is AI?')
+    const userMessages = store.messages.filter((message) => message.role === 'user')
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages[0]!.content).toBe('What is AI?')
 
     // Resolve backend and complete
-    resolveBackend!({ reply: 'AI is...', session_id: 's1' })
+    resolveStream!({ content: 'AI is...', metadata: undefined, toolCalls: undefined, agentName: undefined })
     await promise
   })
 
   it('A2: sendMessage calls the backend chat API with correct payload shape', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
     store.chatParams = { provider: 'openai', model: 'gpt-4o', temperature: 0.8, maxTokens: 2048 }
@@ -194,12 +199,13 @@ describe('Chain A: Chat -> Backend -> Response', () => {
 
     await store.sendMessage('Write code')
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'Write code',           // text
       expect.any(String),     // sessionId
       { provider: 'openai', model: 'gpt-4o', temperature: 0.8, maxTokens: 2048 },
       'coder',                // agentRole
       undefined,              // attachments
+      expect.any(Object),     // stream callbacks
       // metadata：温度/MaxTokens 经 F-2 映射为后端消费的 agent_temperature/agent_max_tokens
       // BUG-20260703：显式 agentRole 同时作为 pinned_agent 锁定信号
       expect.objectContaining({
@@ -247,7 +253,11 @@ describe('Chain A: Chat -> Backend -> Response', () => {
   })
 
   it('A4: error during chat sets error state on the message', async () => {
-    sendViaBackend.mockRejectedValueOnce(new Error('Backend unavailable'))
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new Error('Backend unavailable')),
+    })
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -258,7 +268,9 @@ describe('Chain A: Chat -> Backend -> Response', () => {
     expect(result).toBeNull()
     // An error assistant message is added to store
     expect(store.error).not.toBeNull()
-    const errorMsg = store.messages.find((m) => m.role === 'assistant' && m.content.includes('Backend unavailable'))
+    const errorMsg = store.messages.find(
+      (m) => m.role === 'assistant' && m.content.includes('WebSocket transport unavailable'),
+    )
     expect(errorMsg).toBeDefined()
   })
 

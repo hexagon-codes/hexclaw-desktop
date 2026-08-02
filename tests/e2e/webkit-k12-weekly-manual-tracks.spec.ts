@@ -82,23 +82,17 @@ function weeklyPlan(revision = 11, agent = AGENT) {
     manual_track_recommendations: {
       textbook_consolidation: {
         availability: 'available',
-        selected_tier: 'standard',
-        options: [
-          { tier: 'less', item_count: 3, recommended: false },
-          { tier: 'standard', item_count: 6, recommended: true },
-          { tier: 'more', item_count: 9, recommended: false },
-        ],
+        selected_item_count: 5,
+        recommended_item_count: 5,
+        min_item_count: 1,
+        max_item_count: 10,
       },
       arithmetic_warmup: {
         availability: 'available',
-        selected_minutes: 2,
-        options: [
-          { minutes: 1, estimated_item_count: 6, recommended: false },
-          { minutes: 2, estimated_item_count: 12, recommended: true },
-          { minutes: 3, estimated_item_count: 18, recommended: false },
-          { minutes: 4, estimated_item_count: 24, recommended: false },
-          { minutes: 5, estimated_item_count: 30, recommended: false },
-        ],
+        selected_item_count: 10,
+        recommended_item_count: 10,
+        min_item_count: 1,
+        max_item_count: 20,
       },
     },
     created_at: '2026-07-20T00:00:00Z',
@@ -205,8 +199,7 @@ async function installMocks(page: Page) {
       })
     }
     if (
-      path ===
-        '/api/k12/weekly-practice/plans/weekly-30/tracks/textbook_consolidation/prepare' &&
+      path === '/api/k12/weekly-practice/plans/weekly-30/tracks/textbook_consolidation/prepare' &&
       method === 'POST'
     ) {
       syncBodies.push(request.postDataJSON())
@@ -218,16 +211,20 @@ async function installMocks(page: Page) {
       method === 'POST'
     ) {
       arithmeticBodies.push(request.postDataJSON())
-      return json(route, {
-        batch: {
-          batch_id: 'batch-30',
-          plan_id: 'weekly-30',
-          plan_revision: plan.revision,
-          state: 'ready',
-          items: [],
+      return json(
+        route,
+        {
+          batch: {
+            batch_id: 'batch-30',
+            plan_id: 'weekly-30',
+            plan_revision: plan.revision,
+            state: 'ready',
+            items: [],
+          },
+          replayed: false,
         },
-        replayed: false,
-      }, 201)
+        201,
+      )
     }
     if (path === '/api/k12/mistakes' || path === '/api/k12/review-queue') {
       return json(route, { items: [] })
@@ -258,7 +255,7 @@ async function installMocks(page: Page) {
 
 async function openWeeklyRecords(page: Page, agent: string, title: string) {
   await page.goto(`/chat?role=${agent}&roleTitle=${encodeURIComponent(title)}`)
-  const scenarioTabs = page.locator('.k12enh-seg')
+  const scenarioTabs = page.getByRole('tablist', { name: '辅导助手功能' })
   await expect(scenarioTabs.getByRole('tab', { name: '学习档案', exact: true })).toBeVisible()
   await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
   await expect(page.getByTestId('week-section')).toBeVisible()
@@ -285,6 +282,34 @@ async function tabStyle(tab: ReturnType<Page['locator']>) {
   })
 }
 
+/**
+ * `K12BookTabs` intentionally animates hover color/background for 150ms.
+ * Read the shared contract only after the browser has painted the hover and
+ * all element-local transitions have settled; sampling the first tab after
+ * 150ms but the second immediately compares two different visual states.
+ */
+async function settledHoverTabStyle(tab: ReturnType<Page['locator']>) {
+  await tab.hover()
+  await tab.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      }),
+  )
+  await expect
+    .poll(() =>
+      tab.evaluate((element) =>
+        element
+          .getAnimations()
+          .every(
+            (animation) => animation.playState !== 'running' && animation.playState !== 'pending',
+          ),
+      ),
+    )
+    .toBe(true)
+  return tabStyle(tab)
+}
+
 test.describe('BUG-20260727-005 weekly manual tracks @ WebKit', () => {
   test('shared current/history tabs and disabled-auto manual commands remain operable', async ({
     page,
@@ -292,7 +317,7 @@ test.describe('BUG-20260727-005 weekly manual tracks @ WebKit', () => {
     const requests = await installMocks(page)
     await page.goto(`/chat?role=${AGENT}&roleTitle=${encodeURIComponent('小明的辅导助手')}`)
 
-    const scenarioTabs = page.locator('.k12enh-seg')
+    const scenarioTabs = page.getByRole('tablist', { name: '辅导助手功能' })
     await expect(scenarioTabs.getByRole('tab', { name: '学习档案', exact: true })).toBeVisible()
     await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.getByTestId('week-section')).toBeVisible()
@@ -304,38 +329,38 @@ test.describe('BUG-20260727-005 weekly manual tracks @ WebKit', () => {
       'true',
     )
     await weeklyTabs.getByRole('tab', { name: '历史', exact: true }).click()
-    await expect(page.getByRole('tabpanel', { name: '历史周练' })).toContainText(
-      '2026年第29周',
-    )
+    await expect(page.getByRole('tabpanel', { name: '历史周练' })).toContainText('2026年第29周')
     await weeklyTabs.getByRole('tab', { name: '本周', exact: true }).click()
 
     await expect(page.getByText('本周暂时没有需要复习的错题', { exact: true })).toBeVisible()
     await expect(page.locator('[data-textbook-consolidation-state]')).toContainText('同步巩固')
     await expect(page.locator('[data-arithmetic-state]')).toContainText('口算热身')
 
-    const textbookOptions = page.getByRole('group', { name: '同步巩固本次题量' })
-    await textbookOptions.getByRole('button', { name: '多一些（9 道）', exact: true }).click()
-    await expect(
-      textbookOptions.getByRole('button', { name: '多一些（9 道）', exact: true }),
-    ).toHaveAttribute('aria-pressed', 'true')
+    const textbookOptions = page.getByRole('group', { name: '同步巩固题数' })
+    const textbookCount = textbookOptions.getByRole('spinbutton')
+    await expect(textbookCount).toHaveAttribute('min', '1')
+    await expect(textbookCount).toHaveAttribute('max', '10')
+    await textbookCount.fill('8')
+    await expect(textbookCount).toHaveValue('8')
     await page.locator('[data-consolidation-action]').click()
     await expect.poll(() => requests.syncBodies.length).toBe(1)
     expect(requests.syncBodies[0]).toEqual({
       plan_revision: 11,
-      tier: 'more',
+      item_count: 8,
       idempotency_key: expect.any(String),
     })
 
-    const arithmeticOptions = page.getByRole('group', { name: '口算热身本组时长' })
-    await arithmeticOptions.getByRole('button', { name: '4 分钟 · 约 24 道', exact: true }).click()
-    await expect(
-      arithmeticOptions.getByRole('button', { name: '4 分钟 · 约 24 道', exact: true }),
-    ).toHaveAttribute('aria-pressed', 'true')
+    const arithmeticOptions = page.getByRole('group', { name: '口算热身题数' })
+    const arithmeticCount = arithmeticOptions.getByRole('spinbutton')
+    await expect(arithmeticCount).toHaveAttribute('min', '1')
+    await expect(arithmeticCount).toHaveAttribute('max', '20')
+    await arithmeticCount.fill('15')
+    await expect(arithmeticCount).toHaveValue('15')
     await page.locator('[data-arithmetic-action]').click()
     await expect.poll(() => requests.arithmeticBodies.length).toBe(1)
     expect(requests.arithmeticBodies[0]).toEqual({
       plan_revision: 12,
-      minutes: 4,
+      item_count: 15,
       idempotency_key: expect.any(String),
     })
   })
@@ -366,18 +391,14 @@ test.describe('BUG-20260727-005 weekly manual tracks @ WebKit', () => {
     })
     expect(await tabStyle(weeklyCurrent)).toEqual(await tabStyle(recordsCurrent))
 
-    await weeklyHistory.hover()
-    const weeklyHover = await tabStyle(weeklyHistory)
-    await recordsInactive.hover()
-    const recordsHover = await tabStyle(recordsInactive)
+    const weeklyHover = await settledHoverTabStyle(weeklyHistory)
+    const recordsHover = await settledHoverTabStyle(recordsInactive)
     expect(weeklyHover).toEqual(recordsHover)
 
     await weeklyCurrent.focus()
     await page.keyboard.press('Alt+Tab')
     await expect(weeklyHistory).toBeFocused()
-    expect(await weeklyHistory.evaluate((element) => element.matches(':focus-visible'))).toBe(
-      true,
-    )
+    expect(await weeklyHistory.evaluate((element) => element.matches(':focus-visible'))).toBe(true)
     const weeklyFocus = await tabStyle(weeklyHistory)
     await recordsCurrent.focus()
     await page.keyboard.press('Alt+Tab')

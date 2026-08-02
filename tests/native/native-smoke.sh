@@ -158,6 +158,17 @@ wait_for_health() {
   return 1
 }
 
+assert_protected_sidecar_requires_capability() {
+  local status
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 2 \
+    --output /dev/null --write-out '%{http_code}' \
+    "http://localhost:${PORT}/api/v1/knowledge/operations?corpus_id=default")"
+  if [[ "${status}" != "401" ]]; then
+    printf 'anonymous protected Sidecar request returned %s, want 401\n' "${status}" >&2
+    return 1
+  fi
+}
+
 run_smoke() {
   validate
   if [[ ! -f "${APP_BUNDLE}/Contents/Info.plist" ]]; then
@@ -193,6 +204,7 @@ run_smoke() {
   APP_PID=$!
 
   wait_for_health
+  assert_protected_sidecar_requires_capability
   test -f "${SANDBOX}/.hexclaw/hexclaw.yaml"
   grep -q "port: ${PORT}" "${SANDBOX}/.hexclaw/hexclaw.yaml"
   grep -q "${SANDBOX}/.hexclaw/data.db" "${SANDBOX}/.hexclaw/hexclaw.yaml"

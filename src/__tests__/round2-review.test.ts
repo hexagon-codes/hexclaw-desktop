@@ -48,19 +48,22 @@ describe('useShortcuts — 动态映射', () => {
 describe('ChatAttachment 数据完整性', () => {
   // 附件映射逻辑已迁移到 services/chatService.ts
   const chatServiceSrc = readSrc('services/chatService.ts')
-  const chatApiSrc = readSrc('api/chat.ts')
+  const chatApiSrc = readSrc('api/chat-websocket-compat.ts')
 
-  it('sendMessageViaBackend 映射 attachment 使用 data 而非 url', () => {
-    expect(chatServiceSrc).toContain('a.data')
+  it('聊天 wire 只传递 owner-bound attachment receipt', () => {
+    expect(chatServiceSrc).toContain('attachment.attachmentId')
+    expect(chatServiceSrc).toContain('attachment_id: attachment.attachmentId')
   })
 
-  it('sendMessageViaBackend 映射包含 mime 字段', () => {
-    expect(chatServiceSrc).toContain('a.mime')
+  it('聊天 wire 不传递 renderer base64 或 MIME 副本', () => {
+    const mapping = chatServiceSrc.slice(chatServiceSrc.indexOf('const wsAttachments'))
+    expect(mapping.slice(0, 500)).not.toContain('.data')
+    expect(mapping.slice(0, 500)).not.toContain('.mime')
   })
 
   it('sendChatViaBackend 签名接受 attachments 参数', () => {
     expect(chatApiSrc).toContain('attachments?:')
-    expect(chatApiSrc).toContain('attachments: options?.attachments || null')
+    expect(chatApiSrc).toContain('options.attachments as ChatAttachment[] | undefined')
   })
 })
 

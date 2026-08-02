@@ -109,7 +109,7 @@ describe('Issue 4: KnowledgeView upload uses entry reference, not index', () => 
   })
 
   it('binds HTTP 202 to the durable job instead of declaring completion', () => {
-    expect(src).toContain('uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)')
+    expect(src).toContain('accepted.operation_id')
     expect(src).toContain('uploadsStore.markSucceeded(entry)')
   })
 

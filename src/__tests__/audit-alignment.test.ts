@@ -35,124 +35,85 @@ vi.mock('@/constants', () => ({
 describe('1. API Request/Response Shape Validation', () => {
   // ─── chat.ts ──────────────────────────────────────────────────
 
-  describe('chat.ts — sendChatViaBackend', () => {
-    let invokeArgs: unknown
+  describe('chat.ts — WebSocket-only compatibility adapter', () => {
+    let mockSendViaBackend: ReturnType<typeof vi.fn>
 
     beforeEach(() => {
       vi.resetModules()
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn((_cmd: string, args: unknown) => {
-          invokeArgs = args
-          return Promise.resolve(JSON.stringify({
-            reply: 'hello',
-            session_id: 'sess-1',
-          }))
-        }),
-      }))
+      mockSendViaBackend = vi.fn().mockResolvedValue({ reply: 'hello', session_id: 'sess-1' })
+      vi.doMock('@/services/chat-service-compat', () => ({ sendViaBackend: mockSendViaBackend }))
     })
 
-    it('sends temperature and max_tokens — but backend ChatRequest does NOT declare them (silently dropped)', async () => {
+    it('maps temperature and max token aliases into the WebSocket request', async () => {
       const { sendChatViaBackend } = await import('@/api/chat')
-      await sendChatViaBackend('test', { temperature: 0.5, maxTokens: 1024 })
-
-      const params = (invokeArgs as { params: Record<string, unknown> }).params
-      // Frontend DOES send these fields
-      expect(params).toHaveProperty('temperature', 0.5)
-      expect(params).toHaveProperty('max_tokens', 1024)
-      // But backend ChatRequest struct has NO json tags for temperature/max_tokens.
-      // They are silently ignored by the Go JSON decoder. This is a confirmed
-      // misalignment: the frontend offers per-message temperature/max_tokens,
-      // but the backend ignores them.
+      await sendChatViaBackend('test', { sessionId: 'sess-1', temperature: 0.5, maxTokens: 1024 })
+      expect(mockSendViaBackend).toHaveBeenCalledWith(
+        'test',
+        'sess-1',
+        { provider: undefined, model: undefined, temperature: 0.5, maxTokens: 1024 },
+        '',
+        undefined,
+        undefined,
+        undefined,
+      )
     })
 
-    it('maps options.sessionId to session_id (camelCase → snake_case)', async () => {
+    it('accepts both camelCase and snake_case session ids', async () => {
       const { sendChatViaBackend } = await import('@/api/chat')
       await sendChatViaBackend('test', { sessionId: 'my-session' })
-
-      const params = (invokeArgs as { params: Record<string, unknown> }).params
-      expect(params).toHaveProperty('session_id', 'my-session')
-      expect(params).not.toHaveProperty('sessionId')
+      expect(mockSendViaBackend.mock.calls[0]![1]).toBe('my-session')
+      mockSendViaBackend.mockClear()
+      await sendChatViaBackend('test', { session_id: 'legacy-session' })
+      expect(mockSendViaBackend.mock.calls[0]![1]).toBe('legacy-session')
     })
 
-    it('includes user_id = DESKTOP_USER_ID', async () => {
+    it('does not inject renderer-owned user identity into transport options', async () => {
       const { sendChatViaBackend } = await import('@/api/chat')
-      await sendChatViaBackend('hello')
-
-      const params = (invokeArgs as { params: Record<string, unknown> }).params
-      expect(params).toHaveProperty('user_id', 'desktop-user')
+      await sendChatViaBackend('hello', { sessionId: 'sess-1' })
+      expect(mockSendViaBackend.mock.calls[0]![2]).not.toHaveProperty('user_id')
     })
 
-    it('null-coalesces missing optional fields', async () => {
+    it('keeps absent optional fields absent instead of inventing null values', async () => {
       const { sendChatViaBackend } = await import('@/api/chat')
-      await sendChatViaBackend('test')
-
-      const params = (invokeArgs as { params: Record<string, unknown> }).params
-      expect(params.session_id).toBeNull()
-      expect(params.role).toBeNull()
-      expect(params.provider).toBeNull()
-      expect(params.model).toBeNull()
-      expect(params.temperature).toBeNull()
-      expect(params.max_tokens).toBeNull()
-      expect(params.attachments).toBeNull()
+      await sendChatViaBackend('test', { sessionId: 'sess-1' })
+      expect(mockSendViaBackend.mock.calls[0]!.slice(2)).toEqual([
+        { provider: undefined, model: undefined, temperature: undefined, maxTokens: undefined },
+        '',
+        undefined,
+        undefined,
+        undefined,
+      ])
     })
 
-    it('throws on non-JSON backend response', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue('not json!!!'),
-      }))
-      vi.resetModules()
+    it('propagates the canonical WebSocket transport error unchanged', async () => {
+      mockSendViaBackend.mockRejectedValueOnce(new Error('WebSocket connection failed'))
       const { sendChatViaBackend } = await import('@/api/chat')
-      await expect(sendChatViaBackend('test')).rejects.toThrow('non-JSON')
+      await expect(sendChatViaBackend('test', { sessionId: 'sess-1' })).rejects.toThrow(
+        'WebSocket connection failed',
+      )
     })
 
-    it('handles backend JSON without reply field gracefully (defensive check added)', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue(JSON.stringify({ session_id: 's1' })),
-      }))
-      vi.resetModules()
+    it('passes normalized WebSocket responses through without renderer JSON parsing', async () => {
+      mockSendViaBackend.mockResolvedValueOnce({ session_id: 's1' })
       const { sendChatViaBackend } = await import('@/api/chat')
-
-      // FIXED: (result?.reply ?? '').slice(0, 50) handles undefined reply without crashing
-      const result = await sendChatViaBackend('test')
-      expect(result.session_id).toBe('s1')
-    })
-  })
-
-  describe('chat.ts — sendChat compat wrapper', () => {
-    beforeEach(() => {
-      vi.resetModules()
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue(JSON.stringify({
-          reply: 'ok',
-          session_id: 's1',
-        })),
-      }))
+      await expect(sendChatViaBackend('test', { sessionId: 's1' })).resolves.toEqual({ session_id: 's1' })
     })
 
     it('sendChat forwards provider_id as provider fallback', async () => {
       const { sendChat } = await import('@/api/chat')
-      // ChatRequest has both provider and provider_id
-      // sendChat does: provider: req.provider ?? req.provider_id
-      const mockInvoke = (await import('@tauri-apps/api/core')).invoke as ReturnType<typeof vi.fn>
-
-      await sendChat({ message: 'hi', provider_id: 'deepseek' })
-      const params = mockInvoke.mock.calls[0]![1].params
-      expect(params.provider).toBe('deepseek')
+      await sendChat({ message: 'hi', sessionId: 's1', provider_id: 'deepseek' })
+      expect(mockSendViaBackend.mock.calls[0]![2].provider).toBe('deepseek')
     })
 
-    it('sendChat forwards temperature/maxTokens from ChatRequest', async () => {
+    it('sendChat forwards temperature/maxTokens aliases', async () => {
       const { sendChat } = await import('@/api/chat')
-      const mockInvoke = (await import('@tauri-apps/api/core')).invoke as ReturnType<typeof vi.fn>
-
-      await sendChat({
-        message: 'hi',
+      await sendChat({ message: 'hi', sessionId: 's1', temperature: 0.9, max_tokens: 2000 })
+      expect(mockSendViaBackend.mock.calls[0]![2]).toEqual({
+        provider: undefined,
+        model: undefined,
         temperature: 0.9,
-        max_tokens: 2000,
+        maxTokens: 2000,
       })
-      const params = mockInvoke.mock.calls[0]![1].params
-      // FIXED: sendChat now forwards temperature and max_tokens from ChatRequest
-      expect(params.temperature).toBe(0.9)
-      expect(params.max_tokens).toBe(2000)
     })
   })
 
@@ -168,31 +129,25 @@ describe('1. API Request/Response Shape Validation', () => {
       delete (globalThis as Record<string, unknown>).isTauri
     })
 
-    it('getLLMConfig calls proxy with GET /api/v1/config/llm', async () => {
-      const mockInvoke = vi.fn().mockResolvedValue(JSON.stringify({
+    it('getLLMConfig calls the typed native credential coordinator', async () => {
+      const nativeConfig = {
         default: 'openai',
         providers: {},
         routing: { enabled: false, strategy: 'round_robin' },
         cache: { enabled: false, similarity: 0.9, ttl: '1h', max_entries: 100 },
-      }))
+      }
+      const mockInvoke = vi.fn().mockResolvedValue(nativeConfig)
       vi.doMock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 
       const { getLLMConfig } = await import('@/api/config')
       const config = await getLLMConfig()
 
-      expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', {
-        method: 'GET',
-        path: '/api/v1/config/llm',
-        body: null,
-      })
-      expect(config).toHaveProperty('default')
-      expect(config).toHaveProperty('providers')
-      expect(config).toHaveProperty('routing')
-      expect(config).toHaveProperty('cache')
+      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials')
+      expect(config).toBe(nativeConfig)
     })
 
-    it('updateLLMConfig calls proxy with PUT and stringified body', async () => {
-      const mockInvoke = vi.fn().mockResolvedValue(JSON.stringify({ ok: true }))
+    it('updateLLMConfig applies config and credential replacements atomically', async () => {
+      const mockInvoke = vi.fn().mockResolvedValue(undefined)
       vi.doMock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 
       const { updateLLMConfig } = await import('@/api/config')
@@ -206,20 +161,18 @@ describe('1. API Request/Response Shape Validation', () => {
       }
       await updateLLMConfig(config)
 
-      expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', {
-        method: 'PUT',
-        path: '/api/v1/config/llm',
-        body: JSON.stringify(config),
+      expect(mockInvoke).toHaveBeenCalledWith('apply_llm_config_with_credentials', {
+        config,
+        replacements: [],
       })
     })
 
-    it('getLLMConfig throws on non-JSON response', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue('invalid'),
-      }))
+    it('getLLMConfig consumes the typed native result without renderer JSON parsing', async () => {
+      const nativeConfig = { default: 'openai', providers: {}, routing: {}, cache: {} }
+      vi.doMock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(nativeConfig) }))
 
       const { getLLMConfig } = await import('@/api/config')
-      await expect(getLLMConfig()).rejects.toThrow('non-JSON')
+      await expect(getLLMConfig()).resolves.toBe(nativeConfig)
     })
   })
 
@@ -283,8 +236,14 @@ describe('1. API Request/Response Shape Validation', () => {
       vi.doMock('@/api/client', () => ({
         apiGet: vi.fn(),
         apiPost: vi.fn((url: string, body: unknown) => {
-          capturedBody = body
-          return Promise.resolve({ id: 'doc1', title: 'test', chunk_count: 3, created_at: '2024-01-01' })
+          if (body instanceof FormData) capturedBody = body
+          return Promise.resolve({
+            operation_id: 'op-1',
+            document_id: 'doc1',
+            job_id: 'job-1',
+            text_index_state: 'pending',
+            vector_index_state: 'pending',
+          })
         }),
         apiDelete: vi.fn(),
       }))
@@ -621,34 +580,22 @@ describe('1. API Request/Response Shape Validation', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('2. Security Tests', () => {
-  describe('proxy_api_request path validation (frontend-side)', () => {
-    // The Rust backend (commands.rs) should reject path traversal,
-    // but the frontend config.ts passes the path directly without
-    // any validation.
-
+  describe('credential configuration native boundary', () => {
     afterEach(() => {
       delete (globalThis as Record<string, unknown>).isTauri
     })
 
-    it('proxyApiRequestText does NOT validate path before sending (no frontend guard)', async () => {
+    it('does not send credential-bearing LLM configuration through the legacy JSON proxy', async () => {
       vi.resetModules()
       ;(globalThis as Record<string, unknown>).isTauri = true
       const mockInvoke = vi.fn().mockResolvedValue('{}')
       vi.doMock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 
       const { getLLMConfig } = await import('@/api/config')
-      // This call should work fine
       await getLLMConfig()
 
-      // Verify the path is sent as-is
-      expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', {
-        method: 'GET',
-        path: '/api/v1/config/llm',
-        body: null,
-      })
-
-      // The proxyApiRequestText function has NO path validation.
-      // It relies entirely on the Rust side. Frontend could add a guard.
+      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials')
+      expect(mockInvoke).not.toHaveBeenCalledWith('proxy_api_request', expect.anything())
     })
   })
 
@@ -975,62 +922,40 @@ describe('3. Response Shape Resilience', () => {
   })
 
   describe('chat.ts — sendChatViaBackend response resilience', () => {
-    beforeEach(() => {
+    async function sendWithResponse(response: unknown) {
       vi.resetModules()
-    })
+      vi.doMock('@/services/chat-service-compat', () => ({
+        sendViaBackend: vi.fn().mockResolvedValue(response),
+      }))
+      const { sendChatViaBackend } = await import('@/api/chat')
+      return await sendChatViaBackend('test', { sessionId: 's1' })
+    }
 
     it('handles empty object response gracefully (no reply field)', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue('{}'),
-      }))
-
-      const { sendChatViaBackend } = await import('@/api/chat')
-      // FIXED: (result?.reply ?? '').slice(0, 50) handles undefined reply
-      const result = await sendChatViaBackend('test')
+      const result = await sendWithResponse({})
       expect(result.reply).toBeUndefined()
     })
 
     it('handles null reply without crashing', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue(JSON.stringify({ reply: null, session_id: 's1' })),
-      }))
-
-      const { sendChatViaBackend } = await import('@/api/chat')
-      // FIXED: (result?.reply ?? '').slice(0, 50) handles null reply
-      const result = await sendChatViaBackend('test')
+      const result = await sendWithResponse({ reply: null, session_id: 's1' })
       expect(result.reply).toBeNull()
       expect(result.session_id).toBe('s1')
     })
 
     it('does not crash when metadata is missing (optional field)', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue(JSON.stringify({
-          reply: 'hello',
-          session_id: 's1',
-          // no metadata, no tool_calls
-        })),
-      }))
-
-      const { sendChatViaBackend } = await import('@/api/chat')
-      const result = await sendChatViaBackend('test')
+      const result = await sendWithResponse({ reply: 'hello', session_id: 's1' })
       expect(result.metadata).toBeUndefined()
       expect(result.tool_calls).toBeUndefined()
     })
 
     it('handles extra unexpected fields in response without crashing', async () => {
-      vi.doMock('@tauri-apps/api/core', () => ({
-        invoke: vi.fn().mockResolvedValue(JSON.stringify({
-          reply: 'hi',
-          session_id: 's1',
-          usage: { prompt_tokens: 10, completion_tokens: 20 },
-          some_future_field: true,
-        })),
-      }))
-
-      const { sendChatViaBackend } = await import('@/api/chat')
-      const result = await sendChatViaBackend('test')
+      const result = await sendWithResponse({
+        reply: 'hi',
+        session_id: 's1',
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+        some_future_field: true,
+      })
       expect(result.reply).toBe('hi')
-      // Extra fields are silently kept (JSON.parse doesn't strip them)
     })
   })
 

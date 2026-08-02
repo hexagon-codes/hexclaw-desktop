@@ -82,6 +82,7 @@ describe('API 客户端架构审计', () => {
 
 describe('Chat 会话链路', () => {
   const chatSrc = readSrc('api/chat.ts')
+  const chatCompatSrc = readSrc('api/chat-websocket-compat.ts')
   const chatStoreSrc = readSrc('stores/chat.ts')
   const chatServiceSrc = readSrc('services/chatService.ts')
   const chatStreamCancelSrc = readSrc('stores/chat-stream-cancel.ts')
@@ -90,16 +91,15 @@ describe('Chat 会话链路', () => {
   const chatSendAutoTitleSrc = readSrc('stores/chat-send-auto-title.ts')
   const chatSessionControllerSrc = readSrc('stores/chat-session-controller.ts')
 
-  it('sendChatViaBackend 应传递所有参数给 Tauri invoke', () => {
-    // 确保 temperature、maxTokens、attachments 都正确传递
-    expect(chatSrc).toContain('temperature: options?.temperature ?? null')
-    expect(chatSrc).toContain('max_tokens: options?.maxTokens ?? null')
-    expect(chatSrc).toContain('attachments: options?.attachments || null')
+  it('sendChatViaBackend 应将兼容参数传递给单一 WebSocket 适配器', () => {
+    expect(chatCompatSrc).toContain('temperature: options.temperature')
+    expect(chatCompatSrc).toContain('maxTokens: options.maxTokens ?? options.max_tokens')
+    expect(chatCompatSrc).toContain('options.attachments as ChatAttachment[] | undefined')
   })
 
   it('sendChat 兼容旧接口应支持 provider_id 回退', () => {
     // sendChat 使用 req.provider ?? req.provider_id
-    expect(chatSrc).toContain('req.provider ?? req.provider_id')
+    expect(chatCompatSrc).toContain('options.provider ?? options.provider_id')
   })
 
   it('WebSocket 流式回调清理不应破坏 approval 监听', () => {
@@ -130,12 +130,12 @@ describe('Chat 会话链路', () => {
   })
 
   it('forkSession API 路径与后端对齐', () => {
-    expect(chatSrc).toContain('/api/v1/sessions/${encodeURIComponent(sessionId)}/fork')
+    expect(chatSrc).toContain('/api/v1/sessions/${encodeURIComponent(id)}/fork')
     // 后端: POST /api/v1/sessions/{id}/fork — 匹配，sessionId 已 URL 编码
   })
 
   it('deleteMessage 应 URL 编码 messageId', () => {
-    expect(chatSrc).toContain('encodeURIComponent(messageId)')
+    expect(chatSrc).toContain('encodeURIComponent(id)')
   })
 
   it('updateMessageFeedback 使用顶层 import 而非动态 import', () => {
@@ -162,24 +162,22 @@ describe('Session 管理链路', () => {
     expect(chatSrc).toContain("user_id: DESKTOP_USER_ID")
   })
 
-  it('searchMessages 传递 user_id 和 query (via sessionGet)', () => {
-    // searchMessages uses sessionGet which auto-injects user_id
-    expect(chatSrc).toContain("q: query")
-    expect(chatSrc).toContain("sessionGet")
+  it('searchMessages 通过共享 API client 传递 user_id 和 query', () => {
+    expect(chatSrc).toContain('{ q: query, ...userQuery(), ...params }')
+    expect(chatSrc).toContain("'/api/v1/messages/search'")
   })
 
   it('createSession 参数与后端 POST /api/v1/sessions 对齐', () => {
-    // createSession uses sessionPost helper (which auto-injects user_id)
-    expect(chatSrc).toContain("sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions'")
+    expect(chatSrc).toContain("apiPost<ChatSession>(ownedPath('/api/v1/sessions')")
   })
 
   it('getSessionBranches 路径与后端对齐', () => {
-    expect(chatSrc).toContain('/api/v1/sessions/${encodeURIComponent(sessionId)}/branches')
+    expect(chatSrc).toContain('/api/v1/sessions/${encodeURIComponent(id)}/branches')
   })
 
   it('listSessionMessages 支持分页参数', () => {
-    expect(chatSrc).toContain("if (opts?.limit) q.limit = opts.limit")
-    expect(chatSrc).toContain("if (opts?.offset) q.offset = opts.offset")
+    expect(chatSrc).toContain('...(params.limit ? { limit: params.limit } : {})')
+    expect(chatSrc).toContain('...(params.offset ? { offset: params.offset } : {})')
   })
 })
 
@@ -710,28 +708,31 @@ describe('Team 团队链路', () => {
 
 describe('安全审计', () => {
   const commandsSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/commands.rs'), 'utf-8')
+  const sidecarClientSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/sidecar_client.rs'), 'utf-8')
+  const sidecarSocketSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/sidecar_socket.rs'), 'utf-8')
   const sidecarSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/sidecar.rs'), 'utf-8')
 
-  it('proxy_api_request 应阻止路径遍历', () => {
-    expect(commandsSrc).toContain('path.contains("..")')
-    expect(commandsSrc).toContain("path.starts_with('/')")
+  it('proxy_api_request 应委托给共享的路径与同源校验', () => {
+    expect(commandsSrc).toContain('client.renderer_request(proxy_method(&method)?, &path)?')
+    expect(sidecarClientSrc).toContain('validate_relative_path(relative_path)?')
+    expect(sidecarClientSrc).toContain('validate_exact_sidecar_origin(&url)?')
   })
 
-  it('stream_chat 应阻止 SSRF（云元数据端点）', () => {
-    expect(commandsSrc).toContain('169.254.169.254')
-    expect(commandsSrc).toContain('metadata.google.internal')
+  it('聊天直连命令应退役，WebSocket 只允许产品路径', () => {
+    expect(commandsSrc).not.toMatch(/async fn (?:stream_chat|backend_chat)\b/)
+    expect(sidecarSocketSrc).toContain('matches!(without_query, "/ws" | "/api/v1/logs/stream")')
   })
 
-  it('stream_chat 应仅允许 http/https scheme', () => {
-    expect(commandsSrc).toContain('scheme != "https" && scheme != "http"')
+  it('WebSocket 的 origin 与 bearer 必须由 Rust 管理', () => {
+    expect(sidecarSocketSrc).toContain('SidecarClient::endpoint(socket_path(path)?)?')
+    expect(sidecarSocketSrc).toContain('AUTHORIZATION')
   })
 
-  it('secure store 使用 Tauri Store，浏览器端不做持久化假加密', () => {
-    // Secure storage is handled in TypeScript (secure-store.ts) using Tauri LazyStore.
-    // Browser mode keeps secrets only in volatile memory.
+  it('secure store 使用 OS 凭据库，浏览器端仅保留会话内存', () => {
     const secureStoreSrc = readSrc('utils/secure-store.ts')
-    expect(secureStoreSrc).toContain('LazyStore')
-    expect(secureStoreSrc).toContain('volatileBrowserStore')
+    expect(secureStoreSrc).toContain('browserSessionVault')
+    expect(secureStoreSrc).not.toContain('LazyStore')
+    expect(secureStoreSrc).not.toContain('localStorage')
   })
 
   it('sidecar 端口冲突检测应区分 hexclaw 与非 hexclaw 进程', () => {
@@ -749,13 +750,9 @@ describe('安全审计', () => {
     expect(sidecarSrc).toContain('hexclaw.yaml')
   })
 
-  it('后端 chat 请求体应限制大小（MaxBytesReader）', () => {
-    // 检查 handleSaveMemory 有 MaxBytesReader(1MB) 限制
-    // 但 handleChat 有类似保护吗？
-    // BUG-20260523-v2: backend_chat 改 SSE 流式后，HTTP 总时长 timeout
-    // 仅作 zombie 兜底（>= 1800s）；用 chunk 间 idle timeout (60s) 检测真实卡死。
-    // commands.rs 整文件仍有 from_secs(120) 是 /api/v1/render 的 timeout（与 chat 无关）。
-    expect(commandsSrc).toMatch(/from_secs\((1800|3600|600)\)/)
+  it('原生 Sidecar 请求与 WebSocket 帧应有明确大小上限', () => {
+    expect(commandsSrc).toContain('MAX_PROXY_REQUEST_BYTES')
+    expect(sidecarSocketSrc).toContain('MAX_SOCKET_MESSAGE_BYTES')
   })
 })
 
