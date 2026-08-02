@@ -70,6 +70,7 @@ function isEmoji(s: string): boolean {
     return /\p{Extended_Pictographic}/u.test(s)
   } catch {
     // 极老环境无 Unicode property escape：退化为「非 ASCII 短串」判定
+    // oxlint-disable-next-line no-control-regex -- keep the audited literal escape; a regression test rejects real NUL bytes
     return s.length <= 4 && /[^\x00-\x7f]/.test(s)
   }
 }
