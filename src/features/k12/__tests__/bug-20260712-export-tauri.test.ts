@@ -4,30 +4,55 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Tauri WKWebView 里不触发下载（无下载管理器）→ 静默无反应。修：桌面走 Tauri 原生 Save 对话框
 // + Rust 写盘（downloadInApp），浏览器/dev 保留 blob 回退。
 
-const h = vi.hoisted(() => ({ tauri: false, saveSpy: vi.fn<(src: string, fn: string) => void>() }))
+const h = vi.hoisted(() => ({
+  tauri: false,
+  createOperation: vi.fn<(...args: unknown[]) => string>(() => 'save-blob:test'),
+  pickSave: vi.fn(),
+  stageBlob: vi.fn(),
+  copyGrant: vi.fn(),
+}))
 vi.mock('@/utils/platform', () => ({ isTauri: () => h.tauri }))
-vi.mock('@/utils/download', () => ({ downloadInApp: (src: string, fn: string) => h.saveSpy(src, fn) }))
+vi.mock('@/api/native-files', () => ({
+  createNativeFileOperation: (...args: unknown[]) => h.createOperation(...args),
+  pickSaveFileGrant: (...args: unknown[]) => h.pickSave(...args),
+  stageBlob: (...args: unknown[]) => h.stageBlob(...args),
+  copyGrantedFile: (...args: unknown[]) => h.copyGrant(...args),
+}))
 
 import { download } from '../export'
 
 describe('BUG-20260712-#6 导出走 Tauri 原生保存（WKWebView <a download> 失效）', () => {
-  beforeEach(() => { h.saveSpy.mockClear() })
+  beforeEach(() => {
+    h.createOperation.mockReset().mockReturnValue('save-blob:test')
+    h.pickSave.mockReset().mockResolvedValue({
+      grantId: 'destination', operationId: 'save-blob:test', purpose: 'save_copy',
+      name: '错题本.md', mime: 'text/markdown', size: 0,
+    })
+    h.stageBlob.mockReset().mockResolvedValue({
+      grantId: 'source', operationId: 'save-blob:test', purpose: 'save_copy',
+      name: '错题本.md', mime: 'text/markdown', size: 24,
+    })
+    h.copyGrant.mockReset().mockResolvedValue(24)
+  })
 
-  it('Tauri 环境 → 调 downloadInApp(data URL)，不再 <a download> 静默失败', async () => {
+  it('Tauri 环境 → 通过 Blob + opaque grants 保存，不创建 data URL', async () => {
     h.tauri = true
     await download('错题本.md', '# 错题\n长方体的体积', 'text/markdown')
-    expect(h.saveSpy).toHaveBeenCalledOnce() // RED（修前 download 不调 downloadInApp）
-    const [src, fn] = h.saveSpy.mock.calls[0]!
-    expect(src).toMatch(/^data:text\/markdown;base64,/)
-    expect(fn).toBe('错题本.md')
-    // 中文内容 UTF-8 安全还原
-    const b64 = (src as string).split(',')[1]!
-    expect(decodeURIComponent(escape(atob(b64)))).toContain('长方体的体积')
+    expect(h.pickSave).toHaveBeenCalledWith('错题本.md', 'save_copy', 'save-blob:test')
+    expect(h.stageBlob).toHaveBeenCalledWith(
+      expect.any(Blob),
+      '错题本.md',
+      { purpose: 'save_copy', operationId: 'save-blob:test' },
+    )
+    const blob = h.stageBlob.mock.calls[0]![0] as Blob
+    expect(blob.type).toBe('text/markdown')
+    expect(new TextDecoder().decode(await blob.arrayBuffer())).toContain('长方体的体积')
+    expect(h.copyGrant).toHaveBeenCalledOnce()
   })
 
   it('浏览器/dev 环境 → 不走 Tauri 保存（blob 回退）', async () => {
     h.tauri = false
     await download('x.md', 'hi', 'text/markdown')
-    expect(h.saveSpy).not.toHaveBeenCalled()
+    expect(h.pickSave).not.toHaveBeenCalled()
   })
 })

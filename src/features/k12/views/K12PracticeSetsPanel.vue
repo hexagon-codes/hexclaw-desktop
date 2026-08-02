@@ -16,11 +16,8 @@ import {
   k12GradePracticeSet,
   k12CancelPracticeSet,
   k12GetPracticePaper,
-  k12GetPracticePrintJob,
   k12GetPracticePrintJobPaper,
   k12PreparePracticePrintJob,
-  k12CommitPracticePrintReceipt,
-  k12RecordPracticePrintEvent,
   k12RetryPracticePrintJob,
   k12UploadAsset,
   k12AssetURL,
@@ -33,15 +30,10 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
 import {
   printPracticePaper,
-  printPracticePaperWithReceipt,
   renderPracticePaperPdf,
   savePracticePaperPdf,
 } from '../export'
-import type { PersistentPrintRequest } from '../persistent-print'
-import {
-  commitPrintReceiptWithConvergence,
-  recordDialogOpenWithConvergence,
-} from '../print-receipt'
+import { executeNativePrintJob, type PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 
@@ -319,49 +311,13 @@ async function confirmPrintPreview() {
   current.printing = true
   busy.value = current.recordId
   try {
-    await recordDialogOpenWithConvergence(
-      () => k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'dialog_open' }),
-      () => k12GetPracticePrintJob(props.agentId, current.jobId),
-    )
-    // DD-023A：确认打印必须复用 PDF.js 画布正在预览的 exact PDF Blob，禁止再次
-    // 从 Markdown/HTML 渲染，否则预览与物理打印分页会漂移。
-    const receipt = await printPracticePaperWithReceipt(current.pdf)
-    if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
-      await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
-        status: receipt.status,
-        native_job_id: receipt.native_job_id,
-        failure_kind: receipt.failure_kind,
-        failure_detail: receipt.failure_detail,
-      })
-      throw new Error(
-        receipt.failure_detail || receipt.failure_kind || '系统打印对话框未返回可验证回执',
-      )
-    }
-    if (receipt.status === 'cancelled') {
-      await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
-        status: 'cancelled',
-        native_job_id: receipt.native_job_id,
-        printer_snapshot: receipt.printer_snapshot,
-      })
-      toast.info(t('k12.practice.paperPrintFailed'))
-      closePrintPreview(true)
-      return
-    }
-    const nativeReceipt = {
-      native_job_id: receipt.native_job_id,
-      native_receipt_id: receipt.native_receipt_id!,
-      printer_snapshot: receipt.printer_snapshot,
-    }
-    await commitPrintReceiptWithConvergence(
-      nativeReceipt,
-      () => k12CommitPracticePrintReceipt(props.agentId, current.jobId, nativeReceipt),
-      () => k12GetPracticePrintJob(props.agentId, current.jobId),
-    )
-    closePrintPreview(true)
-    toast.success(t('k12.practice.print'))
-    await load()
-  } catch (error) {
-    toast.error((error as Error).message)
+    const printed = await executeNativePrintJob({
+      agent: props.agentId,
+      printJobId: current.jobId,
+    })
+    closePrintPreview(printed)
+  } catch (errorValue) {
+    toast.error(errorValue instanceof Error ? errorValue.message : '原生打印失败')
   } finally {
     current.printing = false
     busy.value = ''

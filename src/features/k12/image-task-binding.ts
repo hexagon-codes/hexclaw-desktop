@@ -1,10 +1,26 @@
+import { k12ListRecoverableImageTasks } from '@/api/k12'
+
+const runtimeProjectionValues = new Map<string, string>()
+const runtimeProjectionStorage = {
+  getItem: (key: string) => runtimeProjectionValues.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    runtimeProjectionValues.set(key, value)
+  },
+  removeItem: (key: string) => {
+    runtimeProjectionValues.delete(key)
+  },
+  clear: () => {
+    runtimeProjectionValues.clear()
+  },
+}
+
 /**
  * Desktop 对持久 ImageTaskDispatch 的最小会话绑定。
  *
  * 只保存恢复同一服务端分流根对象所需的 session / agent / dispatch ID；原图、
  * base64、模型输出和子链结果都不得进入浏览器存储。所有读取均校验版本与字段。
  */
-export const K12_IMAGE_TASK_BINDINGS_KEY = 'hexclaw.k12.image-task-bindings.v2'
+export const IMAGE_TASK_RUNTIME_PROJECTION = 'image-task-runtime-projection'
 
 interface StoredBinding {
   source_session_id: string
@@ -24,14 +40,16 @@ export interface ImageTaskBinding {
   dispatchId: string
 }
 
-function storage(): Storage | null {
+function storage(): typeof runtimeProjectionStorage | null {
   if (typeof window === 'undefined') return null
   try {
-    return window.localStorage
+    return runtimeProjectionStorage
   } catch {
     return null
   }
 }
+
+export * from './image-task-binding-compat'
 
 function validID(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
@@ -44,7 +62,7 @@ function emptyState(): StoredBindingsV2 {
 function readState(): StoredBindingsV2 {
   const target = storage()
   if (!target) return emptyState()
-  const raw = target.getItem(K12_IMAGE_TASK_BINDINGS_KEY)
+  const raw = target.getItem(IMAGE_TASK_RUNTIME_PROJECTION)
   if (!raw) return emptyState()
   try {
     const candidate = JSON.parse(raw) as {
@@ -111,18 +129,16 @@ function readState(): StoredBindingsV2 {
       bindings.push({
         source_session_id: binding.source_session_id,
         agent_id: binding.agent_id,
-        ...(binding.source_message_id
-          ? { source_message_id: binding.source_message_id }
-          : {}),
+        ...(binding.source_message_id ? { source_message_id: binding.source_message_id } : {}),
         dispatch_id: binding.dispatch_id,
       })
     }
     return { version: 2, bindings }
   } catch {
     try {
-      target.removeItem(K12_IMAGE_TASK_BINDINGS_KEY)
+      target.removeItem(IMAGE_TASK_RUNTIME_PROJECTION)
     } catch {
-      // localStorage 可能不可写；内存侧仍安全返回空状态。
+      // runtimeProjectionStorage 可能不可写；内存侧仍安全返回空状态。
     }
     return emptyState()
   }
@@ -133,10 +149,10 @@ function writeState(state: StoredBindingsV2): void {
   if (!target) return
   try {
     if (state.bindings.length === 0) {
-      target.removeItem(K12_IMAGE_TASK_BINDINGS_KEY)
+      target.removeItem(IMAGE_TASK_RUNTIME_PROJECTION)
       return
     }
-    target.setItem(K12_IMAGE_TASK_BINDINGS_KEY, JSON.stringify(state))
+    target.setItem(IMAGE_TASK_RUNTIME_PROJECTION, JSON.stringify(state))
   } catch {
     // 持久化不可用不改变服务端任务；只是无法跨刷新恢复。
   }
@@ -168,8 +184,8 @@ export function listImageTaskBindings(
   agentId: string,
 ): ImageTaskBinding[] {
   if (!validID(sessionId) || !validID(agentId)) return []
-  return readState().bindings
-    .filter(
+  return readState()
+    .bindings.filter(
       (binding) =>
         binding.source_session_id === sessionId &&
         binding.agent_id === agentId &&
@@ -183,7 +199,10 @@ export function listImageTaskBindings(
 }
 
 export function hasImageTaskBinding(sessionId: string | undefined, agentId: string): boolean {
-  return getImageTaskBinding(sessionId, agentId) !== null
+  if (!validID(sessionId) || !validID(agentId)) return false
+  return readState().bindings.some(
+    (binding) => binding.source_session_id === sessionId && binding.agent_id === agentId,
+  )
 }
 
 export function setImageTaskBinding(
@@ -231,5 +250,36 @@ export function clearImageTaskBinding(
     if (validID(resolvedDispatchId) && binding.dispatch_id !== resolvedDispatchId) return true
     return false
   })
+  writeState(state)
+}
+
+export async function listRecoverableImageTasks(agent: string) {
+  return k12ListRecoverableImageTasks(agent)
+}
+
+/**
+ * Replaces one owner's disposable renderer projection with the Sidecar's
+ * durable recovery view. Missing/invalid identities fail closed.
+ */
+export async function refreshRecoverableImageTaskBindings(agent: string): Promise<void> {
+  if (!validID(agent)) return
+  const recoverable = await k12ListRecoverableImageTasks(agent)
+  const state = readState()
+  state.bindings = state.bindings.filter((binding) => binding.agent_id !== agent)
+  for (const item of recoverable) {
+    if (
+      !validID(item.source_session) ||
+      !validID(item.source_message_id) ||
+      !validID(item.dispatch?.dispatch_id)
+    ) {
+      continue
+    }
+    state.bindings.push({
+      source_session_id: item.source_session,
+      source_message_id: item.source_message_id,
+      agent_id: agent,
+      dispatch_id: item.dispatch.dispatch_id,
+    })
+  }
   writeState(state)
 }

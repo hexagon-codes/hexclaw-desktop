@@ -7,9 +7,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
-import { K12_IMAGE_TASK_BINDINGS_KEY } from '../image-task-binding'
-
-const STORAGE_KEY = K12_IMAGE_TASK_BINDINGS_KEY
+const recovery = vi.hoisted(() => ({ list: vi.fn() }))
 
 vi.mock('@/api/k12', () => ({
   k12GetViewDescriptor: vi.fn().mockResolvedValue({ composer_chips: [] }),
@@ -23,6 +21,7 @@ vi.mock('@/api/k12', () => ({
   }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0 }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
+  k12ListRecoverableImageTasks: (...args: unknown[]) => recovery.list(...args),
 }))
 
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
@@ -69,31 +68,24 @@ describe('K12 会话刷新后的 ImageTaskDispatch 入口恢复', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
+    recovery.list.mockReset()
     document.body.innerHTML =
       '<div id="hc-chat-scenario-inline-message-1"></div><div id="hc-chat-scenario-inline-message-2"></div><div id="hc-chat-scenario-footer"></div>'
   })
 
   it('同 session+agent 的多个绑定分别恢复到原消息锚点', async () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 2,
-        bindings: [
-          {
-            source_session_id: 'session-1',
-            agent_id: 'mingming',
-            source_message_id: 'message-1',
-            dispatch_id: 'dispatch-1',
-          },
-          {
-            source_session_id: 'session-1',
-            agent_id: 'mingming',
-            source_message_id: 'message-2',
-            dispatch_id: 'dispatch-2',
-          },
-        ],
-      }),
-    )
+    recovery.list.mockResolvedValue([
+      {
+        source_session: 'session-1',
+        source_message_id: 'message-1',
+        dispatch: { dispatch_id: 'dispatch-1' },
+      },
+      {
+        source_session: 'session-1',
+        source_message_id: 'message-2',
+        dispatch: { dispatch_id: 'dispatch-2' },
+      },
+    ])
     render()
     await flushPromises()
 
@@ -122,20 +114,7 @@ describe('K12 会话刷新后的 ImageTaskDispatch 入口恢复', () => {
   })
 
   it('相同 session 但 Agent 不匹配时不恢复，不把另一孩子的任务投影进来', async () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 2,
-        bindings: [
-          {
-            source_session_id: 'session-1',
-            agent_id: 'other-child',
-            source_message_id: 'message-1',
-            dispatch_id: 'dispatch-other',
-          },
-        ],
-      }),
-    )
+    recovery.list.mockResolvedValue([])
     render('mingming')
     await flushPromises()
     expect(document.querySelector('[data-testid="guard-restore-stub"]')).toBeNull()

@@ -8,7 +8,7 @@
  * 提供：①头部 tab（辅导/错题本 就地切换，不分叉会话）②识题后内联「这份作业的辅导要点」③记录视图。
  * 通过 update:recordsActive 告知外壳何时隐藏原生消息区（记录视图接管）。
  */
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { k12GetViewDescriptor } from '@/api/k12'
@@ -33,7 +33,11 @@ import type {
   ScenarioTextModelRoute,
 } from '@/shell/scenario/registry'
 import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
-import { listImageTaskBindings } from '../image-task-binding'
+import {
+  listImageTaskBindings,
+  refreshRecoverableImageTaskBindings,
+} from '../image-task-binding'
+import { useK12Appearance } from '../appearance/useK12Appearance'
 
 const props = defineProps<{
   agentId: string
@@ -104,6 +108,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const route = useRoute()
 const toast = useToast()
+const {
+  activateOnFirstEntry,
+  setExperienceSceneLevel,
+  deactivateExperience,
+  setPreference: setK12AppearancePreference,
+} = useK12Appearance()
 const finalArtifactPrintController =
   ref<InstanceType<typeof K12PersistentPrintController>>()
 const finalArtifactActionHandler = createFinalArtifactActionHandler({
@@ -308,6 +318,15 @@ function trapCapabilityFocus(event: KeyboardEvent) {
 // 深链（智能体卡快捷入口）：?scenarioTab=records|insights → 直接进学习档案/学情
 onMounted(async () => {
   tab.value = tabFromRoute()
+  const shouldShowAppearanceIntro = activateOnFirstEntry()
+  setExperienceSceneLevel(tab.value === 'chat' ? 'immersive' : 'calm')
+  if (shouldShowAppearanceIntro) {
+    toast.action(
+      '已启用 K12 专属皮肤，已应用到全部页面；已显示完整学习场景',
+      '使用通用外观',
+      () => setK12AppearancePreference('default'),
+    )
+  }
   try {
     const d = await k12GetViewDescriptor('tutor')
     composerChips.value = (d.composer_chips ?? []).map((label, index) => ({
@@ -320,8 +339,11 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => deactivateExperience())
+
 // 学习档案与学情都接管消息区（外壳据 recordsActive 隐藏原生消息/输入）。
 watch(tab, (v) => emit('update:recordsActive', v !== 'chat'), { immediate: true })
+watch(tab, (v) => setExperienceSceneLevel(v === 'chat' ? 'immersive' : 'calm'))
 watch(
   [visibleTaskShells, tab],
   ([tasks, currentTab]) => {
@@ -358,17 +380,38 @@ watch(
 )
 // 刷新/重启后只在同一 session+agent 存在最小 Job 绑定时恢复原会话位置；
 // 不从图片、题目或显示名猜测，也不把另一孩子的 Job 投影进来。
+let imageTaskRecoveryGeneration = 0
 watch(
   [() => props.sessionId, () => props.agentId],
-  ([sessionId, agentId]) => {
+  async ([sessionId, agentId]) => {
+    const generation = ++imageTaskRecoveryGeneration
+    try {
+      await refreshRecoverableImageTaskBindings(agentId)
+    } catch {
+      // A transient Sidecar read keeps the current disposable projection.
+    }
+    if (generation !== imageTaskRecoveryGeneration) return
     const recoverable = listImageTaskBindings(sessionId, agentId)
     if (recoverable.length) {
       tab.value = 'chat'
     }
-    taskShells.value = recoverable.map((binding) => ({
+    const recoveredShells = recoverable.map((binding) => ({
       sourceMessageId: binding.sourceMessageId!,
       restoreDispatchId: binding.dispatchId,
     }))
+    // Recovery may start before a composer image and finish after its live shell
+    // was appended. Persisted recovery owns restored shells, but must not erase an
+    // in-flight shell owned by the current session.
+    const liveShells = taskShells.value.filter(
+      (task) =>
+        task.payload &&
+        (!task.payload.sourceSessionId || task.payload.sourceSessionId === sessionId),
+    )
+    const liveSourceMessageIds = new Set(liveShells.map((task) => task.sourceMessageId))
+    taskShells.value = [
+      ...recoveredShells.filter((task) => !liveSourceMessageIds.has(task.sourceMessageId)),
+      ...liveShells,
+    ]
   },
   { immediate: true },
 )
@@ -399,8 +442,20 @@ watch(
     if (!dataUrl) return
     tab.value = 'chat'
     const sourceMessageId = img.requestId.trim()
-    if (!taskShells.value.some((task) => task.sourceMessageId === sourceMessageId)) {
-      taskShells.value = [...taskShells.value, { sourceMessageId, payload: img }]
+    const currentTask = taskShells.value.find(
+      (task) => task.sourceMessageId === sourceMessageId,
+    )
+    if (
+      !currentTask?.payload ||
+      currentTask.payload.requestId !== img.requestId ||
+      currentTask.payload.dataUrl !== img.dataUrl
+    ) {
+      // A current live attempt supersedes a stale recovery-only projection for
+      // the same source message. Repeating the same live payload remains idempotent.
+      taskShells.value = [
+        ...taskShells.value.filter((task) => task.sourceMessageId !== sourceMessageId),
+        { sourceMessageId, payload: img },
+      ]
     }
     emit('update:composerImage', '')
   },

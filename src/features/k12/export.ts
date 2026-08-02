@@ -5,9 +5,7 @@
  * PDF = 浏览器打印对话框另存；Word = HTML 内容 .doc（Word 可直接打开，无需额外依赖，砍 CSV/JSON）。
  */
 import type { RecordItem } from '@/contracts'
-import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/utils/platform'
-import { downloadInApp } from '@/utils/download'
 import { renderDocument } from '@/api/k12'
 
 export interface WorksheetMeta {
@@ -26,9 +24,10 @@ function worksheetExportFilename(meta: WorksheetMeta, ext: string): string {
 
 /** HTML 转义，防题干里的尖括号破坏结构 */
 function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
-  ))
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
+  )
 }
 
 /** 从错题记录生成 A4 打印 HTML（题干 + 答题留白 + page-break） */
@@ -100,102 +99,9 @@ export interface NativePrintReceipt {
   failure_detail?: string
 }
 
-const MAX_NATIVE_PRINT_PDF_BYTES = 32 * 1024 * 1024
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = ''
-  const CHUNK = 0x8000
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
-  }
-  return btoa(bin)
-}
-
-async function printablePdfBase64(pdf: Blob): Promise<string> {
-  if (pdf.size === 0) throw new Error('打印 PDF 不能为空')
-  if (pdf.size > MAX_NATIVE_PRINT_PDF_BYTES) {
-    throw new Error(`打印 PDF 过大 ${pdf.size} > ${MAX_NATIVE_PRINT_PDF_BYTES} 字节`)
-  }
-  const bytes = new Uint8Array(await pdf.arrayBuffer())
-  if (
-    bytes.length < 5 ||
-    bytes[0] !== 0x25 ||
-    bytes[1] !== 0x50 ||
-    bytes[2] !== 0x44 ||
-    bytes[3] !== 0x46 ||
-    bytes[4] !== 0x2d
-  ) {
-    throw new Error('打印内容不是有效的 PDF 文档')
-  }
-  return bytesToBase64(bytes)
-}
-
 async function printPdfWithReceipt(pdf: Blob): Promise<NativePrintReceipt> {
-  const localJobId = () =>
-    `desktop-print-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
-  const localOutcome = (
-    status: 'failed' | 'outcome_unknown',
-    failureKind: string,
-    failureDetail: string,
-  ): NativePrintReceipt => ({
-    status,
-    native_job_id: localJobId(),
-    printer_snapshot: { adapter: 'desktop-native-bridge', platform: 'desktop' },
-    failure_kind: failureKind,
-    failure_detail: failureDetail,
-  })
-
-  if (!isTauri()) {
-    return localOutcome('failed', 'native_print_unavailable', '正式打印需要桌面原生系统打印对话框')
-  }
-  let pdfBase64: string
-  try {
-    pdfBase64 = await printablePdfBase64(pdf)
-  } catch (error) {
-    return localOutcome(
-      'failed',
-      'pdf_preflight_failed',
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-
-  let result: unknown
-  try {
-    result = await invoke<unknown>('native_print_pdf', { pdfBase64 })
-  } catch (error) {
-    return localOutcome(
-      'outcome_unknown',
-      'native_result_unavailable',
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-  if (!isNativePrintReceipt(result)) {
-    return localOutcome(
-      'outcome_unknown',
-      'native_result_unverifiable',
-      '原生打印适配器未返回可验证的 PrintJob 回执',
-    )
-  }
-  return result
-}
-
-function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
-  if (!value || typeof value !== 'object') return false
-  const receipt = value as Partial<NativePrintReceipt>
-  if (!['printed', 'cancelled', 'failed', 'outcome_unknown'].includes(receipt.status ?? '')) return false
-  if (!receipt.native_job_id?.trim()) return false
-  if (
-    !receipt.printer_snapshot ||
-    typeof receipt.printer_snapshot !== 'object' ||
-    Array.isArray(receipt.printer_snapshot) ||
-    Object.keys(receipt.printer_snapshot).length === 0
-  )
-    return false
-  if (receipt.status === 'printed') return Boolean(receipt.native_receipt_id?.trim())
-  if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
-    return Boolean(receipt.failure_kind?.trim())
-  }
-  return true
+  void pdf
+  throw new Error('桌面原生打印必须绑定既有持久 PrintJob')
 }
 
 /** 浏览器/prototype 打印错题卷；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
@@ -252,17 +158,25 @@ export async function printPracticePaper(markdown: string, title: string): Promi
  * This entry point never accepts Markdown/HTML and fails closed unless the native adapter returns
  * a typed operation receipt suitable for the backend PrintJob event ledger.
  */
-export async function printPracticePaperWithReceipt(
-  pdf: Blob,
-): Promise<NativePrintReceipt> {
+export async function printPracticePaperWithReceipt(pdf: Blob): Promise<NativePrintReceipt> {
   return printPdfWithReceipt(pdf)
 }
 
 // ── 辅导要点打印 ──────────────────────────────────────────────
-export interface TutoringTipsSection { title: string; content: string; source_label: string }
-export interface TutoringTips { knowledge_points: string[]; sections: TutoringTipsSection[] }
+export interface TutoringTipsSection {
+  title: string
+  content: string
+  source_label: string
+}
+export interface TutoringTips {
+  knowledge_points: string[]
+  sections: TutoringTipsSection[]
+}
 
-export function buildTutoringTipsHtml(card: TutoringTips, meta: { title: string; gradeLabel: string }): string {
+export function buildTutoringTipsHtml(
+  card: TutoringTips,
+  meta: { title: string; gradeLabel: string },
+): string {
   const kps = card.knowledge_points.map((k) => esc(k)).join(' · ')
   const secs = card.sections
     .map(
@@ -292,7 +206,10 @@ export function buildTutoringTipsHtml(card: TutoringTips, meta: { title: string;
 }
 
 /** 辅导要点纯文本：冻结为私聊投递载荷。 */
-export function tutoringTipsToText(card: TutoringTips, meta: { title: string; gradeLabel: string }): string {
+export function tutoringTipsToText(
+  card: TutoringTips,
+  meta: { title: string; gradeLabel: string },
+): string {
   const head = `【${meta.title}】${meta.gradeLabel}${card.knowledge_points.length ? ` · ${card.knowledge_points.join(' · ')}` : ''}`
   const body = card.sections
     .map((s) => `\n${s.title}${s.source_label ? `（${s.source_label}）` : ''}\n${s.content}`)
@@ -316,17 +233,29 @@ export function tutoringTipsToMarkdown(
 }
 
 /** 浏览器/prototype 打印辅导要点；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
-export async function printTutoringTips(card: TutoringTips, meta: { title: string; gradeLabel: string }): Promise<boolean> {
+export async function printTutoringTips(
+  card: TutoringTips,
+  meta: { title: string; gradeLabel: string },
+): Promise<boolean> {
   return printHtml(buildTutoringTipsHtml(card, meta))
 }
 
 /** 触发浏览器下载一个文件 */
+async function saveBlobWithGrant(blob: Blob, filename: string): Promise<boolean> {
+  const { copyGrantedFile, createNativeFileOperation, pickSaveFileGrant, stageBlob } =
+    await import('@/api/native-files')
+  const operationId = createNativeFileOperation('save-blob')
+  const destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
+  if (!destination) return false
+  const source = await stageBlob(blob, filename, { purpose: 'save_copy', operationId })
+  await copyGrantedFile(source, destination)
+  return true
+}
+
 export async function download(filename: string, content: string, mime: string): Promise<boolean> {
-  // BUG-20260712-#6：Tauri WKWebView 里 `<a download>` / blob URL 不触发下载（点了没反应）。
-  // 桌面端走原生 Save 对话框 + Rust 写盘（downloadInApp）；浏览器/dev 保留 blob 下载。
+  // Tauri keeps file bytes out of data URLs and writes through an opaque grant.
   if (isTauri()) {
-    const b64 = btoa(unescape(encodeURIComponent(content))) // UTF-8 安全 base64（中文内容）
-    return (await downloadInApp(`data:${mime};base64,${b64}`, filename)) !== null
+    return saveBlobWithGrant(new Blob([content], { type: mime }), filename)
   }
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -341,12 +270,22 @@ export async function download(filename: string, content: string, mime: string):
 }
 
 /** 文件名：{称呼}_错题本_{起}_{止}.{ext} */
-export function worksheetFilename(childName: string, kind: string, from: string, to: string, ext: string): string {
+export function worksheetFilename(
+  childName: string,
+  kind: string,
+  from: string,
+  to: string,
+  ext: string,
+): string {
   return `${childName}_${kind}_${from}_${to}.${ext}`
 }
 
 /** 导出 Word（.doc）：HTML 内容，Word 可直接打开（无需 docx 依赖） */
-export async function exportWord(items: RecordItem[], meta: WorksheetMeta, filename: string): Promise<void> {
+export async function exportWord(
+  items: RecordItem[],
+  meta: WorksheetMeta,
+  filename: string,
+): Promise<void> {
   const html = buildWorksheetHtml(items, meta)
   // Word 识别带 MS Office 命名空间的 HTML；application/msword + .doc 后缀即可
   await download(filename, html, 'application/msword')
@@ -360,7 +299,9 @@ export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta)
   } else {
     items.forEach((it, i) => {
       const q = String(it.fields.question ?? '')
-      const kp = String(it.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
+      const kp = String(it.fields.knowledge_point ?? '')
+        .replace(/[·・]\s*$/, '')
+        .trim()
       lines.push(`${i + 1}. ${q}${kp ? `  【${kp}】` : ''}`)
       // Markdown thematic break 会被 Pandoc/Typst 渲染成不可换行的矢量横线。
       // 禁用重复全角下划线：版心稍窄时文本会折成“长线 + 残余短线”。
@@ -371,12 +312,7 @@ export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta)
   return lines.join('\n')
 }
 
-/** Blob → base64（分块避免 String.fromCharCode 参数过多；供 downloadInApp 的 data: URL 用）。 */
-async function blobToBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  return bytesToBase64(bytes)
-}
-
+/** 生成跨平台安全的 PDF 文件名。 */
 function safePdfFilename(title: string): string {
   const base = title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'HexClaw'
   return `${base}.pdf`
@@ -393,12 +329,8 @@ export interface ArchiveDocumentExport {
 export async function exportArchiveDocument(options: ArchiveDocumentExport): Promise<boolean> {
   const { content, format, title, filename } = options
   const blob = await renderDocument({ content, format, title })
-  const mime = format === 'pdf'
-    ? 'application/pdf'
-    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   if (isTauri()) {
-    const b64 = await blobToBase64(blob)
-    return (await downloadInApp(`data:${mime};base64,${b64}`, filename)) !== null
+    return saveBlobWithGrant(blob, filename)
   }
   if (typeof document === 'undefined') return false
   const url = URL.createObjectURL(blob)
@@ -412,7 +344,11 @@ export async function exportArchiveDocument(options: ArchiveDocumentExport): Pro
   return true
 }
 
-async function saveRenderedPdf(content: string, title: string, filename = safePdfFilename(title)): Promise<boolean> {
+async function saveRenderedPdf(
+  content: string,
+  title: string,
+  filename = safePdfFilename(title),
+): Promise<boolean> {
   return exportArchiveDocument({ content, format: 'pdf', title, filename })
 }
 
@@ -423,20 +359,26 @@ export function savePracticePaperPdf(markdown: string, title: string): Promise<b
 
 /** 保存服务端已冻结的 PDF Artifact；不得重新渲染或改写其字节。 */
 export async function savePdfArtifact(pdf: Blob, title: string): Promise<boolean> {
-  const filename = safePdfFilename(title)
-  if (isTauri()) {
-    const b64 = await blobToBase64(pdf)
-    return (await downloadInApp(`data:application/pdf;base64,${b64}`, filename)) !== null
+  if (!isTauri()) {
+    if (typeof document === 'undefined') return false
+    const url = URL.createObjectURL(pdf)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = safePdfFilename(title)
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+    return true
   }
-  if (typeof document === 'undefined') return false
-  const url = URL.createObjectURL(pdf)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
+  const { copyGrantedFile, createNativeFileOperation, pickSaveFileGrant, stageBlob } =
+    await import('@/api/native-files')
+  const filename = safePdfFilename(title)
+  const operationId = createNativeFileOperation('save-pdf-artifact')
+  const destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
+  if (!destination) return false
+  const source = await stageBlob(pdf, filename, { purpose: 'save_copy', operationId })
+  await copyGrantedFile(source, destination)
   return true
 }
 

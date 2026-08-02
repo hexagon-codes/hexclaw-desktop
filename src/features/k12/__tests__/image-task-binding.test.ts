@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  K12_IMAGE_TASK_BINDINGS_KEY,
   clearImageTaskBinding,
   getImageTaskBinding,
   hasImageTaskBinding,
+  listImageTaskBindings,
   setImageTaskBinding,
 } from '../image-task-binding'
 
 describe('session → ImageTaskDispatch durable binding', () => {
   beforeEach(() => {
     localStorage.clear()
+    clearImageTaskBinding('session-1', 'tutor-a')
+    clearImageTaskBinding('session-1', 'tutor-b')
   })
 
   it('stores only session owner and dispatch identity', () => {
@@ -27,17 +29,14 @@ describe('session → ImageTaskDispatch durable binding', () => {
       dispatchId: 'dispatch-1',
     })
     expect(hasImageTaskBinding('session-1', 'tutor-a')).toBe(true)
-    expect(JSON.parse(localStorage.getItem(K12_IMAGE_TASK_BINDINGS_KEY) ?? '{}')).toEqual({
-      version: 2,
-      bindings: [
-        {
-          source_session_id: 'session-1',
-          agent_id: 'tutor-a',
-          source_message_id: 'message-1',
-          dispatch_id: 'dispatch-1',
-        },
-      ],
-    })
+    expect(listImageTaskBindings('session-1', 'tutor-a')).toEqual([
+      {
+        agentId: 'tutor-a',
+        sourceMessageId: 'message-1',
+        dispatchId: 'dispatch-1',
+      },
+    ])
+    expect(localStorage.length).toBe(0)
   })
 
   it('同一会话持久化多个 source_message_id + dispatch_id，任一任务不得覆盖另一任务', () => {
@@ -50,26 +49,21 @@ describe('session → ImageTaskDispatch durable binding', () => {
     setBinding('session-1', 'tutor-a', 'message-1', 'dispatch-1')
     setBinding('session-1', 'tutor-a', 'message-2', 'dispatch-2')
 
-    const persisted = JSON.parse(
-      localStorage.getItem(K12_IMAGE_TASK_BINDINGS_KEY) ?? '{}',
-    ) as { bindings?: Array<Record<string, string>> }
-    expect(persisted.bindings).toEqual([
+    expect(listImageTaskBindings('session-1', 'tutor-a')).toEqual([
       {
-        source_session_id: 'session-1',
-        agent_id: 'tutor-a',
-        source_message_id: 'message-1',
-        dispatch_id: 'dispatch-1',
+        agentId: 'tutor-a',
+        sourceMessageId: 'message-1',
+        dispatchId: 'dispatch-1',
       },
       {
-        source_session_id: 'session-1',
-        agent_id: 'tutor-a',
-        source_message_id: 'message-2',
-        dispatch_id: 'dispatch-2',
+        agentId: 'tutor-a',
+        sourceMessageId: 'message-2',
+        dispatchId: 'dispatch-2',
       },
     ])
   })
 
-  it('fails closed for a different owner and corrupt persisted data', () => {
+  it('fails closed for a different owner', () => {
     const setBinding = setImageTaskBinding as unknown as (
       sessionId: string,
       agentId: string,
@@ -78,25 +72,11 @@ describe('session → ImageTaskDispatch durable binding', () => {
     ) => void
     setBinding('session-1', 'tutor-a', 'message-1', 'dispatch-1')
     expect(getImageTaskBinding('session-1', 'tutor-b', 'message-1')).toBeNull()
-
-    localStorage.setItem(
-      K12_IMAGE_TASK_BINDINGS_KEY,
-      JSON.stringify({
-        version: 2,
-        bindings: [
-          {
-            source_session_id: 'session-1',
-            agent_id: 'tutor-a',
-            source_message_id: '',
-            dispatch_id: '',
-            image_base64: 'must-not-survive',
-          },
-        ],
-      }),
-    )
-
-    expect(getImageTaskBinding('session-1', 'tutor-a', 'message-1')).toBeNull()
-    expect(localStorage.getItem(K12_IMAGE_TASK_BINDINGS_KEY)).toBeNull()
+    expect(getImageTaskBinding('session-1', 'tutor-a', 'message-1')).toEqual({
+      agentId: 'tutor-a',
+      sourceMessageId: 'message-1',
+      dispatchId: 'dispatch-1',
+    })
   })
 
   it('clears only the matching generation', () => {

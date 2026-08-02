@@ -3,27 +3,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({
   tauri: true,
   prepare: vi.fn(),
+  prepareArtifact: vi.fn(),
   getJob: vi.fn(),
   paper: vi.fn(),
-  commit: vi.fn(),
-  event: vi.fn(),
+  artifactContent: vi.fn(),
   retry: vi.fn(),
-  nativePrint: vi.fn(),
   renderPdf: vi.fn(),
   browserPrint: vi.fn(),
+  invoke: vi.fn(),
 }))
 
 vi.mock('@/utils/platform', () => ({ isTauri: () => h.tauri }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => h.invoke(...args),
+}))
 vi.mock('@/api/k12', () => ({
   k12PrepareGenericPrintJob: (...args: unknown[]) => h.prepare(...args),
+  k12PrepareArtifactPrintJob: (...args: unknown[]) => h.prepareArtifact(...args),
   k12GetGenericPrintJob: (...args: unknown[]) => h.getJob(...args),
   k12GetGenericPrintArtifact: (...args: unknown[]) => h.paper(...args),
-  k12CommitGenericPrintReceipt: (...args: unknown[]) => h.commit(...args),
-  k12RecordGenericPrintEvent: (...args: unknown[]) => h.event(...args),
+  k12GetPrintArtifactContent: (...args: unknown[]) => h.artifactContent(...args),
   k12RetryGenericPrintJob: (...args: unknown[]) => h.retry(...args),
 }))
 vi.mock('../export', () => ({
-  printPracticePaperWithReceipt: (...args: unknown[]) => h.nativePrint(...args),
   renderPracticePaperPdf: (...args: unknown[]) => h.renderPdf(...args),
 }))
 
@@ -57,12 +59,22 @@ function job(status = 'preparing') {
   }
 }
 
-describe('persistent generic PrintJob orchestration', () => {
+const printedReceipt = {
+  receipt: {
+    status: 'printed',
+    native_job_id: 'native-a',
+    native_receipt_id: 'receipt-a',
+    printer_snapshot: { printer: 'Office', paper: 'A4' },
+  },
+}
+
+describe('persistent PrintJob orchestration', () => {
   const exactPdf = new Blob(['%PDF-frozen-artifact'], { type: 'application/pdf' })
 
   beforeEach(() => {
     h.tauri = true
     h.prepare.mockReset().mockResolvedValue({ print_job: job() })
+    h.prepareArtifact.mockReset()
     h.getJob.mockReset().mockResolvedValue({ print_job: job('dialog_open') })
     h.paper.mockReset().mockResolvedValue({
       print_job_id: 'gprint-a',
@@ -73,42 +85,29 @@ describe('persistent generic PrintJob orchestration', () => {
       source_digest: 'abc',
       markdown: '# 服务端冻结内容',
     })
-    h.event.mockReset().mockImplementation(async (_agent, _id, event) => ({
-      print_job: job(event.status),
-    }))
-    h.commit.mockReset().mockResolvedValue({
-      print_job: {
-        ...job('printed'),
-        native_job_id: 'native-a',
-        native_receipt_id: 'receipt-a',
-        printer_snapshot: { printer: 'Office', paper: 'A4' },
-      },
-    })
+    h.artifactContent.mockReset()
     h.retry.mockReset().mockResolvedValue({ print_job: job() })
-    h.nativePrint.mockReset().mockResolvedValue({
-      status: 'printed',
-      native_job_id: 'native-a',
-      native_receipt_id: 'receipt-a',
-      printer_snapshot: { printer: 'Office', paper: 'A4' },
-    })
     h.renderPdf.mockReset().mockResolvedValue(exactPdf)
     h.browserPrint.mockReset().mockResolvedValue(true)
+    h.invoke.mockReset().mockResolvedValue(printedReceipt)
   })
 
-  it('browser/dev stays on window.print path and never writes a PrintJob', async () => {
+  it('keeps browser development on window.print without creating a job', async () => {
     h.tauri = false
+
     await expect(preparePersistentPrint(request)).resolves.toEqual({
       status: 'completed',
       printed: true,
     })
-    expect(h.browserPrint).toHaveBeenCalledTimes(1)
+    expect(h.browserPrint).toHaveBeenCalledOnce()
     expect(h.prepare).not.toHaveBeenCalled()
+    expect(h.invoke).not.toHaveBeenCalled()
   })
 
-  it('Tauri freezes and renders backend Artifact, but cannot open native dialog before visible preview confirmation', async () => {
+  it('previews the frozen artifact and gives Rust only the durable job identity', async () => {
     const prepared = await preparePersistentPrint(request)
-    expect(prepared.status).toBe('preview')
 
+    expect(prepared).toMatchObject({ status: 'preview', title: '冻结标题', pdf: exactPdf })
     expect(h.prepare).toHaveBeenCalledWith({
       agent: 'tutor-a',
       idempotency_key: 'desktop:tutoring-tips:1',
@@ -117,130 +116,107 @@ describe('persistent generic PrintJob orchestration', () => {
       title: '辅导要点',
       canonical_markdown: '# 辅导要点\n\n小数点对齐',
     })
-    expect(h.paper).toHaveBeenCalledWith('tutor-a', 'gprint-a')
-    expect(h.renderPdf).toHaveBeenCalledWith('# 服务端冻结内容', '冻结标题')
-    expect(h.nativePrint).not.toHaveBeenCalled()
-    expect(h.event).not.toHaveBeenCalled()
+    expect(h.invoke).not.toHaveBeenCalled()
 
     if (prepared.status !== 'preview') throw new Error('expected preview')
     await expect(prepared.confirm()).resolves.toBe(true)
-    expect(h.nativePrint).toHaveBeenCalledWith(exactPdf)
-    expect(h.event.mock.calls.map((call) => call[2])).toEqual([{ status: 'dialog_open' }])
-    expect(h.commit).toHaveBeenCalledWith('tutor-a', 'gprint-a', {
-      native_job_id: 'native-a',
-      native_receipt_id: 'receipt-a',
-      printer_snapshot: { printer: 'Office', paper: 'A4' },
+    expect(h.invoke).toHaveBeenCalledExactlyOnceWith('execute_print_job', {
+      request: { agent: 'tutor-a', printJobId: 'gprint-a' },
     })
   })
 
-  it('coalesces a double click so one Artifact cannot create two preview preparations', async () => {
-    const first = preparePersistentPrint(request)
-    const second = preparePersistentPrint(request)
-    const [a, b] = await Promise.all([first, second])
-    expect(a).toBe(b)
-    expect(h.prepare).toHaveBeenCalledTimes(1)
-    expect(h.nativePrint).not.toHaveBeenCalled()
+  it('coalesces a double click into one preview preparation', async () => {
+    const [first, second] = await Promise.all([
+      preparePersistentPrint(request),
+      preparePersistentPrint(request),
+    ])
+
+    expect(first).toBe(second)
+    expect(h.prepare).toHaveBeenCalledOnce()
+    expect(h.invoke).not.toHaveBeenCalled()
   })
 
-  it('definitive cancellation is durable and can retry the same bounded job next click', async () => {
-    const cachedKeyRequest = { ...request, idempotencyKey: undefined }
-    h.nativePrint.mockResolvedValueOnce({
-      status: 'cancelled',
-      native_job_id: 'native-cancel',
-      printer_snapshot: { printer: 'Office' },
-    })
-    const first = await preparePersistentPrint(cachedKeyRequest)
+  it('retries a cancelled durable attempt with the same operation identity', async () => {
+    const withoutExplicitKey = { ...request, idempotencyKey: undefined }
+    h.invoke
+      .mockResolvedValueOnce({
+        receipt: {
+          status: 'cancelled',
+          native_job_id: 'native-cancelled',
+          printer_snapshot: { printer: 'Office' },
+        },
+      })
+      .mockResolvedValueOnce(printedReceipt)
+
+    const first = await preparePersistentPrint(withoutExplicitKey)
     if (first.status !== 'preview') throw new Error('expected preview')
     await expect(first.confirm()).resolves.toBe(false)
-    expect(h.event).toHaveBeenLastCalledWith('tutor-a', 'gprint-a', {
-      status: 'cancelled',
-      native_job_id: 'native-cancel',
-      printer_snapshot: { printer: 'Office' },
-    })
 
     h.prepare.mockResolvedValueOnce({ print_job: job('cancelled') })
-    const retried = await preparePersistentPrint(cachedKeyRequest)
-    if (retried.status !== 'preview') throw new Error('expected preview')
-    await expect(retried.confirm()).resolves.toBe(true)
+    const second = await preparePersistentPrint(withoutExplicitKey)
+    if (second.status !== 'preview') throw new Error('expected preview')
+    await expect(second.confirm()).resolves.toBe(true)
+
     expect(h.retry).toHaveBeenCalledWith('tutor-a', 'gprint-a')
-    const [firstPrepare, secondPrepare] = h.prepare.mock.calls
-    expect(firstPrepare?.[0].idempotency_key).toBe(secondPrepare?.[0].idempotency_key)
+    expect(h.prepare.mock.calls[0]?.[0].idempotency_key).toBe(
+      h.prepare.mock.calls[1]?.[0].idempotency_key,
+    )
   })
 
   it.each(['dialog_open', 'submitted', 'outcome_unknown'])(
-    'does not blindly reopen unresolved %s job',
+    'resumes unresolved %s through the same Rust coordinator',
     async (status) => {
       h.prepare.mockResolvedValueOnce({ print_job: job(status) })
-      await expect(preparePersistentPrint(request)).rejects.toThrow('未决')
-      expect(h.nativePrint).not.toHaveBeenCalled()
+
+      const prepared = await preparePersistentPrint(request)
+      if (prepared.status !== 'preview') throw new Error('expected preview')
+      await expect(prepared.confirm()).resolves.toBe(true)
+
+      expect(h.getJob).toHaveBeenCalledWith('tutor-a', 'gprint-a')
+      expect(h.invoke).toHaveBeenCalledExactlyOnceWith('execute_print_job', {
+        request: { agent: 'tutor-a', printJobId: 'gprint-a' },
+      })
     },
   )
 
-  it('records outcome_unknown only when the native adapter gives an ambiguous result', async () => {
-    h.nativePrint.mockResolvedValueOnce({
-      status: 'outcome_unknown',
-      native_job_id: 'native-unknown',
-      printer_snapshot: { adapter: 'appkit' },
-      failure_kind: 'print_operation_result_ambiguous',
-      failure_detail: 'driver disconnected',
-    })
+  it('allows convergence replay after an ambiguous IPC response', async () => {
+    h.invoke
+      .mockRejectedValueOnce(new Error('native response channel closed'))
+      .mockResolvedValueOnce(printedReceipt)
     const prepared = await preparePersistentPrint(request)
     if (prepared.status !== 'preview') throw new Error('expected preview')
-    await expect(prepared.confirm()).rejects.toThrow('driver disconnected')
-    expect(h.event).toHaveBeenLastCalledWith('tutor-a', 'gprint-a', {
-      status: 'outcome_unknown',
-      native_job_id: 'native-unknown',
-      failure_kind: 'print_operation_result_ambiguous',
-      failure_detail: 'driver disconnected',
-    })
+
+    await expect(prepared.confirm()).rejects.toThrow('native response channel closed')
+    await expect(prepared.confirm()).resolves.toBe(true)
+
+    expect(h.invoke).toHaveBeenCalledTimes(2)
   })
 
-  it('records a deterministic pre-dialog native failure as failed so the same job remains retryable', async () => {
-    h.nativePrint.mockResolvedValueOnce({
-      status: 'failed',
-      native_job_id: 'native-failed',
-      printer_snapshot: { adapter: 'appkit' },
-      failure_kind: 'pdf_page_limit_exceeded',
-      failure_detail: '打印 PDF 页数超过限制',
-    })
-    const prepared = await preparePersistentPrint(request)
-    if (prepared.status !== 'preview') throw new Error('expected preview')
-    await expect(prepared.confirm()).rejects.toThrow('打印 PDF 页数超过限制')
-    expect(h.event).toHaveBeenLastCalledWith('tutor-a', 'gprint-a', {
-      status: 'failed',
-      native_job_id: 'native-failed',
-      failure_kind: 'pdf_page_limit_exceeded',
-      failure_detail: '打印 PDF 页数超过限制',
-    })
-  })
-
-  it('converges a lost atomic commit response by querying the exact persisted receipt without printing twice', async () => {
-    h.commit.mockRejectedValueOnce(new Error('response lost'))
-    h.getJob.mockResolvedValueOnce({
-      print_job: {
-        ...job('printed'),
-        native_job_id: 'native-a',
-        native_receipt_id: 'receipt-a',
-        printer_snapshot: { printer: 'Office', paper: 'A4' },
+  it('propagates a deterministic native failure without a renderer callback', async () => {
+    h.invoke.mockResolvedValueOnce({
+      receipt: {
+        status: 'failed',
+        native_job_id: 'native-failed',
+        printer_snapshot: { adapter: 'appkit' },
+        failure_kind: 'pdf_page_limit_exceeded',
+        failure_detail: '打印 PDF 页数超过限制',
       },
     })
     const prepared = await preparePersistentPrint(request)
     if (prepared.status !== 'preview') throw new Error('expected preview')
-    await expect(prepared.confirm()).resolves.toBe(true)
-    expect(h.nativePrint).toHaveBeenCalledTimes(1)
-    expect(h.commit).toHaveBeenCalledTimes(1)
-    expect(h.getJob).toHaveBeenCalledWith('tutor-a', 'gprint-a')
+
+    await expect(prepared.confirm()).rejects.toThrow('打印 PDF 页数超过限制')
+    expect(h.invoke).toHaveBeenCalledOnce()
   })
 
-  it('queries a lost dialog_open response before allowing the native print side effect', async () => {
-    h.event.mockRejectedValueOnce(new Error('dialog event response lost'))
-    h.getJob.mockResolvedValueOnce({ print_job: job('dialog_open') })
-    const prepared = await preparePersistentPrint(request)
-    if (prepared.status !== 'preview') throw new Error('expected preview')
+  it('returns an already committed printed job without opening another dialog', async () => {
+    h.prepare.mockResolvedValueOnce({ print_job: job('printed') })
 
-    await expect(prepared.confirm()).resolves.toBe(true)
-    expect(h.event).toHaveBeenCalledTimes(1)
-    expect(h.getJob).toHaveBeenCalledWith('tutor-a', 'gprint-a')
-    expect(h.nativePrint).toHaveBeenCalledTimes(1)
+    await expect(preparePersistentPrint(request)).resolves.toEqual({
+      status: 'completed',
+      printed: true,
+    })
+    expect(h.paper).not.toHaveBeenCalled()
+    expect(h.invoke).not.toHaveBeenCalled()
   })
 })

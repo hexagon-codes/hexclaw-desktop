@@ -141,37 +141,50 @@ function createResponse(problem: Record<string, unknown> = problemProgress()) {
   }
 }
 
-function sourceActionResponse(
-  problem: Record<string, unknown>,
-  options: {
+function sourceActionResponse(options: {
     action?: 'skip' | 'resume'
     structureVersion?: number
     inputRevision?: number
     snapshotRevision?: number
     coverage?: {
-      state: 'full' | 'with_skips' | 'incomplete'
       total: number
-      processed: number
+      published: number
       skipped: number
+      awaiting: number
+      failed: number
+      status: 'empty' | 'in_progress' | 'complete'
+      projection_revision: number
     }
-  } = {},
-) {
+  } = {}) {
+  const action = options.action ?? 'skip'
+  const inputRevision = options.inputRevision ?? (action === 'resume' ? 3 : 2)
   return {
-    command_receipt_id: `receipt-${options.action ?? 'skip'}-1`,
+    command_receipt_id: `receipt-${action}-1`,
     dispatch_id: 'dispatch-progressive-wave-3',
     problem_id: 'problem-1',
-    action: options.action ?? 'skip',
+    action,
     structure_version: options.structureVersion ?? 4,
-    input_revision: options.inputRevision ?? 3,
+    input_revision: inputRevision,
     progressive_snapshot: {
       structure_version: options.structureVersion ?? 4,
       snapshot_revision: options.snapshotRevision ?? 9,
-      problem_progress: [problem],
+      problem_progress: [
+        {
+          problem_id: 'problem-1',
+          status: action === 'skip' ? 'skipped' : 'awaiting_source',
+          input_revision: inputRevision,
+          published_revision: action === 'skip' ? 1 : 0,
+          current_disposition: 'current',
+        },
+      ],
       coverage: options.coverage ?? {
-        state: 'incomplete',
         total: 1,
-        processed: 0,
-        skipped: 0,
+        published: 0,
+        skipped: action === 'skip' ? 1 : 0,
+        awaiting: action === 'skip' ? 0 : 1,
+        failed: 0,
+        status: action === 'skip' ? 'complete' : 'in_progress',
+        projection_revision: options.snapshotRevision ?? 9,
       },
     },
   }
@@ -349,21 +362,20 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     )
 
     first.resolve(
-      sourceActionResponse(
-        problemProgress({
-          source_state: 'ready',
-          operation_state: 'skipped',
-          disposition_state: 'skipped_by_parent',
-          input_revision: 3,
-          command_available: true,
-        }),
-        {
-          structureVersion: 5,
-          inputRevision: 3,
-          snapshotRevision: 11,
-          coverage: { state: 'with_skips', total: 1, processed: 0, skipped: 1 },
+      sourceActionResponse({
+        structureVersion: 4,
+        inputRevision: 2,
+        snapshotRevision: 11,
+        coverage: {
+          total: 1,
+          published: 0,
+          skipped: 1,
+          awaiting: 0,
+          failed: 0,
+          status: 'complete',
+          projection_revision: 11,
         },
-      ),
+      }),
     )
     await flushPromises()
     await flushPromises()
@@ -371,6 +383,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain(
       '已跳过 · 未判断对错',
     )
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('一. 1')
     const resume = buttonByName(resolver(wrapper), '恢复处理')
     expect(resume).not.toBeNull()
     resume!.click()
@@ -379,8 +392,8 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     expect(h.sourceAction).toHaveBeenCalledTimes(2)
     expect(h.sourceAction.mock.calls[1]?.[2]).toEqual({
       action: 'resume',
-      structure_version: 5,
-      expected_input_revision: 3,
+      structure_version: 4,
+      expected_input_revision: 2,
       payload: {},
     })
   })

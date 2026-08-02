@@ -27,6 +27,10 @@ interface Mark {
   errorCause?: string
   source_number_path?: string[]
   display_label?: string
+  source_section_path?: string[]
+  source_section_label?: string
+  system_section_ordinal?: number
+  system_display_label?: string
 }
 function render(marks: Mark[], image = 'data:image/png;base64,AAAA') {
   return mount(PhotoGradeOverlay, {
@@ -197,5 +201,24 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     expect(cards[1]!.text()).toContain('三、2')
     expect(cards[0]!.text()).not.toContain('第 1 题')
     expect(cards[1]!.text()).not.toContain('第 2 题')
+  })
+
+  it('DD-041：无印刷子题号时明确显示原卷分区与系统序号，绝不伪造原卷题号', () => {
+    const w = render([
+      {
+        correct: true,
+        bbox: { x: 0.1, y: 0.2, w: 0.15, h: 0.05 },
+        source_number_path: [],
+        display_label: '',
+        source_section_path: ['一'],
+        source_section_label: '一、直接写得数',
+        system_section_ordinal: 1,
+        system_display_label: '第 1 题（系统序号）',
+        question: '4÷0.5=',
+      },
+    ])
+    const projection = w.get('.grade-card--correct').text()
+    expect(projection).toContain('一、直接写得数 · 第 1 题（系统序号）')
+    expect(projection).not.toContain('一、1')
   })
 })

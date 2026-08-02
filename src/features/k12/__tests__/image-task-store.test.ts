@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { K12_IMAGE_TASK_BINDINGS_KEY } from '../image-task-binding'
+import {
+  clearImageTaskBinding,
+  getImageTaskBinding,
+} from '../image-task-binding'
 
 const h = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -82,6 +85,7 @@ describe('K12 store ImageTaskDispatch adoption', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
+    clearImageTaskBinding('session-1', 'mingming')
     Object.values(h).forEach((spy) => spy.mockReset())
   })
 
@@ -138,17 +142,12 @@ describe('K12 store ImageTaskDispatch adoption', () => {
       },
       undefined,
     )
-    expect(JSON.parse(localStorage.getItem(K12_IMAGE_TASK_BINDINGS_KEY) ?? '{}')).toMatchObject({
-      version: 2,
-      bindings: [
-        {
-          source_session_id: 'session-1',
-          source_message_id: 'message-1',
-          agent_id: 'mingming',
-          dispatch_id: 'dispatch-1',
-        },
-      ],
+    expect(getImageTaskBinding('session-1', 'mingming', 'message-1')).toEqual({
+      sourceMessageId: 'message-1',
+      agentId: 'mingming',
+      dispatchId: 'dispatch-1',
     })
+    expect(localStorage.length).toBe(0)
   })
 
   it('reads a blank worksheet only from the discriminated facade result', async () => {

@@ -2197,6 +2197,8 @@ async function doExportMd() {
   display: flex;
   flex-direction: column;
   flex: 1;
+  inline-size: 100%;
+  max-inline-size: 1024px;
   min-height: 0;
 }
 .k12archive-undos {

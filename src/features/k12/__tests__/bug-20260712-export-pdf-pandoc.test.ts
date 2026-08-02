@@ -6,12 +6,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   tauri: true,
-  saveSpy: vi.fn<(src: string, fn: string) => Promise<string | null>>(),
   renderSpy: vi.fn<(req: { content: string; format: string; title?: string }) => Promise<Blob>>(),
+  createOperation: vi.fn<(...args: unknown[]) => string>(() => 'save-blob:test'),
+  pickSave: vi.fn(),
+  stageBlob: vi.fn(),
+  copyGrant: vi.fn(),
 }))
 vi.mock('@/utils/platform', () => ({ isTauri: () => h.tauri }))
-vi.mock('@/utils/download', () => ({ downloadInApp: (src: string, fn: string) => h.saveSpy(src, fn) }))
 vi.mock('@/api/k12', () => ({ renderDocument: (req: unknown) => h.renderSpy(req as { content: string; format: string }) }))
+vi.mock('@/api/native-files', () => ({
+  createNativeFileOperation: (...args: unknown[]) => h.createOperation(...args),
+  pickSaveFileGrant: (...args: unknown[]) => h.pickSave(...args),
+  stageBlob: (...args: unknown[]) => h.stageBlob(...args),
+  copyGrantedFile: (...args: unknown[]) => h.copyGrant(...args),
+}))
 
 import { exportPdf, buildWorksheetMarkdown } from '../export'
 import type { RecordItem } from '@/contracts'
@@ -22,27 +30,48 @@ const items: RecordItem[] = [
 const meta = { childName: '小明', title: '复习卷', dateLabel: '2026-07-12' }
 
 describe('项-7 Tauri 导出 PDF 走 render 端点出真 .pdf', () => {
-  beforeEach(() => { h.saveSpy.mockReset().mockResolvedValue('/x/复习卷.pdf'); h.renderSpy.mockReset() })
+  beforeEach(() => {
+    h.renderSpy.mockReset()
+    h.createOperation.mockReset().mockReturnValue('save-blob:test')
+    h.pickSave.mockReset().mockResolvedValue({
+      grantId: 'destination', operationId: 'save-blob:test', purpose: 'save_copy',
+      name: '复习卷.pdf', mime: 'application/pdf', size: 0,
+    })
+    h.stageBlob.mockReset().mockResolvedValue({
+      grantId: 'source', operationId: 'save-blob:test', purpose: 'save_copy',
+      name: '复习卷.pdf', mime: 'application/pdf', size: 4,
+    })
+    h.copyGrant.mockReset().mockResolvedValue(4)
+  })
 
   it('Tauri → 调 renderDocument(format=pdf) 并把 pdf 字节存 .pdf（非 .html）', async () => {
     h.tauri = true
-    h.renderSpy.mockResolvedValue(new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' })) // "%PDF"
+    const pdf = new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' })
+    h.renderSpy.mockResolvedValue(pdf) // "%PDF"
     const ok = await exportPdf(items, meta)
     expect(ok).toBe(true)
     expect(h.renderSpy).toHaveBeenCalledOnce() // RED：修前不调 render 端点
     const req = h.renderSpy.mock.calls[0]![0]
     expect(req.format).toBe('pdf')
     expect(req.content).toContain('3.8×3') // Markdown 内容含题干
-    expect(h.saveSpy).toHaveBeenCalledOnce()
-    const [src, fn] = h.saveSpy.mock.calls[0]!
-    expect(src).toMatch(/^data:application\/pdf;base64,/) // RED：修前是 text/html
-    expect(fn).toBe('小明_复习卷_0712_0712.pdf')
+    expect(h.pickSave).toHaveBeenCalledWith(
+      '小明_复习卷_0712_0712.pdf',
+      'save_copy',
+      'save-blob:test',
+    )
+    expect(h.stageBlob).toHaveBeenCalledWith(
+      pdf,
+      '小明_复习卷_0712_0712.pdf',
+      { purpose: 'save_copy', operationId: 'save-blob:test' },
+    )
+    expect(h.copyGrant).toHaveBeenCalledOnce()
   })
 
   it('非 Tauri → 保留原逻辑（不调 render 端点）', async () => {
     h.tauri = false
     const ok = await exportPdf(items, meta)
     expect(h.renderSpy).not.toHaveBeenCalled()
+    expect(h.stageBlob).not.toHaveBeenCalled()
     expect(typeof ok).toBe('boolean')
   })
 

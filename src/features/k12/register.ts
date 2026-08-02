@@ -14,6 +14,8 @@ import K12ChatEnhancement from './views/K12ChatEnhancement.vue'
 import K12AgentCard from './views/K12AgentCard.vue'
 import K12ProfileForm from './views/K12ProfileForm.vue'
 import K12WebhookPanel from './views/K12WebhookPanel.vue'
+import K12GlobalPresentation from './appearance/K12GlobalPresentation.vue'
+import K12AppearanceSettings from './appearance/K12AppearanceSettings.vue'
 import k12ZhCN from './i18n/zh-CN'
 import k12En from './i18n/en'
 import k12UgCN from './i18n/ug-CN'
@@ -70,6 +72,9 @@ export function registerK12Scenario(): void {
     description: '按孩子绑定 TutorAgent · HMAC-SHA256 · 防重放 · 可查询 Receipt',
     component: K12WebhookPanel,
   })
+  // 7) 全局展示与系统外观设置均经通用注册缝装配；shell 不 import 本场景包。
+  scenarioRegistry.registerGlobalPresentationExtension(K12GlobalPresentation)
+  scenarioRegistry.registerAppearanceSettingsExtension(K12AppearanceSettings)
 }
 
 /** 测试用：复位装配标志（配合 scenarioRegistry.reset） */

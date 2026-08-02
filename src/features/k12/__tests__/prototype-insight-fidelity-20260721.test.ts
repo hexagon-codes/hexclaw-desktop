@@ -259,14 +259,16 @@ describe('多孩实例隔离', () => {
 describe('app.html 学情几何契约', () => {
   const source = readFileSync(resolve(__dirname, '../views/K12InsightPanel.vue'), 'utf8')
 
-  it('保留 170px 指标列、14px 瓷片、640px 优先卡与右置 CTA', () => {
+  it('保留 170px 指标列、14px 瓷片、1024px 对齐阅读列与右置 CTA', () => {
     expect(source).toMatch(/\.k12ins\s*\{[^}]*flex:\s*1[^}]*overflow:\s*auto/s)
-    expect(source).not.toMatch(/\.k12ins\s*\{[^}]*max-width/s)
+    expect(source).toMatch(/\.k12ins\s*\{[^}]*max-inline-size:\s*1024px/s)
     expect(source).toMatch(/\.k12ins__h\s*\{[^}]*font-size:\s*15px/s)
     expect(source).toContain('minmax(170px, 1fr)')
     expect(source).toMatch(/\.k12ins__tile\s*\{[^}]*border-radius:\s*14px/s)
     expect(source).toMatch(/\.k12ins__tile\s*\{[^}]*padding:\s*14px 16px/s)
-    expect(source).toMatch(/\.k12ins__priority\s*\{[^}]*max-width:\s*640px/s)
+    expect(source).toMatch(
+      /\.k12ins__priority\s*\{[^}]*inline-size:\s*100%[^}]*max-inline-size:\s*none/s,
+    )
     expect(source).toMatch(/\.k12ins__action\s*\{[^}]*display:\s*flex/s)
   })
 })

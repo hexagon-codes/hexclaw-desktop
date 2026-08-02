@@ -251,6 +251,8 @@ const weakBars = computed(() => {
 <style scoped>
 .k12ins {
   flex: 1;
+  inline-size: 100%;
+  max-inline-size: 1024px;
   min-height: 0;
   overflow: auto;
   padding: 16px 26px 48px;
@@ -354,7 +356,9 @@ const weakBars = computed(() => {
   font-size: 13px;
 }
 .k12ins__priority {
-  max-width: 640px;
+  inline-size: 100%;
+  max-inline-size: none;
+  box-sizing: border-box;
   padding: 6px 8px;
   border-radius: 14px;
   background: var(--hc-bg-card);

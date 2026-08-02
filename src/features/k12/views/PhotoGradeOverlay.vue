@@ -14,6 +14,7 @@ import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { BBox, ParentTeachingGuideDTO } from '@/api/k12'
 import { isValidGradingBBox } from '../graded-photo'
+import { k12QuestionSourceDisplayLabel } from '../source-display'
 
 /** 一道题的叠加标记：批改结论 + 可选订正/错因，按题 id 对齐其 bbox。 */
 interface OverlayMark {
@@ -27,6 +28,11 @@ interface OverlayMark {
   source_number_path?: string[]
   /** 原卷题号的冻结展示值；禁止由数组位置重新编号。 */
   display_label?: string
+  /** 原卷可见大题与服务端系统序号分别投影，绝不合成为伪造原卷题号。 */
+  source_section_path?: string[]
+  source_section_label?: string
+  system_section_ordinal?: number
+  system_display_label?: string
   /** 题干（降级文字批改时展示，供家长对位）。 */
   question?: string
   /** 正确答案（订正，错题时展示）。 */
@@ -91,7 +97,7 @@ function markStyle(b: BBox) {
 }
 
 function markDisplayLabel(mark: OverlayMark): string {
-  return mark.display_label?.trim() ?? ''
+  return k12QuestionSourceDisplayLabel(mark)
 }
 
 function issueTitle(mark: OverlayMark): string {
@@ -261,10 +267,7 @@ function issueTitle(mark: OverlayMark): string {
               <span>{{ t('k12.overlay.question') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.question" />
             </div>
-            <div
-              v-if="!m.outOfScope && m.correctAnswer && !m.parentGuide"
-              class="grade-card__row"
-            >
+            <div v-if="!m.outOfScope && m.correctAnswer && !m.parentGuide" class="grade-card__row">
               <span>{{ t('k12.overlay.correctAnswer') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.correctAnswer" />
             </div>
@@ -318,10 +321,7 @@ function issueTitle(mark: OverlayMark): string {
               </div>
               <div class="grade-card__row">
                 <span>怎么检查</span>
-                <MarkdownRenderer
-                  class="grade-card__md"
-                  :content="m.parentGuide.checking_method"
-                />
+                <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.checking_method" />
               </div>
             </template>
             <div v-if="m.outOfScope" class="grade-wrong-step is-scope">

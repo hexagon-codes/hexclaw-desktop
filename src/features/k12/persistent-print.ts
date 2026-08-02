@@ -1,20 +1,14 @@
 import {
-  k12CommitGenericPrintReceipt,
   k12GetGenericPrintArtifact,
   k12GetGenericPrintJob,
   k12GetPrintArtifactContent,
   k12PrepareArtifactPrintJob,
   k12PrepareGenericPrintJob,
-  k12RecordGenericPrintEvent,
   k12RetryGenericPrintJob,
   type GenericPrintSourceKind,
 } from '@/api/k12'
 import { isTauri } from '@/utils/platform'
-import { printPracticePaperWithReceipt, renderPracticePaperPdf } from './export'
-import {
-  commitPrintReceiptWithConvergence,
-  recordDialogOpenWithConvergence,
-} from './print-receipt'
+import { renderPracticePaperPdf, type NativePrintReceipt } from './export'
 
 export interface PersistentPrintRequest {
   agent: string
@@ -22,26 +16,18 @@ export interface PersistentPrintRequest {
   sourceKind: GenericPrintSourceKind
   sourceRef: string
   title: string
-  /** Existing canonical content path. Mutually exclusive with artifactId. */
   canonicalMarkdown?: string
-  /** Existing PrintableArtifact path; the print controller must not render it again. */
   artifactId?: string
-  /** Browser/prototype only. Formal Tauri builds never invoke this callback. */
   browserPrint: () => Promise<boolean>
 }
+
+export type PersistentPrintPreparation =
+  | { status: 'completed'; printed: boolean }
+  | { status: 'preview'; title: string; pdf: Blob; confirm: () => Promise<boolean> }
 
 let printSequence = 0
 const operationKeys = new Map<string, string>()
 const inFlightPreparations = new Map<string, Promise<PersistentPrintPreparation>>()
-
-export type PersistentPrintPreparation =
-  | { status: 'completed'; printed: boolean }
-  | {
-      status: 'preview'
-      title: string
-      pdf: Blob
-      confirm: () => Promise<boolean>
-    }
 
 function operationIdentity(req: PersistentPrintRequest): string {
   return `${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.artifactId ?? req.canonicalMarkdown ?? ''}`
@@ -62,20 +48,45 @@ function clearOperationKey(req: PersistentPrintRequest) {
   if (!req.idempotencyKey) operationKeys.delete(operationIdentity(req))
 }
 
-/**
- * Prepare the shared DD-023 state machine up to a visible PDF preview. The
- * backend-frozen Artifact—not mutable component state—is the only rendered
- * source. `dialog_open` and native printing remain impossible until confirm().
- */
+async function executeCoordinatedPrint(
+  req: PersistentPrintRequest,
+  printJobId: string,
+): Promise<boolean> {
+  const printed = await executeNativePrintJob({
+    agent: req.agent,
+    printJobId,
+  })
+  if (printed) clearOperationKey(req)
+  return printed
+}
+
+export async function executeNativePrintJob(input: {
+  agent: string
+  printJobId: string
+}): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const result = await invoke<{ receipt: NativePrintReceipt }>('execute_print_job', {
+    request: {
+      agent: input.agent,
+      printJobId: input.printJobId,
+    },
+  })
+  if (result.receipt.status === 'printed') {
+    return true
+  }
+  if (result.receipt.status === 'cancelled') return false
+  throw new Error(
+    result.receipt.failure_detail || result.receipt.failure_kind || '原生打印结果未能确认',
+  )
+}
+
 async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
   const artifactId = req.artifactId?.trim()
   const canonicalMarkdown = req.canonicalMarkdown?.trim()
   if (Boolean(artifactId) === Boolean(canonicalMarkdown)) {
     throw new Error('打印请求必须且只能指定 artifactId 或 canonicalMarkdown')
   }
-  if (!isTauri()) {
-    return { status: 'completed', printed: await req.browserPrint() }
-  }
+  if (!isTauri()) return { status: 'completed', printed: await req.browserPrint() }
 
   const prepared = artifactId
     ? await k12PrepareArtifactPrintJob({
@@ -99,7 +110,9 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
   if (job.status === 'cancelled' || job.status === 'failed') {
     job = (await k12RetryGenericPrintJob(req.agent, job.print_job_id)).print_job
   } else if (['dialog_open', 'submitted', 'outcome_unknown'].includes(job.status)) {
-    throw new Error('发现未决打印任务，请先核对系统打印队列，不能盲目重复打印')
+    // Calling the coordinator with the same durable operation resumes commit
+    // convergence and never opens another native dialog.
+    await k12GetGenericPrintJob(req.agent, job.print_job_id)
   }
 
   const genericArtifact = artifactId
@@ -110,53 +123,18 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
     : await renderPracticePaperPdf(genericArtifact!.markdown, genericArtifact!.title)
   let confirmation: Promise<boolean> | null = null
   const confirm = () => {
-    if (confirmation) return confirmation
-    confirmation = (async () => {
-      await recordDialogOpenWithConvergence(
-        () => k12RecordGenericPrintEvent(req.agent, job.print_job_id, { status: 'dialog_open' }),
-        () => k12GetGenericPrintJob(req.agent, job.print_job_id),
-      )
-
-      // The exact Blob exposed for preview is passed unchanged to PDFKit.
-      const receipt = await printPracticePaperWithReceipt(pdf)
-      if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
-        await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-          status: receipt.status,
-          native_job_id: receipt.native_job_id,
-          failure_kind: receipt.failure_kind,
-          failure_detail: receipt.failure_detail,
-        })
-        throw new Error(receipt.failure_detail || receipt.failure_kind || '原生打印结果未能确认')
-      }
-      if (receipt.status === 'cancelled') {
-        await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-          status: 'cancelled',
-          native_job_id: receipt.native_job_id,
-          printer_snapshot: receipt.printer_snapshot,
-        })
-        return false
-      }
-
-      const nativeReceipt = {
-        native_job_id: receipt.native_job_id,
-        native_receipt_id: receipt.native_receipt_id!,
-        printer_snapshot: receipt.printer_snapshot,
-      }
-      await commitPrintReceiptWithConvergence(
-        nativeReceipt,
-        () => k12CommitGenericPrintReceipt(req.agent, job.print_job_id, nativeReceipt),
-        () => k12GetGenericPrintJob(req.agent, job.print_job_id),
-      )
-      clearOperationKey(req)
-      return true
-    })()
+    confirmation ??= executeCoordinatedPrint(req, job.print_job_id).catch((error) => {
+      confirmation = null
+      throw error
+    })
     return confirmation
   }
-
   return { status: 'preview', title: genericArtifact?.title ?? req.title, pdf, confirm }
 }
 
-export function preparePersistentPrint(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
+export function preparePersistentPrint(
+  req: PersistentPrintRequest,
+): Promise<PersistentPrintPreparation> {
   const identity = operationIdentity(req)
   const running = inFlightPreparations.get(identity)
   if (running) return running

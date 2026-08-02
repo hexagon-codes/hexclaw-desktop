@@ -7,7 +7,12 @@ import k12Zh from '../i18n/zh-CN'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import apiSource from '@/api/k12.ts?raw'
 import storeSource from '../store.ts?raw'
-import { K12_IMAGE_TASK_BINDINGS_KEY } from '../image-task-binding'
+import {
+  K12_IMAGE_TASK_BINDINGS_KEY,
+  clearImageTaskBinding,
+  getImageTaskBinding,
+  setImageTaskBinding,
+} from '../image-task-binding'
 
 const STORAGE_KEY = K12_IMAGE_TASK_BINDINGS_KEY
 
@@ -151,13 +156,7 @@ function result() {
 }
 
 function bind(agent = 'mingming') {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      version: 1,
-      bindings: { 'session-1': { agent_id: agent, dispatch_id: 'dispatch-unknown' } },
-    }),
-  )
+  setImageTaskBinding('session-1', agent, 'dispatch-unknown')
 }
 
 function mountRestoredPanel() {
@@ -177,6 +176,8 @@ function mountRestoredPanel() {
 describe('K12 整卷批改 recovering 恢复语义', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    clearImageTaskBinding('session-1', 'mingming')
+    clearImageTaskBinding('session-1', 'other-child')
     localStorage.clear()
     document.body.innerHTML = ''
     Object.values(h).forEach((spy) => spy.mockReset())
@@ -185,6 +186,8 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    clearImageTaskBinding('session-1', 'mingming')
+    clearImageTaskBinding('session-1', 'other-child')
     localStorage.clear()
     document.body.innerHTML = ''
   })
@@ -333,11 +336,11 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     await expect(store.restoreImageTask('mingming', 'session-1')).resolves.toMatchObject({
       stage: 'completed',
     })
-    expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull()
+    expect(getImageTaskBinding('session-1', 'mingming')).not.toBeNull()
 
     h.getResult.mockResolvedValue(result())
     await store.completeImageTask('mingming', 'dispatch-unknown', { sourceSession: 'session-1' })
-    expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull()
+    expect(getImageTaskBinding('session-1', 'mingming')).not.toBeNull()
   })
 
   it('恢复 awaiting_confirmation 回显既有识别结果，不创建新任务', async () => {
@@ -382,17 +385,17 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
       await expect(useK12Store().restoreImageTask('mingming', 'session-1')).resolves.toMatchObject({
         stage,
       })
-      expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull()
+      expect(getImageTaskBinding('session-1', 'mingming')).not.toBeNull()
     },
   )
 
   it.each(['{bad json', JSON.stringify({ version: 2, bindings: {} })])(
-    '损坏或未知版本 binding fail-closed 并清理：%s',
+    '浏览器持久化 payload 不能伪造恢复绑定：%s',
     async (raw) => {
       localStorage.setItem(STORAGE_KEY, raw)
       await expect(useK12Store().restoreImageTask('mingming', 'session-1')).resolves.toBeNull()
       expect(h.getTask).not.toHaveBeenCalled()
-      expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+      expect(getImageTaskBinding('session-1', 'mingming')).toBeNull()
     },
   )
 
@@ -402,6 +405,6 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     await expect(
       useK12Store().restoreImageTask('mingming', 'session-1'),
     ).resolves.toBeNull()
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(getImageTaskBinding('session-1', 'mingming')).toBeNull()
   })
 })
