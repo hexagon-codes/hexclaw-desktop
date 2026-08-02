@@ -216,15 +216,19 @@ fn resolve_safe_test_home(raw: &str) -> Result<PathBuf, String> {
     if let Some(user_home) = system_user_home() {
         let canonical_user_home =
             std::fs::canonicalize(user_home).unwrap_or_else(|_| user_home.to_path_buf());
-        if canonical_user_home.starts_with(&resolved) || resolved.starts_with(&canonical_user_home) {
+        if canonical_user_home.starts_with(&resolved) || resolved.starts_with(&canonical_user_home)
+        {
             return Err(format!(
                 "{TEST_HOME_ENV} cannot be the real user home, an ancestor, or a descendant"
             ));
         }
-        if protected_user_paths(&canonical_user_home).iter().any(|path| {
-            let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            resolved.starts_with(&path) || path.starts_with(&resolved)
-        }) {
+        if protected_user_paths(&canonical_user_home)
+            .iter()
+            .any(|path| {
+                let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                resolved.starts_with(&path) || path.starts_with(&resolved)
+            })
+        {
             return Err(format!(
                 "{TEST_HOME_ENV} cannot overlap a real HexClaw user-data path"
             ));
@@ -458,9 +462,8 @@ mod tests {
 
     #[test]
     fn test_run_context_derives_all_mutable_paths_from_the_sandbox() {
-        let expected_home =
-            resolve_existing_ancestor(Path::new("/tmp/hexclaw-test/run-42"))
-                .expect("canonical test home");
+        let expected_home = resolve_existing_ancestor(Path::new("/tmp/hexclaw-test/run-42"))
+            .expect("canonical test home");
         let ctx =
             parse_test_run_context(Some("1"), Some("/tmp/hexclaw-test/run-42"), Some("16061"))
                 .expect("valid test context")
@@ -585,12 +588,7 @@ mod tests {
 #[cfg(test)]
 mod bug_20260727_003_test_home_isolation_regression {
     use super::parse_test_run_context;
-    use std::{
-        env,
-        fs,
-        path::PathBuf,
-        process::Command,
-    };
+    use std::{env, fs, path::PathBuf, process::Command};
 
     fn isolated_root(label: &str) -> PathBuf {
         let root = env::temp_dir().join(format!(

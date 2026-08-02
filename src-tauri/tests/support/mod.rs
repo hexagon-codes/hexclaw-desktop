@@ -1,3 +1,8 @@
+// Cargo compiles every integration-test target as an independent crate. Each target
+// imports only the shared source-inspection helpers it needs, so the remaining helpers
+// are intentionally unused in that target while still being used by sibling tests.
+#![allow(dead_code)]
+
 use std::{fs, path::PathBuf};
 
 pub fn read_source(relative_path: &str) -> String {

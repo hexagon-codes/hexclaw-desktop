@@ -9,7 +9,7 @@
 
 use std::path::Path;
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
@@ -34,6 +34,31 @@ impl Default for SidecarState {
 
 /// hexclaw serve 的端口
 pub const HEXCLAW_PORT: u16 = 16060;
+const SIDECAR_CAPABILITY_ENV: &str = "HEXCLAW_SIDECAR_CAPABILITY_TOKEN";
+static SIDECAR_CAPABILITY_TOKEN: OnceLock<zeroize::Zeroizing<String>> = OnceLock::new();
+
+/// Creates the process-scoped Sidecar capability before the child is spawned.
+/// The value is never persisted or returned through a Tauri command.
+pub(crate) fn initialize_capability_token() -> Result<(), String> {
+    if SIDECAR_CAPABILITY_TOKEN.get().is_some() {
+        return Ok(());
+    }
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    SIDECAR_CAPABILITY_TOKEN
+        .set(zeroize::Zeroizing::new(token))
+        .map_err(|_| "Sidecar capability was initialized concurrently".to_string())
+}
+
+pub(crate) fn capability_token() -> Result<&'static str, String> {
+    SIDECAR_CAPABILITY_TOKEN
+        .get()
+        .map(|token| token.as_str())
+        .ok_or_else(|| "Sidecar capability is not initialized".to_string())
+}
 
 fn sidecar_port_for_context(ctx: Option<&TestRunContext>) -> u16 {
     ctx.map_or(HEXCLAW_PORT, |ctx| ctx.sidecar_port)
@@ -65,28 +90,22 @@ fn set_ready(app_handle: &tauri::AppHandle, ready: bool) {
 /// 轮询 /health 端点，最多等待 timeout_secs 秒。
 /// 就绪后更新全局状态。
 pub async fn wait_for_healthy(app_handle: tauri::AppHandle, timeout_secs: u64) {
-    let client = reqwest::Client::new();
     let url = health_url();
     let max_attempts = timeout_secs * 2; // 每 500ms 检查一次
 
     for _ in 0..max_attempts {
-        match client
-            .get(&url)
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                log::info!("hexclaw sidecar 就绪: {}", url);
-                set_ready(&app_handle, true);
-                // 通知前端 sidecar 已就绪
-                let _ = app_handle.emit("sidecar-ready", true);
-                return;
-            }
-            _ => {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Ok(client) = crate::sidecar_client::SidecarClient::new(Duration::from_secs(2)) {
+            if let Ok(resp) = client.get("/health").await {
+                if resp.status().is_success() {
+                    log::info!("hexclaw sidecar 就绪: {}", url);
+                    set_ready(&app_handle, true);
+                    // 通知前端 sidecar 已就绪
+                    let _ = app_handle.emit("sidecar-ready", true);
+                    return;
+                }
             }
         }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     log::error!("hexclaw sidecar 启动超时 ({}s)", timeout_secs);
@@ -107,6 +126,7 @@ pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
 /// Tauri externalBin 会将 sidecar 放在与主程序同目录 (Contents/MacOS/)。
 /// 进程句柄存储在全局静态变量中，供 stop_sidecar 使用。
 pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
+    initialize_capability_token()?;
     set_ready(app, false);
 
     let test_ctx = test_runtime::current()?;
@@ -181,7 +201,10 @@ pub fn enrich_path(sidecar_dir: Option<&Path>) -> String {
             "/usr/local/bin",
             "/usr/local/sbin",
             // nvm / fnm / volta 默认路径
-            &format!("{}/.nvm/versions/node/default/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!(
+                "{}/.nvm/versions/node/default/bin",
+                std::env::var("HOME").unwrap_or_default()
+            ),
             &format!("{}/.local/bin", std::env::var("HOME").unwrap_or_default()),
             // cargo, go
             &format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()),
@@ -191,7 +214,10 @@ pub fn enrich_path(sidecar_dir: Option<&Path>) -> String {
         &[
             "/usr/local/bin",
             &format!("{}/.local/bin", std::env::var("HOME").unwrap_or_default()),
-            &format!("{}/.nvm/versions/node/default/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!(
+                "{}/.nvm/versions/node/default/bin",
+                std::env::var("HOME").unwrap_or_default()
+            ),
             &format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()),
             &format!("{}/.cargo/bin", std::env::var("HOME").unwrap_or_default()),
         ]
@@ -237,6 +263,7 @@ fn spawn_child(
     if let Some(ctx) = test_ctx {
         test_runtime::configure_child_command(&mut cmd, ctx);
     }
+    cmd.env(SIDECAR_CAPABILITY_ENV, capability_token()?);
     cmd.env("PATH", &enriched_path);
 
     // 把资源根透传给 sidecar，main.go.resolveRenderAssetPaths 第一优先级查这里。
@@ -359,7 +386,11 @@ pub fn stop_sidecar() {
             let graceful = stop_child_gracefully(child, Duration::from_secs(3));
             log::info!(
                 "sidecar 已停止（{}）",
-                if graceful { "优雅退出" } else { "KILL 兜底" }
+                if graceful {
+                    "优雅退出"
+                } else {
+                    "KILL 兜底"
+                }
             );
         }
     }
@@ -515,7 +546,10 @@ fn ensure_desktop_voice_enabled() -> Result<(), String> {
 
     std::fs::write(&config_path, next)
         .map_err(|e| format!("写入配置文件失败 ({}): {}", config_path.display(), e))?;
-    log::info!("桌面模式已确保语音 TTS(edge-tts) 默认启用: {}", config_path.display());
+    log::info!(
+        "桌面模式已确保语音 TTS(edge-tts) 默认启用: {}",
+        config_path.display()
+    );
     Ok(())
 }
 
@@ -533,7 +567,10 @@ fn ensure_voice_tts_enabled_yaml(content: &str) -> (String, bool) {
     }
 
     let normalized = content.replace("\r\n", "\n");
-    let lines: Vec<String> = normalized.lines().map(std::string::ToString::to_string).collect();
+    let lines: Vec<String> = normalized
+        .lines()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     let Some(start) = lines.iter().position(|l| is_top_level_key(l, "voice")) else {
         // 无 voice 块 → 追加完整块
@@ -620,18 +657,20 @@ fn voice_subsection_provider(
     let sub_idx = (start + 1..end).find(|&i| lines[i].trim() == sub)?;
     let sub_indent = line_indent(&lines[sub_idx]);
     let mut sub_end = end;
-    for i in (sub_idx + 1)..end {
-        let t = lines[i].trim();
+    for (i, line) in lines.iter().enumerate().take(end).skip(sub_idx + 1) {
+        let t = line.trim();
         if t.is_empty() || t.starts_with('#') {
             continue;
         }
-        if line_indent(&lines[i]) <= sub_indent {
+        if line_indent(line) <= sub_indent {
             sub_end = i;
             break;
         }
     }
     let pi = (sub_idx + 1..sub_end).find(|&i| lines[i].trim_start().starts_with("provider:"))?;
-    let val = lines[pi].trim_start()["provider:".len()..].trim().to_string();
+    let val = lines[pi].trim_start()["provider:".len()..]
+        .trim()
+        .to_string();
     Some((pi, val))
 }
 
@@ -1035,8 +1074,7 @@ mod tests {
 
     #[test]
     fn ensure_voice_tts_enabled_yaml_appends_block_when_missing() {
-        let (next, changed) =
-            ensure_voice_tts_enabled_yaml("knowledge:\n  enabled: true\n");
+        let (next, changed) = ensure_voice_tts_enabled_yaml("knowledge:\n  enabled: true\n");
         assert!(changed);
         assert!(next.contains(
             "knowledge:\n  enabled: true\n\nvoice:\n  enabled: true\n  tts:\n    provider: edge-tts\n"
@@ -1057,7 +1095,10 @@ mod tests {
     fn ensure_voice_tts_block_without_tts_should_inject_provider() {
         let (next, changed) = ensure_voice_tts_enabled_yaml("voice:\n  enabled: true\n");
         assert!(changed);
-        assert!(next.contains("provider: edge-tts"), "应注入 provider: {next}");
+        assert!(
+            next.contains("provider: edge-tts"),
+            "应注入 provider: {next}"
+        );
         assert!(next.contains("enabled: true"), "应保留 enabled: {next}");
     }
 
@@ -1066,7 +1107,10 @@ mod tests {
         let (next, changed) =
             ensure_voice_tts_enabled_yaml("voice:\n  enabled: true\n  tts:\n    provider:\n");
         assert!(changed);
-        assert!(next.contains("provider: edge-tts"), "空 provider 应补全: {next}");
+        assert!(
+            next.contains("provider: edge-tts"),
+            "空 provider 应补全: {next}"
+        );
         // 不得产生重复 tts 子段
         assert_eq!(next.matches("tts:").count(), 1, "不应重复 tts: {next}");
     }
@@ -1082,7 +1126,10 @@ mod tests {
         let (next, changed) = ensure_voice_tts_enabled_yaml(input);
         assert!(changed, "默认 disabled 且无 provider → 应强制启用: {next}");
         assert!(next.contains("enabled: true"), "应翻 enabled: {next}");
-        assert!(next.contains("provider: edge-tts"), "应注入 edge-tts: {next}");
+        assert!(
+            next.contains("provider: edge-tts"),
+            "应注入 edge-tts: {next}"
+        );
     }
 
     // bug-20260626-tts-A2：装机现场真实复现。hexclaw 把零值默认 voice 段整段序列化到
@@ -1107,13 +1154,26 @@ mod tests {
         let (next, changed) = ensure_voice_tts_enabled_yaml(input);
         assert!(changed, "默认零值 voice 块必须被强制启用: {next}");
         // voice.enabled 翻 true（仅这一处；wake.enabled 保持 false 不动）
-        assert_eq!(next.matches("enabled: true").count(), 1, "只应翻 voice.enabled: {next}");
-        assert!(next.contains("enabled: false"), "wake.enabled 应保持不动: {next}");
+        assert_eq!(
+            next.matches("enabled: true").count(),
+            1,
+            "只应翻 voice.enabled: {next}"
+        );
+        assert!(
+            next.contains("enabled: false"),
+            "wake.enabled 应保持不动: {next}"
+        );
         // tts.provider 设为免费 edge-tts
-        assert!(next.contains("provider: edge-tts"), "tts.provider 应为 edge-tts: {next}");
+        assert!(
+            next.contains("provider: edge-tts"),
+            "tts.provider 应为 edge-tts: {next}"
+        );
         // 绝不能把 edge-tts 注到 stt.provider（stt 段仍不含 edge-tts）
         let stt_seg = &next[next.find("stt:").unwrap()..next.find("tts:").unwrap()];
-        assert!(!stt_seg.contains("edge-tts"), "不得污染 stt.provider: {stt_seg}");
+        assert!(
+            !stt_seg.contains("edge-tts"),
+            "不得污染 stt.provider: {stt_seg}"
+        );
         // 不重复 tts 子段
         assert_eq!(next.matches("tts:").count(), 1, "不应重复 tts 子段: {next}");
     }
@@ -1153,7 +1213,8 @@ mod tests {
     #[test]
     fn parse_scutil_proxy_tun_mode_yields_empty() {
         // TUN/fake-ip 透明模式：系统无手动代理 → 不注入任何变量（靠系统路由直连）。
-        let out = "  HTTPEnable : 0\n  HTTPSEnable : 0\n  SOCKSEnable : 0\n  ProxyAutoConfigEnable : 0\n";
+        let out =
+            "  HTTPEnable : 0\n  HTTPSEnable : 0\n  SOCKSEnable : 0\n  ProxyAutoConfigEnable : 0\n";
         assert!(parse_scutil_proxy(out).is_empty());
     }
 
@@ -1180,11 +1241,8 @@ mod stop_gracefully_tests {
     /// 若不同步就绪，TERM 可能赶在 trap 生效前送达——子进程按默认处置退出，
     /// 被误判「优雅」（并发全量跑时曾真实复现）。
     fn spawn_trapped_child(name: &str, trap_cmd: &str, body: &str) -> Child {
-        let marker: PathBuf = std::env::temp_dir().join(format!(
-            "hexclaw-stop-test-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let marker: PathBuf =
+            std::env::temp_dir().join(format!("hexclaw-stop-test-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let script = format!("{}; : > '{}'; {}", trap_cmd, marker.display(), body);
         let child = Command::new("sh")
@@ -1207,7 +1265,10 @@ mod stop_gracefully_tests {
         let child = spawn_trapped_child("compliant", "trap 'exit 0' TERM", "sleep 30 & wait $!");
         let start = Instant::now();
         let graceful = stop_child_gracefully(child, Duration::from_secs(3));
-        assert!(graceful, "TERM 响应型子进程应在优雅窗口内退出，不应升级 KILL");
+        assert!(
+            graceful,
+            "TERM 响应型子进程应在优雅窗口内退出，不应升级 KILL"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(2),
             "优雅退出不应耗满超时窗口"

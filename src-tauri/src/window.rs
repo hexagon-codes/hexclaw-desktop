@@ -56,12 +56,9 @@ impl LifecycleController {
                     return LifecycleDecision::Exit;
                 }
 
-                if self
-                    .last_system_quit
-                    .is_some_and(|previous| {
-                        now.saturating_duration_since(previous) < SYSTEM_QUIT_CONFIRM_WINDOW
-                    })
-                {
+                if self.last_system_quit.is_some_and(|previous| {
+                    now.saturating_duration_since(previous) < SYSTEM_QUIT_CONFIRM_WINDOW
+                }) {
                     self.last_system_quit = None;
                     LifecycleDecision::Exit
                 } else {
@@ -76,10 +73,7 @@ impl LifecycleController {
 #[derive(Debug, Default)]
 pub struct LifecycleState(Mutex<LifecycleController>);
 
-pub fn lifecycle_decision(
-    app: &tauri::AppHandle,
-    source: LifecycleSource,
-) -> LifecycleDecision {
+pub fn lifecycle_decision(app: &tauri::AppHandle, source: LifecycleSource) -> LifecycleDecision {
     let state = app.state::<LifecycleState>();
     let decision = state
         .0

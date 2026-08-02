@@ -7,12 +7,21 @@
 //   tray      — 系统托盘
 //   window    — 窗口管理 + 全局快捷键
 
+use tauri::Manager;
+
 pub mod autostart;
 pub mod commands;
+pub mod credential_vault;
 pub mod menu;
+pub mod native_file;
 pub mod native_print;
 pub mod ollama;
+pub mod print_coordinator;
+pub mod provider_credentials;
 pub mod sidecar;
+pub(crate) mod sidecar_client;
+pub mod sidecar_socket;
+pub mod sidecar_stream;
 pub mod test_runtime;
 pub mod tray;
 pub mod window;
@@ -28,11 +37,16 @@ pub fn run() {
     // 收紧文件创建权限: 新文件默认 0600, 新目录默认 0700
     #[cfg(unix)]
     {
-        unsafe { libc::umask(0o077); }
+        unsafe {
+            libc::umask(0o077);
+        }
     }
 
     test_runtime::prepare_shell_path_isolation()
         .unwrap_or_else(|err| panic!("test runtime path isolation refused startup: {err}"));
+
+    sidecar::initialize_capability_token()
+        .unwrap_or_else(|err| panic!("initialize Sidecar capability: {err}"));
 
     env_logger::init();
 
@@ -59,9 +73,20 @@ pub fn run() {
         .manage(sidecar::SidecarState::default())
         .manage(ollama::OllamaState::default())
         .manage(window::LifecycleState::default())
+        .manage(native_file::NativeFileGrantRegistry::default())
+        .manage(native_file::NativeFileTransferRegistry::default())
+        .manage(print_coordinator::PrintOperationLocks::default())
+        .manage(provider_credentials::ProviderCredentialCoordinator::default())
+        .manage(commands::SidecarFetchRegistry::default())
+        .manage(sidecar_socket::NativeSidecarSocketRegistry::default())
+        .manage(sidecar_stream::NativeSidecarStreamRegistry::default())
         // 初始化
         .setup(|app| {
             eprintln!("[HexClaw] setup 开始...");
+
+            if let Err(error) = native_file::prune_stale_staging_files(app.handle()) {
+                log::warn!("清理遗留原生临时文件失败: {}", error);
+            }
 
             if let Err(e) = autostart::migrate_legacy_macos_autostart(app.handle()) {
                 log::warn!("旧版 macOS 自启项迁移失败，将保留原配置: {}", e);
@@ -74,10 +99,13 @@ pub fn run() {
 
             // 启动 Ollama 本地推理引擎（优先复用外部实例，否则启动内嵌二进制）
             let ollama_started = if test_runtime::should_start_managed_ollama() {
-                match ollama::spawn_ollama(&app.handle()) {
+                match ollama::spawn_ollama(app.handle()) {
                     Ok(()) => {
                         log::info!("Ollama 进程就绪");
-                        eprintln!("[HexClaw] Ollama 进程就绪 (managed={})", ollama::is_managed());
+                        eprintln!(
+                            "[HexClaw] Ollama 进程就绪 (managed={})",
+                            ollama::is_managed()
+                        );
                         true
                     }
                     Err(e) => {
@@ -92,7 +120,7 @@ pub fn run() {
             };
 
             // 启动 hexclaw sidecar 进程
-            let sidecar_started = match sidecar::spawn_sidecar(&app.handle()) {
+            let sidecar_started = match sidecar::spawn_sidecar(app.handle()) {
                 Ok(()) => {
                     log::info!("sidecar 进程已启动");
                     eprintln!("[HexClaw] sidecar 进程已启动");
@@ -137,28 +165,56 @@ pub fn run() {
             commands::get_sidecar_status,
             commands::get_platform_info,
             commands::check_engine_health,
+            commands::sidecar_fetch,
+            commands::sidecar_fetch_cancel,
             commands::proxy_api_request,
-            commands::stream_chat,
-            commands::backend_chat,
+            sidecar_socket::sidecar_socket_open,
+            sidecar_socket::sidecar_socket_send,
+            sidecar_socket::sidecar_socket_close,
+            sidecar_stream::sidecar_stream_open,
+            sidecar_stream::sidecar_stream_cancel,
             commands::restart_sidecar,
             commands::get_ollama_status,
             commands::restart_ollama,
-            commands::save_file_from_url,
-            commands::save_bytes_to_path,
-            commands::read_file_as_base64,
-            commands::render_artifact_to_path,
+            native_file::pick_open_file_grant,
+            native_file::pick_save_file_grant,
+            native_file::create_staging_file_grant,
+            native_file::append_file_grant_chunk,
+            native_file::seal_file_grant,
+            native_file::discard_file_grant,
+            native_file::upload_file_grant,
+            native_file::cancel_file_transfer,
+            native_file::download_file_grant,
+            native_file::copy_file_grant,
+            native_file::render_artifact_to_grant,
+            credential_vault::put_credential,
+            credential_vault::delete_credential,
+            credential_vault::credential_present,
+            provider_credentials::get_llm_config_with_credentials,
+            provider_credentials::apply_llm_config_with_credentials,
+            print_coordinator::execute_print_job,
             commands::open_about,
             commands::set_autostart,
             commands::is_autostart_enabled,
-            native_print::native_print_pdf,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if window.label() == "main" {
-                    ollama::stop_ollama();
-                    sidecar::stop_sidecar();
-                }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                let app = window.app_handle().clone();
+                let window_label = window.label().to_owned();
+                let paths = paths.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        native_file::issue_native_drop_grants(app, window_label, paths).await
+                    {
+                        log::warn!("native drop capability issuance failed: {}", error);
+                    }
+                });
             }
+            tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                ollama::stop_ollama();
+                sidecar::stop_sidecar();
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

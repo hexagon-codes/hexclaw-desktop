@@ -6,7 +6,6 @@
 //! operation-scoped receipt that distinguishes Print from Cancel/failure and can be committed to
 //! the durable backend PrintJob. No HTML/PDF file is persisted by this adapter.
 
-use base64::Engine;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_PRINT_PDF_BYTES: usize = 32 * 1024 * 1024;
@@ -70,27 +69,27 @@ fn validate_pdf_geometry(page_count: usize, media_boxes: &[(f64, f64)]) -> Resul
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-struct NativePrinterSnapshot {
-    adapter: &'static str,
-    platform: &'static str,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NativePrinterSnapshot {
+    pub adapter: String,
+    pub platform: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    printer: Option<String>,
+    pub printer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    paper: Option<String>,
+    pub paper: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NativePrintReceipt {
-    status: &'static str,
-    native_job_id: String,
+    pub status: String,
+    pub native_job_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    native_receipt_id: Option<String>,
-    printer_snapshot: NativePrinterSnapshot,
+    pub native_receipt_id: Option<String>,
+    pub printer_snapshot: NativePrinterSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
-    failure_kind: Option<&'static str>,
+    pub failure_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    failure_detail: Option<String>,
+    pub failure_detail: Option<String>,
 }
 
 fn receipt_for_status(
@@ -110,20 +109,20 @@ fn receipt_for_status(
         format!("appkit-receipt-{sequence}-{observed_at}")
     });
     NativePrintReceipt {
-        status,
+        status: status.to_owned(),
         native_job_id,
         native_receipt_id,
         printer_snapshot: NativePrinterSnapshot {
-            adapter: "appkit",
+            adapter: "appkit".into(),
             platform: if cfg!(target_os = "macos") {
-                "macos"
+                "macos".into()
             } else {
-                "unsupported"
+                "unsupported".into()
             },
             printer,
             paper,
         },
-        failure_kind,
+        failure_kind: failure_kind.map(str::to_owned),
         failure_detail,
     }
 }
@@ -139,22 +138,7 @@ fn failed_receipt(sequence: u64, failure_kind: &'static str, detail: String) -> 
     )
 }
 
-fn decode_print_pdf(pdf_base64: &str) -> Result<Vec<u8>, String> {
-    let encoded = pdf_base64.trim();
-    if encoded.is_empty() {
-        return Err("打印 PDF 不能为空".into());
-    }
-    let max_encoded_len = MAX_PRINT_PDF_BYTES.div_ceil(3) * 4;
-    if encoded.len() > max_encoded_len {
-        return Err(format!(
-            "打印 PDF 编码过大 {} > {} 字节",
-            encoded.len(),
-            max_encoded_len
-        ));
-    }
-    let pdf = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|e| format!("打印 PDF 编码无效: {e}"))?;
+fn validate_print_pdf(pdf: &[u8]) -> Result<(), String> {
     if pdf.is_empty() {
         return Err("打印 PDF 不能为空".into());
     }
@@ -168,14 +152,14 @@ fn decode_print_pdf(pdf_base64: &str) -> Result<Vec<u8>, String> {
     if !pdf.starts_with(b"%PDF-") {
         return Err("打印内容不是有效的 PDF 文档".into());
     }
-    Ok(pdf)
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{
-        classify_print_execution, decode_print_pdf, failed_receipt, next_print_sequence,
-        receipt_for_status, validate_pdf_geometry, NativePrintReceipt, PrintExecution,
+        classify_print_execution, failed_receipt, next_print_sequence, receipt_for_status,
+        validate_pdf_geometry, validate_print_pdf, NativePrintReceipt, PrintExecution,
         MAX_PRINT_PAGES,
     };
     use objc2::{AnyThread, MainThreadMarker};
@@ -319,12 +303,11 @@ mod platform {
         }
     }
 
-    pub async fn print_pdf(app: tauri::AppHandle, pdf_base64: String) -> PrintResult {
+    pub async fn print_pdf(app: tauri::AppHandle, pdf: Vec<u8>) -> PrintResult {
         let sequence = next_print_sequence();
-        let pdf = match decode_print_pdf(&pdf_base64) {
-            Ok(pdf) => pdf,
-            Err(error) => return Ok(failed_receipt(sequence, "pdf_preflight_failed", error)),
-        };
+        if let Err(error) = validate_print_pdf(&pdf) {
+            return Ok(failed_receipt(sequence, "pdf_preflight_failed", error));
+        }
         let (tx, rx) = oneshot::channel::<PrintResult>();
         let sender: ResultSender = Arc::new(Mutex::new(Some(tx)));
         let main_sender = Arc::clone(&sender);
@@ -347,25 +330,21 @@ mod platform {
     }
 }
 
-/// Print an in-memory canonical PDF with PDFKit/AppKit. PDFKit consumes the exact bytes already
-/// shown in the preview, so the native print operation cannot reflow the document.
 #[cfg(target_os = "macos")]
-#[tauri::command]
-pub async fn native_print_pdf(
+pub async fn print_pdf_bytes(
     app: tauri::AppHandle,
-    pdf_base64: String,
+    pdf: Vec<u8>,
 ) -> Result<NativePrintReceipt, String> {
-    platform::print_pdf(app, pdf_base64).await
+    platform::print_pdf(app, pdf).await
 }
 
 #[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub async fn native_print_pdf(
+pub async fn print_pdf_bytes(
     _app: tauri::AppHandle,
-    pdf_base64: String,
+    pdf: Vec<u8>,
 ) -> Result<NativePrintReceipt, String> {
     let sequence = next_print_sequence();
-    if let Err(error) = decode_print_pdf(&pdf_base64) {
+    if let Err(error) = validate_print_pdf(&pdf) {
         return Ok(failed_receipt(sequence, "pdf_preflight_failed", error));
     }
     Ok(failed_receipt(
@@ -378,7 +357,7 @@ pub async fn native_print_pdf(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_print_execution, decode_print_pdf, receipt_for_status, validate_pdf_geometry,
+        classify_print_execution, receipt_for_status, validate_pdf_geometry, validate_print_pdf,
         PrintExecution, MAX_PRINT_PAGES, MAX_PRINT_PDF_BYTES,
     };
 
@@ -441,15 +420,9 @@ mod tests {
 
     #[test]
     fn pdf_payload_requires_exact_pdf_magic_and_enforces_the_decoded_size_limit() {
-        let decoded = decode_print_pdf("JVBERi0xLjc=").expect("valid PDF payload");
-        assert_eq!(decoded, b"%PDF-1.7");
-
-        assert!(decode_print_pdf("").is_err());
-        assert!(decode_print_pdf("PGh0bWw+").is_err());
-        assert!(decode_print_pdf("not base64").is_err());
-
-        // Reject before decoding an attacker-controlled payload large enough to exceed the cap.
-        let encoded_over_limit = "A".repeat(((MAX_PRINT_PDF_BYTES + 2) / 3) * 4 + 4);
-        assert!(decode_print_pdf(&encoded_over_limit).is_err());
+        assert!(validate_print_pdf(b"%PDF-1.7").is_ok());
+        assert!(validate_print_pdf(b"").is_err());
+        assert!(validate_print_pdf(b"<html>").is_err());
+        assert!(validate_print_pdf(&vec![0; MAX_PRINT_PDF_BYTES + 1]).is_err());
     }
 }

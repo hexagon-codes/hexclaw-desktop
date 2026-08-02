@@ -56,10 +56,7 @@ pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
 
 /// 是否由本应用管理 Ollama 进程
 pub fn is_managed() -> bool {
-    OLLAMA_MANAGED
-        .lock()
-        .map(|g| *g)
-        .unwrap_or(false)
+    OLLAMA_MANAGED.lock().map(|g| *g).unwrap_or(false)
 }
 
 /// 快速检测端口是否已被占用（同步，用于启动前判断）
@@ -80,7 +77,8 @@ fn is_ollama_healthy() -> bool {
     {
         use std::io::{Read, Write};
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], OLLAMA_PORT));
-        let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        else {
             return false;
         };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
@@ -89,7 +87,9 @@ fn is_ollama_healthy() -> bool {
             return false;
         }
         let mut buf = [0u8; 32];
-        let Ok(n) = stream.read(&mut buf) else { return false };
+        let Ok(n) = stream.read(&mut buf) else {
+            return false;
+        };
         let response = String::from_utf8_lossy(&buf[..n]);
         if !(response.starts_with("HTTP/1") && response.contains("200")) {
             return false;
@@ -100,7 +100,12 @@ fn is_ollama_healthy() -> bool {
     #[cfg(unix)]
     {
         let output = Command::new("lsof")
-            .args(["-nP", &format!("-iTCP:{}", OLLAMA_PORT), "-sTCP:LISTEN", "-t"])
+            .args([
+                "-nP",
+                &format!("-iTCP:{}", OLLAMA_PORT),
+                "-sTCP:LISTEN",
+                "-t",
+            ])
             .output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -112,11 +117,12 @@ fn is_ollama_healthy() -> bool {
                         .output();
                     if let Ok(cmd_out) = cmd_output {
                         let cmd = String::from_utf8_lossy(&cmd_out.stdout);
-                        let exe_path = cmd.trim().split_whitespace().next().unwrap_or("");
+                        let exe_path = cmd.split_whitespace().next().unwrap_or("");
                         if !exe_path.is_empty() && !Path::new(exe_path).exists() {
                             log::warn!(
                                 "Ollama 进程 PID {} 的可执行文件已不存在: {}",
-                                pid, exe_path
+                                pid,
+                                exe_path
                             );
                             return false;
                         }
@@ -137,7 +143,11 @@ fn find_system_ollama() -> Option<std::path::PathBuf> {
     #[cfg(not(target_os = "windows"))]
     {
         // 1. 常见安装路径，按序探测
-        for candidate in ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/usr/bin/ollama"] {
+        for candidate in [
+            "/usr/local/bin/ollama",
+            "/opt/homebrew/bin/ollama",
+            "/usr/bin/ollama",
+        ] {
             let p = std::path::PathBuf::from(candidate);
             if p.exists() {
                 return Some(p);
@@ -256,11 +266,17 @@ fn is_ollama_functional() -> bool {
         r#"{{"model":{},"prompt":"hi","stream":false,"options":{{"num_predict":1}}}}"#,
         serde_json::Value::String(model.clone())
     );
-    match http_request("POST", "/api/generate", Some(&probe_body), Duration::from_secs(10)) {
+    match http_request(
+        "POST",
+        "/api/generate",
+        Some(&probe_body),
+        Duration::from_secs(10),
+    ) {
         Some((200, _)) => true,
         Some((status, body)) => {
             let lower = body.to_lowercase();
-            if status >= 500 || lower.contains("llama-server") || lower.contains("binary not found") {
+            if status >= 500 || lower.contains("llama-server") || lower.contains("binary not found")
+            {
                 log::warn!(
                     "Ollama 推理探针失败（模型 {}，HTTP {}），判定坏实例（可能内置 bundle 缺 llama-server）",
                     model, status
@@ -314,7 +330,10 @@ pub fn spawn_ollama(app: &tauri::AppHandle) -> Result<(), String> {
     // 1. 检测端口是否被占用 — 用功能性健康检查识破坏 bundle（能列模型但推理 500）
     if is_port_in_use(OLLAMA_PORT) {
         if is_ollama_functional() {
-            log::info!("检测到外部 Ollama 已运行于端口 {} 且可正常推理，直接复用", OLLAMA_PORT);
+            log::info!(
+                "检测到外部 Ollama 已运行于端口 {} 且可正常推理，直接复用",
+                OLLAMA_PORT
+            );
             set_ready(app, true);
             *OLLAMA_MANAGED.lock().unwrap_or_else(|e| e.into_inner()) = false;
             let _ = app.emit("ollama-ready", true);
@@ -380,7 +399,11 @@ pub fn spawn_ollama(app: &tauri::AppHandle) -> Result<(), String> {
 /// false 表示内置 bundle（binary 同目录带 libggml/libmlx 等，需覆盖 DYLD/LD 路径）。
 fn spawn_ollama_child(path: &std::path::Path, is_system: bool) -> Result<(), String> {
     let enriched_path = crate::sidecar::enrich_path(None);
-    let lib_dir = path.parent().unwrap_or(Path::new(".")).to_string_lossy().to_string();
+    let lib_dir = path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_string_lossy()
+        .to_string();
 
     let mut cmd = Command::new(path);
     cmd.args(["serve"])
@@ -480,10 +503,10 @@ mod tests {
     /// 环境无关（无论测试机是否装了 ollama 都成立）。
     #[test]
     fn find_system_ollama_returns_existing_or_none() {
-        match find_system_ollama() {
-            Some(p) => assert!(p.exists(), "返回的系统 ollama 路径必须真实存在: {:?}", p),
-            None => {} // 未装系统 ollama，合法
+        if let Some(p) = find_system_ollama() {
+            assert!(p.exists(), "返回的系统 ollama 路径必须真实存在: {:?}", p);
         }
+        // 未装系统 ollama 时返回 None，属于合法降级。
     }
 
     /// first_available_model 返回 Some 时必须非空模型名。
