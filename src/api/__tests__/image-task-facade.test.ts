@@ -309,10 +309,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
       },
     })
 
-    const response = await k12Api.k12GetImageTask(
-      'tutor/小明',
-      'EPtdYUWhUqQLvublgPSJR',
-    )
+    const response = await k12Api.k12GetImageTask('tutor/小明', 'EPtdYUWhUqQLvublgPSJR')
 
     expect(response.dispatch.target_projection).toEqual({
       kind: 'homework',
@@ -382,7 +379,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
       },
     }
     const unknownCoverageWire = structuredClone(currentInProgressWire)
-    unknownCoverageWire.dispatch.target_projection.progressive.coverage.status = 'provider_private_state'
+    unknownCoverageWire.dispatch.target_projection.progressive.coverage.status =
+      'provider_private_state'
     client.apiGet.mockResolvedValueOnce(currentInProgressWire)
 
     await expect(
@@ -485,9 +483,9 @@ describe('K12 ImageTaskDispatch public facade', () => {
     }
     client.apiGet.mockResolvedValueOnce(response)
 
-    await expect(
-      k12Api.k12GetImageTask('tutor/小明', 'dispatch-homework'),
-    ).rejects.toThrow(/invalid image task dispatch response/i)
+    await expect(k12Api.k12GetImageTask('tutor/小明', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task dispatch response/i,
+    )
   })
 
   it('calls only the owner-scoped /image-tasks method+path exact-set', async () => {

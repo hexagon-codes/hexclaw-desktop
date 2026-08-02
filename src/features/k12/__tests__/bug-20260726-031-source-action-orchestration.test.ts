@@ -54,9 +54,7 @@ function i18n() {
   })
 }
 
-function problemProgress(
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+function problemProgress(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     problem_id: 'problem-1',
     source_number_path: ['一', '1'],
@@ -141,7 +139,8 @@ function createResponse(problem: Record<string, unknown> = problemProgress()) {
   }
 }
 
-function sourceActionResponse(options: {
+function sourceActionResponse(
+  options: {
     action?: 'skip' | 'resume'
     structureVersion?: number
     inputRevision?: number
@@ -155,7 +154,8 @@ function sourceActionResponse(options: {
       status: 'empty' | 'in_progress' | 'complete'
       projection_revision: number
     }
-  } = {}) {
+  } = {},
+) {
   const action = options.action ?? 'skip'
   const inputRevision = options.inputRevision ?? (action === 'resume' ? 3 : 2)
   return {
@@ -216,7 +216,7 @@ async function renderTask() {
 function buttonByName(root: Element, name: string): HTMLButtonElement | null {
   return (
     [...root.querySelectorAll<HTMLButtonElement>('button')].find(
-      button => button.textContent?.replace(/\s+/g, ' ').trim() === name,
+      (button) => button.textContent?.replace(/\s+/g, ' ').trim() === name,
     ) ?? null
   )
 }
@@ -248,7 +248,7 @@ function deferred<T>() {
 describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
-    Object.values(h).forEach(spy => spy.mockReset())
+    Object.values(h).forEach((spy) => spy.mockReset())
   })
 
   afterEach(() => {
@@ -284,13 +284,15 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     expect(String(idempotencyKey).trim()).not.toBe('')
     const actionButtons = resolver(wrapper).querySelectorAll<HTMLButtonElement>('button')
     expect(actionButtons.length).toBeGreaterThan(0)
-    expect([...actionButtons].every(button => button.disabled)).toBe(true)
+    expect([...actionButtons].every((button) => button.disabled)).toBe(true)
     expect(resolver(wrapper).textContent).not.toContain('已跳过 · 未判断对错')
   })
 
   it('PROG-027 reuses the same Idempotency-Key when the unchanged operation is retried', async () => {
     h.sourceAction
-      .mockRejectedValueOnce(Object.assign(new Error('temporary transport failure'), { status: 503 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('temporary transport failure'), { status: 503 }),
+      )
       .mockReturnValueOnce(new Promise(() => {}))
     const wrapper = await renderTask()
 
@@ -330,36 +332,25 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     )
     h.get.mockReset()
     h.get.mockResolvedValue({ dispatch: authoritative })
-
     ;(await openSkipConfirmation(wrapper)).click()
     await flushPromises()
     await flushPromises()
 
     expect(h.sourceAction).toHaveBeenCalledTimes(1)
     expect(h.get).toHaveBeenCalledTimes(1)
-    expect(h.get).toHaveBeenCalledWith(
-      'mingming',
-      'dispatch-progressive-wave-3',
-      expect.anything(),
-    )
+    expect(h.get).toHaveBeenCalledWith('mingming', 'dispatch-progressive-wave-3', expect.anything())
     expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('已批改')
-    expect(wrapper.get('[data-problem-id="problem-1"]').text()).not.toContain(
-      '已跳过 · 未判断对错',
-    )
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).not.toContain('已跳过 · 未判断对错')
   })
 
   it('PROG-026 applies only the post-commit server snapshot and uses its structure/input revision for the next action', async () => {
     const first = deferred<ReturnType<typeof sourceActionResponse>>()
-    h.sourceAction
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(new Promise(() => {}))
+    h.sourceAction.mockReturnValueOnce(first.promise).mockReturnValueOnce(new Promise(() => {}))
     const wrapper = await renderTask()
 
     ;(await openSkipConfirmation(wrapper)).click()
     await nextTick()
-    expect(wrapper.get('[data-problem-id="problem-1"]').text()).not.toContain(
-      '已跳过 · 未判断对错',
-    )
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).not.toContain('已跳过 · 未判断对错')
 
     first.resolve(
       sourceActionResponse({
@@ -380,9 +371,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain(
-      '已跳过 · 未判断对错',
-    )
+    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('已跳过 · 未判断对错')
     expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('一. 1')
     const resume = buttonByName(resolver(wrapper), '恢复处理')
     expect(resume).not.toBeNull()

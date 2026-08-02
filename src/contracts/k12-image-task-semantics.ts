@@ -1226,9 +1226,7 @@ export function assertImageTaskProblemSourceActionSemantics(
   }
   const responseInputRevision = numberValue(response.input_revision, '$.input_revision', true)
   const wantInputRevision =
-    expected.action === 'skip'
-      ? expected.expectedInputRevision
-      : expected.expectedInputRevision + 1
+    expected.action === 'skip' ? expected.expectedInputRevision : expected.expectedInputRevision + 1
   if (responseInputRevision !== wantInputRevision) {
     fail('$.input_revision', `action revision ${wantInputRevision}`)
   }

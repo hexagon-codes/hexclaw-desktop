@@ -25,9 +25,8 @@ type SubmitProblemSourceAction = (
 ) => Promise<Record<string, unknown>>
 
 function submitProblemSourceAction(): SubmitProblemSourceAction {
-  const candidate = (
-    k12Api as unknown as Record<string, unknown>
-  ).k12SubmitImageTaskProblemSourceAction
+  const candidate = (k12Api as unknown as Record<string, unknown>)
+    .k12SubmitImageTaskProblemSourceAction
   expect(
     candidate,
     'the progressive client must expose the one canonical source-action command',

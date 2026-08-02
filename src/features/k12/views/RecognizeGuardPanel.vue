@@ -486,10 +486,7 @@ function updatePendingSourceProblems(problemIds: string[], pending: boolean) {
 
 function applyProblemSourceSnapshot(response: ImageTaskProblemSourceActionResp) {
   if (response.dispatch_id !== currentDispatchId.value) return
-  const snapshot = projectImageTaskProblemSourceActionSnapshot(
-    response,
-    problemProgressSlots.value,
-  )
+  const snapshot = projectImageTaskProblemSourceActionSnapshot(response, problemProgressSlots.value)
   currentStructureVersion.value = snapshot.structure_version
   problemProgressSlots.value = snapshot.problem_progress
   taskCoverage.value = snapshot.coverage
