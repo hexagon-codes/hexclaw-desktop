@@ -15,16 +15,21 @@ const VIEWPORT = { width: 2048, height: 924 }
 const K12_RECORD = JSON.stringify({ version: 1, preference: 'k12', introSeen: true })
 const FIXTURE_NOW = '2026-07-29T12:49:13+08:00'
 const K12_TUTOR_SOURCE_MESSAGE_ID = 'k12-tutor-p52-message'
-const K12_TUTOR_DISPATCH_ID = 'k12-tutor-p52-dispatch'
+// The authoritative prototype exposes this durable operation key on its
+// TaskShell. Reuse it in the browser fixture so VIS-026 compares the same
+// task, rather than merely a similarly-shaped task card.
+const K12_TUTOR_DISPATCH_ID = 'op-k12-ming-homework-001'
+// The reference's live task is captured exactly 42 seconds after its durable
+// operation timestamp. Freeze only the browser fixture clock for that paired
+// recovery state; production keeps its real clock and no DOM is fabricated.
+const K12_TUTOR_CAPTURE_NOW_MS = 1_785_295_842_000
 
 // This is the public, recoverable ImageTask fixture corresponding to the
 // authoritative K12 tutor scene. It is deliberately served through the same
 // Sidecar-facing routes used by Desktop rather than injected into the DOM.
-// The source has fourteen canonical chat-message wrappers plus one TaskShell;
-// the prototype nests that TaskShell inside its fifteenth message wrapper.
-// Geometry records both facts and compares the normalized visible message-unit
-// count so the structural difference cannot be mistaken for business-state
-// drift.
+// Only the P52 source message is rendered for the paired tutor capture. The
+// static prototype retains additional historical markup behind `display:none`;
+// it is deliberately not served into Desktop's visible business state.
 const k12TutorSourceMessages = [
   {
     id: K12_TUTOR_SOURCE_MESSAGE_ID,
@@ -135,9 +140,13 @@ const k12TutorSourceMessages = [
   },
 ]
 
+const k12TutorVisibleSourceMessages = k12TutorSourceMessages.slice(0, 1)
+
 const k12TutorRecoveryDispatch = {
   dispatch_id: K12_TUTOR_DISPATCH_ID,
   task_intent: 'completed_homework',
+  // The recoverable-list gate accepts this existing dispatch status immediately;
+  // the homework projection below remains in its visible `assessing` stage.
   status: 'awaiting_confirmation',
   provider_display_name: 'HexClaw-GPT',
   model_id: 'gpt-5.6-sol',
@@ -153,14 +162,14 @@ const k12TutorRecoveryDispatch = {
   target: { type: 'homework_submission', id: 'submission-k12-tutor-p52' },
   target_projection: {
     kind: 'homework',
-    stage: 'awaiting_confirmation',
+    stage: 'assessing',
     confirmation_state: 'pending',
     anchor_state: 'located',
     recognition: {
       subject: '数学',
       questions: [
         {
-          problem_id: 'k12-tutor-p1',
+          problem_id: 'problem-1',
           problem_kind: 'standalone',
           source_number_path: ['一', '1'],
           display_label: '一、1',
@@ -178,7 +187,7 @@ const k12TutorRecoveryDispatch = {
           confirmed_version: 1,
         },
         {
-          problem_id: 'k12-tutor-p2',
+          problem_id: 'problem-2',
           problem_kind: 'standalone',
           source_number_path: ['一', '2'],
           display_label: '一、2',
@@ -197,9 +206,9 @@ const k12TutorRecoveryDispatch = {
           confirmed_version: 0,
         },
         {
-          problem_id: 'k12-tutor-p3-1',
+          problem_id: 'problem-3-1',
           problem_kind: 'subproblem',
-          parent_problem_id: 'k12-tutor-p3',
+          parent_problem_id: 'problem-3',
           subproblem_no: '1',
           source_number_path: ['三', '1'],
           display_label: '三、1',
@@ -218,9 +227,9 @@ const k12TutorRecoveryDispatch = {
           confirmed_version: 0,
         },
         {
-          problem_id: 'k12-tutor-p3-2',
+          problem_id: 'problem-3-2',
           problem_kind: 'subproblem',
-          parent_problem_id: 'k12-tutor-p3',
+          parent_problem_id: 'problem-3',
           subproblem_no: '2',
           source_number_path: ['三', '2'],
           display_label: '三、2',
@@ -244,46 +253,46 @@ const k12TutorRecoveryDispatch = {
       snapshot_revision: 8,
       problem_progress: [
         {
-          problem_id: 'k12-tutor-p1',
-          status: 'completed',
+          problem_id: 'problem-1',
+          status: 'correct',
           input_revision: 1,
           published_revision: 1,
-          current_disposition: 'result',
+          current_disposition: 'current',
         },
         {
-          problem_id: 'k12-tutor-p2',
-          status: 'assessing',
+          problem_id: 'problem-2',
+          status: 'processing',
           input_revision: 1,
           published_revision: 0,
-          current_disposition: 'open',
+          current_disposition: 'current',
         },
         {
-          problem_id: 'k12-tutor-p3-1',
-          status: 'awaiting_confirmation',
+          problem_id: 'problem-3-1',
+          status: 'awaiting_source',
           input_revision: 1,
           published_revision: 0,
-          current_disposition: 'open',
+          current_disposition: 'current',
         },
         {
-          problem_id: 'k12-tutor-p3-2',
-          status: 'awaiting_confirmation',
+          problem_id: 'problem-3-2',
+          status: 'awaiting_source',
           input_revision: 1,
           published_revision: 0,
-          current_disposition: 'open',
+          current_disposition: 'current',
         },
       ],
       coverage: {
         total: 4,
         published: 1,
         skipped: 0,
-        awaiting: 2,
+        awaiting: 3,
         failed: 0,
         status: 'in_progress',
         projection_revision: 8,
       },
     },
   },
-  progress: { operation: 'homework', state: 'awaiting_confirmation' },
+  progress: { operation: 'homework', state: 'assessing' },
   version: 8,
   created_at: 1785295800,
   updated_at: 1785295842,
@@ -442,7 +451,8 @@ async function installSourceFixture(
   const k12TutorRecovery = options?.k12TutorRecovery ?? false
   await page.setViewportSize(VIEWPORT)
   await page.addInitScript(
-    ({ k12Record, freshK12Entry }) => {
+    ({ k12Record, freshK12Entry, k12TutorRecovery, k12TutorCaptureNowMs }) => {
+      if (k12TutorRecovery) Date.now = () => k12TutorCaptureNowMs
       if (!sessionStorage.getItem('__hexclawK12V9FixtureInitialized')) {
         localStorage.clear()
         sessionStorage.clear()
@@ -536,7 +546,12 @@ async function installSourceFixture(
       }
       fixtureWindow.__TAURI_INTERNALS__ = fixtureTauri
     },
-    { k12Record: K12_RECORD, freshK12Entry: options?.freshK12Entry ?? false },
+    {
+      k12Record: K12_RECORD,
+      freshK12Entry: options?.freshK12Entry ?? false,
+      k12TutorRecovery,
+      k12TutorCaptureNowMs: K12_TUTOR_CAPTURE_NOW_MS,
+    },
   )
 
   await page.route('http://localhost:11434/**', (route) =>
@@ -619,7 +634,7 @@ async function installSourceFixture(
             title: '小明的辅导助手 · 五年级',
             created_at: '2026-07-29T12:00:00+08:00',
             updated_at: '2026-07-29T12:48:00+08:00',
-            message_count: k12TutorRecovery ? k12TutorSourceMessages.length : 0,
+            message_count: k12TutorRecovery ? k12TutorVisibleSourceMessages.length : 0,
           },
         ],
         total: 1,
@@ -627,8 +642,8 @@ async function installSourceFixture(
     }
     if (apiPath === '/api/v1/sessions/session-k12/messages') {
       return json(route, {
-        messages: k12TutorRecovery ? k12TutorSourceMessages : [],
-        total: k12TutorRecovery ? k12TutorSourceMessages.length : 0,
+        messages: k12TutorRecovery ? k12TutorVisibleSourceMessages : [],
+        total: k12TutorRecovery ? k12TutorVisibleSourceMessages.length : 0,
       })
     }
     if (apiPath === '/api/v1/streams/active') {
@@ -1231,6 +1246,12 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           scene: '.k12-global-presentation__main-scene',
           chatSidebar: '.hc-chat__sidebar',
           tutor: '.k12enh',
+          taskShell: '[data-testid="k12-photo-assistant-message"]',
+          taskBubble: '[data-testid="k12-photo-assistant-message"] .k12enh-tutor__bubble',
+          taskBody: '[data-testid="k12-photo-assistant-message"] .k12enh-tutor__body',
+          taskAvatar: '[data-testid="k12-photo-assistant-message"] .k12enh-tutor__avatar',
+          sourceMessage: '.hc-msg--user',
+          sourceBubble: '.hc-msg--user .hc-msg__bubble',
           records: '.k12rec',
           insights: '[data-testid="insight-panel"]',
           tiles: '.k12ins__tiles',
@@ -1242,27 +1263,27 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           scene: '.mn',
           chatSidebar: '.chat-sessions',
           tutor: '#chatTutorView',
+          taskShell: '#k12ThreadMing [data-k12-task-shell]',
+          taskBubble: '#k12ThreadMing [data-k12-task-shell]',
+          taskBody: '#k12ThreadMing .msg.bot .msg-body',
+          taskAvatar: '#k12ThreadMing .msg.bot .msg-av',
+          sourceMessage: '#k12ThreadMing .msg.user',
+          sourceBubble: '#k12ThreadMing .msg.user .bubble',
           records: '#k12ViewRecords',
           insights: '#k12BookPanel5',
           tiles: '#k12BookPanel5 .mini-grid',
           priority: '#k12BookPanel5 .k12-priority-card',
         }
-    const messageWrappers = isImplementation
-      ? document.querySelectorAll('.hc-msg').length
-      : document.querySelectorAll('#k12ThreadMing .msg').length
-    const taskShells = isImplementation
-      ? document.querySelectorAll('[data-testid="k12-photo-assistant-message"]').length
-      : document.querySelectorAll('#k12ThreadMing [data-k12-task-shell]').length
-    const messageNodes = Array.from(
-      document.querySelectorAll<HTMLElement>(isImplementation ? '.hc-msg' : '#k12ThreadMing .msg'),
-    )
-    const taskShellNodes = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        isImplementation
-          ? '[data-testid="k12-photo-assistant-message"]'
-          : '#k12ThreadMing [data-k12-task-shell]',
-      ),
-    )
+    const messageSelector = isImplementation ? '.hc-msg' : '#k12ThreadMing .msg'
+    const taskShellSelector = isImplementation
+      ? '[data-testid="k12-photo-assistant-message"]'
+      : '#k12ThreadMing [data-k12-task-shell]'
+    const messageNodes = Array.from(document.querySelectorAll<HTMLElement>(messageSelector))
+    const taskShellNodes = Array.from(document.querySelectorAll<HTMLElement>(taskShellSelector))
+    const hasLayoutBox = (node: HTMLElement) =>
+      node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden'
+    const visibleMessageNodes = messageNodes.filter(hasLayoutBox)
+    const visibleTaskShellNodes = taskShellNodes.filter(hasLayoutBox)
     const messageRole = (node: HTMLElement) =>
       isImplementation
         ? node.classList.contains('hc-msg--user')
@@ -1271,59 +1292,155 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
         : node.classList.contains('user')
           ? 'user'
           : 'assistant'
-    // VIS-026 evidence must retain only irreversible content signatures. It
-    // intentionally does not write fixture conversation copy to disk.
-    const messageSignatures = await Promise.all(
-      messageNodes.map(async (node) => ({
-        role: messageRole(node),
-        contentHash: await digest(normalizeText(node.innerText || node.textContent)),
-      })),
-    )
-    const taskShellSignatures = await Promise.all(
-      taskShellNodes.map(async (node) => ({
-        fixtureKey:
+    const messageText = (node: HTMLElement) => normalizeText(node.innerText || node.textContent)
+    // VIS-026 compares fixture-owned business payloads, not DOM chrome. The
+    // authoritative reference includes the photo timestamp inside `.msg`, and
+    // Desktop renders footer/status copy in a different subtree. Both are
+    // intentionally excluded from the non-reversible business signature.
+    const semanticMessagePayload = (node: HTMLElement) => {
+      const content = messageText(node)
+      if (content.includes('数学练习册 P52')) return 'fixture:k12-tutor-p52-photo'
+      return content
+    }
+    const semanticMessageKey = (node: HTMLElement) => {
+      const content = semanticMessagePayload(node)
+      if (content === 'fixture:k12-tutor-p52-photo') return 'k12-tutor-p52-photo'
+      return (
+        node.getAttribute('data-scroll-anchor-id') ??
+        node.id ??
+        `message-${messageNodes.indexOf(node)}`
+      )
+    }
+    const sourceMessageForTask = (node: HTMLElement) => {
+      if (isImplementation) {
+        const sourceMessageId =
           node.getAttribute('data-source-message-id') ??
-          node.getAttribute('data-session-operation-id') ??
-          '',
-        intent: node.getAttribute('data-task-intent') ?? '',
-        stage:
           node
-            .querySelector<HTMLElement>('[data-task-progress-state]')
-            ?.getAttribute('data-task-progress-state') ??
-          node.getAttribute('data-task-stage') ??
-          '',
-        contentHash: await digest(normalizeText(node.innerText || node.textContent)),
-      })),
+            .closest<HTMLElement>('[data-source-message-id]')
+            ?.getAttribute('data-source-message-id')
+        return sourceMessageId
+          ? (messageNodes.find(
+              (message) =>
+                message.getAttribute('data-scroll-anchor-id') === sourceMessageId ||
+                message.id === `msg-${sourceMessageId}`,
+            ) ?? null)
+          : null
+      }
+      const taskMessage = node.closest<HTMLElement>('.msg')
+      const prior = taskMessage?.previousElementSibling
+      return prior instanceof HTMLElement && prior.matches('.msg') ? prior : null
+    }
+    const taskSignaturePromises = new Map<HTMLElement, Promise<Record<string, unknown>>>()
+    const taskSignature = (node: HTMLElement) => {
+      const existing = taskSignaturePromises.get(node)
+      if (existing) return existing
+      const result = (async () => {
+        const sourceMessage = sourceMessageForTask(node)
+        const progressiveSlots = Array.from(
+          node.querySelectorAll<HTMLElement>(
+            isImplementation
+              ? '[data-testid="homework-problem-progress-slot"]'
+              : '.k12-progressive-slot',
+          ),
+        ).map((slot) => {
+          const state = ['done', 'processing', 'source-issue', 'skipped'].find((candidate) =>
+            slot.classList.contains(`is-${candidate}`),
+          )
+          const problemId = slot.getAttribute('data-problem-id')
+          const groupId = slot.getAttribute('data-problem-group-id')
+          const children = Array.from(slot.querySelectorAll<HTMLElement>('[data-problem-id]'))
+            .map((child) => child.getAttribute('data-problem-id'))
+            .filter((id): id is string => !!id)
+          return {
+            kind: groupId ? 'group' : 'problem',
+            id: groupId ? `group:${children.join(',')}` : (problemId ?? ''),
+            state: state ?? '',
+            children,
+          }
+        })
+        return {
+          sourceMessage: sourceMessage
+            ? {
+                role: messageRole(sourceMessage),
+                semanticKey: semanticMessageKey(sourceMessage),
+                contentHash: await digest(semanticMessagePayload(sourceMessage)),
+              }
+            : null,
+          dispatch:
+            node.getAttribute('data-dispatch-id') ??
+            node.getAttribute('data-session-operation-id') ??
+            '',
+          intent:
+            node.getAttribute('data-task-intent') ??
+            (node.querySelector('.k12-task-progress') ? 'completed_homework' : ''),
+          stage:
+            node
+              .querySelector<HTMLElement>('.k12-task-progress')
+              ?.getAttribute('data-task-state') ??
+            node
+              .querySelector<HTMLElement>('[data-task-progress-state]')
+              ?.getAttribute('data-task-progress-state') ??
+            node.getAttribute('data-task-stage') ??
+            '',
+          progressiveSlots,
+        }
+      })()
+      taskSignaturePromises.set(node, result)
+      return result
+    }
+    const taskShellSignatures = await Promise.all(visibleTaskShellNodes.map(taskSignature))
+    const standaloneTaskShellNodes = visibleTaskShellNodes.filter(
+      (taskShell) => !visibleMessageNodes.some((message) => message.contains(taskShell)),
+    )
+    const visibleUnits = [
+      ...visibleMessageNodes.map((node) => ({ kind: 'message' as const, node })),
+      ...standaloneTaskShellNodes.map((node) => ({ kind: 'task-shell' as const, node })),
+    ].sort(
+      (left, right) =>
+        left.node.getBoundingClientRect().top - right.node.getBoundingClientRect().top ||
+        left.node.getBoundingClientRect().left - right.node.getBoundingClientRect().left,
+    )
+    // The reference nests its task inside a message while Desktop teleports it
+    // after its source message. Normalize that ownership difference into one
+    // semantic assistant task unit, without hiding or altering either DOM.
+    const unitSignatures = await Promise.all(
+      visibleUnits.map(async (unit) => {
+        const taskShell =
+          unit.kind === 'task-shell'
+            ? unit.node
+            : visibleTaskShellNodes.find((task) => unit.node.contains(task))
+        if (taskShell) {
+          const task = await taskSignature(taskShell)
+          return {
+            kind: 'task-shell',
+            role: 'assistant',
+            semanticKey: `task:${String(task.dispatch || task.intent || 'unknown')}`,
+            contentHash: await digest(JSON.stringify(task)),
+          }
+        }
+        return {
+          kind: 'message',
+          role: messageRole(unit.node),
+          semanticKey: semanticMessageKey(unit.node),
+          contentHash: await digest(semanticMessagePayload(unit.node)),
+        }
+      }),
     )
     const scrollContainer = document.querySelector<HTMLElement>(
       isImplementation ? '.hc-chat__messages' : '#k12ViewChat .chat-thread',
     )
     const scrollRect = scrollContainer?.getBoundingClientRect()
-    const firstVisibleMessage = messageNodes
-      .map((node) => ({ node, rect: node.getBoundingClientRect() }))
-      .filter(
-        ({ rect }) => !!scrollRect && rect.bottom > scrollRect.top && rect.top < scrollRect.bottom,
-      )
-      .sort((left, right) => left.rect.top - right.rect.top)[0]
-    const visibleScrollAnchor = firstVisibleMessage
-      ? {
-          kind: 'message',
-          role: messageRole(firstVisibleMessage.node),
-          contentHash: await digest(
-            normalizeText(
-              firstVisibleMessage.node.innerText || firstVisibleMessage.node.textContent,
-            ),
-          ),
-          relativeTop: Math.round((firstVisibleMessage.rect.top - scrollRect!.top) * 100) / 100,
-          containsTaskShell: Boolean(
-            firstVisibleMessage.node.querySelector(
-              isImplementation
-                ? '[data-testid="k12-photo-assistant-message"]'
-                : '[data-k12-task-shell]',
-            ),
-          ),
-        }
-      : null
+    const firstVisibleUnitIndex = visibleUnits.findIndex(({ node }) => {
+      const rect = node.getBoundingClientRect()
+      return !!scrollRect && rect.bottom > scrollRect.top && rect.top < scrollRect.bottom
+    })
+    const visibleScrollAnchor =
+      firstVisibleUnitIndex >= 0
+        ? {
+            ...unitSignatures[firstVisibleUnitIndex]!,
+            scrollOffset: Math.round((scrollContainer?.scrollTop ?? 0) * 100) / 100,
+          }
+        : null
     const activeTab = normalizeText(
       document.querySelector<HTMLElement>(
         isImplementation
@@ -1331,6 +1448,101 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           : '.k12tabs [role="tab"][aria-selected="true"]',
       )?.textContent,
     )
+    const renderedNodes = (selector: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>(selector)).filter(hasLayoutBox)
+    const surfaceContentSignature = async () => {
+      if (activeTab === '学习档案') {
+        const activeObject = normalizeText(
+          document.querySelector<HTMLElement>(
+            isImplementation
+              ? '.k12-book-tabs [role="tab"][aria-selected="true"]'
+              : '#k12ViewRecords [role="tab"][aria-selected="true"]',
+          )?.textContent,
+        )
+        const rows = renderedNodes(
+          isImplementation ? '.k12mistakes .rl-row' : '#k12MistakeList .resource-row',
+        )
+        const items = await Promise.all(
+          rows.map(async (row, index) => {
+            const implementationPayload = {
+              title: normalizeText(row.querySelector('.rl-title')?.textContent),
+              chips: Array.from(row.querySelectorAll('.rl-chip')).map((chip) =>
+                normalizeText(chip.textContent),
+              ),
+              meta: normalizeText(row.querySelector('.rl-meta')?.textContent),
+            }
+            const referencePayload = {
+              title: normalizeText(row.querySelector('b')?.textContent),
+              subject: row.dataset.subject ?? '',
+              status: row.dataset.status ?? '',
+              practiceState: row.dataset.practiceState ?? '',
+              knowledge: normalizeText(row.querySelector('.kpill')?.textContent),
+              meta: normalizeText(row.querySelector('.sp')?.textContent),
+            }
+            return {
+              key: isImplementation
+                ? (row.dataset.recordId ?? `record-${index}`)
+                : (row.dataset.mistakeKey ?? `record-${index}`),
+              status: isImplementation ? (row.dataset.recordStatus ?? '') : (row.dataset.status ?? ''),
+              contentHash: await digest(
+                JSON.stringify(isImplementation ? implementationPayload : referencePayload),
+              ),
+            }
+          }),
+        )
+        return {
+          kind: 'records',
+          activeObject,
+          itemCount: items.length,
+          items,
+          digest: await digest(JSON.stringify({ activeObject, items })),
+        }
+      }
+      if (activeTab === '学情') {
+        const tiles = await Promise.all(
+          renderedNodes(
+            isImplementation
+              ? '[data-testid^="insight-tile-"]'
+              : '#k12BookPanel5 [data-learner-panel]:not([hidden]) .mini-tile',
+          ).map(async (tile, index) => ({
+            key: isImplementation
+              ? (tile.dataset.testid?.replace('insight-tile-', '') ?? `tile-${index}`)
+              : ['semester', 'mastered', 'week', 'practice'][index] ?? `tile-${index}`,
+            contentHash: await digest(normalizeText(tile.textContent)),
+          })),
+        )
+        const weakBars = await Promise.all(
+          renderedNodes(
+            isImplementation
+              ? '[data-testid="insight-weak-bar"]'
+              : '#k12BookPanel5 [data-learner-panel]:not([hidden]) .k12-priority-card .k12bar',
+          ).map(async (bar, index) => ({
+            key: `weak-bar-${index}`,
+            contentHash: await digest(normalizeText(bar.textContent)),
+          })),
+        )
+        const actions = await Promise.all(
+          renderedNodes(
+            isImplementation
+              ? '[data-testid="insight-setback-action"], [data-testid="insight-week-action"]'
+              : '#k12BookPanel5 [data-learner-panel]:not([hidden]) .k12-insight-action',
+          ).map(async (action, index) => ({
+            key: isImplementation
+              ? (action.dataset.testid?.replace('insight-', '') ?? `action-${index}`)
+              : ['setback-action', 'week-action'][index] ?? `action-${index}`,
+            contentHash: await digest(normalizeText(action.textContent)),
+          })),
+        )
+        return {
+          kind: 'insights',
+          tiles,
+          weakBars,
+          actions,
+          digest: await digest(JSON.stringify({ tiles, weakBars, actions })),
+        }
+      }
+      return { kind: 'tutor' }
+    }
     return {
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
       body: {
@@ -1344,6 +1556,12 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
       scene: measure(selectors.scene),
       chatSidebar: measure(selectors.chatSidebar),
       tutor: measure(selectors.tutor),
+      taskShell: measure(selectors.taskShell),
+      taskBubble: measure(selectors.taskBubble),
+      taskBody: measure(selectors.taskBody),
+      taskAvatar: measure(selectors.taskAvatar),
+      sourceMessage: measure(selectors.sourceMessage),
+      sourceBubble: measure(selectors.sourceBubble),
       records: measure(selectors.records),
       insights: measure(selectors.insights),
       tiles: measure(selectors.tiles),
@@ -1354,35 +1572,41 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
         '[data-k12-blackboard],.k12-blackboard,.k12-board',
       ).length,
       runtimeState: {
-        // The prototype embeds TaskProgressCard in a .msg wrapper; Desktop
-        // renders its same source-anchored TaskShell as a Teleport sibling.
-        // Preserve the raw wrapper count and compare the visual message-unit
-        // count so the fixture checks user-visible business state, not a
-        // framework-specific wrapper nesting detail.
-        messageWrappers,
-        messages: messageWrappers + (isImplementation ? taskShells : 0),
-        taskShells,
+        // Preserve raw wrapper facts for diagnostics, but compare only units
+        // that have a layout box. Hidden prototype history is not a visible
+        // state, and an embedded/sibling TaskShell is one business unit.
+        messageWrappers: messageNodes.length,
+        visibleMessageWrappers: visibleMessageNodes.length,
+        messages: visibleUnits.length,
+        taskShells: visibleTaskShellNodes.length,
         activeTab,
         messageSequence: {
-          count: messageSignatures.length,
-          digest: await digest(JSON.stringify(messageSignatures)),
+          count: unitSignatures.length,
+          digest: await digest(JSON.stringify(unitSignatures)),
         },
+        // Retain only keys and one-way hashes, never message body or image
+        // bytes, so a reviewer can explain a signature mismatch.
+        visibleUnitSignatures: unitSignatures,
         taskShellSequence: {
           count: taskShellSignatures.length,
           digest: await digest(JSON.stringify(taskShellSignatures)),
         },
+        taskShellSignatures,
         visibleScrollAnchor,
+        surfaceContentSignature: await surfaceContentSignature(),
         composerLocked: isImplementation
-          ? Boolean(
-              document.querySelector<HTMLElement>(
+          ? (() => {
+              const input = document.querySelector<HTMLElement>(
                 '.hc-chat__input-area [data-testid="chat-input"][aria-disabled="true"]',
-              ),
-            )
-          : Boolean(
-              document.querySelector<HTMLButtonElement>(
+              )
+              return !!input && hasLayoutBox(input)
+            })()
+          : (() => {
+              const send = document.querySelector<HTMLButtonElement>(
                 '#k12ViewChat .chat-input[data-session-operation-lock] .ci-send:disabled',
-              ),
-            ),
+              )
+              return !!send && hasLayoutBox(send)
+            })(),
       },
     }
   }, implementation)
@@ -1397,6 +1621,24 @@ async function writeK12SurfaceEvidence(
 ) {
   await mkdir(EVIDENCE_ROOT, { recursive: true })
   await waitForTransientFeedbackToSettle(source, reference)
+  if (surface === 'tutor') {
+    // The paired reference begins at its P52 source message. Desktop correctly
+    // follows a freshly restored TaskShell to the conversation end, so return
+    // both real scroll containers to the same user-readable top anchor via a
+    // physical wheel event rather than mutating either business DOM.
+    for (const [page, selector] of [
+      [source, '.hc-chat__messages'],
+      [reference, '#k12ViewChat .chat-thread'],
+    ] as const) {
+      const container = page.locator(selector)
+      await expect(container).toBeVisible()
+      await container.hover()
+      await page.mouse.wheel(0, -10_000)
+      await expect
+        .poll(() => container.evaluate((node) => Math.round(node.scrollTop)), { timeout: 5_000 })
+        .toBe(0)
+    }
+  }
   await Promise.all([source.mouse.move(1100, 20), reference.mouse.move(1100, 20)])
   const engineSuffix = browserName === 'webkit' ? '' : `-${browserName}`
   const stem = `${theme}-k12-${surface}-2048x924${engineSuffix}`
@@ -1432,6 +1674,11 @@ async function writeK12SurfaceEvidence(
       'visibleScrollAnchor',
       referenceFacts.runtimeState.visibleScrollAnchor,
       sourceFacts.runtimeState.visibleScrollAnchor,
+    ],
+    [
+      'surfaceContentSignature',
+      referenceFacts.runtimeState.surfaceContentSignature,
+      sourceFacts.runtimeState.surfaceContentSignature,
     ],
   ].flatMap(([field, referenceValue, implementationValue]) =>
     JSON.stringify(referenceValue) === JSON.stringify(implementationValue)
@@ -1701,25 +1948,24 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
           expect(comparison.sourceFacts.fireflies).toBe(18)
           expect(comparison.sourceFacts.blackboardOverlayNodes).toBe(0)
           if (surface === 'tutor') {
-            // RED for BUG-20260801-012 / VIS-026: equal wrapper counts, a
-            // TaskShell count and a locked composer do not prove that the
-            // paired viewport shows the same business state. The captured
-            // reference is anchored at the P52 TaskShell while Desktop is
-            // scrolled to the tail of a different message sequence.
+            // RED for BUG-20260801-012 / VIS-026: the P52 running fixture
+            // must compare the actual rendered two-unit business state, not
+            // hidden prototype history or a screen-coordinate offset. Once
+            // signatures are equal, the visible pixel diff can expose real
+            // implementation drift instead of a fixture mismatch.
+            expect(comparison.stateEquivalence.comparable).toBe(true)
+            expect(comparison.stateEquivalence.differences).toEqual([])
+          } else {
+            // No recoverable task only permits a page-domain comparison. The
+            // reference archive currently shows seven visible business items
+            // while the Desktop fixture has four, so the surface signature
+            // must reject false equivalence without changing recovery tabs.
             expect(comparison.stateEquivalence.comparable).toBe(false)
             expect(comparison.stateEquivalence.differences).toEqual(
               expect.arrayContaining([
-                expect.objectContaining({ field: 'messageSequence' }),
-                expect.objectContaining({ field: 'visibleScrollAnchor' }),
+                expect.objectContaining({ field: 'surfaceContentSignature' }),
               ]),
             )
-          } else {
-            // The authoritative prototype retains an active task while its
-            // archive/insight panel is open. Current Desktop deliberately
-            // restores that task into the tutor panel, so these screenshots
-            // remain diagnostic-only until an approved equivalent fixture is
-            // available; see VIS-026 rather than masking the drift.
-            expect(comparison.stateEquivalence.comparable).toBe(false)
           }
 
           if (surface === 'records') {
@@ -1740,6 +1986,113 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
       }
     })
   }
+
+  test('K12-SKIN-DESKTOP-TASK-032: P52 running shell keeps one wide expanded task track', async ({
+    browser,
+    browserName,
+  }) => {
+    test.setTimeout(180_000)
+    const contextOptions = {
+      viewport: VIEWPORT,
+      deviceScaleFactor: 1,
+      locale: 'zh-CN',
+      reducedMotion: 'no-preference' as const,
+    }
+    const sourceContext = await browser.newContext({ ...contextOptions, baseURL: SOURCE_URL })
+    const referenceContext = await browser.newContext(contextOptions)
+    const source = await sourceContext.newPage()
+    const reference = await referenceContext.newPage()
+
+    try {
+      await installSourceFixture(source, { k12TutorRecovery: true })
+      for (const theme of ['light', 'dark'] as const) {
+        await openSourceK12Surface(source, theme, 'tutor')
+        await openReferenceK12Surface(reference, theme, 'tutor')
+        const comparison = await writeK12SurfaceEvidence(
+          'tutor',
+          theme,
+          source,
+          reference,
+          browserName,
+        )
+        expect(comparison.stateEquivalence.comparable).toBe(true)
+        expect(comparison.stateEquivalence.differences).toEqual([])
+
+        const referenceTaskBodyWidth = comparison.referenceFacts.taskBody?.rect.width
+        const sourceTaskBodyWidth = comparison.sourceFacts.taskBody?.rect.width
+        expect(referenceTaskBodyWidth).toBeDefined()
+        expect(sourceTaskBodyWidth).toBeDefined()
+        expect(Math.abs(referenceTaskBodyWidth! - 780)).toBeLessThanOrEqual(1)
+        expect(Math.abs(sourceTaskBodyWidth! - 780)).toBeLessThanOrEqual(1)
+        expect(comparison.sourceFacts.taskAvatar?.rect.width).toBe(36)
+        expect(
+          Math.abs(
+            comparison.sourceFacts.taskBody!.rect.x -
+              (comparison.sourceFacts.taskAvatar!.rect.x +
+                comparison.sourceFacts.taskAvatar!.rect.width),
+          ),
+        ).toBeLessThanOrEqual(11)
+
+        const task = source.getByTestId('k12-photo-assistant-message')
+        await expect(task).toContainText(
+          '📷 收到！已自动识别为已作答作业。每道题完成后会在原题位置稳定显示；需要核对的题不会阻塞其他清晰题。',
+        )
+        await expect(task.getByTestId('task-progress-disclosure')).toHaveAttribute(
+          'aria-expanded',
+          'true',
+        )
+        await expect(task.getByTestId('activity-timeline')).toHaveCount(1)
+        await expect(task.getByTestId('activity-timeline')).toHaveAttribute(
+          'data-activity-layout',
+          'branch-grid',
+        )
+        const runningTaskVisuals = await task.evaluate((node) => {
+          const timeline = node.querySelector<HTMLElement>('[data-testid="activity-timeline"]')
+          const body = node.querySelector<HTMLElement>('.k12enh-tutor__body')
+          const progress = node.querySelector<HTMLElement>('.k12-task-progress')
+          const slots = [
+            ...node.querySelectorAll<HTMLElement>('[data-testid="homework-problem-progress-slot"]'),
+          ]
+          return {
+            body: body?.getBoundingClientRect().toJSON() ?? null,
+            progress: progress?.getBoundingClientRect().toJSON() ?? null,
+            timelineColumns: timeline
+              ? getComputedStyle(timeline).gridTemplateColumns.split(' ').length
+              : 0,
+            slots: slots.map((slot) => {
+              const style = getComputedStyle(slot)
+              return {
+                minHeight: style.minHeight,
+                gridTemplateColumns: style.gridTemplateColumns.split(' ').length,
+                borderRadius: style.borderRadius,
+              }
+            }),
+          }
+        })
+        expect(runningTaskVisuals.body).not.toBeNull()
+        expect(runningTaskVisuals.progress).not.toBeNull()
+        expect(
+          Math.abs(runningTaskVisuals.progress!.x - runningTaskVisuals.body!.x),
+        ).toBeLessThanOrEqual(1)
+        expect(
+          Math.abs(runningTaskVisuals.progress!.width - runningTaskVisuals.body!.width),
+        ).toBeLessThanOrEqual(1)
+        expect(runningTaskVisuals.timelineColumns).toBe(2)
+        expect(runningTaskVisuals.slots).toHaveLength(3)
+        for (const slot of runningTaskVisuals.slots) {
+          expect(slot.minHeight).toBe('52px')
+          expect(slot.gridTemplateColumns).toBe(3)
+          expect(slot.borderRadius).toBe('11px')
+        }
+        await expect(
+          task.locator('[data-testid="homework-problem-progress-slot"][data-problem-group-id]'),
+        ).toContainText('三、公共题干')
+        await expect(task.locator('.rec-guard')).toHaveCount(0)
+      }
+    } finally {
+      await Promise.all([sourceContext.close(), referenceContext.close()])
+    }
+  })
 
   for (const viewport of [
     { width: 1280, height: 820 },

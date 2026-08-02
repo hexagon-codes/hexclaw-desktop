@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import type { ActivityTimelineItem } from './activity-timeline'
 
-defineProps<{
-  items: ActivityTimelineItem[]
-}>()
+withDefaults(
+  defineProps<{
+    items: ActivityTimelineItem[]
+    /** Explicit presentation only. The default preserves existing thinking surfaces. */
+    layout?: 'stacked' | 'branch-grid'
+  }>(),
+  { layout: 'stacked' },
+)
 </script>
 
 <template>
   <ol
     v-if="items.length"
     class="hc-activity-timeline"
+    :class="{ 'hc-activity-timeline--branch-grid': layout === 'branch-grid' }"
+    :data-activity-layout="layout"
     data-testid="activity-timeline"
     role="list"
   >
@@ -114,6 +121,50 @@ defineProps<{
   line-height: 1.45;
 }
 
+.hc-activity-timeline--branch-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.hc-activity-timeline--branch-grid .hc-activity-timeline__item {
+  grid-template-columns: 19px minmax(0, 1fr);
+  gap: 7px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: var(--hc-bg-card);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.hc-activity-timeline--branch-grid .hc-activity-timeline__marker {
+  width: 19px;
+  height: 19px;
+  background: var(--hc-accent-subtle);
+  border-radius: 50%;
+}
+
+.hc-activity-timeline--branch-grid
+  .hc-activity-timeline__item[data-activity-state='completed']
+  .hc-activity-timeline__marker {
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
+}
+
+.hc-activity-timeline--branch-grid .hc-activity-timeline__marker svg {
+  width: 15px;
+  height: 15px;
+}
+
+.hc-activity-timeline--branch-grid .hc-activity-timeline__copy b {
+  color: var(--hc-text-primary);
+  font-size: 10.5px;
+}
+
+.hc-activity-timeline--branch-grid .hc-activity-timeline__copy small {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 @keyframes hc-activity-pulse {
   70% {
     box-shadow: 0 0 0 5px transparent;
@@ -126,6 +177,12 @@ defineProps<{
 @media (prefers-reduced-motion: reduce) {
   .hc-activity-timeline__pulse {
     animation: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .hc-activity-timeline--branch-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

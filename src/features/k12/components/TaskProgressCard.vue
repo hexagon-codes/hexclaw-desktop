@@ -3,31 +3,29 @@ import { ref } from 'vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 
-defineProps<{
-  state: 'running' | 'completed'
-  summary: string
-  ariaLabel: string
-  items: ActivityTimelineItem[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    state: 'running' | 'completed'
+    summary: string
+    ariaLabel: string
+    items: ActivityTimelineItem[]
+    /** Presentation only: callers may reveal the existing shared timeline on first render. */
+    initiallyExpanded?: boolean
+  }>(),
+  { initiallyExpanded: false },
+)
 
 const emit = defineEmits<{
   viewResult: []
 }>()
 
-const expanded = ref(false)
+const expanded = ref(props.initiallyExpanded)
 </script>
 
 <template>
-  <section
-    class="k12-task-progress"
-    :data-task-state="state"
-    :aria-label="ariaLabel"
-  >
+  <section class="k12-task-progress" :data-task-state="state" :aria-label="ariaLabel">
     <div class="k12-task-progress__header">
-      <span
-        class="k12-task-progress__summary"
-        data-testid="task-progress-summary"
-      >
+      <span class="k12-task-progress__summary" data-testid="task-progress-summary">
         {{ summary }}
       </span>
       <button
@@ -39,18 +37,14 @@ const expanded = ref(false)
         :aria-label="expanded ? '收起处理详情' : '展开处理详情'"
         @click="expanded = !expanded"
       >
-        <svg
-          viewBox="0 0 20 20"
-          aria-hidden="true"
-          :class="{ 'is-expanded': expanded }"
-        >
+        <svg viewBox="0 0 20 20" aria-hidden="true" :class="{ 'is-expanded': expanded }">
           <path d="m6 8 4 4 4-4" />
         </svg>
       </button>
     </div>
 
     <div v-if="expanded && items.length" class="k12-task-progress__timeline">
-      <ActivityTimeline :items="items" />
+      <ActivityTimeline :items="items" :layout="state === 'running' ? 'branch-grid' : 'stacked'" />
     </div>
 
     <button

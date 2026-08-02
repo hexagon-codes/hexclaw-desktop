@@ -33,10 +33,7 @@ import type {
   ScenarioTextModelRoute,
 } from '@/shell/scenario/registry'
 import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
-import {
-  listImageTaskBindings,
-  refreshRecoverableImageTaskBindings,
-} from '../image-task-binding'
+import { listImageTaskBindings, refreshRecoverableImageTaskBindings } from '../image-task-binding'
 import { useK12Appearance } from '../appearance/useK12Appearance'
 
 const props = defineProps<{
@@ -114,8 +111,7 @@ const {
   deactivateExperience,
   setPreference: setK12AppearancePreference,
 } = useK12Appearance()
-const finalArtifactPrintController =
-  ref<InstanceType<typeof K12PersistentPrintController>>()
+const finalArtifactPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
 const finalArtifactActionHandler = createFinalArtifactActionHandler({
   agent: () => props.agentId,
   openPrint: async (request) => {
@@ -321,10 +317,8 @@ onMounted(async () => {
   const shouldShowAppearanceIntro = activateOnFirstEntry()
   setExperienceSceneLevel(tab.value === 'chat' ? 'immersive' : 'calm')
   if (shouldShowAppearanceIntro) {
-    toast.action(
-      '已启用 K12 专属皮肤，已应用到全部页面；已显示完整学习场景',
-      '使用通用外观',
-      () => setK12AppearancePreference('default'),
+    toast.action('已启用 K12 专属皮肤，已应用到全部页面；已显示完整学习场景', '使用通用外观', () =>
+      setK12AppearancePreference('default'),
     )
   }
   try {
@@ -442,9 +436,7 @@ watch(
     if (!dataUrl) return
     tab.value = 'chat'
     const sourceMessageId = img.requestId.trim()
-    const currentTask = taskShells.value.find(
-      (task) => task.sourceMessageId === sourceMessageId,
-    )
+    const currentTask = taskShells.value.find((task) => task.sourceMessageId === sourceMessageId)
     if (
       !currentTask?.payload ||
       currentTask.payload.requestId !== img.requestId ||
@@ -549,7 +541,6 @@ watch(
     </Teleport>
 
     <!-- 辅导要点只在 RecognizeGuardPanel 识题持久确认后内联展示。 -->
-
   </div>
 
   <!-- composer 预设 chips（后端 descriptor 下发，对齐原型 .composer-chips）：
@@ -683,7 +674,6 @@ watch(
               </div>
             </div>
           </template>
-
         </div>
 
         <div class="k12cap-modal__foot">
@@ -798,6 +788,8 @@ watch(
 /* 渐进提示辅导面板（辅导 tab 内嵌，可开合） */
 .k12enh-tutor {
   display: flex;
+  width: min(826px, 100%);
+  max-width: 100%;
   align-items: flex-start;
   gap: 10px;
   margin: 0 0 8px;
@@ -826,8 +818,10 @@ watch(
   background: var(--hc-success);
 }
 .k12enh-tutor__body {
+  width: calc(100% - 46px);
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: min(92%, 980px);
+  max-width: 780px;
 }
 .k12enh-tutor__name {
   margin: 0 0 4px 2px;
@@ -836,8 +830,8 @@ watch(
   font-weight: 500;
 }
 .k12enh-tutor__bubble {
-  border-radius: 4px 14px 14px 14px;
-  background: var(--hc-bg-card);
+  border-radius: 0;
+  background: transparent;
   color: var(--hc-text-primary);
 }
 

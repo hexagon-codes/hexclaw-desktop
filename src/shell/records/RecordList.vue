@@ -101,7 +101,13 @@ const reviewItems = computed(() => {
         <slot name="review-actions" :items="reviewItems" />
       </header>
       <div class="rl-rows">
-        <div v-for="item in reviewItems" :key="item.recordId" class="rl-row">
+        <div
+          v-for="item in reviewItems"
+          :key="item.recordId"
+          class="rl-row"
+          :data-record-id="item.recordId"
+          :data-record-status="item.status"
+        >
           <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
           <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
           <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
@@ -139,7 +145,13 @@ const reviewItems = computed(() => {
     <!-- 全部记录 -->
     <p v-if="!hideList && !filteredItems.length" class="rl-empty">{{ t('records.empty') }}</p>
     <div v-else-if="!hideList" class="rl-rows">
-      <div v-for="item in filteredItems" :key="item.recordId" class="rl-row">
+      <div
+        v-for="item in filteredItems"
+        :key="item.recordId"
+        class="rl-row"
+        :data-record-id="item.recordId"
+        :data-record-status="item.status"
+      >
         <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
         <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
         <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>

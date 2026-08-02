@@ -29,11 +29,8 @@ import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import SourceIssueResolver from '../components/SourceIssueResolver.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
 import { sourceIssueOperationLocked, type SourceIssueIntent } from '../source-issue'
-import {
-  k12GetImageTask,
-  k12SubmitImageTaskProblemSourceAction,
-  projectImageTaskProblemSourceActionSnapshot,
-} from '@/api/k12'
+import { k12GetImageTask, k12SubmitImageTaskProblemSourceAction } from '@/api/k12'
+import { projectImageTaskProblemSourceActionSnapshot } from '../source-action-projection'
 import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
@@ -390,11 +387,18 @@ function problemProgressDisplayLabel(problem: ImageTaskProblemProgressDTO): stri
   return k12QuestionSourceDisplayLabel(problem)
 }
 
+function problemProgressGroupID(problem: ImageTaskProblemProgressDTO): string {
+  const dependencyGroupID = problem.dependency_group_id?.trim()
+  if (dependencyGroupID) return dependencyGroupID
+  const parentProblemID = problem.parent_problem_id?.trim()
+  return parentProblemID ? `parent:${parentProblemID}` : ''
+}
+
 const problemProgressItems = computed<ProblemProgressItem[]>(() => {
   const projected: ProblemProgressItem[] = []
   const consumedGroups = new Set<string>()
   for (const problem of problemProgressSlots.value) {
-    const groupId = problem.dependency_group_id?.trim()
+    const groupId = problemProgressGroupID(problem)
     if (!groupId) {
       projected.push({
         kind: 'problem',
@@ -406,7 +410,7 @@ const problemProgressItems = computed<ProblemProgressItem[]>(() => {
     if (consumedGroups.has(groupId)) continue
     consumedGroups.add(groupId)
     const problems = problemProgressSlots.value.filter(
-      (candidate) => candidate.dependency_group_id === groupId,
+      (candidate) => problemProgressGroupID(candidate) === groupId,
     )
     const parent = rows.value.find((row) => row.problemId === problem.parent_problem_id)
     projected.push({
@@ -420,6 +424,10 @@ const problemProgressItems = computed<ProblemProgressItem[]>(() => {
   }
   return projected
 })
+
+function problemProgressGroupDisplayLabel(item: GroupProblemProgressItem): string {
+  return item.problems[0]?.source_number_path[0]?.trim() || item.displayLabel
+}
 
 function problemIsSkipped(problem: ImageTaskProblemProgressDTO): boolean {
   return problem.operation_state === 'skipped' || problem.disposition_state === 'skipped_by_parent'
@@ -451,6 +459,40 @@ function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
   if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
   if (problem.disposition_state === 'result') return '已批改'
   return '处理中'
+}
+
+function problemProgressVisualState(problem: ImageTaskProblemProgressDTO): string {
+  if (problemIsSkipped(problem)) return 'skipped'
+  if (problem.source_state === 'awaiting_resolution') return 'source-issue'
+  if (problem.disposition_state === 'result') return 'done'
+  return 'processing'
+}
+
+function problemProgressMarker(problem: ImageTaskProblemProgressDTO): string {
+  const state = problemProgressVisualState(problem)
+  if (state === 'done') return '✓'
+  if (state === 'source-issue') return '!'
+  if (state === 'skipped') return '—'
+  const label = problemProgressDisplayLabel(problem)
+  const marker = label.match(/\d+$/)?.[0]
+  return marker || String(sourceOrdinal(problem) || '…')
+}
+
+function problemProgressQuestion(problem: ImageTaskProblemProgressDTO): string {
+  return rows.value.find((row) => row.problemId === problem.problem_id)?.rawProblem.trim() ?? ''
+}
+
+function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
+  const state = problemProgressVisualState(problem)
+  const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
+  if (state === 'done') {
+    const knowledgePoint = row?.knowledgePoints[0]
+    return knowledgePoint ? `已程序验算 · ${knowledgePoint}` : '已程序验算'
+  }
+  if (state === 'source-issue') return '正在核对题源信息'
+  if (state === 'skipped') return '未判断对错'
+  if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
+  return '正在验证计算过程'
 }
 
 function sourceActionRequest(intent: SourceIssueIntent): ImageTaskProblemSourceActionReq | null {
@@ -781,6 +823,7 @@ const homeworkTimelineItems = computed<ActivityTimelineItem[]>(() => {
       id: 'structure-frozen',
       state: 'completed',
       label: '题目结构已冻结',
+      detail: taskCoverage.value ? `共 ${taskCoverage.value.total} 个可作答小题` : '',
     },
   ]
   if (homeworkTaskProgressState.value === 'running' && homeworkCurrentProblemNumber.value > 0) {
@@ -1754,6 +1797,7 @@ async function coldStart() {
     :class="{
       'rec-panel--conversation': !!initialImage || restoredFromBinding,
       'rec-panel--collapsed': collapsed,
+      'rec-panel--homework-running': homeworkTaskProgressState === 'running',
     }"
     data-testid="recognize-guard"
     :data-source-message-id="sourceMessageId || undefined"
@@ -1878,12 +1922,22 @@ async function coldStart() {
       <span>正在生成作品点评…</span>
     </p>
 
+    <p
+      v-if="homeworkTaskProgressState === 'running'"
+      class="rec-homework-task__lead"
+      data-testid="homework-task-running-lead"
+    >
+      📷
+      收到！已自动识别为<b>已作答作业</b>。每道题完成后会在原题位置稳定显示；需要核对的题不会阻塞其他清晰题。
+    </p>
+
     <TaskProgressCard
       v-if="homeworkTaskProgressState"
       :state="homeworkTaskProgressState"
       :summary="homeworkTaskSummary"
       :ariaLabel="'已作答作业处理状态'"
       :items="homeworkTimelineItems"
+      :initially-expanded="homeworkTaskProgressState === 'running'"
       @view-result="viewHomeworkResult"
     />
     <div
@@ -1935,57 +1989,85 @@ async function coldStart() {
           v-for="item in problemProgressItems"
           :key="item.key"
           class="rec-problem-progress__item"
+          :class="
+            item.kind === 'problem'
+              ? `is-${problemProgressVisualState(item.problem)}`
+              : 'is-source-issue'
+          "
           role="listitem"
+          data-testid="homework-problem-progress-slot"
           :data-problem-id="item.kind === 'problem' ? item.problem.problem_id : undefined"
           :data-problem-group-id="item.kind === 'group' ? item.groupId : undefined"
         >
           <template v-if="item.kind === 'problem'">
-            <div class="rec-problem-progress__line">
-              <b>{{ problemProgressDisplayLabel(item.problem) }}</b>
-              <span>{{ problemProgressStatus(item.problem) }}</span>
+            <span class="rec-problem-progress__status" aria-hidden="true">
+              {{ problemProgressMarker(item.problem) }}
+            </span>
+            <div class="rec-problem-progress__body">
+              <div class="rec-problem-progress__line">
+                <b>
+                  {{ problemProgressDisplayLabel(item.problem) }}
+                  <template v-if="problemProgressQuestion(item.problem)">
+                    &nbsp; {{ problemProgressQuestion(item.problem) }}
+                  </template>
+                </b>
+              </div>
+              <small>{{ problemProgressDetail(item.problem) }}</small>
+              <SourceIssueResolver
+                v-if="problemNeedsResolver(item.problem)"
+                class="rec-problem-progress__resolver"
+                scope="problem"
+                :display-label="problemProgressDisplayLabel(item.problem)"
+                :affected-labels="[problemProgressDisplayLabel(item.problem)]"
+                :problem-ids="[item.problem.problem_id]"
+                :structure-version="currentStructureVersion"
+                :expected-input-revision="expectedInputRevision([item.problem])"
+                :skipped="problemIsSkipped(item.problem)"
+                :command-available="!resolverDisabled([item.problem])"
+                skip-label="跳过这题"
+                @intent="applyLocalSourceIntent"
+              />
             </div>
-            <SourceIssueResolver
-              v-if="problemNeedsResolver(item.problem)"
-              scope="problem"
-              :display-label="problemProgressDisplayLabel(item.problem)"
-              :affected-labels="[problemProgressDisplayLabel(item.problem)]"
-              :problem-ids="[item.problem.problem_id]"
-              :structure-version="currentStructureVersion"
-              :expected-input-revision="expectedInputRevision([item.problem])"
-              :skipped="problemIsSkipped(item.problem)"
-              :command-available="!resolverDisabled([item.problem])"
-              skip-label="跳过这题"
-              @intent="applyLocalSourceIntent"
-            />
+            <span class="rec-problem-progress__state">{{
+              problemProgressStatus(item.problem)
+            }}</span>
           </template>
           <template v-else>
-            <div class="rec-problem-progress__line">
-              <b>{{ item.displayLabel }}</b>
-              <span>公共题干 · {{ item.problems.length }} 个小题</span>
+            <span class="rec-problem-progress__status" aria-hidden="true">!</span>
+            <div class="rec-problem-progress__body">
+              <div class="rec-problem-progress__line">
+                <b>{{ problemProgressGroupDisplayLabel(item) }}、公共题干</b>
+              </div>
+              <small>需要核对 {{ item.problems.length }} 个小题的题源</small>
+              <div class="rec-problem-progress__children">
+                <div
+                  v-for="problem in item.problems"
+                  :key="problem.problem_id"
+                  class="rec-problem-progress__child"
+                  :data-problem-id="problem.problem_id"
+                >
+                  <b>{{ problemProgressDisplayLabel(problem) }}</b>
+                  <span>{{ problemProgressQuestion(problem) }}</span>
+                  <span>{{ problemProgressStatus(problem) }}</span>
+                </div>
+              </div>
+              <SourceIssueResolver
+                v-if="item.problems.some(problemNeedsResolver)"
+                class="rec-problem-progress__resolver"
+                scope="group"
+                :display-label="problemProgressGroupDisplayLabel(item)"
+                :affected-labels="item.problems.map(problemProgressDisplayLabel)"
+                :problem-ids="item.problems.map((problem) => problem.problem_id)"
+                :dependency-group-id="item.groupId"
+                :structure-version="currentStructureVersion"
+                :expected-input-revision="expectedInputRevision(item.problems)"
+                :skipped="item.problems.every(problemIsSkipped)"
+                :command-available="!resolverDisabled(item.problems)"
+                :skip-label="`跳过第 ${item.ordinal} 题组`"
+                @intent="applyLocalSourceIntent"
+              />
             </div>
-            <div
-              v-for="problem in item.problems"
-              :key="problem.problem_id"
-              class="rec-problem-progress__child"
-              :data-problem-id="problem.problem_id"
-            >
-              <span>{{ problemProgressDisplayLabel(problem) }}</span>
-              <span>{{ problemProgressStatus(problem) }}</span>
-            </div>
-            <SourceIssueResolver
-              v-if="item.problems.some(problemNeedsResolver)"
-              scope="group"
-              :display-label="item.displayLabel"
-              :affected-labels="item.problems.map(problemProgressDisplayLabel)"
-              :problem-ids="item.problems.map((problem) => problem.problem_id)"
-              :dependency-group-id="item.groupId"
-              :structure-version="currentStructureVersion"
-              :expected-input-revision="expectedInputRevision(item.problems)"
-              :skipped="item.problems.every(problemIsSkipped)"
-              :command-available="!resolverDisabled(item.problems)"
-              :skip-label="`跳过第 ${item.ordinal} 题组`"
-              @intent="applyLocalSourceIntent"
-            />
+            <span class="rec-problem-progress__state">需要你确认</span>
           </template>
         </li>
       </ol>
@@ -2319,7 +2401,14 @@ async function coldStart() {
       :marks="overlayMarks"
     />
 
-    <div v-else-if="currentTaskIntent === 'completed_homework' && rows.length" class="rec-guard">
+    <div
+      v-else-if="
+        currentTaskIntent === 'completed_homework' &&
+        rows.length &&
+        homeworkTaskProgressState !== 'running'
+      "
+      class="rec-guard"
+    >
       <p v-if="!confirmed && riskCount" class="rec-guard__lead">
         📷 {{ t('k12.recognize.confirmLead') }}
       </p>
@@ -2549,6 +2638,19 @@ async function coldStart() {
 }
 .rec-panel--conversation {
   padding: 10px 14px 12px;
+}
+/* P52 running TaskShell is already placed on the shared 780px message rail.
+   Do not spend that rail a second time in the domain projection wrapper: the
+   lead, shared progress card and progressive slots must all meet the same
+   body edges. Individual semantic cards retain their own internal padding. */
+.rec-panel--conversation.rec-panel--homework-running {
+  padding: 0;
+}
+.rec-homework-task__lead {
+  margin: 0;
+  color: var(--hc-text-primary);
+  font-size: 13px;
+  line-height: 1.65;
 }
 .rec-panel--collapsed > :not(.rec-panel__head):not(.rec-panel__footer) {
   display: none !important;
@@ -2845,6 +2947,112 @@ async function coldStart() {
   color: var(--hc-text-primary);
   font-size: 10.5px;
   font-weight: 600;
+}
+.rec-panel--homework-running .rec-pipeline {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.rec-panel--homework-running .rec-problem-progress {
+  gap: 8px;
+  margin: 0;
+}
+.rec-panel--homework-running .rec-problem-progress__item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+  min-height: 52px;
+  padding: 11px 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 11px;
+  background: var(--hc-bg-card);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.rec-panel--homework-running .rec-problem-progress__status {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.rec-panel--homework-running .rec-problem-progress__body {
+  min-width: 0;
+}
+.rec-panel--homework-running .rec-problem-progress__line b {
+  display: block;
+  color: var(--hc-text-primary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.rec-panel--homework-running .rec-problem-progress__body > small {
+  display: block;
+  margin-top: 3px;
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.rec-panel--homework-running .rec-problem-progress__state {
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+.rec-panel--homework-running .rec-problem-progress__item.is-done .rec-problem-progress__status {
+  background: var(--hc-success-subtle);
+  color: var(--hc-success);
+}
+.rec-panel--homework-running .rec-problem-progress__item.is-processing {
+  border-color: var(--hc-border-hl);
+  background: var(--hc-accent-subtle);
+}
+.rec-panel--homework-running
+  .rec-problem-progress__item.is-processing
+  .rec-problem-progress__status {
+  color: var(--hc-accent);
+}
+.rec-panel--homework-running .rec-problem-progress__item.is-source-issue {
+  border-color: color-mix(in srgb, var(--hc-warning) 35%, var(--hc-border));
+  background: color-mix(in srgb, var(--hc-warning) 6%, var(--hc-bg-card));
+}
+.rec-panel--homework-running
+  .rec-problem-progress__item.is-source-issue
+  .rec-problem-progress__status {
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+  color: var(--hc-warning);
+}
+.rec-panel--homework-running .rec-problem-progress__children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.rec-panel--homework-running .rec-problem-progress__child {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font-size: 11.5px;
+}
+.rec-panel--homework-running .rec-problem-progress__child b {
+  min-width: 34px;
+  color: var(--hc-text-primary);
+}
+.rec-panel--homework-running .rec-problem-progress__child span:last-child {
+  color: var(--hc-text-muted);
+}
+.rec-panel--homework-running .rec-problem-progress__resolver {
+  margin-top: 8px;
 }
 .rec-pipeline__branches {
   display: grid;
