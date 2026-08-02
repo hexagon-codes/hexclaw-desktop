@@ -33,6 +33,7 @@ export { cloneProviders } from './settings-provider-copy'
 export {
   isMaskedApiKey,
   materializeProviderApiKeys,
+  providerCredentialReplacements,
   restoreProviderApiKeys,
   syncProviderApiKeys,
 } from './settings-provider-secrets'
@@ -379,7 +380,9 @@ export function backendToProviders(
       // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
       enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
-      apiKey: p.api_key || localProvider?.apiKey || '',
+      apiKey: p.api_key || (p.credential_ref ? '********' : localProvider?.apiKey || ''),
+      credentialRef: p.credential_ref,
+      credentialPresent: p.credential_present,
       models: mergeProviderModels(localProvider, p.model, p.models, p.model_specs),
       selectedModelId: '',
       modelSpecsMode: p.model_specs_mode ?? 'legacy',
@@ -417,7 +420,16 @@ export function providersToBackend(
     backendProviders[key] = {
       ...(p.providerInstanceId ? { provider_instance_id: p.providerInstanceId } : {}),
       display_name: p.name,
-      api_key: p.apiKey || '',
+      ...(p.apiKeyMutation
+        ? {
+            api_key_mutation: {
+              mode: p.apiKeyMutation,
+              ...(p.apiKeyMutation === 'replace' && p.credentialRef
+                ? { credential_ref: p.credentialRef }
+                : {}),
+            },
+          }
+        : {}),
       base_url: p.baseUrl || '',
       model: selectedModelId,
       models: p.models.map((m) => m.id).filter(Boolean),

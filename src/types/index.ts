@@ -45,6 +45,7 @@ export type {
   NotificationConfig,
   MCPConfig,
   ProviderConfig,
+  ProviderCredentialReplacement,
   ProviderLocality,
   ProviderType,
   ProviderPreset,

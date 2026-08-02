@@ -61,7 +61,7 @@ export function createSessionExecutionRegistry(executions: Ref<SessionExecutionS
     executions.value = {
       ...executions.value,
       [normalizedSessionId]: {
-        ...(executions.value[normalizedSessionId] ?? {}),
+        ...executions.value[normalizedSessionId],
         [normalizedExecutionId]: {
           ...snapshot,
           executionId: normalizedExecutionId,

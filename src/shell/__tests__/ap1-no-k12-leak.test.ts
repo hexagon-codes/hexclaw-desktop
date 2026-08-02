@@ -49,7 +49,7 @@ function walk(dir: string): string[] {
     if (statSync(p).isDirectory()) {
       if (e === '__tests__') continue // 测试文件本身会提到 K12 词，不算泄漏
       out = out.concat(walk(p))
-    } else if (/\.(ts|vue)$/.test(e) && !/\.test\.ts$/.test(e)) {
+    } else if (/\.(ts|vue)$/.test(e) && !e.endsWith('.test.ts')) {
       out.push(p)
     }
   }

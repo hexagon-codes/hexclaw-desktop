@@ -31,6 +31,7 @@ describe('useToast', () => {
         error: vi.fn(),
         warning: vi.fn(),
         info: vi.fn(),
+        action: vi.fn(),
       }
       ;(window as any).__hcToast = { value: mockInstance }
 
@@ -47,6 +48,7 @@ describe('useToast', () => {
       error: ReturnType<typeof vi.fn>
       warning: ReturnType<typeof vi.fn>
       info: ReturnType<typeof vi.fn>
+      action: ReturnType<typeof vi.fn>
     }
 
     beforeEach(() => {
@@ -55,6 +57,7 @@ describe('useToast', () => {
         error: vi.fn(),
         warning: vi.fn(),
         info: vi.fn(),
+        action: vi.fn(),
       }
       ;(window as any).__hcToast = { value: mockInstance }
     })
@@ -86,6 +89,13 @@ describe('useToast', () => {
       expect(mockInstance.info).toHaveBeenCalledTimes(1)
       expect(mockInstance.info).toHaveBeenCalledWith('FYI')
     })
+
+    it('action() delegates the exact label, callback and duration', () => {
+      const toast = useToast()
+      const onAction = vi.fn()
+      toast.action('Changed', 'Undo', onAction, 8000)
+      expect(mockInstance.action).toHaveBeenCalledWith('Changed', 'Undo', onAction, 8000)
+    })
   })
 
   describe('graceful no-op when toast is undefined', () => {
@@ -112,6 +122,11 @@ describe('useToast', () => {
       const toast = useToast()
       expect(() => toast.info('test')).not.toThrow()
     })
+
+    it('action() does not throw when toast is undefined', () => {
+      const toast = useToast()
+      expect(() => toast.action('Changed', 'Undo', vi.fn())).not.toThrow()
+    })
   })
 
   describe('message passthrough', () => {
@@ -121,6 +136,7 @@ describe('useToast', () => {
         error: vi.fn(),
         warning: vi.fn(),
         info: vi.fn(),
+        action: vi.fn(),
       }
       ;(window as any).__hcToast = { value: mockInstance }
 

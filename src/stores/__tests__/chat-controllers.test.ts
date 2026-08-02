@@ -891,8 +891,10 @@ describe('chat controller modules', () => {
     expect(pendingAutoTitleSync.size).toBe(0)
   })
 
-  it('delivers through backend when websocket is unavailable', async () => {
+  it('fails closed when the sole WebSocket transport is unavailable', async () => {
     const finalizeAssistantMessage = vi.fn().mockReturnValue({ id: 'assistant-1' })
+    const sendViaBackend = vi.fn()
+    const handleSendError = vi.fn()
     const controller = createChatSendDeliveryController({
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
       agentRole: ref(''),
@@ -900,12 +902,7 @@ describe('chat controller modules', () => {
       activeStreams: ref({}),
       chatSvc: {
         ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
-        sendViaBackend: vi.fn().mockResolvedValue({
-          reply: 'backend reply',
-          session_id: 's1',
-          metadata: { backend_message_id: 'msg-1' },
-          tool_calls: [],
-        }),
+        sendViaBackend,
       } as any,
       getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
       clearSessionCancelled: vi.fn(),
@@ -915,12 +912,12 @@ describe('chat controller modules', () => {
       updateStreamChunk: vi.fn(),
       resetSessionStream: vi.fn(),
       finalizeAssistantMessage: finalizeAssistantMessage as any,
-      handleSendError: vi.fn(),
+      handleSendError,
       storePendingApproval: vi.fn(),
       streamHandles: new Map(),
     })
 
-    await controller.deliverMessage({
+    const result = await controller.deliverMessage({
       backendText: 'hello',
       sessionId: 's1',
       requestId: 'req-1',
@@ -928,24 +925,25 @@ describe('chat controller modules', () => {
       draftSending: ref(false),
     })
 
-    expect(finalizeAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: 'backend reply',
-        sessionId: 's1',
-        metadata: { backend_message_id: 'msg-1' },
-      }),
+    expect(result).toBeNull()
+    expect(handleSendError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('WebSocket transport unavailable') }),
+      's1',
+      expect.any(Object),
+      expect.any(Object),
+      undefined,
     )
+    expect(finalizeAssistantMessage).not.toHaveBeenCalled()
+    expect(sendViaBackend).not.toHaveBeenCalled()
   })
 
   it('keeps the accepted edit model and agent route frozen while websocket connection settles', async () => {
     let resolveConnection!: (connected: boolean) => void
     const chatParams = ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' })
     const agentRole = ref('k12-tutor-mingming')
-    const sendViaBackend = vi.fn().mockResolvedValue({
-      reply: 'backend reply',
-      session_id: 'edit-branch',
-      metadata: {},
-      tool_calls: [],
+    const openWebSocketStream = vi.fn().mockReturnValue({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'backend reply' }),
     })
     const controller = createChatSendDeliveryController({
       chatParams,
@@ -958,7 +956,7 @@ describe('chat controller modules', () => {
             resolveConnection = resolve
           }),
         ),
-        sendViaBackend,
+        openWebSocketStream,
       } as any,
       getSettingsStore: ((() => ({ config: { memory: { enabled: true } }, availableModels: [] })) as any),
       clearSessionCancelled: vi.fn(),
@@ -987,15 +985,16 @@ describe('chat controller modules', () => {
     })
     chatParams.value = { provider: 'other-provider', model: 'other-model' }
     agentRole.value = 'other-agent'
-    resolveConnection(false)
+    resolveConnection(true)
     await pending
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'edited question',
       'edit-branch',
       { provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' },
       'k12-tutor-mingming',
       undefined,
+      expect.any(Object),
       expect.any(Object),
       'edited-request',
     )
@@ -1012,11 +1011,12 @@ describe('chat controller modules', () => {
     const messages = ref<ChatMessage[]>(sourceMessages.map((message) => ({ ...message })))
     const ensureSession = vi.fn().mockResolvedValue('wrong-current-session')
     const persistMessage = vi.fn().mockResolvedValue(true)
-    const sendViaBackend = vi.fn().mockResolvedValue({
-      reply: '新版本回答',
-      session_id: 'edit-branch',
-      metadata: { backend_message_id: 'branch-assistant' },
-      tool_calls: [],
+    const openWebSocketStream = vi.fn().mockReturnValue({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: '新版本回答',
+        metadata: { backend_message_id: 'branch-assistant' },
+      }),
     })
     const finalizeAssistantMessage = vi.fn().mockReturnValue({
       id: 'branch-assistant',
@@ -1042,8 +1042,8 @@ describe('chat controller modules', () => {
         updateSessionTitle: vi.fn().mockResolvedValue(undefined),
       } as any,
       chatSvc: {
-        ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
-        sendViaBackend,
+        ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
+        openWebSocketStream,
       } as any,
       createId: () => 'edited-user-version',
       getSettingsStore: ((() => ({
@@ -1082,12 +1082,13 @@ describe('chat controller modules', () => {
       expect.objectContaining({ id: 'edited-user-version', content: '修改后的问题' }),
       'edit-branch',
     )
-    expect(sendViaBackend).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       '修改后的问题',
       'edit-branch',
       expect.objectContaining({ model: 'gpt-5.6-sol' }),
       'k12-tutor-mingming',
       undefined,
+      expect.any(Object),
       expect.any(Object),
       'edited-user-version',
     )

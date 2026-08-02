@@ -196,11 +196,23 @@ describe('sendViaWebSocket — extended', () => {
 
   // ─── attachment mapping ────────────────────────────────
 
-  it('maps attachments to {type, name, mime, data} and passes to sendMessage', async () => {
+  it('maps uploaded attachment receipts to attachment_id-only WebSocket payloads', async () => {
     const cbs = makeCallbacks()
     const attachments = [
-      { type: 'image' as const, name: 'photo.png', mime: 'image/png', data: 'base64data' },
-      { type: 'file' as const, name: 'doc.pdf', mime: 'application/pdf', data: 'pdfdata' },
+      {
+        type: 'image' as const,
+        name: 'photo.png',
+        mime: 'image/png',
+        data: 'cGhvdG8=',
+        attachmentId: 'att-photo',
+      },
+      {
+        type: 'file' as const,
+        name: 'doc.pdf',
+        mime: 'application/pdf',
+        data: 'ZG9j',
+        attachmentId: 'att-doc',
+      },
     ]
 
     // Settle immediately via onReply
@@ -221,8 +233,8 @@ describe('sendViaWebSocket — extended', () => {
       'test-model',
       'assistant',
       [
-        { type: 'image', name: 'photo.png', mime: 'image/png', data: 'base64data' },
-        { type: 'file', name: 'doc.pdf', mime: 'application/pdf', data: 'pdfdata' },
+        { attachment_id: 'att-photo' },
+        { attachment_id: 'att-doc' },
       ],
       undefined, // provider
       undefined, // temperature

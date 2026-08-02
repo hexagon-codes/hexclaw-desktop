@@ -12,7 +12,8 @@ export {
   messageFromUnknownError,
 } from './errors'
 export {
-  saveSecureValue,
-  loadSecureValue,
-  removeSecureValue,
+  credentialPresent,
+  credentialRefFor,
+  deleteCredential,
+  putCredential,
 } from './secure-store'

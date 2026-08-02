@@ -8,11 +8,9 @@
  * 数据库迁移后：Outbox 改为纯内存实现（sidecar 是本地进程，无需离线队列）。
  */
 
-import { sendChatViaBackend } from '@/api/chat'
 import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
-import { env } from '@/config/env'
+import { NativeSidecarWebSocket } from '@/api/native-sidecar-websocket'
 import { logger } from '@/utils/logger'
-import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { DESKTOP_USER_ID, USER_CANCELLED_MESSAGE } from '@/constants'
 import type { ChatMessage, ChatAttachment, RuntimeWireFrame, RuntimeWireSnapshot } from '@/types'
@@ -28,8 +26,7 @@ import type { MessageContent, RenderManifest } from '@/contracts/message-content
 // enough for that first observable event, otherwise tool approval becomes
 // impossible because the UI has already closed the stream.
 const WS_FIRST_REPLY_TIMEOUT_MS = 300_000
-const WS_INACTIVITY_TIMEOUT_MS = 300_000
-const BACKEND_REPLY_TIMEOUT_MS = 300_000
+const WS_INACTIVITY_TIMEOUT_MS = 60_000
 
 export class ChatRequestError extends Error {
   noFallback: boolean
@@ -107,7 +104,7 @@ function runtimeMetadata(
     delete legacyMetadata.reasoning_disclosure
     return legacyMetadata
   }
-  const next = { ...(metadata ?? {}) }
+  const next = { ...metadata }
   delete next.reasoning
   delete next.reasoning_disclosure
   delete next.runtime_events
@@ -137,7 +134,7 @@ function foldRetrievalHits(
   const kh = Array.isArray(source.knowledge_hits) && source.knowledge_hits.length > 0 ? source.knowledge_hits : undefined
   const mh = Array.isArray(source.memory_hits) && source.memory_hits.length > 0 ? source.memory_hits : undefined
   if (!kh && !mh) return metadata
-  const merged: Record<string, unknown> = { ...(metadata ?? {}) }
+  const merged: Record<string, unknown> = { ...metadata }
   if (kh) merged.knowledge_hits = kh
   if (mh) merged.memory_hits = mh
   return merged
@@ -176,7 +173,7 @@ export interface ToolApprovalAckWire {
 }
 
 interface ApprovalAckWaiter {
-  socket: WebSocket
+  socket: NativeSidecarWebSocket
   requestId: string
   resolve: (ack: ToolApprovalAckWire) => void
   reject: (error: Error) => void
@@ -184,7 +181,7 @@ interface ApprovalAckWaiter {
 
 const approvalAckWaiters = new Map<string, ApprovalAckWaiter>()
 
-function releaseApprovalSocket(socket: WebSocket, reason: string) {
+function releaseApprovalSocket(socket: NativeSidecarWebSocket, reason: string) {
   for (const [decisionId, waiter] of approvalAckWaiters) {
     if (waiter.socket !== socket) continue
     approvalAckWaiters.delete(decisionId)
@@ -211,10 +208,10 @@ function consumeToolApprovalAck(data: Record<string, unknown>): boolean {
 }
 
 function sendToolApprovalResponse(
-  socket: WebSocket,
+  socket: NativeSidecarWebSocket,
   decision: ToolApprovalDecisionWire,
 ): Promise<ToolApprovalAckWire> {
-  if (socket.readyState !== WebSocket.OPEN) {
+  if (socket.readyState !== NativeSidecarWebSocket.OPEN) {
     return Promise.reject(new Error('Owning approval request socket is not connected'))
   }
 
@@ -349,7 +346,12 @@ export function sendViaWebSocket(
       fail(new ChatRequestError(errMsg || 'WebSocket request failed', true))
     }, streamScope)
 
-    const wsAttachments = attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data }))
+    const wsAttachments = attachments?.map((attachment) => {
+      if (!attachment.attachmentId?.trim()) {
+        throw new ChatRequestError('Chat attachment is missing its upload receipt', false)
+      }
+      return { attachment_id: attachment.attachmentId }
+    })
     hexclawWS.sendMessage(
       text,
       sessionId,
@@ -372,8 +374,7 @@ function openRequestSocket(
   buildPayload: () => Record<string, unknown>,
   route?: { provider?: string; model?: string },
 ): WebSocketStreamHandle {
-  const url = `${env.wsBase}/ws`
-  const ws = new WebSocket(url)
+  const ws = new NativeSidecarWebSocket('/ws')
 
   let settled = false
   let accumulatedContent = ''
@@ -413,7 +414,10 @@ function openRequestSocket(
     settled = true
     cleanup()
     try {
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      if (
+        ws.readyState === NativeSidecarWebSocket.OPEN
+        || ws.readyState === NativeSidecarWebSocket.CONNECTING
+      ) {
         ws.close()
       }
     } catch {
@@ -427,7 +431,10 @@ function openRequestSocket(
     settled = true
     cleanup()
     try {
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      if (
+        ws.readyState === NativeSidecarWebSocket.OPEN
+        || ws.readyState === NativeSidecarWebSocket.CONNECTING
+      ) {
         ws.close()
       }
     } catch {
@@ -505,7 +512,7 @@ function openRequestSocket(
         let runtimeFrame: RuntimeWireFrame | undefined
         if (hasAtomicRuntimeSnapshot) {
           const snapshotMetadata = normalizeRuntimeSnapshotMetadata({
-            ...(msg.metadata ?? {}),
+            ...msg.metadata,
             assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
             message_id: msg.message_id ?? msg.metadata?.message_id,
             reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
@@ -645,7 +652,7 @@ function openRequestSocket(
     cancel() {
       if (settled) return
       try {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState === NativeSidecarWebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId, request_id: requestId }))
         }
       } catch {
@@ -667,7 +674,12 @@ export function openWebSocketStream(
   metadata?: Record<string, string>,
   requestId?: string,
 ): WebSocketStreamHandle {
-  const wsAttachments = attachments?.map((a) => ({ type: a.type, name: a.name, mime: a.mime, data: a.data }))
+  const wsAttachments = attachments?.map((attachment) => {
+    if (!attachment.attachmentId?.trim()) {
+      throw new ChatRequestError('Chat attachment is missing its upload receipt', false)
+    }
+    return { attachment_id: attachment.attachmentId }
+  })
   const resolvedMetadata = withModelReasoningDefaults(chatParams.model, metadata)
   return openRequestSocket(sessionId, requestId, callbacks, () => ({
     type: 'message',
@@ -698,78 +710,6 @@ export function resumeWebSocketStream(
   }))
 }
 
-// ─── HTTP 发送 (fallback) ────────────────────────────
-
-export async function sendViaBackend(
-  text: string,
-  sessionId: string,
-  chatParams: { model?: string; provider?: string; temperature?: number; maxTokens?: number },
-  agentRole: string,
-  attachments?: ChatAttachment[],
-  metadata?: Record<string, string>,
-  requestId?: string,
-): Promise<{ reply: string; message_content?: MessageContent; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls']; blocks?: ChatMessage['blocks'] }> {
-  let sseRuntimeSnapshot = createRuntimeWireSnapshot()
-  let publicSseReasoning = ''
-  const result = await withTimeout(
-    sendChatViaBackend(text, {
-      sessionId,
-      role: agentRole || undefined,
-      provider: chatParams.provider,
-      model: chatParams.model,
-      temperature: chatParams.temperature,
-      maxTokens: chatParams.maxTokens,
-      requestId,
-      metadata: withModelReasoningDefaults(chatParams.model, metadata),
-      attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
-      onStreamFrame: (frame) => {
-        const merged = mergeRuntimeWireFrame(sseRuntimeSnapshot, frame, chatParams)
-        if (!merged.accepted || (Number(frame.sequence) > 0 && !merged.frame)) return
-        sseRuntimeSnapshot = merged.snapshot
-        if (
-          merged.frame?.reasoningDisclosure.visibility === 'visible'
-          && typeof frame.reasoning === 'string'
-        ) {
-          publicSseReasoning = normalizeAssistantReasoning(
-            publicSseReasoning + frame.reasoning,
-            { trim: false },
-          )
-        }
-      },
-    }),
-    BACKEND_REPLY_TIMEOUT_MS,
-    'Backend request timed out — no response received.',
-  )
-  const normalizedMetadata = normalizeRuntimeSnapshotMetadata({
-    ...(result.metadata ?? {}),
-    assistant_message_id: sseRuntimeSnapshot.assistantMessageId
-      ?? result.assistant_message_id
-      ?? result.metadata?.assistant_message_id,
-    message_id: sseRuntimeSnapshot.assistantMessageId
-      ?? result.message_id
-      ?? result.metadata?.message_id,
-    reasoning_disclosure: sseRuntimeSnapshot.reasoningDisclosure
-      ?? result.reasoning_disclosure
-      ?? result.metadata?.reasoning_disclosure,
-    runtime_events: sseRuntimeSnapshot.lastSequence > 0
-      ? sseRuntimeSnapshot.runtimeEvents
-      : result.runtime_events ?? result.metadata?.runtime_events,
-    last_sequence: sseRuntimeSnapshot.lastSequence
-      || result.last_sequence
-      || result.sequence
-      || result.metadata?.last_sequence,
-  }, undefined, chatParams)
-  if (
-    normalizedMetadata.reasoning_disclosure?.visibility === 'visible'
-    && publicSseReasoning.trim()
-  ) {
-    normalizedMetadata.reasoning = publicSseReasoning
-  } else if (normalizedMetadata.reasoning_disclosure?.visibility !== 'visible') {
-    delete normalizedMetadata.reasoning
-  }
-  return { ...result, metadata: normalizedMetadata }
-}
-
 // ─── WebSocket 连接管理 ──────────────────────────────
 
 export async function ensureWebSocketConnected(): Promise<boolean> {
@@ -786,3 +726,5 @@ export async function ensureWebSocketConnected(): Promise<boolean> {
 export function clearWebSocketCallbacks(): void {
   hexclawWS.clearStreamCallbacks()
 }
+
+export * from './chat-service-compat'

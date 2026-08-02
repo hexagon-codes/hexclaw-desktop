@@ -14,5 +14,7 @@ export function useToast() {
     error: (msg: string) => getToast()?.error(msg),
     warning: (msg: string) => getToast()?.warning(msg),
     info: (msg: string) => getToast()?.info(msg),
+    action: (msg: string, actionLabel: string, onAction: () => void, duration = 8000) =>
+      getToast()?.action(msg, actionLabel, onAction, duration),
   }
 }

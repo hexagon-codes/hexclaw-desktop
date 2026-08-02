@@ -24,7 +24,7 @@ import {
   reconcileDefaultSelection,
   restoreProviderApiKeys,
   materializeProviderApiKeys,
-  syncProviderApiKeys,
+  providerCredentialReplacements,
   backendToProviders,
   providersToBackend,
   appendLocalProvidersMissingFromRuntime,
@@ -80,8 +80,6 @@ export const useSettingsStore = defineStore('settings', () => {
   let loadConfigPromise: Promise<void> | null = null
   /** 当前加载进行中时，force reload 会挂到这里，避免被静默吞掉 */
   let forceReloadPromise: Promise<void> | null = null
-  /** 最近一次成功完成持久化的 Provider 快照，用于安全 Key 的增删差分。 */
-  let lastPersistedProviders: ProviderConfig[] = []
   /** saveConfig 调用版本；旧保存只能提交自己的不可变快照，不能覆盖更新版本的内存状态。 */
   let latestSaveRevision = 0
   const providerSync = createSettingsProviderSync({
@@ -221,8 +219,6 @@ export const useSettingsStore = defineStore('settings', () => {
       syncedSandbox.value = cloneSandbox(config.value.sandbox ?? fallbackSandbox())
     }
 
-    lastPersistedProviders = cloneProviders(config.value?.llm.providers ?? [])
-
     loading.value = false
     // 目录是可再生缓存：配置可先使用，远程刷新在后台完成。小目录变更走独立保存队列，
     // 不调用 saveConfig，因此不会形成 save → sync → save 递归。
@@ -335,7 +331,10 @@ export const useSettingsStore = defineStore('settings', () => {
           plainConfig.llm.defaultProviderId ?? '',
           plainConfig.llm.routing,
         )
-        await updateLLMConfig(backendConfig)
+        await updateLLMConfig(
+          backendConfig,
+          providerCredentialReplacements(plainConfig.llm.providers),
+        )
         logger.debug('LLM 配置已保存到后端', {
           providerCount: Object.keys(backendConfig.providers).length,
           defaultProvider: backendConfig.default,
@@ -429,19 +428,6 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
       }
-
-      const previousProviders = cloneProviders(lastPersistedProviders)
-      try {
-        await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
-      } catch (e) {
-        try {
-          await syncProviderApiKeys(previousProviders, plainConfig.llm.providers)
-        } catch (rollbackError) {
-          logger.error('Provider API Key 回滚失败', rollbackError)
-        }
-        throw e
-      }
-      lastPersistedProviders = cloneProviders(plainConfig.llm.providers)
 
       // 保存后异步拉取远程模型列表（不阻塞保存，失败静默）
       providerSync.sync(plainConfig.llm.providers)

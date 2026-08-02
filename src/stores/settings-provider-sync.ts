@@ -6,6 +6,7 @@ import { syncProviderModelCatalogs } from './provider-model-sync'
 import {
   invalidateChangedProviderProbeReceipt,
   materializeProviderApiKeys,
+  providerCredentialReplacements,
   providersToBackend,
 } from './settings-helpers'
 
@@ -61,6 +62,7 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
           snapshot.llm.defaultProviderId ?? '',
           snapshot.llm.routing,
         ),
+        providerCredentialReplacements(snapshot.llm.providers),
       )
     })
     void queued.catch((error) => {

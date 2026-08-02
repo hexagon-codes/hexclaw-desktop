@@ -1,88 +1,98 @@
-/**
- * secure-store 安全性和正确性测试
- *
- * 验证加密存储的安全性、边界情况、降级行为
- */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-describe('secure-store', () => {
+const native = vi.hoisted(() => ({
+  tauri: false,
+  invoke: vi.fn(),
+}))
+
+vi.mock('@/utils/platform', () => ({ isTauri: () => native.tauri }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => native.invoke(...args),
+}))
+
+const connectionKey = {
+  ownerKind: 'connection' as const,
+  ownerId: 'connector-001',
+  secretKind: 'token' as const,
+}
+const providerKey = {
+  ownerKind: 'provider' as const,
+  ownerId: 'pvd_v1_00112233445566778899aabbccddeeff',
+  secretKind: 'api_key' as const,
+}
+
+describe('secure-store write-only renderer boundary', () => {
   beforeEach(() => {
+    native.tauri = false
+    native.invoke.mockReset()
     localStorage.clear()
   })
 
-  // ─── 安全改进验证: 浏览器端 fail-closed ────────────────
-  it('浏览器模式不再把敏感值持久化到 localStorage', async () => {
+  it('contains no renderer persistence or vault read API', async () => {
     const sourceCode = await import('../secure-store?raw')
     const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
-    expect(raw).toContain('volatileBrowserStore')
-    expect(raw).not.toContain("enc.encode('hexclaw-desktop')")
-    expect(raw).not.toContain('DEVICE_SALT_KEY')
+    const api = await import('../secure-store')
+
+    expect(raw).toContain('browserSessionVault')
+    expect(raw).not.toContain('localStorage')
+    expect(raw).not.toContain('get_credential')
+    expect(raw).not.toContain('read_credential')
+    expect(api).not.toHaveProperty('getCredential')
   })
 
-  // ─── 功能测试: saveSecureValue + loadSecureValue 对称性 ──
-  it('同一浏览器运行时内存储和读取应该对称', async () => {
-    const { saveSecureValue, loadSecureValue } = await import('../secure-store')
+  it('browser fallback exposes only typed presence and deletes process memory', async () => {
+    const { credentialPresent, deleteCredential, putCredential } = await import('../secure-store')
 
-    await saveSecureValue('test-key', 'my-secret-api-key')
-    const value = await loadSecureValue('test-key')
-    expect(value).toBe('my-secret-api-key')
-    expect(localStorage.getItem('hc-sec-test-key')).toBeNull()
+    await expect(putCredential(connectionKey, 'session-secret')).resolves.toEqual({
+      credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
+      updated: true,
+    })
+    await expect(credentialPresent(connectionKey)).resolves.toBe(true)
+    await expect(deleteCredential(connectionKey)).resolves.toMatchObject({ updated: true })
+    await expect(credentialPresent(connectionKey)).resolves.toBe(false)
+    expect(localStorage.length).toBe(0)
   })
 
-  // ─── 边界情况: 空值处理 ─────────────────────────────
-  it('保存空字符串应该正常工作', async () => {
-    const { saveSecureValue, loadSecureValue } = await import('../secure-store')
+  it('forbids standalone provider writes and deletes before native IPC', async () => {
+    const { deleteCredential, putCredential } = await import('../secure-store')
 
-    await saveSecureValue('empty-key', '')
-    const value = await loadSecureValue('empty-key')
-    expect(value).toBe('')
+    await expect(putCredential(providerKey, 'sk-live')).rejects.toThrow('native config coordinator')
+    await expect(deleteCredential(providerKey)).rejects.toThrow('native config coordinator')
+    expect(native.invoke).not.toHaveBeenCalled()
   })
 
-  // ─── 边界情况: 读取不存在的 key ─────────────────────
-  it('读取不存在的 key 应返回 null', async () => {
-    const { loadSecureValue } = await import('../secure-store')
+  it('Tauri connection mutations use typed owner keys and return opaque refs', async () => {
+    native.tauri = true
+    native.invoke
+      .mockResolvedValueOnce({
+        credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
+        updated: true,
+      })
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce({
+        credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
+        updated: true,
+      })
+    const { credentialPresent, deleteCredential, putCredential } = await import('../secure-store')
 
-    const value = await loadSecureValue('nonexistent-key')
-    expect(value).toBeNull()
+    await putCredential(connectionKey, '密钥=token-abc123')
+    await expect(credentialPresent(connectionKey)).resolves.toBe(true)
+    await deleteCredential(connectionKey)
+
+    expect(native.invoke.mock.calls).toEqual([
+      ['put_credential', { key: connectionKey, secret: '密钥=token-abc123' }],
+      ['credential_present', { key: connectionKey }],
+      ['delete_credential', { key: connectionKey }],
+    ])
   })
 
-  // ─── 边界情况: 损坏数据处理 ─────────────────────────
-  it('localStorage 中存在损坏数据时应返回 null 而不是抛异常', async () => {
-    const { loadSecureValue } = await import('../secure-store')
+  it('derives canonical provider and connection references without aliasing', async () => {
+    const { credentialRefFor } = await import('../secure-store')
 
-    localStorage.setItem('hc-sec-corrupted', 'not-valid-base64!!!')
-    const value = await loadSecureValue('corrupted')
-    expect(value).toBeNull()
-    expect(localStorage.getItem('hc-sec-corrupted')).toBeNull()
-  })
-
-  // ─── 删除测试 ──────────────────────────────────────
-  it('removeSecureValue 应该正确删除', async () => {
-    const { saveSecureValue, loadSecureValue, removeSecureValue } = await import('../secure-store')
-
-    await saveSecureValue('del-test', 'value')
-    await removeSecureValue('del-test')
-    const value = await loadSecureValue('del-test')
-    expect(value).toBeNull()
-  })
-
-  // ─── 特殊字符处理 ─────────────────────────────────
-  it('应正确处理包含特殊字符的值', async () => {
-    const { saveSecureValue, loadSecureValue } = await import('../secure-store')
-    const specialValue = '密钥=sk-abc123!@#$%^&*()_+🔑\n\t'
-
-    await saveSecureValue('special', specialValue)
-    const value = await loadSecureValue('special')
-    expect(value).toBe(specialValue)
-  })
-
-  // ─── 旧版浏览器持久化清理 ─────────────────────────
-  it('检测到旧版 localStorage 持久化密文时会忽略并清理', async () => {
-    const { loadSecureValue } = await import('../secure-store')
-
-    localStorage.setItem('hc-sec-legacy-key', 'legacy-secret')
-    const value = await loadSecureValue('legacy-key')
-    expect(value).toBeNull()
-    expect(localStorage.getItem('hc-sec-legacy-key')).toBeNull()
+    expect(credentialRefFor(providerKey)).toBe(
+      'llm_provider/pvd_v1_00112233445566778899aabbccddeeff/api_key',
+    )
+    expect(credentialRefFor(connectionKey)).toBe('hexclaw-vault:v1:connection:connector-001:token')
+    expect(() => credentialRefFor({ ...providerKey, ownerId: '../provider' })).toThrow('identity')
   })
 })

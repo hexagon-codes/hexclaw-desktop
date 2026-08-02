@@ -9,6 +9,8 @@ const parseDocument = vi.hoisted(() =>
 
 const toastError = vi.hoisted(() => vi.fn())
 const toastWarning = vi.hoisted(() => vi.fn())
+const uploadChatAttachment = vi.hoisted(() => vi.fn())
+const ensureChatAttachmentReceipt = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/knowledge', () => ({ searchKnowledge }))
 vi.mock('@/utils/file-parser', () => ({
@@ -17,6 +19,10 @@ vi.mock('@/utils/file-parser', () => ({
 }))
 vi.mock('../useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: toastError, warning: toastWarning, info: vi.fn() }),
+}))
+vi.mock('@/api/attachments', () => ({
+  uploadChatAttachment,
+  ensureChatAttachmentReceipt,
 }))
 
 import { useChatSend } from '../useChatSend'
@@ -52,6 +58,13 @@ describe('useChatSend', () => {
     searchKnowledge.mockResolvedValue({ result: [] })
     parseDocument.mockReset()
     parseDocument.mockResolvedValue({ text: 'parsed', fileName: 'test.txt' })
+    uploadChatAttachment.mockReset()
+    uploadChatAttachment.mockResolvedValue({ attachment_id: 'attachment-test' })
+    ensureChatAttachmentReceipt.mockReset()
+    ensureChatAttachmentReceipt.mockImplementation(async (attachment: { type: string; attachmentId?: string }) => {
+      if (attachment.type !== 'image') throw new Error('Only image chat attachments are supported')
+      return { ...attachment, attachmentId: attachment.attachmentId ?? 'attachment-test' }
+    })
   })
 
   it('sends message through chatStore.sendMessage', async () => {
@@ -291,23 +304,15 @@ describe('useChatSend', () => {
     expect(ordinaryDeps.chatStore.agentRole).toBe('researcher')
   })
 
-  it('sends video attachments with type=video instead of downgrading them to generic files', async () => {
-    parseDocument.mockRejectedValueOnce(new Error('unsupported video parsing'))
-
+  it('fails closed for video attachments because the native chat receipt boundary is image-only', async () => {
     const deps = makeDeps()
     const { handleSend } = useChatSend(deps as any)
     const video = new File(['video-bytes'], 'demo.mp4', { type: 'video/mp4' })
 
-    await handleSend('watch this', [video])
-
-    const call = deps.chatStore.sendMessage.mock.calls[0]!
-    expect(call[1]).toEqual([
-      expect.objectContaining({
-        type: 'video',
-        name: 'demo.mp4',
-        mime: 'video/mp4',
-      }),
-    ])
+    await expect(handleSend('watch this', [video])).rejects.toThrow(
+      'Only image chat attachments are supported',
+    )
+    expect(deps.chatStore.sendMessage).not.toHaveBeenCalled()
   })
 
   // ─── 文档解析失败兜底（BUG: PDF 被当二进制发后端 → 误报「仅支持图片」）──────────

@@ -211,35 +211,8 @@ describe('CHAT-INV-THINKING-007 Desktop runtime wire', () => {
     })
   })
 
-  it('merges full typed SSE frames through the backend fallback', async () => {
-    sendChatViaBackend.mockImplementationOnce(async (_text, options: any) => {
-      options.onStreamFrame?.(fullFrame({
-        reasoning: 'public SSE summary',
-        runtime_event: {
-          version: 1,
-          event_id: 'sse-event-1',
-          kind: 'tool_started',
-          tool_call_id: 'sse-call-1',
-          tool_name: 'web_search',
-        },
-      }))
-      options.onStreamFrame?.(fullFrame({
-        sequence: 2,
-        runtime_event: {
-          version: 1,
-          event_id: 'sse-event-2',
-          kind: 'terminal',
-          terminal_status: 'completed',
-        },
-      }))
-      return {
-        reply: 'SSE answer',
-        session_id: 's1',
-        metadata: {},
-      }
-    })
-
-    const result = await sendViaBackend(
+  it('merges full typed frames through the WebSocket-only compatibility adapter', async () => {
+    const pending = sendViaBackend(
       'hello',
       's1',
       { provider: 'openai', model: 'gpt-5.6-sol' },
@@ -248,17 +221,43 @@ describe('CHAT-INV-THINKING-007 Desktop runtime wire', () => {
       undefined,
       'request-sse',
     )
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit(fullFrame({
+      content: 'WebSocket answer',
+      reasoning: 'public WebSocket summary',
+      runtime_event: {
+        version: 1,
+        event_id: 'ws-event-1',
+        kind: 'tool_started',
+        tool_call_id: 'ws-call-1',
+        tool_name: 'web_search',
+      },
+    }))
+    socket.emit(fullFrame({
+      sequence: 2,
+      done: true,
+      runtime_event: {
+        version: 1,
+        event_id: 'ws-event-2',
+        kind: 'terminal',
+        terminal_status: 'completed',
+      },
+    }))
+
+    const result = await pending
 
     expect(result.metadata).toMatchObject({
       assistant_message_id: 'assistant-backend-1',
       last_sequence: 2,
       reasoning_visibility: 'visible',
-      reasoning: 'public SSE summary',
       runtime_events: [
-        expect.objectContaining({ event_id: 'sse-event-1', sequence: 1 }),
-        expect.objectContaining({ event_id: 'sse-event-2', sequence: 2 }),
+        expect.objectContaining({ event_id: 'ws-event-1', sequence: 1 }),
+        expect.objectContaining({ event_id: 'ws-event-2', sequence: 2 }),
       ],
     })
+    expect(result.metadata).not.toHaveProperty('reasoning')
+    expect(sendChatViaBackend).not.toHaveBeenCalled()
   })
 
   it('rejects mismatched aliases, route provenance, unknown kinds, and sensitive payloads', async () => {

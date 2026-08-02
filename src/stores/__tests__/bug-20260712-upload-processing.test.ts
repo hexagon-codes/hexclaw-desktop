@@ -1,119 +1,190 @@
-import { nextTick } from 'vue'
-import { describe, it, expect, beforeEach } from 'vitest'
-import { setActivePinia, createPinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import type { KnowledgeOperation } from '@/api/knowledge'
 import { useKnowledgeUploadsStore } from '../knowledge-uploads'
 
-// BUG-20260712 #8 知识库上传「卡 100% 不动」前端相：字节传完(100%)后端仍在解析+嵌入，
-// 这段无法上报百分比，旧实现继续显示「100% uploading」→ 被误读为卡死。
-// 修：新增 processing 相 + markProcessing() 迁移，让 UI 显「处理中…」。
+function operation(overrides: Partial<KnowledgeOperation> = {}): KnowledgeOperation {
+  return {
+    operation_id: 'job-durable',
+    job_id: 'job-durable',
+    document_id: 'doc-durable',
+    title: '六上数学.pdf',
+    display_name: '六上数学.pdf',
+    content_digest: 'a'.repeat(64),
+    state: 'running',
+    stage: 'embedding',
+    terminal: false,
+    created_at: '2026-08-02T00:00:00Z',
+    updated_at: '2026-08-02T00:00:00Z',
+    ...overrides,
+  }
+}
 
-describe('BUG-20260712 #8 上传进度 100% 后切「处理中」相，不再假死在 100%', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    setActivePinia(createPinia())
-  })
+describe('knowledge upload runtime projection', () => {
+  beforeEach(() => setActivePinia(createPinia()))
 
-  it('uploading 条目 markProcessing → status 变 processing（RED：无此方法/相）', () => {
+  it('moves uploaded bytes into the processing phase', () => {
     const store = useKnowledgeUploadsStore()
     const entry = store.track({ name: '五年级下册.pdf', progress: 100, status: 'uploading' })
+
     store.markProcessing(entry)
+
     expect(entry.status).toBe('processing')
   })
 
-  it('done/error 是终态，markProcessing 不回退', () => {
+  it('does not regress terminal rows or settle processing rows by filename', () => {
     const store = useKnowledgeUploadsStore()
     const done = store.track({ name: 'a.txt', progress: 100, status: 'done' })
-    const err = store.track({ name: 'b.txt', progress: 0, status: 'error', error: 'x' })
+    const failed = store.track({ name: 'b.txt', progress: 0, status: 'error', error: 'x' })
+    const processing = store.track({ name: 'c.pdf', progress: 100, status: 'processing' })
+
     store.markProcessing(done)
-    store.markProcessing(err)
-    expect(done.status).toBe('done')
-    expect(err.status).toBe('error')
-  })
-
-  it('processing 条目不被 settleAgainstDocs 误清（仍在处理中，未落库）', () => {
-    const store = useKnowledgeUploadsStore()
-    const entry = store.track({ name: 'c.pdf', progress: 100, status: 'uploading' })
-    store.markProcessing(entry)
-    // 即便文档列表已含同名（极端并发），processing 也只清 done 相
+    store.markProcessing(failed)
     store.settleAgainstDocs([{ source: 'upload:c.pdf' }])
-    expect(store.items).toHaveLength(1)
-    expect(store.items[0]!.status).toBe('processing')
+
+    expect(done.status).toBe('done')
+    expect(failed.status).toBe('error')
+    expect(processing.status).toBe('processing')
   })
 
-  it('tracks a durable job while processing and reaches cancelled explicitly', () => {
+  it('tracks a durable job and reaches cancelled explicitly', () => {
     const store = useKnowledgeUploadsStore()
     const entry = store.track({ name: 'book.pdf', progress: 100, status: 'processing' })
 
     store.attachJob(entry, 'doc-1', 'job-1')
     expect(store.hasAwaitingIndex()).toBe(true)
-    expect(entry).toMatchObject({ documentId: 'doc-1', jobId: 'job-1' })
-
     store.markCancelled(entry)
-    expect(entry.status).toBe('cancelled')
+
+    expect(entry).toMatchObject({ documentId: 'doc-1', jobId: 'job-1', status: 'cancelled' })
     expect(store.hasAwaitingIndex()).toBe(false)
   })
 
-  it('rehydrates accepted durable jobs after a desktop process restart', async () => {
-    const beforeRestart = useKnowledgeUploadsStore()
-    const entry = beforeRestart.track({ name: '六上数学.pdf', progress: 100, status: 'processing' })
-    beforeRestart.attachJob(entry, 'doc-durable', 'job-durable')
-    await nextTick()
+  it('rebuilds accepted jobs from the Sidecar operation projection', () => {
+    const store = useKnowledgeUploadsStore()
 
-    setActivePinia(createPinia())
-    const afterRestart = useKnowledgeUploadsStore()
+    store.reconcileRecoverableOperations([operation()])
 
-    expect(afterRestart.items).toEqual([
+    expect(store.items).toEqual([
       expect.objectContaining({
         name: '六上数学.pdf',
         progress: 100,
         status: 'processing',
         documentId: 'doc-durable',
         jobId: 'job-durable',
+        stage: 'embedding',
       }),
     ])
-    expect(afterRestart.hasAwaitingIndex()).toBe(true)
+    expect(store.hasAwaitingIndex()).toBe(true)
   })
 
-  it('persists an explicit response-unknown row without pretending it has a pollable job', async () => {
-    const beforeRestart = useKnowledgeUploadsStore()
-    const entry = beforeRestart.track({ name: 'lost-202.pdf', progress: 100, status: 'uploading' })
-    beforeRestart.bindIntent(entry, {
-      idempotencyKey: 'knowledge-upload:lost-202',
-      sourceSha256: 'a'.repeat(64),
-    })
-    beforeRestart.markPendingResponse(entry, '响应未知，请重新选择同一文件恢复')
-    await nextTick()
-
-    setActivePinia(createPinia())
-    const afterRestart = useKnowledgeUploadsStore()
-
-    expect(afterRestart.items).toEqual([
-      expect.objectContaining({
-        name: 'lost-202.pdf',
-        status: 'pending-response',
-        intentKey: 'knowledge-upload:lost-202',
-        sourceSha256: 'a'.repeat(64),
-      }),
-    ])
-    expect(afterRestart.hasAwaitingIndex()).toBe(false)
-  })
-
-  it('reselecting the same durable intent resumes one UI row instead of appending a duplicate', () => {
+  it('removes stale renderer rows and projects failed Sidecar jobs', () => {
     const store = useKnowledgeUploadsStore()
-    const original = store.track({ name: 'same.pdf', progress: 100, status: 'pending-response' })
-    store.bindIntent(original, {
-      idempotencyKey: 'knowledge-upload:same',
+    const stale = store.track({ name: 'stale.pdf', progress: 100, status: 'processing' })
+    store.attachJob(stale, 'doc-stale', 'job-stale')
+
+    store.reconcileRecoverableOperations([
+      operation({ state: 'failed', terminal: true, error: 'embedding failed' }),
+    ])
+
+    expect(store.items).toHaveLength(1)
+    expect(store.items[0]).toMatchObject({
+      jobId: 'job-durable',
+      documentId: 'doc-durable',
+      status: 'error',
+      error: 'embedding failed',
+    })
+  })
+
+  it('keeps response-unknown identity only as a disposable runtime row', () => {
+    const store = useKnowledgeUploadsStore()
+    const entry = store.track({ name: 'lost-202.pdf', progress: 100, status: 'uploading' })
+    store.bindIntent(entry, {
+      idempotencyKey: `knowledge-upload:v3:${'a'.repeat(64)}`,
       sourceSha256: 'b'.repeat(64),
     })
+    store.markPendingResponse(entry, '响应未知，请重新选择同一文件恢复')
+
+    expect(entry).toMatchObject({ status: 'pending-response', progress: 100 })
+    expect(store.hasAwaitingIndex()).toBe(false)
+  })
+
+  it('reselecting the same content-addressed intent resumes one row', () => {
+    const store = useKnowledgeUploadsStore()
+    const intent = {
+      idempotencyKey: `knowledge-upload:v3:${'c'.repeat(64)}`,
+      sourceSha256: 'd'.repeat(64),
+    }
+    const original = store.track({ name: 'same.pdf', progress: 100, status: 'pending-response' })
+    store.bindIntent(original, intent)
     const duplicate = store.track({ name: 'same.pdf', progress: 0, status: 'uploading' })
 
-    const resumed = store.bindIntent(duplicate, {
-      idempotencyKey: 'knowledge-upload:same',
-      sourceSha256: 'b'.repeat(64),
-    })
+    const resumed = store.bindIntent(duplicate, intent)
 
     expect(resumed).toBe(original)
     expect(store.items).toHaveLength(1)
     expect(original).toMatchObject({ status: 'uploading', progress: 0, error: undefined })
+  })
+
+  it('projects the exact durable upload lifecycle, including states without a job', () => {
+    const cases = [
+      ['receiving', 'uploading', false],
+      ['pending_response', 'pending-response', false],
+      ['queued', 'processing', false],
+      ['running', 'processing', false],
+      ['retry_wait', 'processing', false],
+      ['succeeded', 'done', true],
+      ['failed', 'error', true],
+      ['cancelled', 'cancelled', true],
+    ] as const
+
+    for (const [state, status, terminal] of cases) {
+      setActivePinia(createPinia())
+      const store = useKnowledgeUploadsStore()
+      const hasAcceptedBody = state !== 'receiving'
+      store.reconcileRecoverableOperations([
+        {
+          operation_id: `upload-${state}`,
+          job_id: hasAcceptedBody ? `job-${state}` : '',
+          document_id: hasAcceptedBody ? `doc-${state}` : '',
+          title: 'book.pdf',
+          display_name: 'book.pdf',
+          content_digest: hasAcceptedBody ? 'a'.repeat(64) : undefined,
+          state,
+          stage: state === 'receiving' ? 'receiving' : 'extracting',
+          terminal,
+          error: state === 'failed' ? 'extract failed' : undefined,
+          created_at: '2026-08-02T00:00:00Z',
+          updated_at: '2026-08-02T00:00:01Z',
+        } as KnowledgeOperation,
+      ])
+
+      expect(store.items).toHaveLength(1)
+      expect(store.items[0]).toMatchObject({
+        operationId: `upload-${state}`,
+        name: 'book.pdf',
+        status,
+      })
+      const item = store.items[0]
+      expect({
+        hasDocumentId: Object.prototype.hasOwnProperty.call(item, 'documentId'),
+        hasJobId: Object.prototype.hasOwnProperty.call(item, 'jobId'),
+        documentId: item?.documentId,
+        jobId: item?.jobId,
+      }).toEqual(
+        hasAcceptedBody
+          ? {
+              hasDocumentId: true,
+              hasJobId: true,
+              documentId: `doc-${state}`,
+              jobId: `job-${state}`,
+            }
+          : {
+              hasDocumentId: false,
+              hasJobId: false,
+              documentId: undefined,
+              jobId: undefined,
+            },
+      )
+    }
   })
 })

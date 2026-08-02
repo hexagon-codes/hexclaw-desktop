@@ -25,7 +25,7 @@ describe('BUG: connector DB credentials are persisted as plaintext in localStora
     const { addInstance } = useConnectorInstances()
     const SECRET = 'sup3r-s3cret-db-pw'
 
-    addInstance({
+    await addInstance({
       type: 'postgres',
       name: '生产库',
       config: { host: 'db.internal', port: '5432', user: 'admin', password: SECRET },

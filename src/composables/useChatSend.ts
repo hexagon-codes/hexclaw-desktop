@@ -30,6 +30,7 @@ import {
   type CreateTaskAction,
 } from '@/utils/chat-automation'
 import { parseCronSlashCommand } from './useCronSlashParser'
+import { ensureChatAttachmentReceipt, uploadChatAttachment } from '@/api/attachments'
 
 type ChatStore = ReturnType<typeof useChatStore>
 
@@ -310,7 +311,17 @@ export function useChatSend(deps: ChatSendDeps) {
     // 从旧的 attachmentPreview（兼容拖拽等路径）
     if (legacyAttachment) {
       const { file, type } = legacyAttachment
-      if (type === 'image' || type === 'video') {
+      if (type === 'image') {
+        const data = await fileToBase64(file)
+        const receipt = await uploadChatAttachment(file)
+        attachments.push({
+          type,
+          name: file.name,
+          mime: file.type,
+          data,
+          attachmentId: receipt.attachment_id,
+        })
+      } else if (type === 'video') {
         const data = await fileToBase64(file)
         attachments.push({ type, name: file.name, mime: file.type, data })
       } else if (!legacyParsedDocument) {
@@ -333,7 +344,14 @@ export function useChatSend(deps: ChatSendDeps) {
         if (isImage) {
           // 图片：作为 attachment 发送给支持 vision 的模型
           const data = await fileToBase64(file)
-          attachments.push({ type: 'image', name: file.name, mime: file.type, data })
+          const receipt = await uploadChatAttachment(file)
+          attachments.push({
+            type: 'image',
+            name: file.name,
+            mime: file.type,
+            data,
+            attachmentId: receipt.attachment_id,
+          })
         } else if (isVideo) {
           // 视频：保留 video 类型
           const data = await fileToBase64(file)
@@ -360,6 +378,11 @@ export function useChatSend(deps: ChatSendDeps) {
         }
       }
     }
+
+    const receiptBackedAttachments = await Promise.all(
+      attachments.map(ensureChatAttachmentReceipt),
+    )
+    attachments.splice(0, attachments.length, ...receiptBackedAttachments)
 
     // 旧拖拽路径的已解析文档：同样进隐藏上下文 + 文件卡片。
     if (legacyParsedDocument && legacyParsedDocument.text.trim()) {

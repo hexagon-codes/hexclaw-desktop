@@ -73,7 +73,7 @@ export function createChatStreamRecoveryController(params: {
               content: current.content,
               reasoning: current.reasoning,
               done: !!current.done,
-              ...(current.metadata ?? {}),
+              ...current.metadata,
             })
           },
           onChunk: (content, reasoning, runtimeFrame) => {

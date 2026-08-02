@@ -4,6 +4,7 @@ import { connectLogStream, getLogs, getLogStats } from '@/api/logs'
 import { trySafe } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { LogEntry, LogStats, LogQuery, ApiError } from '@/types'
+import type { NativeSidecarWebSocket } from '@/api/native-sidecar-websocket'
 
 const MAX_ENTRIES = 1000
 
@@ -14,7 +15,7 @@ export const useLogsStore = defineStore('logs', () => {
   const stats = ref<LogStats | null>(null)
   const error = ref<ApiError | null>(null)
 
-  let ws: WebSocket | null = null
+  let ws: NativeSidecarWebSocket | null = null
   let reconnectDelay = 1000
   // 主动关闭标志 + 重连定时器句柄（bug 2026-06-22 D：防 disconnect 后僵尸重连）
   let closing = false
@@ -53,7 +54,7 @@ export const useLogsStore = defineStore('logs', () => {
     if (ws) return
     closing = false
 
-    ws = connectLogStream(
+    const socket = connectLogStream(
       (entry) => {
         if (entries.value.length >= MAX_ENTRIES) {
           entries.value = [...entries.value.slice(1), entry]
@@ -66,8 +67,9 @@ export const useLogsStore = defineStore('logs', () => {
         ws = null
       },
     )
+    ws = socket
 
-    ws.onopen = async () => {
+    socket.onopen = async () => {
       connected.value = true
       reconnectDelay = 1000
       reconnecting = false
@@ -75,7 +77,7 @@ export const useLogsStore = defineStore('logs', () => {
       await loadHistory()
     }
 
-    ws.onclose = () => {
+    socket.onclose = () => {
       connected.value = false
       ws = null
       if (closing) return // 主动关闭，不重连

@@ -143,22 +143,16 @@ describe('chat store edge cases', () => {
   // ─── WebSocket disconnect mid-stream ───────────────
 
   describe('WebSocket disconnect mid-stream', () => {
-    it('falls back to HTTP when WebSocket send fails', async () => {
+    it('fails closed when the WebSocket request fails', async () => {
       vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
         cancel: vi.fn(),
         done: Promise.reject(new Error('WebSocket connection lost')),
       }))
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
-        reply: 'HTTP fallback reply',
-        metadata: {},
-      })
-
       await chatStore.sendMessage('test message')
 
-      // Should have fallen back to HTTP
-      expect(chatSvc.sendViaBackend).toHaveBeenCalled()
-      // Should have a message in the store
-      expect(chatStore.messages.length).toBeGreaterThanOrEqual(2)
+      expect(chatSvc.sendViaBackend).not.toHaveBeenCalled()
+      expect(chatStore.error?.message).toContain('WebSocket transport unavailable')
+      expect(chatStore.messages.some((message) => message.role === 'assistant')).toBe(true)
     })
 
     it('does not fall back to HTTP when error has noFallback flag', async () => {
@@ -181,11 +175,6 @@ describe('chat store edge cases', () => {
         cancel: vi.fn(),
         done: Promise.reject(new Error('connection lost')),
       }))
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
-        reply: 'recovered',
-        metadata: {},
-      })
-
       await chatStore.sendMessage('test')
 
       expect(chatStore.streaming).toBe(false)
@@ -197,11 +186,11 @@ describe('chat store edge cases', () => {
 
   describe('empty reply handling', () => {
     it('handles empty string reply from backend', async () => {
-      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValueOnce(false)
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
-        reply: '',
-        metadata: {},
-      })
+      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValueOnce(true)
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.resolve({ content: '' }),
+      }))
 
       await chatStore.sendMessage('hello')
 
@@ -211,11 +200,11 @@ describe('chat store edge cases', () => {
     })
 
     it('handles whitespace-only reply from backend', async () => {
-      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValueOnce(false)
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
-        reply: '   ',
-        metadata: {},
-      })
+      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValueOnce(true)
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.resolve({ content: '   ' }),
+      }))
 
       await chatStore.sendMessage('hello')
 
@@ -330,28 +319,27 @@ describe('chat store edge cases', () => {
     it('error is cleared when sending a new message', async () => {
       chatStore.error = { code: 'UNKNOWN' as const, status: 500, message: 'previous error' }
 
-      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(false)
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({
-        reply: 'ok',
-        metadata: {},
-      })
+      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(true)
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.resolve({ content: 'ok' }),
+      }))
 
       await chatStore.sendMessage('test')
 
       expect(chatStore.error).toBeNull()
     })
 
-    it('error is set when both WS and HTTP fail', async () => {
+    it('error is set when the sole WebSocket transport fails', async () => {
       vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
         cancel: vi.fn(),
         done: Promise.reject(new Error('ws fail')),
       }))
-      vi.mocked(chatSvc.sendViaBackend).mockRejectedValueOnce(new Error('http fail'))
-
       await chatStore.sendMessage('test')
 
       expect(chatStore.error).toBeDefined()
-      expect(chatStore.error?.message).toContain('http fail')
+      expect(chatStore.error?.message).toContain('WebSocket transport unavailable')
+      expect(chatSvc.sendViaBackend).not.toHaveBeenCalled()
     })
   })
 

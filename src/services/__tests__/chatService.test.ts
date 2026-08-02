@@ -12,6 +12,7 @@ const {
   sendChatViaBackend,
   approvalCallbacks,
   socketInstances,
+  MockRequestWebSocket,
 } = vi.hoisted(() => ({
   wsIsConnected: vi.fn().mockReturnValue(false),
   wsConnect: vi.fn().mockResolvedValue(undefined),
@@ -31,22 +32,49 @@ const {
   }),
   wsSendMessage: vi.fn(),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
-  socketInstances: [] as Array<{
-    url: string
-    readyState: number
-    send: ReturnType<typeof vi.fn>
-    close: ReturnType<typeof vi.fn>
-    onopen: ((event?: unknown) => void) | null
-    onmessage: ((event: { data: string }) => void) | null
-    onerror: ((event?: unknown) => void) | null
-    onclose: ((event?: unknown) => void) | null
-  }>,
+  ...(() => {
+    const socketInstances: Array<{
+      url: string
+      readyState: number
+      send: ReturnType<typeof vi.fn>
+      close: ReturnType<typeof vi.fn>
+      onopen: ((event?: unknown) => void) | null
+      onmessage: ((event: { data: string }) => void) | null
+      onerror: ((event?: unknown) => void) | null
+      onclose: ((event?: unknown) => void) | null
+    }> = []
+    class MockRequestWebSocket {
+      static CONNECTING = 0
+      static OPEN = 1
+      static CLOSING = 2
+      static CLOSED = 3
+
+      url: string
+      readyState = MockRequestWebSocket.CONNECTING
+      send = vi.fn()
+      close = vi.fn(() => {
+        this.readyState = MockRequestWebSocket.CLOSED
+      })
+      onopen: ((event?: unknown) => void) | null = null
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: ((event?: unknown) => void) | null = null
+      onclose: ((event?: unknown) => void) | null = null
+
+      constructor(url: string) {
+        this.url = url
+        socketInstances.push(this)
+      }
+    }
+    return { socketInstances, MockRequestWebSocket }
+  })(),
 }))
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
-    isConnected: wsIsConnected, connect: wsConnect,
-    clearCallbacks: wsClearCallbacks, clearStreamCallbacks: vi.fn(),
+    isConnected: wsIsConnected,
+    connect: wsConnect,
+    clearCallbacks: wsClearCallbacks,
+    clearStreamCallbacks: vi.fn(),
     onChunk: wsOnChunk,
     onReply: wsOnReply,
     onError: wsOnError,
@@ -55,39 +83,24 @@ vi.mock('@/api/websocket', () => ({
   },
 }))
 vi.mock('@/api/chat', () => ({ sendChatViaBackend }))
+vi.mock('@/api/native-sidecar-websocket', () => ({ NativeSidecarWebSocket: MockRequestWebSocket }))
 
 import { hexclawWS } from '@/api/websocket'
-import { ensureWebSocketConnected, sendViaBackend, sendViaWebSocket, openWebSocketStream, resumeWebSocketStream, ChatRequestError } from '../chatService'
+import {
+  ensureWebSocketConnected,
+  sendViaBackend,
+  sendViaWebSocket,
+  openWebSocketStream,
+  resumeWebSocketStream,
+  ChatRequestError,
+} from '../chatService'
 import { DESKTOP_USER_ID } from '@/constants'
-
-class MockRequestWebSocket {
-  static CONNECTING = 0
-  static OPEN = 1
-  static CLOSED = 3
-
-  url: string
-  readyState = MockRequestWebSocket.CONNECTING
-  send = vi.fn()
-  close = vi.fn(() => {
-    this.readyState = MockRequestWebSocket.CLOSED
-  })
-  onopen: ((event?: unknown) => void) | null = null
-  onmessage: ((event: { data: string }) => void) | null = null
-  onerror: ((event?: unknown) => void) | null = null
-  onclose: ((event?: unknown) => void) | null = null
-
-  constructor(url: string) {
-    this.url = url
-    socketInstances.push(this)
-  }
-}
 
 describe('chatService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     approvalCallbacks.length = 0
     socketInstances.length = 0
-    vi.stubGlobal('WebSocket', MockRequestWebSocket as unknown as typeof WebSocket)
   })
 
   // ─── ensureWebSocketConnected ───
@@ -110,79 +123,198 @@ describe('chatService', () => {
 
   // ─── sendViaBackend ───
   it('passes temperature and maxTokens to backend', async () => {
-    await sendViaBackend('hello', 's1', { model: 'glm-5', provider: '智谱', temperature: 0.8, maxTokens: 2048 }, '', undefined)
-    expect(sendChatViaBackend).toHaveBeenCalledWith('hello', expect.objectContaining({
+    const pending = sendViaBackend(
+      'hello',
+      's1',
+      { model: 'glm-5', provider: '智谱', temperature: 0.8, maxTokens: 2048 },
+      '',
+      undefined,
+    )
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    expect(JSON.parse(socket.send.mock.calls[0]![0])).toMatchObject({
       temperature: 0.8,
-      maxTokens: 2048,
+      max_tokens: 2048,
       model: 'glm-5',
       provider: '智谱',
-    }))
+    })
+    socket.onmessage?.({ data: JSON.stringify({ type: 'reply', content: 'ok' }) })
+    await expect(pending).resolves.toMatchObject({ reply: 'ok', session_id: 's1' })
+    expect(sendChatViaBackend).not.toHaveBeenCalled()
   })
 
   it('passes undefined temperature when not set', async () => {
-    await sendViaBackend('hi', 's1', { model: 'gpt-4' }, '', undefined)
-    expect(sendChatViaBackend).toHaveBeenCalledWith('hi', expect.objectContaining({
-      temperature: undefined,
-      maxTokens: undefined,
-    }))
+    const pending = sendViaBackend('hi', 's1', { model: 'gpt-4' }, '', undefined)
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    const payload = JSON.parse(socket.send.mock.calls[0]![0])
+    expect(payload).not.toHaveProperty('temperature')
+    expect(payload).not.toHaveProperty('max_tokens')
+    socket.onmessage?.({ data: JSON.stringify({ type: 'reply', content: 'ok' }) })
+    await pending
   })
 
   it('requests thinking off for qwen thinking models via backend', async () => {
-    await sendViaBackend('hi', 's1', { model: 'qwen3.5:9b', provider: 'Ollama (本地)' }, '', undefined)
-
-    expect(sendChatViaBackend).toHaveBeenCalledWith('hi', expect.objectContaining({
+    const pending = sendViaBackend(
+      'hi',
+      's1',
+      { model: 'qwen3.5:9b', provider: 'Ollama (本地)' },
+      '',
+      undefined,
+    )
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    expect(JSON.parse(socket.send.mock.calls[0]![0])).toMatchObject({
       metadata: { thinking: 'off' },
       model: 'qwen3.5:9b',
       provider: 'Ollama (本地)',
-    }))
+    })
+    socket.onmessage?.({ data: JSON.stringify({ type: 'reply', content: 'ok' }) })
+    await pending
   })
 
   // ─── sendViaWebSocket ───
   it('sends message with temperature/maxTokens via WebSocket', async () => {
-    wsOnReply.mockImplementation((cb) => { cb({ content: 'done', type: 'reply' }); return () => {} })
-    await sendViaWebSocket('hi', 's1', { model: 'glm-5', temperature: 0.5, maxTokens: 1024 }, 'coder', undefined, {
-      onChunk: vi.fn(),
-      onDone: vi.fn(),
+    wsOnReply.mockImplementation((cb) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
     })
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', 'coder', undefined, undefined, 0.5, 1024, undefined, undefined)
+    await sendViaWebSocket(
+      'hi',
+      's1',
+      { model: 'glm-5', temperature: 0.5, maxTokens: 1024 },
+      'coder',
+      undefined,
+      {
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+      },
+    )
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hi',
+      's1',
+      'glm-5',
+      'coder',
+      undefined,
+      undefined,
+      0.5,
+      1024,
+      undefined,
+      undefined,
+    )
   })
 
   it('passes metadata through to WebSocket sendMessage', async () => {
-    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
-    await sendViaWebSocket('hi', 's1', { model: 'qwen3:8b' }, '', undefined, {
-      onChunk: vi.fn(),
-      onDone: vi.fn(),
-    }, { thinking: 'on' })
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'qwen3:8b', undefined, undefined, undefined, undefined, undefined, { thinking: 'on' }, undefined)
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
+    })
+    await sendViaWebSocket(
+      'hi',
+      's1',
+      { model: 'qwen3:8b' },
+      '',
+      undefined,
+      {
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+      },
+      { thinking: 'on' },
+    )
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hi',
+      's1',
+      'qwen3:8b',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { thinking: 'on' },
+      undefined,
+    )
   })
 
   it('requests thinking off for qwen thinking models via WebSocket by default', async () => {
-    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
+    })
     await sendViaWebSocket('hi', 's1', { model: 'qwen3.5:9b' }, '', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
     })
 
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'qwen3.5:9b', undefined, undefined, undefined, undefined, undefined, { thinking: 'off' }, undefined)
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hi',
+      's1',
+      'qwen3.5:9b',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { thinking: 'off' },
+      undefined,
+    )
   })
 
   it('does not override explicit thinking metadata for qwen models', async () => {
-    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
-    await sendViaWebSocket('hi', 's1', { model: 'qwen3.5:9b' }, '', undefined, {
-      onChunk: vi.fn(),
-      onDone: vi.fn(),
-    }, { thinking: 'on' })
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
+    })
+    await sendViaWebSocket(
+      'hi',
+      's1',
+      { model: 'qwen3.5:9b' },
+      '',
+      undefined,
+      {
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+      },
+      { thinking: 'on' },
+    )
 
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'qwen3.5:9b', undefined, undefined, undefined, undefined, undefined, { thinking: 'on' }, undefined)
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hi',
+      's1',
+      'qwen3.5:9b',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { thinking: 'on' },
+      undefined,
+    )
   })
 
   it('omits metadata when undefined', async () => {
-    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
+    })
     await sendViaWebSocket('hi', 's1', { model: 'glm-5' }, '', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
     })
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hi',
+      's1',
+      'glm-5',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    )
   })
 
   it('keeps existing tool approval listeners while starting a chat request', async () => {
@@ -203,7 +335,16 @@ describe('chatService', () => {
   })
 
   it('openWebSocketStream opens a dedicated socket and sends the request payload on that socket', async () => {
-    const handle = openWebSocketStream('hello', 's1', { model: 'glm-5', provider: '智谱' }, 'coder', undefined, undefined, { thinking: 'on' }, 'req-1')
+    const handle = openWebSocketStream(
+      'hello',
+      's1',
+      { model: 'glm-5', provider: '智谱' },
+      'coder',
+      undefined,
+      undefined,
+      { thinking: 'on' },
+      'req-1',
+    )
     const socket = socketInstances[0]
 
     expect(socket).toBeDefined()
@@ -213,20 +354,22 @@ describe('chatService', () => {
     socket!.readyState = MockRequestWebSocket.OPEN
     socket!.onopen?.()
 
-    expect(socket!.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'message',
-      content: 'hello',
-      request_id: 'req-1',
-      session_id: 's1',
-      user_id: DESKTOP_USER_ID,
-      provider: '智谱',
-      model: 'glm-5',
-      role: 'coder',
-      attachments: undefined,
-      temperature: undefined,
-      max_tokens: undefined,
-      metadata: { thinking: 'on' },
-    }))
+    expect(socket!.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'message',
+        content: 'hello',
+        request_id: 'req-1',
+        session_id: 's1',
+        user_id: DESKTOP_USER_ID,
+        provider: '智谱',
+        model: 'glm-5',
+        role: 'coder',
+        attachments: undefined,
+        temperature: undefined,
+        max_tokens: undefined,
+        metadata: { thinking: 'on' },
+      }),
+    )
 
     socket!.onmessage?.({
       data: JSON.stringify({ type: 'reply', content: 'done', metadata: { request_id: 'req-1' } }),
@@ -242,7 +385,16 @@ describe('chatService', () => {
 
   it('openWebSocketStream preserves accumulated text when the done chunk only carries tool blocks', async () => {
     const onChunk = vi.fn()
-    const handle = openWebSocketStream('hello', 's1', { model: 'glm-5' }, '', undefined, { onChunk }, undefined, 'req-tool')
+    const handle = openWebSocketStream(
+      'hello',
+      's1',
+      { model: 'glm-5' },
+      '',
+      undefined,
+      { onChunk },
+      undefined,
+      'req-tool',
+    )
     const socket = socketInstances[0]
 
     socket!.readyState = MockRequestWebSocket.OPEN
@@ -262,7 +414,13 @@ describe('chatService', () => {
         metadata: { request_id: 'req-tool' },
         blocks: [
           { type: 'tool_use', id: 'tool-1', name: 'app_query', input: {} },
-          { type: 'tool_result', toolUseId: 'tool-1', toolName: 'app_query', output: '<app-data>...</app-data>', isError: false },
+          {
+            type: 'tool_result',
+            toolUseId: 'tool-1',
+            toolName: 'app_query',
+            output: '<app-data>...</app-data>',
+            isError: false,
+          },
         ],
       }),
     })
@@ -273,7 +431,13 @@ describe('chatService', () => {
       toolCalls: undefined,
       blocks: [
         { type: 'tool_use', id: 'tool-1', name: 'app_query', input: {} },
-        { type: 'tool_result', toolUseId: 'tool-1', toolName: 'app_query', output: '<app-data>...</app-data>', isError: false },
+        {
+          type: 'tool_result',
+          toolUseId: 'tool-1',
+          toolName: 'app_query',
+          output: '<app-data>...</app-data>',
+          isError: false,
+        },
       ],
       agentName: undefined,
     })
@@ -283,7 +447,16 @@ describe('chatService', () => {
   it('keeps the request socket alive past 120s for slow real-model first responses', async () => {
     vi.useFakeTimers()
     try {
-      const handle = openWebSocketStream('slow tool request', 's1', { model: 'Qwen/Qwen3.6-35B-A3B' }, '', undefined, undefined, undefined, 'req-slow')
+      const handle = openWebSocketStream(
+        'slow tool request',
+        's1',
+        { model: 'Qwen/Qwen3.6-35B-A3B' },
+        '',
+        undefined,
+        undefined,
+        undefined,
+        'req-slow',
+      )
       const done = handle.done.catch((err: unknown) => err)
       const socket = socketInstances[0]
 
@@ -307,14 +480,25 @@ describe('chatService', () => {
   })
 
   it('openWebSocketStream cancel sends cancel on the dedicated socket and resolves without fallback', async () => {
-    const handle = openWebSocketStream('hello', 's1', { model: 'glm-5' }, '', undefined, undefined, undefined, 'req-2')
+    const handle = openWebSocketStream(
+      'hello',
+      's1',
+      { model: 'glm-5' },
+      '',
+      undefined,
+      undefined,
+      undefined,
+      'req-2',
+    )
     const socket = socketInstances[0]
 
     socket!.readyState = MockRequestWebSocket.OPEN
     socket!.onopen?.()
     handle.cancel()
 
-    expect(socket!.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'cancel', session_id: 's1', request_id: 'req-2' }))
+    expect(socket!.send).toHaveBeenLastCalledWith(
+      JSON.stringify({ type: 'cancel', session_id: 's1', request_id: 'req-2' }),
+    )
     await expect(handle.done).resolves.toBeNull()
   })
 
@@ -327,12 +511,14 @@ describe('chatService', () => {
     socket!.readyState = MockRequestWebSocket.OPEN
     socket!.onopen?.()
 
-    expect(socket!.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'resume',
-      session_id: 's1',
-      request_id: 'req-resume',
-      user_id: DESKTOP_USER_ID,
-    }))
+    expect(socket!.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'resume',
+        session_id: 's1',
+        request_id: 'req-resume',
+        user_id: DESKTOP_USER_ID,
+      }),
+    )
 
     socket!.onmessage?.({
       data: JSON.stringify({
@@ -408,18 +594,20 @@ describe('chatService', () => {
         }),
       })
 
-      expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({
-        content: 'already resumed',
-        metadata: expect.objectContaining({
-          assistant_message_id: 'assistant-backend-gap',
-          last_sequence: 3,
-          runtime_events: [
-            expect.objectContaining({ event_id: 'event-1', sequence: 1 }),
-            expect.objectContaining({ event_id: 'event-2', sequence: 2 }),
-            expect.objectContaining({ event_id: 'event-3', sequence: 3 }),
-          ],
+      expect(onSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'already resumed',
+          metadata: expect.objectContaining({
+            assistant_message_id: 'assistant-backend-gap',
+            last_sequence: 3,
+            runtime_events: [
+              expect.objectContaining({ event_id: 'event-1', sequence: 1 }),
+              expect.objectContaining({ event_id: 'event-2', sequence: 2 }),
+              expect.objectContaining({ event_id: 'event-3', sequence: 3 }),
+            ],
+          }),
         }),
-      }))
+      )
 
       socket!.onmessage?.({
         data: JSON.stringify({

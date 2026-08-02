@@ -104,6 +104,12 @@ export interface ProviderConfig {
   type: ProviderType
   enabled: boolean
   apiKey: string
+  /** Stable native-vault identity; never resolves to plaintext in the renderer. */
+  credentialRef?: string
+  /** Native Keychain value was hydrated into the current Sidecar process. */
+  credentialPresent?: boolean
+  /** Explicit secret intent for the next config transaction. */
+  apiKeyMutation?: 'preserve' | 'replace' | 'delete'
   baseUrl: string
   models: ModelOption[]
   /** 当前 provider 在后端运行时默认使用的模型 */
@@ -288,7 +294,13 @@ export interface AppConfig {
 export interface BackendLLMProvider {
   provider_instance_id?: string
   display_name?: string
-  api_key: string
+  api_key?: string
+  credential_ref?: string
+  credential_present?: boolean
+  api_key_mutation?: {
+    mode: 'preserve' | 'replace' | 'delete'
+    credential_ref?: string
+  }
   base_url: string
   model: string
   models?: string[]              // 已配置的模型列表（桌面端持久化用）
@@ -304,6 +316,12 @@ export interface BackendLLMProvider {
   enabled?: boolean              // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
   keep_alive?: string            // 本地模型驻留时长（仅 Ollama；空=后端默认 30m · BUG-20260710 P1）
   num_ctx?: number               // 本地模型上下文上限；0=自动
+}
+
+/** Plaintext exists only for the duration of one native coordinator invoke. */
+export interface ProviderCredentialReplacement {
+  providerKey: string
+  secret: string
 }
 
 /** 后端 LLM 配置（匹配 GET/PUT /api/v1/config/llm） */

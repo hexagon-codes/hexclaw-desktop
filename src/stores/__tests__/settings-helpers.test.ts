@@ -5,9 +5,8 @@ import type { ProviderConfig, ModelOption, ModelCapability, BackendLLMConfig, Ap
 /*  Mocks                                                              */
 /* ------------------------------------------------------------------ */
 vi.mock('@/utils/secure-store', () => ({
-  saveSecureValue: vi.fn(),
-  loadSecureValue: vi.fn(),
-  removeSecureValue: vi.fn(),
+  credentialPresent: vi.fn().mockResolvedValue(false),
+  credentialRefFor: vi.fn((key: { ownerId: string }) => `llm_provider/${key.ownerId}/api_key`),
 }))
 vi.mock('@/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
 
@@ -32,7 +31,7 @@ import {
   resolveDefaultModelProviderId,
 } from '@/stores/settings-helpers'
 
-import { saveSecureValue, loadSecureValue, removeSecureValue } from '@/utils/secure-store'
+import { credentialPresent } from '@/utils/secure-store'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -1031,17 +1030,27 @@ describe('providersToBackend', () => {
 
 /* ============== restoreProviderApiKeys ============== */
 describe('restoreProviderApiKeys', () => {
-  it('replaces apiKey from secure store when available', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue('real-secret-key')
-    const providers = [makeProvider({ id: 'p1', apiKey: '****mask' })]
+  it('keeps plaintext out of renderer and restores only native presence metadata', async () => {
+    vi.mocked(credentialPresent).mockResolvedValue(true)
+    const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    const providers = [makeProvider({
+      id: 'p1',
+      providerInstanceId,
+      credentialRef: `llm_provider/${providerInstanceId}/api_key`,
+      apiKey: '****mask',
+    })]
 
     const result = await restoreProviderApiKeys(providers)
-    expect(result[0]!.apiKey).toBe('real-secret-key')
-    expect(loadSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey')
+    expect(result[0]!.apiKey).toBe('********')
+    expect(result[0]!.credentialPresent).toBe(true)
+    expect(credentialPresent).toHaveBeenCalledWith({
+      ownerKind: 'provider',
+      ownerId: providerInstanceId,
+      secretKind: 'api_key',
+    })
   })
 
-  it('keeps original apiKey when nothing in secure store', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue(null)
+  it('keeps original apiKey when no credential ref exists', async () => {
     const providers = [makeProvider({ id: 'p1', apiKey: 'original-key' })]
 
     const result = await restoreProviderApiKeys(providers)
@@ -1049,7 +1058,6 @@ describe('restoreProviderApiKeys', () => {
   })
 
   it('returns deep cloned providers', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue(null)
     const src = [makeProvider()]
     const result = await restoreProviderApiKeys(src)
 
@@ -1065,33 +1073,31 @@ describe('materializeProviderApiKeys', () => {
     const providers = [makeProvider({ id: 'p1', apiKey: 'sk-real-key' })]
     const result = await materializeProviderApiKeys(providers)
     expect(result[0]!.apiKey).toBe('sk-real-key')
-    expect(loadSecureValue).not.toHaveBeenCalled()
+    expect(result[0]!.apiKeyMutation).toBe('replace')
   })
 
   it('does not touch empty key', async () => {
     const providers = [makeProvider({ id: 'p1', apiKey: '' })]
     const result = await materializeProviderApiKeys(providers)
     expect(result[0]!.apiKey).toBe('')
-    expect(loadSecureValue).not.toHaveBeenCalled()
+    expect(result[0]!.apiKeyMutation).toBe('delete')
   })
 
-  it('replaces masked key with secure store value', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue('real-secret')
-    const providers = [makeProvider({ id: 'p1', apiKey: '****mask' })]
+  it('preserves a masked key without resolving plaintext', async () => {
+    const providers = [makeProvider({ id: 'p1', apiKey: '****mask', backendKey: 'p1' })]
 
     const result = await materializeProviderApiKeys(providers)
-    expect(result[0]!.apiKey).toBe('real-secret')
+    expect(result[0]!.apiKey).toBe('****mask')
+    expect(result[0]!.apiKeyMutation).toBe('preserve')
   })
 
   it('throws when masked key has no secure store AND no backendKey', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue(null)
     const providers = [makeProvider({ id: 'p1', name: 'TestProv', apiKey: '****mask', backendKey: undefined })]
 
     await expect(materializeProviderApiKeys(providers)).rejects.toThrow(/API Key/)
   })
 
   it('continues silently when masked key has no secure store but has backendKey', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue(null)
     const providers = [makeProvider({ id: 'p1', apiKey: '****mask', backendKey: 'existing-backend' })]
 
     const result = await materializeProviderApiKeys(providers)
@@ -1100,7 +1106,6 @@ describe('materializeProviderApiKeys', () => {
   })
 
   it('handles whitespace-only backendKey as missing', async () => {
-    vi.mocked(loadSecureValue).mockResolvedValue(null)
     const providers = [makeProvider({ id: 'p1', name: 'X', apiKey: '****mask', backendKey: '   ' })]
 
     await expect(materializeProviderApiKeys(providers)).rejects.toThrow(/API Key/)
@@ -1109,45 +1114,8 @@ describe('materializeProviderApiKeys', () => {
 
 /* ============== syncProviderApiKeys ============== */
 describe('syncProviderApiKeys', () => {
-  it('removes secure keys for deleted providers', async () => {
-    const previous = [makeProvider({ id: 'deleted-1' }), makeProvider({ id: 'kept' })]
-    const current = [makeProvider({ id: 'kept', apiKey: 'sk-new' })]
-
-    await syncProviderApiKeys(current, previous)
-    expect(removeSecureValue).toHaveBeenCalledWith('llm.provider.deleted-1.apiKey')
-  })
-
-  it('saves non-masked apiKeys to secure store', async () => {
-    const providers = [makeProvider({ id: 'p1', apiKey: 'sk-real-key' })]
-    await syncProviderApiKeys(providers)
-    expect(saveSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey', 'sk-real-key')
-  })
-
-  it('skips saving masked apiKeys', async () => {
-    const providers = [makeProvider({ id: 'p1', apiKey: '****mask' })]
-    await syncProviderApiKeys(providers)
-    expect(saveSecureValue).not.toHaveBeenCalled()
-  })
-
-  it('removes secure key when provider apiKey is empty', async () => {
-    const providers = [makeProvider({ id: 'p1', apiKey: '' })]
-    await syncProviderApiKeys(providers)
-    expect(removeSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey')
-    expect(saveSecureValue).not.toHaveBeenCalled()
-  })
-
-  it('handles empty previous providers', async () => {
-    const providers = [makeProvider({ id: 'new-one', apiKey: 'key123' })]
-    await syncProviderApiKeys(providers, [])
-    expect(removeSecureValue).not.toHaveBeenCalled()
-    expect(saveSecureValue).toHaveBeenCalledWith('llm.provider.new-one.apiKey', 'key123')
-  })
-
-  it('handles whitespace-only apiKey as empty', async () => {
-    const providers = [makeProvider({ id: 'p1', apiKey: '   ' })]
-    await syncProviderApiKeys(providers)
-    // trimmed to empty → removeSecureValue path
-    expect(removeSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey')
+  it('fails closed because standalone provider vault mutation is forbidden', async () => {
+    await expect(syncProviderApiKeys()).rejects.toThrow('standalone')
   })
 })
 

@@ -1,45 +1,57 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { saveMock, invokeMock, shellOpenMock } = vi.hoisted(() => ({
-  saveMock: vi.fn(),
-  invokeMock: vi.fn(),
+const { pickSaveFileGrantMock, downloadIntoGrantMock, shellOpenMock } = vi.hoisted(() => ({
+  pickSaveFileGrantMock: vi.fn(),
+  downloadIntoGrantMock: vi.fn(),
   shellOpenMock: vi.fn(),
 }))
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({ save: (...a: unknown[]) => saveMock(...a) }))
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }))
+vi.mock('@/api/native-files', () => ({
+  pickSaveFileGrant: (...args: unknown[]) => pickSaveFileGrantMock(...args),
+  downloadIntoGrant: (...args: unknown[]) => downloadIntoGrantMock(...args),
+}))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: (...a: unknown[]) => shellOpenMock(...a) }))
 
 import { downloadInApp, openOrDownloadDocument } from '../download'
 
 describe('downloadInApp — 应用内下载（原生 Save 对话框 + Rust 写盘）', () => {
+  const grant = {
+    grantId: 'save-grant-1',
+    operationId: 'native-save:test',
+    purpose: 'save_download',
+    name: '会话.pdf',
+    mime: 'application/pdf',
+    size: 0,
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
-    invokeMock.mockResolvedValue(123)
+    pickSaveFileGrantMock.mockResolvedValue(grant)
+    downloadIntoGrantMock.mockResolvedValue({ status: 200, bytesTransferred: 123 })
   })
 
-  it('http(s) 源 → save_file_from_url，绝不走浏览器/shell', async () => {
-    saveMock.mockResolvedValueOnce('/Users/me/会话.pdf')
+  it('http(s) 源 → opaque grant 流式下载，绝不暴露路径或走浏览器/shell', async () => {
     const ret = await downloadInApp('http://localhost:16060/api/v1/documents/preview/tok', '会话.pdf')
-    expect(saveMock).toHaveBeenCalledWith({ defaultPath: '会话.pdf' })
-    expect(invokeMock).toHaveBeenCalledWith('save_file_from_url', {
-      url: 'http://localhost:16060/api/v1/documents/preview/tok',
-      path: '/Users/me/会话.pdf',
-    })
+    expect(pickSaveFileGrantMock).toHaveBeenCalledWith('会话.pdf', 'save_download')
+    expect(downloadIntoGrantMock).toHaveBeenCalledWith(
+      grant,
+      'http://localhost:16060/api/v1/documents/preview/tok',
+    )
     expect(shellOpenMock).not.toHaveBeenCalled()
-    expect(ret).toBe('/Users/me/会话.pdf')
+    expect(ret).toBe('会话.pdf')
   })
 
-  it('data: 源 → save_bytes_to_path（base64）', async () => {
-    saveMock.mockResolvedValueOnce('/Users/me/x.pdf')
-    await downloadInApp('data:application/pdf;base64,QUJD', 'x.pdf')
-    expect(invokeMock).toHaveBeenCalledWith('save_bytes_to_path', { base64Data: 'QUJD', path: '/Users/me/x.pdf' })
+  it('拒绝 data URL，二进制不得经 renderer base64 传输', async () => {
+    await expect(downloadInApp('data:application/pdf;base64,QUJD', 'x.pdf')).rejects.toThrow(
+      'unsupported src',
+    )
+    expect(downloadIntoGrantMock).not.toHaveBeenCalled()
   })
 
   it('用户取消 Save 对话框 → 不写盘，返回 null', async () => {
-    saveMock.mockResolvedValueOnce(null)
+    pickSaveFileGrantMock.mockResolvedValueOnce(null)
     const ret = await downloadInApp('http://localhost/x', 'x.pdf')
-    expect(invokeMock).not.toHaveBeenCalled()
+    expect(downloadIntoGrantMock).not.toHaveBeenCalled()
     expect(ret).toBeNull()
   })
 })

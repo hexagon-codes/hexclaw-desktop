@@ -229,7 +229,7 @@ export function normalizeRuntimeSnapshotMetadata(
   fallbackAssistantMessageId?: string,
   route?: { provider?: string; model?: string },
 ): ChatMessageMetadata {
-  const metadata: ChatMessageMetadata = { ...(source ?? {}) }
+  const metadata: ChatMessageMetadata = { ...source }
   const canonical = nonEmptyString(metadata.assistant_message_id)
     ? metadata.assistant_message_id
     : nonEmptyString(metadata.message_id)
@@ -295,7 +295,7 @@ export function normalizeThinkingMetadata(
   reasoning?: string,
   terminalState?: Extract<ThinkingState, 'completed' | 'failed' | 'cancelled'>,
 ): ChatMessageMetadata | undefined {
-  const metadata: ChatMessageMetadata = { ...(source ?? {}) }
+  const metadata: ChatMessageMetadata = { ...source }
   const duration = normalizeThinkingDuration(metadata.thinking_duration)
   if (duration == null) delete metadata.thinking_duration
   else metadata.thinking_duration = duration
@@ -488,6 +488,8 @@ export interface ChatAttachment {
   type: 'image' | 'video' | 'audio' | 'file'
   name: string
   mime: string
+  /** Opaque owner-bound Sidecar receipt used on the chat wire. */
+  attachmentId?: string
   /**
    * 附件数据。可能是：
    * - base64（历史数据 / 上传时），形如 "xxxxxx"

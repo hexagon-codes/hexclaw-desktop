@@ -3,7 +3,7 @@
  *
  * 背景：Tauri WKWebView 里 `<a download>` / blob URL 不可靠，且全局点击拦截会把
  * http(s) 链接交给 `shell.open` → 系统浏览器。下载类动作必须走原生 Save 对话框，
- * 由 Rust 侧 `save_file_from_url`（http/s）/ `save_bytes_to_path`（data:）写盘，
+ * 由 Rust 侧 opaque grant 流式写盘，
  * 获得"本应用下载"的体验。
  */
 
@@ -11,25 +11,18 @@ import { open as shellOpen } from '@tauri-apps/plugin-shell'
 
 /**
  * 弹原生 Save 对话框让用户选路径，再由 Rust 写盘。返回保存路径；用户取消返回 null。
- * http(s) → save_file_from_url（流式，不进 JS 内存）；data: → save_bytes_to_path。
+ * http(s) 资源全程由 Rust 流式落盘；不接受内嵌二进制 data URL。
  */
 export async function downloadInApp(src: string, filename: string): Promise<string | null> {
-  const { save } = await import('@tauri-apps/plugin-dialog')
-  const { invoke } = await import('@tauri-apps/api/core')
+  const { downloadIntoGrant, pickSaveFileGrant } = await import('@/api/native-files')
+  const grant = await pickSaveFileGrant(filename, 'save_download')
+  if (!grant) return null // 用户取消
 
-  const chosen = await save({ defaultPath: filename })
-  if (!chosen) return null // 用户取消
-
-  if (src.startsWith('data:')) {
-    const comma = src.indexOf(',')
-    if (comma < 0) throw new Error('invalid data URL')
-    await invoke<number>('save_bytes_to_path', { base64Data: src.slice(comma + 1), path: chosen })
-  } else if (src.startsWith('http')) {
-    await invoke<number>('save_file_from_url', { url: src, path: chosen })
-  } else {
+  if (!src.startsWith('http')) {
     throw new Error(`unsupported src: ${src.slice(0, 32)}`)
   }
-  return chosen
+  await downloadIntoGrant(grant, src)
+  return grant.name
 }
 
 export interface OpenDocumentDeps {

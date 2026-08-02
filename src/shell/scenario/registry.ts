@@ -135,6 +135,10 @@ interface RegistryState {
   scenarioTemplates: ScenarioTemplate[]
   /** 自动化 Webhook 页的场景管理扩展（领域 UI 仍由 features/* 提供） */
   webhookManagementExtensions: WebhookManagementExtension[]
+  /** 应用根级展示扩展；通用壳只负责装配，不解释场景语义。 */
+  globalPresentationExtensions: Component[]
+  /** 系统外观设置扩展；具体可见内容与状态仍由场景包拥有。 */
+  appearanceSettingsExtensions: Component[]
   /** 场景实例内部名模式（BUG-20260712：实例已删除时元数据不复存在，shell 靠名字形状
    *  识别遗留孤儿会话——如标题恰为某场景实例内部名 → 显示「已删除的智能体」） */
   instanceIdPatterns: RegExp[]
@@ -152,6 +156,8 @@ function createState(): RegistryState {
     agentCardBadgeKey: null,
     scenarioTemplates: [],
     webhookManagementExtensions: [],
+    globalPresentationExtensions: [],
+    appearanceSettingsExtensions: [],
     instanceIdPatterns: [],
   }
 }
@@ -267,6 +273,22 @@ export const scenarioRegistry = {
   },
   get webhookManagementExtensions(): readonly WebhookManagementExtension[] {
     return state.webhookManagementExtensions
+  },
+
+  /** 注册应用根级展示扩展（通用 Layout 不 import 任一场景包）。 */
+  registerGlobalPresentationExtension(component: Component): void {
+    state.globalPresentationExtensions.push(component)
+  },
+  get globalPresentationExtensions(): readonly Component[] {
+    return state.globalPresentationExtensions
+  },
+
+  /** 注册系统外观设置扩展（通用设置页不持有场景状态）。 */
+  registerAppearanceSettingsExtension(component: Component): void {
+    state.appearanceSettingsExtensions.push(component)
+  },
+  get appearanceSettingsExtensions(): readonly Component[] {
+    return state.appearanceSettingsExtensions
   },
 
   /** 注册动作 handler */

@@ -13,23 +13,26 @@ type AppConfigOverrides = Omit<
   mcp?: Partial<AppConfig['mcp']>
 }
 
-const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig, mockLogger } = vi.hoisted(() => ({
-  state: {
-    savedConfig: null as AppConfig | null,
-    secureValues: new Map<string, string>(),
-    loadSecureValueHook: null as null | ((key: string) => Promise<string | null>),
-  },
-  mockGetLLMConfig: vi.fn(),
-  mockUpdateLLMConfig: vi.fn().mockResolvedValue({}),
-  mockUpdateConfig: vi.fn().mockResolvedValue({}),
-  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}))
+const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig, mockLogger } = vi.hoisted(
+  () => ({
+    state: {
+      savedConfig: null as AppConfig | null,
+      secureValues: new Map<string, string>(),
+      loadSecureValueHook: null as null | ((key: string) => Promise<string | null>),
+    },
+    mockGetLLMConfig: vi.fn(),
+    mockUpdateLLMConfig: vi.fn().mockResolvedValue({}),
+    mockUpdateConfig: vi.fn().mockResolvedValue({}),
+    mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }),
+)
 
 vi.mock('@/utils/logger', () => ({ logger: mockLogger }))
 
 vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
-  updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
+  updateLLMConfig: (config: unknown, replacements: unknown) =>
+    mockUpdateLLMConfig(config, replacements),
   fetchProviderModels: vi.fn().mockResolvedValue([]),
 }))
 
@@ -38,6 +41,11 @@ vi.mock('@/api/settings', () => ({
 }))
 
 vi.mock('@/utils/secure-store', () => ({
+  credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
+    key.ownerKind === 'provider'
+      ? `llm_provider/${key.ownerId}/api_key`
+      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
+  credentialPresent: vi.fn().mockResolvedValue(true),
   loadSecureValue: vi.fn(async (key: string) => {
     if (state.loadSecureValueHook) return state.loadSecureValueHook(key)
     return state.secureValues.get(key) ?? null
@@ -194,14 +202,11 @@ describe('Settings Store persistence', () => {
     expect(provider.id).toBe('custom-1')
     expect(provider.name).toBe('API Mart')
     expect(provider.type).toBe('custom')
-    expect(provider.apiKey).toBe('sk-live-key')
-    expect(provider.models.map((model) => model.id)).toEqual([
-      'claude-sonnet-4-6-test',
-      'gpt-4o',
-    ])
+    expect(provider.apiKey).toBe('****key')
+    expect(provider.models.map((model) => model.id)).toEqual(['claude-sonnet-4-6-test', 'gpt-4o'])
   })
 
-  it('保存时用安全存储中的真实 API Key，避免把脱敏值写回后端', async () => {
+  it('保存脱敏 provider 时只提交 preserve mutation，不把明文或掩码写入配置', async () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider()],
@@ -221,7 +226,9 @@ describe('Settings Store persistence', () => {
 
     expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(1)
     const backendConfig = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
-    expect(backendConfig.providers['API Mart']!.api_key).toBe('sk-live-key')
+    expect(backendConfig.providers['API Mart']).not.toHaveProperty('api_key')
+    expect(backendConfig.providers['API Mart']!.api_key_mutation).toEqual({ mode: 'preserve' })
+    expect(mockUpdateLLMConfig.mock.calls[0]![1]).toEqual([])
     expect(backendConfig.default).toBe('API Mart')
     expect(state.savedConfig!.llm.providers[0]!.apiKey).toBe('')
     expect(state.savedConfig!.llm.defaultProviderId).toBe('custom-1')
@@ -313,9 +320,7 @@ describe('Settings Store persistence', () => {
           model: 'chat-model',
           models: ['chat-model'],
           model_specs_mode: 'explicit',
-          model_specs: [
-            { id: 'chat-model', display_name: 'Chat Model', capabilities: ['text'] },
-          ],
+          model_specs: [{ id: 'chat-model', display_name: 'Chat Model', capabilities: ['text'] }],
           compatible: 'openai',
           locality: 'cloud',
           enabled: true,
@@ -367,7 +372,9 @@ describe('Settings Store persistence', () => {
     expect(Object.keys(firstPayload.providers)).toEqual([canonicalBackendKey])
     expect(firstPayload.providers[canonicalBackendKey]!.provider_instance_id).toBeUndefined()
     expect(Object.keys(secondPayload.providers)).toEqual([canonicalBackendKey])
-    expect(secondPayload.providers[canonicalBackendKey]!.provider_instance_id).toBe(serverProviderId)
+    expect(secondPayload.providers[canonicalBackendKey]!.provider_instance_id).toBe(
+      serverProviderId,
+    )
     expect(secondPayload.providers).not.toHaveProperty('Renamed for display')
     const afterRename = store.config!.llm.providers.find((provider) => provider.id === created.id)!
     expect(afterRename).toMatchObject({
@@ -457,7 +464,8 @@ describe('Settings Store persistence', () => {
     await store.saveConfig(store.config!)
 
     const backendConfig = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
-    expect(backendConfig.providers['API Mart']!.api_key).toBe('****key')
+    expect(backendConfig.providers['API Mart']).not.toHaveProperty('api_key')
+    expect(backendConfig.providers['API Mart']!.api_key_mutation).toEqual({ mode: 'preserve' })
   })
 
   it('拒绝保存重名 provider，避免后端按名称落键时互相覆盖', async () => {
@@ -507,7 +515,7 @@ describe('Settings Store persistence', () => {
     expect(store.config!.llm.defaultModel).toBe('')
   })
 
-  it('保存等待安全存储期间产生的新编辑不会被旧快照覆盖', async () => {
+  it('保存等待原生配置协调器期间产生的新编辑不会被旧快照覆盖', async () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider()],
@@ -523,24 +531,23 @@ describe('Settings Store persistence', () => {
     await store.loadConfig()
     store.config!.llm.providers[0]!.apiKey = '****key'
 
-    let releaseSecureLoad!: () => void
-    let markSecureLoadStarted!: () => void
-    const secureLoadGate = new Promise<void>((resolve) => {
-      releaseSecureLoad = resolve
+    let releaseCoordinator!: () => void
+    let markCoordinatorStarted!: () => void
+    const coordinatorGate = new Promise<void>((resolve) => {
+      releaseCoordinator = resolve
     })
-    const secureLoadStarted = new Promise<void>((resolve) => {
-      markSecureLoadStarted = resolve
+    const coordinatorStarted = new Promise<void>((resolve) => {
+      markCoordinatorStarted = resolve
     })
-    state.loadSecureValueHook = async (key) => {
-      markSecureLoadStarted()
-      await secureLoadGate
-      return state.secureValues.get(key) ?? null
-    }
+    mockUpdateLLMConfig.mockImplementationOnce(async () => {
+      markCoordinatorStarted()
+      await coordinatorGate
+    })
 
     const save = store.saveConfig(store.config!)
-    await secureLoadStarted
+    await coordinatorStarted
     store.config!.llm.providers[0]!.name = 'Edited while saving'
-    releaseSecureLoad()
+    releaseCoordinator()
     await save
 
     expect(store.config!.llm.providers[0]!.name).toBe('Edited while saving')
@@ -549,7 +556,7 @@ describe('Settings Store persistence', () => {
     expect(payload.providers).not.toHaveProperty('Edited while saving')
   })
 
-  it('provider 删除保存成功后清理最后一次持久化快照对应的安全 Key', async () => {
+  it('provider 删除通过同一次原生配置提交完成，不调用 renderer vault API', async () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider()],
@@ -567,10 +574,12 @@ describe('Settings Store persistence', () => {
 
     await store.saveConfig(store.config!)
 
-    expect(state.secureValues.has('llm.provider.custom-1.apiKey')).toBe(false)
+    const payload = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
+    expect(payload.providers).toEqual({})
+    expect(mockUpdateLLMConfig.mock.calls[0]![1]).toEqual([])
   })
 
-  it('provider 删除保存失败时保留上次成功配置的安全 Key', async () => {
+  it('provider 原子删除失败时不覆盖上次成功的本地快照', async () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider()],
@@ -589,7 +598,8 @@ describe('Settings Store persistence', () => {
 
     await expect(store.saveConfig(store.config!)).rejects.toThrow('backend unavailable')
 
-    expect(state.secureValues.get('llm.provider.custom-1.apiKey')).toBe('sk-live-key')
+    expect(state.savedConfig!.llm.providers).toHaveLength(1)
+    expect(state.savedConfig!.llm.providers[0]!.id).toBe('custom-1')
   })
 
   it('安全和 sandbox 同步失败时应同时回滚内存状态和本地持久化', async () => {

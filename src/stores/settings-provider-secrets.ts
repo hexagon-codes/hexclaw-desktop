@@ -1,9 +1,20 @@
-import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
-import type { ProviderConfig } from '@/types'
+import { credentialPresent, credentialRefFor, type CredentialKey } from '@/utils/secure-store'
+import type { ProviderConfig, ProviderCredentialReplacement } from '@/types'
 import { cloneProviders } from './settings-provider-copy'
 
-function secureApiKeyKey(providerId: string): string {
-  return `llm.provider.${providerId}.apiKey`
+function providerCredentialKey(provider: ProviderConfig): CredentialKey {
+  if (!provider.providerInstanceId) {
+    throw new Error('provider credential requires a stable provider identity')
+  }
+  return {
+    ownerKind: 'provider',
+    ownerId: provider.providerInstanceId,
+    secretKind: 'api_key',
+  }
+}
+
+function providerWireKey(provider: ProviderConfig): string {
+  return provider.backendKey || provider.name || provider.id
 }
 
 export function isMaskedApiKey(value: string | undefined | null): boolean {
@@ -14,14 +25,26 @@ export async function restoreProviderApiKeys(
   providers: ProviderConfig[],
 ): Promise<ProviderConfig[]> {
   const restoredProviders = cloneProviders(providers)
-
   for (const provider of restoredProviders) {
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (secureApiKey) {
-      provider.apiKey = secureApiKey
+    if (provider.credentialRef) {
+      const key = providerCredentialKey(provider)
+      const expectedRef = credentialRefFor(key)
+      if (provider.credentialRef !== expectedRef) {
+        throw new Error('provider credential reference conflicts with stable identity')
+      }
+      const present = provider.credentialPresent ?? (await credentialPresent(key))
+      provider.credentialPresent = present
+      // Keep the approved masked presentation stable. The materialization
+      // boundary still refuses preserve when native presence is false.
+      provider.apiKey = '********'
+      provider.apiKeyMutation = 'preserve'
+      continue
+    }
+    if (isMaskedApiKey(provider.apiKey)) {
+      // Legacy inline Sidecar secret: preserve without ever mapping mask -> empty.
+      provider.apiKeyMutation = 'preserve'
     }
   }
-
   return restoredProviders
 }
 
@@ -29,46 +52,58 @@ export async function materializeProviderApiKeys(
   providers: ProviderConfig[],
 ): Promise<ProviderConfig[]> {
   const normalizedProviders = cloneProviders(providers)
-
   for (const provider of normalizedProviders) {
-    const currentApiKey = provider.apiKey.trim()
-    if (!currentApiKey) continue
-    if (!isMaskedApiKey(currentApiKey)) continue
-
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (!secureApiKey) {
-      if (provider.backendKey?.trim()) {
-        continue
+    const apiKey = provider.apiKey.trim()
+    if (isMaskedApiKey(apiKey)) {
+      if (provider.credentialRef) {
+        const expectedRef = credentialRefFor(providerCredentialKey(provider))
+        if (provider.credentialRef !== expectedRef || provider.credentialPresent === false) {
+          throw new Error(
+            `服务商 ${provider.name || provider.id} 的 API Key 只有脱敏值，请重新输入完整 Key 后再保存`,
+          )
+        }
+      } else if (!provider.backendKey?.trim()) {
+        throw new Error(
+          `服务商 ${provider.name || provider.id} 的 API Key 只有脱敏值，请重新输入完整 Key 后再保存`,
+        )
       }
-      throw new Error(
-        `服务商 ${provider.name || provider.id} 的 API Key 只有脱敏值，请重新输入完整 Key 后再保存`,
-      )
+      provider.apiKeyMutation = 'preserve'
+      continue
     }
-    provider.apiKey = secureApiKey
-  }
 
+    if (apiKey) {
+      provider.credentialRef = provider.providerInstanceId
+        ? credentialRefFor(providerCredentialKey(provider))
+        : undefined
+      provider.credentialPresent = undefined
+      provider.apiKeyMutation = 'replace'
+      continue
+    }
+
+    provider.apiKeyMutation = 'delete'
+  }
   return normalizedProviders
 }
 
-export async function syncProviderApiKeys(
+export function providerCredentialReplacements(
   providers: ProviderConfig[],
-  previousProviders: ProviderConfig[] = [],
-): Promise<void> {
-  const nextProviderIds = new Set(providers.map((provider) => provider.id))
+): ProviderCredentialReplacement[] {
+  return providers
+    .filter((provider) => provider.apiKeyMutation === 'replace')
+    .map((provider) => {
+      const secret = provider.apiKey.trim()
+      if (!secret || isMaskedApiKey(secret)) {
+        throw new Error('replace mutation requires one plaintext native secret')
+      }
+      return { providerKey: providerWireKey(provider), secret }
+    })
+}
 
-  for (const previousProvider of previousProviders) {
-    if (!nextProviderIds.has(previousProvider.id)) {
-      await removeSecureValue(secureApiKeyKey(previousProvider.id))
-    }
-  }
-
-  for (const provider of providers) {
-    const apiKey = provider.apiKey.trim()
-    if (!apiKey) {
-      await removeSecureValue(secureApiKeyKey(provider.id))
-      continue
-    }
-    if (isMaskedApiKey(apiKey)) continue
-    await saveSecureValue(secureApiKeyKey(provider.id), apiKey)
-  }
+/**
+ * Removed production boundary. Provider mutations must be committed together
+ * with the Sidecar config by the native coordinator; standalone vault sync is
+ * deliberately fail-closed to prevent split-brain state.
+ */
+export async function syncProviderApiKeys(): Promise<never> {
+  throw new Error('standalone provider credential sync is forbidden')
 }

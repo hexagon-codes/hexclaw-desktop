@@ -14,14 +14,16 @@
  *  - error：保留给用户看，由下一轮上传开始时 clearErrors 清理。
  */
 import { defineStore } from 'pinia'
-import { reactive, ref, watch } from 'vue'
-
-const DURABLE_UPLOADS_STORAGE_KEY = 'hexclaw:knowledge-upload-jobs:v1'
+import { reactive, ref } from 'vue'
+import type { KnowledgeOperation, KnowledgeOperationState } from '@/api/knowledge'
 
 export interface KnowledgeUploadEntry {
   name: string
   progress: number
   status: 'uploading' | 'pending-response' | 'processing' | 'done' | 'error' | 'cancelled'
+  operationId?: string
+  operationUpdatedAt?: string
+  operationTerminal?: boolean
   intentKey?: string
   sourceSha256?: string
   documentId?: string
@@ -34,114 +36,24 @@ export interface KnowledgeUploadEntry {
 
 /** settle 匹配用的最小文档形状（api Document 的子集） */
 interface DocLike {
+  id?: string
   source?: string
   title?: string
 }
 
-function loadDurableUploadEntries(): KnowledgeUploadEntry[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(DURABLE_UPLOADS_STORAGE_KEY)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((value): KnowledgeUploadEntry[] => {
-      if (typeof value !== 'object' || value === null) return []
-      const candidate = value as Partial<KnowledgeUploadEntry>
-      if (typeof candidate.name !== 'string') {
-        return []
-      }
-      if (candidate.status === 'pending-response') {
-        if (
-          typeof candidate.intentKey !== 'string' ||
-          !candidate.intentKey.startsWith('knowledge-upload:') ||
-          typeof candidate.sourceSha256 !== 'string' ||
-          !/^[0-9a-f]{64}$/.test(candidate.sourceSha256)
-        ) {
-          return []
-        }
-        return [
-          {
-            name: candidate.name,
-            progress: 100,
-            status: 'pending-response',
-            intentKey: candidate.intentKey,
-            sourceSha256: candidate.sourceSha256,
-            error: typeof candidate.error === 'string' ? candidate.error : undefined,
-          },
-        ]
-      }
-      if (
-        typeof candidate.documentId !== 'string' ||
-        typeof candidate.jobId !== 'string' ||
-        (candidate.status !== 'processing' && candidate.status !== 'done')
-      )
-        return []
-      return [
-        {
-          name: candidate.name,
-          progress: 100,
-          status: candidate.status,
-          documentId: candidate.documentId,
-          jobId: candidate.jobId,
-          stage: typeof candidate.stage === 'string' ? candidate.stage : undefined,
-        },
-      ]
-    })
-  } catch {
-    return []
-  }
-}
+const OPERATION_STATUS = {
+  receiving: 'uploading',
+  pending_response: 'pending-response',
+  queued: 'processing',
+  running: 'processing',
+  retry_wait: 'processing',
+  succeeded: 'done',
+  failed: 'error',
+  cancelled: 'cancelled',
+} as const satisfies Record<KnowledgeOperationState, KnowledgeUploadEntry['status']>
 
 export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
-  const items = ref<KnowledgeUploadEntry[]>(loadDurableUploadEntries())
-
-  watch(
-    items,
-    (current) => {
-      try {
-        const durable = current.flatMap<KnowledgeUploadEntry>((entry): KnowledgeUploadEntry[] => {
-          if (entry.status === 'pending-response' && entry.intentKey && entry.sourceSha256) {
-            return [
-              {
-                name: entry.name,
-                progress: 100,
-                status: entry.status,
-                intentKey: entry.intentKey,
-                sourceSha256: entry.sourceSha256,
-                error: entry.error,
-              },
-            ]
-          }
-          if (
-            (entry.status === 'processing' || entry.status === 'done') &&
-            entry.documentId &&
-            entry.jobId
-          ) {
-            return [
-              {
-                name: entry.name,
-                progress: 100,
-                status: entry.status,
-                documentId: entry.documentId,
-                jobId: entry.jobId,
-                stage: entry.stage,
-              },
-            ]
-          }
-          return []
-        })
-        if (durable.length === 0) {
-          globalThis.localStorage?.removeItem(DURABLE_UPLOADS_STORAGE_KEY)
-        } else {
-          globalThis.localStorage?.setItem(DURABLE_UPLOADS_STORAGE_KEY, JSON.stringify(durable))
-        }
-      } catch {
-        // Browser storage can be unavailable (private mode/quota). The server
-        // Job remains durable; this only disables local progress restoration.
-      }
-    },
-    { deep: true },
-  )
+  const items = ref<KnowledgeUploadEntry[]>([])
 
   /** 登记一个条目并返回其响应式引用——上传任务直接改 entry.progress/status 即驱动 UI */
   function track(init: KnowledgeUploadEntry): KnowledgeUploadEntry {
@@ -190,55 +102,137 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     if (entry.status === 'done' || entry.status === 'cancelled') return
     entry.progress = 100
     entry.status = 'pending-response'
+    entry.operationTerminal = false
     entry.error = error
   }
 
   /** Bind the accepted upload to the durable backend state machine returned by HTTP 202. */
-  function attachJob(entry: KnowledgeUploadEntry, documentId: string, jobId: string): void {
+  function attachJob(
+    entry: KnowledgeUploadEntry,
+    documentId: string,
+    jobId: string,
+    operationId?: string,
+  ): void {
+    if (operationId?.trim()) entry.operationId = operationId
     entry.documentId = documentId
     entry.jobId = jobId
     entry.status = 'processing'
     entry.progress = 100
+    entry.operationTerminal = false
     entry.intentKey = undefined
-    entry.sourceSha256 = undefined
     entry.error = undefined
   }
 
   function markSucceeded(entry: KnowledgeUploadEntry): void {
     if (entry.status === 'processing') entry.status = 'done'
+    entry.operationTerminal = true
     entry.cancelling = false
   }
 
   function markFailed(entry: KnowledgeUploadEntry, error: string): void {
     if (entry.status !== 'done' && entry.status !== 'cancelled') entry.status = 'error'
+    entry.operationTerminal = true
     entry.error = error
     entry.cancelling = false
   }
 
   function markCancelled(entry: KnowledgeUploadEntry): void {
     if (entry.status !== 'done') entry.status = 'cancelled'
+    entry.operationTerminal = true
     entry.cancelling = false
   }
 
-  /** 文档落地判定：后端上传来源统一是 `upload:<文件名>`；标题兜底匹配（去扩展名的场景交给 source） */
+  /** A completed operation lands only when its stable document ID is listed. */
   function landed(entry: KnowledgeUploadEntry, docs: DocLike[]): boolean {
-    return docs.some(
-      (d) =>
-        d.source === `upload:${entry.name}` ||
-        (d.source ?? '').endsWith(`:${entry.name}`) ||
-        d.title === entry.name,
-    )
+    return Boolean(entry.documentId && docs.some((document) => document.id === entry.documentId))
   }
 
-  /** 用最新文档列表结算：done 且已在列表出现 → 移除；uploading/error 一律保留 */
+  /** Settle terminal success by Sidecar identity; filename/source are presentation only. */
   function settleAgainstDocs(docs: DocLike[]): void {
     items.value = items.value.filter((e) => !(e.status === 'done' && landed(e, docs)))
+  }
+
+  /** Replace restartable rows with the Sidecar's durable upload-operation projection. */
+  function reconcileRecoverableOperations(operations: KnowledgeOperation[]): void {
+    const remoteOperationIDs = new Set(operations.map((operation) => operation.operation_id))
+    const remoteJobIDs = new Set(
+      operations.map((operation) => operation.job_id).filter((jobID) => Boolean(jobID)),
+    )
+    const remoteDocumentIDs = new Set(
+      operations
+        .map((operation) => operation.document_id)
+        .filter((documentID) => Boolean(documentID)),
+    )
+    items.value = items.value.filter((entry) => {
+      if (entry.status === 'done') return true
+      if (!entry.operationId && !entry.jobId && !entry.documentId) return true
+      return (
+        Boolean(entry.operationId && remoteOperationIDs.has(entry.operationId)) ||
+        Boolean(entry.jobId && remoteJobIDs.has(entry.jobId)) ||
+        Boolean(entry.documentId && remoteDocumentIDs.has(entry.documentId))
+      )
+    })
+    for (const operation of operations) {
+      const existing = items.value.find(
+        (entry) =>
+          entry.operationId === operation.operation_id ||
+          Boolean(operation.job_id && entry.jobId === operation.job_id) ||
+          Boolean(operation.document_id && entry.documentId === operation.document_id) ||
+          Boolean(
+            operation.content_digest &&
+              entry.sourceSha256 === operation.content_digest &&
+              entry.name === (operation.display_name || operation.title),
+          ),
+      )
+      if (
+        existing?.operationUpdatedAt &&
+        Date.parse(existing.operationUpdatedAt) > Date.parse(operation.updated_at)
+      ) {
+        continue
+      }
+      const status = OPERATION_STATUS[operation.state]
+      const name =
+        operation.display_name || operation.title || operation.document_id || operation.operation_id
+      if (existing) {
+        existing.name = name || existing.name
+        existing.operationId = operation.operation_id
+        existing.operationUpdatedAt = operation.updated_at
+        existing.operationTerminal = operation.terminal
+        if (operation.document_id) existing.documentId = operation.document_id
+        if (operation.job_id) existing.jobId = operation.job_id
+        if (operation.content_digest) existing.sourceSha256 = operation.content_digest
+        existing.stage = operation.stage
+        existing.progress = operation.state === 'receiving' ? existing.progress : 100
+        existing.status = status
+        existing.error = operation.state === 'failed' ? operation.error : undefined
+        existing.warning = undefined
+        existing.cancelling = false
+        continue
+      }
+      items.value.push(
+        reactive({
+          name,
+          progress: operation.state === 'receiving' ? 0 : 100,
+          status,
+          operationId: operation.operation_id,
+          operationUpdatedAt: operation.updated_at,
+          operationTerminal: operation.terminal,
+          ...(operation.document_id ? { documentId: operation.document_id } : {}),
+          ...(operation.job_id ? { jobId: operation.job_id } : {}),
+          ...(operation.content_digest ? { sourceSha256: operation.content_digest } : {}),
+          stage: operation.stage,
+          ...(operation.state === 'failed' && operation.error ? { error: operation.error } : {}),
+        }),
+      )
+    }
   }
 
   /** 是否还有持久化 Job 或等待列表投影落地的条目。 */
   function hasAwaitingIndex(): boolean {
     return items.value.some(
-      (e) => e.status === 'done' || (e.status === 'processing' && Boolean(e.jobId)),
+      (entry) =>
+        entry.status === 'done' ||
+        (!entry.operationTerminal && Boolean(entry.operationId || entry.jobId)),
     )
   }
 
@@ -258,6 +252,7 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     markFailed,
     markCancelled,
     settleAgainstDocs,
+    reconcileRecoverableOperations,
     hasAwaitingIndex,
     clearErrors,
   }

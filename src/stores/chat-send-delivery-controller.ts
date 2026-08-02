@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import { buildChatRequestMetadata } from './chat-request-metadata'
-import { createChatSendBackendDeliveryController } from './chat-send-backend-delivery'
+import { createChatTransportUnavailableController } from './chat-transport-unavailable'
 import {
   CHAT_SEND_WEBSOCKET_FALLBACK,
   createChatSendWebSocketDeliveryController,
@@ -99,14 +99,10 @@ export function createChatSendDeliveryController(params: {
     })
   }
 
-  const backendDelivery = createChatSendBackendDeliveryController({
-    chatParams,
-    agentRole,
+  const unavailableDelivery = createChatTransportUnavailableController({
     activeStreams,
-    chatSvc,
     isSessionCancelled,
     resetSessionStream,
-    finalizeAssistantMessage,
     handleSendError,
   })
 
@@ -183,7 +179,7 @@ export function createChatSendDeliveryController(params: {
     }
 
     if (!wsConnected) {
-      return backendDelivery.deliverViaBackend({
+      return unavailableDelivery.rejectUnavailableTransport({
         backendText,
         sessionId,
         attachments,
@@ -210,7 +206,7 @@ export function createChatSendDeliveryController(params: {
     }
 
     setSessionPending(sessionId, true, sending, draftSending)
-    return backendDelivery.deliverViaBackend({
+    return unavailableDelivery.rejectUnavailableTransport({
       backendText,
       sessionId,
       attachments,

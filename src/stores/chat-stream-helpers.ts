@@ -287,7 +287,7 @@ export function buildRecoveredStreamState(
   const snapshotContent = snapshot.content || ''
   const snapshotReasoning = normalizeAssistantReasoning(snapshot.reasoning || '', { trim: false })
   const metadata = normalizeRuntimeSnapshotMetadata({
-    ...(snapshot.metadata ?? {}),
+    ...snapshot.metadata,
     assistant_message_id: snapshot.assistant_message_id,
     message_id: snapshot.message_id,
     reasoning_disclosure: snapshot.reasoning_disclosure,

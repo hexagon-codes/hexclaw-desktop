@@ -168,7 +168,7 @@ describe('useChatStore', () => {
     loadArtifacts.mockResolvedValue([])
     getLastSessionId.mockResolvedValue(null)
     sendViaBackend.mockResolvedValue({ reply: '你好！', session_id: 's1' })
-    ensureWebSocketConnected.mockResolvedValue(false)
+    ensureWebSocketConnected.mockResolvedValue(true)
     updateMessageFeedback.mockResolvedValue({ message: 'ok' })
     approvalListeners.length = 0
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -388,8 +388,11 @@ describe('useChatStore', () => {
     ])
 
     const store = useChatStore()
-    ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockResolvedValueOnce({ reply: '收到', metadata: {} })
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockImplementationOnce(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '收到' }),
+    }))
 
     await store.sendMessage('这是第一条消息，用来生成会话标题')
 
@@ -407,8 +410,11 @@ describe('useChatStore', () => {
 
   it('replaces the temporary first-message title with a suggested summary after the first reply completes', async () => {
     const store = useChatStore()
-    ensureWebSocketConnected.mockResolvedValue(false)
-    sendViaBackend.mockResolvedValueOnce({ reply: '可以从帐篷、睡袋、炊具和照明开始准备', metadata: {} })
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockImplementationOnce(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: '可以从帐篷、睡袋、炊具和照明开始准备' }),
+    }))
 
     await store.sendMessage('帮我规划这个周末去杭州露营需要带什么')
 
@@ -625,17 +631,20 @@ describe('useChatStore', () => {
   })
 
   it('persists assistant metadata and tool calls from backend responses', async () => {
-    sendViaBackend.mockResolvedValueOnce({
-      reply: '已完成',
-      session_id: 's1',
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockImplementationOnce(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({
+        content: '已完成',
+        agentName: 'Coder',
       metadata: {
         provider: 'openai',
         model: 'gpt-4o',
-        agent_name: 'Coder',
         knowledge_hits: [{ doc_title: 'Spec' }],
       },
-      tool_calls: [{ id: 'tool-1', name: 'search', arguments: '{"q":"spec"}' }],
-    })
+        toolCalls: [{ id: 'tool-1', name: 'search', arguments: '{"q":"spec"}' }],
+      }),
+    }))
 
     const store = useChatStore()
     await store.sendMessage('hello')
@@ -927,21 +936,22 @@ describe('useChatStore', () => {
     )
   })
 
-  it('preserves thinking metadata when falling back to backend', async () => {
-    ensureWebSocketConnected.mockResolvedValue(false)
+  it('preserves thinking metadata on the sole WebSocket request', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
 
     const store = useChatStore()
     store.currentSessionId = 's1'
     store.thinkingEnabled = true
 
-    await store.sendMessage('think hard over http')
+    await store.sendMessage('think hard over websocket')
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
-      'think hard over http',
+    expect(openWebSocketStream).toHaveBeenCalledWith(
+      'think hard over websocket',
       's1',
       expect.any(Object),
       '',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         thinking: 'on', pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
       }),
@@ -1063,21 +1073,22 @@ describe('useChatStore', () => {
     expect(store.pendingApproval?.requestId).toBe('req-s2')
   })
 
-  it('sends explicit provider and model to backend fallback requests', async () => {
-    ensureWebSocketConnected.mockResolvedValue(false)
+  it('sends explicit provider and model to the WebSocket request', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
 
     const store = useChatStore()
     store.chatParams.provider = '智谱'
     store.chatParams.model = 'glm-5'
 
-    await store.sendMessage('走 HTTP')
+    await store.sendMessage('走 WebSocket')
 
-    expect(sendViaBackend).toHaveBeenCalledWith(
-      '走 HTTP',
+    expect(openWebSocketStream).toHaveBeenCalledWith(
+      '走 WebSocket',
       expect.any(String),
       { provider: '智谱', model: 'glm-5' },
       '',
       undefined,
+      expect.any(Object),
       expect.objectContaining({
         pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
       }),
