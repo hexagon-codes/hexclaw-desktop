@@ -21,6 +21,7 @@ import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+import type { K12SourceRegion } from '@/contracts/k12-source-region'
 import { isTauri } from '@/utils/platform'
 import {
   createNativeFileOperation,
@@ -28,6 +29,7 @@ import {
   uploadGrantedFile,
   type NativeFileGrant,
 } from './native-files'
+export { k12AssetURL } from './k12-asset-url'
 
 const BASE = '/api/k12'
 
@@ -1561,6 +1563,10 @@ export interface RecognizedQuestion {
   system_section_ordinal?: number
   system_display_label?: string
   page_asset_id?: string
+  /** Immutable PageAsset dimensions and problem-source crop in source pixels. */
+  source_width?: number
+  source_height?: number
+  source_region?: K12SourceRegion
   /** compound_parent 无 Attempt；standalone/subproblem 各自拥有独立 Attempt。 */
   attempt_id?: string
   question: string
@@ -1755,6 +1761,11 @@ export interface ImageTaskProblemProgressDTO {
   published_revision: number
   input_revision?: number
   command_available?: boolean
+  /** Present as one exact-set on new snapshots; historical frozen responses omit all four fields. */
+  page_asset_id?: string
+  source_width?: number
+  source_height?: number
+  source_region?: K12SourceRegion | null
 }
 
 export interface ImageTaskCoverageDTO {
@@ -3195,13 +3206,6 @@ export interface AssetUploadResp {
   /** 自描述资产 ID：asset://<agent>/<sha256>.<ext>（内容寻址，同图幂等） */
   asset_id: string
   size: number
-}
-
-/** 资产回图 URL（<img :src>）：GET /assets/{file}?agent=——文件段取自 asset_id 尾段 */
-export function k12AssetURL(agent: string, assetId: string): string {
-  if (!assetId.startsWith('asset://')) return ''
-  const file = assetId.slice(assetId.lastIndexOf('/') + 1)
-  return `${env.apiBase}${BASE}/assets/${file}?agent=${encodeURIComponent(agent)}`
 }
 
 /** 上传作品照片（multipart + XHR：带真实上传进度回调）。魔数非图片 415、>10MB 413。 */

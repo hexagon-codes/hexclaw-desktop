@@ -2198,7 +2198,8 @@ async function doExportMd() {
   flex-direction: column;
   flex: 1;
   inline-size: 100%;
-  max-inline-size: 1024px;
+  max-inline-size: none;
+  box-sizing: border-box;
   min-height: 0;
 }
 .k12archive-undos {
@@ -2249,7 +2250,12 @@ async function doExportMd() {
 .k12rec__body {
   flex: 1;
   overflow: auto;
-  padding: 16px 20px 40px;
+  padding: 16px 26px 48px;
+}
+/* DD-019：档案工作区铺满，真实记录内容统一落在原型的 1024px 阅读列。 */
+.k12rec__body > section {
+  inline-size: min(100%, 1024px);
+  max-inline-size: 1024px;
 }
 .k12rec__ftue {
   display: flex;

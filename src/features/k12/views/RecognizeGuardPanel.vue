@@ -28,8 +28,14 @@ import TutoringTipsPanel from './TutoringTipsPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import SourceIssueResolver from '../components/SourceIssueResolver.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
-import { sourceIssueOperationLocked, type SourceIssueIntent } from '../source-issue'
-import { k12GetImageTask, k12SubmitImageTaskProblemSourceAction } from '@/api/k12'
+import {
+  sourceIssueOperationLocked,
+  type SourceIssueIntent,
+  type SourceIssueRetakeFileIntent,
+  type SourceRegion,
+} from '../source-issue'
+import { k12GetImageTask, k12SubmitImageTaskProblemSourceAction, k12UploadAsset } from '@/api/k12'
+import { k12AssetURL } from '@/api/k12-asset-url'
 import { projectImageTaskProblemSourceActionSnapshot } from '../source-action-projection'
 import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
@@ -132,6 +138,10 @@ interface GuardRow {
   sourceSectionLabel: string
   systemSectionOrdinal: number
   systemDisplayLabel: string
+  pageAssetId: string
+  sourceWidth: number
+  sourceHeight: number
+  sourceRegion?: SourceRegion
   attemptId: string
   rawProblem: string
   problem: string // 家长可就地订正的题干（初值=识别原文）
@@ -429,6 +439,10 @@ function problemProgressGroupDisplayLabel(item: GroupProblemProgressItem): strin
   return item.problems[0]?.source_number_path[0]?.trim() || item.displayLabel
 }
 
+function problemProgressGroupResolverLabel(item: GroupProblemProgressItem): string {
+  return item.ordinal > 0 ? `第 ${item.ordinal} 题组` : item.displayLabel
+}
+
 function problemIsSkipped(problem: ImageTaskProblemProgressDTO): boolean {
   return problem.operation_state === 'skipped' || problem.disposition_state === 'skipped_by_parent'
 }
@@ -451,6 +465,83 @@ function expectedInputRevision(problems: ImageTaskProblemProgressDTO[]): number 
     0,
     ...problems.map((problem) => problem.input_revision ?? problem.published_revision),
   )
+}
+
+interface SourceResolverFacts {
+  pageAssetId?: string
+  sourceImageUrl?: string
+  sourceWidth?: number
+  sourceHeight?: number
+  currentSourceRegion?: SourceRegion
+}
+
+function sourceResolverFacts(problems: ImageTaskProblemProgressDTO[]): SourceResolverFacts {
+  const directRows = problems.flatMap((problem) => {
+    const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
+    return row ? [row] : []
+  })
+  const validSourceRow = (row: GuardRow) =>
+    !!row.pageAssetId.trim() &&
+    Number.isInteger(row.sourceWidth) &&
+    Number.isInteger(row.sourceHeight) &&
+    row.sourceWidth > 0 &&
+    row.sourceHeight > 0
+  if (
+    directRows.length !== problems.length ||
+    directRows.length === 0 ||
+    directRows.some((row) => !validSourceRow(row))
+  ) {
+    return {}
+  }
+  const source = directRows[0]!
+  if (
+    directRows.some(
+      (row) =>
+        row.pageAssetId !== source.pageAssetId ||
+        row.sourceWidth !== source.sourceWidth ||
+        row.sourceHeight !== source.sourceHeight,
+    )
+  ) {
+    // A group command cannot safely invent one shared source identity when
+    // its answerable exact-set points at different immutable assets.
+    return {}
+  }
+  const parentRows = directRows.flatMap((row) => {
+    if (!row.parentProblemId) return []
+    const parent = rows.value.find((candidate) => candidate.problemId === row.parentProblemId)
+    return parent ? [parent] : []
+  })
+  const parentSource = parentRows.find(
+    (row) =>
+      validSourceRow(row) &&
+      row.pageAssetId === source.pageAssetId &&
+      row.sourceWidth === source.sourceWidth &&
+      row.sourceHeight === source.sourceHeight,
+  )
+  const regionEqual = (left?: SourceRegion, right?: SourceRegion) =>
+    left === right ||
+    (!!left &&
+      !!right &&
+      left.x === right.x &&
+      left.y === right.y &&
+      left.width === right.width &&
+      left.height === right.height)
+  const directRegionIsShared = directRows.every((row) =>
+    regionEqual(row.sourceRegion, source.sourceRegion),
+  )
+  // Current answerable heads win after select_region/retake. The parent crop
+  // is only a legacy group fallback when child regions genuinely differ and
+  // the parent still references the same immutable PageAsset.
+  const currentSourceRegion = directRegionIsShared
+    ? source.sourceRegion
+    : parentSource?.sourceRegion
+  return {
+    pageAssetId: source.pageAssetId,
+    sourceImageUrl: k12AssetURL(props.agentId, source.pageAssetId),
+    sourceWidth: source.sourceWidth,
+    sourceHeight: source.sourceHeight,
+    ...(currentSourceRegion ? { currentSourceRegion: { ...currentSourceRegion } } : {}),
+  }
 }
 
 function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
@@ -505,13 +596,46 @@ function sourceActionRequest(intent: SourceIssueIntent): ImageTaskProblemSourceA
     }
   }
   if (intent.action === 'correct_recognition') {
-    const corrected = intent.payload?.corrected_text?.trim()
+    const corrected = intent.payload.corrected_text.trim()
     if (!corrected) return null
     return {
       action: 'correct_text',
       structure_version: intent.structure_version,
       expected_input_revision: intent.expected_input_revision,
       payload: { question_canonical_markdown: corrected },
+    }
+  }
+  if (intent.action === 'reselect_region') {
+    const pageAssetId = intent.payload.page_asset_id.trim()
+    const region = intent.payload.region
+    if (
+      !pageAssetId ||
+      !Number.isInteger(region.x) ||
+      !Number.isInteger(region.y) ||
+      !Number.isInteger(region.width) ||
+      !Number.isInteger(region.height) ||
+      region.x < 0 ||
+      region.y < 0 ||
+      region.width < 1 ||
+      region.height < 1
+    ) {
+      return null
+    }
+    return {
+      action: 'select_region',
+      structure_version: intent.structure_version,
+      expected_input_revision: intent.expected_input_revision,
+      payload: { page_asset_id: pageAssetId, region: { ...region } },
+    }
+  }
+  if (intent.action === 'retake') {
+    const pageAssetId = intent.payload.page_asset_id.trim()
+    if (!pageAssetId) return null
+    return {
+      action: 'retake',
+      structure_version: intent.structure_version,
+      expected_input_revision: intent.expected_input_revision,
+      payload: { page_asset_id: pageAssetId },
     }
   }
   return null
@@ -529,6 +653,15 @@ function updatePendingSourceProblems(problemIds: string[], pending: boolean) {
 function applyProblemSourceSnapshot(response: ImageTaskProblemSourceActionResp) {
   if (response.dispatch_id !== currentDispatchId.value) return
   const snapshot = projectImageTaskProblemSourceActionSnapshot(response, problemProgressSlots.value)
+  for (const problem of snapshot.problem_progress) {
+    if (problem.page_asset_id === undefined) continue
+    const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
+    if (!row) continue
+    row.pageAssetId = problem.page_asset_id
+    row.sourceWidth = problem.source_width!
+    row.sourceHeight = problem.source_height!
+    row.sourceRegion = problem.source_region === null ? undefined : { ...problem.source_region! }
+  }
   currentStructureVersion.value = snapshot.structure_version
   problemProgressSlots.value = snapshot.problem_progress
   taskCoverage.value = snapshot.coverage
@@ -547,24 +680,51 @@ function sourceActionStatus(cause: unknown): number | undefined {
   return undefined
 }
 
-async function applyLocalSourceIntent(intent: SourceIssueIntent) {
-  const dispatchId = currentDispatchId.value
-  const problemId = intent.problem_ids[0]?.trim()
-  const request = sourceActionRequest(intent)
-  if (!dispatchId || !problemId || !request) return
-  if (intent.problem_ids.some((id) => pendingSourceProblemIds.value.has(id))) return
+function sourceActionRequiresSameDispatchPolling(
+  response: ImageTaskProblemSourceActionResp,
+  intent: SourceIssueIntent,
+): boolean {
+  const affected = new Set(intent.problem_ids)
+  return response.progressive_snapshot.problem_progress.some(
+    (problem) => affected.has(problem.problem_id) && problem.status === 'processing',
+  )
+}
 
+async function reconcileSourceActionFailure(
+  cause: unknown,
+  dispatchId: string,
+  controller: AbortController,
+): Promise<void> {
+  if (sourceActionStatus(cause) === 409 && !controller.signal.aborted) {
+    try {
+      const current = await k12GetImageTask(props.agentId, dispatchId, controller.signal)
+      if (currentDispatchId.value === dispatchId) projectImageTaskDispatch(current.dispatch)
+    } catch (refreshCause) {
+      if (!controller.signal.aborted) {
+        errMsg.value = refreshCause instanceof Error ? refreshCause.message : String(refreshCause)
+      }
+    }
+    return
+  }
+  if (!controller.signal.aborted) {
+    errMsg.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function submitSourceIntent(
+  intent: SourceIssueIntent,
+  request: ImageTaskProblemSourceActionReq,
+  dispatchId: string,
+  problemId: string,
+  controller: AbortController,
+): Promise<void> {
   emit('sourceIssueIntent', intent)
-  updatePendingSourceProblems(intent.problem_ids, true)
-  errMsg.value = ''
   const fingerprint = `${dispatchId}:${problemId}:${JSON.stringify(request)}`
   let idempotencyKey = sourceActionIdempotencyKeys.get(fingerprint)
   if (!idempotencyKey) {
     idempotencyKey = `source-action-${nanoid(24)}`
     sourceActionIdempotencyKeys.set(fingerprint, idempotencyKey)
   }
-  const controller = new AbortController()
-  sourceActionControllers.add(controller)
   try {
     const response = await k12SubmitImageTaskProblemSourceAction(
       dispatchId,
@@ -573,25 +733,74 @@ async function applyLocalSourceIntent(intent: SourceIssueIntent) {
       idempotencyKey,
       controller.signal,
     )
+    if (controller.signal.aborted || currentDispatchId.value !== dispatchId) return
     applyProblemSourceSnapshot(response)
-  } catch (cause) {
-    if (sourceActionStatus(cause) === 409 && !controller.signal.aborted) {
-      try {
-        const current = await k12GetImageTask(props.agentId, dispatchId, controller.signal)
-        if (currentDispatchId.value === dispatchId) {
-          projectImageTaskDispatch(current.dispatch)
-        }
-      } catch (refreshCause) {
-        if (!controller.signal.aborted) {
-          errMsg.value = refreshCause instanceof Error ? refreshCause.message : String(refreshCause)
-        }
-      }
-    } else if (!controller.signal.aborted) {
-      errMsg.value = cause instanceof Error ? cause.message : String(cause)
+    if (sourceActionRequiresSameDispatchPolling(response, intent)) {
+      await completeImageTaskFlow()
     }
+  } catch (cause) {
+    await reconcileSourceActionFailure(cause, dispatchId, controller)
+  }
+}
+
+function beginSourceAction(problemIds: string[]): AbortController | null {
+  if (problemIds.some((id) => pendingSourceProblemIds.value.has(id))) return null
+  updatePendingSourceProblems(problemIds, true)
+  errMsg.value = ''
+  const controller = new AbortController()
+  sourceActionControllers.add(controller)
+  return controller
+}
+
+function finishSourceAction(problemIds: string[], controller: AbortController): void {
+  sourceActionControllers.delete(controller)
+  updatePendingSourceProblems(problemIds, false)
+}
+
+async function applyLocalSourceIntent(intent: SourceIssueIntent) {
+  const dispatchId = currentDispatchId.value
+  const problemId = intent.problem_ids[0]?.trim()
+  const request = sourceActionRequest(intent)
+  if (!dispatchId || !problemId || !request) return
+  const controller = beginSourceAction(intent.problem_ids)
+  if (!controller) return
+  try {
+    await submitSourceIntent(intent, request, dispatchId, problemId, controller)
   } finally {
-    sourceActionControllers.delete(controller)
-    updatePendingSourceProblems(intent.problem_ids, false)
+    finishSourceAction(intent.problem_ids, controller)
+  }
+}
+
+async function applyLocalRetakeFile(candidate: SourceIssueRetakeFileIntent) {
+  const dispatchId = currentDispatchId.value
+  const problemId = candidate.problem_ids[0]?.trim()
+  if (!dispatchId || !problemId || !candidate.file.type.startsWith('image/')) return
+  const controller = beginSourceAction(candidate.problem_ids)
+  if (!controller) return
+  try {
+    let asset
+    try {
+      asset = await k12UploadAsset(props.agentId, candidate.file, undefined, controller.signal)
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        errMsg.value = cause instanceof Error ? cause.message : String(cause)
+      }
+      return
+    }
+    if (controller.signal.aborted || currentDispatchId.value !== dispatchId) return
+    const intent: SourceIssueIntent = {
+      action: 'retake',
+      problem_ids: [...candidate.problem_ids],
+      dependency_group_id: candidate.dependency_group_id,
+      structure_version: candidate.structure_version,
+      expected_input_revision: candidate.expected_input_revision,
+      payload: { page_asset_id: asset.asset_id },
+    }
+    const request = sourceActionRequest(intent)
+    if (!request) return
+    await submitSourceIntent(intent, request, dispatchId, problemId, controller)
+  } finally {
+    finishSourceAction(candidate.problem_ids, controller)
   }
 }
 
@@ -899,6 +1108,10 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
     sourceSectionLabel: question.source_section_label ?? '',
     systemSectionOrdinal: question.system_section_ordinal ?? 0,
     systemDisplayLabel: question.system_display_label ?? '',
+    pageAssetId: question.page_asset_id ?? '',
+    sourceWidth: question.source_width ?? 0,
+    sourceHeight: question.source_height ?? 0,
+    ...(question.source_region ? { sourceRegion: { ...question.source_region } } : {}),
     attemptId: question.attempt_id ?? '',
     rawProblem: question.raw_transcription ?? question.question,
     problem: question.canonical_markdown ?? question.question,
@@ -923,6 +1136,21 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
     verdict: '',
     expanded: false,
   }))
+}
+
+function syncGuardRowSourceFacts(questions: RecognizedQuestion[]): void {
+  for (const question of questions) {
+    if (!question.problem_id) continue
+    const row = rows.value.find((candidate) => candidate.problemId === question.problem_id)
+    if (!row) continue
+    const sourceIdentityChanged =
+      !!question.page_asset_id && question.page_asset_id !== row.pageAssetId
+    row.pageAssetId = question.page_asset_id ?? row.pageAssetId
+    row.sourceWidth = question.source_width ?? row.sourceWidth
+    row.sourceHeight = question.source_height ?? row.sourceHeight
+    if (question.source_region) row.sourceRegion = { ...question.source_region }
+    else if (sourceIdentityChanged) row.sourceRegion = undefined
+  }
 }
 
 function projectCreativeIntake(projection?: ImageTaskCreativeProjectionDTO) {
@@ -975,6 +1203,7 @@ function projectImageTaskView(view: ImageTaskView) {
 
   const questions = view.questions
   if (questions.length && !rows.value.length) rows.value = guardRowsFromQuestions(questions)
+  else if (questions.length) syncGuardRowSourceFacts(questions)
   if (!selectedSubject.value && view.subject) {
     selectedSubject.value = view.subject
   }
@@ -1093,6 +1322,9 @@ watch(
   () => {
     agentGeneration += 1
     recognitionGeneration += 1
+    for (const controller of sourceActionControllers) controller.abort()
+    sourceActionControllers.clear()
+    pendingSourceProblemIds.value = new Set()
     restoreAbort?.abort()
     restoreAbort = null
     confirmationAbort?.abort()
@@ -2000,74 +2232,82 @@ async function coldStart() {
           :data-problem-group-id="item.kind === 'group' ? item.groupId : undefined"
         >
           <template v-if="item.kind === 'problem'">
-            <span class="rec-problem-progress__status" aria-hidden="true">
-              {{ problemProgressMarker(item.problem) }}
-            </span>
-            <div class="rec-problem-progress__body">
-              <div class="rec-problem-progress__line">
-                <b>
-                  {{ problemProgressDisplayLabel(item.problem) }}
-                  <template v-if="problemProgressQuestion(item.problem)">
-                    &nbsp; {{ problemProgressQuestion(item.problem) }}
-                  </template>
-                </b>
+            <div class="rec-problem-progress__slot">
+              <span class="rec-problem-progress__status" aria-hidden="true">
+                {{ problemProgressMarker(item.problem) }}
+              </span>
+              <div class="rec-problem-progress__body">
+                <div class="rec-problem-progress__line">
+                  <b>
+                    {{ problemProgressDisplayLabel(item.problem) }}
+                    <template v-if="problemProgressQuestion(item.problem)">
+                      &nbsp; {{ problemProgressQuestion(item.problem) }}
+                    </template>
+                  </b>
+                </div>
+                <small>{{ problemProgressDetail(item.problem) }}</small>
               </div>
-              <small>{{ problemProgressDetail(item.problem) }}</small>
-              <SourceIssueResolver
-                v-if="problemNeedsResolver(item.problem)"
-                class="rec-problem-progress__resolver"
-                scope="problem"
-                :display-label="problemProgressDisplayLabel(item.problem)"
-                :affected-labels="[problemProgressDisplayLabel(item.problem)]"
-                :problem-ids="[item.problem.problem_id]"
-                :structure-version="currentStructureVersion"
-                :expected-input-revision="expectedInputRevision([item.problem])"
-                :skipped="problemIsSkipped(item.problem)"
-                :command-available="!resolverDisabled([item.problem])"
-                skip-label="跳过这题"
-                @intent="applyLocalSourceIntent"
-              />
+              <span class="rec-problem-progress__state">{{
+                problemProgressStatus(item.problem)
+              }}</span>
             </div>
-            <span class="rec-problem-progress__state">{{
-              problemProgressStatus(item.problem)
-            }}</span>
+            <SourceIssueResolver
+              v-if="problemNeedsResolver(item.problem)"
+              class="rec-problem-progress__resolver"
+              scope="problem"
+              :display-label="problemProgressDisplayLabel(item.problem)"
+              :affected-labels="[problemProgressDisplayLabel(item.problem)]"
+              :problem-ids="[item.problem.problem_id]"
+              :structure-version="currentStructureVersion"
+              :expected-input-revision="expectedInputRevision([item.problem])"
+              :skipped="problemIsSkipped(item.problem)"
+              :command-available="!resolverDisabled([item.problem])"
+              skip-label="跳过这题"
+              v-bind="sourceResolverFacts([item.problem])"
+              @intent="applyLocalSourceIntent"
+              @retake-file="applyLocalRetakeFile"
+            />
           </template>
           <template v-else>
-            <span class="rec-problem-progress__status" aria-hidden="true">!</span>
-            <div class="rec-problem-progress__body">
-              <div class="rec-problem-progress__line">
-                <b>{{ problemProgressGroupDisplayLabel(item) }}、公共题干</b>
-              </div>
-              <small>需要核对 {{ item.problems.length }} 个小题的题源</small>
-              <div class="rec-problem-progress__children">
-                <div
-                  v-for="problem in item.problems"
-                  :key="problem.problem_id"
-                  class="rec-problem-progress__child"
-                  :data-problem-id="problem.problem_id"
-                >
-                  <b>{{ problemProgressDisplayLabel(problem) }}</b>
-                  <span>{{ problemProgressQuestion(problem) }}</span>
-                  <span>{{ problemProgressStatus(problem) }}</span>
+            <div class="rec-problem-progress__slot">
+              <span class="rec-problem-progress__status" aria-hidden="true">!</span>
+              <div class="rec-problem-progress__body">
+                <div class="rec-problem-progress__line">
+                  <b>{{ problemProgressGroupDisplayLabel(item) }}、公共题干</b>
+                </div>
+                <small>需要核对 {{ item.problems.length }} 个小题的题源</small>
+                <div class="rec-problem-progress__children">
+                  <div
+                    v-for="problem in item.problems"
+                    :key="problem.problem_id"
+                    class="rec-problem-progress__child"
+                    :data-problem-id="problem.problem_id"
+                  >
+                    <b>{{ problemProgressDisplayLabel(problem) }}</b>
+                    <span>{{ problemProgressQuestion(problem) }}</span>
+                    <span>{{ problemProgressStatus(problem) }}</span>
+                  </div>
                 </div>
               </div>
-              <SourceIssueResolver
-                v-if="item.problems.some(problemNeedsResolver)"
-                class="rec-problem-progress__resolver"
-                scope="group"
-                :display-label="problemProgressGroupDisplayLabel(item)"
-                :affected-labels="item.problems.map(problemProgressDisplayLabel)"
-                :problem-ids="item.problems.map((problem) => problem.problem_id)"
-                :dependency-group-id="item.groupId"
-                :structure-version="currentStructureVersion"
-                :expected-input-revision="expectedInputRevision(item.problems)"
-                :skipped="item.problems.every(problemIsSkipped)"
-                :command-available="!resolverDisabled(item.problems)"
-                :skip-label="`跳过第 ${item.ordinal} 题组`"
-                @intent="applyLocalSourceIntent"
-              />
+              <span class="rec-problem-progress__state">需要你确认</span>
             </div>
-            <span class="rec-problem-progress__state">需要你确认</span>
+            <SourceIssueResolver
+              v-if="item.problems.some(problemNeedsResolver)"
+              class="rec-problem-progress__resolver"
+              scope="group"
+              :display-label="problemProgressGroupResolverLabel(item)"
+              :affected-labels="item.problems.map(problemProgressDisplayLabel)"
+              :problem-ids="item.problems.map((problem) => problem.problem_id)"
+              :dependency-group-id="item.groupId"
+              :structure-version="currentStructureVersion"
+              :expected-input-revision="expectedInputRevision(item.problems)"
+              :skipped="item.problems.every(problemIsSkipped)"
+              :command-available="!resolverDisabled(item.problems)"
+              :skip-label="`跳过第 ${item.ordinal} 题组`"
+              v-bind="sourceResolverFacts(item.problems)"
+              @intent="applyLocalSourceIntent"
+              @retake-file="applyLocalRetakeFile"
+            />
           </template>
         </li>
       </ol>
@@ -2940,13 +3180,13 @@ async function coldStart() {
   padding: 0;
   list-style: none;
 }
-.rec-problem-progress__item {
-  padding: 8px 9px;
-  border-radius: 9px;
-  background: var(--hc-bg-card);
+.rec-problem-progress__slot {
   color: var(--hc-text-primary);
   font-size: 10.5px;
   font-weight: 600;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: var(--hc-bg-card);
 }
 .rec-panel--homework-running .rec-pipeline {
   margin: 12px 0 0;
@@ -2958,7 +3198,7 @@ async function coldStart() {
   gap: 8px;
   margin: 0;
 }
-.rec-panel--homework-running .rec-problem-progress__item {
+.rec-panel--homework-running .rec-problem-progress__slot {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 9px;
@@ -3005,10 +3245,10 @@ async function coldStart() {
   white-space: nowrap;
 }
 .rec-panel--homework-running .rec-problem-progress__item.is-done .rec-problem-progress__status {
-  background: var(--hc-success-subtle);
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
   color: var(--hc-success);
 }
-.rec-panel--homework-running .rec-problem-progress__item.is-processing {
+.rec-panel--homework-running .rec-problem-progress__item.is-processing .rec-problem-progress__slot {
   border-color: var(--hc-border-hl);
   background: var(--hc-accent-subtle);
 }
@@ -3017,7 +3257,9 @@ async function coldStart() {
   .rec-problem-progress__status {
   color: var(--hc-accent);
 }
-.rec-panel--homework-running .rec-problem-progress__item.is-source-issue {
+.rec-panel--homework-running
+  .rec-problem-progress__item.is-source-issue
+  .rec-problem-progress__slot {
   border-color: color-mix(in srgb, var(--hc-warning) 35%, var(--hc-border));
   background: color-mix(in srgb, var(--hc-warning) 6%, var(--hc-bg-card));
 }
@@ -3050,9 +3292,6 @@ async function coldStart() {
 }
 .rec-panel--homework-running .rec-problem-progress__child span:last-child {
   color: var(--hc-text-muted);
-}
-.rec-panel--homework-running .rec-problem-progress__resolver {
-  margin-top: 8px;
 }
 .rec-pipeline__branches {
   display: grid;

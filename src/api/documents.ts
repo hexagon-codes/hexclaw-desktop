@@ -14,9 +14,30 @@ export interface ExtractedDocument {
  * 故下沉到后端（复用 hexagon rag/loader）。docx/xlsx 等纯 JS 库仍在前端解析。
  */
 export async function extractDocument(file: File): Promise<ExtractedDocument> {
+  const grantFromNative = nativeGrantFromFile(file)
+  if (grantFromNative && grantFromNative.purpose !== 'attachment_upload') {
+    throw new Error('Native document grant purpose is invalid')
+  }
+  if (isTauri()) {
+    const grant = grantFromNative ?? await stageBlob(file, file.name, {
+      purpose: 'attachment_upload',
+      operationId: createNativeFileOperation('document-extract'),
+    })
+    if (!/^[0-9a-f]{64}$/.test(grant.sourceSha256 ?? '')) {
+      throw new Error('Native document grant is missing its attested source digest')
+    }
+    const transfer = await uploadGrantedFile<ExtractedDocument>({
+      grant,
+      url: DOCUMENT_EXTRACT_PATH,
+      idempotencyKey: `document-extract:${grant.sourceSha256}`,
+      fieldName: 'file',
+    })
+    if (!transfer.body) throw new Error('Document extraction returned no response')
+    return transfer.body
+  }
   const form = new FormData()
   form.append('file', file)
-  return apiPost<ExtractedDocument>('/api/v1/documents/extract', form)
+  return apiPost<ExtractedDocument>(DOCUMENT_EXTRACT_PATH, form)
 }
 
 /** 暂存原文件到 sidecar，返回预览 token。 */
@@ -36,3 +57,12 @@ export async function uploadDocumentPreview(file: File): Promise<{ token: string
 export function documentPreviewUrl(token: string, download = false): string {
   return `${env.apiBase}/api/v1/documents/preview/${encodeURIComponent(token)}${download ? '?dl=1' : ''}`
 }
+import { isTauri } from '@/utils/platform'
+import {
+  createNativeFileOperation,
+  nativeGrantFromFile,
+  stageBlob,
+  uploadGrantedFile,
+} from './native-files'
+
+const DOCUMENT_EXTRACT_PATH = '/api/v1/documents/extract'

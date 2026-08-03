@@ -1,15 +1,19 @@
 import type { ChatAttachment } from '@/types'
+import {
+  CHAT_FILE_MAX_BYTES,
+  CHAT_FILE_MAX_MIB,
+  effectiveChatFileSize,
+} from '@/contracts/chat-file-boundary'
 import { isTauri } from '@/utils/platform'
 import { apiPost, sidecarFetch } from './client'
 import {
   createNativeFileOperation,
+  nativeGrantFromFile,
   stageBlob,
   uploadGrantedFile,
-  type NativeFileGrant,
 } from './native-files'
 
 const ATTACHMENT_PATH = '/api/v1/attachments'
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 export interface AttachmentReceipt {
   attachment_id: string
@@ -40,10 +44,6 @@ function assertReceipt(
   return receipt
 }
 
-function nativeGrant(file: File): NativeFileGrant | undefined {
-  return (file as File & { nativeFileGrant?: NativeFileGrant }).nativeFileGrant
-}
-
 async function sha256(blob: Blob): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -66,11 +66,11 @@ async function attachmentIdempotencyKey(
 }
 
 export async function uploadChatAttachment(file: File): Promise<AttachmentReceipt> {
-  const grantFromNative = nativeGrant(file)
-  const size = grantFromNative?.size ?? file.size
+  const grantFromNative = nativeGrantFromFile(file)
+  const size = grantFromNative?.size ?? effectiveChatFileSize(file)
   const mediaType = grantFromNative?.mime ?? file.type
-  if (!mediaType.startsWith('image/') || size <= 0 || size > MAX_ATTACHMENT_BYTES) {
-    throw new Error('Chat attachment must be an image no larger than 20 MiB')
+  if (!mediaType.startsWith('image/') || size <= 0 || size > CHAT_FILE_MAX_BYTES) {
+    throw new Error(`Chat attachment must be an image no larger than ${CHAT_FILE_MAX_MIB} MiB`)
   }
 
   if (isTauri()) {

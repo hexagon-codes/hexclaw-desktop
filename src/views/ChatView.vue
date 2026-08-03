@@ -1016,6 +1016,10 @@ const scenarioCtx = computed(() => {
     messageIds: visibleMessages.value.map((message) => message.id),
   }
 })
+// Shell 只读取 descriptor 合同；任何场景都可声明自己的已批准头部，普通会话默认保留通用工具栏。
+const scenarioOwnsHeader = computed(
+  () => scenarioCtx.value?.descriptor.headerOwner === 'scenario',
+)
 watch(
   [() => scenarioCtx.value?.agentId, () => scenarioCtx.value?.sessionId],
   ([, sessionId]) => {
@@ -2673,6 +2677,7 @@ function startSidebarResize(event: MouseEvent) {
       </Transition>
       <!-- Compact toolbar -->
       <ChatToolbar
+        v-if="!scenarioOwnsHeader"
         :workspace-mode="chatWorkspaceMode"
         :message-count="chatStore.messages.length"
         :token-badge="t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) })"

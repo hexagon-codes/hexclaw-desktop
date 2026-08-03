@@ -6,7 +6,11 @@
 import { extractDocument } from '@/api/documents'
 
 const MAX_TEXT_LENGTH = 50000
-const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+import {
+  CHAT_FILE_MAX_BYTES,
+  CHAT_FILE_MAX_MIB,
+  effectiveChatFileSize,
+} from '@/contracts/chat-file-boundary'
 
 export interface ParsedDocument {
   text: string
@@ -38,9 +42,10 @@ export function isDocumentFile(file: File): boolean {
 
 /** Parse a document file and extract its text content */
 export async function parseDocument(file: File): Promise<ParsedDocument> {
-  if (file.size > MAX_FILE_SIZE) {
+  const fileSize = effectiveChatFileSize(file)
+  if (fileSize > CHAT_FILE_MAX_BYTES) {
     throw new Error(
-      `File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(0)} MB, max ${MAX_FILE_SIZE / 1024 / 1024} MB)`,
+      `File "${file.name}" is too large (${(fileSize / 1024 / 1024).toFixed(0)} MB, max ${CHAT_FILE_MAX_MIB} MB)`,
     )
   }
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''

@@ -252,10 +252,17 @@ const weakBars = computed(() => {
 .k12ins {
   flex: 1;
   inline-size: 100%;
-  max-inline-size: 1024px;
+  max-inline-size: none;
+  box-sizing: border-box;
   min-height: 0;
   overflow: auto;
   padding: 16px 26px 48px;
+}
+/* DD-019：学情页的画布不缩窄；统计、薄弱项与行动卡共享原型阅读列。 */
+.k12ins > * {
+  inline-size: min(100%, 1024px);
+  max-inline-size: 1024px;
+  box-sizing: border-box;
 }
 .k12ins__head {
   display: flex;
@@ -356,8 +363,6 @@ const weakBars = computed(() => {
   font-size: 13px;
 }
 .k12ins__priority {
-  inline-size: 100%;
-  max-inline-size: none;
   box-sizing: border-box;
   padding: 6px 8px;
   border-radius: 14px;

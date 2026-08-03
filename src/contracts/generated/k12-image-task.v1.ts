@@ -166,8 +166,12 @@ export const K12_IMAGE_TASK_SCHEMA = {
               {
                 "current_disposition": "current",
                 "input_revision": 1,
+                "page_asset_id": "asset://mingming/431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
                 "problem_id": "problem-source-action",
                 "published_revision": 1,
+                "source_height": 1,
+                "source_region": null,
+                "source_width": 1,
                 "status": "skipped"
               }
             ],
@@ -272,12 +276,34 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minimum": 1,
           "type": "integer"
         },
+        "page_asset_id": {
+          "minLength": 1,
+          "type": "string"
+        },
         "problem_id": {
           "minLength": 1,
           "type": "string"
         },
         "published_revision": {
           "minimum": 0,
+          "type": "integer"
+        },
+        "source_height": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "source_region": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sourcePixelRegion"
+            }
+          ]
+        },
+        "source_width": {
+          "minimum": 1,
           "type": "integer"
         },
         "status": {
@@ -429,6 +455,34 @@ export const K12_IMAGE_TASK_SCHEMA = {
       ],
       "type": "object"
     },
+    "sourcePixelRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "width": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
     "target": {
       "additionalProperties": false,
       "properties": {
@@ -496,6 +550,10 @@ export interface K12ImageTaskProblemSourceProgressWire {
   input_revision: number
   published_revision: number
   current_disposition: 'current'
+  page_asset_id?: string
+  source_width?: number
+  source_height?: number
+  source_region?: { x: number; y: number; width: number; height: number } | null
 }
 export interface K12ImageTaskProblemSourceCoverageWire {
   total: number

@@ -44,6 +44,10 @@ export function fileFromNativeGrant(grant: NativeFileGrant): File {
   return file
 }
 
+export function nativeGrantFromFile(file: File): NativeFileGrant | undefined {
+  return (file as File & { nativeFileGrant?: NativeFileGrant }).nativeFileGrant
+}
+
 export function pickOpenFileGrant(
   purpose: Extract<NativeFilePurpose, 'attachment_upload' | 'knowledge_upload'>,
   operation = operationId('native-open'),

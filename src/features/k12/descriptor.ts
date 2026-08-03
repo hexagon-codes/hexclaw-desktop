@@ -14,6 +14,8 @@ export const K12_SCENARIO_ID = 'k12-tutor'
 export const K12_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
   schemaVersion: '1',
   i18nNamespace: 'k12',
+  // DD-019：权威原型只有 K12 场景头；不在其上方叠加通用消息/Token 工具条。
+  headerOwner: 'scenario',
   // IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段「辅导｜学习档案｜学情」，学情=一等 Tab（kind: report）。
   headerTabs: [
     { id: 'chat', labelKey: 'k12.tabs.chat', kind: 'chat', icon: '💬' },

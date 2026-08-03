@@ -434,8 +434,8 @@ if (
 }
 
 :global(body[data-k12-skin-active='k12'] .k12enh-records) {
-  max-inline-size: 1024px;
   inline-size: 100%;
+  max-inline-size: none;
 }
 
 @media (prefers-reduced-motion: no-preference) {

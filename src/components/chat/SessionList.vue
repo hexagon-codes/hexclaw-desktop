@@ -670,12 +670,14 @@ onUnmounted(() => {
 <template>
   <div class="hc-sessions">
     <!-- 常驻搜索框（对齐原型 .srch：放大镜图标 + 输入框始终可见） -->
-    <SearchInput
-      v-model="filterQuery"
-      fluid
-      class="hc-sessions__search"
-      :placeholder="t('chat.filterSessions')"
-    />
+    <div class="hc-sessions__search-slot">
+      <SearchInput
+        v-model="filterQuery"
+        fluid
+        class="hc-sessions__search"
+        :placeholder="t('chat.filterSessions')"
+      />
+    </div>
 
     <template v-if="filterQuery.trim()">
       <div v-if="searchingHistory" class="hc-sessions__searching">
@@ -955,10 +957,14 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-/* 常驻搜索框（对齐原型 .srch） */
-.hc-sessions__search {
+/* DD-019：外层占用会话内容轨，SearchInput 的 100% 不再与横向 margin 叠加。 */
+.hc-sessions__search-slot {
   flex-shrink: 0;
+  min-width: 0;
   margin: 6px 4px 12px;
+}
+.hc-sessions__search {
+  inline-size: 100%;
 }
 
 .hc-sessions__section {

@@ -88,6 +88,11 @@ export interface InstanceViewDescriptor {
   schemaVersion: string
   /** i18n 命名空间前缀（皮肤从此取 key） */
   i18nNamespace?: string
+  /**
+   * 头部视觉 chrome 的归属。缺省为 shell，保留普通会话的通用工具栏；
+   * 仅声明 scenario 的场景包可用自身已批准的头部替代它。
+   */
+  headerOwner?: 'shell' | 'scenario'
   headerTabs: HeaderTab[]
   messageBadges: MessageBadgeKind[]
   composer?: ComposerPreset
@@ -101,6 +106,7 @@ export interface InstanceViewDescriptor {
 /** 空描述符：普通会话的零增强视图（shell 默认态） */
 export const EMPTY_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
   schemaVersion: '0',
+  headerOwner: 'shell',
   headerTabs: [],
   messageBadges: [],
   recordCollections: [],

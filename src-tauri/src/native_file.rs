@@ -24,7 +24,7 @@ use uuid::Uuid;
 const GRANT_TTL: Duration = Duration::from_secs(60);
 const MAX_IPC_CHUNK_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_KNOWLEDGE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ACTIVE_FILE_GRANTS: usize = 64;
@@ -502,6 +502,7 @@ fn validate_upload_contract(
         }
         GrantPurpose::AttachmentUpload => {
             (path == "/api/v1/attachments" && query.is_empty())
+                || (path == "/api/v1/documents/extract" && query.is_empty())
                 || (path == "/api/k12/assets"
                     && query.len() == 1
                     && query[0].0 == "agent"
@@ -1390,7 +1391,7 @@ mod tests {
     #[test]
     fn purpose_limits_and_mime_are_fail_closed() {
         assert_eq!(GRANT_TTL, Duration::from_secs(60));
-        assert_eq!(GrantPurpose::AttachmentUpload.max_bytes(), 20 * 1024 * 1024);
+        assert_eq!(GrantPurpose::AttachmentUpload.max_bytes(), 200 * 1024 * 1024);
         assert!(
             GrantPurpose::AttachmentUpload.max_bytes() < GrantPurpose::KnowledgeUpload.max_bytes()
         );
@@ -1407,6 +1408,13 @@ mod tests {
             GrantPurpose::AttachmentUpload,
             "/api/v1/attachments",
             "attachment:abc",
+            Some("file")
+        )
+        .is_ok());
+        assert!(validate_upload_contract(
+            GrantPurpose::AttachmentUpload,
+            "/api/v1/documents/extract",
+            "document:abc",
             Some("file")
         )
         .is_ok());

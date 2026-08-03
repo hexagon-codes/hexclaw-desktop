@@ -181,6 +181,9 @@ function validateQuestion(value: unknown, path: string): WireRecord {
       'system_section_ordinal',
       'system_display_label',
       'page_asset_id',
+      'source_width',
+      'source_height',
+      'source_region',
       'attempt_id',
       'question',
       'raw_transcription',
@@ -258,6 +261,42 @@ function validateQuestion(value: unknown, path: string): WireRecord {
     for (const key of ['x', 'y', 'w', 'h']) {
       const coordinate = numberValue(bbox[key], `${path}.bbox.${key}`)
       if (coordinate < 0 || coordinate > 1) fail(`${path}.bbox.${key}`, '0..1')
+    }
+  }
+  const hasSourceWidth = question.source_width !== undefined
+  const hasSourceHeight = question.source_height !== undefined
+  if (hasSourceWidth !== hasSourceHeight) {
+    fail(path, 'source_width and source_height together')
+  }
+  let sourceWidth = 0
+  let sourceHeight = 0
+  if (hasSourceWidth && hasSourceHeight) {
+    if (!question.page_asset_id) fail(`${path}.page_asset_id`, 'source PageAsset identity')
+    sourceWidth = numberValue(question.source_width, `${path}.source_width`, true)
+    sourceHeight = numberValue(question.source_height, `${path}.source_height`, true)
+    if (sourceWidth < 1) fail(`${path}.source_width`, 'positive integer')
+    if (sourceHeight < 1) fail(`${path}.source_height`, 'positive integer')
+  }
+  if (question.source_region !== undefined && question.source_region !== null) {
+    if (!hasSourceWidth || !hasSourceHeight) {
+      fail(`${path}.source_region`, 'PageAsset dimensions')
+    }
+    const region = record(question.source_region, `${path}.source_region`)
+    exact(region, ['x', 'y', 'width', 'height'], `${path}.source_region`)
+    required(region, ['x', 'y', 'width', 'height'], `${path}.source_region`)
+    const x = numberValue(region.x, `${path}.source_region.x`, true)
+    const y = numberValue(region.y, `${path}.source_region.y`, true)
+    const width = numberValue(region.width, `${path}.source_region.width`, true)
+    const height = numberValue(region.height, `${path}.source_region.height`, true)
+    if (
+      x < 0 ||
+      y < 0 ||
+      width < 1 ||
+      height < 1 ||
+      x + width > sourceWidth ||
+      y + height > sourceHeight
+    ) {
+      fail(`${path}.source_region`, 'positive source-pixel rectangle inside PageAsset')
     }
   }
   return question
@@ -369,6 +408,59 @@ const PROBLEM_SOURCE_TERMINAL_STATUSES = new Set([
   'out_of_scope',
   'untrusted',
 ])
+const PROBLEM_SOURCE_FACT_FIELDS = [
+  'page_asset_id',
+  'source_width',
+  'source_height',
+  'source_region',
+] as const
+
+function normalizeProblemSourceFacts(problem: WireRecord, path: string): WireRecord {
+  const present = PROBLEM_SOURCE_FACT_FIELDS.filter((field) => field in problem)
+  if (present.length === 0) return {}
+  if (present.length !== PROBLEM_SOURCE_FACT_FIELDS.length) {
+    fail(path, 'historical all-absent or complete source exact-set')
+  }
+
+  const pageAssetID = stringValue(problem.page_asset_id, `${path}.page_asset_id`)
+  const sourceWidth = numberValue(problem.source_width, `${path}.source_width`, true)
+  const sourceHeight = numberValue(problem.source_height, `${path}.source_height`, true)
+  if (sourceWidth < 1) fail(`${path}.source_width`, 'positive integer')
+  if (sourceHeight < 1) fail(`${path}.source_height`, 'positive integer')
+
+  if (problem.source_region === null) {
+    return {
+      page_asset_id: pageAssetID,
+      source_width: sourceWidth,
+      source_height: sourceHeight,
+      source_region: null,
+    }
+  }
+
+  const region = record(problem.source_region, `${path}.source_region`)
+  exact(region, ['x', 'y', 'width', 'height'], `${path}.source_region`)
+  required(region, ['x', 'y', 'width', 'height'], `${path}.source_region`)
+  const x = numberValue(region.x, `${path}.source_region.x`, true)
+  const y = numberValue(region.y, `${path}.source_region.y`, true)
+  const width = numberValue(region.width, `${path}.source_region.width`, true)
+  const height = numberValue(region.height, `${path}.source_region.height`, true)
+  if (
+    x < 0 ||
+    y < 0 ||
+    width < 1 ||
+    height < 1 ||
+    x + width > sourceWidth ||
+    y + height > sourceHeight
+  ) {
+    fail(`${path}.source_region`, 'positive source-pixel rectangle inside PageAsset')
+  }
+  return {
+    page_asset_id: pageAssetID,
+    source_width: sourceWidth,
+    source_height: sourceHeight,
+    source_region: { x, y, width, height },
+  }
+}
 
 function normalizeProblemSourceProgress(
   value: unknown,
@@ -379,7 +471,14 @@ function normalizeProblemSourceProgress(
   const problem = record(value, path)
   exact(
     problem,
-    ['problem_id', 'status', 'input_revision', 'published_revision', 'current_disposition'],
+    [
+      'problem_id',
+      'status',
+      'input_revision',
+      'published_revision',
+      'current_disposition',
+      ...PROBLEM_SOURCE_FACT_FIELDS,
+    ],
     path,
   )
   required(
@@ -400,6 +499,7 @@ function normalizeProblemSourceProgress(
   )
   if (inputRevision < 1) fail(`${path}.input_revision`, 'positive integer')
   if (publishedRevision < 0) fail(`${path}.published_revision`, 'non-negative integer')
+  const sourceFacts = normalizeProblemSourceFacts(problem, path)
 
   const terminal = PROBLEM_SOURCE_TERMINAL_STATUSES.has(status)
   const skipped = status === 'skipped'
@@ -426,6 +526,7 @@ function normalizeProblemSourceProgress(
     published_revision: publishedRevision,
     input_revision: inputRevision,
     command_available: awaitingResolution || skipped,
+    ...sourceFacts,
   }
 }
 
@@ -1256,11 +1357,10 @@ export function assertImageTaskProblemSourceActionSemantics(
   let skipped = 0
   let awaiting = 0
   rawProblems.forEach((value, index) => {
-    const problem = record(value, `$.progressive_snapshot.problem_progress[${index}]`)
-    const problemID = stringValue(
-      problem.problem_id,
-      `$.progressive_snapshot.problem_progress[${index}].problem_id`,
-    )
+    const problemPath = `$.progressive_snapshot.problem_progress[${index}]`
+    const problem = record(value, problemPath)
+    normalizeProblemSourceFacts(problem, problemPath)
+    const problemID = stringValue(problem.problem_id, `${problemPath}.problem_id`)
     if (seen.has(problemID)) {
       fail(`$.progressive_snapshot.problem_progress[${index}].problem_id`, 'unique problem id')
     }
