@@ -344,6 +344,7 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
       disposition_state: 'open',
       result_projection: null,
       published_revision: 0,
+      input_revision: 1,
     }
     h.sourceAction.mockResolvedValue({
       command_receipt_id: 'receipt-group-3-skip',
@@ -405,6 +406,14 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     expect(group, 'public stem must have one group projection').not.toBeNull()
     expect(group!.querySelectorAll('[data-source-issue-resolver]')).toHaveLength(1)
     expect(root.querySelectorAll('[data-source-issue-resolver]')).toHaveLength(1)
+    const groupResolver = group!.querySelector<HTMLElement>('[data-source-issue-resolver]')
+    expect(
+      groupResolver?.parentElement,
+      'the resolver must be the full-width sibling of the progress-slot card',
+    ).toBe(group)
+    expect(
+      groupResolver?.previousElementSibling?.classList.contains('rec-problem-progress__slot'),
+    ).toBe(true)
 
     const children = [
       group!.querySelector<HTMLElement>('[data-problem-id="problem-3-1"]'),
@@ -422,6 +431,23 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     expect(dialog?.textContent).toContain('不会写入错题、复习或学情')
     buttonByName(dialog!, '确认跳过 2 题')!.click()
     await flushPromises()
+    expect(wrapper.emitted('sourceIssueIntent')?.[0]?.[0]).toMatchObject({
+      action: 'skip',
+      problem_ids: ['problem-3-1', 'problem-3-2'],
+      dependency_group_id: 'group-3',
+    })
+    expect(h.sourceAction).toHaveBeenCalledWith(
+      'dispatch-progressive-wave-2',
+      'problem-3-1',
+      {
+        action: 'skip',
+        structure_version: 2,
+        expected_input_revision: 1,
+        payload: {},
+      },
+      expect.any(String),
+      expect.anything(),
+    )
     for (const child of children) {
       expect(child!.textContent).toContain('已跳过 · 未判断对错')
       expect(child!.textContent).not.toContain('✓')

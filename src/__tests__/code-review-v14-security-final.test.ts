@@ -49,10 +49,12 @@ describe('safe HTML boundaries', () => {
 
 describe('file parsing budget', () => {
   const parser = readSrc('utils/file-parser.ts')
+  const boundary = readSrc('contracts/chat-file-boundary.ts')
 
   it('checks the shared file-size limit before parsing', () => {
-    expect(parser).toMatch(/const MAX_FILE_SIZE\s*=/)
-    expect(parser).toContain('file.size > MAX_FILE_SIZE')
+    expect(boundary).toMatch(/CHAT_FILE_MAX_BYTES\s*=\s*200\s*\*\s*1024\s*\*\s*1024/)
+    expect(parser).toContain('effectiveChatFileSize(file)')
+    expect(parser).toContain('fileSize > CHAT_FILE_MAX_BYTES')
     expect(parser).toMatch(/throw new Error\([\s\S]*?too large/)
   })
 })

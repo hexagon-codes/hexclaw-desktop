@@ -115,6 +115,12 @@ describe('RecordList（schema 驱动通用记录视图）', () => {
     expect(w.find('.rl-status--got').exists()).toBe(true)
   })
 
+  it('为可见记录行暴露稳定的领域身份与状态，不依赖呈现文案做验收定位', () => {
+    const w = render()
+    expect(w.find('.rl-row[data-record-id="r1"][data-record-status="todo"]').exists()).toBe(true)
+    expect(w.find('.rl-row[data-record-id="r2"][data-record-status="got"]').exists()).toBe(true)
+  })
+
   it('reviewable + reviewQueue → 渲染复习队列区', () => {
     const w = render()
     expect(w.find('.rl-review').exists()).toBe(true)

@@ -257,6 +257,7 @@ async function openWeeklyRecords(page: Page, agent: string, title: string) {
   await page.goto(`/chat?role=${agent}&roleTitle=${encodeURIComponent(title)}`)
   const scenarioTabs = page.getByRole('tablist', { name: '辅导助手功能' })
   await expect(scenarioTabs.getByRole('tab', { name: '学习档案', exact: true })).toBeVisible()
+  await expect(page.locator('.hc-toast')).toHaveCount(0, { timeout: 10_000 })
   await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
   await expect(page.getByTestId('week-section')).toBeVisible()
 }
@@ -319,6 +320,7 @@ test.describe('BUG-20260727-005 weekly manual tracks @ WebKit', () => {
 
     const scenarioTabs = page.getByRole('tablist', { name: '辅导助手功能' })
     await expect(scenarioTabs.getByRole('tab', { name: '学习档案', exact: true })).toBeVisible()
+    await expect(page.locator('.hc-toast')).toHaveCount(0, { timeout: 10_000 })
     await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.getByTestId('week-section')).toBeVisible()
 

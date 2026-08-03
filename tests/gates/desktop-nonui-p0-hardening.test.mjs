@@ -52,7 +52,7 @@ test('DESKTOP-BOUNDARY-FILE-001/004 has only native-issued, one-shot purpose-bou
   assert.match(nativeFile, /fn consume\(/)
   assert.match(nativeFile, /window_label/)
   assert.match(nativeFile, /operation_id/)
-  assert.match(nativeFile, /MAX_ATTACHMENT_BYTES:\s*u64\s*=\s*20\s*\*\s*1024\s*\*\s*1024/)
+  assert.match(nativeFile, /MAX_ATTACHMENT_BYTES:\s*u64\s*=\s*200\s*\*\s*1024\s*\*\s*1024/)
   assert.match(nativeFile, /open_verified_read_grant/)
   assert.match(nativeFile, /O_NOFOLLOW/)
   assert.match(nativeFile, /purge_expired/)

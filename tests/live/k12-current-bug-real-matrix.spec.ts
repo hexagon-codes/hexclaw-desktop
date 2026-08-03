@@ -31,6 +31,8 @@ import {
   classifyK12TaskTerminalPoll,
   classifyOperationReceiptPoll,
 } from './k12-operation-receipt-poll'
+import { installDiagnosticBrowserSidecarBridge } from './k12-diagnostic-browser-sidecar-transport'
+import { summarizePhotoAnnotationCoverage } from './k12-photo-annotation-coverage'
 
 type Json = Record<string, unknown>
 type FixtureKey = 'writing' | 'homework' | 'problem' | 'art'
@@ -83,6 +85,43 @@ const blockers = [
   ),
 ]
 const real10xCycle = envValue('HEX_K12_REAL_10X_CYCLE_ID')
+
+/**
+ * The canonical release lane serves the frozen UI and its Sidecar on :16060.
+ * A diagnostic-only isolated lane may use an alternate Sidecar port while the
+ * canonical port is owned by another running desktop instance.  Production
+ * Tauri uses its native Sidecar bridge instead, so this bridge is deliberately
+ * opt-in and does not change the release artefact or its normal transport.
+ */
+function diagnosticBrowserSidecarURL(): string | null {
+  const raw = envValue('HEX_K12_LIVE_DIAGNOSTIC_BROWSER_SIDECAR_URL')
+  if (!raw) return null
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error('HEX_K12_LIVE_DIAGNOSTIC_BROWSER_SIDECAR_URL must be an absolute URL')
+  }
+  if (
+    parsed.protocol !== 'http:' ||
+    !['127.0.0.1', 'localhost'].includes(parsed.hostname) ||
+    !parsed.port ||
+    parsed.port === '16060' ||
+    parsed.pathname !== '/' ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error('diagnostic browser Sidecar must be an isolated loopback origin')
+  }
+  return parsed.origin
+}
+
+async function installDiagnosticBrowserSidecarTransport(page: Page): Promise<void> {
+  const sidecarURL = diagnosticBrowserSidecarURL()
+  await installDiagnosticBrowserSidecarBridge(page, sidecarURL)
+}
 
 function fixture(key: FixtureKey) {
   const frozen = contract.fixtures[key]
@@ -1126,6 +1165,131 @@ function assertHomeworkResult(payload: Json): void {
   }
 }
 
+/**
+ * A completed-homework result has two mutually exclusive visual paths:
+ * immutable server annotations, or legacy DOM marks.  Count the artifact
+ * branch from the same grade/bbox semantics as PhotoGradeOverlay rather than
+ * treating its intentionally absent DOM marks as missing answers.
+ */
+async function assertPhotoAnnotationCoverage(
+  overlay: Locator,
+  payload: Json,
+  expectedItems: number,
+  testInfo: TestInfo,
+  evidenceName: string,
+): Promise<ReturnType<typeof summarizePhotoAnnotationCoverage>> {
+  const coverage = summarizePhotoAnnotationCoverage(payload)
+  expect(coverage.evaluated, 'every terminal item must map to exactly one overlay outcome').toBe(
+    expectedItems,
+  )
+  expect(
+    coverage.artifactCoverage + coverage.degradedCoverage,
+    'trusted-positioned and degraded coverage must form one exact item partition',
+  ).toBe(expectedItems)
+  await expect(overlay.getByTestId('overlay-toggle')).toHaveAttribute('aria-pressed', 'true')
+  const positionedDOM = await overlay.locator('[data-testid^="overlay-mark-"]').count()
+  const degradedDOM = await overlay.locator('[data-testid^="overlay-degraded-"]').count()
+  expect(
+    degradedDOM,
+    'each untrusted or out-of-scope item must remain visible as one degraded text row',
+  ).toBe(coverage.degradedCoverage)
+  expect(
+    positionedDOM,
+    coverage.immutableArtifact
+      ? 'immutable annotation artifact must suppress duplicate DOM marks'
+      : 'legacy no-artifact result must render each trusted coordinate as one DOM mark',
+  ).toBe(coverage.immutableArtifact ? 0 : coverage.artifactCoverage)
+  await attachJSON(testInfo, evidenceName, {
+    evaluated_items: coverage.evaluated,
+    immutable_artifact: coverage.immutableArtifact,
+    artifact_positioned_items: coverage.artifactCoverage,
+    dom_positioned_items: positionedDOM,
+    dom_degraded_items: degradedDOM,
+  })
+  return coverage
+}
+
+async function assertImmutableAnnotationArtifactPixels(
+  page: Page,
+  payload: Json,
+  source: Buffer,
+  sourceDigest: string,
+  coverage: ReturnType<typeof summarizePhotoAnnotationCoverage>,
+  testInfo: TestInfo,
+  evidenceName: string,
+): Promise<void> {
+  if (!coverage.immutableArtifact || coverage.artifactCoverage === 0) return
+  const annotated = record(payload.annotated_image, 'annotated homework image')
+  const encoded = String(annotated.data_base64 ?? '').replace(/\s/g, '')
+  const facts = await page.evaluate(
+    async ({ sourceBase64, annotatedBase64 }) => {
+      const decode = async (base64: string) => {
+        const image = new Image()
+        image.src = `data:image/png;base64,${base64}`
+        await image.decode()
+        const canvas = document.createElement('canvas')
+        canvas.width = image.naturalWidth
+        canvas.height = image.naturalHeight
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) throw new Error('canvas context is unavailable for annotation verification')
+        context.drawImage(image, 0, 0)
+        return {
+          width: canvas.width,
+          height: canvas.height,
+          pixels: context.getImageData(0, 0, canvas.width, canvas.height).data,
+        }
+      }
+      const source = await decode(sourceBase64)
+      const annotated = await decode(annotatedBase64)
+      if (source.width !== annotated.width || source.height !== annotated.height) {
+        return {
+          source_width: source.width,
+          source_height: source.height,
+          annotated_width: annotated.width,
+          annotated_height: annotated.height,
+          changed_pixels: -1,
+        }
+      }
+      let changedPixels = 0
+      for (let index = 0; index < source.pixels.length; index += 4) {
+        if (
+          source.pixels[index] !== annotated.pixels[index] ||
+          source.pixels[index + 1] !== annotated.pixels[index + 1] ||
+          source.pixels[index + 2] !== annotated.pixels[index + 2] ||
+          source.pixels[index + 3] !== annotated.pixels[index + 3]
+        ) {
+          changedPixels += 1
+        }
+      }
+      return {
+        source_width: source.width,
+        source_height: source.height,
+        annotated_width: annotated.width,
+        annotated_height: annotated.height,
+        changed_pixels: changedPixels,
+      }
+    },
+    { sourceBase64: source.toString('base64'), annotatedBase64: encoded },
+  )
+  expect(
+    { width: facts.annotated_width, height: facts.annotated_height },
+    'immutable annotation artifact must retain the original photo geometry',
+  ).toEqual({ width: facts.source_width, height: facts.source_height })
+  expect(
+    facts.changed_pixels,
+    'trusted artifact coverage requires a visible pixel difference from the original photo',
+  ).toBeGreaterThan(0)
+  await attachJSON(testInfo, evidenceName, {
+    source_digest: sourceDigest,
+    annotated_digest: normalizedDigest(annotated.digest),
+    source_width: facts.source_width,
+    source_height: facts.source_height,
+    annotated_width: facts.annotated_width,
+    annotated_height: facts.annotated_height,
+    changed_pixels: facts.changed_pixels,
+  })
+}
+
 if (!real10xCycle) {
   test('fixture manifest freezes four user-supplied source images and the submission budget', () => {
     for (const key of ['writing', 'homework', 'problem', 'art'] as const) {
@@ -1144,6 +1308,10 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
     blockers.length > 0,
     liveSkipReason(blockers, 'frozen app + real provider + state fixtures'),
   )
+
+  test.beforeEach(async ({ page }) => {
+    await installDiagnosticBrowserSidecarTransport(page)
+  })
 
   let sessionID = ''
   let sessionTitle = ''
@@ -1301,12 +1469,6 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         guard,
         homeworkDispatchId,
       )
-      expect(
-        await overlay
-          .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
-          .count(),
-        'every answered source item must expose one visible positioned or degraded annotation',
-      ).toBe(homeworkGroundTruth.length)
 
       const homeworkResult = await liveJSON<Json>(
         request,
@@ -1316,6 +1478,22 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       const homeworkPayload = record(
         record(homeworkResult.result, 'homework result').payload,
         'homework payload',
+      )
+      const annotationCoverage = await assertPhotoAnnotationCoverage(
+        overlay,
+        homeworkPayload,
+        homeworkGroundTruth.length,
+        testInfo,
+        'k12-real-10x-C02-annotation-coverage',
+      )
+      await assertImmutableAnnotationArtifactPixels(
+        page,
+        homeworkPayload,
+        verifyFixture('homework'),
+        contract.fixtures.homework.sha256,
+        annotationCoverage,
+        testInfo,
+        'k12-real-10x-C02-annotation-pixel-diff',
       )
       assertHomeworkResult(homeworkPayload)
       const history = await listHistory(request, sessionID)
@@ -1579,12 +1757,6 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
       const overlay = guard.getByTestId('photo-grade-overlay')
       await expect(overlay).toBeVisible({ timeout: 12 * 60_000 })
-      expect(
-        await overlay
-          .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
-          .count(),
-        'every answered source item must expose one visible positioned or degraded annotation',
-      ).toBe(homeworkGroundTruth.length)
 
       const taskNode = await homework.shell.elementHandle()
       const laterNode = await laterUser.elementHandle()
@@ -1608,6 +1780,22 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         'homework payload',
       )
       const resultItems = Array.isArray(homeworkPayload.items) ? homeworkPayload.items : []
+      const annotationCoverage = await assertPhotoAnnotationCoverage(
+        overlay,
+        homeworkPayload,
+        homeworkGroundTruth.length,
+        testInfo,
+        'current-bug-real-matrix-annotation-coverage',
+      )
+      await assertImmutableAnnotationArtifactPixels(
+        page,
+        homeworkPayload,
+        verifyFixture('homework'),
+        contract.fixtures.homework.sha256,
+        annotationCoverage,
+        testInfo,
+        'current-bug-real-matrix-annotation-pixel-diff',
+      )
       assertHomeworkResult(homeworkPayload)
       assertHomeworkSourceFacts(
         resultItems.map((item) => record(record(item, 'result item').question, 'result question')),

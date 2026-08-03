@@ -9,6 +9,7 @@ const native = vi.hoisted(() => ({
 vi.mock('@/utils/platform', () => ({ isTauri: () => true }))
 vi.mock('../native-files', () => ({
   createNativeFileOperation: vi.fn(() => 'chat-attachment:test'),
+  nativeGrantFromFile: (file: File & { nativeFileGrant?: unknown }) => file.nativeFileGrant,
   stageBlob: native.stageBlob,
   uploadGrantedFile: native.uploadGrantedFile,
 }))

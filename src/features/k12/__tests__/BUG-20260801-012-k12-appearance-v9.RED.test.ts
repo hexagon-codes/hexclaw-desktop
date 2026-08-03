@@ -31,6 +31,7 @@ const toastProviderSource = source('src/components/common/ToastProvider.vue')
 const toastSource = source('src/composables/useToast.ts')
 const chatSource = source('src/views/ChatView.vue')
 const insightSource = source('src/features/k12/views/K12InsightPanel.vue')
+const recordsSource = source('src/features/k12/views/K12RecordsView.vue')
 
 describe('BUG-20260801-012 · K12 v9 production contract (unchanged-production RED)', () => {
   it('has one feature-owned appearance owner, global presentation and settings extension', () => {
@@ -146,15 +147,24 @@ describe('BUG-20260801-012 · K12 v9 production contract (unchanged-production R
     expect(toastSource).toContain('action:')
   })
 
-  it('keeps the shared 226/256/220 geometry and the K12 1024px reading column', () => {
+  it('keeps shared 226/256/220 geometry and constrains only the K12 reading rail', () => {
     expect(presentationSource).not.toMatch(/\.hc-chat__sessions[^}]*width\s*:/s)
     expect(presentationSource).not.toMatch(/\.hc-chat__sessions[^}]*flex-basis\s*:/s)
-    expect(presentationSource).toContain('max-inline-size: 1024px')
+    expect(presentationSource).toMatch(
+      /\.k12enh-records\s*\)[^{]*\{[^}]*inline-size:\s*100%;[^}]*max-inline-size:\s*none;/s,
+    )
     expect(source('src/components/layout/Sidebar.vue')).toContain('width: 226px')
     expect(chatSource).toMatch(/SIDEBAR_DEFAULT_WIDTH\s*=\s*256/)
     expect(chatSource).toMatch(/SIDEBAR_COMPACT_WIDTH\s*=\s*220/)
     expect(chatSource).toMatch(/SIDEBAR_COMPACT_BREAKPOINT\s*=\s*1040/)
+    expect(recordsSource).toMatch(/\.k12rec\s*\{[^}]*max-inline-size:\s*none;/s)
+    expect(recordsSource).toMatch(
+      /\.k12rec__body\s*>\s*section\s*\{[^}]*inline-size:\s*min\(100%,\s*1024px\);[^}]*max-inline-size:\s*1024px;/s,
+    )
     expect(insightSource).not.toMatch(/\.k12ins__priority\s*\{[^}]*max-width:\s*640px/s)
-    expect(insightSource).toMatch(/\.k12ins\s*\{[^}]*max-inline-size:\s*1024px/s)
+    expect(insightSource).toMatch(/\.k12ins\s*\{[^}]*max-inline-size:\s*none;/s)
+    expect(insightSource).toMatch(
+      /\.k12ins\s*>\s*\*\s*\{[^}]*inline-size:\s*min\(100%,\s*1024px\);[^}]*max-inline-size:\s*1024px;/s,
+    )
   })
 })

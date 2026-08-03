@@ -161,7 +161,9 @@ describe('BUG-20260726-031 · TaskShell stable problem slots', () => {
     })
     await flushPromises()
 
-    const progressList = wrapper.element.querySelector('[role="list"]') as HTMLElement | null
+    const progressList = wrapper.element.querySelector(
+      '[role="list"][aria-label="逐题处理进度"]',
+    ) as HTMLElement | null
     expect(
       progressList,
       'TaskShell must expose one accessible list for the frozen problem slots',

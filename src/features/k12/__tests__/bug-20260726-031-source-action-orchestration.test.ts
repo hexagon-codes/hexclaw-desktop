@@ -105,6 +105,10 @@ function dispatchSnapshot(
             problem_id: 'problem-1',
             source_number_path: ['一', '1'],
             display_label: '一. 1',
+            page_asset_id: 'asset://mingming/photo.png',
+            source_width: 430,
+            source_height: 520,
+            source_region: { x: 18, y: 324, width: 394, height: 126 },
             question: '一. 1 题目',
             canonical_markdown: '一. 1 题目',
             knowledge_points: ['小数计算'],
@@ -141,10 +145,27 @@ function createResponse(problem: Record<string, unknown> = problemProgress()) {
 
 function sourceActionResponse(
   options: {
-    action?: 'correct_text' | 'skip' | 'resume'
+    action?: 'correct_text' | 'select_region' | 'retake' | 'skip' | 'resume'
     structureVersion?: number
     inputRevision?: number
     snapshotRevision?: number
+    status?:
+      | 'awaiting_source'
+      | 'processing'
+      | 'skipped'
+      | 'correct'
+      | 'wrong'
+      | 'unanswered'
+      | 'answer_unclear'
+      | 'blank_solved'
+      | 'out_of_scope'
+      | 'untrusted'
+    sourceFacts?: {
+      page_asset_id: string
+      source_width: number
+      source_height: number
+      source_region: { x: number; y: number; width: number; height: number } | null
+    }
     coverage?: {
       total: number
       published: number
@@ -172,10 +193,16 @@ function sourceActionResponse(
         {
           problem_id: 'problem-1',
           status:
-            action === 'skip' ? 'skipped' : action === 'resume' ? 'awaiting_source' : 'processing',
+            options.status ??
+            (action === 'skip'
+              ? 'skipped'
+              : action === 'resume'
+                ? 'awaiting_source'
+                : 'processing'),
           input_revision: inputRevision,
           published_revision: action === 'skip' ? 1 : 0,
           current_disposition: 'current',
+          ...(options.sourceFacts ?? {}),
         },
       ],
       coverage: options.coverage ?? {
@@ -193,9 +220,9 @@ function sourceActionResponse(
 
 const wrappers: VueWrapper[] = []
 
-async function renderTask() {
+async function renderTask(initial = createResponse()) {
   h.upload.mockResolvedValue({ asset_id: 'asset://mingming/photo.png', size: 3 })
-  h.create.mockResolvedValue(createResponse())
+  h.create.mockResolvedValue(initial)
   h.get.mockReturnValue(new Promise(() => {}))
   const wrapper = mount(RecognizeGuardPanel, {
     props: {
@@ -212,6 +239,84 @@ async function renderTask() {
   await flushPromises()
   await flushPromises()
   return wrapper
+}
+
+function groupedCreateResponseWithStaleParentAsset() {
+  const children = [
+    {
+      problem_id: 'problem-3-1',
+      problem_kind: 'subproblem',
+      parent_problem_id: 'problem-3-parent',
+      source_number_path: ['三', '1'],
+      display_label: '三. 1',
+      page_asset_id: 'asset://mingming/retake-current.png',
+      source_width: 600,
+      source_height: 800,
+      source_region: { x: 30, y: 400, width: 520, height: 220 },
+      question: '第一问',
+      canonical_markdown: '第一问',
+      knowledge_points: ['小数计算'],
+      answer_state: 'present',
+      student_answer: '11',
+      confirmation_required: true,
+      confirmation_reasons: ['source_conflict'],
+    },
+    {
+      problem_id: 'problem-3-2',
+      problem_kind: 'subproblem',
+      parent_problem_id: 'problem-3-parent',
+      source_number_path: ['三', '2'],
+      display_label: '三. 2',
+      page_asset_id: 'asset://mingming/retake-current.png',
+      source_width: 600,
+      source_height: 800,
+      source_region: { x: 30, y: 400, width: 520, height: 220 },
+      question: '第二问',
+      canonical_markdown: '第二问',
+      knowledge_points: ['小数计算'],
+      answer_state: 'present',
+      student_answer: '22',
+      confirmation_required: true,
+      confirmation_reasons: ['source_conflict'],
+    },
+  ]
+  const childProgress = children.map((question) =>
+    problemProgress({
+      problem_id: question.problem_id,
+      parent_problem_id: question.parent_problem_id,
+      source_number_path: question.source_number_path,
+      display_label: question.display_label,
+      input_revision: 3,
+    }),
+  )
+  const dispatch = dispatchSnapshot(childProgress[0]!)
+  dispatch.target_projection.recognition.questions = [
+    {
+      problem_id: 'problem-3-parent',
+      problem_kind: 'compound_parent',
+      source_number_path: ['三'],
+      display_label: '三',
+      page_asset_id: 'asset://mingming/original-stale.png',
+      source_width: 430,
+      source_height: 520,
+      source_region: { x: 18, y: 324, width: 394, height: 126 },
+      question: '公共题干',
+      canonical_markdown: '公共题干',
+      knowledge_points: [],
+      answer_state: 'blank',
+      confirmation_required: false,
+      confirmation_reasons: [],
+    },
+    ...children,
+  ] as never
+  dispatch.target_projection.problems = childProgress as never
+  dispatch.target_projection.coverage = {
+    state: 'incomplete',
+    total: 2,
+    processed: 0,
+    skipped: 0,
+  }
+  return { created: true, dispatch }
 }
 
 function buttonByName(root: Element, name: string): HTMLButtonElement | null {
@@ -379,17 +484,249 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     expect(h.sourceAction).toHaveBeenCalledTimes(1)
   })
 
-  it('PROG-026D keeps reselect and retake unwired until their concrete UI journeys are approved', async () => {
+  it('PROG-026D maps the approved region draft to one select_region command instead of silently dropping it', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({ action: 'select_region', inputRevision: 3, snapshotRevision: 10 }),
+    )
     const wrapper = await renderTask()
 
-    for (const action of ['重新选择区域', '重新拍摄']) {
-      buttonByName(resolver(wrapper), action)!.click()
-      await nextTick()
-    }
+    buttonByName(resolver(wrapper), '重新选择区域')!.click()
+    await nextTick()
+    const selection = wrapper.get('[data-source-region-selection]')
+    await selection.trigger('keydown', { key: 'ArrowRight' })
+    buttonByName(resolver(wrapper), '使用此区域重新读取')!.click()
+    await flushPromises()
 
+    expect(h.sourceAction).toHaveBeenCalledTimes(1)
+    expect(h.sourceAction).toHaveBeenCalledWith(
+      'dispatch-progressive-wave-3',
+      'problem-1',
+      {
+        action: 'select_region',
+        structure_version: 4,
+        expected_input_revision: 2,
+        payload: {
+          page_asset_id: 'asset://mingming/photo.png',
+          region: { x: 19, y: 324, width: 394, height: 126 },
+        },
+      },
+      expect.any(String),
+      expect.anything(),
+    )
+    expect(wrapper.emitted('sourceIssueIntent')?.[0]?.[0]).toMatchObject({
+      action: 'reselect_region',
+      problem_ids: ['problem-1'],
+      payload: {
+        page_asset_id: 'asset://mingming/photo.png',
+        region: { x: 19, y: 324, width: 394, height: 126 },
+      },
+    })
+  })
+
+  it('PROG-026D applies the select_region 200 source facts to the matching row immediately', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({
+        action: 'select_region',
+        inputRevision: 3,
+        snapshotRevision: 10,
+        status: 'awaiting_source',
+        sourceFacts: {
+          page_asset_id: 'asset://mingming/photo.png',
+          source_width: 430,
+          source_height: 520,
+          source_region: { x: 24, y: 310, width: 380, height: 140 },
+        },
+      }),
+    )
+    const wrapper = await renderTask()
+
+    buttonByName(resolver(wrapper), '重新选择区域')!.click()
+    await nextTick()
+    buttonByName(resolver(wrapper), '使用此区域重新读取')!.click()
+    await flushPromises()
+
+    const editor = wrapper.get('[data-source-region-editor]')
+    expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/photo.png')
+    expect(editor.attributes('data-source-width')).toBe('430')
+    expect(editor.attributes('data-source-height')).toBe('520')
+    expect(JSON.parse(editor.attributes('data-current-region')!)).toEqual({
+      x: 24,
+      y: 310,
+      width: 380,
+      height: 140,
+    })
+  })
+
+  it('PROG-026D uses the answerable exact-set current PageAsset when a compound parent still references the old photo', async () => {
+    const wrapper = await renderTask(groupedCreateResponseWithStaleParentAsset())
+
+    buttonByName(resolver(wrapper), '重新选择区域')!.click()
+    await nextTick()
+
+    const editor = wrapper.get('[data-source-region-editor]')
+    expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/retake-current.png')
+    expect(editor.attributes('data-source-width')).toBe('600')
+    expect(editor.attributes('data-source-height')).toBe('800')
+    expect(JSON.parse(editor.attributes('data-current-region')!)).toEqual({
+      x: 30,
+      y: 400,
+      width: 520,
+      height: 220,
+    })
+  })
+
+  it('PROG-026E treats picker cancel as zero work and uploads a selected image before one retake command', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({ action: 'retake', inputRevision: 3, snapshotRevision: 10 }),
+    )
+    const wrapper = await renderTask()
+    const baselineUploads = h.upload.mock.calls.length
+
+    buttonByName(resolver(wrapper), '重新拍摄')!.click()
+    await nextTick()
+    const picker = wrapper.get<HTMLInputElement>('[data-source-panel="retake"] input[type="file"]')
+    Object.defineProperty(picker.element, 'files', { configurable: true, value: [] })
+    await picker.trigger('change')
+    await flushPromises()
+
+    expect(h.upload).toHaveBeenCalledTimes(baselineUploads)
     expect(h.sourceAction).not.toHaveBeenCalled()
-    expect(wrapper.emitted('sourceIssueIntent')).toBeUndefined()
-    expect(wrapper.get('[data-problem-id="problem-1"]').text()).toContain('等待处理题源问题')
+
+    const file = new File(['new immutable page'], 'retake.png', { type: 'image/png' })
+    h.upload.mockResolvedValueOnce({ asset_id: 'asset://mingming/retake.png', size: file.size })
+    Object.defineProperty(picker.element, 'files', { configurable: true, value: [file] })
+    await picker.trigger('change')
+    await flushPromises()
+
+    expect(h.upload).toHaveBeenCalledTimes(baselineUploads + 1)
+    const latestUpload = h.upload.mock.calls[h.upload.mock.calls.length - 1]
+    expect(latestUpload?.[0]).toBe('mingming')
+    expect(latestUpload?.[1]).toBe(file)
+    expect(h.sourceAction).toHaveBeenCalledTimes(1)
+    expect(h.sourceAction).toHaveBeenCalledWith(
+      'dispatch-progressive-wave-3',
+      'problem-1',
+      {
+        action: 'retake',
+        structure_version: 4,
+        expected_input_revision: 2,
+        payload: { page_asset_id: 'asset://mingming/retake.png' },
+      },
+      expect.any(String),
+      expect.anything(),
+    )
+  })
+
+  it('PROG-026E applies the retake 200 PageAsset identity and clears the previous crop immediately', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({
+        action: 'retake',
+        inputRevision: 3,
+        snapshotRevision: 10,
+        status: 'awaiting_source',
+        sourceFacts: {
+          page_asset_id: 'asset://mingming/retake-current.png',
+          source_width: 600,
+          source_height: 800,
+          source_region: null,
+        },
+      }),
+    )
+    const wrapper = await renderTask()
+    const file = new File(['new immutable page'], 'retake.png', { type: 'image/png' })
+    h.upload.mockResolvedValueOnce({
+      asset_id: 'asset://mingming/retake-current.png',
+      size: file.size,
+    })
+
+    buttonByName(resolver(wrapper), '重新拍摄')!.click()
+    await nextTick()
+    const picker = wrapper.get<HTMLInputElement>('[data-source-panel="retake"] input[type="file"]')
+    Object.defineProperty(picker.element, 'files', { configurable: true, value: [file] })
+    await picker.trigger('change')
+    await flushPromises()
+    buttonByName(resolver(wrapper), '重新选择区域')!.click()
+    await nextTick()
+
+    const editor = wrapper.get('[data-source-region-editor]')
+    expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/retake-current.png')
+    expect(editor.attributes('data-source-width')).toBe('600')
+    expect(editor.attributes('data-source-height')).toBe('800')
+    expect(JSON.parse(editor.attributes('data-current-region')!)).toEqual({
+      x: 0,
+      y: 0,
+      width: 600,
+      height: 800,
+    })
+  })
+
+  it('PROG-026B preserves current row source facts for a historical all-absent frozen 200', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({
+        action: 'correct_text',
+        inputRevision: 3,
+        snapshotRevision: 10,
+        status: 'awaiting_source',
+      }),
+    )
+    const wrapper = await renderTask()
+
+    buttonByName(resolver(wrapper), '纠正识别')!.click()
+    await nextTick()
+    await wrapper.get('textarea').setValue('历史冻结响应兼容')
+    buttonByName(resolver(wrapper), '保存并重新处理')!.click()
+    await flushPromises()
+    buttonByName(resolver(wrapper), '重新选择区域')!.click()
+    await nextTick()
+
+    const editor = wrapper.get('[data-source-region-editor]')
+    expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/photo.png')
+    expect(editor.attributes('data-source-width')).toBe('430')
+    expect(editor.attributes('data-source-height')).toBe('520')
+    expect(JSON.parse(editor.attributes('data-current-region')!)).toEqual({
+      x: 18,
+      y: 324,
+      width: 394,
+      height: 126,
+    })
+  })
+
+  it('PROG-026K resumes only the same dispatch after a processing 200 and never creates a replacement ImageTask', async () => {
+    h.sourceAction.mockResolvedValue(
+      sourceActionResponse({ action: 'correct_text', inputRevision: 3, snapshotRevision: 10 }),
+    )
+    const wrapper = await renderTask()
+    const backgroundGetCalls = h.get.mock.calls.length
+    h.get.mockResolvedValue({
+      dispatch: dispatchSnapshot(
+        problemProgress({
+          source_state: 'ready',
+          anchor_state: 'located',
+          operation_state: 'published',
+          disposition_state: 'result',
+          result_projection: { assessment_status: 'correct' },
+          published_revision: 3,
+          input_revision: 3,
+          command_available: false,
+        }),
+        { snapshotRevision: 11 },
+      ),
+    })
+
+    buttonByName(resolver(wrapper), '纠正识别')!.click()
+    await nextTick()
+    await wrapper.get('textarea').setValue('8 的四分之一是多少？')
+    buttonByName(resolver(wrapper), '保存并重新处理')!.click()
+    await flushPromises()
+    await flushPromises()
+
+    expect(h.get.mock.calls.length).toBeGreaterThan(backgroundGetCalls)
+    for (const call of h.get.mock.calls.slice(backgroundGetCalls)) {
+      expect(call[0]).toBe('mingming')
+      expect(call[1]).toBe('dispatch-progressive-wave-3')
+    }
+    expect(h.create).toHaveBeenCalledTimes(1)
+    expect(h.sourceAction).toHaveBeenCalledTimes(1)
   })
 
   it('PROG-026 applies only the post-commit server snapshot and uses its structure/input revision for the next action', async () => {
