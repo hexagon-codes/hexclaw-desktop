@@ -224,11 +224,11 @@ body,
   background: transparent;
 }
 
-/* 原生容器继续处理滚轮、键盘、触控板与可访问滚动；原生视觉保持透明。 */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
+/* 原生容器继续处理滚轮、键盘、触控板与可访问滚动；原生视觉保持透明。
+   DD-043：禁用 scrollbar-width 与 scrollbar-color 这两个标准属性——真实
+   WKWebView（macOS 26）会把 transparent 颜色降级绘制为默认深色 thumb 并压过
+   ::-webkit-scrollbar 透明规则，导致安装版重新显露原生深色、内容比例长度滚动条
+   （BUG-20260726-014）。 */
 
 .hc-global-scrollbar-layer {
   position: fixed;

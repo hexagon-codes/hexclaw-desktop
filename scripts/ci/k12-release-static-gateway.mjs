@@ -365,7 +365,7 @@ function writeResponse(response, result) {
 
 function proxyHTTP(prepared, incoming, response) {
   const target = new URL(mapReleaseGatewayProxyURL(prepared.config, incoming.url, false))
-  const headers = { ...incoming.headers, host: target.host }
+  const headers = { ...incoming.headers }
   const outgoing = httpRequest({
     protocol: target.protocol,
     hostname: target.hostname,
@@ -394,10 +394,9 @@ function proxyWebSocket(prepared, request, socket, head) {
     upstream.write(`${request.method} ${target.pathname}${target.search} HTTP/${request.httpVersion}\r\n`)
     for (let index = 0; index < request.rawHeaders.length; index += 2) {
       const name = request.rawHeaders[index]
-      if (name.toLowerCase() === 'host') continue
       upstream.write(`${name}: ${request.rawHeaders[index + 1]}\r\n`)
     }
-    upstream.write(`Host: ${target.host}\r\n\r\n`)
+    upstream.write('\r\n')
     if (head.length > 0) upstream.write(head)
     socket.pipe(upstream).pipe(socket)
   })

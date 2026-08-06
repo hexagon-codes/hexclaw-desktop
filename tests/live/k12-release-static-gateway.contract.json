@@ -38,7 +38,8 @@
       "/ws",
       "/_hexclaw/ws -> /ws"
     ],
-    "pathPolicy": "direct-preserve-prefixed-strip-one-exact-prefix"
+    "pathPolicy": "direct-preserve-prefixed-strip-one-exact-prefix",
+    "headerPolicy": "preserve-incoming-host-origin-and-headers"
   },
   "forbidden": [
     "asset-injection",

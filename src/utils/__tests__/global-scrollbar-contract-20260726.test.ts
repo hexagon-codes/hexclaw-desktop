@@ -137,4 +137,20 @@ describe('single global fixed scrollbar controller 2026-07-26', () => {
     expect(controllerSource).toContain('FIXED_THUMB_PX = 168')
     expect(controllerSource).not.toContain('scrollHeight /')
   })
+
+  it('DD-043：全局滚动条禁止标准 scrollbar-width / scrollbar-color 属性，保留 ::-webkit-scrollbar 透明规则', () => {
+    const srcRoot = resolve(process.cwd(), 'src')
+    const globalCss = resolve(srcRoot, 'assets/styles/global.css')
+    const globalSource = readFileSync(globalCss, 'utf8')
+
+    const standardProps =
+      /scrollbar-width\s*:|scrollbar-color\s*:/g
+    expect(globalSource.match(standardProps) ?? []).toEqual([])
+    expect(globalSource).toMatch(
+      /::-webkit-scrollbar-thumb:window-inactive[\s\S]*background\s*:\s*transparent/,
+    )
+    expect(globalSource).toMatch(
+      /::-webkit-scrollbar-thumb[\s\S]*background\s*:\s*transparent/,
+    )
+  })
 })

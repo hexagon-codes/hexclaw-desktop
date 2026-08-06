@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
+import { connect as connectTCP } from 'node:net'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -65,6 +66,48 @@ async function releaseFixture(name) {
   }
 }
 
+function requestWebSocketUpgrade({ port, path, host, origin }) {
+  return new Promise((resolve, reject) => {
+    const socket = connectTCP({ host: '127.0.0.1', port })
+    let response = ''
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      socket.destroy()
+      callback(value)
+    }
+    const timeout = setTimeout(() => {
+      finish(reject, new Error(`timed out waiting for WebSocket upgrade ${path}`))
+    }, 5_000)
+    socket.setEncoding('utf8')
+    socket.once('connect', () => {
+      socket.write([
+        `GET ${path} HTTP/1.1`,
+        `Host: ${host}`,
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        `Origin: ${origin}`,
+        'Sec-WebSocket-Version: 13',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        '',
+        '',
+      ].join('\r\n'))
+    })
+    socket.on('data', (chunk) => {
+      response += chunk
+      if (response.includes('\r\n\r\n')) {
+        finish(resolve, response.split('\r\n', 1)[0])
+      }
+    })
+    socket.once('error', (error) => finish(reject, error))
+    socket.once('end', () => {
+      if (!settled) finish(reject, new Error(`WebSocket upgrade closed without a response for ${path}`))
+    })
+  })
+}
+
 test('gateway contract freezes exact release origin, direct Sidecar namespaces and prohibitions', async () => {
   const contract = JSON.parse(await readFile(contractURL, 'utf8'))
   assert.deepEqual(contract, {
@@ -100,6 +143,7 @@ test('gateway contract freezes exact release origin, direct Sidecar namespaces a
       httpProxyPaths: ['/api', '/health', '/version', '/_hexclaw/api -> /api'],
       webSocketProxyPaths: ['/ws', '/_hexclaw/ws -> /ws'],
       pathPolicy: 'direct-preserve-prefixed-strip-one-exact-prefix',
+      headerPolicy: 'preserve-incoming-host-origin-and-headers',
     },
     forbidden: [
       'asset-injection',
@@ -217,6 +261,7 @@ test('prefixed release API proxy preserves request and upstream response semanti
       resolveObserved({
         method: request.method,
         url: request.url,
+        host: request.headers.host,
         contentType: request.headers['content-type'],
         proof: request.headers['x-hexclaw-proof'],
         body: Buffer.concat(chunks),
@@ -271,6 +316,7 @@ test('prefixed release API proxy preserves request and upstream response semanti
         method: 'DELETE',
         path: '/_hexclaw/api/v1/agents?id=agent%2Fproof&mode=cleanup',
         headers: {
+          host: `localhost:${gatewayPort}`,
           'content-length': requestBody.length,
           'content-type': 'application/json',
           'x-hexclaw-proof': 'request-exact',
@@ -292,6 +338,7 @@ test('prefixed release API proxy preserves request and upstream response semanti
     assert.deepEqual(await observed, {
       method: 'DELETE',
       url: '/api/v1/agents?id=agent%2Fproof&mode=cleanup',
+      host: `localhost:${gatewayPort}`,
       contentType: 'application/json',
       proof: 'request-exact',
       body: requestBody,
@@ -302,6 +349,89 @@ test('prefixed release API proxy preserves request and upstream response semanti
       receipt: 'cleanup-exact',
       body: responseBody,
     })
+  } finally {
+    if (gateway) await gateway.close()
+    await new Promise((resolve, reject) => {
+      sidecar.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test('gateway preserves browser Host and Origin through direct and prefixed WebSocket upgrades', async () => {
+  const upgrades = []
+  const sidecar = createServer()
+  sidecar.on('upgrade', (request, socket) => {
+    upgrades.push({
+      host: request.headers.host,
+      origin: request.headers.origin,
+      url: request.url,
+    })
+    const sameOrigin = request.headers.host === new URL(request.headers.origin).host
+    socket.end(
+      sameOrigin
+        ? 'HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'
+        : 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n',
+    )
+  })
+  await new Promise((resolve, reject) => {
+    sidecar.once('error', reject)
+    sidecar.listen(0, '127.0.0.1', resolve)
+  })
+
+  const built = await releaseFixture('websocket-host')
+  const sidecarAddress = sidecar.address()
+  assert.ok(sidecarAddress && typeof sidecarAddress === 'object')
+  built.config.sidecar_url = `http://127.0.0.1:${sidecarAddress.port}`
+
+  const {
+    createReleaseStaticGatewayServer,
+    startReleaseStaticGateway,
+  } = await loadGateway()
+  let gateway
+  let gatewayPort
+  try {
+    gateway = await startReleaseStaticGateway(built.config, {
+      listenGateway: async (prepared) => {
+        const server = createReleaseStaticGatewayServer(prepared)
+        await new Promise((resolve, reject) => {
+          server.once('error', reject)
+          server.listen(0, '127.0.0.1', resolve)
+        })
+        const address = server.address()
+        assert.ok(address && typeof address === 'object')
+        gatewayPort = address.port
+        return {
+          origin: `http://127.0.0.1:${gatewayPort}`,
+          close: () => new Promise((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve())
+          }),
+        }
+      },
+    })
+    const host = `localhost:${gatewayPort}`
+    const origin = `http://${host}`
+    assert.equal(
+      await requestWebSocketUpgrade({
+        port: gatewayPort,
+        path: '/ws?session=direct',
+        host,
+        origin,
+      }),
+      'HTTP/1.1 101 Switching Protocols',
+    )
+    assert.equal(
+      await requestWebSocketUpgrade({
+        port: gatewayPort,
+        path: '/_hexclaw/ws?session=prefixed',
+        host,
+        origin,
+      }),
+      'HTTP/1.1 101 Switching Protocols',
+    )
+    assert.deepEqual(upgrades, [
+      { host, origin, url: '/ws?session=direct' },
+      { host, origin, url: '/ws?session=prefixed' },
+    ])
   } finally {
     if (gateway) await gateway.close()
     await new Promise((resolve, reject) => {
