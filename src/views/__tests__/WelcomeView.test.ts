@@ -32,7 +32,12 @@ vi.mock('vue-router', () => ({
 
 vi.mock('@/config/providers', () => ({
   PROVIDER_PRESETS: {
-    openai: { name: 'OpenAI', placeholder: 'sk-', defaultBaseUrl: 'https://api.openai.com/v1', defaultModels: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }] },
+    openai: {
+      name: 'OpenAI',
+      placeholder: 'sk-',
+      defaultBaseUrl: 'https://api.openai.com/v1',
+      defaultModels: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', capabilities: ['text', 'vision'] }],
+    },
   },
 }))
 
@@ -57,7 +62,56 @@ describe('WelcomeView onboarding', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     testLLMConnection.mockResolvedValue({ ok: true, message: 'ok' })
-    addProvider.mockReturnValue({ id: 'p1', name: 'OpenAI', type: 'openai', enabled: true, apiKey: 'sk-test', baseUrl: 'https://api.openai.com/v1', models: [] })
+    addProvider.mockReturnValue({
+      id: 'p1',
+      name: 'OpenAI',
+      type: 'openai',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [],
+    })
+  })
+
+  it('BUG-20260808-001 keeps the connection test button and receipt in one action row', async () => {
+    const wrapper = mount(WelcomeView, {
+      global: {
+        plugins: [createI18nInstance()],
+        stubs: { ProviderSelect: true },
+      },
+    })
+
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      apiKey: string
+      model: string
+      testConnection: () => Promise<void>
+    }
+    vm.apiKey = 'sk-test'
+    vm.model = 'gpt-4o'
+    await vm.testConnection()
+    await flushPromises()
+
+    const actionRows = wrapper.findAll('[data-testid="welcome-connection-actions"]')
+    expect(actionRows).toHaveLength(1)
+    expect(actionRows[0]!.find('button').text()).toContain(zhCN.welcome.testConnection)
+    expect(actionRows[0]!.text()).toContain('ok')
+    expect(actionRows[0]!.find('[data-testid="welcome-connection-receipt"]').exists()).toBe(true)
+  })
+
+  it('BUG-20260808-002 defaults onboarding to the first current OpenAI preset', async () => {
+    const wrapper = mount(WelcomeView, {
+      global: {
+        plugins: [createI18nInstance()],
+        stubs: { ProviderSelect: true },
+      },
+    })
+
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { model: string }
+    expect(vm.model).toBe('gpt-5.6-sol')
   })
 
   it('finishes wizard, persists provider, and navigates to chat', async () => {
@@ -70,7 +124,16 @@ describe('WelcomeView onboarding', () => {
 
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { apiKey: string; customBaseUrl: string; model: string; connectionTesting: boolean; connectionResult: { ok: boolean } | null; nextStep: () => Promise<void>; skip: () => void; testConnection: () => Promise<void> }
+    const vm = wrapper.vm as unknown as {
+      apiKey: string
+      customBaseUrl: string
+      model: string
+      connectionTesting: boolean
+      connectionResult: { ok: boolean } | null
+      nextStep: () => Promise<void>
+      skip: () => void
+      testConnection: () => Promise<void>
+    }
     vm.apiKey = 'sk-test'
     vm.customBaseUrl = ''
     vm.model = 'gpt-4o'
@@ -151,7 +214,9 @@ describe('WelcomeView onboarding', () => {
 
     expect(loadConfig).not.toHaveBeenCalled()
     expect(saveConfig).toHaveBeenCalledTimes(1)
-    expect((saveConfig.mock.calls[0] as unknown[])?.[0] as Record<string, Record<string, unknown>>).toHaveProperty('general.welcomeCompleted', true)
+    expect(
+      (saveConfig.mock.calls[0] as unknown[])?.[0] as Record<string, Record<string, unknown>>,
+    ).toHaveProperty('general.welcomeCompleted', true)
     expect(routerPush).toHaveBeenCalledWith('/chat')
   })
 

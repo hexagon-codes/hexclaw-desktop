@@ -33,7 +33,7 @@ const finishing = ref(false)
 
 const apiKey = ref('')
 const provider = ref<ProviderType>('openai')
-const model = ref('gpt-4o')
+const model = ref(PROVIDER_PRESETS.openai.defaultModels[0]?.id ?? '')
 const selectedAgentRole = ref<'' | 'coder' | 'writer'>('')
 
 /** Available models based on selected provider */
@@ -233,14 +233,16 @@ async function finishWizard(targetPath?: string) {
     const existingProvider = settingsStore.config?.llm.providers.find(
       (p) => p.type === provider.value && p.baseUrl === effectiveBaseUrl,
     )
-    const createdProvider = existingProvider ?? settingsStore.addProvider({
-      name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
-      type: provider.value,
-      enabled: true,
-      apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
-      baseUrl: effectiveBaseUrl,
-      models: providerModelsForConfig,
-    })
+    const createdProvider =
+      existingProvider ??
+      settingsStore.addProvider({
+        name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
+        type: provider.value,
+        enabled: true,
+        apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
+        baseUrl: effectiveBaseUrl,
+        models: providerModelsForConfig,
+      })
 
     // Set default model
     if (settingsStore.config) {
@@ -372,22 +374,44 @@ async function skip() {
               <div
                 class="flex items-center gap-2 px-3 py-2.5 rounded-lg border"
                 :style="{
-                  borderColor: ollamaReady ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
+                  borderColor: ollamaReady
+                    ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)'
+                    : 'var(--hc-border)',
                   background: 'var(--hc-bg-main)',
                 }"
               >
-                <Loader2 v-if="ollamaDetecting" :size="14" class="animate-spin" :style="{ color: 'var(--hc-text-muted)' }" />
+                <Loader2
+                  v-if="ollamaDetecting"
+                  :size="14"
+                  class="animate-spin"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                />
                 <CheckCircle v-else-if="ollamaReady" :size="14" style="color: var(--hc-success)" />
                 <XCircle v-else :size="14" style="color: var(--hc-error)" />
-                <span class="text-xs" :style="{ color: ollamaReady ? 'var(--hc-success)' : 'var(--hc-text-secondary)' }">
-                  {{ ollamaDetecting ? t('welcome.ollamaDetecting', '正在检测 Ollama...') :
-                     ollamaReady ? t('welcome.ollamaReady', 'Ollama 已就绪') + (ollamaStatus?.version ? ` (v${ollamaStatus.version})` : '') :
-                     t('welcome.ollamaNotRunning', 'Ollama 未运行 — HexClaw 将自动启动内置引擎') }}
+                <span
+                  class="text-xs"
+                  :style="{ color: ollamaReady ? 'var(--hc-success)' : 'var(--hc-text-secondary)' }"
+                >
+                  {{
+                    ollamaDetecting
+                      ? t('welcome.ollamaDetecting', '正在检测 Ollama...')
+                      : ollamaReady
+                        ? t('welcome.ollamaReady', 'Ollama 已就绪') +
+                          (ollamaStatus?.version ? ` (v${ollamaStatus.version})` : '')
+                        : t(
+                            'welcome.ollamaNotRunning',
+                            'Ollama 未运行 — HexClaw 将自动启动内置引擎',
+                          )
+                  }}
                 </span>
                 <button
                   v-if="!ollamaDetecting"
                   class="ml-auto text-xs px-2 py-0.5 rounded border"
-                  :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)', background: 'transparent' }"
+                  :style="{
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-secondary)',
+                    background: 'transparent',
+                  }"
                   @click="detectOllama"
                 >
                   {{ t('common.refresh', '刷新') }}
@@ -398,7 +422,9 @@ async function skip() {
               </p>
             </div>
             <div v-if="ollamaModels.length > 0" class="hc-settings__field">
-              <label class="hc-settings__label">{{ t('welcome.ollamaSelectModel', '选择模型') }}</label>
+              <label class="hc-settings__label">{{
+                t('welcome.ollamaSelectModel', '选择模型')
+              }}</label>
               <HcSelect v-model="model" :options="ollamaModelOptions" />
             </div>
             <p v-else-if="ollamaReady" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
@@ -412,11 +438,11 @@ async function skip() {
               <label class="hc-settings__label">API Key</label>
               <HcClearableField>
                 <input
-                v-model="apiKey"
-                type="password"
-                class="hc-input"
-                :placeholder="PROVIDER_PRESETS[provider].placeholder"
-              />
+                  v-model="apiKey"
+                  type="password"
+                  class="hc-input"
+                  :placeholder="PROVIDER_PRESETS[provider].placeholder"
+                />
               </HcClearableField>
               <p
                 v-if="apiKey.trim().length === 0"
@@ -430,30 +456,35 @@ async function skip() {
               <label class="hc-settings__label">Base URL</label>
               <HcClearableField>
                 <input
-                v-model="customBaseUrl"
-                type="text"
-                class="hc-input"
-                placeholder="https://your-api.example.com/v1"
-              />
+                  v-model="customBaseUrl"
+                  type="text"
+                  class="hc-input"
+                  placeholder="https://your-api.example.com/v1"
+                />
               </HcClearableField>
             </div>
             <div class="hc-settings__field">
               <label class="hc-settings__label">Model</label>
               <HcClearableField v-if="isCustomProvider">
                 <input
-                v-model="customModelId"
-                type="text"
-                class="hc-input"
-                :placeholder="t('welcome.customModelPlaceholder')"
-              />
+                  v-model="customModelId"
+                  type="text"
+                  class="hc-input"
+                  :placeholder="t('welcome.customModelPlaceholder')"
+                />
               </HcClearableField>
               <HcSelect v-else v-model="model" :options="providerModelOptions" />
             </div>
-            <div class="pt-1">
+            <div
+              class="flex flex-wrap items-center gap-3 pt-1"
+              data-testid="welcome-connection-actions"
+            >
               <button
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
                 :style="{
-                  borderColor: connectionResult?.ok ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
+                  borderColor: connectionResult?.ok
+                    ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)'
+                    : 'var(--hc-border)',
                   color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-text-secondary)',
                   background: 'var(--hc-bg-main)',
                 }"
@@ -466,7 +497,11 @@ async function skip() {
                 @click="testConnection"
               >
                 <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-                <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: var(--hc-success)" />
+                <CheckCircle
+                  v-else-if="connectionResult?.ok"
+                  :size="12"
+                  style="color: var(--hc-success)"
+                />
                 <XCircle
                   v-else-if="connectionResult && !connectionResult.ok"
                   :size="12"
@@ -475,17 +510,19 @@ async function skip() {
                 {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
               </button>
 
-              <div v-if="connectionResult" class="mt-3">
-                <p
-                  class="text-xs px-3 py-1.5 rounded-lg inline-block"
-                  :style="{
-                    background: connectionResult.ok ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)' : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
-                    color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
-                  }"
-                >
-                  {{ connectionResult.msg }}
-                </p>
-              </div>
+              <p
+                v-if="connectionResult"
+                data-testid="welcome-connection-receipt"
+                class="text-xs px-3 py-1.5 rounded-lg inline-block"
+                :style="{
+                  background: connectionResult.ok
+                    ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)'
+                    : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
+                  color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
+                }"
+              >
+                {{ connectionResult.msg }}
+              </p>
             </div>
           </template>
         </div>
@@ -574,7 +611,9 @@ async function skip() {
               <span :style="{ color: 'var(--hc-text-muted)' }">{{
                 t('welcome.summaryConnection')
               }}</span>
-              <span :style="{ color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-error)' }">
+              <span
+                :style="{ color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-error)' }"
+              >
                 {{
                   connectionResult?.ok
                     ? t('welcome.connectionReady')
@@ -594,8 +633,14 @@ async function skip() {
             >
               <Radio :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
               <span class="flex-1">
-                <span class="block text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.quickChannels', '接入 IM 通道') }}</span>
-                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.quickChannelsDesc', '让 AI 出现在你的微信 / 飞书 / Telegram 里') }}</span>
+                <span
+                  class="block text-xs font-medium"
+                  :style="{ color: 'var(--hc-text-primary)' }"
+                  >{{ t('welcome.quickChannels', '接入 IM 通道') }}</span
+                >
+                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{
+                  t('welcome.quickChannelsDesc', '让 AI 出现在你的微信 / 飞书 / Telegram 里')
+                }}</span>
               </span>
             </button>
             <button
@@ -606,8 +651,14 @@ async function skip() {
             >
               <Zap :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
               <span class="flex-1">
-                <span class="block text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.quickAutomation', '创建第一个定时任务') }}</span>
-                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.quickAutomationDesc', '每天早上让 AI 主动给你发简报') }}</span>
+                <span
+                  class="block text-xs font-medium"
+                  :style="{ color: 'var(--hc-text-primary)' }"
+                  >{{ t('welcome.quickAutomation', '创建第一个定时任务') }}</span
+                >
+                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{
+                  t('welcome.quickAutomationDesc', '每天早上让 AI 主动给你发简报')
+                }}</span>
               </span>
             </button>
           </div>
@@ -667,5 +718,4 @@ async function skip() {
   border-radius: 16px;
   object-fit: cover;
 }
-
 </style>

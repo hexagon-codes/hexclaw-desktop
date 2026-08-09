@@ -3175,6 +3175,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   background: var(--hc-bg-card);
   border: 1px solid var(--hc-border);
   overflow: hidden;
+  container-type: inline-size;
   transition: border-color 0.15s;
 }
 
@@ -3187,9 +3188,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   padding: 10px 14px;
   cursor: pointer;
   user-select: none;
@@ -3199,6 +3202,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .hc-provider__logo {
@@ -3229,6 +3233,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   font-size: 13px;
   font-weight: 600;
   color: var(--hc-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hc-provider__tag {
@@ -3238,17 +3246,24 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   border-radius: 3px;
   color: var(--hc-accent);
   background: var(--hc-accent-subtle);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .hc-provider__model-count {
   font-size: 11px;
   color: var(--hc-text-muted);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .hc-provider__card-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+  justify-content: flex-end;
 }
 
 .hc-provider__connection-status {
@@ -3264,6 +3279,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   transition:
     color 0.18s,
     background 0.18s;
+  flex: 0 0 auto;
 }
 
 .hc-provider__connection-status--testing {
@@ -3302,6 +3318,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__test-btn {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -3323,6 +3340,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   cursor: pointer;
   border-radius: var(--hc-radius-sm);
   display: flex;
+  flex: 0 0 auto;
   transition: background 0.15s;
 }
 
@@ -3340,6 +3358,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-provider__chevron {
   color: var(--hc-text-muted);
+  flex: 0 0 auto;
 }
 
 .hc-provider__edit {
@@ -3531,6 +3550,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
   padding: 5px 10px;
   border: none;
   background: transparent;
@@ -3539,10 +3559,23 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   cursor: pointer;
   border-radius: var(--hc-radius-sm);
   transition: background 0.15s;
+  white-space: nowrap;
 }
 
 .hc-provider__delete-btn:hover {
   background: rgba(255, 69, 58, 0.1);
+}
+
+@container (max-width: 959px) {
+  .hc-provider__card-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hc-provider__card-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }
 
 .hc-btn-sm {

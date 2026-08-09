@@ -47,12 +47,9 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.openai.com/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'gpt-4.1', name: 'GPT-4.1', capabilities: ['text', 'vision'] },
-      { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', capabilities: ['text', 'vision'] },
-      { id: 'o3', name: 'o3', capabilities: ['text', 'vision'] },
-      { id: 'o3-mini', name: 'o3 Mini', capabilities: ['text'] },
-      { id: 'o4-mini', name: 'o4 Mini', capabilities: ['text', 'vision'] },
-      { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', capabilities: ['text', 'vision'] },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', capabilities: ['text', 'vision'] },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', capabilities: ['text', 'vision'] },
     ],
   },
   deepseek: {
@@ -61,8 +58,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.deepseek.com/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'deepseek-chat', name: 'DeepSeek Chat (V3)', capabilities: ['text'] },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (R1)', capabilities: ['text'] },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', capabilities: ['text'] },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', capabilities: ['text'] },
     ],
   },
   anthropic: {
@@ -71,10 +68,14 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     placeholder: 'sk-ant-...',
     defaultModels: [
-      { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', capabilities: ['text', 'vision'] },
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', capabilities: ['text', 'vision'] },
-      { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', capabilities: ['text', 'vision'] },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', capabilities: ['text', 'vision'] },
+      { id: 'claude-fable-5', name: 'Claude Fable 5', capabilities: ['text', 'vision'] },
+      { id: 'claude-opus-5', name: 'Claude Opus 5', capabilities: ['text', 'vision'] },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', capabilities: ['text', 'vision'] },
+      {
+        id: 'claude-haiku-4-5-20251001',
+        name: 'Claude Haiku 4.5',
+        capabilities: ['text', 'vision'],
+      },
     ],
   },
   gemini: {
@@ -83,9 +84,26 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     placeholder: 'AIza...',
     defaultModels: [
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', capabilities: ['text', 'vision', 'video', 'audio'] },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', capabilities: ['text', 'vision', 'video', 'audio'] },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', capabilities: ['text', 'vision', 'video', 'audio'] },
+      {
+        id: 'gemini-3.6-flash',
+        name: 'Gemini 3.6 Flash',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'gemini-3.5-flash',
+        name: 'Gemini 3.5 Flash',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'gemini-3.5-flash-lite',
+        name: 'Gemini 3.5 Flash-Lite',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'gemini-3.1-pro-preview',
+        name: 'Gemini 3.1 Pro Preview',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
     ],
   },
   qwen: {
@@ -94,10 +112,9 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'qwen3-235b-a22b', name: 'Qwen3 235B', capabilities: ['text'] },
-      { id: 'qwen-max', name: 'Qwen Max', capabilities: ['text'] },
-      { id: 'qwen-plus', name: 'Qwen Plus', capabilities: ['text'] },
-      { id: 'qwen-vl-max', name: 'Qwen VL Max', capabilities: ['text', 'vision', 'video'] },
+      { id: 'qwen3.7-max', name: 'Qwen3.7 Max', capabilities: ['text', 'vision'] },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', capabilities: ['text', 'vision'] },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6 Flash', capabilities: ['text'] },
     ],
   },
   ark: {
@@ -106,9 +123,26 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     placeholder: 'ep-...',
     defaultModels: [
-      { id: 'doubao-pro-32k', name: 'Doubao Pro 32K', capabilities: ['text'] },
-      { id: 'doubao-lite-32k', name: 'Doubao Lite 32K', capabilities: ['text'] },
-      { id: 'doubao-vision-pro-32k', name: 'Doubao Vision Pro', capabilities: ['text', 'vision'] },
+      {
+        id: 'doubao-seed-2-0-pro-260215',
+        name: 'Doubao Seed 2.0 Pro',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'doubao-seed-2-0-lite-260428',
+        name: 'Doubao Seed 2.0 Lite',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'doubao-seed-2-0-mini-260428',
+        name: 'Doubao Seed 2.0 Mini',
+        capabilities: ['text', 'vision', 'video', 'audio'],
+      },
+      {
+        id: 'doubao-seed-2-0-code-preview-260215',
+        name: 'Doubao Seed 2.0 Code Preview',
+        capabilities: ['text', 'vision', 'code'],
+      },
     ],
   },
   zhipu: {
@@ -117,22 +151,30 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'glm-z1-flash', name: 'GLM-Z1 Flash', capabilities: ['text'] },
-      { id: 'glm-z1-airx', name: 'GLM-Z1 AirX', capabilities: ['text'] },
-      { id: 'glm-4v-plus', name: 'GLM-4V Plus', capabilities: ['text', 'vision'] },
-      { id: 'cogview-4', name: 'CogView-4', capabilities: ['image_generation'] },
-      { id: 'cogvideox-2', name: 'CogVideoX-2', capabilities: ['video_generation'] },
+      { id: 'glm-5.2', name: 'GLM-5.2', capabilities: ['text'] },
+      { id: 'glm-5.1', name: 'GLM-5.1', capabilities: ['text'] },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', capabilities: ['text'] },
+      { id: 'glm-5v-turbo', name: 'GLM-5V Turbo', capabilities: ['text', 'vision'] },
     ],
   },
   kimi: {
     type: 'kimi',
     name: 'Kimi (月之暗面)',
-    defaultBaseUrl: 'https://api.moonshot.cn/v1',
+    defaultBaseUrl: 'https://api.moonshot.ai/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'kimi-k2', name: 'Kimi K2', capabilities: ['text'] },
-      { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K', capabilities: ['text'] },
-      { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K', capabilities: ['text'] },
+      { id: 'kimi-k3', name: 'Kimi K3', capabilities: ['text', 'vision', 'video'] },
+      {
+        id: 'kimi-k2.7-code',
+        name: 'Kimi K2.7 Code',
+        capabilities: ['text', 'vision', 'video', 'code'],
+      },
+      {
+        id: 'kimi-k2.7-code-highspeed',
+        name: 'Kimi K2.7 Code Highspeed',
+        capabilities: ['text', 'vision', 'video', 'code'],
+      },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', capabilities: ['text', 'vision', 'video'] },
     ],
   },
   ernie: {
@@ -141,32 +183,24 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://qianfan.baidubce.com/v2',
     placeholder: 'bce-v3/...',
     defaultModels: [
-      { id: 'ernie-x1-turbo-32k', name: 'ERNIE X1 Turbo', capabilities: ['text'] },
-      { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K', capabilities: ['text'] },
-      { id: 'ernie-4.0-8k', name: 'ERNIE 4.0 8K', capabilities: ['text'] },
+      { id: 'ernie-5.1', name: 'ERNIE 5.1', capabilities: ['text'] },
+      { id: 'ernie-5.0', name: 'ERNIE 5.0', capabilities: ['text', 'vision', 'video', 'audio'] },
+      { id: 'ernie-x1.1-preview', name: 'ERNIE X1.1 Preview', capabilities: ['text'] },
     ],
   },
   hunyuan: {
     type: 'hunyuan',
     name: '腾讯混元',
-    defaultBaseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
+    defaultBaseUrl: 'https://tokenhub.tencentmaas.com/v1',
     placeholder: 'sk-...',
-    defaultModels: [
-      { id: 'hunyuan-t1-latest', name: 'Hunyuan T1', capabilities: ['text'] },
-      { id: 'hunyuan-pro', name: 'Hunyuan Pro', capabilities: ['text'] },
-      { id: 'hunyuan-lite', name: 'Hunyuan Lite', capabilities: ['text'] },
-    ],
+    defaultModels: [{ id: 'hy3', name: 'Tencent HY 3', capabilities: ['text'] }],
   },
   spark: {
     type: 'spark',
     name: '讯飞星火',
-    defaultBaseUrl: 'https://spark-api-open.xf-yun.com/v1',
+    defaultBaseUrl: 'https://spark-api-open.xf-yun.com/x2',
     placeholder: 'Bearer ...',
-    defaultModels: [
-      { id: 'spark-max', name: 'Spark Max', capabilities: ['text'] },
-      { id: 'spark-pro', name: 'Spark Pro', capabilities: ['text'] },
-      { id: 'spark-lite', name: 'Spark Lite', capabilities: ['text'] },
-    ],
+    defaultModels: [{ id: 'spark-x', name: 'Spark X2', capabilities: ['text'] }],
   },
   minimax: {
     type: 'minimax',
@@ -174,8 +208,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.minimax.chat/v1',
     placeholder: 'eyJ...',
     defaultModels: [
-      { id: 'MiniMax-M1-80k', name: 'MiniMax M1', capabilities: ['text'] },
-      { id: 'abab6.5s-chat', name: 'ABAB 6.5s', capabilities: ['text'] },
+      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', capabilities: ['text'] },
+      { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', capabilities: ['text'] },
     ],
   },
   ollama: {
@@ -226,7 +260,7 @@ export function getProviderTypes(options?: { includeOllama?: boolean }): Provide
   // 默认情况下 Ollama 由 OllamaCard 统一管理，不在添加服务商选择器中重复
   // 引导页等场景需要显示 Ollama 时传入 includeOllama: true
   if (options?.includeOllama) return Object.values(PROVIDER_PRESETS)
-  return Object.values(PROVIDER_PRESETS).filter(p => p.type !== 'ollama')
+  return Object.values(PROVIDER_PRESETS).filter((p) => p.type !== 'ollama')
 }
 
 /**
@@ -246,14 +280,16 @@ export function inferCapabilitiesFromId(id: string): ModelCapability[] {
       normalizedId,
     ) ||
     /(?:^|\/)(?:bge|gte)-[^/:]+(?::|$)/.test(normalizedId) ||
-    /(?:^|\/)(?:nemotron-3-embed-1b|llama-nemotron-embed-vl-1b-v2)(?::|$)/.test(
-      normalizedId,
-    )
+    /(?:^|\/)(?:nemotron-3-embed-1b|llama-nemotron-embed-vl-1b-v2)(?::|$)/.test(normalizedId)
   if (isKnownEmbeddingIdentity) {
     return ['embedding']
   }
   // 纯图像生成（不做对话）
-  if (/cogview|dall-?e|\bflux\b|sdxl|stable-?diffusion|midjourney|imagen|recraft|ideogram|janus/i.test(id)) {
+  if (
+    /cogview|dall-?e|\bflux\b|sdxl|stable-?diffusion|midjourney|imagen|recraft|ideogram|janus/i.test(
+      id,
+    )
+  ) {
     return ['image_generation']
   }
   // 纯视频生成
@@ -265,7 +301,9 @@ export function inferCapabilitiesFromId(id: string): ModelCapability[] {
   // - Ollama: qwen-vl/qwen2-vl/qwen2.5-vl/qwen3-vl/llava/moondream/minicpm-v/bakllava/gemma4/llama3.2-vision
   // - 云端: glm-4v/glm-4.5v/qwen-vl-max/gpt-4o/gpt-4-vision/claude-3+/gemini-*/internvl/pixtral/molmo/cogvlm/qvq
   if (
-    /\bvl\b|vision|llava|moondream|minicpm-v|bakllava|gemma4|pixtral|molmo|internvl|cogvlm|\bqvq\b|glm-?\d+\.?\d*v|gpt-?4o|gpt-?4-?vision|claude-3|claude-sonnet-4|claude-opus-4|claude-haiku-4|gemini-/i.test(id)
+    /\bvl\b|vision|llava|moondream|minicpm-v|bakllava|gemma4|pixtral|molmo|internvl|cogvlm|\bqvq\b|glm-?\d+\.?\d*v|gpt-?4o|gpt-?4-?vision|claude-3|claude-sonnet-4|claude-opus-4|claude-haiku-4|gemini-/i.test(
+      id,
+    )
   ) {
     caps.push('vision')
   }
@@ -276,7 +314,11 @@ export function inferCapabilitiesFromId(id: string): ModelCapability[] {
   // 代码专项（编码强化模型 — 标识用，功能上和普通 chat 同链路，区别只在模型权重）
   // Ollama: qwen3-coder / qwen-coder / deepseek-coder / codellama / codegemma / starcoder / granite-code / devstral
   // 云端: 大多数 Provider 没有专门 code 端点，但 deepseek-coder-v2 / qwen-coder-plus 等也是同名约定
-  if (/coder|codellama|codegemma|starcoder|granite-code|devstral|phi-coder|wizardcoder|magicoder/i.test(id)) {
+  if (
+    /coder|codellama|codegemma|starcoder|granite-code|devstral|phi-coder|wizardcoder|magicoder/i.test(
+      id,
+    )
+  ) {
     caps.push('code')
   }
   return caps
@@ -288,7 +330,7 @@ export function inferCapabilitiesFromId(id: string): ModelCapability[] {
  */
 export function resolveOllamaCapabilities(id: string): ModelCapability[] {
   const baseId = id.split(':')[0] ?? id
-  const preset = PROVIDER_PRESETS.ollama.defaultModels.find(m => m.id === baseId)
+  const preset = PROVIDER_PRESETS.ollama.defaultModels.find((m) => m.id === baseId)
   return preset?.capabilities ?? inferCapabilitiesFromId(id)
 }
 

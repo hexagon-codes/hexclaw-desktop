@@ -7,9 +7,20 @@ import { describe, it, expect, vi } from 'vitest'
 
 // Mock all SVG logo imports to avoid asset resolution errors
 for (const name of [
-  'openai', 'deepseek', 'anthropic', 'gemini', 'qwen', 'ark',
-  'zhipu', 'kimi', 'ernie', 'hunyuan', 'spark', 'minimax',
-  'ollama', 'custom',
+  'openai',
+  'deepseek',
+  'anthropic',
+  'gemini',
+  'qwen',
+  'ark',
+  'zhipu',
+  'kimi',
+  'ernie',
+  'hunyuan',
+  'spark',
+  'minimax',
+  'ollama',
+  'custom',
 ]) {
   vi.mock(`@/assets/provider-logos/${name}.svg`, () => ({ default: `${name}.svg` }))
 }
@@ -26,12 +37,65 @@ import {
 import type { ModelCapability, ProviderType } from '@/types'
 
 const ALL_PROVIDER_KEYS: ProviderType[] = [
-  'openai', 'deepseek', 'anthropic', 'gemini', 'qwen', 'ark',
-  'zhipu', 'kimi', 'ernie', 'hunyuan', 'spark', 'minimax',
-  'ollama', 'custom',
+  'openai',
+  'deepseek',
+  'anthropic',
+  'gemini',
+  'qwen',
+  'ark',
+  'zhipu',
+  'kimi',
+  'ernie',
+  'hunyuan',
+  'spark',
+  'minimax',
+  'ollama',
+  'custom',
 ]
 
 describe('PROVIDER_PRESETS', () => {
+  it('BUG-20260808-002 exposes the approved 2026-08-08 cloud model catalog snapshot', () => {
+    const expected: Record<Exclude<ProviderType, 'ollama' | 'custom'>, string[]> = {
+      openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+      deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      anthropic: [
+        'claude-fable-5',
+        'claude-opus-5',
+        'claude-sonnet-5',
+        'claude-haiku-4-5-20251001',
+      ],
+      gemini: [
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-pro-preview',
+      ],
+      qwen: ['qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-flash'],
+      ark: [
+        'doubao-seed-2-0-pro-260215',
+        'doubao-seed-2-0-lite-260428',
+        'doubao-seed-2-0-mini-260428',
+        'doubao-seed-2-0-code-preview-260215',
+      ],
+      zhipu: ['glm-5.2', 'glm-5.1', 'glm-4.7-flash', 'glm-5v-turbo'],
+      kimi: ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'],
+      ernie: ['ernie-5.1', 'ernie-5.0', 'ernie-x1.1-preview'],
+      hunyuan: ['hy3'],
+      spark: ['spark-x'],
+      minimax: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed'],
+    }
+
+    for (const [provider, ids] of Object.entries(expected) as Array<
+      [Exclude<ProviderType, 'ollama' | 'custom'>, string[]]
+    >) {
+      expect(PROVIDER_PRESETS[provider].defaultModels.map((model) => model.id)).toEqual(ids)
+    }
+
+    expect(PROVIDER_PRESETS.hunyuan.defaultBaseUrl).toBe('https://tokenhub.tencentmaas.com/v1')
+    expect(PROVIDER_PRESETS.kimi.defaultBaseUrl).toBe('https://api.moonshot.ai/v1')
+    expect(PROVIDER_PRESETS.spark.defaultBaseUrl).toBe('https://spark-api-open.xf-yun.com/x2')
+  })
+
   it('has exactly 14 entries', () => {
     expect(Object.keys(PROVIDER_PRESETS)).toHaveLength(14)
   })
@@ -82,15 +146,19 @@ describe('PROVIDER_PRESETS', () => {
     const models = PROVIDER_PRESETS.ollama.defaultModels
     expect(models.length).toBeGreaterThanOrEqual(10)
     // 多模态代表
-    expect(models.some(m => m.id === 'qwen2.5-vl')).toBe(true)
-    expect(models.some(m => m.id === 'llava')).toBe(true)
-    expect(models.some(m => m.id === 'llama3.2-vision')).toBe(true)
+    expect(models.some((m) => m.id === 'qwen2.5-vl')).toBe(true)
+    expect(models.some((m) => m.id === 'llava')).toBe(true)
+    expect(models.some((m) => m.id === 'llama3.2-vision')).toBe(true)
     // 代码代表
-    expect(models.some(m => m.id === 'qwen3-coder' && m.capabilities?.includes('code'))).toBe(true)
-    expect(models.some(m => m.id === 'deepseek-coder' && m.capabilities?.includes('code'))).toBe(true)
+    expect(models.some((m) => m.id === 'qwen3-coder' && m.capabilities?.includes('code'))).toBe(
+      true,
+    )
+    expect(models.some((m) => m.id === 'deepseek-coder' && m.capabilities?.includes('code'))).toBe(
+      true,
+    )
     // 每个白名单条目至少有一个非-text 能力
     for (const m of models) {
-      const extras = (m.capabilities ?? []).filter(c => c !== 'text')
+      const extras = (m.capabilities ?? []).filter((c) => c !== 'text')
       expect(extras.length).toBeGreaterThan(0)
     }
   })
@@ -103,18 +171,14 @@ describe('PROVIDER_PRESETS', () => {
     expect(PROVIDER_PRESETS.custom.defaultBaseUrl).toBe('')
   })
 
-  it('OpenAI models include both text and vision capabilities', () => {
+  it('current OpenAI models expose text and vision capabilities', () => {
     const openaiModels = PROVIDER_PRESETS.openai.defaultModels
-    const hasVision = openaiModels.some(m => m.capabilities?.includes('vision'))
-    const hasTextOnly = openaiModels.some(
-      m => m.capabilities?.includes('text') && !m.capabilities?.includes('vision'),
-    )
-    expect(hasVision).toBe(true)
-    expect(hasTextOnly).toBe(true)
+    expect(openaiModels.every((m) => m.capabilities?.includes('text'))).toBe(true)
+    expect(openaiModels.every((m) => m.capabilities?.includes('vision'))).toBe(true)
   })
 
   it('all non-custom defaultBaseUrl values are valid URLs', () => {
-    const nonCustomKeys = ALL_PROVIDER_KEYS.filter(k => k !== 'custom')
+    const nonCustomKeys = ALL_PROVIDER_KEYS.filter((k) => k !== 'custom')
     for (const key of nonCustomKeys) {
       const url = PROVIDER_PRESETS[key].defaultBaseUrl
       expect(url).toMatch(/^https?:\/\//)
@@ -281,7 +345,7 @@ describe('isChatModel() / classifyModel() — 聊天页过滤', () => {
 describe('getProviderTypes()', () => {
   it('excludes ollama', () => {
     const types = getProviderTypes()
-    const ollamaEntry = types.find(p => p.type === 'ollama')
+    const ollamaEntry = types.find((p) => p.type === 'ollama')
     expect(ollamaEntry).toBeUndefined()
   })
 
@@ -290,8 +354,8 @@ describe('getProviderTypes()', () => {
   })
 
   it('includes all non-ollama types', () => {
-    const types = getProviderTypes().map(p => p.type)
-    const expected = ALL_PROVIDER_KEYS.filter(k => k !== 'ollama')
+    const types = getProviderTypes().map((p) => p.type)
+    const expected = ALL_PROVIDER_KEYS.filter((k) => k !== 'ollama')
     expect(types).toEqual(expect.arrayContaining(expected))
     expect(expected).toEqual(expect.arrayContaining(types))
   })

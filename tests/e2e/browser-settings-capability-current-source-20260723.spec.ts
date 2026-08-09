@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
+import { writeFile } from 'node:fs/promises'
 
 test.use({
   viewport: { width: 1440, height: 960 },
@@ -7,6 +8,7 @@ test.use({
 
 const OPENROUTER_PROVIDER = 'OpenRouter'
 const SMALL_PROVIDER = '智谱 AI'
+const NVIDIA_PROVIDER = 'Nvidia'
 const LONG_MODEL_ID = 'nvidia/very-long-free-vision-code-model'
 const LONG_MODEL_NAME = 'NVIDIA: Nemotron Ultra Long Free Vision Model for Layout Regression'
 const CUSTOM_MODEL_ID = 'custom-parent-tutor-model'
@@ -38,6 +40,26 @@ const smallCatalog = Array.from({ length: 4 }, (_, index) => ({
   input_modalities: ['text'],
   supports_tools: true,
 }))
+
+const providerHeaderOpenRouterModels = Array.from({ length: 7 }, (_, index) => ({
+  id: `openrouter/header-layout-${index + 1}`,
+  name: `OpenRouter Header Layout ${index + 1}`,
+  prompt_price: '0.000001',
+  completion_price: '0.000002',
+  input_modalities: ['text'],
+  supports_tools: false,
+}))
+
+const providerHeaderNvidiaModels = [
+  {
+    id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+    name: 'NVIDIA Llama 3.1 Nemotron Ultra 253B v1',
+    prompt_price: '0.000001',
+    completion_price: '0.000002',
+    input_modalities: ['text'],
+    supports_tools: false,
+  },
+]
 
 const backendLlmConfig = {
   default: OPENROUTER_PROVIDER,
@@ -85,6 +107,65 @@ const backendLlmConfig = {
       compatible: 'openai',
       locality: 'cloud',
       enabled: true,
+    },
+  },
+  routing: { enabled: false, strategy: 'cost-aware' },
+  cache: { enabled: false, similarity: 0.92, ttl: '24h', max_entries: 1000 },
+}
+
+const providerHeaderLayoutConfig = {
+  default: OPENROUTER_PROVIDER,
+  providers: {
+    [OPENROUTER_PROVIDER]: {
+      provider_instance_id: 'pvd_v1_00112233445566778899aabbccddeeff',
+      api_key: '****test',
+      base_url: 'https://openrouter.ai/api/v1',
+      model: providerHeaderOpenRouterModels[0]!.id,
+      models: providerHeaderOpenRouterModels.map((model) => model.id),
+      model_specs_mode: 'explicit',
+      model_specs: providerHeaderOpenRouterModels.map((model) => ({
+        id: model.id,
+        display_name: model.name,
+        is_custom: false,
+        capabilities: ['text'],
+      })),
+      compatible: 'openai',
+      locality: 'cloud',
+      enabled: true,
+      probe_receipt: {
+        provider_instance_id: 'pvd_v1_00112233445566778899aabbccddeeff',
+        outcome: 'passed',
+        locality: 'cloud',
+        latency_ms: 321,
+        tested_at: '2026-08-06T19:33:00+08:00',
+        message: '连接成功',
+      },
+    },
+    [NVIDIA_PROVIDER]: {
+      provider_instance_id: 'pvd_v1_ffeeddccbbaa99887766554433221100',
+      api_key: '****test',
+      base_url: 'https://integrate.api.nvidia.com/v1',
+      model: providerHeaderNvidiaModels[0]!.id,
+      models: providerHeaderNvidiaModels.map((model) => model.id),
+      model_specs_mode: 'explicit',
+      model_specs: providerHeaderNvidiaModels.map((model) => ({
+        id: model.id,
+        display_name: model.name,
+        is_custom: false,
+        capabilities: ['text'],
+      })),
+      compatible: 'openai',
+      locality: 'cloud',
+      enabled: true,
+      probe_receipt: {
+        provider_instance_id: 'pvd_v1_ffeeddccbbaa99887766554433221100',
+        outcome: 'failed',
+        locality: 'cloud',
+        latency_ms: 15_000,
+        tested_at: '2026-08-06T19:32:00+08:00',
+        error_message:
+          'openai complete request failed: Post "https://integrate.api.nvidia.com/v1/chat/completions": context deadline exceeded',
+      },
     },
   },
   routing: { enabled: false, strategy: 'cost-aware' },
@@ -211,7 +292,14 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
-async function installMocks(page: Page) {
+async function installMocks(
+  page: Page,
+  fixture: {
+    llmConfig?: unknown
+    catalogsByProviderInstanceId?: Record<string, unknown>
+  } = {},
+) {
+  const llmConfig = fixture.llmConfig ?? backendLlmConfig
   await page.addInitScript(() => {
     localStorage.clear()
     sessionStorage.clear()
@@ -230,7 +318,7 @@ async function installMocks(page: Page) {
     const method = route.request().method()
 
     if (path === '/api/v1/config/llm' && method === 'GET') {
-      return json(route, backendLlmConfig)
+      return json(route, llmConfig)
     }
     if (path === '/api/v1/config/llm' && method === 'PUT') {
       return json(route, { ok: true })
@@ -239,15 +327,17 @@ async function installMocks(page: Page) {
       const requestBody = route.request().postDataJSON() as {
         provider_instance_id?: string
       }
-      const models = requestBody.provider_instance_id?.endsWith('1100')
-        ? smallCatalog
-        : openRouterCatalog
+      const models =
+        (requestBody.provider_instance_id
+          ? fixture.catalogsByProviderInstanceId?.[requestBody.provider_instance_id]
+          : undefined) ??
+        (requestBody.provider_instance_id?.endsWith('1100') ? smallCatalog : openRouterCatalog)
       return json(route, { models })
     }
     if (path === '/api/v1/config' && method === 'GET') {
       return json(route, {
         knowledge: { enabled: true },
-        llm: backendLlmConfig,
+        llm: llmConfig,
       })
     }
     if (path === '/api/v1/llm/capabilities') return json(route, [])
@@ -631,5 +721,184 @@ test.describe('Settings / Agents / Capability current-source contracts', () => {
       path: 'tests/e2e/screenshots/current-source/bug-20260723-mcp-tools-runtime.png',
       fullPage: true,
     })
+  })
+})
+
+test.describe('BUG-20260723-021 Provider card-header layout', () => {
+  test.use({
+    viewport: { width: 1226, height: 1548 },
+    deviceScaleFactor: 1,
+  })
+
+  test.beforeEach(async ({ page }) => {
+    await installMocks(page, {
+      llmConfig: providerHeaderLayoutConfig,
+      catalogsByProviderInstanceId: {
+        pvd_v1_00112233445566778899aabbccddeeff: providerHeaderOpenRouterModels,
+        pvd_v1_ffeeddccbbaa99887766554433221100: providerHeaderNvidiaModels,
+      },
+    })
+  })
+
+  test('keeps verified OpenRouter and failed Nvidia header facts horizontally readable', async ({
+    page,
+  }, testInfo) => {
+    await page.goto('/settings', { waitUntil: 'domcontentloaded' })
+    const layoutEvidence: Array<Record<string, unknown>> = []
+
+    const providers = [
+      { name: OPENROUTER_PROVIDER, expectedModels: '7', expectsFailureDetail: false },
+      { name: NVIDIA_PROVIDER, expectedModels: '1', expectsFailureDetail: true },
+    ]
+
+    for (const provider of providers) {
+      const card = page
+        .locator('.hc-provider__card')
+        .filter({ has: page.locator('.hc-provider__card-name', { hasText: provider.name }) })
+      await expect(card).toBeVisible({ timeout: 20_000 })
+      await expect(card.locator('.hc-provider__model-count')).toContainText(provider.expectedModels)
+
+      const geometry = await card.evaluate((node) => {
+        const header = node.querySelector<HTMLElement>('.hc-provider__card-head')!
+        const getBox = (selector: string) => {
+          const element = node.querySelector<HTMLElement>(selector)!
+          const rect = element.getBoundingClientRect()
+          const style = getComputedStyle(element)
+          return {
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom,
+            width: rect.width,
+            height: rect.height,
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            display: style.display,
+            minWidth: style.minWidth,
+            overflow: style.overflow,
+            textOverflow: style.textOverflow,
+            whiteSpace: style.whiteSpace,
+            flexShrink: style.flexShrink,
+            flexWrap: style.flexWrap,
+            justifyContent: style.justifyContent,
+          }
+        }
+        const headerRect = header.getBoundingClientRect()
+        const cardRect = node.getBoundingClientRect()
+        const headerStyle = getComputedStyle(header)
+        return {
+          cardOverflow: node.scrollWidth - node.clientWidth,
+          header: {
+            left: headerRect.left,
+            right: headerRect.right,
+            top: headerRect.top,
+            bottom: headerRect.bottom,
+            width: headerRect.width,
+            height: headerRect.height,
+            display: headerStyle.display,
+            gridTemplateColumns: headerStyle.gridTemplateColumns,
+            alignItems: headerStyle.alignItems,
+          },
+          info: getBox('.hc-provider__card-info'),
+          actions: getBox('.hc-provider__card-actions'),
+          modelCount: getBox('.hc-provider__model-count'),
+          connectionStatus: getBox('.hc-provider__connection-status'),
+          deleteButton: getBox('.hc-provider__delete-btn'),
+          failureDetail: node.querySelector<HTMLElement>('.hc-provider__connection-detail')
+            ? getBox('.hc-provider__connection-detail')
+            : undefined,
+          card: { left: cardRect.left, right: cardRect.right },
+        }
+      })
+
+      expect(geometry.cardOverflow).toBeLessThanOrEqual(1)
+      expect(geometry.header.height).toBeLessThanOrEqual(100)
+      expect(geometry.actions.height).toBeLessThanOrEqual(32)
+      expect(geometry.modelCount.height).toBeLessThanOrEqual(24)
+      expect(geometry.deleteButton.height).toBeLessThanOrEqual(32)
+      expect(geometry.modelCount.whiteSpace).toBe('nowrap')
+      expect(geometry.deleteButton.whiteSpace).toBe('nowrap')
+      if (geometry.header.width < 960) {
+        expect(geometry.actions.top).toBeGreaterThanOrEqual(geometry.info.bottom - 1)
+      } else {
+        expect(Math.abs(geometry.actions.top - geometry.info.top)).toBeLessThanOrEqual(1)
+      }
+      for (const box of [
+        geometry.info,
+        geometry.actions,
+        geometry.modelCount,
+        geometry.connectionStatus,
+        geometry.deleteButton,
+      ]) {
+        expect(box.left).toBeGreaterThanOrEqual(geometry.header.left - 1)
+        expect(box.right).toBeLessThanOrEqual(geometry.header.right + 1)
+      }
+      if (provider.expectsFailureDetail) {
+        expect(geometry.failureDetail).toBeDefined()
+        expect(geometry.failureDetail!.top).toBeGreaterThanOrEqual(geometry.header.bottom - 1)
+        expect(geometry.failureDetail!.left).toBeGreaterThanOrEqual(geometry.card.left - 1)
+        expect(geometry.failureDetail!.right).toBeLessThanOrEqual(geometry.card.right + 1)
+      }
+      layoutEvidence.push({ provider: provider.name, narrowLayout: geometry })
+    }
+
+    const section = page.locator('.hc-settings__section')
+    await section.evaluate((node) => {
+      const element = node as HTMLElement
+      element.style.maxWidth = 'none'
+      element.style.width = '968px'
+    })
+    const wideOpenRouterCard = page
+      .locator('.hc-provider__card')
+      .filter({ has: page.locator('.hc-provider__card-name', { hasText: OPENROUTER_PROVIDER }) })
+    const wideGeometry = await wideOpenRouterCard.evaluate((node) => {
+      const header = node.querySelector<HTMLElement>('.hc-provider__card-head')!
+      const info = node.querySelector<HTMLElement>('.hc-provider__card-info')!
+      const actions = node.querySelector<HTMLElement>('.hc-provider__card-actions')!
+      const modelCount = node.querySelector<HTMLElement>('.hc-provider__model-count')!
+      const deleteButton = node.querySelector<HTMLElement>('.hc-provider__delete-btn')!
+      const card = node.getBoundingClientRect()
+      const headerRect = header.getBoundingClientRect()
+      const infoRect = info.getBoundingClientRect()
+      const actionsRect = actions.getBoundingClientRect()
+      const headerStyle = getComputedStyle(header)
+      const actionsStyle = getComputedStyle(actions)
+      return {
+        cardOverflow: node.scrollWidth - node.clientWidth,
+        headerWidth: headerRect.width,
+        infoCenter: (infoRect.top + infoRect.bottom) / 2,
+        actionsCenter: (actionsRect.top + actionsRect.bottom) / 2,
+        modelCountHeight: modelCount.getBoundingClientRect().height,
+        deleteButtonHeight: deleteButton.getBoundingClientRect().height,
+        actionsRight: actionsRect.right,
+        cardRight: card.right,
+        headerDisplay: headerStyle.display,
+        headerGridTemplateColumns: headerStyle.gridTemplateColumns,
+        actionsFlexWrap: actionsStyle.flexWrap,
+      }
+    })
+    expect(wideGeometry.cardOverflow).toBeLessThanOrEqual(1)
+    expect(wideGeometry.headerWidth).toBeGreaterThanOrEqual(960)
+    expect(Math.abs(wideGeometry.actionsCenter - wideGeometry.infoCenter)).toBeLessThanOrEqual(1)
+    expect(wideGeometry.modelCountHeight).toBeLessThanOrEqual(24)
+    expect(wideGeometry.deleteButtonHeight).toBeLessThanOrEqual(32)
+    expect(wideGeometry.actionsRight).toBeLessThanOrEqual(wideGeometry.cardRight + 1)
+    layoutEvidence.push({ provider: OPENROUTER_PROVIDER, wideLayout: wideGeometry })
+
+    await page.screenshot({
+      path: testInfo.outputPath('provider-card-header-layout-1226x1548.png'),
+      fullPage: true,
+    })
+    await page.locator('.hc-provider__list').screenshot({
+      path: testInfo.outputPath('provider-card-header-layout-wide.png'),
+    })
+    await testInfo.attach('provider-card-header-layout-geometry.json', {
+      body: JSON.stringify(layoutEvidence, null, 2),
+      contentType: 'application/json',
+    })
+    await writeFile(
+      testInfo.outputPath('provider-card-header-layout-geometry.json'),
+      JSON.stringify(layoutEvidence, null, 2),
+    )
   })
 })
