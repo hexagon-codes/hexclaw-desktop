@@ -13,14 +13,16 @@ pub const TEST_PROFILE_CATCHUP_ENV: &str = "HEXCLAW_TEST_PROFILE_CATCHUP";
 enum TestLLMConfigMode {
     Missing,
     ExplicitEmpty,
+    PreseededOwnerYaml,
 }
 
 fn test_llm_config_mode(value: Option<&str>) -> Result<TestLLMConfigMode, String> {
     match value.unwrap_or("missing") {
         "missing" => Ok(TestLLMConfigMode::Missing),
         "explicit-empty" => Ok(TestLLMConfigMode::ExplicitEmpty),
+        "preseeded-owner-yaml" => Ok(TestLLMConfigMode::PreseededOwnerYaml),
         invalid => Err(format!(
-            "{TEST_LLM_CONFIG_MODE_ENV} must be missing or explicit-empty, got {invalid:?}"
+            "{TEST_LLM_CONFIG_MODE_ENV} must be missing, explicit-empty, or preseeded-owner-yaml, got {invalid:?}"
         )),
     }
 }
@@ -357,6 +359,9 @@ pub fn write_test_config(ctx: &TestRunContext) -> Result<(), String> {
     ensure_sandbox_dirs(ctx)?;
     let path = ctx.config_path();
     let llm_mode = test_llm_config_mode(std::env::var(TEST_LLM_CONFIG_MODE_ENV).ok().as_deref())?;
+    if llm_mode == TestLLMConfigMode::PreseededOwnerYaml {
+        return validate_preseeded_owner_yaml(ctx, &path);
+    }
     std::fs::write(&path, render_test_config_with_llm_mode(ctx, llm_mode))
         .map_err(|err| format!("failed to write test config {}: {err}", path.display()))?;
     if test_profile_catchup_enabled(std::env::var(TEST_PROFILE_CATCHUP_ENV).ok().as_deref())? {
@@ -369,6 +374,66 @@ pub fn write_test_config(ctx: &TestRunContext) -> Result<(), String> {
             .map_err(|err| format!("failed to protect test config {}: {err}", path.display()))?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn validate_preseeded_owner_yaml(ctx: &TestRunContext, path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (label, candidate, expected_mode, require_file) in [
+        ("test home", ctx.home.as_path(), 0o700, false),
+        (
+            "test config directory",
+            path.parent().unwrap_or(Path::new(".")),
+            0o700,
+            false,
+        ),
+        ("test config", path, 0o600, true),
+    ] {
+        let metadata = std::fs::symlink_metadata(candidate).map_err(|error| {
+            format!(
+                "preseeded owner YAML {label} is unavailable at {}: {error}",
+                candidate.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "preseeded owner YAML {label} must not be a symbolic link: {}",
+                candidate.display()
+            ));
+        }
+        if require_file && !metadata.is_file() {
+            return Err(format!(
+                "preseeded owner YAML {label} must be a regular file: {}",
+                candidate.display()
+            ));
+        }
+        if !require_file && !metadata.is_dir() {
+            return Err(format!(
+                "preseeded owner YAML {label} must be a directory: {}",
+                candidate.display()
+            ));
+        }
+        let actual_mode = metadata.permissions().mode() & 0o777;
+        if actual_mode != expected_mode {
+            return Err(format!(
+                "preseeded owner YAML {label} permissions are {actual_mode:#o}, want {expected_mode:#o}: {}",
+                candidate.display()
+            ));
+        }
+    }
+    if std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0) == 0 {
+        return Err(format!(
+            "preseeded owner YAML must not be empty: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_preseeded_owner_yaml(_ctx: &TestRunContext, _path: &Path) -> Result<(), String> {
+    Err("preseeded-owner-yaml is only available on owner-permission Unix test hosts".to_string())
 }
 
 fn prepare_profile_catchup_fixture(ctx: &TestRunContext) -> Result<(), String> {
@@ -507,6 +572,100 @@ mod tests {
             TestLLMConfigMode::ExplicitEmpty
         );
         assert!(test_llm_config_mode(Some("provider-from-host")).is_err());
+    }
+
+    #[test]
+    fn bug_20260808_installed_app_mode_accepts_preseeded_owner_yaml_explicitly() {
+        let mode = test_llm_config_mode(Some("preseeded-owner-yaml"));
+        assert!(
+            mode.is_ok(),
+            "DESKTOP-UNSIGNED-CASK-CRED-004 needs an explicit isolated preseeded owner-YAML mode"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bug_20260808_installed_app_mode_preserves_preseeded_owner_yaml_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hexclaw-preseeded-owner-yaml-{}-{nonce}",
+            std::process::id()
+        ));
+        let config_dir = root.join(".hexclaw");
+        std::fs::create_dir_all(&config_dir).expect("create isolated owner config directory");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect isolated owner home");
+        std::fs::set_permissions(&config_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("protect isolated owner config directory");
+        let config_path = config_dir.join("hexclaw.yaml");
+        let before = b"server:\n  host: 127.0.0.1\n  port: 16243\nllm:\n  default: hexclaw-gpt\n  providers:\n    hexclaw-gpt:\n      api_key: never-log-this-fixture\n      model: gpt-5.6-sol\n";
+        std::fs::write(&config_path, before).expect("seed isolated owner YAML");
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect isolated owner YAML");
+
+        let prior_mode = std::env::var_os(TEST_LLM_CONFIG_MODE_ENV);
+        std::env::set_var(TEST_LLM_CONFIG_MODE_ENV, "preseeded-owner-yaml");
+        let result = write_test_config(&TestRunContext {
+            home: root.clone(),
+            sidecar_port: 16243,
+        });
+        if let Some(value) = prior_mode {
+            std::env::set_var(TEST_LLM_CONFIG_MODE_ENV, value);
+        } else {
+            std::env::remove_var(TEST_LLM_CONFIG_MODE_ENV);
+        }
+
+        result.expect("accept owner-only preseeded YAML");
+        assert_eq!(
+            std::fs::read(&config_path).expect("read preserved owner YAML"),
+            before,
+            "preseeded owner YAML must remain byte-identical before Sidecar launch"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bug_20260808_installed_app_mode_rejects_non_owner_yaml_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hexclaw-preseeded-owner-yaml-mode-{}-{nonce}",
+            std::process::id()
+        ));
+        let config_dir = root.join(".hexclaw");
+        std::fs::create_dir_all(&config_dir).expect("create isolated owner config directory");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect isolated owner home");
+        std::fs::set_permissions(&config_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("protect isolated owner config directory");
+        let config_path = config_dir.join("hexclaw.yaml");
+        std::fs::write(&config_path, "llm:\n  providers: {}\n")
+            .expect("seed isolated owner YAML");
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644))
+            .expect("prepare unsafe YAML permissions");
+
+        let error = validate_preseeded_owner_yaml(
+            &TestRunContext {
+                home: root.clone(),
+                sidecar_port: 16243,
+            },
+            &config_path,
+        )
+        .expect_err("group/world-readable preseeded YAML must fail closed");
+        assert!(error.contains("permissions are 0o644, want 0o600"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

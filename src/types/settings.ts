@@ -104,9 +104,9 @@ export interface ProviderConfig {
   type: ProviderType
   enabled: boolean
   apiKey: string
-  /** Stable native-vault identity; never resolves to plaintext in the renderer. */
+  /** Stable Provider identity for a typed update; never resolves to plaintext in the renderer. */
   credentialRef?: string
-  /** Native Keychain value was hydrated into the current Sidecar process. */
+  /** Sidecar reports that the owner-YAML Provider key is usable in this process. */
   credentialPresent?: boolean
   /** Explicit secret intent for the next config transaction. */
   apiKeyMutation?: 'preserve' | 'replace' | 'delete'

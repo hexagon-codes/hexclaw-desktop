@@ -16,28 +16,21 @@ test('DESKTOP-BOUNDARY-PRINT-002/003 uses the dynamic authenticated Sidecar clie
   assert.match(coordinator, /SidecarClient::is_conflict/)
 })
 
-test('DESKTOP-BOUNDARY-CRED-001/002 preserves secrets by credential reference, never masked-to-empty', () => {
+test('DESKTOP-UNSIGNED-CASK-CRED-001/003 uses owner YAML without Keychain recovery or a second native store', () => {
   const providerSecrets = read('src/stores/settings-provider-secrets.ts')
-  const secureStore = read('src/utils/secure-store.ts')
   const coordinator = read('src-tauri/src/provider_credentials.rs')
-  const commands = read('src-tauri/src/commands.rs')
 
-  assert.doesNotMatch(providerSecrets, /provider\.apiKey\s*=\s*['"]['"]/) 
+  assert.doesNotMatch(providerSecrets, /credentialPresent\(/)
   assert.match(providerSecrets, /credentialRef/)
-  assert.match(providerSecrets, /preserve/)
-  assert.doesNotMatch(secureStore, /loadSecureValue|resolve_credential/)
-  assert.match(secureStore, /await invoke(?:<[^>]+>)?\('(?:put|delete)_credential'/)
+  assert.match(providerSecrets, /credentialPresent === true/)
   assert.match(coordinator, /provider-credentials\/reserve/)
   assert.match(coordinator, /credentials\/hydrate/)
   assert.match(coordinator, /credentials\/dehydrate/)
   assert.match(coordinator, /apply_llm_config_with_credentials/)
-  assert.match(coordinator, /PendingConfigMutation/)
   assert.match(coordinator, /Idempotency-Key/)
-  assert.match(coordinator, /credential_ref_not_hydrated/)
-  assert.match(coordinator, /replacement_digests/)
-  assert.match(coordinator, /rollback_uncommitted_transaction/)
-  assert.doesNotMatch(coordinator, /Rejected\s*\{\s*status:\s*422\s*,\s*\.\./)
-  assert.doesNotMatch(commands, /api\/internal\/desktop\/credentials/)
+  assert.doesNotMatch(coordinator, /credential_vault::(?:read_secret|write_secret|remove_secret)/)
+  assert.doesNotMatch(coordinator, /PendingConfigMutation|write_pending|load_pending/)
+  assert.match(coordinator, /get_config\(&client\)\.await/)
 })
 
 test('DESKTOP-BOUNDARY-FILE-001/004 has only native-issued, one-shot purpose-bound grants', () => {

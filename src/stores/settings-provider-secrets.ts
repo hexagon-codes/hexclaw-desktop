@@ -1,4 +1,4 @@
-import { credentialPresent, credentialRefFor, type CredentialKey } from '@/utils/secure-store'
+import { credentialRefFor, type CredentialKey } from '@/utils/secure-store'
 import type { ProviderConfig, ProviderCredentialReplacement } from '@/types'
 import { cloneProviders } from './settings-provider-copy'
 
@@ -32,12 +32,19 @@ export async function restoreProviderApiKeys(
       if (provider.credentialRef !== expectedRef) {
         throw new Error('provider credential reference conflicts with stable identity')
       }
-      const present = provider.credentialPresent ?? (await credentialPresent(key))
-      provider.credentialPresent = present
-      // Keep the approved masked presentation stable. The materialization
-      // boundary still refuses preserve when native presence is false.
-      provider.apiKey = '********'
-      provider.apiKeyMutation = 'preserve'
+      if (provider.credentialPresent === true) {
+        // The Sidecar has a usable owner-YAML key (whether loaded on startup
+        // or just saved). Keep the masked presentation without Keychain.
+        provider.apiKey = '********'
+        provider.apiKeyMutation = 'preserve'
+      } else {
+        // The Sidecar reports no usable YAML key. Do not probe Keychain or
+        // invent another persistence source for the opaque reference.
+        provider.credentialRef = undefined
+        provider.credentialPresent = false
+        provider.apiKey = ''
+        provider.apiKeyMutation = 'delete'
+      }
       continue
     }
     if (isMaskedApiKey(provider.apiKey)) {

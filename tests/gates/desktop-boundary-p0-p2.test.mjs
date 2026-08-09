@@ -42,11 +42,12 @@ test('BUG-20260802-014 gives the Rust print coordinator sole ownership of the na
   assert.equal(receiptSource, '', 'the renderer-owned print convergence module must be removed')
 })
 
-test('BUG-20260802-015 stores credentials behind a Rust OS-vault boundary without plaintext reads', () => {
+test('BUG-20260802-015 keeps native OS-vault commands scoped to explicit non-provider credentials', () => {
   const cargo = read(desktopRoot, 'src-tauri/Cargo.toml')
   const lib = read(desktopRoot, 'src-tauri/src/lib.rs')
   const vault = read(desktopRoot, 'src-tauri/src/credential_vault.rs')
   const secureStore = read(desktopRoot, 'src/utils/secure-store.ts')
+  const providerCoordinator = read(desktopRoot, 'src-tauri/src/provider_credentials.rs')
 
   assert.match(cargo, /keyring\s*=/)
   assert.match(lib, /mod credential_vault/)
@@ -54,6 +55,7 @@ test('BUG-20260802-015 stores credentials behind a Rust OS-vault boundary withou
   assert.match(vault, /Entry::new|keyring::Entry/)
   assert.doesNotMatch(secureStore, /LazyStore|loadSecureValue|secure\.dat/)
   assert.match(secureStore, /credentialPresent/)
+  assert.doesNotMatch(providerCoordinator, /credential_vault/)
 })
 
 test('BUG-20260802-016 hydrates durable ImageTask and Knowledge operations from Sidecar projections', () => {

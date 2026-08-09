@@ -5,7 +5,6 @@ import type { ProviderConfig, ModelOption, ModelCapability, BackendLLMConfig, Ap
 /*  Mocks                                                              */
 /* ------------------------------------------------------------------ */
 vi.mock('@/utils/secure-store', () => ({
-  credentialPresent: vi.fn().mockResolvedValue(false),
   credentialRefFor: vi.fn((key: { ownerId: string }) => `llm_provider/${key.ownerId}/api_key`),
 }))
 vi.mock('@/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
@@ -30,8 +29,6 @@ import {
   syncProviderApiKeys,
   resolveDefaultModelProviderId,
 } from '@/stores/settings-helpers'
-
-import { credentialPresent } from '@/utils/secure-store'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -1030,8 +1027,7 @@ describe('providersToBackend', () => {
 
 /* ============== restoreProviderApiKeys ============== */
 describe('restoreProviderApiKeys', () => {
-  it('keeps plaintext out of renderer and restores only native presence metadata', async () => {
-    vi.mocked(credentialPresent).mockResolvedValue(true)
+  it('marks an absent owner-YAML key for explicit deletion without consulting Keychain', async () => {
     const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
     const providers = [makeProvider({
       id: 'p1',
@@ -1041,13 +1037,10 @@ describe('restoreProviderApiKeys', () => {
     })]
 
     const result = await restoreProviderApiKeys(providers)
-    expect(result[0]!.apiKey).toBe('********')
-    expect(result[0]!.credentialPresent).toBe(true)
-    expect(credentialPresent).toHaveBeenCalledWith({
-      ownerKind: 'provider',
-      ownerId: providerInstanceId,
-      secretKind: 'api_key',
-    })
+    expect(result[0]!.apiKey).toBe('')
+    expect(result[0]!.credentialPresent).toBe(false)
+    expect(result[0]!.credentialRef).toBeUndefined()
+    expect(result[0]!.apiKeyMutation).toBe('delete')
   })
 
   it('keeps original apiKey when no credential ref exists', async () => {

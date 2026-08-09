@@ -65,7 +65,7 @@ describe('provider credential mutation boundary', () => {
     ])
   })
 
-  it('fails closed when a masked ref is not present in the native vault', async () => {
+  it('fails closed when a masked Provider has no usable owner-YAML key', async () => {
     await expect(
       materializeProviderApiKeys([provider({ credentialPresent: false })]),
     ).rejects.toThrow('只有脱敏值')

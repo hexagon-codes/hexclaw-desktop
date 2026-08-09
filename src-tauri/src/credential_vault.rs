@@ -154,14 +154,6 @@ fn validate_owner_id(owner_id: &str) -> Result<(), String> {
 }
 
 impl CredentialKey {
-    pub(crate) fn provider_api_key(provider_instance_id: String) -> Self {
-        Self {
-            owner_kind: CredentialOwnerKind::Provider,
-            owner_id: provider_instance_id,
-            secret_kind: CredentialSecretKind::ApiKey,
-        }
-    }
-
     pub(crate) fn credential_ref(&self) -> Result<String, String> {
         validate_owner_id(&self.owner_id)?;
         if self.owner_kind == CredentialOwnerKind::Provider {
@@ -206,6 +198,7 @@ fn entry(key: &CredentialKey) -> Result<(String, Entry), String> {
     Ok((credential_ref, entry))
 }
 
+#[cfg(test)]
 pub(crate) fn read_secret(key: &CredentialKey) -> Result<Option<Zeroizing<String>>, String> {
     match entry(key)?.1.get_password() {
         Ok(secret) => Ok(Some(Zeroizing::new(secret))),
