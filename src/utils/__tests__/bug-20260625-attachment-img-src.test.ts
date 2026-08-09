@@ -18,4 +18,7 @@ describe('BUG-20260625 imageSrc 按 data 前缀 auto-detect', () => {
     expect(imageSrc({ data: 'https://cdn.example.com/a.png', mime: 'image/png' })).toBe('https://cdn.example.com/a.png')
     expect(imageSrc({ data: 'http://x/y.gif', mime: 'image/gif' })).toBe('http://x/y.gif')
   })
+  it('当前会话 blob URL → 原样返回（不退化成 data URL）', () => {
+    expect(imageSrc({ data: 'blob:chat-image-preview', mime: 'image/png' })).toBe('blob:chat-image-preview')
+  })
 })

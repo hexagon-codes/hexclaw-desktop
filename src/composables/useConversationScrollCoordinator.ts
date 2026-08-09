@@ -4,6 +4,7 @@ export interface ConversationContentUpdated {
   conversationId: string
   contentIdentity: string
   reason: string
+  reveal?: 'start'
 }
 
 interface ScrollSnapshot {
@@ -19,14 +20,17 @@ export interface ConversationContentUpdateTicket extends ScrollSnapshot {
   conversationId: string
   contentIdentity: string
   reason: string
+  reveal?: 'start'
   layoutEpoch: number
 }
 
 interface ConversationScrollCoordinatorOptions {
   getContainer: () => HTMLElement | undefined
   getBottomAnchor: () => HTMLElement | undefined
+  getRevealTarget?: (contentIdentity: string) => HTMLElement | undefined
   isAtBottom: () => boolean
   onFollowBottom?: () => void
+  onRevealStart?: () => void
 }
 
 const CONTENT_BOTTOM_TOLERANCE_PX = 100
@@ -116,6 +120,23 @@ export function useConversationScrollCoordinator(options: ConversationScrollCoor
       return
     }
     latestPendingEpoch = 0
+    if (ticket.reveal === 'start') {
+      const container = options.getContainer()
+      const target = options.getRevealTarget?.(ticket.contentIdentity)
+      if (container && target) {
+        const viewportTop = container.getBoundingClientRect().top
+        const targetTop = target.getBoundingClientRect().top
+        container.scrollTop += targetTop - viewportTop
+        options.onRevealStart?.()
+        baseline = {
+          ...ticket,
+          atBottom: false,
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+        }
+        return
+      }
+    }
     if (ticket.atBottom) {
       options.getBottomAnchor()?.scrollIntoView({ behavior: 'smooth' })
       options.onFollowBottom?.()
@@ -139,6 +160,7 @@ export function useConversationScrollCoordinator(options: ConversationScrollCoor
       conversationId: identity.conversationId,
       contentIdentity: identity.contentIdentity,
       reason: identity.reason,
+      reveal: identity.reveal,
       layoutEpoch: ++layoutEpoch,
       atBottom: beforeLayout?.atBottom ?? true,
       anchorIdentity: beforeLayout?.anchorIdentity,

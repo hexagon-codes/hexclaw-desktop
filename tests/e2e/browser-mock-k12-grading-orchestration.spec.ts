@@ -113,5 +113,8 @@ test.describe('BUG-20260728-018 real-Sidecar grading orchestration', () => {
     await expect(page.getByTestId('recognize-guard')).not.toContainText(
       /requires a frozen grading budget policy/i,
     )
+    await expect(page.getByTestId('recognize-guard')).not.toContainText(
+      /invalid image task result response/i,
+    )
   })
 })

@@ -86,6 +86,41 @@ describe('BUG-20260726-019 content-updated uses one anchor-aware scroll coordina
     expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ behavior: 'smooth' })
   })
 
+  it('reveals a tall result from its top without letting the bottom anchor win', async () => {
+    const container = document.createElement('div')
+    const target = document.createElement('section')
+    const bottom = document.createElement('div')
+    const bottomScrollIntoView = vi.fn()
+    const onRevealStart = vi.fn()
+    bottom.scrollIntoView = bottomScrollIntoView
+    container.getBoundingClientRect = () => ({ top: 100, bottom: 500 }) as DOMRect
+    target.getBoundingClientRect = () => ({ top: 180, bottom: 780 }) as DOMRect
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1_400 },
+      scrollTop: { configurable: true, writable: true, value: 600 },
+    })
+    const coordinator = useConversationScrollCoordinator({
+      getContainer: () => container,
+      getBottomAnchor: () => bottom,
+      getRevealTarget: () => target,
+      isAtBottom: () => true,
+      onRevealStart,
+    })
+    coordinator.recordScrollState()
+    coordinator.publishContentUpdated({
+      conversationId: 'conversation-tall-result',
+      contentIdentity: 'blank-worksheet-guide',
+      reason: 'blank-guide-ready',
+      reveal: 'start',
+    })
+    await nextTick()
+
+    expect(container.scrollTop).toBe(680)
+    expect(onRevealStart).toHaveBeenCalledOnce()
+    expect(bottomScrollIntoView).not.toHaveBeenCalled()
+  })
+
   it('compensates growth above the active upscroll anchor without jumping to bottom', async () => {
     const container = document.createElement('div')
     const anchor = document.createElement('article')

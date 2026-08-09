@@ -119,6 +119,8 @@ function work(overrides: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
     content_markdown: '柳枝像绿色的丝带。',
     row_version: 1,
     initial_feedback: generation('succeeded'),
+    created_at: 1,
+    latest_generation_at: 1,
     ...overrides,
   }
 }
@@ -167,6 +169,7 @@ describe('K12CreativeWorksPanel current contract', () => {
 
   afterEach(() => {
     document.body.innerHTML = ''
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -205,6 +208,117 @@ describe('K12CreativeWorksPanel current contract', () => {
     expect(wrapper.get('[data-testid="cw-thumb"]').attributes('src')).toContain(
       '/api/k12/assets/art.png?agent=agent-1',
     )
+    wrapper.unmount()
+  })
+
+  it('BUG-20260726-020 refreshes a pending initial review until the durable feedback is visible', async () => {
+    vi.useFakeTimers()
+    const pending = work({
+      initial_feedback: generation('running', 'art', 'real-art'),
+      work_type: 'art',
+      display_name: '彩虹和小猫',
+      content_markdown: undefined,
+    })
+    const reviewed = work({
+      initial_feedback: generation('succeeded', 'art', 'real-art'),
+      work_type: 'art',
+      display_name: '彩虹和小猫',
+      content_markdown: undefined,
+    })
+    h.list.mockResolvedValueOnce({ items: [pending] }).mockResolvedValue({ items: [reviewed] })
+
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.get('.k12cw__card').attributes('data-review-state')).toBe('pending')
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+
+    expect(h.list).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.k12cw__card').attributes('data-review-state')).toBe('reviewed')
+    expect(wrapper.get('[data-testid="cw-detail-toggle"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('BUG-20260726-022 projects persisted generation/creation time in the card footer', async () => {
+    h.list.mockResolvedValue({
+      items: [
+        work({
+          work_id: 'work-reviewed-time',
+          created_at: 1_785_536_418,
+          latest_generation_at: 1_785_575_743,
+        } as Partial<CreativeWorkDTO>),
+        work({
+          work_id: 'work-pending-time',
+          initial_feedback: generation('running', 'writing', 'pending-time'),
+          created_at: 1_785_622_938,
+          latest_generation_at: undefined,
+        } as Partial<CreativeWorkDTO>),
+        work({
+          work_id: 'work-failed-time',
+          initial_feedback: generation('failed', 'writing', 'failed-time'),
+          created_at: 1_785_709_458,
+          latest_generation_at: undefined,
+        } as Partial<CreativeWorkDTO>),
+      ],
+    })
+
+    const wrapper = render()
+    await flushPromises()
+    const cards = wrapper.findAll('.k12cw__card')
+
+    expect(cards).toHaveLength(3)
+    expect(cards[0]!.get('[data-testid="cw-card-time"]').attributes('datetime')).toBe(
+      new Date(1_785_575_743_000).toISOString(),
+    )
+    expect(cards[0]!.get('[data-testid="cw-card-time"]').attributes('data-time-source')).toBe(
+      'latest_generation_at',
+    )
+    expect(cards[1]!.get('[data-testid="cw-card-time"]').attributes('datetime')).toBe(
+      new Date(1_785_622_938_000).toISOString(),
+    )
+    expect(cards[2]!.get('[data-testid="cw-card-time"]').attributes('datetime')).toBe(
+      new Date(1_785_709_458_000).toISOString(),
+    )
+    expect(cards[1]!.get('[data-testid="cw-card-time"]').attributes('data-time-source')).toBe(
+      'created_at',
+    )
+    expect(cards[2]!.get('[data-testid="cw-card-time"]').attributes('data-time-source')).toBe(
+      'created_at',
+    )
+    expect(cards.every((card) => card.get('.k12cw__foot').find('button').exists())).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('BUG-20260723-012 opens the immutable artwork preview by keyboard and restores focus on Escape', async () => {
+    h.list.mockResolvedValue({
+      items: [
+        work({
+          work_type: 'art',
+          display_name: '彩虹和小猫',
+          content_markdown: undefined,
+          source_asset_id: 'asset://agent-1/frozen-art.png',
+          initial_feedback: generation('succeeded', 'art', 'preview'),
+        }),
+      ],
+    })
+    const wrapper = render()
+    await flushPromises()
+
+    const thumbnail = wrapper.get('[data-testid="cw-thumb"]')
+    ;(thumbnail.element as HTMLElement).focus()
+    await thumbnail.trigger('keydown', { key: 'Enter', keyCode: 13 })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="cw-image-preview"]').attributes('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(
+      wrapper.get('[data-testid="cw-image-preview"]').element,
+    )
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cw-image-preview"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(thumbnail.element)
     wrapper.unmount()
   })
 
@@ -300,6 +414,32 @@ describe('K12CreativeWorksPanel current contract', () => {
     })
     expect(h.createImageTask).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="cw-add-modal"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('BUG-20260723-004 keeps the approved minimal writing/art add-work field sets', async () => {
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('[data-testid="cw-add-open"]').trigger('click')
+
+    const modal = wrapper.get('[data-testid="cw-add-modal"]')
+    expect(modal.find('[data-testid="cw-add-photo-input"]').exists()).toBe(true)
+    expect(modal.find('[data-testid="cw-add-draft"]').exists()).toBe(true)
+    expect(modal.find('[data-testid="cw-add-title"]').exists()).toBe(false)
+    expect(modal.find('[data-testid="cw-add-task"]').exists()).toBe(false)
+    expect(modal.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
+
+    await modal.get('[data-testid="cw-add-type-art"]').trigger('click')
+    await flushPromises()
+    const artModal = wrapper.get('[data-testid="cw-add-modal"]')
+    expect(artModal.find('[data-testid="cw-add-photo-input"]').exists()).toBe(true)
+    expect(artModal.find('[data-testid="cw-add-draft"]').exists()).toBe(false)
+    expect(artModal.get('[data-testid="cw-add-title"]').attributes('placeholder')).toBe(
+      '选填，如作品已有名称可填写',
+    )
+    expect(artModal.find('[data-testid="cw-add-task"]').exists()).toBe(false)
+    expect(artModal.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
+    expect(artModal.get('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 

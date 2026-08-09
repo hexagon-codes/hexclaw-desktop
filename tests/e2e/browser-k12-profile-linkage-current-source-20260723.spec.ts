@@ -75,12 +75,83 @@ async function installK12ProfileMocks(page: Page) {
     if (path === `/api/v1/agents/${K12_AGENT}` && method === 'PUT') {
       return json(route, { message: 'updated' })
     }
-    if (path === '/api/k12/profile' && method === 'PUT') {
+    if (path === '/api/k12/curriculum-progress' && method === 'GET') {
       return json(route, {
-        child_name: '小明',
-        grade_term: '六年级下',
-        textbook_edition: '人教版',
+        progress: {
+          progress_id: 'progress-1',
+          agent: K12_AGENT,
+          subject: 'math',
+          revision: 1,
+          textbook_binding_id: 'binding-1',
+          textbook_manifest_id: 'manifest-1',
+          textbook_edition: '人教版',
+          textbook_version: '2022',
+          title: '数学',
+          volume: '五年级下册',
+          unit_id: 'unit-1',
+          unit_title: '第一单元',
+          page_verification_status: 'not_requested',
+          segment_refs: [],
+          evidence_source: 'parent_confirmed',
+          confirmed_at: '2026-07-23T00:00:00Z',
+          created_at: '2026-07-23T00:00:00Z',
+          updated_at: '2026-07-23T00:00:00Z',
+        },
       })
+    }
+    if (path === '/api/k12/textbook-binding-options' && method === 'GET') {
+      return json(route, {
+        items: [
+          {
+            manifest_id: 'manifest-1',
+            document_id: 'document-1',
+            document_generation: 1,
+            document_title: '数学五年级下册.pdf',
+            state: 'ready_for_confirmation',
+            retryable: false,
+            failure_message: '',
+            text_index_state: 'ready',
+            vector_index_state: 'ready',
+            catalog: {
+              subject: 'math',
+              textbook_edition: '人教版',
+              textbook_version: '2022',
+              title: '数学',
+              volume: '五年级下册',
+              page_min: 1,
+              page_max: 120,
+              units: [
+                {
+                  unit_id: 'unit-1',
+                  title: '第一单元',
+                  page_from: 1,
+                  page_to: 20,
+                  lessons: [],
+                },
+              ],
+              page_refs: [],
+            },
+            updated_at: '2026-07-23T00:00:00Z',
+          },
+        ],
+      })
+    }
+    if (path === '/api/k12/weekly-practice/settings' && method === 'GET') {
+      return json(route, {
+        agent: K12_AGENT,
+        revision: 1,
+        timezone: 'Asia/Shanghai',
+        due_review_enabled: true,
+        textbook_consolidation_enabled: false,
+        textbook_consolidation_tier: 'standard',
+        arithmetic_warmup_enabled: false,
+        arithmetic_minutes: 2,
+        created_at: '2026-07-23T00:00:00Z',
+        updated_at: '2026-07-23T00:00:00Z',
+      })
+    }
+    if (path === '/api/k12/profile-bundle' && method === 'PUT') {
+      return json(route, { replayed: false })
     }
     if (path === '/api/k12/cron/reconcile-defaults' && method === 'POST') {
       return json(route, {
@@ -155,7 +226,7 @@ test.describe('K12 建档二级联动 current-source contract', () => {
     page.on('request', (request) => {
       const url = new URL(request.url())
       if (
-        url.pathname.replace(/^\/_hexclaw/, '') === '/api/k12/profile' &&
+        url.pathname.replace(/^\/_hexclaw/, '') === '/api/k12/profile-bundle' &&
         request.method() === 'PUT'
       ) {
         savedProfile = request.postDataJSON() as Record<string, unknown>
@@ -198,7 +269,24 @@ test.describe('K12 建档二级联动 current-source contract', () => {
       '四年级',
       '五年级',
       '六年级',
+      '初一（暂未开放）',
+      '初二（暂未开放）',
+      '初三（暂未开放）',
+      '高一（暂未开放）',
+      '高二（暂未开放）',
+      '高三（暂未开放）',
     ])
+    await expect(gradeOptions.filter({ hasText: '暂未开放' })).toHaveCount(6)
+    for (const label of [
+      '初一（暂未开放）',
+      '初二（暂未开放）',
+      '初三（暂未开放）',
+      '高一（暂未开放）',
+      '高二（暂未开放）',
+      '高三（暂未开放）',
+    ]) {
+      await expect(gradeOptions.filter({ hasText: label })).toHaveAttribute('aria-disabled', 'true')
+    }
     await gradeOptions.getByText('六年级', { exact: true }).click()
 
     // 年级变化不应把既有“下学期”静默重置为默认“上学期”。
@@ -217,9 +305,11 @@ test.describe('K12 建档二级联动 current-source contract', () => {
     await expect(form).toHaveCount(0)
     expect(savedProfile).toMatchObject({
       agent: K12_AGENT,
-      child_name: '小明',
-      grade_term: '六年级下',
-      textbook_edition: '人教版',
+      profile: {
+        child_name: '小明',
+        grade_term: '六年级下',
+        subject_textbooks: { math: '人教版' },
+      },
     })
   })
 

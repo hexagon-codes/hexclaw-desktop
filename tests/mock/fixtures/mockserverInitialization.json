@@ -294,5 +294,62 @@
       },
       "body": "{\"id\":\"chatcmpl_mock_k12_parent_guide\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"answer\\\":\\\"56\\\",\\\"full_solution_steps\\\":[\\\"8×7=56\\\"],\\\"grade_level_method\\\":\\\"用六年级整数乘法计算。\\\",\\\"likely_mistakes\\\":[\\\"把 8×7 误算成 54。\\\"],\\\"parent_teaching_sequence\\\":[\\\"先让孩子重算 8×7。\\\",\\\"再对照乘法口诀检查。\\\"],\\\"follow_up_questions\\\":[\\\"7×8 为什么等于 56？\\\"],\\\"checking_method\\\":\\\"用 56÷7=8 反向验算。\\\"}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":48,\"total_tokens\":64}}"
     }
+  },
+  {
+    "id": "openai-k12-solver-verified-answer",
+    "priority": 230,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*你是一位耐心的老师.*题目：8×7=.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_solver\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"8×7=56。\\n答案：56\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":12,\"total_tokens\":28}}"
+    }
+  },
+  {
+    "id": "openai-k12-verifier-verified-answer",
+    "priority": 240,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*你是一名独立校验员.*题目：8×7=.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_verifier\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"VERDICT: AGREE\\nCOMPUTED: 56\\n说明：8×7 的计算与待校验答案一致。\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":18,\"total_tokens\":34}}"
+    }
+  },
+  {
+    "id": "openai-k12-grader-verified-answer",
+    "priority": 250,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*你是一位老师在批改作业.*题目：8×7=.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_grader\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"CORRECT: no\\nWRONG_STEP: 将 8×7 误算为 54。\\nMISCONCEPTION: 乘法口诀计算错误。\\nGUIDANCE: 先用 7×8 的口诀重新核对。\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":28,\"total_tokens\":44}}"
+    }
   }
 ]

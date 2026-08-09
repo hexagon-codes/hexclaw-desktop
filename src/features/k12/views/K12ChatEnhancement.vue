@@ -46,8 +46,8 @@ const props = defineProps<{
   descriptor: InstanceViewDescriptor
   /** shell 在当前交互时展示的文本模型路由；K12 只透传给会产生异步文本任务的子视图。 */
   modelRoute?: ScenarioTextModelRoute
-  /** composer 改道进来的图片 dataURL（BUG-20260709 拍照发题不解题）：
-   *  外壳把 ChatInput 拦下的粘贴/上传图片经此传入 → 自动打开识题护栏并识题；
+  /** composer 改道进来的图片（BUG-20260709 拍照发题不解题）：
+   *  外壳把 ChatInput 拦下的粘贴/上传原始 File/grant 经此传入 → 自动打开识题护栏并识题；
    *  消费后 emit update:composerImage('') 复位，避免重复触发。通用 prop，零 shell 领域词。 */
   composerImage?: ScenarioComposerImagePayload | string
   /** 通用 shell 转发的结构化 composer action；领域 action id 只由本 feature 解释。 */
@@ -83,7 +83,10 @@ const emit = defineEmits<{
   (e: 'update:composerImage', v: string): void
   /** 会话内联槽是否有活动内容：shell 据此收起空会话占位并把新内容滚入可视区。 */
   (e: 'update:inlineActive', v: boolean): void
-  (e: 'contentUpdated'): void
+  (
+    e: 'contentUpdated',
+    payload: { sourceMessageId?: string; reveal?: 'start' },
+  ): void
   /** 请求 shell 操作通用输入框；K12 文案不进入 ChatInput/ChatView。 */
   (e: 'composerCommand', command: ScenarioComposerCommand): void
   /** 失败任务显式重提：只上交原始图片事实；shell 负责新消息身份与当前路由冻结。 */
@@ -432,15 +435,19 @@ watch(
       emit('update:composerImage', '')
       return
     }
-    const dataUrl = img.dataUrl
-    if (!dataUrl) return
+    const previewUrl = img.previewUrl?.trim() || img.dataUrl?.trim() || ''
+    if (!img.file && !previewUrl) {
+      emit('update:composerImage', '')
+      return
+    }
     tab.value = 'chat'
     const sourceMessageId = img.requestId.trim()
     const currentTask = taskShells.value.find((task) => task.sourceMessageId === sourceMessageId)
     if (
       !currentTask?.payload ||
       currentTask.payload.requestId !== img.requestId ||
-      currentTask.payload.dataUrl !== img.dataUrl
+      (currentTask.payload.previewUrl || currentTask.payload.dataUrl || '') !== previewUrl ||
+      currentTask.payload.file !== img.file
     ) {
       // A current live attempt supersedes a stale recovery-only projection for
       // the same source message. Repeating the same live payload remains idempotent.
@@ -523,7 +530,9 @@ watch(
               :grade="grade"
               :textbook="textbook"
               :textbooks="subjectTextbooks"
-              :initial-image="task.payload?.dataUrl || ''"
+              :initial-image="task.payload?.previewUrl || task.payload?.dataUrl || ''"
+              :initial-file="task.payload?.file"
+              :on-source-stored="task.payload?.onSourceStored"
               :request-id="task.sourceMessageId"
               :source-message-id="task.sourceMessageId"
               :restore-dispatch-id="task.restoreDispatchId"
@@ -532,7 +541,7 @@ watch(
               @close="closeRecognize(task)"
               @retry="retryRecognizeAsNewAttempt(task)"
               @final-artifact-action="runFinalArtifactAction"
-              @content-updated="emit('contentUpdated')"
+              @content-updated="emit('contentUpdated', $event)"
               @update:execution-state="emit('update:sessionExecution', $event)"
             />
           </div>

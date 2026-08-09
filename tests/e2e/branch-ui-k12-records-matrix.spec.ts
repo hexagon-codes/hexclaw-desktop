@@ -14,6 +14,7 @@ const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-fidelity/evidence')
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
+const STATE_FILTER = process.env.HEX_UI_STATE_FILTER?.trim()
 
 type Side = 'reference' | 'implementation'
 
@@ -280,6 +281,8 @@ const creativeWorks = [
     display_name: '《春天的校园》',
     content_markdown: '柳枝像绿色的丝带，在春风里轻轻摆动。',
     row_version: 1,
+    created_at: 1_784_115_343,
+    latest_generation_at: 1_784_115_343,
     initial_feedback: {
       generation_id: 'REVIEW-WRITING-20260715-001',
       status: 'succeeded',
@@ -295,6 +298,8 @@ const creativeWorks = [
     work_type: 'art',
     display_name: '《雨后的校园》',
     row_version: 1,
+    created_at: 1_784_203_929,
+    latest_generation_at: 1_784_203_929,
     initial_feedback: {
       generation_id: 'REVIEW-ART-20260716-001',
       status: 'succeeded',
@@ -310,6 +315,8 @@ const creativeWorks = [
     work_type: 'art',
     display_name: '《桌上的水杯》',
     row_version: 1,
+    created_at: 1_784_248_938,
+    latest_generation_at: null,
     initial_feedback: {
       generation_id: 'REVIEW-ART-20260717-002',
       status: 'failed',
@@ -356,7 +363,7 @@ async function installImplementationMocks(page: Page) {
   await page.route('http://localhost:11434/**', (route) =>
     json(route, { models: [], version: 'k12-records-matrix' }),
   )
-  await page.route('**/_hexclaw/**', async (route) => {
+  await page.route(/\/(?:_hexclaw\/)?api\/(?:v1|k12)\//, async (route) => {
     const request = route.request()
     const requestURL = new URL(request.url())
     const apiPath = requestURL.pathname.replace(/^\/_hexclaw/, '')
@@ -797,7 +804,18 @@ const states: StateDefinition[] = [
     fixture: '小明 / 作品 3 条 / 写作成功 + 美术成功 + 美术失败',
     openReference: async (page) => openReferenceRecords(page, 4),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-works'),
-    ...worksTargets,
+    referenceTargets: [
+      ...worksTargets.referenceTargets,
+      { name: 'card-footer', selector: '.creative-work-card__foot', all: true, required: true },
+      { name: 'card-time', selector: '.creative-work-card__time', all: true, required: true },
+      { name: 'card-action', selector: '.creative-work-card__action', all: true, required: true },
+    ],
+    implementationTargets: [
+      ...worksTargets.implementationTargets,
+      { name: 'card-footer', selector: '.k12cw__foot', all: true, required: true },
+      { name: 'card-time', selector: '.k12cw__time', all: true, required: true },
+      { name: 'card-action', selector: '.k12cw__detail-toggle', all: true, required: true },
+    ],
   },
   {
     name: 'insights',
@@ -1257,7 +1275,13 @@ test.describe('feat/v0.5.0-k12-parent-tutor learning-record visual matrix', () =
     const implementationPage = await browser.newPage()
     await installImplementationMocks(implementationPage)
     try {
-      for (const state of states) {
+      const selectedStates = STATE_FILTER
+        ? states.filter((state) => state.name === STATE_FILTER)
+        : states
+      if (selectedStates.length === 0) {
+        throw new Error(`unknown HEX_UI_STATE_FILTER=${STATE_FILTER}`)
+      }
+      for (const state of selectedStates) {
         await captureState(referencePage, implementationPage, state, testInfo)
       }
     } finally {

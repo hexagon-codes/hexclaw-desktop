@@ -108,7 +108,7 @@ describe('BUG-20260726-031 · ImageTask progressive snapshot public contract', (
           anchor_state: 'located',
           operation_state: 'published',
           disposition_state: 'result',
-          result_projection: null,
+          result_projection: { assessment_status: 'correct' },
           published_revision: 9,
         },
         {

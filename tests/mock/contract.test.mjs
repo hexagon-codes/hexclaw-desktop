@@ -322,6 +322,27 @@ test('K12 photo fixtures implement the current independent recognition and ancho
   )
 })
 
+test('K12 graded worksheet fixtures supply parseable solver, verifier, and grader contracts', async () => {
+  const expectations = JSON.parse(await read('tests/mock/fixtures/mockserverInitialization.json'))
+  const byID = new Map(expectations.map((expectation) => [expectation.id, expectation]))
+
+  const solver = byID.get('openai-k12-solver-verified-answer')
+  const verifier = byID.get('openai-k12-verifier-verified-answer')
+  const grader = byID.get('openai-k12-grader-verified-answer')
+
+  assert.ok(solver, 'the real-sidecar worksheet lane must not fall through to generic chat for solver')
+  assert.ok(verifier, 'the real-sidecar worksheet lane must not fall through to generic chat for verifier')
+  assert.ok(grader, 'the real-sidecar worksheet lane must not fall through to generic chat for grader')
+  assert.match(solver.httpRequest.body.regex, /你是一位耐心的老师/)
+  assert.match(solver.httpResponse.body, /答案：56/)
+  assert.match(verifier.httpRequest.body.regex, /你是一名独立校验员/)
+  assert.match(verifier.httpResponse.body, /VERDICT: AGREE/)
+  assert.match(verifier.httpResponse.body, /COMPUTED: 56/)
+  assert.match(grader.httpRequest.body.regex, /你是一位老师在批改作业/)
+  assert.match(grader.httpResponse.body, /CORRECT: no/)
+  assert.match(grader.httpResponse.body, /WRONG_STEP:/)
+})
+
 test('internal-only PoC probes the complete protocol matrix and negative paths', async () => {
   const script = await read('tests/mock/internal-poc.sh')
 

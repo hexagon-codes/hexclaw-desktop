@@ -1391,7 +1391,10 @@ mod tests {
     #[test]
     fn purpose_limits_and_mime_are_fail_closed() {
         assert_eq!(GRANT_TTL, Duration::from_secs(60));
-        assert_eq!(GrantPurpose::AttachmentUpload.max_bytes(), 200 * 1024 * 1024);
+        assert_eq!(
+            GrantPurpose::AttachmentUpload.max_bytes(),
+            200 * 1024 * 1024
+        );
         assert!(
             GrantPurpose::AttachmentUpload.max_bytes() < GrantPurpose::KnowledgeUpload.max_bytes()
         );
@@ -1399,6 +1402,48 @@ mod tests {
         assert!(validate_mime("paper.pdf", "image/png").is_err());
         assert!(!GrantPurpose::SaveDownload.is_read());
         assert!(!GrantPurpose::KnowledgeUpload.is_save());
+    }
+
+    #[tokio::test]
+    async fn attachment_grant_accepts_exact_200_mib_and_rejects_one_byte_over_before_hashing() {
+        let root =
+            std::env::temp_dir().join(format!("hexclaw-attachment-limit-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create attachment-limit fixture root");
+        let exact = root.join("exact-limit.png");
+        let over = root.join("over-limit.png");
+        std::fs::File::create(&exact)
+            .expect("create exact attachment fixture")
+            .set_len(MAX_ATTACHMENT_BYTES)
+            .expect("size exact attachment fixture");
+        std::fs::File::create(&over)
+            .expect("create over-limit attachment fixture")
+            .set_len(MAX_ATTACHMENT_BYTES + 1)
+            .expect("size over-limit attachment fixture");
+
+        let registry = NativeFileGrantRegistry::default();
+        let descriptor = issue_read_grant(
+            &registry,
+            "main",
+            "attachment-exact-limit",
+            exact,
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("exact 200 MiB attachment must receive a grant");
+        assert_eq!(descriptor.size, MAX_ATTACHMENT_BYTES);
+
+        let error = issue_read_grant(
+            &registry,
+            "main",
+            "attachment-over-limit",
+            over,
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect_err("200 MiB + 1 byte attachment must be rejected before hashing");
+        assert_eq!(error, "selected file exceeds operation limit");
+
+        std::fs::remove_dir_all(root).expect("clean attachment-limit fixture root");
     }
 
     #[test]

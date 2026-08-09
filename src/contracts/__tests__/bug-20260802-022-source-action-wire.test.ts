@@ -107,6 +107,24 @@ describe('BUG-20260802-022 · generated source-action raw-wire contract', () => 
     expect(normalized).not.toHaveProperty('source_region')
   })
 
+  it('accepts correct_with_process_issue as a published terminal problem snapshot', () => {
+    const response = canonicalExample()
+    firstProblem(response).status = 'correct_with_process_issue'
+    Object.assign(progressive(response).coverage as MutableRecord, {
+      published: 1,
+      skipped: 0,
+    })
+
+    expect(() => assertK12ImageTaskProblemSourceActionResponse(response)).not.toThrow()
+    expect(() =>
+      assertImageTaskProblemSourceActionSemantics(response, expected(response)),
+    ).not.toThrow()
+    const snapshot = normalizeImageTaskProblemSourceActionSnapshot(response, [currentProblem()])
+    expect((snapshot.problem_progress as MutableRecord[])[0]!.result_projection).toEqual({
+      assessment_status: 'correct_with_process_issue',
+    })
+  })
+
   it.each(['page_asset_id', 'source_width', 'source_height', 'source_region'])(
     'PROG-026B fails closed when a new source exact-set is missing %s',
     (missingField) => {

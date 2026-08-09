@@ -40,7 +40,7 @@ const emit = defineEmits<{
   (event: 'count', count: number): void
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 
 function newCommandID(prefix: string): string {
@@ -56,6 +56,8 @@ const loading = ref(false)
 const loadError = ref('')
 const typeFilter = ref<'' | WorkType>('')
 let loadGeneration = 0
+const pendingReviewPollIntervalMS = 1_500
+let pendingReviewTimer: number | null = null
 
 const filtered = computed(() =>
   typeFilter.value
@@ -122,27 +124,79 @@ function cardSummary(work: CreativeWorkDTO): string {
   return t('k12.works.initialReviewPending')
 }
 
+function cardTime(work: CreativeWorkDTO): {
+  unixSeconds: number
+  iso: string
+  label: string
+  source: 'latest_generation_at' | 'created_at'
+} | null {
+  const reviewed = reviewState(work) === 'reviewed'
+  const source = reviewed ? 'latest_generation_at' : 'created_at'
+  const unixSeconds = reviewed ? work.latest_generation_at : work.created_at
+  if (!Number.isFinite(unixSeconds) || Number(unixSeconds) <= 0) return null
+  const date = new Date(Number(unixSeconds) * 1000)
+  if (!Number.isFinite(date.getTime())) return null
+  return {
+    unixSeconds: Number(unixSeconds),
+    iso: date.toISOString(),
+    label: new Intl.DateTimeFormat(locale.value, {
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date),
+    source,
+  }
+}
+
 function workThumbURL(work: CreativeWorkDTO): string {
   const assetID = work.source_asset_id?.trim() ?? ''
   return assetID.startsWith('asset://') ? k12AssetURL(props.agentId, assetID) : ''
 }
 
-async function load() {
+function stopPendingReviewPoll() {
+  if (pendingReviewTimer !== null) window.clearTimeout(pendingReviewTimer)
+  pendingReviewTimer = null
+}
+
+function schedulePendingReviewPoll() {
+  stopPendingReviewPoll()
+  if (!works.value.some((work) => ['queued', 'running'].includes(work.initial_feedback.status))) {
+    return
+  }
+  const agent = props.agentId.trim()
+  pendingReviewTimer = window.setTimeout(() => {
+    pendingReviewTimer = null
+    if (agent !== props.agentId.trim()) return
+    void loadWorks(true)
+  }, pendingReviewPollIntervalMS)
+}
+
+async function loadWorks(background: boolean) {
   const agent = props.agentId.trim()
   if (!agent) return
+  stopPendingReviewPoll()
   const generation = ++loadGeneration
-  loading.value = true
-  loadError.value = ''
+  if (!background) {
+    loading.value = true
+    loadError.value = ''
+  }
   try {
     const response = await k12ListCreativeWorks(agent)
     if (generation !== loadGeneration || agent !== props.agentId.trim()) return
     works.value = response.items ?? []
+    schedulePendingReviewPoll()
   } catch (error) {
     if (generation !== loadGeneration || agent !== props.agentId.trim()) return
-    loadError.value = (error as Error).message || t('k12.works.loadError')
+    if (!background) loadError.value = (error as Error).message || t('k12.works.loadError')
   } finally {
-    if (generation === loadGeneration) loading.value = false
+    if (!background && generation === loadGeneration) loading.value = false
   }
+}
+
+async function load() {
+  await loadWorks(false)
 }
 
 function replaceWork(updated: CreativeWorkDTO) {
@@ -920,6 +974,7 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 }
 
 function resetAgentState() {
+  stopPendingReviewPoll()
   loadGeneration += 1
   feedbackGeneration += 1
   feedbackAbort?.abort()
@@ -953,6 +1008,7 @@ watch(
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleDocumentKeydown)
+  stopPendingReviewPoll()
   resetAgentState()
   if (copiedResetTimer) clearTimeout(copiedResetTimer)
 })
@@ -1096,18 +1152,29 @@ defineExpose({ load, openAdd })
             <span v-for="evidence in cardEvidence(work)" :key="evidence">{{ evidence }}</span>
           </div>
           <p class="k12cw__summary">{{ cardSummary(work) }}</p>
-          <button
-            type="button"
-            class="hc-btn hc-btn-secondary k12cw__detail-toggle"
-            data-testid="cw-detail-toggle"
-            aria-haspopup="dialog"
-            :aria-expanded="expandedID === work.work_id"
-            :aria-controls="`cw-detail-${work.work_id}`"
-            :disabled="reviewState(work) === 'pending'"
-            @click="openDetails(work, $event)"
-          >
-            {{ reviewCTA(work) }}
-          </button>
+          <div class="k12cw__foot">
+            <time
+              v-if="cardTime(work)"
+              class="k12cw__time"
+              data-testid="cw-card-time"
+              :datetime="cardTime(work)!.iso"
+              :data-time-source="cardTime(work)!.source"
+            >
+              {{ cardTime(work)!.label }}
+            </time>
+            <button
+              type="button"
+              class="hc-btn hc-btn-secondary k12cw__detail-toggle"
+              data-testid="cw-detail-toggle"
+              aria-haspopup="dialog"
+              :aria-expanded="expandedID === work.work_id"
+              :aria-controls="`cw-detail-${work.work_id}`"
+              :disabled="reviewState(work) === 'pending'"
+              @click="openDetails(work, $event)"
+            >
+              {{ reviewCTA(work) }}
+            </button>
+          </div>
         </div>
       </li>
     </ul>
@@ -1879,10 +1946,26 @@ defineExpose({ load, openAdd })
   -webkit-line-clamp: 2;
 }
 
+.k12cw__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.k12cw__time {
+  min-width: 0;
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .k12cw__detail-toggle {
   align-self: flex-end;
   min-height: 32px;
-  margin-top: auto;
+  margin-top: 0;
   padding: 6px 12px;
   font-size: 12px;
   box-shadow: none;

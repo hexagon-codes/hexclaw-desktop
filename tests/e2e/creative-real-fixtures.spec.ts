@@ -383,4 +383,101 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     )
     expect(String(structured?.limitations)).toMatch(/不(?:评分|打分).*不排名.*不替孩子重画/)
   })
+
+  test('BUG-20260725-009 real initial feedback and regeneration preserve generation identity', async ({
+    page,
+  }) => {
+    test.skip(!LIVE_AI, 'NOT RUN: requires authorized creative feedback generation')
+    childName = `点评代次-${e2eMarker('child')}`
+    const owner = await createTutorAndOpenWorks(page, childName)
+    const modal = await openAddWork(page, 'writing')
+    const draft = `周末我和爸爸一起修好了旧台灯。爸爸没有直接告诉我答案，而是让我先检查插头和灯泡。我找到松动的灯泡后，台灯终于亮了。-${e2eMarker('work')}`
+    await modal.getByTestId('cw-add-draft').fill(draft)
+    await modal.getByTestId('cw-add-submit').click()
+    await expect(modal).toHaveCount(0, { timeout: 30_000 })
+
+    await expect
+      .poll(
+        async () =>
+          (await listWorks(page, owner)).filter((item) => item.content_markdown === draft).length,
+        { timeout: 60_000 },
+      )
+      .toBe(1)
+    const created = (await listWorks(page, owner)).find(
+      (item) => item.content_markdown === draft,
+    )
+    const workID = String(created?.work_id || '')
+    expect(workID).not.toBe('')
+    const card = page.locator(`.k12cw__card[data-work-id="${workID}"]`)
+    await expect(card.getByTestId('cw-detail-toggle')).toBeEnabled({ timeout: 6 * 60_000 })
+    await card.getByTestId('cw-detail-toggle').click()
+
+    const detail = page.getByTestId('cw-detail-modal')
+    const beforeRetry = (await listWorks(page, owner)).find((item) => item.work_id === workID)
+    const initialState = (beforeRetry?.initial_feedback ??
+      beforeRetry?.initial_feedback_generation) as Json | undefined
+    const initialGenerationID = String(initialState?.generation_id || '')
+    expect(initialGenerationID).not.toBe('')
+
+    const failedInitial = detail.getByTestId('cw-initial-review-error')
+    const initialBlock = detail.getByTestId('cw-latest-feedback')
+    if (await failedInitial.isVisible().catch(() => false)) {
+      await detail.getByTestId('cw-initial-review-retry').click()
+    }
+    await expect(initialBlock).toBeVisible({ timeout: 6 * 60_000 })
+    expect(await initialBlock.getAttribute('data-generation-id')).toBe(initialGenerationID)
+    const initialFeedbackID = await initialBlock.getAttribute('data-feedback-id')
+    expect(initialFeedbackID).toBeTruthy()
+
+    const regeneratePath = `/api/k12/creative-works/${encodeURIComponent(workID)}/generate-feedback`
+    let regeneratePosts = 0
+    let commandID = ''
+    page.on('request', (request) => {
+      if (
+        request.method() === 'POST' &&
+        new URL(request.url()).pathname.endsWith(regeneratePath)
+      ) {
+        regeneratePosts++
+        commandID = request.headers()['idempotency-key'] || commandID
+      }
+    })
+    const regenerate = detail.getByTestId('cw-feedback-regenerate')
+    await regenerate.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await expect(regenerate).toHaveAttribute('aria-busy', 'true')
+    await expect(regenerate).not.toHaveAttribute('aria-busy', 'true', { timeout: 6 * 60_000 })
+    expect(regeneratePosts, 'one synchronous double click must emit one provider command').toBe(1)
+    expect(commandID).not.toBe('')
+
+    const regeneratedBlock = detail.getByTestId('cw-latest-feedback')
+    const regeneratedGenerationID = await regeneratedBlock.getAttribute('data-generation-id')
+    const regeneratedFeedbackID = await regeneratedBlock.getAttribute('data-feedback-id')
+    expect(regeneratedGenerationID).toBeTruthy()
+    expect(regeneratedGenerationID).not.toBe(initialGenerationID)
+    expect(regeneratedFeedbackID).toBeTruthy()
+    expect(regeneratedFeedbackID).not.toBe(initialFeedbackID)
+
+    const persisted = (await listWorks(page, owner)).find((item) => item.work_id === workID)
+    const initial = (persisted?.initial_feedback ?? persisted?.initial_feedback_generation) as
+      | Json
+      | undefined
+    const latest = (persisted?.latest_feedback ?? persisted?.latest_feedback_generation) as
+      | Json
+      | undefined
+    expect(initial?.generation_id).toBe(initialGenerationID)
+    expect(latest?.generation_id).toBe(regeneratedGenerationID)
+
+    const replay = await json<Json>(
+      await page.request.post(`${BASE_URL}${regeneratePath}`, {
+        data: { agent: owner },
+        headers: { 'Idempotency-Key': commandID },
+      }),
+    )
+    const replayLatest = (replay.latest_feedback ?? replay.latest_feedback_generation) as
+      | Json
+      | undefined
+    expect(replayLatest?.generation_id).toBe(regeneratedGenerationID)
+  })
 })

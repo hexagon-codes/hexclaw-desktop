@@ -853,6 +853,12 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
   test('K12 works keep a two-column archive, bounded add/detail dialogs and keyboard image preview', async ({
     page,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'hc-k12-appearance-v1',
+        JSON.stringify({ version: 1, preference: 'k12', introSeen: true }),
+      )
+    })
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(
       `/chat?role=${encodeURIComponent(k12Agent)}&roleTitle=${encodeURIComponent('小明的辅导助手')}&scenarioTab=records`,
@@ -1038,15 +1044,17 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
       const rect = node.getBoundingClientRect()
       const body = node.querySelector('.k12cw-detail-modal__body') as HTMLElement | null
       const footer = node.querySelector('.k12cw-detail-modal__foot') as HTMLElement | null
+      const actions = node.querySelector('.k12cw__action-bar') as HTMLElement | null
       const overlay = node.parentElement
-      if (!body || !footer) throw new Error('work detail geometry missing')
+      if (!body || !actions) throw new Error('work detail geometry missing')
       const style = getComputedStyle(node)
       const overlayStyle = overlay ? getComputedStyle(overlay) : null
       return {
         insideViewport:
           rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
         bodyOverflow: body.scrollWidth - body.clientWidth,
-        footerVisible: footer.getBoundingClientRect().bottom <= innerHeight,
+        footerCount: footer ? 1 : 0,
+        actionsVisible: actions.getBoundingClientRect().bottom <= innerHeight,
         display: style.display,
         opacity: style.opacity,
         visibility: style.visibility,
@@ -1058,7 +1066,8 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     })
     expect(detailGeometry.insideViewport).toBe(true)
     expect(detailGeometry.bodyOverflow).toBeLessThanOrEqual(1)
-    expect(detailGeometry.footerVisible).toBe(true)
+    expect(detailGeometry.footerCount).toBe(0)
+    expect(detailGeometry.actionsVisible).toBe(true)
     expect(detailGeometry.display).not.toBe('none')
     expect(detailGeometry.opacity).toBe('1')
     expect(detailGeometry.visibility).toBe('visible')

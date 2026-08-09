@@ -15,14 +15,8 @@ import {
   getSessionAgent,
 } from '@/stores/session-agent-binding'
 import { clearSessionDeepThinking } from '@/stores/session-thinking-preference'
-import {
-  clearSessionModel,
-  setSessionModel,
-} from '@/stores/session-model-binding'
-import {
-  scenarioRegistry,
-  type ScenarioComposerImagePayload,
-} from '@/shell/scenario/registry'
+import { clearSessionModel, setSessionModel } from '@/stores/session-model-binding'
+import { scenarioRegistry, type ScenarioComposerImagePayload } from '@/shell/scenario/registry'
 
 const { parseDocument, isDocumentFile } = vi.hoisted(() => ({
   parseDocument: vi.fn(),
@@ -84,7 +78,8 @@ vi.mock('@/api/websocket', () => ({
   hexclawWS: {
     isConnected: vi.fn().mockReturnValue(false),
     connect: vi.fn().mockRejectedValue(new Error('test')),
-    clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
+    clearCallbacks: vi.fn(),
+    clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}),
     onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
@@ -163,7 +158,9 @@ vi.mock('@/api/desktop', () => ({
 // Mock Tauri Store
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -295,10 +292,7 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
-function mountChatView(options?: {
-  setup?: () => void
-  attachTo?: HTMLElement
-}) {
+function mountChatView(options?: { setup?: () => void; attachTo?: HTMLElement }) {
   const pinia = createPinia()
   setActivePinia(pinia)
   options?.setup?.()
@@ -363,7 +357,12 @@ describe('ChatView — E2E 关键路径', () => {
     mockRoute.query = {}
     mockRoute.path = '/chat'
     mockRoute.params = {}
-    mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
+    mockGetOllamaStatus.mockResolvedValue({
+      running: false,
+      associated: false,
+      model_count: 0,
+      models: [],
+    })
     mockGetConnections.mockResolvedValue([])
     mockGetConnectionsResult.mockResolvedValue({ connections: [] })
     tauriEventMock.sidecarReady = undefined
@@ -482,7 +481,9 @@ describe('ChatView — E2E 关键路径', () => {
     expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(tauriEventMock.sidecarReady).toBeTypeOf('function'))
     const settingsStore = useSettingsStore()
-    vi.spyOn(settingsStore, 'loadConfig').mockRejectedValueOnce(new Error('provider refresh failed'))
+    vi.spyOn(settingsStore, 'loadConfig').mockRejectedValueOnce(
+      new Error('provider refresh failed'),
+    )
 
     await tauriEventMock.sidecarReady?.()
     await flushPromises()
@@ -532,7 +533,12 @@ describe('ChatView — E2E 关键路径', () => {
 
     store.messages.push(
       { id: 'u1', role: 'user', content: '你好', timestamp: '2026-01-01T00:00:00Z' },
-      { id: 'a1', role: 'assistant', content: '你好！有什么可以帮你的？', timestamp: '2026-01-01T00:00:01Z' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '你好！有什么可以帮你的？',
+        timestamp: '2026-01-01T00:00:01Z',
+      },
     )
     await flushPromises()
 
@@ -558,7 +564,9 @@ describe('ChatView — E2E 关键路径', () => {
     ]
     await flushPromises()
 
-    const behaviors = scrollSpy.mock.calls.map((c) => (c[0] as { behavior?: string } | undefined)?.behavior)
+    const behaviors = scrollSpy.mock.calls.map(
+      (c) => (c[0] as { behavior?: string } | undefined)?.behavior,
+    )
     expect(behaviors).toContain('auto') // 会话级=瞬时到底（无动画）
   }, 10000)
 
@@ -568,17 +576,26 @@ describe('ChatView — E2E 关键路径', () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
     store.currentSessionId = 'sess'
-    store.messages = [{ id: 'a1', role: 'assistant', content: 'hi', timestamp: '2026-01-01T00:00:00Z' }] // open
+    store.messages = [
+      { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2026-01-01T00:00:00Z' },
+    ] // open
     await flushPromises()
 
     const scrollSpy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
     scrollSpy.mockClear()
     // 会话内追加（push，同引用）→ 走 length watcher 平滑滚动
-    store.messages.push({ id: 'u2', role: 'user', content: '追问', timestamp: '2026-01-01T00:00:02Z' })
+    store.messages.push({
+      id: 'u2',
+      role: 'user',
+      content: '追问',
+      timestamp: '2026-01-01T00:00:02Z',
+    })
     await flushPromises()
     await new Promise((r) => setTimeout(r, 150)) // scrollToBottom 节流 100ms
 
-    const behaviors = scrollSpy.mock.calls.map((c) => (c[0] as { behavior?: string } | undefined)?.behavior)
+    const behaviors = scrollSpy.mock.calls.map(
+      (c) => (c[0] as { behavior?: string } | undefined)?.behavior,
+    )
     expect(behaviors).toContain('smooth') // 会话内=平滑
     expect(behaviors).not.toContain('auto') // 会话内不用瞬时
   }, 10000)
@@ -781,7 +798,7 @@ describe('ChatView — E2E 关键路径', () => {
 
       await resizer.trigger('mousedown', { button: 0, clientX: 256 })
       document.dispatchEvent(new MouseEvent('mousemove', { clientX: 356 }))
-      await new Promise(resolve => requestAnimationFrame(resolve))
+      await new Promise((resolve) => requestAnimationFrame(resolve))
       await flushPromises()
 
       expect(wrapper.find('.hc-chat__sidebar').attributes('style')).toContain('width: 356px;')
@@ -1005,6 +1022,79 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
+  it('新选场景图片只在资产回执后持久化同一条稳定消息', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'scenario-receipt-session'
+    const sourceFile = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'homework.png', {
+      type: 'image/png',
+    })
+    const payload = {
+      file: sourceFile,
+      previewUrl: 'blob:scenario-homework-preview',
+      attachment: {
+        type: 'image' as const,
+        name: 'homework.png',
+        mime: 'image/png',
+        data: 'blob:scenario-homework-preview',
+      },
+    }
+
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+
+    const vm = wrapper.vm as unknown as {
+      scenarioComposerImage: ScenarioComposerImagePayload | ''
+    }
+    await vi.waitFor(() => {
+      expect(vm.scenarioComposerImage).toMatchObject({
+        file: sourceFile,
+        previewUrl: payload.previewUrl,
+        attachment: payload.attachment,
+        sourceSessionId: 'scenario-receipt-session',
+      })
+    })
+    expect(mockAppendSessionMessage).not.toHaveBeenCalled()
+    expect(typeof (vm.scenarioComposerImage as ScenarioComposerImagePayload).onSourceStored).toBe(
+      'function',
+    )
+
+    const routedPayload = vm.scenarioComposerImage as ScenarioComposerImagePayload
+    const sourceStored = routedPayload.onSourceStored!
+    const persisted = await sourceStored({
+      assetId: 'asset://mingming/photo.png',
+      displayUrl: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+    })
+
+    expect(persisted).toBe(true)
+    expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+    const imageMessage = store.messages.find((message) => message.id === routedPayload.requestId)
+    expect(imageMessage).toBeDefined()
+    expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+      'scenario-receipt-session',
+      expect.objectContaining({
+        id: imageMessage?.id,
+        metadata: {
+          attachments: [
+            expect.objectContaining({
+              data: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+            }),
+          ],
+        },
+      }),
+    )
+    expect(
+      store.messages.find((message) => message.id === imageMessage?.id)?.metadata?.attachments,
+    ).toEqual([
+      expect.objectContaining({
+        data: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+      }),
+    ])
+
+    wrapper.unmount()
+  })
+
   it('BUG-20260724-010 编辑纯图片消息会以新消息身份重新进入既有场景图片管道', async () => {
     const descriptor = {
       schemaVersion: '1',
@@ -1015,7 +1105,7 @@ describe('ChatView — E2E 关键路径', () => {
       actions: [],
     }
     scenarioRegistry.registerResolver((ctx) =>
-      ctx.metadata?.scenario === 'edit-image-test' ? descriptor as never : null,
+      ctx.metadata?.scenario === 'edit-image-test' ? (descriptor as never) : null,
     )
     scenarioRegistry.registerChatEnhancement({
       name: 'EditImageScenarioStub',
@@ -1077,11 +1167,13 @@ describe('ChatView — E2E 关键路径', () => {
         editingMsgId: string | null
         editingText: string
         confirmEdit: (messageId: string) => Promise<void>
-        scenarioComposerImage: {
-          dataUrl: string
-          requestId?: string
-          attachment: typeof attachment
-        } | ''
+        scenarioComposerImage:
+          | {
+              dataUrl: string
+              requestId?: string
+              attachment: typeof attachment
+            }
+          | ''
       }
       vm.editingMsgId = 'original-image-message'
       vm.editingText = ''
@@ -1101,7 +1193,11 @@ describe('ChatView — E2E 关键路径', () => {
       expect(revisedMessage.metadata?.attachments).toEqual([attachment])
       expect(mockAppendSessionMessage).toHaveBeenCalledWith(
         'edited-image-branch',
-        expect.objectContaining({ id: revisedMessage.id, content: '', metadata: { attachments: [attachment] } }),
+        expect.objectContaining({
+          id: revisedMessage.id,
+          content: '',
+          metadata: { attachments: [attachment] },
+        }),
       )
       expect(vm.scenarioComposerImage).toEqual({
         dataUrl: 'data:image/png;base64,aG9tZXdvcms=',
@@ -1313,9 +1409,13 @@ describe('ChatView — E2E 关键路径', () => {
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
-      expect(mockForkSession).toHaveBeenCalledWith('edit-image-with-text-session', 'original-image-with-text', {
-        includeMessage: false,
-      })
+      expect(mockForkSession).toHaveBeenCalledWith(
+        'edit-image-with-text-session',
+        'original-image-with-text',
+        {
+          includeMessage: false,
+        },
+      )
       expect(store.currentSessionId).toBe('edited-image-branch')
       expect(store.agentRole).toBe('edit-image-with-text-agent')
       expect(store.messages).toHaveLength(1)
@@ -2007,8 +2107,7 @@ describe('ChatView — E2E 关键路径', () => {
       await vi.waitFor(() => {
         expect(
           store.messages.some(
-            (message) =>
-              message.role === 'user' && message.content === '请讲解二分之一加三分之一',
+            (message) => message.role === 'user' && message.content === '请讲解二分之一加三分之一',
           ),
         ).toBe(true)
       })
@@ -2127,7 +2226,13 @@ describe('ChatView — E2E 关键路径', () => {
             max_tokens_per_request: 8192,
             rate_limit_rpm: 60,
           },
-          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: '',
+          },
           notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
           mcp: { default_protocol: 'stdio' },
         }
@@ -2168,8 +2273,12 @@ describe('ChatView — E2E 关键路径', () => {
   it('keeps the model query when the downloaded Ollama model is still not visible after retries', async () => {
     vi.useFakeTimers()
     mockRoute.query = { model: 'qwen3:8b' }
-    mockGetOllamaStatus
-      .mockResolvedValue({ running: true, associated: true, model_count: 0, models: [] })
+    mockGetOllamaStatus.mockResolvedValue({
+      running: true,
+      associated: true,
+      model_count: 0,
+      models: [],
+    })
 
     mountChatView({
       setup: () => {
@@ -2201,7 +2310,13 @@ describe('ChatView — E2E 关键路径', () => {
             max_tokens_per_request: 8192,
             rate_limit_rpm: 60,
           },
-          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: '',
+          },
           notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
           mcp: { default_protocol: 'stdio' },
         }
@@ -2259,7 +2374,13 @@ describe('ChatView — E2E 关键路径', () => {
             max_tokens_per_request: 8192,
             rate_limit_rpm: 60,
           },
-          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: '',
+          },
           notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
           mcp: { default_protocol: 'stdio' },
           memory: { enabled: true },

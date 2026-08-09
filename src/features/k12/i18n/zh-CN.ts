@@ -461,8 +461,7 @@ export default {
     gradeSupportNote:
       '当前版本支持小学一至六年级。初高中能力开放后，可直接升级当前孩子档案，历史学习记录会继续保留。',
     textbookBySubject: '数学教材版本',
-    textbookCreateNote:
-      '当前版本只开放数学教材与进度管理；其他学科无需在这里配置。',
+    textbookCreateNote: '当前版本只开放数学教材与进度管理；其他学科无需在这里配置。',
     textbookEditNote: '当前版本只开放数学教材与进度管理；其他学科历史绑定会原样保留。',
     subjects: {
       math: '数学',
@@ -709,6 +708,9 @@ export default {
     title: '原图批改',
     completed: '整页批改完成',
     summarySubtitle: '作业原图作为结果主体 · {correct} 题正确 · {attention} 题需要关注',
+    summaryProcessSubtitle: '作业原图作为结果主体 · {correct} 道正确 · {process} 道过程问题',
+    summaryMixedSubtitle:
+      '作业原图作为结果主体 · {correct} 道正确 · {process} 道过程问题 · {attention} 道需要关注',
     hideAnnotations: '隐藏批注',
     showAnnotations: '显示批注',
     summaryLabel: '批改摘要',
@@ -718,7 +720,9 @@ export default {
     pendingReview: '待人工复核',
     originalUntouched: '作业原图 · 未经任何修改',
     originalReadOnly: '原图保持只读',
+    originalArchived: '原图已存证',
     annotationCaption: '对错标记画在照片上层，照片本身不会被改动',
+    processAnnotationCaption: '过程提醒画在照片上层，照片本身不会被改动',
     legendLabel: '批改状态图例',
     statusCorrect: '正确',
     statusIncorrect: '错误',
@@ -728,6 +732,8 @@ export default {
     statusProcessIssue: '过程问题',
     statusOutOfScope: '超范围',
     onlyAttention: '只展开需要关注的题',
+    processExpanded: '默认展开过程问题',
+    processProjectionStatus: '答案正确但过程存在格式、单位或不可复核跳步；不记为错题。',
     questionCount: '{count} 道',
     issueTitle: '第 {number} 题 · {issue}',
     needsAttention: '需要关注',
@@ -742,6 +748,9 @@ export default {
     wrong: '错',
     degradedTitle: '以下题目未能在原图上定位作答区域，改为文字批改（不叠加，避免标错位置）：',
     correctAnswer: '正确答案',
+    finalAnswer: '最终答案',
+    wrongStep: '错误步骤',
+    cause: '原因',
     errorCause: '错因',
     save: '保存批改图',
     saving: '正在生成…',

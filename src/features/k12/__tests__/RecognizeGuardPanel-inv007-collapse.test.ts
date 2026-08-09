@@ -167,7 +167,7 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
     h.tutoringTips.mockResolvedValue({ knowledge_points: [], sections: [] })
   })
 
-  it('整个图片任务只有一个 X；收起只折叠原位内容，后台任务不取消', async () => {
+  it('BUG-20260726-023 uses one chevron disclosure; collapse never closes or cancels', async () => {
     h.create.mockResolvedValue({
       created: true,
       ...dispatch('completed_homework', 'awaiting_confirmation', [riskQuestion]),
@@ -179,12 +179,16 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
     expect(wrapper.findAll('[data-testid="recognize-close"]')).toHaveLength(1)
     expect(wrapper.findAll('.hc-clearable-field__button')).toHaveLength(0)
     const close = wrapper.get('[data-testid="recognize-close"]')
-    expect(close.attributes('aria-label')).toBe('收起任务')
+    expect(close.attributes('aria-label')).toBe('收起任务详情')
+    expect(close.attributes('title')).toBe('收起任务详情')
     expect(close.attributes('aria-expanded')).toBe('true')
+    expect(close.find('svg').exists()).toBe(true)
+    expect(close.text()).not.toContain('✕')
 
     await close.trigger('click')
     expect(wrapper.classes()).toContain('rec-panel--collapsed')
-    expect(close.attributes('aria-label')).toBe('展开任务')
+    expect(close.attributes('aria-label')).toBe('展开任务详情')
+    expect(close.attributes('title')).toBe('展开任务详情')
     expect(close.attributes('aria-expanded')).toBe('false')
     expect(wrapper.text()).toContain('任务已收起 · 后台继续处理')
     expect(wrapper.emitted('close')).toBeUndefined()
@@ -192,7 +196,7 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
 
     await close.trigger('click')
     expect(wrapper.classes()).not.toContain('rec-panel--collapsed')
-    expect(close.attributes('aria-label')).toBe('收起任务')
+    expect(close.attributes('aria-label')).toBe('收起任务详情')
     expect(h.cancel).not.toHaveBeenCalled()
   })
 

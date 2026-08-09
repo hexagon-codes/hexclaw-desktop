@@ -13,7 +13,13 @@ import zhCN from '@/i18n/locales/zh-CN'
 import ChatInput from '../ChatInput.vue'
 
 vi.mock('@/composables/useVoice', () => ({
-  useVoice: () => ({ isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }),
+  useVoice: () => ({
+    isListening: ref(false),
+    transcript: ref(''),
+    error: ref(''),
+    isSupported: false,
+    toggleListening: vi.fn(),
+  }),
 }))
 vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ thinkingEnabled: false }) }))
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -31,8 +37,9 @@ vi.mock('@tauri-apps/api/window', () => ({
 }))
 
 const fileFromNativeGrant = vi.fn((grant: unknown) => {
-  void grant
-  return new File([], 'photo.png', { type: 'image/png' })
+  const file = new File([], 'photo.png', { type: 'image/png' })
+  Object.defineProperty(file, 'nativeFileGrant', { value: grant })
+  return file
 })
 vi.mock('@/api/desktop', () => ({
   fileFromNativeGrant: (grant: unknown) => fileFromNativeGrant(grant),
@@ -83,6 +90,39 @@ describe('BUG-20260622 ChatInput Tauri 原生拖拽上传', () => {
     expect(w.find('.hc-composer__files').exists()).toBe(true)
     // 图片附件渲染为缩略图（无文件名文本），按附件元素计数断言
     expect(w.findAll('.hc-composer__file').length).toBe(1)
+  })
+
+  it('场景会话 native drop 保留原始 grant 并直接改道，不进入附件区', async () => {
+    const w = await mountChatInput({ scenarioImageIntercept: true })
+    await flushPromises()
+    const grant = {
+      grantId: 'native-k12-grant',
+      operationId: 'native-drop:k12',
+      purpose: 'attachment_upload',
+      name: 'photo.png',
+      mime: 'image/png',
+      size: 3,
+      sourceSha256: 'b'.repeat(64),
+    }
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:k12-native-drop')
+    try {
+      const cb = listen.mock.calls.find((call) => call[0] === 'native-file-drop-grants')![1] as
+        (event: { payload: unknown[] }) => void
+      cb({ payload: [grant] })
+      await flushPromises()
+
+      const payload = w.emitted('scenario-image')?.[0]?.[0] as {
+        file: File & { nativeFileGrant?: unknown }
+        previewUrl: string
+        attachment: { data: string }
+      }
+      expect(payload.file.nativeFileGrant).toBe(grant)
+      expect(payload.previewUrl).toBe('blob:k12-native-drop')
+      expect(payload.attachment.data).toBe('blob:k12-native-drop')
+      expect(w.find('.hc-composer__files').exists()).toBe(false)
+    } finally {
+      createObjectURL.mockRestore()
+    }
   })
 
   it('生成模式/禁用态不接收拖拽', async () => {

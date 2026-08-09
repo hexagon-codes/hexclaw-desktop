@@ -204,11 +204,23 @@ const unreadScenarioResultCount = ref(0)
 const scrollCoordinator = useConversationScrollCoordinator({
   getContainer: () => messagesContainerRef.value,
   getBottomAnchor: () => messagesEndRef.value,
+  getRevealTarget: (contentIdentity) =>
+    document
+      .getElementById(scenarioMessageAnchorId(contentIdentity))
+      ?.querySelector<HTMLElement>('[data-testid="blank-worksheet-parent-guide"]') ?? undefined,
   isAtBottom: () => !userScrolledUp.value,
   onFollowBottom: () => {
     userScrolledUp.value = false
     showScrollToBottom.value = false
     unreadScenarioResultCount.value = 0
+  },
+  onRevealStart: () => {
+    if (_scrollTimer) {
+      clearTimeout(_scrollTimer)
+      _scrollTimer = null
+    }
+    userScrolledUp.value = true
+    showScrollToBottom.value = true
   },
 })
 const scrollNavigationLabel = computed(() =>
@@ -793,8 +805,9 @@ function handleScenarioComposerCommand(command: ScenarioComposerCommand) {
   if (command.type === 'focus') composer.focus()
   if (command.type === 'set-input') composer.setInput(command.text, command.focus !== false)
 }
-// 场景会话下 composer 拦截的图片：ChatInput 产出同源 dataURL + message attachment；
-// shell 负责形成一次可见/持久用户消息，并冻结该次提交的 request_id + 实际会话路由。
+// 场景会话下 composer 拦截的图片：ChatInput 产出 original File/grant + session-local blob
+// preview；shell 负责形成一次可见用户消息，并在场景资产 receipt 后持久同一消息、冻结
+// 该次提交的 request_id + 实际会话路由。
 const scenarioComposerImage = ref<ScenarioComposerImagePayload | ''>('')
 interface PendingScenarioImageProjection {
   message: ChatMessage
@@ -915,14 +928,48 @@ async function handleScenarioImage(
   // 随后的会话 watcher 还会重建并清掉刚启动的识题面板。
   const sessionId = directedSessionId || await chatStore.ensureSession()
   const routedPayload: ScenarioComposerImagePayload = {
-    dataUrl: payload.dataUrl,
     attachment: payload.attachment,
+    ...(payload.file ? { file: payload.file } : {}),
+    ...(payload.previewUrl ? { previewUrl: payload.previewUrl } : {}),
+    ...(payload.dataUrl ? { dataUrl: payload.dataUrl } : {}),
     ...(payload.contextText !== undefined ? { contextText: payload.contextText } : {}),
     requestId: message.id,
     sourceSessionId: sessionId,
     ...(route ? { route } : {}),
   }
-  if (!(await persistScenarioImageMessage(message, sessionId))) {
+  // 新选图片必须先由场景侧拿到 immutable asset receipt。此处只把同一条本地消息替换成
+  // 稳定资产 URL 后持久化；回调失败会阻止 ImageTask 创建并撤掉这条未持久消息。
+  if (payload.file) {
+    routedPayload.onSourceStored = async (receipt) => {
+      const displayUrl = receipt.displayUrl.trim()
+      if (!displayUrl) return false
+      const persistentAttachment: ChatAttachment = {
+        ...routedPayload.attachment,
+        data: displayUrl,
+      }
+      routedPayload.attachment = persistentAttachment
+      const currentMessage = chatStore.messages.find((candidate) => candidate.id === message.id)
+      if (currentMessage) {
+        currentMessage.metadata = {
+          ...currentMessage.metadata,
+          attachments: [persistentAttachment],
+        }
+      }
+      message.metadata = {
+        ...message.metadata,
+        attachments: [persistentAttachment],
+      }
+      const persisted = await persistScenarioImageMessage(message, sessionId)
+      if (!persisted) {
+        if (chatStore.currentSessionId === sessionId) {
+          const messageIndex = chatStore.messages.findIndex((candidate) => candidate.id === message.id)
+          if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
+        }
+        chatStore.clearSessionExecution(sessionId, message.id)
+      }
+      return persisted
+    }
+  } else if (!(await persistScenarioImageMessage(message, sessionId))) {
     if (chatStore.currentSessionId === sessionId) {
       const messageIndex = chatStore.messages.findIndex((candidate) => candidate.id === message.id)
       if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
@@ -960,15 +1007,20 @@ function handleScenarioInlineActive(active: boolean) {
   if (active) nextTick(() => scrollToBottom(true))
 }
 
-function handleScenarioContentUpdated() {
+function handleScenarioContentUpdated(payload?: {
+  sourceMessageId?: string
+  reveal?: 'start'
+}) {
   const contentIdentity =
-    typeof scenarioComposerImage.value === 'object'
+    payload?.sourceMessageId?.trim() ||
+    (typeof scenarioComposerImage.value === 'object'
       ? (scenarioComposerImage.value.requestId ?? 'scenario-inline')
-      : 'scenario-inline'
+      : 'scenario-inline')
   const update = scrollCoordinator.publishContentUpdated({
     conversationId: chatStore.currentSessionId ?? '',
     contentIdentity,
     reason: 'scenario-content-updated',
+    reveal: payload?.reveal,
   })
   if (!update.atBottom) {
     unreadScenarioResultCount.value += 1

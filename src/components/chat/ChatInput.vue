@@ -122,7 +122,7 @@ const props = defineProps<{
   supportsImageGen?: boolean
   supportsVideoGen?: boolean
   /** 场景图片改道（BUG-20260709 拍照发题不解题）：为 true 时粘贴/选择/拖入的图片不进附件，
-   *  转为 emit('scenario-image', dataURL) 交场景管道（如 K12 拍照识题回显护栏）。
+   *  转为 emit('scenario-image', 原始 File + session blob preview) 交场景管道（如 K12 拍照识题回显护栏）。
    *  由父级按当前会话是否场景实例决定，本组件零场景知识（AP-1）。 */
   scenarioImageIntercept?: boolean
 }>()
@@ -743,23 +743,18 @@ onUnmounted(() => {
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
-    // 场景图片改道（BUG-20260709）：场景会话下图片不进附件（否则走 chat vision 被普通聊天吞掉），
-    // 读成 dataURL 外发给场景管道（K12=拍照识题回显护栏）。非图片文件不受影响。
+    // 场景图片改道（BUG-20260709）：场景会话下图片不进附件（否则走 chat vision 被普通聊天吞掉）。
+    // 新选图片只保留原始 File（含可能的 native grant）和 session-local blob 预览；不读 dataURL/Base64。
+    // K12 资产层直接消费该 File/grant，得到 receipt 后才持久化同一消息投影。非图片文件不受影响。
     if (isImage && props.scenarioImageIntercept) {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const url = String(reader.result ?? '')
-        if (!url) return
-        const comma = url.indexOf(',')
-        const attachment: ChatAttachment = {
-          type: 'image',
-          name: file.name,
-          mime: file.type,
-          data: comma >= 0 ? url.slice(comma + 1) : url,
-        }
-        emit('scenario-image', { dataUrl: url, attachment })
+      const previewUrl = URL.createObjectURL(file)
+      const attachment: ChatAttachment = {
+        type: 'image',
+        name: file.name,
+        mime: file.type,
+        data: previewUrl,
       }
-      reader.readAsDataURL(file)
+      emit('scenario-image', { file, previewUrl, attachment })
       continue
     }
     attachedFiles.value.push({ file, previewUrl: isImage ? URL.createObjectURL(file) : undefined })

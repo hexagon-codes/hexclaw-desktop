@@ -23,6 +23,7 @@ import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRend
 import TaskProgressCard from '../components/TaskProgressCard.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
+import HcDisclosureButton from '@/components/common/HcDisclosureButton.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import TutoringTipsPanel from './TutoringTipsPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
@@ -41,6 +42,12 @@ import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { k12QuestionSourceDisplayLabel } from '../source-display'
+import {
+  PHOTO_PROCESS_ISSUE_COLOR,
+  isPhotoAssessmentStatus,
+  projectPhotoAssessmentStatus,
+  type PhotoAssessmentStatusProjection,
+} from '../photo-assessment-status'
 import { gradeToResult, gradeToVerify } from '../mappers'
 import type {
   AnswerState,
@@ -57,16 +64,21 @@ import type {
   ImageTaskIntent,
   ParentTeachingGuideDTO,
   PhotoJobResult,
+  PhotoJobItemStatus,
   ProblemKind,
   OCRConfirmationReason,
 } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
-import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
+import type {
+  ScenarioComposerImageAssetReceipt,
+  ScenarioImageModelRoute,
+} from '@/shell/scenario/registry'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
 // 故 prop 名就叫 agentId——曾命名 agentName 导致上游把 display_name 传进来，写错孩子作用域。
-// initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的图片 dataURL，
-// 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
+// initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的 session-local
+// blob/data 预览；initialFile 是同一原始 File（可能绑定 native grant）。传入即预填并自动
+// 识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
 const props = defineProps<{
   agentId: string
   agentDisplayName?: string
@@ -80,6 +92,9 @@ const props = defineProps<{
     Record<'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art', string>
   >
   initialImage?: string
+  initialFile?: File
+  /** 新选图片 asset receipt 后持久同一条用户消息；失败时不得创建 ImageTask。 */
+  onSourceStored?: (receipt: ScenarioComposerImageAssetReceipt) => Promise<boolean>
   /** 会话显式选择的视觉路由请求；服务端按能力目录校验后才冻结到 Job。 */
   modelRoute?: ScenarioImageModelRoute
   /** §4.10 desktop request_id，与本次图片用户消息 ID 同源。 */
@@ -97,7 +112,7 @@ const props = defineProps<{
 // 收起手段必须内聚在面板自身。
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'contentUpdated'): void
+  (e: 'contentUpdated', payload: { sourceMessageId?: string; reveal?: 'start' }): void
   /**
    * 用户主动重试必须由会话 shell 创建新的消息/request_id，并重新冻结当前模型路由。
    * 组件绝不能把旧 Job 的 request_id 原地重放，否则模型改绑后会撞上不可变调用账本。
@@ -121,6 +136,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const store = useK12Store()
+const processIssueColor = PHOTO_PROCESS_ISSUE_COLOR
 // Shell 正常路径传入与持久消息同源的 request_id；独立/兼容挂载也只生成一次请求身份，
 // 绝不退回“同图同 key”的内容哈希。
 const generatedRequestId = nanoid(12)
@@ -166,15 +182,19 @@ interface GuardRow {
   bbox: BBox | null
   // graded=true 表示本题走了「批改」（已答卷路径），供原图叠加只画已批改题的 ✓/✗；solve（空白题求解）不叠加。
   graded: boolean
-  // verdict 存后端批改判定五值（agree=对/disagree=错；布尔 correct 已随契约删除），
-  // 叠加层据此画 ✓（绿）/✗（红）。
+  /** completed-homework item.status 的原样投影；这是 UI 状态的唯一真相。 */
+  assessmentStatus: PhotoJobItemStatus | null
+  // verdict 只保存后端证据比较结论；仅作独立证据，禁止据此决定叠加符号、颜色、
+  // 计数或折叠状态。
   verdict: string
-  // INV-007：verdict=agree 的正确题解法详情默认折叠（单行摘要），家长点击展开。
-  // disagree/unverifiable 需家长关注 → 不折叠；solve 路径（graded=false）也不折叠。
+  // INV-007：item.status=correct 的题默认折叠；其余状态由共享 projector 决定。
+  // solve 路径（graded=false）不参与图片批改折叠。
   expanded: boolean
 }
 
 const imageB64 = ref('')
+/** 新选择/拖入的原始 File；data URL 文本兼容入口保持空。 */
+const sourceFile = ref<File>()
 // 服务端不可变批注图；为空时 PhotoGradeOverlay 才使用原图+bbox 的兼容叠加。
 const annotatedImage = ref('')
 /**
@@ -191,7 +211,7 @@ interface BlankWorksheetGuideItem {
 const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
 const hasBlankWorksheetGuide = computed(() => blankWorksheetGuide.value.length > 0)
 // BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
-const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'))
+const isImageData = computed(() => /^(?:data:image|blob:)/.test(imageB64.value.trim()))
 const rows = ref<GuardRow[]>([])
 const problemProgressSlots = ref<ImageTaskProblemProgressDTO[]>([])
 const taskCoverage = ref<ImageTaskCoverageDTO | null>(null)
@@ -544,10 +564,53 @@ function sourceResolverFacts(problems: ImageTaskProblemProgressDTO[]): SourceRes
   }
 }
 
+interface ProblemAssessmentProjection {
+  status: PhotoJobItemStatus
+  projection: PhotoAssessmentStatusProjection
+}
+
+function problemProgressAssessment(
+  problem: ImageTaskProblemProgressDTO,
+): ProblemAssessmentProjection | null {
+  if (problem.disposition_state !== 'result') return null
+  const status = problem.result_projection?.assessment_status
+  if (!isPhotoAssessmentStatus(status)) return null
+  return { status, projection: projectPhotoAssessmentStatus(status) }
+}
+
+function problemAssessmentStatusLabel(status: PhotoJobItemStatus): string {
+  switch (status) {
+    case 'correct':
+      return '已批改 · 正确'
+    case 'correct_with_process_issue':
+      return '过程问题'
+    case 'wrong':
+      return '错误'
+    case 'unanswered':
+      return '未作答'
+    case 'answer_unclear':
+      return '看不清'
+    case 'blank_solved':
+      return '已解答'
+    case 'out_of_scope':
+      return '超范围'
+    case 'untrusted':
+      return '待人工复核'
+    case 'failed':
+      return '处理失败'
+  }
+}
+
+function problemAssessmentVisualState(projection: PhotoAssessmentStatusProjection): string {
+  return projection.tone === 'correct' || projection.tone === 'neutral' ? 'done' : projection.tone
+}
+
 function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
   if (problemIsSkipped(problem)) return '已跳过 · 未判断对错'
   if (problem.source_state === 'awaiting_resolution') return '等待处理题源问题'
   if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
+  const assessment = problemProgressAssessment(problem)
+  if (assessment) return problemAssessmentStatusLabel(assessment.status)
   if (problem.disposition_state === 'result') return '已批改'
   return '处理中'
 }
@@ -555,11 +618,15 @@ function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
 function problemProgressVisualState(problem: ImageTaskProblemProgressDTO): string {
   if (problemIsSkipped(problem)) return 'skipped'
   if (problem.source_state === 'awaiting_resolution') return 'source-issue'
+  const assessment = problemProgressAssessment(problem)
+  if (assessment) return problemAssessmentVisualState(assessment.projection)
   if (problem.disposition_state === 'result') return 'done'
   return 'processing'
 }
 
 function problemProgressMarker(problem: ImageTaskProblemProgressDTO): string {
+  const assessment = problemProgressAssessment(problem)
+  if (assessment) return assessment.projection.symbol
   const state = problemProgressVisualState(problem)
   if (state === 'done') return '✓'
   if (state === 'source-issue') return '!'
@@ -576,6 +643,33 @@ function problemProgressQuestion(problem: ImageTaskProblemProgressDTO): string {
 function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
   const state = problemProgressVisualState(problem)
   const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
+  const assessment = problemProgressAssessment(problem)
+  if (assessment) {
+    const knowledgePoint = row?.knowledgePoints[0]
+    const detail = (() => {
+      switch (assessment.status) {
+        case 'correct':
+          return '已程序验算'
+        case 'correct_with_process_issue':
+          return '最终答案正确 · 过程需关注'
+        case 'wrong':
+          return '批改结论已发布'
+        case 'unanswered':
+          return '未作答'
+        case 'answer_unclear':
+          return '作答内容看不清'
+        case 'blank_solved':
+          return '解答结果已发布'
+        case 'out_of_scope':
+          return '超出当前学习范围'
+        case 'untrusted':
+          return '证据不足 · 待人工复核'
+        case 'failed':
+          return '处理失败'
+      }
+    })()
+    return knowledgePoint ? `${detail} · ${knowledgePoint}` : detail
+  }
   if (state === 'done') {
     const knowledgePoint = row?.knowledgePoints[0]
     return knowledgePoint ? `已程序验算 · ${knowledgePoint}` : '已程序验算'
@@ -829,7 +923,20 @@ const taskContentProjection = computed(() =>
     creativeResult.value ? 'creative-result' : '',
   ].join('|'),
 )
-watch(taskContentProjection, () => emit('contentUpdated'), { flush: 'post' })
+let blankGuideRevealPublished = false
+watch(
+  taskContentProjection,
+  () => {
+    const revealBlankGuide = hasBlankWorksheetGuide.value && !blankGuideRevealPublished
+    if (revealBlankGuide) blankGuideRevealPublished = true
+    if (!hasBlankWorksheetGuide.value) blankGuideRevealPublished = false
+    emit('contentUpdated', {
+      sourceMessageId: props.sourceMessageId,
+      ...(revealBlankGuide ? { reveal: 'start' as const } : {}),
+    })
+  },
+  { flush: 'post' },
+)
 const restoredFromBinding = ref(false)
 let agentGeneration = 0
 let recognitionGeneration = 0
@@ -878,12 +985,10 @@ const allKnowledgePoints = computed(() => {
 // bbox 合理性由叠加组件自己兜底（缺失/非法 → 降级文字批改，不错位），此处只喂数据不做几何判断。
 const overlayMarks = computed(() =>
   rows.value
-    .filter((r) => r.graded && r.verify)
+    .filter((r) => r.graded && r.assessmentStatus)
     .map((r) => ({
-      // 判定五值 → 叠加符号（agree=✓；其余已批改判定按 ✗/超纲处理，超纲由 outOfScope 拦）。
-      correct: r.verdict === 'agree',
-      // 超纲只表示“当前学段不应批改”，绝不是孩子答错；叠加层据此禁止画红叉。
-      outOfScope: r.verify?.verdict === 'out_of_scope',
+      problemId: r.problemId,
+      status: r.assessmentStatus as PhotoJobItemStatus,
       bbox: r.bbox,
       source_number_path: r.sourceNumberPath,
       display_label: r.displayLabel,
@@ -894,6 +999,7 @@ const overlayMarks = computed(() =>
       question: r.problem,
       // solution 可能是整段 Markdown 推导；原图上只显示简短最终答案。
       correctAnswer: extractBriefFinalAnswer(r.solution),
+      wrongStep: r.wrongStep,
       errorCause: r.errorCause,
       parentGuide: r.parentGuide,
     })),
@@ -1133,6 +1239,7 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
     parentGuide: null,
     bbox: question.bbox ?? null,
     graded: false,
+    assessmentStatus: null,
     verdict: '',
     expanded: false,
   }))
@@ -1309,11 +1416,8 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
 function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    imageB64.value = String(reader.result ?? '')
-  }
-  reader.readAsDataURL(file)
+  sourceFile.value = file
+  imageB64.value = URL.createObjectURL(file)
 }
 
 // 多孩切换是状态边界：立即清空本地识题态，并让旧 agent 的在途响应失效。
@@ -1334,6 +1438,7 @@ watch(
     recognitionAbort?.abort()
     recognitionAbort = null
     imageB64.value = ''
+    sourceFile.value = undefined
     annotatedImage.value = ''
     blankWorksheetGuide.value = []
     rows.value = []
@@ -1369,10 +1474,11 @@ watch(
 
 // composer 改道图片：预填 + 自动识题（家长粘贴/上传即进护栏，无需再点「识题」）
 watch(
-  () => props.initialImage,
-  (img) => {
+  [() => props.initialImage, () => props.initialFile],
+  ([img, file]) => {
     if (!img || !img.trim()) return
     collapsed.value = false
+    sourceFile.value = file
     imageB64.value = img
     void run()
   },
@@ -1489,11 +1595,12 @@ async function run() {
     const task = await store.dispatchImageTask(
       {
         agent: props.agentId,
-        dataUrl: sourceImage,
+        ...(sourceFile.value ? { file: sourceFile.value } : { dataUrl: sourceImage }),
         sourceSession: props.sessionId ?? '',
         sourceRef: effectiveRequestId.value,
         messageIntent: props.messageIntent,
         route: props.modelRoute,
+        ...(props.onSourceStored ? { onSourceStored: props.onSourceStored } : {}),
       },
       controller.signal,
       (snapshot) => {
@@ -1833,10 +1940,14 @@ async function confirmAll() {
 }
 
 // ── INV-007：正确题默认折叠（口径对齐 IM 侧 INV-008 正确题单行摘要）────────────
-// 批改结论 agree = 不需要家长关注 → 解法详情默认折叠为单行摘要（题号+✓+题干截断）；
-// disagree/unverifiable 默认展开；solve 路径（graded=false）是家长主动求解，不折叠。
+// 只有 item.status=correct 的题默认折叠为单行摘要；verdict/badge 只是独立证据，
+// 不得反推过程问题等状态。solve 路径（graded=false）是家长主动求解，不折叠。
 function hasCorrectSummary(row: GuardRow): boolean {
-  return row.graded && row.verdict === 'agree'
+  return (
+    row.graded &&
+    row.assessmentStatus !== null &&
+    projectPhotoAssessmentStatus(row.assessmentStatus).summaryBucket === 'correct'
+  )
 }
 function isDetailsCollapsed(row: GuardRow): boolean {
   return hasCorrectSummary(row) && !row.expanded
@@ -1938,7 +2049,8 @@ function applyPhotoJobResult(result: PhotoJobResult) {
     result.items.some(
       (item) =>
         (item.status === 'wrong' && !isParentTeachingGuide(item.parent_guide)) ||
-        (item.status === 'correct' && item.parent_guide !== undefined),
+        (item.status === 'correct' && item.parent_guide !== undefined) ||
+        (item.status === 'correct_with_process_issue' && !isParentTeachingGuide(item.parent_guide)),
     )
   ) {
     throw new Error('invalid completed homework result')
@@ -1960,9 +2072,11 @@ function applyPhotoJobResult(result: PhotoJobResult) {
     const row = rows.value[byID >= 0 ? byID : (answerableIndexes[resultIndex] ?? -1)]
     if (!row) return
     row.bbox = item.question.bbox ?? row.bbox
+    row.assessmentStatus = item.status
     const grade = item.grade
     switch (item.status) {
       case 'correct':
+      case 'correct_with_process_issue':
       case 'wrong':
       case 'out_of_scope':
       case 'untrusted': {
@@ -1975,13 +2089,13 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         row.wrongStep = res.wrongStep ?? ''
         row.errorCause = res.errorCause ?? ''
         row.parentGuide =
-          item.status === 'wrong' && isParentTeachingGuide(item.parent_guide)
+          (item.status === 'wrong' || item.status === 'correct_with_process_issue') &&
+          isParentTeachingGuide(item.parent_guide)
             ? item.parent_guide
             : null
         row.graded = true
         row.verdict = res.verdict
-        // INV-007：整卷 Job 回填同样回到默认折叠态。
-        row.expanded = false
+        row.expanded = projectPhotoAssessmentStatus(item.status).defaultExpanded
         break
       }
       case 'blank_solved': {
@@ -2030,10 +2144,13 @@ async function coldStart() {
       'rec-panel--conversation': !!initialImage || restoredFromBinding,
       'rec-panel--collapsed': collapsed,
       'rec-panel--homework-running': homeworkTaskProgressState === 'running',
+      'rec-panel--blank-guide': hasBlankWorksheetGuide,
+      'rec-panel--photo-result': showOverlay,
     }"
     data-testid="recognize-guard"
     :data-source-message-id="sourceMessageId || undefined"
     :data-dispatch-id="currentDispatchId || restoreDispatchId || undefined"
+    :style="{ '--photo-process-issue-color': processIssueColor }"
   >
     <div class="rec-panel__head">
       <span v-if="!initialImage && !restoredFromBinding && !collapsed" class="rec-panel__title"
@@ -2050,16 +2167,14 @@ async function coldStart() {
         <span class="rec-panel__title">{{ taskShellTitle }}</span>
         <span class="rec-panel__collapsed-summary">任务已收起 · 后台继续处理</span>
       </template>
-      <button
+      <HcDisclosureButton
         class="rec-panel__x"
         data-testid="recognize-close"
-        :aria-label="collapsed ? '展开任务' : '收起任务'"
-        :aria-expanded="collapsed ? 'false' : 'true'"
-        :title="collapsed ? '展开任务' : '收起任务（后台继续处理）'"
-        @click="collapsed = !collapsed"
-      >
-        {{ collapsed ? '↕' : '✕' }}
-      </button>
+        :expanded="!collapsed"
+        expanded-label="收起任务详情"
+        collapsed-label="展开任务详情"
+        @toggle="collapsed = !collapsed"
+      />
     </div>
     <p v-if="!initialImage && !restoredFromBinding" class="rec-panel__intro">
       {{ t('k12.recognize.intro') }}
@@ -2230,6 +2345,9 @@ async function coldStart() {
           data-testid="homework-problem-progress-slot"
           :data-problem-id="item.kind === 'problem' ? item.problem.problem_id : undefined"
           :data-problem-group-id="item.kind === 'group' ? item.groupId : undefined"
+          :data-assessment-status="
+            item.kind === 'problem' ? problemProgressAssessment(item.problem)?.status : undefined
+          "
         >
           <template v-if="item.kind === 'problem'">
             <div class="rec-problem-progress__slot">
@@ -2643,7 +2761,7 @@ async function coldStart() {
 
     <div
       v-else-if="
-        currentTaskIntent === 'completed_homework' &&
+        (currentTaskIntent === 'completed_homework' || currentTaskIntent === 'blank_worksheet') &&
         rows.length &&
         homeworkTaskProgressState !== 'running'
       "
@@ -2886,6 +3004,16 @@ async function coldStart() {
 .rec-panel--conversation.rec-panel--homework-running {
   padding: 0;
 }
+/* BUG-20260724-014: the terminal blank-worksheet guide is itself the approved
+   780px message body. Do not spend another 14px on each side after the shared
+   TaskShell has already placed it on that rail. Keep the vertical breathing
+   room and all guide-internal spacing unchanged. */
+.rec-panel--conversation.rec-panel--blank-guide {
+  padding: 10px 0 12px;
+}
+.rec-panel--conversation.rec-panel--photo-result {
+  padding: 10px 0 12px;
+}
 .rec-homework-task__lead {
   margin: 0;
   color: var(--hc-text-primary);
@@ -3069,19 +3197,7 @@ async function coldStart() {
   font-size: 11.5px;
 }
 .rec-panel__x {
-  border: none;
-  background: transparent;
-  color: var(--hc-text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  padding: 4px 6px;
-  border-radius: 6px;
   flex-shrink: 0;
-}
-.rec-panel__x:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
 }
 .rec-panel__intro {
   font-size: 12px;
@@ -3247,6 +3363,27 @@ async function coldStart() {
 .rec-panel--homework-running .rec-problem-progress__item.is-done .rec-problem-progress__status {
   background: color-mix(in srgb, var(--hc-success) 12%, transparent);
   color: var(--hc-success);
+}
+.rec-problem-progress__item.is-process .rec-problem-progress__slot {
+  border-color: color-mix(in srgb, var(--photo-process-issue-color) 35%, var(--hc-border));
+  background: color-mix(in srgb, var(--photo-process-issue-color) 6%, var(--hc-bg-card));
+}
+.rec-problem-progress__item.is-process .rec-problem-progress__status {
+  background: color-mix(in srgb, var(--photo-process-issue-color) 12%, transparent);
+  color: var(--photo-process-issue-color);
+}
+.rec-problem-progress__item.is-process .rec-problem-progress__state {
+  color: var(--photo-process-issue-color);
+}
+.rec-panel--homework-running .rec-problem-progress__item.is-wrong .rec-problem-progress__status {
+  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
+  color: var(--hc-error);
+}
+.rec-panel--homework-running
+  .rec-problem-progress__item:is(.is-unanswered, .is-unclear, .is-review)
+  .rec-problem-progress__status {
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+  color: var(--hc-warning);
 }
 .rec-panel--homework-running .rec-problem-progress__item.is-processing .rec-problem-progress__slot {
   border-color: var(--hc-border-hl);

@@ -14,6 +14,7 @@ const EVIDENCE =
   process.env.HEX_UI_EVIDENCE_ROOT?.trim() || '/tmp/hexclaw-k12-deep-surfaces-evidence'
 const DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const MAX_RATIO = 0.001
+const STATE_FILTER = process.env.HEX_UI_STATE?.trim() || ''
 
 type Classification = 'COMPARABLE' | 'NOT_COMPARABLE'
 type OpenResult = { root?: string; issues?: string[] }
@@ -98,8 +99,7 @@ const work = {
   work_id: 'ART-20260716-001',
   work_type: 'art',
   display_name: '《雨后的校园》',
-  asset_id: 'asset-work-1',
-  thumbnail_asset_id: 'asset-work-1',
+  source_asset_id: `asset://${AGENT}/asset-work-1`,
   row_version: 1,
   initial_feedback: {
     generation_id: 'REVIEW-ART-20260716-001',
@@ -155,6 +155,10 @@ async function installMocks(page: Page) {
       localStorage.setItem('hexclaw_lastSessionId', session)
       localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
       localStorage.setItem('hc-theme', 'light')
+      localStorage.setItem(
+        'hc-k12-appearance-v1',
+        JSON.stringify({ version: 1, preference: 'k12', introSeen: true }),
+      )
     },
     { agent: AGENT, session: SESSION },
   )
@@ -548,12 +552,31 @@ async function referenceWork(page: Page, action: 'detail' | 'add' | 'preview' | 
     await referenceRecords(page, 4)
     return referenceCallOnLoaded(page, 'openAddCreativeWork', '#overlay')
   }
-  const result = await prototypeButtonCall(
-    page,
-    4,
-    '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
-    'openCreativeWorkDetail',
-  )
+  const result =
+    action === 'preview'
+      ? await (async () => {
+          const opened = await referenceRecords(page, 4)
+          const ok = await page.evaluate(() => {
+            const buttons = [...document.querySelectorAll(
+              '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
+            )]
+            const button = buttons.find((node) => node.closest('article,li,div')?.textContent?.includes('雨后的校园'))
+              ?? buttons[1]
+            const callable = (window as unknown as Record<string, unknown>).openCreativeWorkDetail
+            if (!button || typeof callable !== 'function') return false
+            ;(callable as (node: Element) => void)(button)
+            return true
+          })
+          if (!ok) opened.issues?.push('prototype art work opener missing')
+          opened.root = '#overlay'
+          return opened
+        })()
+      : await prototypeButtonCall(
+          page,
+          4,
+          '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
+          'openCreativeWorkDetail',
+        )
   if (action === 'preview') {
     const ok = await page.evaluate(() => {
       const preview = document.querySelector('#overlay .creative-work-preview')
@@ -563,6 +586,7 @@ async function referenceWork(page: Page, action: 'detail' | 'add' | 'preview' | 
       return true
     })
     if (!ok) result.issues?.push('prototype work preview opener missing')
+    result.root = '#creativeWorkImagePreview'
   } else if (action === 'delete') {
     const ok = await page.evaluate(() => {
       const fn = (window as unknown as Record<string, unknown>).requestDeleteCreativeWork
@@ -1249,9 +1273,20 @@ test.describe('K12 deep page/modal visual matrix', () => {
       'k12.dingtalk-delivery-receipt',
     ]
     const manifest = new Set(BRANCH_UI_FIDELITY_SURFACES.map((surface) => surface.id))
-    const mapped = states.flatMap((state) => state.manifestIds)
-    expect([...new Set(mapped)].sort()).toEqual([...requestedIds].sort())
-    expect(requestedIds.filter((id) => !manifest.has(id))).toEqual([])
+    const selectedStates = STATE_FILTER
+      ? states.filter((state) => state.name === STATE_FILTER)
+      : states
+    expect(
+      selectedStates.length,
+      STATE_FILTER ? `unknown HEX_UI_STATE=${STATE_FILTER}` : 'visual states missing',
+    ).toBeGreaterThan(0)
+    const mapped = selectedStates.flatMap((state) => state.manifestIds)
+    if (!STATE_FILTER) {
+      expect([...new Set(mapped)].sort()).toEqual([...requestedIds].sort())
+      expect(requestedIds.filter((id) => !manifest.has(id))).toEqual([])
+    } else {
+      expect(mapped.filter((id) => !manifest.has(id))).toEqual([])
+    }
     expect(mapped.length).toBe(new Set(mapped).size)
 
     const context = await browser.newContext({
@@ -1270,7 +1305,7 @@ test.describe('K12 deep page/modal visual matrix', () => {
     sourcePage.setDefaultNavigationTimeout(10_000)
     await installMocks(sourcePage)
     const results: Record<string, unknown>[] = []
-    for (const state of states) {
+    for (const state of selectedStates) {
       const result = await test.step(state.name, () =>
         capture(referencePage, sourcePage, state, testInfo),
       )
@@ -1302,6 +1337,6 @@ test.describe('K12 deep page/modal visual matrix', () => {
       path.join(summaryDir, 'matrix-summary.json'),
       `${JSON.stringify(summary, null, 2)}\n`,
     )
-    expect(results).toHaveLength(states.length)
+    expect(results).toHaveLength(selectedStates.length)
   })
 })

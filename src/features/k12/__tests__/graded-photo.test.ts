@@ -12,6 +12,7 @@ function installCanvas() {
     fillRect: vi.fn(),
     strokeRect: vi.fn(),
     fillText: vi.fn(),
+    strokeText: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
@@ -23,6 +24,7 @@ function installCanvas() {
     fillStyle: '',
     font: '',
     textBaseline: '',
+    textAlign: '',
   }
   const canvas = {
     width: 0,
@@ -78,10 +80,10 @@ describe('批改图片像素级导出', () => {
   it('把合法 bbox 的对错标记绘进原图 PNG，非法框不落笔', async () => {
     const { ctx, canvas } = installCanvas()
     const result = await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
-      { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
-      { correct: false, bbox: { x: 0.9, y: 0.2, w: 0.2, h: 0.05 }, correctAnswer: '0.1' },
+      { status: 'correct', bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
+      { status: 'wrong', bbox: { x: 0.9, y: 0.2, w: 0.2, h: 0.05 }, correctAnswer: '0.1' },
       // 超纲不是答错；即便坐标合法，也绝不能把红叉烧进原图像素。
-      { correct: false, outOfScope: true, bbox: { x: 0.5, y: 0.5, w: 0.2, h: 0.05 } },
+      { status: 'out_of_scope', bbox: { x: 0.5, y: 0.5, w: 0.2, h: 0.05 } },
     ])
 
     expect(result).toBe('data:image/png;base64,R1JBREVE')
@@ -94,6 +96,20 @@ describe('批改图片像素级导出', () => {
     expect(ctx.beginPath).toHaveBeenCalledTimes(4) // white underlay + green stroke, two ✓ segments
     expect(ctx.stroke).toHaveBeenCalledTimes(4)
     expect(ctx.moveTo).toHaveBeenCalledWith(expect.any(Number), expect.any(Number))
+  })
+
+  it('过程问题从同一 item.status 绘制紫色 ⚠，不落红叉', async () => {
+    const { ctx } = installCanvas()
+    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
+      {
+        status: 'correct_with_process_issue',
+        bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
+      },
+    ])
+
+    expect(ctx.fillText).toHaveBeenCalledWith('⚠', expect.any(Number), expect.any(Number))
+    expect(ctx.fillStyle).toBe('#A56BD6')
+    expect(ctx.moveTo).not.toHaveBeenCalled()
   })
 
   it('浏览器环境生成带日期文件名并触发真实下载动作', async () => {
@@ -112,7 +128,7 @@ describe('批改图片像素级导出', () => {
       value: createObjectURL,
     })
     const path = await saveGradedPhoto('data:image/jpeg;base64,ORIGINAL', [
-      { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
+      { status: 'correct', bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
     ])
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -129,7 +145,7 @@ describe('批改图片像素级导出', () => {
     const { ctx } = installCanvas()
     await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
       {
-        correct: false,
+        status: 'wrong',
         bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
         correctAnswer: '## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。',
       },

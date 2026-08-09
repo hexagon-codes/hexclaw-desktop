@@ -1,12 +1,21 @@
-# `src/contracts/generated/`（codegen 目标目录 · 占位）
+# `src/contracts/generated/`（codegen 目标目录）
 
-架构 §6.5 / §8.4：本目录是**后端 `api/view_contracts/`（JSON Schema）生成 TS 类型**的落点。
+架构 §6.5 / §8.4：本目录保存由后端 `api/view_contracts/` 中的 versioned JSON Schema
+确定性生成的 TypeScript wire 类型与运行时 validator。
 
-当前状态：**空占位**。前端采用「契约先行」，手写契约类型在 `src/contracts/*.ts`。
-后端 `api/view_contracts/` 定稿后：
+当前已提交生成物：
 
-1. 引入 codegen（如 `json-schema-to-typescript`）把 JSON Schema 生成到本目录；
-2. 让 `src/contracts/index.ts` 从 `./generated` re-export，手写类型收敛为兼容/适配层；
-3. 校验 `schemaVersion` 一致性（IA 四方一致性门，发版 checklist）。
+- `k12-image-task.v1.ts`：来自
+  `../hexclaw/api/view_contracts/k12-image-task.v1.schema.json` 的 ImageTask v1 契约。
 
-在此之前，业务代码统一从 `@/contracts` 导入，不直接依赖本目录，切换零改调用方。
+生成物是唯一的 ImageTask wire exact-set 来源，禁止手工编辑。更新 schema 后在 Desktop
+仓库运行：
+
+```sh
+pnpm contracts:generate
+pnpm contracts:check
+```
+
+`contracts:check` 会重新生成并逐字节比较已提交文件；任何 schema 或生成物单边漂移都必须
+失败。API 适配层直接从 `@/contracts/generated/k12-image-task.v1` 导入 validator，并仅在
+该边界叠加不属于 wire shape 的领域语义校验。

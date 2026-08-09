@@ -73,6 +73,8 @@ function artWork(over: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
     work_title: '《雨后的校园》',
     source_asset_id: 'asset://k12-xiaoming/deadbeef.png',
     row_version: 1,
+    created_at: 1,
+    latest_generation_at: 1,
     initial_feedback: {
       generation_id: 'generation-art',
       status: 'succeeded',

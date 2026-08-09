@@ -152,7 +152,7 @@ export function gradeToVerify(resp: GradeResp): VerifyResult {
 export interface GradeViewResult {
   verify: VerifyResult
   solution: string
-  /** 批改判定五值口径（agree=答对/disagree=答错；布尔 correct 已随后端契约删除）。 */
+  /** 证据比较结论；不得据此反推图片结果 item.status。 */
   verdict: GradeResp['verdict']
   evidenceType: GradeResp['evidence_type']
   badge: GradeResp['badge']

@@ -315,6 +315,52 @@ describe('useChatSend', () => {
     expect(deps.chatStore.sendMessage).not.toHaveBeenCalled()
   })
 
+  it.each(['legacy attachment preview', 'multi-file composer'] as const)(
+    'sends a newly selected image from %s by receipt without FileReader/base64',
+    async (source) => {
+      const readAsDataURL = vi.fn(() => {
+        throw new Error('new chat images must not be encoded as a data URL')
+      })
+      const createObjectURL = vi.fn(() => 'blob:chat-image-preview')
+      vi.stubGlobal('FileReader', class { readAsDataURL = readAsDataURL })
+      vi.stubGlobal('URL', { createObjectURL })
+
+      try {
+        const deps = makeDeps()
+        const image = new File(['image-bytes'], 'photo.png', { type: 'image/png' })
+        if (source === 'legacy attachment preview') {
+          deps.attachmentPreview.value = {
+            url: 'blob:composer-preview', name: image.name, type: 'image', file: image,
+          }
+        }
+
+        const { handleSend } = useChatSend(deps as any)
+        await expect(
+          source === 'legacy attachment preview'
+            ? handleSend('describe this image')
+            : handleSend('describe this image', [image]),
+        ).resolves.toBe(true)
+
+        expect(uploadChatAttachment).toHaveBeenCalledWith(image)
+        expect(readAsDataURL).not.toHaveBeenCalled()
+        expect(createObjectURL).toHaveBeenCalledWith(image)
+        expect(deps.chatStore.sendMessage).toHaveBeenCalledWith(
+          'describe this image',
+          [expect.objectContaining({
+            type: 'image',
+            name: 'photo.png',
+            mime: 'image/png',
+            data: 'blob:chat-image-preview',
+            attachmentId: 'attachment-test',
+          })],
+          expect.objectContaining({ backendText: expect.any(Function) }),
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    },
+  )
+
   // ─── 文档解析失败兜底（BUG: PDF 被当二进制发后端 → 误报「仅支持图片」）──────────
 
   it('文档解析失败时不降级成二进制附件，弹错并中止发送', async () => {

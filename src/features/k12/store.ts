@@ -18,6 +18,7 @@ import {
   k12InsightReport,
   k12ListAccumulation,
   k12UploadAsset,
+  k12AssetURL,
   k12CreateImageTask,
   k12GetImageTask,
   k12GetImageTaskResult,
@@ -54,7 +55,10 @@ import {
   type MistakeDTO,
 } from '@/api/k12'
 import type { RecordCollectionView, VerifyResult } from '@/contracts'
-import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
+import type {
+  ScenarioComposerImageAssetReceipt,
+  ScenarioImageModelRoute,
+} from '@/shell/scenario/registry'
 import { i18n } from '@/i18n'
 import {
   mistakesToView,
@@ -407,7 +411,8 @@ export const useK12Store = defineStore('k12', () => {
     })
   }
 
-  function dataURLFile(dataUrl: string, sourceRef: string): File {
+  /** 仅历史消息或显式重提的 data URL 兼容入口；新选择/拖入必须优先传 original File。 */
+  function legacyDataURLFile(dataUrl: string, sourceRef: string): File {
     const comma = dataUrl.indexOf(',')
     const metadata = comma >= 0 ? dataUrl.slice(0, comma) : ''
     const encoded = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
@@ -557,12 +562,17 @@ export const useK12Store = defineStore('k12', () => {
   async function dispatchImageTask(
     input: {
       agent: string
-      dataUrl: string
+      /** 新选择/拖入路径直接交付原始 File（可能带 native grant），禁止先变 data URL。 */
+      file?: File
+      /** 仅历史消息或显式重提兼容；新选择/拖入不得赋值。 */
+      dataUrl?: string
       sourceSession: string
       sourceRef: string
       messageIntent?: string
       route?: ScenarioImageModelRoute
       attemptGeneration?: number
+      /** K12 asset receipt 后由 shell 持久同一用户消息；失败时不能创建 ImageTask。 */
+      onSourceStored?: (receipt: ScenarioComposerImageAssetReceipt) => Promise<boolean>
     },
     signal?: AbortSignal,
     onStatus?: ImageTaskStatusObserver,
@@ -576,12 +586,27 @@ export const useK12Store = defineStore('k12', () => {
     error.value = null
     try {
       throwIfAborted(signal)
+      const sourceFile = input.file ??
+        (input.dataUrl?.trim() ? legacyDataURLFile(input.dataUrl, sourceRef) : undefined)
+      if (!sourceFile) {
+        throw new Error('desktop image task source is required')
+      }
       const asset = await k12UploadAsset(
         input.agent,
-        dataURLFile(input.dataUrl, sourceRef),
+        sourceFile,
         undefined,
         signal,
       )
+      throwIfAborted(signal)
+      if (input.onSourceStored) {
+        const displayUrl = k12AssetURL(input.agent, asset.asset_id)
+        if (!displayUrl) throw new Error('desktop image task asset URL is required')
+        const persisted = await input.onSourceStored({
+          assetId: asset.asset_id,
+          displayUrl,
+        })
+        if (!persisted) throw new Error('desktop image task source persistence failed')
+      }
       throwIfAborted(signal)
       const created = await k12CreateImageTask(
         {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
+import HcDisclosureButton from '@/components/common/HcDisclosureButton.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 
 const props = withDefaults(
@@ -28,19 +29,15 @@ const expanded = ref(props.initiallyExpanded)
       <span class="k12-task-progress__summary" data-testid="task-progress-summary">
         {{ summary }}
       </span>
-      <button
+      <HcDisclosureButton
         v-if="items.length"
         class="k12-task-progress__disclosure"
         data-testid="task-progress-disclosure"
-        type="button"
-        :aria-expanded="expanded"
-        :aria-label="expanded ? '收起处理详情' : '展开处理详情'"
-        @click="expanded = !expanded"
-      >
-        <svg viewBox="0 0 20 20" aria-hidden="true" :class="{ 'is-expanded': expanded }">
-          <path d="m6 8 4 4 4-4" />
-        </svg>
-      </button>
+        :expanded="expanded"
+        expanded-label="收起处理详情"
+        collapsed-label="展开处理详情"
+        @toggle="expanded = !expanded"
+      />
     </div>
 
     <div v-if="expanded && items.length" class="k12-task-progress__timeline">
@@ -85,41 +82,6 @@ const expanded = ref(props.initiallyExpanded)
   line-height: 1.5;
 }
 
-.k12-task-progress__disclosure {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--hc-text-muted);
-  cursor: pointer;
-}
-
-.k12-task-progress__disclosure:hover,
-.k12-task-progress__disclosure:focus-visible {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-
-.k12-task-progress__disclosure svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-  transition: transform 0.15s ease;
-}
-
-.k12-task-progress__disclosure svg.is-expanded {
-  transform: rotate(180deg);
-}
-
 .k12-task-progress__timeline {
   padding-top: 9px;
   border-top: 1px solid var(--hc-divider);
@@ -137,9 +99,4 @@ const expanded = ref(props.initiallyExpanded)
   font-weight: 600;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .k12-task-progress__disclosure svg {
-    transition: none;
-  }
-}
 </style>

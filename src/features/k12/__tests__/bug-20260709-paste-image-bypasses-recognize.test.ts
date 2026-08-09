@@ -8,7 +8,7 @@
  *
  * 修复契约（三层，本文件逐层断言正确行为；未修复时 FAIL 即证明 bug 存在）：
  *   ① ChatInput 新增通用 prop scenarioImageIntercept：为 true 时粘贴的图片不进附件，
- *      转为 emit('scenario-image', dataURL)（AP-1：ChatInput 零 K12 词，通用场景缝）；
+ *      转为 emit('scenario-image', original File + session blob preview)（AP-1：ChatInput 零 K12 词，通用场景缝）；
  *   ② K12ChatEnhancement 新增通用 prop composerImage：收到图片 → 自动打开识题护栏
  *      并经唯一 ImageTask facade 固化原图、创建 dispatch，随后 emit 清空事件供外壳复位；
  *   ③ ChatView 把 ①② 接起来（源码接线锁：防「有 setter 无 consumer」装饰性参数，AP-194 同族）。
@@ -85,8 +85,17 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({ composer_chips: [] }),
 }))
@@ -116,15 +125,20 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 
-function dispatchPaste(element: HTMLElement, clipboardData: {
-  items: Array<{ type: string; getAsFile: () => File | null }>
-  getData: (type: string) => string
-}) {
+function dispatchPaste(
+  element: HTMLElement,
+  clipboardData: {
+    items: Array<{ type: string; getAsFile: () => File | null }>
+    getData: (type: string) => string
+  },
+) {
   const event = new Event('paste', { bubbles: true, cancelable: true })
   Object.defineProperty(event, 'clipboardData', { value: clipboardData })
   element.dispatchEvent(event)
@@ -132,7 +146,7 @@ function dispatchPaste(element: HTMLElement, clipboardData: {
 }
 
 describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图片改道场景管道', () => {
-  it('★粘贴图片 → emit 同源 scenario-image payload，且不进附件条', async () => {
+  it('★粘贴图片 → 直接 emit 原始 File 与会话 blob 预览，不读 Base64，且不进附件条', async () => {
     const ChatInput = (await import('@/components/chat/ChatInput.vue')).default
     const w = mount(ChatInput, {
       props: { scenarioImageIntercept: true },
@@ -141,30 +155,56 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
       },
     })
-    const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'homework.png', { type: 'image/png' })
+    const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'homework.png', {
+      type: 'image/png',
+    })
     const clipboardData = {
       items: [{ type: 'image/png', getAsFile: () => file }],
       getData: () => '',
     }
-    dispatchPaste(w.get<HTMLElement>('[data-testid="chat-input"]').element, clipboardData)
-    // FileReader 异步读 dataURL → 轮询等待 emit
-    await vi.waitFor(() => {
-      const ev = w.emitted('scenario-image')
-      expect(ev, '粘贴图片应 emit scenario-image（当前走 addFiles 附件=bug 症状）').toBeTruthy()
-      const payload = ev![0]![0] as {
-        dataUrl: string
-        attachment: { type: string; name: string; mime: string; data: string }
-      }
-      expect(payload.dataUrl).toMatch(/^data:image\/png;base64,/)
-      expect(payload.attachment).toEqual({
-        type: 'image',
-        name: 'homework.png',
-        mime: 'image/png',
-        data: payload.dataUrl.split(',')[1],
+    const createObjectURL = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:k12-selected-homework')
+    const readAsDataURL = vi
+      .spyOn(FileReader.prototype, 'readAsDataURL')
+      .mockImplementation(function (this: FileReader) {
+        Object.defineProperty(this, 'result', {
+          configurable: true,
+          value: 'data:image/png;base64,AAAA',
+        })
+        this.dispatchEvent(new ProgressEvent('load'))
       })
-    }, { timeout: 2000 })
-    // 图片不得同时进附件条（否则同一张图既识题又随消息发聊天，双路重复）
-    expect(w.find('.hc-composer__files').exists(), '拦截后附件条不应出现').toBe(false)
+    try {
+      dispatchPaste(w.get<HTMLElement>('[data-testid="chat-input"]').element, clipboardData)
+      await vi.waitFor(
+        () => {
+          const ev = w.emitted('scenario-image')
+          expect(ev, '粘贴图片应 emit scenario-image（当前走 addFiles 附件=bug 症状）').toBeTruthy()
+          const payload = ev![0]![0] as {
+            file: File
+            previewUrl: string
+            dataUrl?: string
+            attachment: { type: string; name: string; mime: string; data: string }
+          }
+          expect(payload.file).toBe(file)
+          expect(payload.previewUrl).toBe('blob:k12-selected-homework')
+          expect(payload.dataUrl).toBeUndefined()
+          expect(payload.attachment).toEqual({
+            type: 'image',
+            name: 'homework.png',
+            mime: 'image/png',
+            data: 'blob:k12-selected-homework',
+          })
+        },
+        { timeout: 2000 },
+      )
+      expect(readAsDataURL).not.toHaveBeenCalled()
+      // 图片不得同时进附件条（否则同一张图既识题又随消息发聊天，双路重复）
+      expect(w.find('.hc-composer__files').exists(), '拦截后附件条不应出现').toBe(false)
+    } finally {
+      createObjectURL.mockRestore()
+      readAsDataURL.mockRestore()
+    }
   })
 
   it('对照：scenarioImageIntercept 缺省（非场景会话）→ 保持原行为进附件条', async () => {
@@ -175,13 +215,18 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
       },
     })
-    const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'cat.png', { type: 'image/png' })
+    const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'cat.png', {
+      type: 'image/png',
+    })
     dispatchPaste(w.get<HTMLElement>('[data-testid="chat-input"]').element, {
       items: [{ type: 'image/png', getAsFile: () => file }],
       getData: () => '',
     })
     await flushPromises()
-    expect(w.find('.hc-composer__files').exists(), '通用会话粘贴图片仍应进附件（vision 路由不受影响）').toBe(true)
+    expect(
+      w.find('.hc-composer__files').exists(),
+      '通用会话粘贴图片仍应进附件（vision 路由不受影响）',
+    ).toBe(true)
     expect(w.emitted('scenario-image')).toBeFalsy()
   })
 })
@@ -191,8 +236,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     setActivePinia(createPinia())
     vi.clearAllMocks()
     localStorage.clear()
-    document.body.innerHTML =
-      `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-1')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-2')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>`
+    document.body.innerHTML = `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-1')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-2')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>`
   })
 
   it('★传入 composerImage → RecognizeGuardPanel 打开、唯一 facade 收到不可变资产与冻结路由、emit 清空', async () => {
@@ -209,7 +253,8 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     }
     const w = mount(K12ChatEnhancement, {
       props: {
-        agentId: 'k12-tutor-x', agentName: '小明的辅导老师',
+        agentId: 'k12-tutor-x',
+        agentName: '小明的辅导老师',
         sessionId: 'session-1',
         metadata: { 'k12.grade_term': '五年级上' },
         descriptor: K12_VIEW_DESCRIPTOR,
@@ -323,9 +368,10 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       }),
       expect.any(AbortSignal),
     )
-    expect(
-      k12CreateImageTask.mock.calls.map((call) => call[0].source_ref),
-    ).toEqual(['message-homework-attempt-1', 'message-homework-attempt-2'])
+    expect(k12CreateImageTask.mock.calls.map((call) => call[0].source_ref)).toEqual([
+      'message-homework-attempt-1',
+      'message-homework-attempt-2',
+    ])
   })
 })
 

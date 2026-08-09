@@ -504,8 +504,7 @@ export default {
       '💡 More than one child? Create one independent instance per child and bind each private-chat target; profiles, learning records, and memory remain isolated.',
     autoName: "{child}'s Study Assistant · {grade}",
     assistantName: "{child}'s Study Assistant",
-    cardDesc:
-      '{grade} · Math textbook and progress linked · Teaching bounded by grade level',
+    cardDesc: '{grade} · Math textbook and progress linked · Teaching bounded by grade level',
     back: 'Back',
     create: 'Create',
     cancel: 'Cancel',
@@ -742,6 +741,10 @@ export default {
     completed: 'Page grading complete',
     summarySubtitle:
       'The original homework photo is the result · {correct} correct · {attention} need attention',
+    summaryProcessSubtitle:
+      'The original homework photo is the result · {correct} correct · {process} process issues',
+    summaryMixedSubtitle:
+      'The original homework photo is the result · {correct} correct · {process} process issues · {attention} need attention',
     hideAnnotations: 'Hide annotations',
     showAnnotations: 'Show annotations',
     summaryLabel: 'Grading summary',
@@ -751,7 +754,10 @@ export default {
     pendingReview: 'Pending review',
     originalUntouched: 'Original homework photo · unchanged',
     originalReadOnly: 'Original stays read-only',
+    originalArchived: 'Original stays read-only',
     annotationCaption: 'Marks are drawn above the photo; the photo itself is never changed',
+    processAnnotationCaption:
+      'Process reminders are drawn above the photo; the photo itself is never changed',
     legendLabel: 'Grading status legend',
     statusCorrect: 'Correct',
     statusIncorrect: 'Incorrect',
@@ -761,6 +767,9 @@ export default {
     statusProcessIssue: 'Process issue',
     statusOutOfScope: 'Out of scope',
     onlyAttention: 'Only questions needing attention are expanded',
+    processExpanded: 'Process issues are expanded by default',
+    processProjectionStatus:
+      'The final answer is correct, but the process has a formatting, unit, or unverifiable-step issue; it is not saved as a mistake.',
     questionCount: '{count}',
     issueTitle: 'Question {number} · {issue}',
     needsAttention: 'Needs attention',
@@ -776,6 +785,9 @@ export default {
     degradedTitle:
       'These questions could not be located on the photo, graded as text instead (no overlay, to avoid mis-placed marks):',
     correctAnswer: 'Correct answer',
+    finalAnswer: 'Final answer',
+    wrongStep: 'Incorrect step',
+    cause: 'Cause',
     errorCause: 'Error cause',
     save: 'Save graded image',
     saving: 'Generating…',

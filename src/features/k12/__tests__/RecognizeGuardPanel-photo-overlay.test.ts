@@ -5,6 +5,8 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
+import recognizeGuardSource from '../views/RecognizeGuardPanel.vue?raw'
+import photoGradeOverlaySource from '../views/PhotoGradeOverlay.vue?raw'
 
 const h = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -266,6 +268,84 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay · 自动终态结果', () =>
     expect(correct.attributes('open')).toBeUndefined()
     expect(correct.text()).toContain('一. 1')
     expect(correct.text()).not.toContain('第 1 题')
+  })
+
+  it('C02 item.status 唯一驱动紫色过程问题，不被 disagree verdict/badge 压成红叉', async () => {
+    const processQuestion = {
+      ...wrongQuestion,
+      problem_id: 'problem-15',
+      display_label: '四、应用题',
+      question: '鱼塘应用题',
+      student_answer: '11250',
+      answer_canonical_markdown: '11250',
+      bbox: { x: 0.08, y: 0.8, w: 0.36, h: 0.08 },
+    }
+    const items = [
+      {
+        question: correctQuestion,
+        status: 'correct',
+        result_kind: 'assessment',
+        grade: grade('agree', '8', { assessment_status: 'correct' }),
+      },
+      {
+        question: processQuestion,
+        status: 'correct_with_process_issue',
+        result_kind: 'assessment',
+        grade: grade('disagree', '11250', {
+          assessment_status: 'correct_with_process_issue',
+          final_answer_correct: true,
+          wrong_step: '300÷2÷2=50',
+          error_cause: '连续除法计算错误',
+          record_created: false,
+        }),
+        parent_guide: guide('11250'),
+      },
+    ]
+    const dispatch = completedDispatch('completed_homework', [correctQuestion, processQuestion])
+    installTerminal(dispatch, completedHomeworkResult({ annotated: false, items }))
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.get('.grade-stat--process').text()).toContain('过程问题')
+    expect(wrapper.get('.grade-stat--process b').text()).toBe('1')
+    expect(wrapper.findAll('.pg-overlay__mark--process')).toHaveLength(1)
+    const processMark = wrapper.get('.pg-overlay__mark--process')
+    expect(processMark.attributes('data-problem-id')).toBe('problem-15')
+    expect(wrapper.get('[data-testid="overlay-sym-1"]').text()).toBe('⚠')
+    expect(wrapper.findAll('.pg-overlay__mark--correct')).toHaveLength(0)
+    expect(wrapper.findAll('.pg-overlay__mark--wrong')).toHaveLength(0)
+
+    const processCard = wrapper.get(
+      '.grade-card--process[data-assessment-status="correct_with_process_issue"]',
+    )
+    expect(processCard.attributes('data-problem-id')).toBe('problem-15')
+    expect(processCard.attributes('open')).toBeDefined()
+    expect(processCard.get('.grade-card__status').text()).toBe('⚠')
+    expect(processCard.text()).toContain('错误步骤')
+    expect(processCard.text()).toContain('300÷2÷2=50')
+    expect(processCard.text()).toContain('原因')
+    expect(processCard.text()).toContain('连续除法计算错误')
+    expect(processCard.text()).toContain('家长怎么讲')
+    expect(processCard.text()).not.toContain('必要步骤')
+    expect(processCard.text()).not.toContain('本年级方法')
+    expect(processCard.text()).not.toContain('可以追问')
+    expect(processCard.text()).not.toContain('怎么检查')
+    expect(wrapper.get('.grade-photo').classes()).toContain('grade-photo--process')
+    expect(wrapper.get('[data-testid="recognize-guard"]').classes()).toContain(
+      'rec-panel--photo-result',
+    )
+    expect(wrapper.get('.grade-projection-status').text()).toContain('不记为错题')
+
+    const correctCard = wrapper.get('.grade-card--correct')
+    expect(correctCard.attributes('open')).toBeUndefined()
+    expect(correctCard.text()).toContain('已答对 1 题')
+    expect(wrapper.text()).not.toContain('已入错题本')
+  })
+
+  it('RecognizeGuardPanel 与 PhotoGradeOverlay 复用一个 assessment status projector', () => {
+    expect(recognizeGuardSource).toContain("from '../photo-assessment-status'")
+    expect(photoGradeOverlaySource).toContain("from '../photo-assessment-status'")
   })
 
   it('旧服务没有批注图时才按可靠 bbox 做本地确定性叠加', async () => {

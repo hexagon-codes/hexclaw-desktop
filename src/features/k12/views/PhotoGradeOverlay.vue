@@ -12,16 +12,21 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import type { BBox, ParentTeachingGuideDTO } from '@/api/k12'
+import type { BBox, ParentTeachingGuideDTO, PhotoJobItemStatus } from '@/api/k12'
 import { isValidGradingBBox } from '../graded-photo'
 import { k12QuestionSourceDisplayLabel } from '../source-display'
+import {
+  PHOTO_PROCESS_ISSUE_COLOR,
+  projectPhotoAssessmentStatus,
+  type PhotoAssessmentStatusProjection,
+} from '../photo-assessment-status'
 
 /** 一道题的叠加标记：批改结论 + 可选订正/错因，按题 id 对齐其 bbox。 */
 interface OverlayMark {
-  /** 批改是否正确（true→绿 ✓，false→红 ✗）。 */
-  correct: boolean
-  /** 超出当前学习范围：不是答错，禁止在原图上画红叉。 */
-  outOfScope?: boolean
+  /** 服务端冻结的稳定题目身份，仅用于可观察投影。 */
+  problemId?: string
+  /** 唯一状态真相：必须直接来自 PhotoJobItemDTO.status。 */
+  status: PhotoJobItemStatus
   /** 学生作答区域归一化边界框；缺失/非法 → 降级纯文字批改（不叠加）。 */
   bbox?: BBox | null
   /** 原卷由大题到当前题的不可变题号 token。 */
@@ -37,9 +42,11 @@ interface OverlayMark {
   question?: string
   /** 正确答案（订正，错题时展示）。 */
   correctAnswer?: string
+  /** 第一个可复核的错误步骤。 */
+  wrongStep?: string
   /** 错因。 */
   errorCause?: string
-  /** 错题的完整家长讲法；正确题和非错题必须为空。 */
+  /** wrong/process 的完整家长讲法；其余状态必须为空。 */
   parentGuide?: ParentTeachingGuideDTO | null
 }
 
@@ -52,6 +59,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const processIssueColor = PHOTO_PROCESS_ISSUE_COLOR
 
 // 叠加层可开关：看原图 / 看批改（设计文档 §5 交互）。
 const showOverlay = ref(true)
@@ -70,29 +78,83 @@ const showProgrammaticMarks = computed(() => showOverlay.value && !props.annotat
 interface IndexedMark extends OverlayMark {
   _i: number
   _valid: boolean
+  _projection: PhotoAssessmentStatusProjection
 }
 const indexed = computed<IndexedMark[]>(() =>
-  props.marks.map((m, i) => ({ ...m, _i: i, _valid: !m.outOfScope && isValidGradingBBox(m.bbox) })),
+  props.marks.map((mark, index) => {
+    const projection = projectPhotoAssessmentStatus(mark.status)
+    return {
+      ...mark,
+      _i: index,
+      _projection: projection,
+      _valid: projection.overlayVisible && isValidGradingBBox(mark.bbox),
+    }
+  }),
 )
 // 只有合法 bbox 才叠加；其余降级为下方文字批改（绝不错位）。
 const positioned = computed(() => indexed.value.filter((m) => m._valid))
 const degraded = computed(() => indexed.value.filter((m) => !m._valid))
-const correctMarks = computed(() => indexed.value.filter((m) => m.correct && !m.outOfScope))
-const attentionMarks = computed(() => indexed.value.filter((m) => !m.correct || m.outOfScope))
+const correctMarks = computed(() =>
+  indexed.value.filter((mark) => mark._projection.summaryBucket === 'correct'),
+)
+const processMarks = computed(() =>
+  indexed.value.filter((mark) => mark._projection.summaryBucket === 'process'),
+)
+const attentionMarks = computed(() =>
+  indexed.value.filter((mark) => mark._projection.summaryBucket === 'attention'),
+)
+const detailMarks = computed(() =>
+  indexed.value.filter((mark) => mark._projection.summaryBucket !== 'correct'),
+)
 // 当前契约没有 assessment_state=needs_review，不能把“bbox 缺失”冒充成“待人工复核”。
 const pendingReviewCount = 0
+const processOnly = computed(
+  () => processMarks.value.length > 0 && attentionMarks.value.length === 0,
+)
+const visiblePositionedMarks = computed(() =>
+  processOnly.value
+    ? positioned.value.filter((mark) => mark._projection.summaryBucket === 'process')
+    : positioned.value,
+)
+const headerSymbol = computed(() => (processOnly.value ? '⚠' : '✓'))
+const summarySubtitle = computed(() => {
+  if (processOnly.value) {
+    return t('k12.overlay.summaryProcessSubtitle', {
+      correct: correctMarks.value.length,
+      process: processMarks.value.length,
+    })
+  }
+  if (processMarks.value.length > 0) {
+    return t('k12.overlay.summaryMixedSubtitle', {
+      correct: correctMarks.value.length,
+      process: processMarks.value.length,
+      attention: attentionMarks.value.length,
+    })
+  }
+  return t('k12.overlay.summarySubtitle', {
+    correct: correctMarks.value.length,
+    attention: attentionMarks.value.length,
+  })
+})
 
 /**
  * 精确答案 bbox → 紧凑勾叉锚点。符号放在答案末端附近，不再用矩形覆盖整个答案；
  * 靠近右边缘时向左展开，避免被画布裁掉。
  */
-function markStyle(b: BBox) {
+function markStyle(b: BBox, status: PhotoJobItemStatus) {
   const rightEdge = b.x + b.w
   const percent = (value: number) => `${Math.round(value * 10_000) / 100}%`
   return {
     left: percent(rightEdge),
     top: percent(b.y + b.h * 0.4),
-    transform: rightEdge > 0.94 ? 'translate(-100%, -50%)' : 'translate(-10%, -50%)',
+    transform:
+      status === 'correct_with_process_issue'
+        ? rightEdge > 0.94
+          ? 'translate(-100%, 0)'
+          : 'translate(0, 0)'
+        : rightEdge > 0.94
+          ? 'translate(-100%, -50%)'
+          : 'translate(-10%, -50%)',
   }
 }
 
@@ -101,27 +163,53 @@ function markDisplayLabel(mark: OverlayMark): string {
 }
 
 function issueTitle(mark: OverlayMark): string {
-  const issue = mark.outOfScope
-    ? t('k12.overlay.statusOutOfScope')
-    : mark.errorCause || t('k12.overlay.needsAttention')
-  const label = markDisplayLabel(mark)
+  const projection = projectPhotoAssessmentStatus(mark.status)
+  const issue =
+    mark.status === 'correct_with_process_issue'
+      ? t('k12.overlay.statusProcessIssue')
+      : projection.tone === 'scope'
+        ? t('k12.overlay.statusOutOfScope')
+        : mark.errorCause || t('k12.overlay.needsAttention')
+  const label =
+    mark.status === 'correct_with_process_issue' && mark.system_display_label?.trim()
+      ? mark.system_display_label.trim()
+      : markDisplayLabel(mark)
   return label ? `${label} · ${issue}` : issue
+}
+
+function markStatusLabel(mark: IndexedMark): string {
+  switch (mark.status) {
+    case 'correct':
+      return t('k12.overlay.correct')
+    case 'correct_with_process_issue':
+      return t('k12.overlay.statusProcessIssue')
+    case 'wrong':
+      return t('k12.overlay.wrong')
+    case 'unanswered':
+      return t('k12.overlay.statusUnanswered')
+    case 'answer_unclear':
+      return t('k12.overlay.statusUnclear')
+    case 'out_of_scope':
+      return t('verify.outOfScope')
+    default:
+      return t('k12.overlay.pendingReview')
+  }
 }
 </script>
 
 <template>
-  <div class="grade-result pg-overlay" data-testid="photo-grade-overlay">
+  <div
+    class="grade-result pg-overlay"
+    data-testid="photo-grade-overlay"
+    :data-assessment-status="processMarks.length ? 'correct_with_process_issue' : undefined"
+    :style="{ '--photo-process-issue-color': processIssueColor }"
+  >
     <div class="grade-result__head">
       <div class="grade-result__title">
-        <span aria-hidden="true">✓</span>
+        <span aria-hidden="true">{{ headerSymbol }}</span>
         <div>
           <b>{{ t('k12.overlay.completed') }}</b>
-          <small>{{
-            t('k12.overlay.summarySubtitle', {
-              correct: correctMarks.length,
-              attention: attentionMarks.length,
-            })
-          }}</small>
+          <small>{{ summarySubtitle }}</small>
         </div>
         <div class="grade-result__actions">
           <button
@@ -136,7 +224,11 @@ function issueTitle(mark: OverlayMark): string {
         </div>
       </div>
 
-      <div class="grade-summary" :aria-label="t('k12.overlay.summaryLabel')">
+      <div
+        class="grade-summary"
+        :class="{ 'grade-summary--mixed': processMarks.length && attentionMarks.length }"
+        :aria-label="t('k12.overlay.summaryLabel')"
+      >
         <div class="grade-stat">
           <span>{{ t('k12.overlay.totalQuestions') }}</span
           ><b>{{ indexed.length }}</b>
@@ -145,7 +237,11 @@ function issueTitle(mark: OverlayMark): string {
           <span>{{ t('k12.overlay.correctCount') }}</span
           ><b>{{ correctMarks.length }}</b>
         </div>
-        <div class="grade-stat grade-stat--issue">
+        <div v-if="processMarks.length" class="grade-stat grade-stat--process">
+          <span>{{ t('k12.overlay.statusProcessIssue') }}</span
+          ><b>{{ processMarks.length }}</b>
+        </div>
+        <div v-if="attentionMarks.length" class="grade-stat grade-stat--issue">
           <span>{{ t('k12.overlay.attentionCount') }}</span
           ><b>{{ attentionMarks.length }}</b>
         </div>
@@ -164,11 +260,16 @@ function issueTitle(mark: OverlayMark): string {
         <div class="grade-media__bar">
           <b>{{ t('k12.overlay.originalUntouched') }}</b>
           <span class="sp"></span>
-          <span class="grade-media__hash">{{ t('k12.overlay.originalReadOnly') }}</span>
+          <span class="grade-media__hash">{{
+            processOnly ? t('k12.overlay.originalArchived') : t('k12.overlay.originalReadOnly')
+          }}</span>
         </div>
 
         <!-- 新契约优先展示服务端不可变批注图；老契约才走原图 + bbox 确定性叠加。 -->
-        <div class="grade-photo pg-overlay__canvas">
+        <div
+          class="grade-photo pg-overlay__canvas"
+          :class="{ 'grade-photo--process': processOnly }"
+        >
           <img
             :src="displayedImage"
             class="pg-overlay__img"
@@ -177,36 +278,50 @@ function issueTitle(mark: OverlayMark): string {
           />
           <template v-if="showProgrammaticMarks">
             <div
-              v-for="m in positioned"
+              v-for="m in visiblePositionedMarks"
               :key="m._i"
               class="pg-overlay__mark"
-              :class="m.correct ? 'pg-overlay__mark--correct' : 'pg-overlay__mark--wrong'"
-              :style="markStyle(m.bbox as BBox)"
+              :class="`pg-overlay__mark--${m._projection.tone}`"
+              :style="markStyle(m.bbox as BBox, m.status)"
+              :data-assessment-status="m.status"
+              :data-problem-id="m.problemId || undefined"
               :data-testid="`overlay-mark-${m._i}`"
             >
               <span class="pg-overlay__sym" :data-testid="`overlay-sym-${m._i}`">{{
-                m.correct ? '✓' : '✗'
+                m._projection.symbol
               }}</span>
             </div>
           </template>
         </div>
 
-        <div class="grade-caption">{{ t('k12.overlay.annotationCaption') }}</div>
+        <div class="grade-caption" :class="{ 'grade-caption--process': processOnly }">
+          {{
+            processOnly
+              ? t('k12.overlay.processAnnotationCaption')
+              : t('k12.overlay.annotationCaption')
+          }}
+        </div>
         <div class="grade-legend" :aria-label="t('k12.overlay.legendLabel')">
           <span data-grade-status="correct"><i>✓</i>{{ t('k12.overlay.statusCorrect') }}</span>
-          <span data-grade-status="incorrect"><i>×</i>{{ t('k12.overlay.statusIncorrect') }}</span>
-          <span data-grade-status="unanswered"
+          <span v-if="!processOnly" data-grade-status="incorrect"
+            ><i>×</i>{{ t('k12.overlay.statusIncorrect') }}</span
+          >
+          <span v-if="!processOnly" data-grade-status="unanswered"
             ><i>○</i>{{ t('k12.overlay.statusUnanswered') }}</span
           >
-          <span data-grade-status="unclear"><i>?</i>{{ t('k12.overlay.statusUnclear') }}</span>
-          <span data-grade-status="partially_correct"
+          <span v-if="!processOnly" data-grade-status="unclear"
+            ><i>?</i>{{ t('k12.overlay.statusUnclear') }}</span
+          >
+          <span v-if="!processOnly" data-grade-status="partially_correct"
             ><i>◐</i>{{ t('k12.overlay.statusPartiallyCorrect') }}</span
           >
           <span data-grade-status="correct_with_process_issue"
             ><i>⚠</i>{{ t('k12.overlay.statusProcessIssue') }}</span
           >
-          <span data-grade-status="needs_review"><i>?</i>{{ t('k12.overlay.pendingReview') }}</span>
-          <span data-grade-status="out_of_scope"
+          <span v-if="!processOnly" data-grade-status="needs_review"
+            ><i>?</i>{{ t('k12.overlay.pendingReview') }}</span
+          >
+          <span v-if="!processOnly" data-grade-status="out_of_scope"
             ><i>—</i>{{ t('k12.overlay.statusOutOfScope') }}</span
           >
         </div>
@@ -222,27 +337,36 @@ function issueTitle(mark: OverlayMark): string {
           >
             <span
               class="pg-overlay__degraded-verdict"
-              :class="m.outOfScope ? 'is-scope' : m.correct ? 'is-correct' : 'is-wrong'"
+              :class="`is-${m._projection.tone}`"
+              :data-assessment-status="m.status"
             >
-              {{
-                m.outOfScope
-                  ? '— ' + t('verify.outOfScope')
-                  : m.correct
-                    ? '✓ ' + t('k12.overlay.correct')
-                    : '✗ ' + t('k12.overlay.wrong')
-              }}
+              {{ m._projection.symbol + ' ' + markStatusLabel(m) }}
             </span>
             <span v-if="m.question" class="pg-overlay__degraded-q">
               <MarkdownRenderer class="pg-overlay__md-inline" :content="m.question" />
             </span>
-            <span v-if="!m.correct && m.correctAnswer" class="pg-overlay__degraded-fix">
-              {{ t('k12.overlay.correctAnswer') }}：<MarkdownRenderer
+            <span
+              v-if="
+                m._projection.summaryBucket !== 'correct' &&
+                m._projection.tone !== 'scope' &&
+                m.correctAnswer
+              "
+              class="pg-overlay__degraded-fix"
+            >
+              {{
+                m.status === 'correct_with_process_issue'
+                  ? t('k12.overlay.finalAnswer')
+                  : t('k12.overlay.correctAnswer')
+              }}：<MarkdownRenderer class="pg-overlay__md-inline" :content="m.correctAnswer" />
+            </span>
+            <span v-if="m.wrongStep" class="pg-overlay__degraded-cause">
+              {{ t('k12.overlay.wrongStep') }}：<MarkdownRenderer
                 class="pg-overlay__md-inline"
-                :content="m.correctAnswer"
+                :content="m.wrongStep"
               />
             </span>
-            <span v-if="!m.correct && m.errorCause" class="pg-overlay__degraded-cause">
-              {{ t('k12.overlay.errorCause') }}：<MarkdownRenderer
+            <span v-if="m.errorCause" class="pg-overlay__degraded-cause">
+              {{ t('k12.overlay.cause') }}：<MarkdownRenderer
                 class="pg-overlay__md-inline"
                 :content="m.errorCause"
               />
@@ -253,29 +377,56 @@ function issueTitle(mark: OverlayMark): string {
 
       <div class="grade-analysis">
         <div class="grade-analysis__head">
-          {{ t('k12.overlay.onlyAttention') }}
-          <span>{{ t('k12.overlay.questionCount', { count: attentionMarks.length }) }}</span>
+          {{ processOnly ? t('k12.overlay.processExpanded') : t('k12.overlay.onlyAttention') }}
+          <span>{{ t('k12.overlay.questionCount', { count: detailMarks.length }) }}</span>
         </div>
 
-        <details v-for="m in attentionMarks" :key="m._i" class="grade-card grade-card--issue" open>
+        <details
+          v-for="m in detailMarks"
+          :key="m._i"
+          class="grade-card grade-card--issue"
+          :class="`grade-card--${m._projection.tone}`"
+          :data-assessment-status="m.status"
+          :data-problem-id="m.problemId || undefined"
+          :open="m._projection.defaultExpanded"
+        >
           <summary>
-            <span class="grade-card__status">{{ m.outOfScope ? '—' : '×' }}</span>
+            <span class="grade-card__status">{{ m._projection.symbol }}</span>
             <span>{{ issueTitle(m) }}</span>
           </summary>
           <div class="grade-card__body">
-            <div v-if="m.question" class="grade-card__row">
+            <div
+              v-if="m.question && m.status !== 'correct_with_process_issue'"
+              class="grade-card__row"
+            >
               <span>{{ t('k12.overlay.question') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.question" />
             </div>
-            <div v-if="!m.outOfScope && m.correctAnswer && !m.parentGuide" class="grade-card__row">
-              <span>{{ t('k12.overlay.correctAnswer') }}</span>
-              <MarkdownRenderer class="grade-card__md" :content="m.correctAnswer" />
+            <div v-if="m._projection.tone !== 'scope' && m.correctAnswer" class="grade-card__row">
+              <span>{{
+                m.status === 'correct_with_process_issue'
+                  ? t('k12.overlay.finalAnswer')
+                  : t('k12.overlay.correctAnswer')
+              }}</span>
+              <b v-if="m.status === 'correct_with_process_issue'" class="grade-math"
+                >{{ m.correctAnswer }} · {{ t('k12.overlay.statusCorrect') }}</b
+              >
+              <MarkdownRenderer v-else class="grade-card__md" :content="m.correctAnswer" />
             </div>
-            <div v-if="!m.outOfScope && m.errorCause" class="grade-card__row">
-              <span>{{ t('k12.overlay.errorCause') }}</span>
-              <MarkdownRenderer class="grade-card__md" :content="m.errorCause" />
+            <div v-if="m.wrongStep" class="grade-wrong-step">
+              <b>{{ t('k12.overlay.wrongStep') }}</b
+              ><br />
+              <span v-if="m.status === 'correct_with_process_issue'" class="grade-math">{{
+                m.wrongStep
+              }}</span>
+              <MarkdownRenderer v-else class="grade-card__md" :content="m.wrongStep" />
             </div>
-            <template v-if="!m.outOfScope && m.parentGuide">
+            <div v-if="m.errorCause" class="grade-card__row">
+              <span>{{ t('k12.overlay.cause') }}</span>
+              <span v-if="m.status === 'correct_with_process_issue'">{{ m.errorCause }}</span>
+              <MarkdownRenderer v-else class="grade-card__md" :content="m.errorCause" />
+            </div>
+            <template v-if="m.parentGuide && m.status !== 'correct_with_process_issue'">
               <div class="grade-card__row">
                 <span>答案</span>
                 <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.answer" />
@@ -324,7 +475,14 @@ function issueTitle(mark: OverlayMark): string {
                 <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.checking_method" />
               </div>
             </template>
-            <div v-if="m.outOfScope" class="grade-wrong-step is-scope">
+            <div
+              v-else-if="m.parentGuide && m.status === 'correct_with_process_issue'"
+              class="grade-card__row"
+            >
+              <span>家长怎么讲</span>
+              <span>{{ m.parentGuide.parent_teaching_sequence.join('；') }}</span>
+            </div>
+            <div v-if="m.status === 'out_of_scope'" class="grade-wrong-step is-scope">
               {{ t('verify.outOfScope') }}
             </div>
           </div>
@@ -356,6 +514,10 @@ function issueTitle(mark: OverlayMark): string {
         </details>
       </div>
     </div>
+
+    <div v-if="processMarks.length" class="grade-projection-status">
+      {{ t('k12.overlay.processProjectionStatus') }}
+    </div>
   </div>
 </template>
 
@@ -367,6 +529,7 @@ function issueTitle(mark: OverlayMark): string {
   background: var(--hc-bg-card);
   overflow: hidden;
   box-shadow: var(--hc-shadow-md);
+  line-height: 1.6;
 }
 .grade-result__head {
   padding: 15px 16px 13px;
@@ -392,6 +555,12 @@ function issueTitle(mark: OverlayMark): string {
   color: var(--hc-accent);
   font-size: 18px;
   flex: none;
+}
+.grade-result[data-assessment-status='correct_with_process_issue']
+  .grade-result__title
+  > span:first-child {
+  background: color-mix(in srgb, var(--photo-process-issue-color) 14%, transparent);
+  color: var(--photo-process-issue-color);
 }
 .grade-result__title b {
   display: block;
@@ -436,6 +605,9 @@ function issueTitle(mark: OverlayMark): string {
   gap: 7px;
   margin-top: 12px;
 }
+.grade-summary--mixed {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
 .grade-stat {
   min-width: 0;
   padding: 8px 9px;
@@ -460,6 +632,9 @@ function issueTitle(mark: OverlayMark): string {
 }
 .grade-stat--issue b {
   color: var(--hc-error);
+}
+.grade-stat--process b {
+  color: var(--photo-process-issue-color);
 }
 .grade-stat--review b {
   color: var(--hc-warning);
@@ -511,6 +686,18 @@ function issueTitle(mark: OverlayMark): string {
   box-shadow: 0 14px 34px rgb(28 22 20 / 18%);
   border: 1px solid color-mix(in srgb, var(--hc-border) 72%, #7a6d67);
 }
+.grade-photo--process {
+  width: 100%;
+  max-width: 320px;
+  min-height: 0;
+  aspect-ratio: 1086 / 1448;
+  background: #d7d0cc;
+}
+.grade-photo--process .pg-overlay__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .pg-overlay__img {
   display: block;
   max-width: 100%;
@@ -540,6 +727,28 @@ function issueTitle(mark: OverlayMark): string {
 .pg-overlay__mark--wrong .pg-overlay__sym {
   color: var(--hc-error, #e05a5a);
 }
+.pg-overlay__mark--process .pg-overlay__sym {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  padding: 1px 6px;
+  background: var(--photo-process-issue-color);
+  color: #fff;
+  font:
+    800 25px/1 ui-rounded,
+    'SF Pro Rounded',
+    sans-serif;
+  -webkit-text-stroke: 0;
+  text-shadow: none;
+  box-shadow: 0 5px 14px rgba(28, 25, 25, 0.25);
+}
+.pg-overlay__mark--unanswered .pg-overlay__sym,
+.pg-overlay__mark--unclear .pg-overlay__sym,
+.pg-overlay__mark--review .pg-overlay__sym {
+  color: var(--hc-warning);
+}
 .grade-caption {
   display: flex;
   align-items: center;
@@ -554,6 +763,10 @@ function issueTitle(mark: OverlayMark): string {
   content: '◇';
   color: var(--hc-success);
   font-weight: 900;
+}
+.grade-caption--process::before {
+  content: '⚠';
+  color: var(--photo-process-issue-color);
 }
 .grade-legend {
   display: flex;
@@ -622,6 +835,10 @@ function issueTitle(mark: OverlayMark): string {
   color: var(--hc-warning);
   font-size: 9.5px;
 }
+.grade-result[data-assessment-status='correct_with_process_issue'] .grade-analysis__head span {
+  background: color-mix(in srgb, var(--photo-process-issue-color) 12%, transparent);
+  color: var(--photo-process-issue-color);
+}
 .grade-card {
   border: 1px solid var(--hc-border);
   border-radius: 11px;
@@ -672,6 +889,25 @@ function issueTitle(mark: OverlayMark): string {
 .grade-card--correct .grade-card__status {
   background: var(--hc-success);
 }
+.grade-card--process[open] {
+  border-color: color-mix(in srgb, var(--photo-process-issue-color) 52%, var(--hc-border));
+}
+.grade-card--process .grade-card__status {
+  background: var(--photo-process-issue-color);
+}
+.grade-card--process .grade-wrong-step {
+  border-left-color: var(--photo-process-issue-color);
+  background: color-mix(in srgb, var(--photo-process-issue-color) 8%, transparent);
+}
+.grade-card--scope .grade-card__status,
+.grade-card--neutral .grade-card__status {
+  background: var(--hc-text-muted);
+}
+.grade-card--unanswered .grade-card__status,
+.grade-card--unclear .grade-card__status,
+.grade-card--review .grade-card__status {
+  background: var(--hc-warning);
+}
 .grade-card__body {
   padding: 0 11px 11px;
   border-top: 1px solid var(--hc-divider);
@@ -687,6 +923,9 @@ function issueTitle(mark: OverlayMark): string {
 .grade-card__row > span:first-child {
   color: var(--hc-text-muted);
 }
+.grade-card__row b {
+  font-weight: 650;
+}
 .grade-card__list {
   display: grid;
   gap: 3px;
@@ -695,6 +934,10 @@ function issueTitle(mark: OverlayMark): string {
 }
 .grade-card__md :deep(p) {
   margin: 0;
+}
+.grade-math {
+  color: var(--hc-text-primary);
+  font-family: 'SF Mono', Menlo, monospace;
 }
 .grade-wrong-step {
   padding: 8px 9px;
@@ -734,6 +977,23 @@ function issueTitle(mark: OverlayMark): string {
   color: var(--hc-text-muted);
   font-size: 10.5px;
 }
+.grade-projection-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--hc-divider);
+  color: var(--hc-text-muted);
+  font-size: 9.5px;
+}
+.grade-projection-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hc-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hc-success) 12%, transparent);
+}
 .pg-overlay__degraded {
   display: flex;
   flex-direction: column;
@@ -765,6 +1025,14 @@ function issueTitle(mark: OverlayMark): string {
 }
 .pg-overlay__degraded-verdict.is-wrong {
   color: var(--hc-error, #e05a5a);
+}
+.pg-overlay__degraded-verdict.is-process {
+  color: var(--photo-process-issue-color);
+}
+.pg-overlay__degraded-verdict.is-unanswered,
+.pg-overlay__degraded-verdict.is-unclear,
+.pg-overlay__degraded-verdict.is-review {
+  color: var(--hc-warning);
 }
 .pg-overlay__degraded-verdict.is-scope {
   color: var(--hc-text-muted);

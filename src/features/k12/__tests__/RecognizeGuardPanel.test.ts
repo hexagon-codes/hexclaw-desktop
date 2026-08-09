@@ -100,18 +100,20 @@ function homeworkStatus(
     questions = [] as Array<Record<string, unknown>>,
     confirmationState = 'pending',
     dispatchStatus = 'routed',
+    taskIntent = 'completed_homework',
     version = 3,
   }: {
     questions?: Array<Record<string, unknown>>
     confirmationState?: 'pending' | 'confirmed'
     dispatchStatus?: 'routing' | 'awaiting_confirmation' | 'routed' | 'failed' | 'cancelled'
+    taskIntent?: 'completed_homework' | 'blank_worksheet'
     version?: number
   } = {},
 ) {
   return {
     dispatch: {
       dispatch_id: 'dispatch-1',
-      task_intent: 'completed_homework',
+      task_intent: taskIntent,
       status: dispatchStatus,
       intent_evidence: ['answer_regions_present'],
       intent_confidence: 0.99,
@@ -219,7 +221,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     h.get.mockResolvedValue(
       homeworkStatus('awaiting_confirmation', {
         questions: [clearQuestion, riskQuestion],
-        dispatchStatus: 'awaiting_confirmation',
+        dispatchStatus: 'routed',
         version: 2,
       }),
     )
@@ -254,12 +256,31 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     )
   })
 
+  it('空白卷在持久题目确认停点复用既有识题行', async () => {
+    h.create.mockResolvedValue({
+      created: true,
+      ...homeworkStatus('awaiting_confirmation', {
+        questions: [clearQuestion, riskQuestion],
+        dispatchStatus: 'routed',
+        taskIntent: 'blank_worksheet',
+        version: 2,
+      }),
+    })
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="rq-item"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid^="rq-confirm-"]')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('还没识题')
+  })
+
   it('不再暴露或调用 Desktop 逐题批改、逐题求解和二次整卷动作', async () => {
     h.create.mockResolvedValue({
       created: true,
       ...homeworkStatus('awaiting_confirmation', {
         questions: [clearQuestion, riskQuestion],
-        dispatchStatus: 'awaiting_confirmation',
+        dispatchStatus: 'routed',
       }),
     })
 
@@ -280,7 +301,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
       created: true,
       ...homeworkStatus('awaiting_confirmation', {
         questions: [clearQuestion, riskQuestion],
-        dispatchStatus: 'awaiting_confirmation',
+        dispatchStatus: 'routed',
         version: 3,
       }),
     })
@@ -364,7 +385,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
       created: true,
       ...homeworkStatus('awaiting_confirmation', {
         questions: [riskQuestion],
-        dispatchStatus: 'awaiting_confirmation',
+        dispatchStatus: 'routed',
         version: 3,
       }),
     })

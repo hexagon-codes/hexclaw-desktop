@@ -167,6 +167,17 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(h.listSpy).toHaveBeenCalled()
   })
 
+  it('BUG-20260723-006 renders one icon plus and no duplicate plus in the accumulation label', async () => {
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+
+    const button = w.get('[data-testid="accum-add-open"]')
+    expect(button.text().trim()).toBe('记到积累本')
+    expect(button.findAll('svg')).toHaveLength(1)
+    expect(button.text()).not.toMatch(/[+＋]/)
+  })
+
   it('新增幂等键：失败原地重试复用；内容变化或成功后的新提交才旋转', async () => {
     h.addSpy
       .mockRejectedValueOnce(new Error('结果未知'))

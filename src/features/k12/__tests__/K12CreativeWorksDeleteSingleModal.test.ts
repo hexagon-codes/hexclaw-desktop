@@ -53,6 +53,8 @@ function readyWork(): CreativeWorkDTO {
     display_name: '语文写作',
     content_markdown: '柳枝像绿色的丝带。',
     row_version: 7,
+    created_at: 1,
+    latest_generation_at: 1,
     initial_feedback: {
       generation_id: 'generation-1',
       status: 'succeeded',

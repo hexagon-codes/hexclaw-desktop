@@ -62,15 +62,33 @@ export interface ScenarioTextModelRoute {
   capability: 'text'
 }
 
+/** 场景资产固化后的最小回执；shell 只消费稳定的显示 URL，不解释领域资产身份。 */
+export interface ScenarioComposerImageAssetReceipt {
+  assetId: string
+  displayUrl: string
+}
+
 /**
  * 通用 composer 拦截图片后交给场景包的完整事实。
  *
- * dataUrl 是场景任务的原始输入，attachment 是同一图片在会话消息中的持久化投影；
- * requestId/route/sourceSessionId 只由拥有消息身份与会话状态的 shell 注入，输入组件不猜测。
+ * 新选图片只携带原始 File（可能绑定 native grant）和本会话 blob 预览；不能在 WebView
+ * 编码为 data URL。dataUrl 仅保留给历史消息或显式重提的兼容输入，不能由新的选择/拖入路径写入。
+ * attachment 是同一图片在会话消息中的投影；requestId/route/sourceSessionId 只由拥有消息身份
+ * 与会话状态的 shell 注入，输入组件不猜测。
  */
 export interface ScenarioComposerImagePayload {
-  dataUrl: string
   attachment: ChatAttachment
+  /** 新选择/拖入图片的原始浏览器 File；仅运行时携带，不写入消息或持久状态。 */
+  file?: File
+  /** 仅当前 WebView 会话可用的预览 URL；持久化前绝不能替代资产回执。 */
+  previewUrl?: string
+  /** 历史 data URL / 显式重提兼容输入；新选择/拖入路径禁止赋值。 */
+  dataUrl?: string
+  /**
+   * 场景资产已被 Sidecar 固化后，由 shell 将同一用户消息写成稳定投影。
+   * 该回调仅存在于当前运行时，既不序列化也不进入场景持久状态；返回 false 时场景不得创建任务。
+   */
+  onSourceStored?: (receipt: ScenarioComposerImageAssetReceipt) => Promise<boolean>
   /** 图片随消息携带的用户说明；为空时保持纯图片语义。 */
   contextText?: string
   /** §4.10 desktop request_id；与持久用户消息 ID 同源，同图再次提交也必须得到新 ID。 */

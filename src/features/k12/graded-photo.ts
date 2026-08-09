@@ -1,11 +1,11 @@
 import { isTauri } from '@/utils/platform'
 import { downloadInApp } from '@/utils/download'
-import type { BBox } from '@/api/k12'
+import type { BBox, PhotoJobItemStatus } from '@/api/k12'
+import { PHOTO_PROCESS_ISSUE_COLOR, projectPhotoAssessmentStatus } from './photo-assessment-status'
 
 export interface GradedPhotoMark {
-  correct: boolean
-  /** 超出当前学段不是答错：不得把红叉写进导出的原图。 */
-  outOfScope?: boolean
+  /** 必须直接来自图片结果 item.status；不得由 verdict/badge/布尔值重推。 */
+  status: PhotoJobItemStatus
   bbox?: BBox | null
   correctAnswer?: string
 }
@@ -119,13 +119,21 @@ export async function renderGradedPhotoDataUrl(
 
   const lineWidth = Math.max(3, Math.round(Math.min(canvas.width, canvas.height) * 0.004))
   for (const mark of marks) {
-    if (mark.outOfScope || !isValidGradingBBox(mark.bbox)) continue
+    const projection = projectPhotoAssessmentStatus(mark.status)
+    if (!projection.overlayVisible || !isValidGradingBBox(mark.bbox)) continue
     const b = mark.bbox
     const x = b.x * canvas.width
     const y = b.y * canvas.height
     const w = b.w * canvas.width
     const h = b.h * canvas.height
-    const strokeColor = mark.correct ? '#24a866' : '#e44848'
+    const strokeColor =
+      projection.tone === 'correct'
+        ? '#24a866'
+        : projection.tone === 'wrong'
+          ? '#e44848'
+          : projection.tone === 'process'
+            ? PHOTO_PROCESS_ISSUE_COLOR
+            : '#d3912d'
     const radius = Math.min(
       42,
       Math.max(18, Math.round(Math.min(canvas.width, canvas.height) / 45)),
@@ -136,6 +144,18 @@ export async function renderGradedPhotoDataUrl(
     ctx.save()
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
+    if (projection.tone !== 'correct' && projection.tone !== 'wrong') {
+      ctx.font = `900 ${Math.round(radius * 1.8)}px ui-rounded, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = lineWidth + 4
+      ctx.strokeText(projection.symbol, cx, cy)
+      ctx.fillStyle = strokeColor
+      ctx.fillText(projection.symbol, cx, cy)
+      ctx.restore()
+      continue
+    }
     const drawSegment = (x0: number, y0: number, x1: number, y1: number) => {
       for (const [color, width] of [
         ['#ffffff', lineWidth + 4],
@@ -149,7 +169,7 @@ export async function renderGradedPhotoDataUrl(
         ctx.stroke()
       }
     }
-    if (mark.correct) {
+    if (projection.tone === 'correct') {
       drawSegment(cx - radius * 0.75, cy, cx - radius * 0.25, cy + radius * 0.5)
       drawSegment(cx - radius * 0.25, cy + radius * 0.5, cx + radius, cy - radius * 0.67)
     } else {

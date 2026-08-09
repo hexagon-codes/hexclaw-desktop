@@ -249,6 +249,30 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     document.body.innerHTML = ''
   })
 
+  it('C02 渐进 TaskShell 从 result_projection.assessment_status 投影紫色过程问题', async () => {
+    const question = recognizedQuestion('problem-process', '四. 15', ['四', '15'])
+    const wrapper = await renderTask(
+      imageTaskDispatch({
+        questions: [question],
+        problems: [
+          problemProgress('problem-process', '四. 15', ['四', '15'], {
+            result_projection: { assessment_status: 'correct_with_process_issue' },
+          }),
+        ],
+      }),
+    )
+
+    const slot = slotByLabel(wrapper.element, '四. 15')
+    expect(slot.classList).toContain('is-process')
+    expect(slot.getAttribute('data-assessment-status')).toBe('correct_with_process_issue')
+    expect(slot.querySelector('.rec-problem-progress__status')?.textContent?.trim()).toBe('⚠')
+    expect(slot.querySelector('.rec-problem-progress__state')?.textContent?.trim()).toBe('过程问题')
+    expect(slot.querySelector('.rec-problem-progress__body small')?.textContent).toContain(
+      '最终答案正确 · 过程需关注',
+    )
+    expect(slot.textContent).not.toContain('已程序验算')
+  })
+
   it('PROG-004/006/019 exposes the one shared source action exact-set only while resolvable, then only resume after skip', async () => {
     const questions = [
       recognizedQuestion('problem-ready', '一. 1', ['一', '1']),

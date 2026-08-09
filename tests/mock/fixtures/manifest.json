@@ -154,6 +154,33 @@
       "expectation_index": 16,
       "source": "synthetic",
       "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-solver-verified-answer",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 17,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-verifier-verified-answer",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 18,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-grader-verified-answer",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 19,
+      "source": "synthetic",
+      "contains_personal_data": false
     }
   ]
 }

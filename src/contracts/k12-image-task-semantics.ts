@@ -59,6 +59,7 @@ const CONFIRMATION_REASONS = new Set([
 ])
 const PHOTO_STATUSES = new Set([
   'correct',
+  'correct_with_process_issue',
   'wrong',
   'unanswered',
   'answer_unclear',
@@ -83,6 +84,16 @@ const GRADE_BADGES = new Set([
   'out-of-scope',
   'unverifiable',
   'verbatim-recall',
+])
+const GRADE_ASSESSMENT_STATUSES = new Set([
+  'correct',
+  'correct_with_process_issue',
+  'wrong',
+  'unanswered',
+  'answer_unclear',
+  'blank_solved',
+  'out_of_scope',
+  'untrusted',
 ])
 const EVIDENCE_TYPES = new Set([
   'numeric_exec',
@@ -392,6 +403,7 @@ const PROBLEM_SOURCE_STATUSES = new Set([
   'processing',
   'skipped',
   'correct',
+  'correct_with_process_issue',
   'wrong',
   'unanswered',
   'answer_unclear',
@@ -401,6 +413,7 @@ const PROBLEM_SOURCE_STATUSES = new Set([
 ])
 const PROBLEM_SOURCE_TERMINAL_STATUSES = new Set([
   'correct',
+  'correct_with_process_issue',
   'wrong',
   'unanswered',
   'answer_unclear',
@@ -504,6 +517,13 @@ function normalizeProblemSourceProgress(
   const terminal = PROBLEM_SOURCE_TERMINAL_STATUSES.has(status)
   const skipped = status === 'skipped'
   const awaitingResolution = status === 'awaiting_source'
+  const previousResultProjection = displaySource.result_projection
+  const resultProjection =
+    previousResultProjection &&
+    typeof previousResultProjection === 'object' &&
+    !Array.isArray(previousResultProjection)
+      ? (previousResultProjection as WireRecord)
+      : {}
   return {
     problem_id: problemID,
     ...(typeof displaySource.parent_problem_id === 'string'
@@ -522,7 +542,7 @@ function normalizeProblemSourceProgress(
     anchor_state: displaySource.anchor_state ?? fallbackAnchorState,
     operation_state: terminal ? 'published' : status,
     disposition_state: terminal ? 'result' : skipped ? 'skipped_by_parent' : 'pending',
-    result_projection: terminal ? (displaySource.result_projection ?? null) : null,
+    result_projection: terminal ? { ...resultProjection, assessment_status: status } : null,
     published_revision: publishedRevision,
     input_revision: inputRevision,
     command_available: awaitingResolution || skipped,
@@ -930,6 +950,8 @@ function validateGrade(value: unknown, path: string): WireRecord {
       'verdict',
       'evidence_type',
       'badge',
+      'assessment_status',
+      'final_answer_correct',
       'wrong_step',
       'error_cause',
       'out_of_scope',
@@ -950,6 +972,12 @@ function validateGrade(value: unknown, path: string): WireRecord {
   enumValue(grade.verdict, GRADE_VERDICTS, `${path}.verdict`)
   enumValue(grade.evidence_type, EVIDENCE_TYPES, `${path}.evidence_type`)
   enumValue(grade.badge, GRADE_BADGES, `${path}.badge`)
+  if (grade.assessment_status !== undefined) {
+    enumValue(grade.assessment_status, GRADE_ASSESSMENT_STATUSES, `${path}.assessment_status`)
+  }
+  if (grade.final_answer_correct !== undefined) {
+    booleanValue(grade.final_answer_correct, `${path}.final_answer_correct`)
+  }
   booleanValue(grade.out_of_scope, `${path}.out_of_scope`)
   booleanValue(grade.record_created, `${path}.record_created`)
   if (grade.solve_only !== undefined) booleanValue(grade.solve_only, `${path}.solve_only`)
@@ -1037,12 +1065,29 @@ function validatePhotoPayload(
     const status = enumValue(item.status, PHOTO_STATUSES, `${itemPath}.status`)
     const resultKind = enumValue(item.result_kind, PHOTO_RESULT_KINDS, `${itemPath}.result_kind`)
     optionalString(item.warning, `${itemPath}.warning`)
-    if (item.grade !== undefined) validateGrade(item.grade, `${itemPath}.grade`)
+    const grade =
+      item.grade === undefined ? undefined : validateGrade(item.grade, `${itemPath}.grade`)
     if (item.parent_guide !== undefined) {
       validateParentGuide(item.parent_guide, `${itemPath}.parent_guide`)
     }
     if (status === 'wrong' && (item.grade === undefined || item.parent_guide === undefined)) {
       fail(itemPath, 'wrong assessment with grade and complete parent guide')
+    }
+    if (status === 'correct_with_process_issue') {
+      if (grade === undefined || item.parent_guide === undefined || resultKind !== 'assessment') {
+        fail(itemPath, 'process-issue assessment with grade and complete parent guide')
+      }
+      if (grade.assessment_status !== status) {
+        fail(`${itemPath}.grade.assessment_status`, 'equal to item.status')
+      }
+      if (grade.final_answer_correct !== true) {
+        fail(`${itemPath}.grade.final_answer_correct`, 'true independent final-answer fact')
+      }
+      stringValue(grade.wrong_step, `${itemPath}.grade.wrong_step`)
+      stringValue(grade.error_cause, `${itemPath}.grade.error_cause`)
+      if (grade.record_created !== false || grade.record_id !== undefined) {
+        fail(`${itemPath}.grade`, 'process issue without mistake/review side effect')
+      }
     }
     if (status === 'correct' && item.parent_guide !== undefined) {
       fail(`${itemPath}.parent_guide`, 'omitted for correct assessment')

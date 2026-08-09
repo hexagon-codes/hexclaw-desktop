@@ -24,6 +24,10 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12ListAccumulation: vi.fn(),
   k12UploadAsset: (...args: unknown[]) => h.uploadSpy(...args),
+  k12AssetURL: (agent: string, assetId: string) => {
+    const file = assetId.slice(assetId.lastIndexOf('/') + 1)
+    return `http://127.0.0.1:16060/api/k12/assets/${file}?agent=${encodeURIComponent(agent)}`
+  },
   k12CreateImageTask: (...args: unknown[]) => h.createTaskSpy(...args),
   k12GetImageTask: (...args: unknown[]) => h.getTaskSpy(...args),
   k12GetImageTaskResult: (...args: unknown[]) => h.getResultSpy(...args),
@@ -113,6 +117,41 @@ describe('K12 store · 自动化/入站接线', () => {
     expect(res.subject).toBe('数学')
     expect(res.anchorState).toBe('located')
     expect(h.retryTaskSpy).not.toHaveBeenCalled()
+  })
+
+  it('新选场景图片直接上传原始 File，先持久 source receipt，再创建 ImageTask', async () => {
+    h.createTaskSpy.mockResolvedValue({ created: true, ...imageTaskResponse() })
+    const sourceFile = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'homework.png', {
+      type: 'image/png',
+    })
+    const onSourceStored = vi.fn().mockResolvedValue(true)
+    const atob = vi.spyOn(globalThis, 'atob')
+    const store = useK12Store()
+    try {
+      await store.dispatchImageTask({
+        agent: 'mingming',
+        // 空 dataUrl 仅使此 RED 在旧签名下可编译；新选路径不能读取它。
+        dataUrl: '',
+        file: sourceFile,
+        sourceSession: 'session-native-file',
+        sourceRef: 'message-native-file',
+        onSourceStored,
+      })
+      expect(h.uploadSpy.mock.calls[0]?.[0]).toBe('mingming')
+      expect(h.uploadSpy.mock.calls[0]?.[1]).toBe(sourceFile)
+      expect(h.uploadSpy.mock.calls[0]?.[2]).toBeUndefined()
+      expect(h.uploadSpy.mock.calls[0]?.[3]).toBeUndefined()
+      expect(onSourceStored).toHaveBeenCalledWith({
+        assetId: 'asset://mingming/photo.png',
+        displayUrl: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+      })
+      expect(onSourceStored.mock.invocationCallOrder[0]).toBeLessThan(
+        h.createTaskSpy.mock.invocationCallOrder[0]!,
+      )
+      expect(atob).not.toHaveBeenCalled()
+    } finally {
+      atob.mockRestore()
+    }
   })
 
   it('显式视觉路由进入 route_request；两次提交由各自 source_ref 隔离', async () => {

@@ -312,6 +312,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
             "processing",
             "skipped",
             "correct",
+            "correct_with_process_issue",
             "wrong",
             "unanswered",
             "answer_unclear",
@@ -543,7 +544,8 @@ export interface K12ImageTaskResultResponse extends Record<string, unknown> {
   result: Record<string, unknown>
 }
 export type K12ImageTaskProblemSourceAction = 'correct_text' | 'select_region' | 'retake' | 'skip' | 'resume'
-export type K12ImageTaskProblemSourceStatus = 'awaiting_source' | 'processing' | 'skipped' | 'correct' | 'wrong' | 'unanswered' | 'answer_unclear' | 'blank_solved' | 'out_of_scope' | 'untrusted'
+export type K12ImageTaskProblemSourceStatus =
+  (typeof K12_IMAGE_TASK_SCHEMA)['$defs']['problemSourceProgress']['properties']['status']['enum'][number]
 export interface K12ImageTaskProblemSourceProgressWire {
   problem_id: string
   status: K12ImageTaskProblemSourceStatus

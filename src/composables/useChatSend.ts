@@ -189,18 +189,17 @@ export function useChatSend(deps: ChatSendDeps) {
     captureRouteSnapshot,
   } = deps
 
-  /** File -> Base64 */
-  function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = reader.result as string
-        // 去掉 data:xxx;base64, 前缀
-        resolve(result.split(',')[1] || result)
-      }
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
+  async function createReceiptBackedImageAttachment(file: File): Promise<ChatAttachment> {
+    const receipt = await uploadChatAttachment(file)
+    return {
+      type: 'image',
+      name: file.name,
+      mime: file.type,
+      // 仅供当前 WebView 会话渲染。聊天 wire 仍由 attachmentId 单独映射为
+      // `{ attachment_id }`，因此不能把文件内容或 data URL 放回 renderer 状态。
+      data: URL.createObjectURL(file),
+      attachmentId: receipt.attachment_id,
+    }
   }
 
   async function handleSend(
@@ -299,8 +298,9 @@ export function useChatSend(deps: ChatSendDeps) {
 
     const toast = useToast()
 
-    // 将附件转为 base64（支持多文件）
-    // 预置附件（编辑/重试重发带回的原图片等，data 已是 base64/URL）置前，再叠加本次新上传。
+    // 预置附件（编辑/重试重发带回的历史图片等）置前，再叠加本次新上传。
+    // 新选图片必须 receipt-first：renderer 只保留当前会话的 blob: 预览引用，
+    // 绝不把文件读为 Base64 后再交给聊天状态或 WebSocket。
     const attachments: ChatAttachment[] = options?.attachments?.length ? [...options.attachments] : []
     // 解析失败 / 无文本的文档名，循环后统一弹错。
     // 后端只接受图片附件（adapter.ValidateAttachments），文档绝不以二进制下发——
@@ -312,18 +312,11 @@ export function useChatSend(deps: ChatSendDeps) {
     if (legacyAttachment) {
       const { file, type } = legacyAttachment
       if (type === 'image') {
-        const data = await fileToBase64(file)
-        const receipt = await uploadChatAttachment(file)
-        attachments.push({
-          type,
-          name: file.name,
-          mime: file.type,
-          data,
-          attachmentId: receipt.attachment_id,
-        })
+        attachments.push(await createReceiptBackedImageAttachment(file))
       } else if (type === 'video') {
-        const data = await fileToBase64(file)
-        attachments.push({ type, name: file.name, mime: file.type, data })
+        // 收据边界当前只支持图片；保留后续统一 fail-closed 行为，但不能为了
+        // 得到一个注定被拒绝的载荷而让 WebView 读取/编码整个视频。
+        attachments.push({ type, name: file.name, mime: file.type, data: '' })
       } else if (!legacyParsedDocument) {
         // 文档解析失败（handleFileUpload catch 后 parsedDocument 为 null）：绝不发二进制。
         failedDocs.push(file.name)
@@ -342,20 +335,12 @@ export function useChatSend(deps: ChatSendDeps) {
         const isImage = file.type.startsWith('image/')
         const isVideo = file.type.startsWith('video/')
         if (isImage) {
-          // 图片：作为 attachment 发送给支持 vision 的模型
-          const data = await fileToBase64(file)
-          const receipt = await uploadChatAttachment(file)
-          attachments.push({
-            type: 'image',
-            name: file.name,
-            mime: file.type,
-            data,
-            attachmentId: receipt.attachment_id,
-          })
+          // 图片：作为 receipt-backed attachment 发送给支持 vision 的模型。
+          attachments.push(await createReceiptBackedImageAttachment(file))
         } else if (isVideo) {
-          // 视频：保留 video 类型
-          const data = await fileToBase64(file)
-          attachments.push({ type: 'video', name: file.name, mime: file.type, data })
+          // 当前 native chat receipt 不支持视频；统一在 receipt boundary fail closed，
+          // 并确保该失败路径不会完整读取文件。
+          attachments.push({ type: 'video', name: file.name, mime: file.type, data: '' })
         } else {
           // 文档（PDF/TXT/DOCX 等）：本地解析提取文本拼入正文。
           // 解析失败/无文本一律记录后报错并跳过，绝不静默吞错降级成二进制附件
@@ -490,6 +475,5 @@ export function useChatSend(deps: ChatSendDeps) {
 
   return {
     handleSend,
-    fileToBase64,
   }
 }

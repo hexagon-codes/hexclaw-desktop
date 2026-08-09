@@ -63,8 +63,8 @@ export interface GradeReq {
   knowledge_points?: string[]
 }
 
-/** verdict 判定五值（§4.5 布尔 correct 已删除）：批改路径 = 批改判定（agree=答对 /
- *  disagree=答错）；解题分叉/超纲沿用验算/超纲结论；verbatim = 语英原词重现确定性比对。 */
+/** verdict 判定五值（§4.5 布尔 correct 已删除）：它只描述证据比较结论，不能替代
+ *  assessment_status 或独立的 final_answer_correct；verbatim = 语英原词重现确定性比对。 */
 export type GradeVerdict = 'agree' | 'disagree' | 'unverifiable' | 'out_of_scope' | 'verbatim'
 /** 徽章枚举（后端 usecase/evidence.go Badge()） */
 export type GradeBadge =
@@ -82,12 +82,29 @@ export type EvidenceType =
   | 'verbatim'
   | 'none'
 
+/**
+ * 持久逐题批改状态。最终答案是否正确是独立事实，不能由该状态或 verdict 反推。
+ */
+export type GradingAssessmentStatus =
+  | 'correct'
+  | 'correct_with_process_issue'
+  | 'wrong'
+  | 'unanswered'
+  | 'answer_unclear'
+  | 'blank_solved'
+  | 'out_of_scope'
+  | 'untrusted'
+
 export interface GradeResp {
   solution: string
-  /** 批改判定五值口径（agree=答对/disagree=答错）；布尔 correct 字段已随后端契约删除。 */
+  /** 证据比较结论；不得据此反推最终逐题状态。 */
   verdict: GradeVerdict
   evidence_type: EvidenceType
   badge: GradeBadge
+  /** 服务端持久 assessment receipt 的状态；图片结果展示仍以 item.status 为唯一状态真相。 */
+  assessment_status?: GradingAssessmentStatus
+  /** 最终答案正确性的独立 tri-state 事实；缺失表示旧 receipt，禁止据此猜状态。 */
+  final_answer_correct?: boolean
   wrong_step?: string
   error_cause?: string
   out_of_scope: boolean
@@ -1620,15 +1637,8 @@ export interface ImageTaskHomeworkRecognition {
 /** 逐题批改结果（completed 后可用）；grade 复用 GradeResp wire 形状（判定五值口径）。 */
 export interface PhotoJobItemDTO {
   question: RecognizedQuestion
-  status:
-    | 'correct'
-    | 'wrong'
-    | 'unanswered'
-    | 'answer_unclear'
-    | 'blank_solved'
-    | 'out_of_scope'
-    | 'untrusted'
-    | 'failed'
+  /** 唯一的逐题展示/副作用状态真相；不得由 grade verdict、badge 或布尔值重推。 */
+  status: PhotoJobItemStatus
   warning?: string
   grade?: GradeResp
   /**
@@ -1639,6 +1649,8 @@ export interface PhotoJobItemDTO {
   /** Complete, parent-facing guide for exactly one blank-worksheet problem. */
   parent_guide?: ParentTeachingGuideDTO
 }
+
+export type PhotoJobItemStatus = GradingAssessmentStatus | 'failed'
 
 /** The page-level photo route frozen by the backend classifier. */
 export type PhotoJobTaskIntent = 'completed_homework' | 'blank_worksheet'
@@ -2918,6 +2930,10 @@ export interface CreativeWorkDTO {
   initial_feedback: WorkFeedbackGenerationDTO
   latest_feedback?: WorkFeedbackGenerationDTO
   delivery_batch_id?: string
+  /** Persisted work creation time, unix seconds. */
+  created_at: number
+  /** Persisted completion time of the latest successful feedback generation. */
+  latest_generation_at: number | null
 }
 
 export interface CreateWorkReq {
@@ -3020,6 +3036,9 @@ function normalizeCreativeWork(raw: CreativeWorkWireDTO): CreativeWorkDTO {
     initial_feedback: initial,
     latest_feedback: latest,
     delivery_batch_id: raw.delivery_batch_id,
+    created_at: Number(raw.created_at ?? 0),
+    latest_generation_at:
+      raw.latest_generation_at == null ? null : Number(raw.latest_generation_at),
   }
 }
 
