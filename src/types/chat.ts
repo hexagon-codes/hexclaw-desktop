@@ -492,11 +492,12 @@ export interface ChatAttachment {
   attachmentId?: string
   /**
    * 附件数据。可能是：
-   * - base64（历史数据 / 上传时），形如 "xxxxxx"
+   * - base64（历史持久消息或 Provider 输出），形如 "xxxxxx"
    * - data URL（图像生成 base64 包装后），形如 "data:image/png;base64,xxx"
    * - HTTP(S) URL（video gen / voice chat 的持久化路径或 Provider 临时 URL）
+   * - blob URL（仅当前 WebView 会话中新选图片的本地预览；聊天 wire 不携带它）
    *
-   * 渲染处按 data.startsWith('http') / 'data:' 自动判别。
+   * 渲染处按 data URL 前缀自动判别。
    */
   data: string
 }

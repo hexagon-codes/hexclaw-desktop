@@ -8,7 +8,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 use tauri::{ipc::Channel, State};
 use tokio::sync::mpsc;
@@ -30,12 +33,14 @@ const SOCKET_COMMAND_BUFFER: usize = 8;
 
 enum SocketCommand {
     Text(String),
+    Close,
 }
 
 #[derive(Clone)]
 struct SocketHandle {
     sender: mpsc::Sender<SocketCommand>,
     cancellation: CancellationToken,
+    opened: Arc<AtomicBool>,
 }
 
 #[derive(Default, Clone)]
@@ -45,6 +50,16 @@ pub struct NativeSidecarSocketRegistry {
 
 fn socket_command_channel() -> (mpsc::Sender<SocketCommand>, mpsc::Receiver<SocketCommand>) {
     mpsc::channel(SOCKET_COMMAND_BUFFER)
+}
+
+fn close_socket_handle(handle: SocketHandle) {
+    if !handle.opened.load(Ordering::Acquire) {
+        handle.cancellation.cancel();
+        return;
+    }
+    if handle.sender.try_send(SocketCommand::Close).is_err() {
+        handle.cancellation.cancel();
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -115,6 +130,7 @@ pub async fn sidecar_socket_open(
     let socket_id = Uuid::new_v4().to_string();
     let (sender, mut receiver) = socket_command_channel();
     let cancellation = CancellationToken::new();
+    let opened = Arc::new(AtomicBool::new(false));
     let mut sockets = registry
         .sockets
         .lock()
@@ -127,6 +143,7 @@ pub async fn sidecar_socket_open(
         SocketHandle {
             sender,
             cancellation: cancellation.clone(),
+            opened: opened.clone(),
         },
     );
     drop(sockets);
@@ -156,6 +173,7 @@ pub async fn sidecar_socket_open(
             }
             return;
         };
+        opened.store(true, Ordering::Release);
         let (mut writer, mut reader) = stream.split();
         send_event(&on_event, NativeSidecarSocketEvent::Open);
 
@@ -174,6 +192,10 @@ pub async fn sidecar_socket_open(
                             });
                             break;
                         }
+                    }
+                    Some(SocketCommand::Close) => {
+                        close_sent = writer.send(Message::Close(None)).await.is_ok();
+                        break;
                     }
                     None => {
                         close_sent = writer.send(Message::Close(None)).await.is_ok();
@@ -265,7 +287,7 @@ pub fn sidecar_socket_close(
         .map_err(|_| "Sidecar socket registry poisoned")?
         .remove(&socket_id);
     if let Some(handle) = handle {
-        handle.cancellation.cancel();
+        close_socket_handle(handle);
     }
     Ok(())
 }
@@ -296,5 +318,40 @@ mod tests {
         assert!(sender
             .try_send(SocketCommand::Text("overflow".into()))
             .is_err());
+    }
+
+    #[test]
+    fn close_is_queued_after_prior_text_for_open_socket() {
+        let (sender, mut receiver) = socket_command_channel();
+        let cancellation = CancellationToken::new();
+        let opened = Arc::new(AtomicBool::new(true));
+        sender
+            .try_send(SocketCommand::Text("cancel".into()))
+            .expect("cancel command");
+
+        close_socket_handle(SocketHandle {
+            sender,
+            cancellation: cancellation.clone(),
+            opened,
+        });
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(SocketCommand::Text(data)) if data == "cancel"
+        ));
+        assert!(matches!(receiver.try_recv(), Ok(SocketCommand::Close)));
+        assert!(!cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn close_cancels_an_unopened_socket_promptly() {
+        let (sender, _receiver) = socket_command_channel();
+        let cancellation = CancellationToken::new();
+        close_socket_handle(SocketHandle {
+            sender,
+            cancellation: cancellation.clone(),
+            opened: Arc::new(AtomicBool::new(false)),
+        });
+        assert!(cancellation.is_cancelled());
     }
 }

@@ -479,6 +479,51 @@ describe('chatService', () => {
     }
   })
 
+  it('sends request-scoped cancel before closing a chunk-idle socket', async () => {
+    vi.useFakeTimers()
+    try {
+      const handle = openWebSocketStream(
+        'long streaming reply',
+        'session-idle',
+        { model: 'gpt-5.6-sol', provider: 'hexclaw-gpt' },
+        '',
+        undefined,
+        undefined,
+        undefined,
+        'req-idle',
+      )
+      const done = handle.done.catch((error: unknown) => error)
+      const socket = socketInstances[0]!
+
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      socket.onmessage?.({
+        data: JSON.stringify({ type: 'chunk', content: 'partial', done: false }),
+      })
+
+      await vi.advanceTimersByTimeAsync(59_999)
+      expect(socket.close).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(socket.send).toHaveBeenLastCalledWith(
+        JSON.stringify({
+          type: 'cancel',
+          session_id: 'session-idle',
+          request_id: 'req-idle',
+        }),
+      )
+      expect(socket.close).toHaveBeenCalledTimes(1)
+      const lastSendOrder =
+        socket.send.mock.invocationCallOrder[socket.send.mock.invocationCallOrder.length - 1]!
+      expect(lastSendOrder).toBeLessThan(socket.close.mock.invocationCallOrder[0]!)
+      await expect(done).resolves.toMatchObject({
+        message: 'Assistant reply stalled — no new content received.',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('openWebSocketStream cancel sends cancel on the dedicated socket and resolves without fallback', async () => {
     const handle = openWebSocketStream(
       'hello',

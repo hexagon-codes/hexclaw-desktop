@@ -255,10 +255,14 @@ async function persistTerminalReply(
   metadata: Record<string, unknown> | undefined,
 ): Promise<void> {
   try {
+    const requestId = typeof metadata?.request_id === 'string' && metadata.request_id.trim()
+      ? metadata.request_id
+      : undefined
     await appendSessionMessage(sessionId, {
       id: message.id,
       role: 'assistant',
       content: message.content,
+      request_id: requestId,
       metadata,
     })
   } catch {

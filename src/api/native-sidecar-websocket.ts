@@ -38,6 +38,7 @@ export class NativeSidecarWebSocket extends EventTarget {
   private socketId: string | null = null
   private browserSocket: WebSocket | null = null
   private closeRequested = false
+  private nativeCommandQueue: Promise<void> = Promise.resolve()
 
   constructor(path: string) {
     super()
@@ -99,6 +100,18 @@ export class NativeSidecarWebSocket extends EventTarget {
     this.dispatchEvent(event)
   }
 
+  private enqueueNativeCommand(command: string, args: Record<string, unknown>): Promise<void> {
+    this.nativeCommandQueue = this.nativeCommandQueue
+      .then(async () => {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke(command, args)
+      })
+      .catch((error) => {
+        this.emitError(error instanceof Error ? error.message : String(error))
+      })
+    return this.nativeCommandQueue
+  }
+
   private async connectNative(path: string) {
     try {
       const { Channel, invoke } = await import('@tauri-apps/api/core')
@@ -111,7 +124,9 @@ export class NativeSidecarWebSocket extends EventTarget {
         }
       })
       this.socketId = await invoke<string>('sidecar_socket_open', { path, onEvent })
-      if (this.closeRequested) await invoke('sidecar_socket_close', { socketId: this.socketId })
+      if (this.closeRequested) {
+        await this.enqueueNativeCommand('sidecar_socket_close', { socketId: this.socketId })
+      }
     } catch (error) {
       this.emitError(error instanceof Error ? error.message : String(error))
       this.emitClose()
@@ -132,9 +147,7 @@ export class NativeSidecarWebSocket extends EventTarget {
       this.browserSocket.send(data)
       return
     }
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke('sidecar_socket_send', { socketId: this.socketId, data }))
-      .catch((error) => this.emitError(error instanceof Error ? error.message : String(error)))
+    void this.enqueueNativeCommand('sidecar_socket_send', { socketId: this.socketId, data })
   }
 
   close(code?: number, reason?: string): void {
@@ -146,8 +159,6 @@ export class NativeSidecarWebSocket extends EventTarget {
       return
     }
     if (!this.socketId) return
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke('sidecar_socket_close', { socketId: this.socketId }))
-      .catch((error) => this.emitError(error instanceof Error ? error.message : String(error)))
+    void this.enqueueNativeCommand('sidecar_socket_close', { socketId: this.socketId })
   }
 }

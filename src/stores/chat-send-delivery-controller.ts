@@ -7,6 +7,7 @@ import {
   CHAT_SEND_WEBSOCKET_FALLBACK,
   createChatSendWebSocketDeliveryController,
 } from './chat-send-websocket-delivery'
+import type { ChatSendErrorHandler } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type SettingsStoreFactory = typeof import('./settings').useSettingsStore
@@ -36,12 +37,7 @@ export function createChatSendDeliveryController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
   }) => ChatMessage
-  handleSendError: (
-    errorValue: unknown,
-    sessionId: string | null | undefined,
-    sending: Ref<boolean>,
-    draftSending: Ref<boolean>,
-  ) => void
+  handleSendError: ChatSendErrorHandler
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
 }) {

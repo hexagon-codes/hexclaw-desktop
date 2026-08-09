@@ -54,6 +54,7 @@ export function createChatStreamErrorController(params: {
       metadata: normalizeThinkingMetadata(
         normalizeRuntimeSnapshotMetadata({
           is_error: true,
+          request_id: streamState?.requestId,
           thinking_duration: getStreamThinkingDuration(streamState),
           reasoning_visibility: streamState?.thinkingEnabled
             ? streamState.visibility ?? 'not_exposed'

@@ -2,7 +2,11 @@ import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
-import { buildSessionStreamState, type SessionStreamState } from './chat-stream-helpers'
+import {
+  buildSessionStreamState,
+  type ChatSendErrorHandler,
+  type SessionStreamState,
+} from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 
@@ -30,13 +34,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
   }) => ChatMessage
-  handleSendError: (
-    errorValue: unknown,
-    sessionId: string | null | undefined,
-    sending: Ref<boolean>,
-    draftSending: Ref<boolean>,
-    streamState?: SessionStreamState,
-  ) => void
+  handleSendError: ChatSendErrorHandler
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
 }) {
@@ -174,11 +172,11 @@ export function createChatSendWebSocketDeliveryController(params: {
         })
       }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
-        handleSendError(wsError, sessionId, sending, draftSending, activeStreams.value[sessionId])
+        handleSendError(wsError, sessionId, activeStreams.value[sessionId])
         return null
       }
-      resetSessionStream(sessionId, sending, draftSending)
       if (isSessionCancelled(sessionId)) {
+        resetSessionStream(sessionId, sending, draftSending)
         return null
       }
       return CHAT_SEND_WEBSOCKET_FALLBACK

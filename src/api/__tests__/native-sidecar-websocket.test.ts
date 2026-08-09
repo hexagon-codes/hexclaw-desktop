@@ -1,10 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/utils/platform', () => ({ isTauri: () => false }))
+const nativeHarness = vi.hoisted(() => ({
+  enabled: false,
+  calls: [] as Array<{ command: string; args: Record<string, unknown> }>,
+  eventHandler: undefined as ((event: Record<string, unknown>) => void) | undefined,
+  resolveSend: undefined as (() => void) | undefined,
+}))
+
+vi.mock('@/utils/platform', () => ({ isTauri: () => nativeHarness.enabled }))
 vi.mock('@/config/env', () => ({
   env: {
     apiBase: 'http://localhost:8787',
     wsBase: 'ws://localhost:8787',
+  },
+}))
+vi.mock('@tauri-apps/api/core', () => ({
+  Channel: class {
+    constructor(handler: (event: Record<string, unknown>) => void) {
+      nativeHarness.eventHandler = handler
+    }
+  },
+  invoke: (command: string, args: Record<string, unknown>) => {
+    nativeHarness.calls.push({ command, args })
+    if (command === 'sidecar_socket_open') return Promise.resolve('socket-1')
+    if (command === 'sidecar_socket_send') {
+      return new Promise<void>((resolve) => { nativeHarness.resolveSend = resolve })
+    }
+    return Promise.resolve()
   },
 }))
 
@@ -53,6 +75,10 @@ class BrowserSocketDouble extends EventTarget {
 describe('NativeSidecarWebSocket browser compatibility boundary', () => {
   beforeEach(() => {
     vi.resetModules()
+    nativeHarness.enabled = false
+    nativeHarness.calls = []
+    nativeHarness.eventHandler = undefined
+    nativeHarness.resolveSend = undefined
     vi.stubGlobal('WebSocket', BrowserSocketDouble)
   })
 
@@ -68,5 +94,35 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
 
     socket.send('hello')
     expect(delegate.sent).toEqual(['hello'])
+  })
+
+  it('serializes native send before close so request cancel cannot be overtaken', async () => {
+    nativeHarness.enabled = true
+    const { NativeSidecarWebSocket } = await import('../native-sidecar-websocket')
+    const socket = new NativeSidecarWebSocket('/ws')
+
+    await vi.waitFor(() => {
+      expect(nativeHarness.calls.map(call => call.command)).toEqual(['sidecar_socket_open'])
+      expect((socket as unknown as { socketId: string | null }).socketId).toBe('socket-1')
+    })
+    nativeHarness.eventHandler?.({ type: 'open' })
+    expect(socket.readyState).toBe(NativeSidecarWebSocket.OPEN)
+
+    socket.send(JSON.stringify({ type: 'cancel', request_id: 'req-idle' }))
+    socket.close()
+
+    await vi.waitFor(() => {
+      expect(nativeHarness.calls.map(call => call.command)).toContain('sidecar_socket_send')
+    })
+    expect(nativeHarness.calls.map(call => call.command)).not.toContain('sidecar_socket_close')
+
+    nativeHarness.resolveSend?.()
+    await vi.waitFor(() => {
+      expect(nativeHarness.calls.map(call => call.command)).toEqual([
+        'sidecar_socket_open',
+        'sidecar_socket_send',
+        'sidecar_socket_close',
+      ])
+    })
   })
 })

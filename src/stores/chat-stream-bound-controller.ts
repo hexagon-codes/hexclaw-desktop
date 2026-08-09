@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import type { createChatStreamController } from './chat-stream-controller'
+import type { SessionStreamState } from './chat-stream-helpers'
 
 export function createBoundChatStreamController(params: {
   streamController: ReturnType<typeof createChatStreamController>
@@ -62,8 +63,12 @@ export function createBoundChatStreamController(params: {
     async recoverActiveStreams() {
       await streamController.recoverActiveStreams(sending, draftSending)
     },
-    handleSendError(errorValue: unknown, sessionId?: string | null) {
-      streamController.handleSendError(errorValue, sessionId, sending, draftSending)
+    handleSendError(
+      errorValue: unknown,
+      sessionId?: string | null,
+      streamState?: SessionStreamState,
+    ) {
+      streamController.handleSendError(errorValue, sessionId, sending, draftSending, streamState)
     },
     stopStreaming(sessionId?: string) {
       streamController.stopStreaming(sessionId, sending, draftSending)

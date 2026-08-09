@@ -316,11 +316,10 @@ pub fn get_sidecar_status(app: tauri::AppHandle) -> SidecarStatus {
 /// 重启 sidecar 进程
 #[tauri::command]
 pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<String, String> {
-    sidecar::stop_sidecar();
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    sidecar::spawn_sidecar(&app)?;
+    sidecar::stop_sidecar()?;
+    let instance = sidecar::spawn_sidecar(&app)?;
     // 等待健康检查
-    sidecar::wait_for_healthy(app, 15).await;
+    sidecar::wait_for_healthy(app, 15, instance).await?;
     Ok("sidecar restarted".to_string())
 }
 

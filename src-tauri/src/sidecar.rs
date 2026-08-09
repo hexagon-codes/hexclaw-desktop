@@ -8,29 +8,27 @@
 // 架构对标: Docker Desktop 管理 Docker Engine
 
 use std::path::Path;
-use std::process::{Child, Command};
-use std::sync::{Mutex, OnceLock};
+use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+use crate::sidecar_supervisor::{
+    CleanupMode, ProcessControl, SidecarEvent, SidecarInstance, SidecarSupervisor, StartupOutcome,
+    StopOutcome, SupervisorError, SystemProcess,
+};
 use crate::test_runtime::{self, TestRunContext};
 
-/// Sidecar 进程句柄，用于生命周期管理
-static SIDECAR_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+/// Sidecar 代次、进程所有权与就绪决策只保存在这一处。
+static SIDECAR_SUPERVISOR: SidecarSupervisor<SystemProcess> = SidecarSupervisor::new();
 
-/// Sidecar 状态，存储在 Tauri 全局状态中
-pub struct SidecarState {
-    /// hexclaw 进程是否就绪
-    pub ready: Mutex<bool>,
-}
+const SIDECAR_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-impl Default for SidecarState {
-    fn default() -> Self {
-        Self {
-            ready: Mutex::new(false),
-        }
-    }
-}
+#[cfg(unix)]
+const SIDECAR_CLEANUP_MODE: CleanupMode = CleanupMode::Graceful;
+
+#[cfg(not(unix))]
+const SIDECAR_CLEANUP_MODE: CleanupMode = CleanupMode::ForceKill;
 
 /// hexclaw serve 的端口
 pub const HEXCLAW_PORT: u16 = 16060;
@@ -79,59 +77,178 @@ pub fn health_url() -> String {
     format!("{}/health", base_url())
 }
 
-fn set_ready(app_handle: &tauri::AppHandle, ready: bool) {
-    if let Some(state) = app_handle.try_state::<SidecarState>() {
-        *state.ready.lock().unwrap_or_else(|e| e.into_inner()) = ready;
+/// 同时观察健康端点与同一次启动的子进程，确保总等待时间有界。
+async fn wait_for_startup<P, Probe, ProbeFuture, EmitEvent>(
+    supervisor: &SidecarSupervisor<P>,
+    instance: SidecarInstance,
+    timeout: Duration,
+    mut health_probe: Probe,
+    mut emit_event: EmitEvent,
+) -> Result<(), SupervisorError>
+where
+    P: ProcessControl,
+    Probe: FnMut() -> ProbeFuture,
+    ProbeFuture: std::future::Future<Output = bool>,
+    EmitEvent: FnMut(SidecarEvent),
+{
+    const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut next_health_probe = tokio::time::Instant::now();
+
+    loop {
+        match supervisor.observe(instance, SIDECAR_CLEANUP_MODE, SIDECAR_CLEANUP_TIMEOUT)? {
+            StartupOutcome::Running => {}
+            StartupOutcome::Ready => return Ok(()),
+        }
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return supervisor
+                .commit_timeout(
+                    instance,
+                    timeout,
+                    SIDECAR_CLEANUP_MODE,
+                    SIDECAR_CLEANUP_TIMEOUT,
+                    &mut emit_event,
+                )
+                .map(|_| ());
+        }
+
+        if now >= next_health_probe {
+            let healthy = tokio::time::timeout_at(deadline, health_probe())
+                .await
+                .unwrap_or(false);
+
+            if healthy {
+                return supervisor
+                    .commit_ready(
+                        instance,
+                        SIDECAR_CLEANUP_MODE,
+                        SIDECAR_CLEANUP_TIMEOUT,
+                        &mut emit_event,
+                    )
+                    .map(|_| ());
+            }
+            next_health_probe = tokio::time::Instant::now() + HEALTH_POLL_INTERVAL;
+        }
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return supervisor
+                .commit_timeout(
+                    instance,
+                    timeout,
+                    SIDECAR_CLEANUP_MODE,
+                    SIDECAR_CLEANUP_TIMEOUT,
+                    &mut emit_event,
+                )
+                .map(|_| ());
+        }
+
+        let wake_at = std::cmp::min(
+            deadline,
+            std::cmp::min(next_health_probe, now + PROCESS_POLL_INTERVAL),
+        );
+        tokio::time::sleep_until(wake_at).await;
     }
 }
 
-/// 等待 hexclaw 就绪
-///
-/// 轮询 /health 端点，最多等待 timeout_secs 秒。
-/// 就绪后更新全局状态。
-pub async fn wait_for_healthy(app_handle: tauri::AppHandle, timeout_secs: u64) {
+/// 等待 hexclaw 就绪，并保留同一次启动进程的真实退出原因。
+pub(crate) async fn wait_for_healthy(
+    app_handle: tauri::AppHandle,
+    timeout_secs: u64,
+    instance: SidecarInstance,
+) -> Result<(), String> {
     let url = health_url();
-    let max_attempts = timeout_secs * 2; // 每 500ms 检查一次
-
-    for _ in 0..max_attempts {
-        if let Ok(client) = crate::sidecar_client::SidecarClient::new(Duration::from_secs(2)) {
-            if let Ok(resp) = client.get("/health").await {
-                if resp.status().is_success() {
-                    log::info!("hexclaw sidecar 就绪: {}", url);
-                    set_ready(&app_handle, true);
-                    // 通知前端 sidecar 已就绪
-                    let _ = app_handle.emit("sidecar-ready", true);
-                    return;
+    let timeout = Duration::from_secs(timeout_secs);
+    let result = wait_for_startup(
+        &SIDECAR_SUPERVISOR,
+        instance,
+        timeout,
+        || async {
+            if let Ok(client) = crate::sidecar_client::SidecarClient::new(Duration::from_secs(2)) {
+                if let Ok(resp) = client.get("/health").await {
+                    if resp.status().is_success() {
+                        return true;
+                    }
                 }
             }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
+            false
+        },
+        |event| match event {
+            SidecarEvent::Ready { .. } => {
+                let _ = app_handle.emit("sidecar-ready", true);
+            }
+            SidecarEvent::Timeout { .. } => {
+                let _ = app_handle.emit("sidecar-error", "启动超时");
+            }
+        },
+    )
+    .await;
 
-    log::error!("hexclaw sidecar 启动超时 ({}s)", timeout_secs);
-    set_ready(&app_handle, false);
-    let _ = app_handle.emit("sidecar-error", "启动超时");
+    match result {
+        Ok(()) => {
+            log::info!("hexclaw sidecar 就绪: {}", url);
+            Ok(())
+        }
+        Err(error @ SupervisorError::Timeout { .. }) => {
+            log::error!("hexclaw sidecar 启动超时 ({}s)", timeout_secs);
+            Err(error.to_string())
+        }
+        Err(error @ SupervisorError::Superseded { .. }) => {
+            log::info!("sidecar 启动观察已因停止或重启取消: {}", error);
+            Err(error.to_string())
+        }
+        Err(error) => {
+            log::error!("sidecar 启动失败: {}", error);
+            Err(error.to_string())
+        }
+    }
 }
 
 /// 检查 sidecar 是否就绪
-pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
-    app_handle
-        .try_state::<SidecarState>()
-        .map(|s| *s.ready.lock().unwrap_or_else(|e| e.into_inner()))
-        .unwrap_or(false)
+pub fn is_ready(_app_handle: &tauri::AppHandle) -> bool {
+    SIDECAR_SUPERVISOR.is_ready()
 }
 
 /// 启动 hexclaw sidecar 进程
 ///
 /// Tauri externalBin 会将 sidecar 放在与主程序同目录 (Contents/MacOS/)。
-/// 进程句柄存储在全局静态变量中，供 stop_sidecar 使用。
-pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
-    initialize_capability_token()?;
-    set_ready(app, false);
+/// 在执行任何可能阻塞的准备工作前先登记启动代次，确保 stop 能取消未完成的 spawn。
+pub(crate) fn spawn_sidecar(app: &tauri::AppHandle) -> Result<SidecarInstance, String> {
+    let instance = SIDECAR_SUPERVISOR
+        .begin_start()
+        .map_err(|error| error.to_string())?;
+    let result = spawn_sidecar_generation(app, instance);
+    match result {
+        Ok(()) => Ok(instance),
+        Err(error) => {
+            let preparation_failed = matches!(error, SupervisorError::StartFailed { .. });
+            let cancel_result = SIDECAR_SUPERVISOR.cancel_start(instance);
+            if preparation_failed {
+                if let Err(superseded @ SupervisorError::Superseded { .. }) = cancel_result {
+                    return Err(superseded.to_string());
+                }
+            }
+            Err(error.to_string())
+        }
+    }
+}
 
-    let test_ctx = test_runtime::current()?;
+fn spawn_sidecar_generation(
+    app: &tauri::AppHandle,
+    instance: SidecarInstance,
+) -> Result<(), SupervisorError> {
+    let start_error =
+        |reason: String| SidecarSupervisor::<SystemProcess>::start_failed(instance, reason);
+
+    initialize_capability_token().map_err(&start_error)?;
+
+    let test_ctx = test_runtime::current().map_err(&start_error)?;
     if let Some(ctx) = test_ctx.as_ref() {
-        test_runtime::write_test_config(ctx)?;
+        test_runtime::write_test_config(ctx).map_err(&start_error)?;
         log::info!(
             "sidecar 测试沙箱已启用: home={}, port={}",
             ctx.home.display(),
@@ -155,9 +272,9 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 
     // externalBin 的 sidecar 与主程序在同一目录 (Contents/MacOS/)
     let binary_path = std::env::current_exe()
-        .map_err(|e| format!("获取当前程序路径失败: {}", e))?
+        .map_err(|e| start_error(format!("获取当前程序路径失败: {}", e)))?
         .parent()
-        .ok_or("无法获取程序所在目录")?
+        .ok_or_else(|| start_error("无法获取程序所在目录".to_string()))?
         .join(binary_name);
 
     // 解析 Tauri 资源目录（reference.docx 资产在此 assets/render/）。
@@ -168,20 +285,30 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         // 开发模式回退：从 resource_dir/binaries 查找
         let resource_path = resource_dir
             .clone()
-            .ok_or_else(|| "获取资源路径失败".to_string())?;
+            .ok_or_else(|| start_error("获取资源路径失败".to_string()))?;
         let fallback_path = resource_path.join("binaries").join(binary_name);
         if !fallback_path.exists() {
-            return Err(format!(
+            return Err(start_error(format!(
                 "sidecar 二进制不存在: {:?} 和 {:?}",
                 binary_path, fallback_path
-            ));
+            )));
         }
-        ensure_port_available(sidecar_port_for_context(test_ctx.as_ref()))?;
-        return spawn_child(&fallback_path, resource_dir.as_deref(), test_ctx.as_ref());
+        ensure_port_available(sidecar_port_for_context(test_ctx.as_ref())).map_err(&start_error)?;
+        return spawn_child(
+            &fallback_path,
+            resource_dir.as_deref(),
+            test_ctx.as_ref(),
+            instance,
+        );
     }
 
-    ensure_port_available(sidecar_port_for_context(test_ctx.as_ref()))?;
-    spawn_child(&binary_path, resource_dir.as_deref(), test_ctx.as_ref())
+    ensure_port_available(sidecar_port_for_context(test_ctx.as_ref())).map_err(&start_error)?;
+    spawn_child(
+        &binary_path,
+        resource_dir.as_deref(),
+        test_ctx.as_ref(),
+        instance,
+    )
 }
 
 /// 构建包含常用工具路径的 PATH
@@ -251,7 +378,8 @@ fn spawn_child(
     path: &std::path::Path,
     resource_dir: Option<&std::path::Path>,
     test_ctx: Option<&TestRunContext>,
-) -> Result<(), String> {
+    instance: SidecarInstance,
+) -> Result<(), SupervisorError> {
     // macOS GUI app 不继承 shell PATH；把 sidecar 所在目录（与捆绑的 pandoc/typst 同处）前置到
     // PATH，sidecar 的 exec.LookPath("pandoc") / LookPath("typst") 优先命中签名捆绑版。
     let sidecar_dir = path.parent();
@@ -263,7 +391,11 @@ fn spawn_child(
     if let Some(ctx) = test_ctx {
         test_runtime::configure_child_command(&mut cmd, ctx);
     }
-    cmd.env(SIDECAR_CAPABILITY_ENV, capability_token()?);
+    cmd.env(
+        SIDECAR_CAPABILITY_ENV,
+        capability_token()
+            .map_err(|reason| SidecarSupervisor::<SystemProcess>::start_failed(instance, reason))?,
+    );
     cmd.env("PATH", &enriched_path);
 
     // 把资源根透传给 sidecar，main.go.resolveRenderAssetPaths 第一优先级查这里。
@@ -283,23 +415,26 @@ fn spawn_child(
         }
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
+    let child = cmd.spawn().map_err(|error| {
+        SidecarSupervisor::<SystemProcess>::start_failed(
+            instance,
+            format!("启动 sidecar 失败: {error}"),
+        )
+    })?;
 
-    std::thread::sleep(Duration::from_millis(300));
-    if let Some(status) = child
-        .try_wait()
-        .map_err(|e| format!("检查 sidecar 进程状态失败: {}", e))?
-    {
-        return Err(format!("sidecar 启动后立即退出: {}", status));
-    }
-
-    log::info!("sidecar 已启动, PID: {}, 路径: {:?}", child.id(), path);
-
-    if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
-        *guard = Some(child);
-    }
+    let pid = child.id();
+    SIDECAR_SUPERVISOR.attach_process(
+        instance,
+        SystemProcess::from(child),
+        SIDECAR_CLEANUP_MODE,
+        SIDECAR_CLEANUP_TIMEOUT,
+    )?;
+    log::info!(
+        "sidecar 已启动, PID: {}, 启动代次: {}, 路径: {:?}",
+        pid,
+        instance.0,
+        path
+    );
 
     Ok(())
 }
@@ -379,11 +514,13 @@ fn parse_scutil_proxy(output: &str) -> Vec<(String, String)> {
 /// 此前直接 child.kill()（Unix 上是不可捕获的 SIGKILL），后端整套
 /// 优雅停机在正常退出路径上从未被触发。
 /// 应在应用退出时调用，确保子进程不会变成孤儿进程。
-pub fn stop_sidecar() {
-    if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
-        if let Some(child) = guard.take() {
-            log::info!("正在停止 sidecar...");
-            let graceful = stop_child_gracefully(child, Duration::from_secs(3));
+pub fn stop_sidecar() -> Result<(), String> {
+    match SIDECAR_SUPERVISOR
+        .stop(SIDECAR_CLEANUP_MODE, SIDECAR_CLEANUP_TIMEOUT)
+        .map_err(|error| error.to_string())?
+    {
+        StopOutcome::Idle => {}
+        StopOutcome::Stopped { graceful } => {
             log::info!(
                 "sidecar 已停止（{}）",
                 if graceful {
@@ -394,43 +531,31 @@ pub fn stop_sidecar() {
             );
         }
     }
+    Ok(())
 }
 
-/// TERM → 限时等待 → KILL 的子进程停止序列。返回是否在优雅窗口内退出。
-///
-/// 用 child.try_wait() 轮询而非按 pid 探活：直接收尸（无僵尸残留）且免疫
-/// pid 复用竞态。TERM 发送失败（进程已死等）时跳过等待直接走 KILL 收尸。
-#[cfg(unix)]
-fn stop_child_gracefully(mut child: Child, term_timeout: Duration) -> bool {
-    let pid = child.id();
-    if send_unix_signal(pid, "-TERM").is_ok() {
-        let deadline = std::time::Instant::now() + term_timeout;
-        while std::time::Instant::now() < deadline {
-            match child.try_wait() {
-                Ok(Some(_)) => return true,
-                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-                Err(_) => break,
-            }
-        }
-        log::warn!(
-            "sidecar PID {} 未在 TERM 后 {:?} 内退出，升级为 KILL。",
-            pid,
-            term_timeout
-        );
+/// 保留原优雅退出测试入口，实际清理由统一 supervisor 策略执行。
+#[cfg(all(test, unix))]
+fn stop_child_gracefully(
+    child: std::process::Child,
+    term_timeout: Duration,
+) -> Result<bool, String> {
+    let mut process = SystemProcess::from(child);
+    let report = crate::sidecar_supervisor::cleanup_process(
+        &mut process,
+        CleanupMode::Graceful,
+        term_timeout,
+    );
+    if !report.reaped {
+        return Err(report.error.map_or_else(
+            || "Sidecar process was not reaped".to_string(),
+            |error| error.to_string(),
+        ));
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    false
-}
-
-/// Windows 无 SIGTERM 等价物：sidecar 以无控制台方式运行，CTRL_BREAK 不可达，
-/// 维持 TerminateProcess 强杀（数据安全由后端 SQLite WAL 兜底，不会损坏库）。
-/// 若后续需要 Windows 优雅退出，应走后端本地回环 shutdown 端点，属跨仓变更。
-#[cfg(not(unix))]
-fn stop_child_gracefully(mut child: Child, _term_timeout: Duration) -> bool {
-    let _ = child.kill();
-    let _ = child.wait();
-    false
+    if let Some(error) = report.error {
+        return Err(error.to_string());
+    }
+    Ok(report.graceful)
 }
 
 fn ensure_port_available(port: u16) -> Result<(), String> {
@@ -1264,7 +1389,8 @@ mod stop_gracefully_tests {
         // （POSIX sh 的 trap 在前台命令结束前不执行，故用 `sleep & wait` 让信号可中断。）
         let child = spawn_trapped_child("compliant", "trap 'exit 0' TERM", "sleep 30 & wait $!");
         let start = Instant::now();
-        let graceful = stop_child_gracefully(child, Duration::from_secs(3));
+        let graceful =
+            stop_child_gracefully(child, Duration::from_secs(3)).expect("stop compliant child");
         assert!(
             graceful,
             "TERM 响应型子进程应在优雅窗口内退出，不应升级 KILL"
@@ -1281,7 +1407,8 @@ mod stop_gracefully_tests {
         let child = spawn_trapped_child("ignoring", "trap '' TERM", "sleep 30");
         let pid = child.id();
         let start = Instant::now();
-        let graceful = stop_child_gracefully(child, Duration::from_millis(500));
+        let graceful =
+            stop_child_gracefully(child, Duration::from_millis(500)).expect("stop ignoring child");
         assert!(!graceful, "忽略 TERM 的子进程应报告非优雅退出");
         assert!(
             start.elapsed() < Duration::from_secs(5),
@@ -1290,6 +1417,60 @@ mod stop_gracefully_tests {
         assert!(
             !process_exists(pid).unwrap_or(true),
             "升级 KILL 后进程必须已消失"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod delayed_startup_exit_tests {
+    use super::wait_for_startup;
+    use crate::sidecar_supervisor::{
+        CleanupMode, SidecarSupervisor, SupervisorError, SystemProcess,
+    };
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn delayed_exit_is_reaped_and_keeps_its_status_instead_of_timing_out() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 0.45; exit 23"])
+            .spawn()
+            .expect("spawn delayed-exit fake sidecar");
+        let supervisor = SidecarSupervisor::new();
+        let instance = supervisor.begin_start().expect("begin fake startup");
+        supervisor
+            .attach_process(
+                instance,
+                SystemProcess::from(child),
+                CleanupMode::Graceful,
+                Duration::from_secs(1),
+            )
+            .expect("attach fake sidecar");
+        let started = Instant::now();
+
+        let result = wait_for_startup(
+            &supervisor,
+            instance,
+            Duration::from_secs(3),
+            || async { false },
+            |_| {},
+        )
+        .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(SupervisorError::Exited { ref exit, .. }) if exit.code() == Some(23)
+            ),
+            "延迟退出必须保留真实 exit status，不得降级为 startup timeout: {result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "延迟退出应在通用启动超时前被观察"
+        );
+        assert!(
+            !supervisor.is_managed(instance),
+            "已退出的 fake sidecar 必须被回收"
         );
     }
 }

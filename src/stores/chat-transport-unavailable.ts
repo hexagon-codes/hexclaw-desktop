@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatAttachment, ChatMessage } from '@/types'
-import type { SessionStreamState } from './chat-stream-helpers'
+import type { ChatSendErrorHandler, SessionStreamState } from './chat-stream-helpers'
 
 /** A failed WebSocket is terminal; retry resumes the same protocol/request id. */
 export function createChatTransportUnavailableController(params: {
@@ -11,13 +11,7 @@ export function createChatTransportUnavailableController(params: {
     sending?: Ref<boolean>,
     draftSending?: Ref<boolean>,
   ) => void
-  handleSendError: (
-    errorValue: unknown,
-    sessionId: string | null | undefined,
-    sending: Ref<boolean>,
-    draftSending: Ref<boolean>,
-    streamState?: SessionStreamState,
-  ) => void
+  handleSendError: ChatSendErrorHandler
 }) {
   async function rejectUnavailableTransport(args: {
     backendText: string
@@ -36,8 +30,6 @@ export function createChatTransportUnavailableController(params: {
     params.handleSendError(
       new Error('WebSocket transport unavailable; retry will resume with the same request id'),
       args.sessionId,
-      args.sending,
-      args.draftSending,
       params.activeStreams.value[args.sessionId],
     )
     return null

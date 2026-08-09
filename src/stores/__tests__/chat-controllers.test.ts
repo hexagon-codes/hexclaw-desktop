@@ -12,6 +12,7 @@ import { shouldBlockChatSend, shouldSeedChatAutoTitle } from '../chat-send-guard
 import { createChatSessionLifecycleController } from '../chat-session-lifecycle'
 import { createChatSessionLoadingController } from '../chat-session-loading'
 import { createChatStoreSelectors } from '../chat-store-selectors'
+import { createBoundChatStreamController } from '../chat-stream-bound-controller'
 import { createChatStreamCancelController } from '../chat-stream-cancel'
 import { createChatStreamCompletionController } from '../chat-stream-completion'
 import { createChatStreamErrorController } from '../chat-stream-error'
@@ -21,6 +22,33 @@ import { createChatThinkingTimerController } from '../chat-thinking-timer'
 import { createChatStoreState, createChatStoreRuntime } from '../chat-store-state'
 
 describe('chat controller modules', () => {
+  it('BUG-20260802-017 forwards request-owned stream identity through the bound error adapter', () => {
+    const sending = ref(false)
+    const draftSending = ref(false)
+    const handleSendError = vi.fn()
+    const streamState = {
+      sessionId: 'session-idle',
+      requestId: 'req-idle',
+      assistantMessageId: 'req-idle:assistant',
+    }
+    const controller = createBoundChatStreamController({
+      streamController: { handleSendError } as any,
+      sending,
+      draftSending,
+    })
+    const idleError = new Error('Assistant reply stalled — no new content received.')
+
+    ;(controller.handleSendError as any)(idleError, 'session-idle', streamState)
+
+    expect(handleSendError).toHaveBeenCalledWith(
+      idleError,
+      'session-idle',
+      sending,
+      draftSending,
+      streamState,
+    )
+  })
+
   it('creates the expected default chat store state and runtime containers', () => {
     const state = createChatStoreState()
     const runtime = createChatStoreRuntime()
@@ -929,12 +957,78 @@ describe('chat controller modules', () => {
     expect(handleSendError).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('WebSocket transport unavailable') }),
       's1',
-      expect.any(Object),
-      expect.any(Object),
       undefined,
     )
     expect(finalizeAssistantMessage).not.toHaveBeenCalled()
     expect(sendViaBackend).not.toHaveBeenCalled()
+  })
+
+  it('keeps the request-owned stream identity until an idle transport error is projected', async () => {
+    class TestChatRequestError extends Error {
+      noFallback: boolean
+      constructor(message: string, noFallback = false) {
+        super(message)
+        this.noFallback = noFallback
+      }
+    }
+    const activeStreams = ref<Record<string, any>>({})
+    const handleSendError = vi.fn()
+    const upsertStreamState = vi.fn((sessionId: string, nextState: any) => {
+      const next = { ...activeStreams.value }
+      if (nextState) next[sessionId] = nextState
+      else delete next[sessionId]
+      activeStreams.value = next
+    })
+    const resetSessionStream = vi.fn((sessionId?: string | null) => {
+      if (!sessionId) return
+      const next = { ...activeStreams.value }
+      delete next[sessionId]
+      activeStreams.value = next
+    })
+    const controller = createChatSendDeliveryController({
+      chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' }),
+      agentRole: ref(''),
+      thinkingEnabled: ref(false),
+      activeStreams,
+      chatSvc: {
+        ChatRequestError: TestChatRequestError,
+        ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
+        openWebSocketStream: vi.fn().mockReturnValue({
+          cancel: vi.fn(),
+          done: Promise.reject(new TestChatRequestError(
+            'Assistant reply stalled — no new content received.',
+          )),
+        }),
+      } as any,
+      getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
+      clearSessionCancelled: vi.fn(),
+      isSessionCancelled: vi.fn().mockReturnValue(false),
+      setSessionPending: vi.fn(),
+      upsertStreamState,
+      updateStreamChunk: vi.fn().mockReturnValue(false),
+      resetSessionStream,
+      finalizeAssistantMessage: vi.fn() as any,
+      handleSendError,
+      storePendingApproval: vi.fn(),
+      streamHandles: new Map(),
+    })
+
+    await controller.deliverMessage({
+      backendText: 'idle request',
+      sessionId: 'session-idle',
+      requestId: 'req-idle',
+      sending: ref(false),
+      draftSending: ref(false),
+    })
+
+    expect(handleSendError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('WebSocket transport unavailable') }),
+      'session-idle',
+      expect.objectContaining({
+        requestId: 'req-idle',
+        assistantMessageId: 'req-idle:assistant',
+      }),
+    )
   })
 
   it('keeps the accepted edit model and agent route frozen while websocket connection settles', async () => {

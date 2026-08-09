@@ -443,6 +443,15 @@ function openRequestSocket(
     rejectDone(err)
   }
 
+  function sendRequestCancel() {
+    if (!requestId || ws.readyState !== NativeSidecarWebSocket.OPEN) return
+    try {
+      ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId, request_id: requestId }))
+    } catch {
+      // 取消为尽力而为；发送失败仍须继续收敛本地流状态。
+    }
+  }
+
   function markActivity() {
     if (firstReplyTimer) {
       clearTimeout(firstReplyTimer)
@@ -452,11 +461,13 @@ function openRequestSocket(
       clearTimeout(inactivityTimer)
     }
     inactivityTimer = setTimeout(() => {
+      sendRequestCancel()
       settleReject(new ChatRequestError('Assistant reply stalled — no new content received.', false))
     }, WS_INACTIVITY_TIMEOUT_MS)
   }
 
   firstReplyTimer = setTimeout(() => {
+    sendRequestCancel()
     settleReject(new ChatRequestError('Assistant reply timed out — no response received.', false))
   }, WS_FIRST_REPLY_TIMEOUT_MS)
 
@@ -651,13 +662,7 @@ function openRequestSocket(
   return {
     cancel() {
       if (settled) return
-      try {
-        if (ws.readyState === NativeSidecarWebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId, request_id: requestId }))
-        }
-      } catch {
-        // ignore best-effort cancel failures
-      }
+      sendRequestCancel()
       settleResolve(null)
     },
     done,

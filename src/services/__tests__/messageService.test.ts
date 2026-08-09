@@ -268,6 +268,27 @@ describe('messageService', () => {
     )
   })
 
+  it('persistErrorReply keeps the request id in both metadata and the durable request column', async () => {
+    await persistErrorReply('s1', {
+      id: 'req-idle:assistant',
+      role: 'assistant',
+      content: 'WebSocket transport unavailable',
+      timestamp: '2026-08-08T00:00:00Z',
+      metadata: { request_id: 'req-idle', is_error: true },
+    })
+    expect(appendSessionMessageApi).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        id: 'req-idle:assistant',
+        request_id: 'req-idle',
+        metadata: expect.objectContaining({
+          request_id: 'req-idle',
+          is_error: true,
+        }),
+      }),
+    )
+  })
+
   it('persistErrorReply swallows backend errors (best-effort, never throws)', async () => {
     appendSessionMessageApi.mockRejectedValueOnce(new Error('session not found'))
     await expect(

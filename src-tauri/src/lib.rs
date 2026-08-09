@@ -22,6 +22,7 @@ pub mod sidecar;
 pub(crate) mod sidecar_client;
 pub mod sidecar_socket;
 pub mod sidecar_stream;
+pub(crate) mod sidecar_supervisor;
 pub mod test_runtime;
 pub mod tray;
 pub mod window;
@@ -70,7 +71,6 @@ pub fn run() {
             crate::window::show_main_window(app);
         }))
         // 全局状态
-        .manage(sidecar::SidecarState::default())
         .manage(ollama::OllamaState::default())
         .manage(window::LifecycleState::default())
         .manage(native_file::NativeFileGrantRegistry::default())
@@ -120,16 +120,16 @@ pub fn run() {
             };
 
             // 启动 hexclaw sidecar 进程
-            let sidecar_started = match sidecar::spawn_sidecar(app.handle()) {
-                Ok(()) => {
+            let sidecar_instance = match sidecar::spawn_sidecar(app.handle()) {
+                Ok(instance) => {
                     log::info!("sidecar 进程已启动");
                     eprintln!("[HexClaw] sidecar 进程已启动");
-                    true
+                    Some(instance)
                 }
                 Err(e) => {
                     log::error!("sidecar 启动失败: {}", e);
                     eprintln!("[HexClaw] sidecar 启动失败: {}", e);
-                    false
+                    None
                 }
             };
 
@@ -145,8 +145,10 @@ pub fn run() {
                         });
                     }
                     // sidecar 健康检查
-                    if sidecar_started {
-                        sidecar::wait_for_healthy(handle, 30).await;
+                    if let Some(instance) = sidecar_instance {
+                        if let Err(error) = sidecar::wait_for_healthy(handle, 30, instance).await {
+                            log::error!("sidecar 健康检查失败: {}", error);
+                        }
                     }
                 });
             }
@@ -212,7 +214,9 @@ pub fn run() {
             }
             tauri::WindowEvent::Destroyed if window.label() == "main" => {
                 ollama::stop_ollama();
-                sidecar::stop_sidecar();
+                if let Err(error) = sidecar::stop_sidecar() {
+                    log::error!("停止 sidecar 失败: {}", error);
+                }
             }
             _ => {}
         })

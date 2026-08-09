@@ -9,7 +9,7 @@ import {
   resolveChatRouteSnapshot,
   type ChatRouteSnapshot,
 } from './chat-route-snapshot'
-import { buildSessionStreamState } from './chat-stream-helpers'
+import { buildSessionStreamState, type ChatSendErrorHandler } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
@@ -72,12 +72,7 @@ export function createChatSendController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
   }) => ChatMessage
-  handleSendError: (
-    errorValue: unknown,
-    sessionId: string | null | undefined,
-    sending: Ref<boolean>,
-    draftSending: Ref<boolean>,
-  ) => void
+  handleSendError: ChatSendErrorHandler
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
   sending: Ref<boolean>

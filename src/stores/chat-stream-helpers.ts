@@ -43,6 +43,13 @@ export type SessionStreamState = {
   degenerated?: boolean
 }
 
+/** 发送链路使用的请求级错误投影契约。 */
+export type ChatSendErrorHandler = (
+  errorValue: unknown,
+  sessionId: string | null | undefined,
+  streamState?: SessionStreamState,
+) => void
+
 export function buildLiveAssistantMessageId(requestId: string): string {
   return `${requestId}:assistant`
 }
