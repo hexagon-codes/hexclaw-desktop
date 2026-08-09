@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { access, readFile, realpath, stat, unlink } from 'node:fs/promises'
+import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 const repoFile = (path) => new URL(`../../${path}`, import.meta.url)
+const execFileAsync = promisify(execFile)
+const hexclawSource = fileURLToPath(new URL('../../../hexclaw/', import.meta.url))
 
 const fields = [
   'schema_version',
@@ -58,6 +65,16 @@ function completeGradingBudget(overrides = {}) {
       { max_problems: 32, seconds: 24 },
     ],
     item_concurrency: 7,
+    recognition_plan_version: 2,
+    recognizing_buckets: {
+      up_to_1_problem_millis: 10_000,
+      up_to_8_problems_millis: 11_000,
+      up_to_16_problems_millis: 12_000,
+      up_to_32_problems_millis: 13_000,
+    },
+    physical_call_cap_millis: 120_000,
+    worker_hard_cap: 2,
+    effective_concurrency: 1,
     ...overrides,
   }
 }
@@ -97,6 +114,30 @@ ${budget.assessing_buckets
   .join('\n')}`
 }
 ${budget.item_concurrency === undefined ? '' : `    item_concurrency: ${budget.item_concurrency}`}
+${
+  budget.recognition_plan_version === undefined
+    ? ''
+    : `    recognition_plan_version: ${budget.recognition_plan_version}`
+}
+${
+  budget.recognizing_buckets === undefined
+    ? ''
+    : `    recognizing_buckets:
+${Object.entries(budget.recognizing_buckets)
+  .map(([name, value]) => `      ${name}: ${value}`)
+  .join('\n')}`
+}
+${
+  budget.physical_call_cap_millis === undefined
+    ? ''
+    : `    physical_call_cap_millis: ${budget.physical_call_cap_millis}`
+}
+${budget.worker_hard_cap === undefined ? '' : `    worker_hard_cap: ${budget.worker_hard_cap}`}
+${
+  budget.effective_concurrency === undefined
+    ? ''
+    : `    effective_concurrency: ${budget.effective_concurrency}`
+}
 `
   return Buffer.from(`server:
   host: ${overrides.host ?? '127.0.0.1'}
@@ -232,7 +273,7 @@ async function loadController() {
   return import(repoFile('scripts/ci/k12-current-bug-isolated-sidecar-control.mjs'))
 }
 
-test('controller contract freezes one module, exact CLI and exact 13-field config', async () => {
+test('controller contract freezes one module, exact CLI and exact 17-field config', async () => {
   const contract = JSON.parse(
     await readFile(
       repoFile('tests/live/k12-current-bug-isolated-sidecar-control.contract.json'),
@@ -245,6 +286,7 @@ test('controller contract freezes one module, exact CLI and exact 13-field confi
   assert.deepEqual(contract.cli.args, ['<action>', '--config', '<absolute-/tmp-json>'])
   assert.equal(contract.cli.shell, false)
   assert.deepEqual(contract.config.exactFields, fields)
+  assert.equal(fields.length, 17)
   assert.deepEqual(contract.config.forbiddenPorts, [18080])
   assert.equal(contract.config.forbidUserProfile, true)
   assert.deepEqual(contract.config.explicitOrigins, ['sidecar_url', 'release_ui_url'])
@@ -493,6 +535,15 @@ k12:
       - max_problems: 32
         seconds: 24
     item_concurrency: 7
+    recognition_plan_version: 2
+    recognizing_buckets:
+      up_to_1_problem_millis: 10000
+      up_to_8_problems_millis: 11000
+      up_to_16_problems_millis: 12000
+      up_to_32_problems_millis: 13000
+    physical_call_cap_millis: 120000
+    worker_hard_cap: 2
+    effective_concurrency: 1
 `),
     {
       host: '127.0.0.1',
@@ -541,6 +592,69 @@ k12:
         }),
       ),
     /frozen K12 grading budget/,
+  )
+})
+
+test('recognition-only preflight parses exact v2 release buckets and rejects cap or concurrency drift', async () => {
+  const { parseSidecarBinding, validateControllerConfig } = await loadController()
+  const raw = controllerConfig()
+  const canonicalBytes = sidecarConfigBytes()
+  const binding = parseSidecarBinding(String(canonicalBytes))
+
+  assert.deepEqual(binding.gradingBudget.recognizing_buckets, {
+    up_to_1_problem_millis: 10_000,
+    up_to_8_problems_millis: 11_000,
+    up_to_16_problems_millis: 12_000,
+    up_to_32_problems_millis: 13_000,
+  })
+  assert.equal(binding.gradingBudget.recognition_plan_version, 2)
+  assert.equal(binding.gradingBudget.physical_call_cap_millis, 120_000)
+  assert.equal(binding.gradingBudget.worker_hard_cap, 2)
+  assert.equal(binding.gradingBudget.effective_concurrency, 1)
+
+  const validateMutation = (gradingBudget) => {
+    const bytes = sidecarConfigBytes({ gradingBudget })
+    const bound = { ...raw, sidecar_config_sha256: sha256(bytes) }
+    return validateControllerConfig(
+      JSON.stringify(bound),
+      validationContext(bound, { readSidecarConfigBytes: () => bytes }),
+    )
+  }
+  for (const mutation of [
+    { physical_call_cap_millis: 119_999 },
+    { worker_hard_cap: 3 },
+    { effective_concurrency: 2 },
+    {
+      recognizing_buckets: {
+        ...completeGradingBudget().recognizing_buckets,
+        up_to_16_problems_millis: 0,
+      },
+    },
+    {
+      recognizing_buckets: {
+        ...completeGradingBudget().recognizing_buckets,
+        up_to_4_problems_millis: 10_500,
+      },
+    },
+  ]) {
+    assert.throws(() => validateMutation(completeGradingBudget(mutation)), /recognition|v2/i)
+  }
+  const lookalikeBytes = Buffer.from(
+    String(sidecarConfigBytes()).replace(
+      '    physical_call_cap_millis: 120000',
+      '    physical_call_timeout_ms: 120000\n    physical_call_cap_millis: 120000',
+    ),
+  )
+  const lookalikeConfig = { ...raw, sidecar_config_sha256: sha256(lookalikeBytes) }
+  assert.throws(
+    () =>
+      validateControllerConfig(
+        JSON.stringify(lookalikeConfig),
+        validationContext(lookalikeConfig, {
+          readSidecarConfigBytes: () => lookalikeBytes,
+        }),
+      ),
+    /recognition|v2|unknown/i,
   )
 })
 
@@ -679,7 +793,9 @@ test('stop permits an owned Sidecar after its isolated YAML changes without weak
   })
 
   assert.deepEqual(signals, [[4242, 'SIGTERM']])
-  assert.deepEqual(events, [['remove', '/private/tmp/k12-controller/run/profile/.hexclaw/.k12-sidecar.pid']])
+  assert.deepEqual(events, [
+    ['remove', '/private/tmp/k12-controller/run/profile/.hexclaw/.k12-sidecar.pid'],
+  ])
   assert.equal(sidecarConfigReads, 0)
 })
 
@@ -735,6 +851,156 @@ test('startup failure and signals use guarded single-flight cleanup without repl
   assert.equal(processLike.exitCode, 130)
   uninstall()
 })
+
+test(
+  'installed attested controller proves exact start stop and fixture lock handoff',
+  {
+    skip: process.env.HEX_K12_CONTROLLER_INSTALLED !== '1',
+    timeout: 120_000,
+  },
+  async (t) => {
+    const requiredEnvironment = [
+      'HEX_K12_LIVE_FIXTURE_PROFILE',
+      'HEX_K12_LIVE_FIXTURE_STORE',
+      'HEX_K12_LIVE_FIXTURE_MANIFEST',
+      'HEX_K12_LIVE_SIDECAR_CONTROL',
+      'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
+      'HEX_K12_LIVE_SIDECAR_URL',
+    ]
+    for (const name of requiredEnvironment) {
+      assert.ok(process.env[name]?.trim(), `${name} is required for installed controller evidence`)
+    }
+
+    const controllerPath = await realpath(process.env.HEX_K12_LIVE_SIDECAR_CONTROL)
+    const controllerConfigPath = await realpath(process.env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG)
+    const profilePath = await realpath(process.env.HEX_K12_LIVE_FIXTURE_PROFILE)
+    const storePath = await realpath(process.env.HEX_K12_LIVE_FIXTURE_STORE)
+    const manifestPath = join(
+      profilePath,
+      process.env.HEX_K12_LIVE_FIXTURE_MANIFEST.split('/').at(-1),
+    )
+    const controllerConfig = JSON.parse(await readFile(controllerConfigPath, 'utf8'))
+    const sidecarConfigPath = await realpath(controllerConfig.sidecar_config_path)
+    const runController = (action) =>
+      execFileAsync(controllerPath, [action, '--config', controllerConfigPath], {
+        maxBuffer: 1024 * 1024,
+      })
+    const stopController = async () => runController('stop').catch(() => undefined)
+    t.after(stopController)
+
+    const assertAbsent = async (pathname) =>
+      assert.rejects(
+        () => access(pathname, fsConstants.F_OK),
+        (error) => error?.code === 'ENOENT',
+      )
+    const assertStopped = async () => {
+      await assertAbsent(controllerConfig.pid_file)
+      await assertAbsent(controllerConfig.lock_file)
+      const health = await fetch(`${process.env.HEX_K12_LIVE_SIDECAR_URL}/health`).catch(
+        () => undefined,
+      )
+      assert.equal(health, undefined)
+      await assert.rejects(
+        () =>
+          execFileAsync('lsof', ['-nP', `-iTCP:${controllerConfig.port}`, '-sTCP:LISTEN', '-t']),
+        (error) => error?.code === 1,
+      )
+    }
+    const assertRunning = async () => {
+      const pid = Number((await readFile(controllerConfig.pid_file, 'utf8')).trim())
+      assert.ok(Number.isSafeInteger(pid) && pid > 0)
+      assert.equal((await stat(controllerConfig.pid_file)).mode & 0o777, 0o600)
+      assert.equal((await stat(controllerConfig.lock_file)).mode & 0o777, 0o600)
+      assert.equal((await readFile(controllerConfig.lock_file, 'utf8')).trim(), String(pid))
+      const listeners = await execFileAsync('lsof', [
+        '-nP',
+        `-iTCP:${controllerConfig.port}`,
+        '-sTCP:LISTEN',
+        '-t',
+      ])
+      assert.deepEqual(
+        [...new Set(listeners.stdout.trim().split(/\s+/).filter(Boolean).map(Number))],
+        [pid],
+      )
+      const command = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])
+      assert.equal(
+        command.stdout.trim(),
+        `${controllerConfig.binary_path} serve --desktop --config ${sidecarConfigPath}`,
+      )
+      const health = await fetch(`${process.env.HEX_K12_LIVE_SIDECAR_URL}/health`)
+      assert.equal(health.status, 200)
+      const version = await fetch(`${process.env.HEX_K12_LIVE_SIDECAR_URL}/api/v1/version`)
+      assert.equal(version.status, 200)
+      assert.equal((await version.json()).version, controllerConfig.expected_version)
+      assert.equal(
+        sha256(await readFile(controllerConfig.binary_path)),
+        controllerConfig.binary_sha256,
+      )
+      return pid
+    }
+
+    await stopController()
+    await runController('start')
+    const firstPID = await assertRunning()
+    await runController('stop')
+    await assertStopped()
+
+    const builderArgs = (action) => {
+      const args = [
+        'run',
+        '-tags',
+        'testtools',
+        './cmd/k12-live-fixture-testtools',
+        action,
+        '--profile',
+        profilePath,
+        '--store',
+        storePath,
+        '--manifest',
+        manifestPath,
+      ]
+      if (action === 'start') {
+        args.push(
+          '--run-id',
+          'installed-controller-lock-handoff',
+          '--learner',
+          'installed-controller-learner',
+          '--provider',
+          'hexclaw-gpt',
+          '--model',
+          'gpt-5.6-sol',
+          '--lease',
+          '30m',
+        )
+      }
+      return args
+    }
+    const started = await execFileAsync('go', builderArgs('start'), {
+      cwd: hexclawSource,
+      env: { ...process.env, DINGTALK_LIVE_SEND: '0' },
+      maxBuffer: 1024 * 1024,
+    })
+    const startReceipt = JSON.parse(started.stdout.trim().split(/\r?\n/).at(-1))
+    assert.deepEqual(startReceipt.boundary_calls, {
+      dingtalk_sends: 0,
+      im_sends: 0,
+      model_calls: 0,
+    })
+    await execFileAsync('go', builderArgs('cleanup'), {
+      cwd: hexclawSource,
+      env: { ...process.env, DINGTALK_LIVE_SEND: '0' },
+      maxBuffer: 1024 * 1024,
+    })
+    await unlink(manifestPath)
+
+    await runController('start')
+    const secondPID = await assertRunning()
+    assert.notEqual(secondPID, firstPID)
+    await runController('stop')
+    await assertStopped()
+    await assertAbsent(manifestPath)
+  },
+)
 
 function validateReadyConfig(raw) {
   return {

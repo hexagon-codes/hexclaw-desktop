@@ -18,21 +18,18 @@ const currentSourceSpecs = [
   'streaming-chain.spec.ts',
 ]
 
-const fixtureSpecs = [
-  'creative-real-fixtures.spec.ts',
-  'ftue-dynamic.spec.ts',
-  'grading-real-fixtures.spec.ts',
-  'grounding-pdf.spec.ts',
-  'practice-integrity.spec.ts',
-  'responsive-a11y.spec.ts',
-  'role-privacy.spec.ts',
-]
-
 async function readRepoFile(path) {
   return readFile(resolve(repoRoot, path), 'utf8')
 }
 
-function listPlaywright(config) {
+const fixtureContract = JSON.parse(await readRepoFile('tests/e2e/k12-fixtures-gate.contract.json'))
+const fixtureSpecs = fixtureContract.specs.map(({ file }) => file).sort()
+const fixtureTitles = fixtureContract.specs.flatMap(({ tests }) => tests)
+const fixtureMembers = fixtureContract.specs
+  .flatMap(({ file, tests }) => tests.map((title) => `${file} › ${title}`))
+  .sort()
+
+function listPlaywright(config, { exactMembers = false } = {}) {
   const result = spawnSync('pnpm', ['exec', 'playwright', 'test', '-c', config, '--list'], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -44,16 +41,46 @@ function listPlaywright(config) {
   )
 
   const output = `${result.stdout}\n${result.stderr}`
-  const files = [
-    ...new Set([...output.matchAll(/(?:^|\s|›)([\w-]+\.spec\.ts):\d+/gm)].map((match) => match[1])),
-  ].sort()
   const total = output.match(/Total:\s*(\d+) tests? in (\d+) files?/)
   assert.ok(total, `${config} --list did not print a test/file total`)
+
+  const entries = exactMembers
+    ? output
+        .split(/\r?\n/)
+        .filter((line) => /^\s+\[[^\]]+\]\s+›\s+/.test(line))
+        .map((line) => {
+          const match = line.match(/^\s+\[([^\]]+)\]\s+›\s+([^:]+\.spec\.ts):\d+:\d+\s+›\s+(.+)$/)
+          assert.ok(match, `${config} --list emitted an unparseable test member: ${line}`)
+          assert.match(
+            match[2],
+            /^[a-z0-9][a-z0-9-]*\.spec\.ts$/,
+            `${config} collected a non-root spec`,
+          )
+          assert.equal(
+            match[3],
+            match[3].trim(),
+            `${config} collected an empty or padded test title`,
+          )
+          return { file: match[2], member: `${match[2]} › ${match[3]}` }
+        })
+    : []
+  const members = entries.map(({ member }) => member).sort()
+  const files = exactMembers
+    ? [...new Set(entries.map(({ file }) => file))].sort()
+    : [
+        ...new Set(
+          [...output.matchAll(/(?:^|\s|›)([\w-]+\.spec\.ts):\d+/gm)].map((match) => match[1]),
+        ),
+      ].sort()
+  if (exactMembers) {
+    assert.equal(entries.length, Number(total[1]), `${config} --list member count is inconsistent`)
+  }
 
   return {
     files,
     tests: Number(total[1]),
     fileCount: Number(total[2]),
+    members,
     output,
   }
 }
@@ -86,16 +113,22 @@ test('current-source execution fails closed without explicit UI and Sidecar endp
   )
 })
 
-test('Chromium and WebKit Fixture lanes independently collect the same 7 files and 27 tests', () => {
-  const chromium = listPlaywright('playwright.k12.fixtures.config.ts')
-  const webkit = listPlaywright('playwright.k12.fixtures.webkit.config.ts')
+test('Chromium and WebKit Fixture lanes collect the canonical member exact-set', () => {
+  const chromium = listPlaywright('playwright.k12.fixtures.config.ts', { exactMembers: true })
+  const webkit = listPlaywright('playwright.k12.fixtures.webkit.config.ts', { exactMembers: true })
 
+  assert.equal(fixtureContract.schemaVersion, 2)
+  assert.equal(new Set(fixtureSpecs).size, fixtureSpecs.length)
+  assert.equal(new Set(fixtureTitles).size, fixtureTitles.length)
+  assert.equal(new Set(fixtureMembers).size, fixtureMembers.length)
   assert.deepEqual(chromium.files, fixtureSpecs)
   assert.deepEqual(webkit.files, fixtureSpecs)
-  assert.equal(chromium.fileCount, 7)
-  assert.equal(webkit.fileCount, 7)
-  assert.equal(chromium.tests, 27)
-  assert.equal(webkit.tests, 27)
+  assert.equal(chromium.fileCount, fixtureSpecs.length)
+  assert.equal(webkit.fileCount, fixtureSpecs.length)
+  assert.deepEqual(chromium.members, fixtureMembers)
+  assert.deepEqual(webkit.members, fixtureMembers)
+  assert.equal(chromium.tests, fixtureMembers.length)
+  assert.equal(webkit.tests, fixtureMembers.length)
   assert.match(chromium.output, /\[chromium\]/)
   assert.doesNotMatch(chromium.output, /\[webkit\]/)
   assert.match(webkit.output, /\[webkit\]/)

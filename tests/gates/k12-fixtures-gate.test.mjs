@@ -15,6 +15,55 @@ const expectedSpecs = [
   'responsive-a11y.spec.ts',
 ]
 
+const expectedTestsBySpec = {
+  'ftue-dynamic.spec.ts': [
+    '§1.2 FTUE upload anchor reads the frozen real-fixture SHA',
+    'dynamic K12 first-use owner and thread › non-default textbook persists through the visible template flow and refresh',
+    'dynamic K12 first-use owner and thread › the first request creates a visible durable thread and survives refresh',
+    'dynamic K12 first-use owner and thread › two equal display names keep distinct learner and TutorAgent identities when one is renamed',
+  ],
+  'grading-real-fixtures.spec.ts': [
+    '§1.2 grading manifest has all three immutable image identities',
+    'real grading/solving fixture oracle › clear sheet preserves the correct result plus process error and visible annotation evidence',
+    'real grading/solving fixture oracle › messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross',
+    'real grading/solving fixture oracle › blank sheet stays solve-only and does not create a mistake projection',
+  ],
+  'creative-real-fixtures.spec.ts': [
+    '§1.2 creative manifest freezes writing and art source bytes',
+    'real creative source, OCR, owner and feedback › art upload stores the frozen image under the exact Tutor owner and round-trips its bytes',
+    'real creative source, OCR, owner and feedback › writing photo requires OCR confirmation, source-grounded feedback and a separate non-empty second work',
+    'real creative source, OCR, owner and feedback › art save automatically produces feedback that cites visible elements',
+    'real creative source, OCR, owner and feedback › BUG-20260725-009 real initial feedback and regeneration preserve generation identity',
+  ],
+  'grounding-pdf.spec.ts': [
+    '§1.2 tracked PDF manifest and verifier match both immutable sources',
+    'real K12 grounding PDF lifecycle › 131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval',
+    'real K12 grounding PDF lifecycle › 122-page scanned PDF exposes OCR progress and a persisted cancel/resume boundary',
+  ],
+  'practice-integrity.spec.ts': [
+    '§1.2 practice return source reads the frozen photo SHA',
+    'real practice basket, paper projection and return evidence › verified and blocked items produce one immutable question/answer exact-set',
+  ],
+  'role-privacy.spec.ts': [
+    '§1.2 privacy source reads the frozen art SHA without logging payload bytes',
+    'K12 role and privacy release boundary › same real image remains owner-scoped in DOM, asset HTTP and CreativeWork detail',
+    'K12 role and privacy release boundary › common privacy notice remains in Settings without a K12-only data-route promise',
+    'K12 role and privacy release boundary › child role cannot reach answer/export/delete/model controls or mutate them',
+    'K12 role and privacy release boundary › third-party embedding payload boundary is checked by an external capture fixture',
+  ],
+  'responsive-a11y.spec.ts': [
+    '§1.2 responsive/a11y gate freezes the clear-sheet source identity',
+    'K12 responsive and accessibility release gate › core archive and add-work dialog stay operable at four canonical viewports and 200% zoom',
+    'K12 responsive and accessibility release gate › archive controls and add-work modal expose names, roles, states, focus and Escape return',
+    'K12 responsive and accessibility release gate › reduced-motion keeps the core journey stable and disables infinite decorative motion',
+    'K12 responsive and accessibility release gate › real photo recognition is completable by keyboard with named live status and non-color verdicts',
+  ],
+}
+
+const expectedMembers = expectedSpecs.flatMap((file) =>
+  expectedTestsBySpec[file].map((title) => `${file} › ${title}`),
+)
+
 const reportPath = 'test-results/k12-fixtures/report.json'
 
 async function readJSON(path) {
@@ -47,7 +96,7 @@ function passingReport(specs = expectedSpecs) {
   }
 }
 
-test('dedicated config and environment contract freeze exactly seven Fixture specs', async () => {
+test('dedicated config freezes seven Fixture specs and their canonical test members', async () => {
   const configPath = repoFile('playwright.k12.fixtures.config.ts')
   const contractPath = repoFile('tests/e2e/k12-fixtures-gate.contract.json')
 
@@ -57,13 +106,24 @@ test('dedicated config and environment contract freeze exactly seven Fixture spe
   const config = await readFile(configPath, 'utf8')
   const contract = await readJSON('tests/e2e/k12-fixtures-gate.contract.json')
 
-  assert.equal(contract.schemaVersion, 1)
+  assert.equal(contract.schemaVersion, 2)
   assert.equal(contract.reportPath, reportPath)
   assert.deepEqual(
     contract.specs.map(({ file }) => file),
     expectedSpecs,
   )
   assert.equal(new Set(contract.specs.map(({ file }) => file)).size, 7)
+  const canonicalTitles = contract.specs.flatMap(({ tests }) => tests)
+  const canonicalMembers = contract.specs.flatMap(({ file, tests }) =>
+    tests.map((title) => `${file} › ${title}`),
+  )
+  assert.deepEqual(canonicalMembers, expectedMembers)
+  assert.equal(
+    canonicalTitles.every((title) => title === title.trim() && title.length > 0),
+    true,
+  )
+  assert.equal(new Set(canonicalTitles).size, canonicalTitles.length)
+  assert.equal(new Set(canonicalMembers).size, canonicalMembers.length)
   assert.deepEqual(contract.currentSource.endpoints, ['HEX_E2E_BASE_URL', 'HEX_E2E_SIDECAR_URL'])
   assert.equal(contract.currentSource.managesWebServer, false)
   assert.equal(contract.currentSource.managesSidecar, false)

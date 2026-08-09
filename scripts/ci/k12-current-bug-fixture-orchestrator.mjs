@@ -5,7 +5,10 @@ import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { readAttestedFileSnapshot } from './k12-attested-file.mjs'
-import { parseSidecarBinding } from './k12-current-bug-isolated-sidecar-control.mjs'
+import {
+  frozenRecognitionV2Policy,
+  parseSidecarBinding,
+} from './k12-current-bug-isolated-sidecar-control.mjs'
 import { parseStrictJSON } from './k12-strict-json.mjs'
 
 const REQUIRED_ENVIRONMENT = [
@@ -16,11 +19,19 @@ const REQUIRED_ENVIRONMENT = [
   'HEX_K12_LIVE_SIDECAR_CONTROL',
   'HEX_K12_LIVE_SIDECAR_CONTROL_SHA256',
   'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
-  'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
-  'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
   'HEX_K12_LIVE_APP_URL',
   'HEX_K12_LIVE_SIDECAR_URL',
   'HEX_K12_LIVE_APP_SHA256',
+]
+
+const GRADING_REQUIRED_ENVIRONMENT = [
+  'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
+  'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
+]
+
+const RECOGNITION_V2_REQUIRED_ENVIRONMENT = [
+  'HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT',
+  'HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256',
 ]
 
 const RELEASE_ATTESTATION_FIELDS = [
@@ -66,6 +77,63 @@ const GRADING_CALIBRATION_APPROVAL_FIELDS = [
   'provider',
   'release_config_sha256',
   'status',
+]
+
+const RECOGNITION_CALIBRATION_FIELDS = [
+  'adapter_worker_hard_cap',
+  'approval_ref',
+  'approval_status',
+  'budget_buckets_millis',
+  'evidence_sha256',
+  'layout_batch_policy_sha256',
+  'measurements',
+  'model',
+  'physical_call_timeout_ms',
+  'provider',
+  'recognition_plan_version',
+  'release_effective_concurrency',
+  'schema_version',
+  'sidecar_config_sha256',
+  'singleton_repair_policy_sha256',
+  'stage',
+  'whole_manifest_policy_sha256',
+]
+
+const RECOGNITION_CALIBRATION_MEASUREMENT_FIELDS = [
+  'complete',
+  'max_problems',
+  'p50_ms',
+  'p95_ms',
+  'physical_provider_calls',
+  'result_digest',
+  'sample_count',
+  'source_fixture_sha256',
+  'success_count',
+]
+
+const RECOGNITION_CALIBRATION_APPROVAL_FIELDS = [
+  'approval_ref',
+  'artifact_sha256',
+  'model',
+  'provider',
+  'recognition_plan_version',
+  'release_config_sha256',
+  'stage',
+  'status',
+]
+
+const RECOGNITION_POLICY_FIELDS = [
+  'adapter_worker_hard_cap',
+  'budget_buckets_millis',
+  'effective_concurrency',
+  'physical_call_cap_millis',
+]
+
+const RECOGNITION_BUCKET_FIELDS = [
+  'up_to_1_problem_millis',
+  'up_to_8_problems_millis',
+  'up_to_16_problems_millis',
+  'up_to_32_problems_millis',
 ]
 
 const GRADING_BUDGET_FIELDS = [
@@ -152,7 +220,10 @@ function defaultFileSHA256(pathname) {
 function exactObjectFields(value, fields) {
   if (!value || Array.isArray(value) || typeof value !== 'object') return false
   const actual = Object.keys(value).sort()
-  return actual.length === fields.length && actual.every((field, index) => field === fields[index])
+  const expected = [...fields].sort()
+  return (
+    actual.length === expected.length && actual.every((field, index) => field === expected[index])
+  )
 }
 
 function canonicalJSON(value) {
@@ -189,6 +260,25 @@ function readGradingCalibrationSnapshot(pathname, adapters) {
     artifact,
     sha256: snapshot.sha256,
   })
+}
+
+function readRecognitionCalibrationSnapshot(pathname, adapters) {
+  let snapshot
+  try {
+    snapshot = readAttestedFileSnapshot(pathname, {
+      label: 'recognition calibration artifact',
+      readBytes: adapters.readRecognitionCalibrationBytes,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  let artifact
+  try {
+    artifact = parseStrictJSON(snapshot.bytes, { label: 'recognition calibration artifact' })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+  return Object.freeze({ artifact, sha256: snapshot.sha256 })
 }
 
 function validateGradingBudget(budget) {
@@ -261,6 +351,148 @@ export function validateGradingCalibrationApproval(
     fail('grading calibration approval release config SHA-256 mismatch')
   }
   return approval
+}
+
+export function validateRecognitionCalibrationApproval(
+  approval,
+  { provider, model, artifactSHA256, releaseConfigSHA256 } = {},
+) {
+  if (!exactObjectFields(approval, RECOGNITION_CALIBRATION_APPROVAL_FIELDS)) {
+    fail('recognition calibration approval fields do not match the exact schema')
+  }
+  if (
+    approval.status !== 'approved' ||
+    typeof approval.approval_ref !== 'string' ||
+    approval.approval_ref.trim() === '' ||
+    approval.stage !== 'recognizing' ||
+    approval.recognition_plan_version !== 2 ||
+    approval.provider !== provider ||
+    approval.model !== model ||
+    typeof approval.artifact_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approval.artifact_sha256) ||
+    typeof approval.release_config_sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approval.release_config_sha256)
+  ) {
+    fail('recognition calibration approval is blocked or invalid')
+  }
+  if (artifactSHA256 !== undefined && approval.artifact_sha256 !== artifactSHA256) {
+    fail('recognition calibration approval artifact SHA-256 mismatch')
+  }
+  if (releaseConfigSHA256 !== undefined && approval.release_config_sha256 !== releaseConfigSHA256) {
+    fail('recognition calibration approval release config SHA-256 mismatch')
+  }
+  return approval
+}
+
+function validateRecognitionPolicy(policy) {
+  if (!exactObjectFields(policy, RECOGNITION_POLICY_FIELDS)) {
+    fail('recognition v2 release policy fields do not match the exact schema')
+  }
+  const buckets = policy.budget_buckets_millis
+  if (!exactObjectFields(buckets, RECOGNITION_BUCKET_FIELDS)) {
+    fail('recognition v2 release policy requires exact 1/8/16/32 buckets')
+  }
+  const values = RECOGNITION_BUCKET_FIELDS.map((field) => buckets[field])
+  if (
+    values.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+    values.some((value, index) => index > 0 && value < values[index - 1])
+  ) {
+    fail('recognition v2 release policy buckets must be positive and monotonic')
+  }
+  if (
+    policy.physical_call_cap_millis !== 120_000 ||
+    policy.adapter_worker_hard_cap !== 2 ||
+    policy.effective_concurrency !== 1
+  ) {
+    fail('recognition v2 release policy cap or concurrency drift')
+  }
+  return Object.freeze({
+    budget_buckets_millis: Object.freeze({ ...buckets }),
+    physical_call_cap_millis: policy.physical_call_cap_millis,
+    adapter_worker_hard_cap: policy.adapter_worker_hard_cap,
+    effective_concurrency: policy.effective_concurrency,
+  })
+}
+
+function validateRecognitionCalibrationArtifact(
+  artifact,
+  { provider, model, recognitionPolicy, sidecarConfigSHA256, approval },
+) {
+  if (!exactObjectFields(artifact, RECOGNITION_CALIBRATION_FIELDS)) {
+    fail('recognition calibration fields do not match the exact schema')
+  }
+  if (
+    artifact.schema_version !== 1 ||
+    artifact.approval_status !== 'approved' ||
+    typeof artifact.approval_ref !== 'string' ||
+    artifact.approval_ref.trim() === '' ||
+    artifact.approval_ref !== approval.approval_ref ||
+    artifact.stage !== 'recognizing' ||
+    artifact.recognition_plan_version !== 2
+  ) {
+    fail('recognition calibration is not an approved recognizing v2 artifact')
+  }
+  if (artifact.provider !== provider || artifact.model !== model) {
+    fail('recognition calibration provider/model drift')
+  }
+  for (const field of [
+    'evidence_sha256',
+    'whole_manifest_policy_sha256',
+    'layout_batch_policy_sha256',
+    'singleton_repair_policy_sha256',
+  ]) {
+    if (typeof artifact[field] !== 'string' || !/^[a-f0-9]{64}$/.test(artifact[field])) {
+      fail(`recognition calibration ${field} is invalid`)
+    }
+  }
+  if (artifact.sidecar_config_sha256 !== sidecarConfigSHA256) {
+    fail('recognition calibration release config SHA-256 mismatch')
+  }
+  const artifactPolicy = validateRecognitionPolicy({
+    budget_buckets_millis: artifact.budget_buckets_millis,
+    physical_call_cap_millis: artifact.physical_call_timeout_ms,
+    adapter_worker_hard_cap: artifact.adapter_worker_hard_cap,
+    effective_concurrency: artifact.release_effective_concurrency,
+  })
+  if (!exactJSONEqual(artifactPolicy, recognitionPolicy)) {
+    fail('recognition calibration policy does not match the attested Sidecar config')
+  }
+  if (!Array.isArray(artifact.measurements) || artifact.measurements.length !== 4) {
+    fail('recognition calibration measurements require exact ordered 1/8/16/32 buckets')
+  }
+  const bucketMaxima = [1, 8, 16, 32]
+  const bucketMillis = RECOGNITION_BUCKET_FIELDS.map(
+    (field) => artifactPolicy.budget_buckets_millis[field],
+  )
+  const sourceFixtures = new Set()
+  for (const [index, maxProblems] of bucketMaxima.entries()) {
+    const measurement = artifact.measurements[index]
+    if (
+      !exactObjectFields(measurement, RECOGNITION_CALIBRATION_MEASUREMENT_FIELDS) ||
+      measurement.max_problems !== maxProblems ||
+      !Number.isSafeInteger(measurement.sample_count) ||
+      measurement.sample_count < 5 ||
+      measurement.success_count !== measurement.sample_count ||
+      !Number.isSafeInteger(measurement.p50_ms) ||
+      measurement.p50_ms <= 0 ||
+      !Number.isSafeInteger(measurement.p95_ms) ||
+      measurement.p95_ms < measurement.p50_ms ||
+      measurement.p95_ms > bucketMillis[index] ||
+      measurement.complete !== true ||
+      !Number.isSafeInteger(measurement.physical_provider_calls) ||
+      measurement.physical_provider_calls <= 0 ||
+      typeof measurement.source_fixture_sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(measurement.source_fixture_sha256) ||
+      typeof measurement.result_digest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(measurement.result_digest)
+    ) {
+      fail(`recognition calibration measurement for ${maxProblems} problems is invalid`)
+    }
+    if (sourceFixtures.has(measurement.source_fixture_sha256)) {
+      fail('recognition calibration requires four independent source fixtures')
+    }
+    sourceFixtures.add(measurement.source_fixture_sha256)
+  }
 }
 
 function validateGradingCalibrationArtifact(
@@ -411,6 +643,23 @@ function exactLoopbackOrigin(value, name, { hostname, port } = {}) {
   return parsed.origin
 }
 
+function gradingCalibrationBudgetProjection(gradingBudget) {
+  if (!gradingBudget || Array.isArray(gradingBudget) || typeof gradingBudget !== 'object') {
+    return gradingBudget
+  }
+  return {
+    policy_version: gradingBudget.policy_version,
+    queued_seconds: gradingBudget.queued_seconds,
+    normalizing_seconds: gradingBudget.normalizing_seconds,
+    recognizing_seconds: gradingBudget.recognizing_seconds,
+    locating_seconds: gradingBudget.locating_seconds,
+    rendering_seconds: gradingBudget.rendering_seconds,
+    projecting_seconds: gradingBudget.projecting_seconds,
+    assessing_buckets: gradingBudget.assessing_buckets,
+    item_concurrency: gradingBudget.item_concurrency,
+  }
+}
+
 function defaultReadControllerRuntimeContract(controllerConfigPath, adapters = {}) {
   let controllerSnapshot
   try {
@@ -518,13 +767,21 @@ function defaultReadControllerRuntimeContract(controllerConfigPath, adapters = {
     sidecarURL: controller.sidecar_url,
     releaseUIURL: controller.release_ui_url,
     installedAppSHA256: receipt.installed_app_sha256,
-    gradingBudget: sidecarBinding.gradingBudget,
+    gradingBudget: gradingCalibrationBudgetProjection(sidecarBinding.gradingBudget),
+    recognitionPolicy:
+      sidecarBinding.gradingBudget?.recognition_plan_version === 2
+        ? frozenRecognitionV2Policy(sidecarBinding)
+        : undefined,
     sidecarConfigSHA256: sidecarConfigSnapshot.sha256,
   }
 }
 
 export function validateFixtureEnvironment(env, adapters = {}) {
-  for (const name of REQUIRED_ENVIRONMENT) {
+  const requireRecognitionV2 = adapters.requireRecognitionV2 === true
+  const calibrationEnvironment = requireRecognitionV2
+    ? RECOGNITION_V2_REQUIRED_ENVIRONMENT
+    : GRADING_REQUIRED_ENVIRONMENT
+  for (const name of [...REQUIRED_ENVIRONMENT, ...calibrationEnvironment]) {
     if (typeof env[name] !== 'string' || env[name].trim() === '') fail(`${name} is required`)
   }
 
@@ -534,7 +791,12 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifestInput = env.HEX_K12_LIVE_FIXTURE_MANIFEST.trim()
   const controllerInput = env.HEX_K12_LIVE_SIDECAR_CONTROL.trim()
   const controllerConfigInput = env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG.trim()
-  const gradingCalibrationInput = env.HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT.trim()
+  const gradingCalibrationInput = requireRecognitionV2
+    ? undefined
+    : env.HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT.trim()
+  const recognitionCalibrationInput = requireRecognitionV2
+    ? env.HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT.trim()
+    : undefined
   const releaseUIURL = exactLoopbackOrigin(
     env.HEX_K12_LIVE_APP_URL.trim(),
     'HEX_K12_LIVE_APP_URL',
@@ -560,7 +822,12 @@ export function validateFixtureEnvironment(env, adapters = {}) {
     [manifestInput, 'HEX_K12_LIVE_FIXTURE_MANIFEST'],
     [controllerInput, 'HEX_K12_LIVE_SIDECAR_CONTROL'],
     [controllerConfigInput, 'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG'],
-    [gradingCalibrationInput, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT'],
+    ...(!requireRecognitionV2
+      ? [[gradingCalibrationInput, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT']]
+      : []),
+    ...(requireRecognitionV2
+      ? [[recognitionCalibrationInput, 'HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT']]
+      : []),
   ]) {
     requireAbsolute(value, name)
   }
@@ -571,14 +838,24 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifest = inspect(adapters, manifestInput, { allowMissing: true })
   const controller = inspect(adapters, controllerInput)
   const controllerConfig = inspect(adapters, controllerConfigInput)
-  const gradingCalibration = inspect(adapters, gradingCalibrationInput)
+  const gradingCalibration = requireRecognitionV2
+    ? undefined
+    : inspect(adapters, gradingCalibrationInput)
+  const recognitionCalibration = requireRecognitionV2
+    ? inspect(adapters, recognitionCalibrationInput)
+    : undefined
 
   requireDirectory(source, 'HEXCLAW_LOCAL_SRC')
   requirePrivateDirectory(profile, 'HEX_K12_LIVE_FIXTURE_PROFILE')
   requirePrivateFile(store, 'HEX_K12_LIVE_FIXTURE_STORE')
   requireRegularFile(controller, 'HEX_K12_LIVE_SIDECAR_CONTROL')
   requirePrivateFile(controllerConfig, 'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG')
-  requirePrivateFile(gradingCalibration, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT')
+  if (!requireRecognitionV2) {
+    requirePrivateFile(gradingCalibration, 'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT')
+  }
+  if (requireRecognitionV2) {
+    requirePrivateFile(recognitionCalibration, 'HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT')
+  }
   if (controller.executable === false) fail('sidecar controller must be executable')
   if (manifest.exists !== false && manifest.kind !== 'missing') {
     fail('fixture manifest path must not already exist')
@@ -590,7 +867,12 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   const manifestPath = realPathOf(manifest, manifestInput)
   const controllerPath = realPathOf(controller, controllerInput)
   const controllerConfigPath = realPathOf(controllerConfig, controllerConfigInput)
-  const gradingCalibrationPath = realPathOf(gradingCalibration, gradingCalibrationInput)
+  const gradingCalibrationPath = requireRecognitionV2
+    ? undefined
+    : realPathOf(gradingCalibration, gradingCalibrationInput)
+  const recognitionCalibrationPath = requireRecognitionV2
+    ? realPathOf(recognitionCalibration, recognitionCalibrationInput)
+    : undefined
 
   if (!canonicalTmp(profilePath)) fail('fixture profile must resolve below /tmp')
   if (!canonicalTmp(controllerConfigPath)) fail('sidecar controller config must resolve below /tmp')
@@ -603,10 +885,6 @@ export function validateFixtureEnvironment(env, adapters = {}) {
     fail('sidecar controller SHA-256 must be 64 lowercase hex characters')
   const actualSHA = (adapters.fileSHA256 ?? defaultFileSHA256)(controllerPath).toLowerCase()
   if (actualSHA !== expectedSHA) fail('sidecar controller SHA-256 mismatch')
-  const expectedCalibrationSHA = env.HEX_K12_LIVE_GRADING_CALIBRATION_SHA256.trim().toLowerCase()
-  if (!/^[a-f0-9]{64}$/.test(expectedCalibrationSHA)) {
-    fail('grading calibration SHA-256 must be 64 lowercase hex characters')
-  }
   const readControllerRuntimeContract =
     adapters.readControllerRuntimeContract ?? defaultReadControllerRuntimeContract
   const controllerRuntime = readControllerRuntimeContract(controllerConfigPath, adapters)
@@ -617,30 +895,72 @@ export function validateFixtureEnvironment(env, adapters = {}) {
   ) {
     fail('fixture environment does not match attested controller runtime')
   }
-  const gradingCalibrationSnapshot = readGradingCalibrationSnapshot(
-    gradingCalibrationPath,
-    adapters,
-  )
-  const actualCalibrationSHA = gradingCalibrationSnapshot.sha256
-  if (actualCalibrationSHA !== expectedCalibrationSHA) {
-    fail('grading calibration SHA-256 mismatch')
-  }
-  const gradingCalibrationApproval = validateGradingCalibrationApproval(
-    adapters.gradingCalibrationApproval,
-    {
+  let actualCalibrationSHA
+  if (!requireRecognitionV2) {
+    const expectedCalibrationSHA = env.HEX_K12_LIVE_GRADING_CALIBRATION_SHA256.trim().toLowerCase()
+    if (!/^[a-f0-9]{64}$/.test(expectedCalibrationSHA)) {
+      fail('grading calibration SHA-256 must be 64 lowercase hex characters')
+    }
+    const gradingCalibrationSnapshot = readGradingCalibrationSnapshot(
+      gradingCalibrationPath,
+      adapters,
+    )
+    actualCalibrationSHA = gradingCalibrationSnapshot.sha256
+    if (actualCalibrationSHA !== expectedCalibrationSHA) {
+      fail('grading calibration SHA-256 mismatch')
+    }
+    const gradingCalibrationApproval = validateGradingCalibrationApproval(
+      adapters.gradingCalibrationApproval,
+      {
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        artifactSHA256: actualCalibrationSHA,
+        releaseConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+      },
+    )
+    validateGradingCalibrationArtifact(gradingCalibrationSnapshot.artifact, {
       provider: 'hexclaw-gpt',
       model: 'gpt-5.6-sol',
-      artifactSHA256: actualCalibrationSHA,
-      releaseConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
-    },
-  )
-  validateGradingCalibrationArtifact(gradingCalibrationSnapshot.artifact, {
-    provider: 'hexclaw-gpt',
-    model: 'gpt-5.6-sol',
-    gradingBudget: controllerRuntime?.gradingBudget,
-    sidecarConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
-    approval: gradingCalibrationApproval,
-  })
+      gradingBudget: controllerRuntime?.gradingBudget,
+      sidecarConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+      approval: gradingCalibrationApproval,
+    })
+  }
+
+  let recognitionPolicy
+  let recognitionCalibrationSHA256
+  if (requireRecognitionV2) {
+    recognitionPolicy = validateRecognitionPolicy(controllerRuntime?.recognitionPolicy)
+    const expectedRecognitionCalibrationSHA =
+      env.HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256.trim().toLowerCase()
+    if (!/^[a-f0-9]{64}$/.test(expectedRecognitionCalibrationSHA)) {
+      fail('recognition calibration SHA-256 must be 64 lowercase hex characters')
+    }
+    const recognitionCalibrationSnapshot = readRecognitionCalibrationSnapshot(
+      recognitionCalibrationPath,
+      adapters,
+    )
+    recognitionCalibrationSHA256 = recognitionCalibrationSnapshot.sha256
+    if (recognitionCalibrationSHA256 !== expectedRecognitionCalibrationSHA) {
+      fail('recognition calibration SHA-256 mismatch')
+    }
+    const recognitionCalibrationApproval = validateRecognitionCalibrationApproval(
+      adapters.recognitionCalibrationApproval,
+      {
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        artifactSHA256: recognitionCalibrationSHA256,
+        releaseConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+      },
+    )
+    validateRecognitionCalibrationArtifact(recognitionCalibrationSnapshot.artifact, {
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      recognitionPolicy,
+      sidecarConfigSHA256: controllerRuntime?.sidecarConfigSHA256,
+      approval: recognitionCalibrationApproval,
+    })
+  }
 
   const runSeed = String(env.HEX_K12_REAL_10X_RUN_ID ?? 'isolated-current-bug')
   return Object.freeze({
@@ -653,8 +973,16 @@ export function validateFixtureEnvironment(env, adapters = {}) {
     controllerPath,
     controllerSHA256: actualSHA,
     controllerConfigPath,
-    gradingCalibrationPath,
-    gradingCalibrationSHA256: actualCalibrationSHA,
+    ...(requireRecognitionV2
+      ? {
+          recognitionCalibrationPath,
+          recognitionCalibrationSHA256,
+          recognitionPolicy,
+        }
+      : {
+          gradingCalibrationPath,
+          gradingCalibrationSHA256: actualCalibrationSHA,
+        }),
     releaseUIURL,
     sidecarURL,
     installedAppSHA256,
@@ -851,6 +1179,13 @@ export async function runFixtureLifecycle(config, deps) {
   } catch (error) {
     cleanupError = error
   }
+  if (!rootError && !cleanupError && deps.collectStoppedEvidence) {
+    try {
+      await deps.collectStoppedEvidence(config)
+    } catch (error) {
+      rootError = error
+    }
+  }
   try {
     await deps.cleanupFixture(config)
   } catch (error) {
@@ -913,6 +1248,7 @@ function subprocessEnvironment(extra = {}) {
 
 export function createFixtureRuntime(config, options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn
+  const recognitionV2ClaimPath = join(config.profilePath, 'recognition-v2-target-claim.json')
   let activeChild
   let cleanupPromise
 
@@ -945,10 +1281,60 @@ export function createFixtureRuntime(config, options = {}) {
       })
     })
 
+  const runJSON = (command, args, spawnOptions = {}) =>
+    new Promise((resolvePromise, rejectPromise) => {
+      let child
+      try {
+        child = spawnProcess(command, args, {
+          shell: false,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          ...spawnOptions,
+          env: subprocessEnvironment(spawnOptions.env),
+        })
+      } catch {
+        rejectPromise(new Error('K12 stopped-ledger evidence process could not start'))
+        return
+      }
+      activeChild = child
+      const stdout = []
+      let size = 0
+      let overflow = false
+      child.stdout?.on('data', (chunk) => {
+        size += chunk.length
+        if (size > 1024 * 1024) {
+          overflow = true
+          child.kill('SIGTERM')
+          return
+        }
+        stdout.push(chunk)
+      })
+      child.stderr?.resume()
+      let startError
+      child.once('error', () => {
+        startError = true
+      })
+      child.once('close', (code) => {
+        if (activeChild === child) activeChild = undefined
+        if (startError || overflow || code !== 0) {
+          rejectPromise(new Error('K12 stopped-ledger evidence collection failed'))
+          return
+        }
+        try {
+          resolvePromise(
+            parseStrictJSON(Buffer.concat(stdout), {
+              label: 'K12 recognition v2 stopped-ledger evidence',
+            }),
+          )
+        } catch {
+          rejectPromise(new Error('K12 stopped-ledger evidence collection failed'))
+        }
+      })
+    })
+
   const controller = (action) =>
     run(config.controllerPath, [action, '--config', config.controllerConfigPath])
 
-  const builder = (action) => {
+  const builderArguments = (action) => {
     const common = [
       'run',
       '-tags',
@@ -976,16 +1362,33 @@ export function createFixtureRuntime(config, options = {}) {
         '30m',
       )
     }
-    return run('go', common, { cwd: config.localSource })
+    if (
+      action === 'recognition-v2-finalization-evidence' ||
+      (action === 'cleanup' && lstatSync(recognitionV2ClaimPath, { throwIfNoEntry: false }))
+    ) {
+      common.push('--claim', recognitionV2ClaimPath)
+    }
+    return common
   }
 
-  const cleanupFixture = createFixtureCleanup(config, {
+  const builder = (action) => run('go', builderArguments(action), { cwd: config.localSource })
+
+  const cleanupFixtureBase = createFixtureCleanup(config, {
     cleanupFixtureRecords: () => builder('cleanup'),
     removeManifest: () => removeCanonicalManifest(config),
     emitReceipt: (receipt) => {
       process.stderr.write(`K12 fixture manifest cleanup receipt: ${JSON.stringify(receipt)}\n`)
     },
   })
+  const cleanupFixture = async () => {
+    const receipt = await cleanupFixtureBase()
+    const metadata = lstatSync(recognitionV2ClaimPath, { throwIfNoEntry: false })
+    if (metadata) {
+      if (metadata.isDirectory()) fail('recognition v2 claim is not a file')
+      unlinkSync(recognitionV2ClaimPath)
+    }
+    return receipt
+  }
 
   const readManifest = async () => {
     const link = lstatSync(config.manifestPath)
@@ -1022,6 +1425,11 @@ export function createFixtureRuntime(config, options = {}) {
     cleanupFixture,
     readManifest,
     cancelActive,
+    recognitionV2ClaimPath,
+    collectRecognitionV2Evidence: () =>
+      runJSON('go', builderArguments('recognition-v2-finalization-evidence'), {
+        cwd: config.localSource,
+      }),
   }
   runtime.cleanup = () => {
     cleanupPromise ??= (async () => {

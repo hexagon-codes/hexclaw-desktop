@@ -14,6 +14,7 @@ interface K12FixtureGateContract {
   parentOwnedChildEnvironment: string[]
   specs: Array<{
     file: string
+    tests: string[]
     zeroSkipGates: string[]
     fixtureOverrides: string[]
   }>
@@ -24,7 +25,7 @@ const contract = JSON.parse(
 ) as K12FixtureGateContract
 
 if (
-  contract.schemaVersion !== 1 ||
+  contract.schemaVersion !== 2 ||
   contract.reportPath !== 'test-results/k12-fixtures/report.json' ||
   JSON.stringify(contract.parentOwnedChildEnvironment) !==
     '["HEX_K12_REAL_10X_CYCLE_ID","HEX_K12_REAL_10X_KNOWLEDGE_LINEAGE_PATH","HEX_K12_REAL_10X_PARENT_RUN_ID"]'
@@ -33,11 +34,40 @@ if (
 }
 
 const fixtureFiles = contract.specs.map(({ file }) => file)
-if (fixtureFiles.length !== 7 || new Set(fixtureFiles).size !== fixtureFiles.length) {
+if (
+  fixtureFiles.length !== 7 ||
+  new Set(fixtureFiles).size !== fixtureFiles.length ||
+  fixtureFiles.some(
+    (file) => typeof file !== 'string' || !/^[a-z0-9][a-z0-9-]*\.spec\.ts$/.test(file),
+  )
+) {
   throw new Error('K12 Fixture gate must contain exactly seven unique specs')
 }
 
-export const k12FixtureTestMatch = fixtureFiles.map((file) => `**/${file}`)
+const fixtureTitles: string[] = []
+const fixtureMembers = contract.specs.flatMap(({ file, tests }) => {
+  if (
+    !Array.isArray(tests) ||
+    tests.length === 0 ||
+    tests.some((title) => typeof title !== 'string' || !title.trim() || title !== title.trim())
+  ) {
+    throw new Error('K12 Fixture gate specs must declare non-empty canonical tests')
+  }
+  fixtureTitles.push(...tests)
+  return tests.map((title) => `${file} › ${title}`)
+})
+if (
+  new Set(fixtureTitles).size !== fixtureTitles.length ||
+  new Set(fixtureMembers).size !== fixtureMembers.length
+) {
+  throw new Error('K12 Fixture gate canonical tests must be unique')
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+export const k12FixtureTestMatch = fixtureFiles.map(
+  (file) => new RegExp(`[\\\\/]tests[\\\\/]e2e[\\\\/]${escapeRegExp(file)}$`),
+)
 
 /**
  * Current-source lane only:

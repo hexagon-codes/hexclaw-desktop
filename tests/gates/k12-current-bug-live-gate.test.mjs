@@ -42,6 +42,24 @@ test('dedicated contract freezes exact provider, four fixtures, six submissions 
     displayName: 'HexClaw-GPT',
     model: 'gpt-5.6-sol',
   })
+  assert.deepEqual(contract.recognitionCalibrationApproval, {
+    status: 'blocked',
+    approval_ref: null,
+    stage: 'recognizing',
+    recognition_plan_version: 2,
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    artifact_sha256: null,
+    release_config_sha256: null,
+  })
+  assert.deepEqual(contract.recognitionOnlyRequiredStrictValues, [
+    'HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT',
+    'HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256',
+  ])
+  assert.deepEqual(contract.gradingRequiredStrictValues, [
+    'HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT',
+    'HEX_K12_LIVE_GRADING_CALIBRATION_SHA256',
+  ])
   assert.equal(contract.submissions.plannedTopLevel, 6)
   assert.ok(contract.submissions.maximumTopLevel <= 8)
   assert.equal(contract.currentSource.usesMocks, false)
@@ -55,6 +73,7 @@ test('dedicated contract freezes exact provider, four fixtures, six submissions 
     contract.fixtures.homework.path,
     '/Users/guoyanjun/work/hexclaw-docs/test/k12-test-批改作业.png',
   )
+  assert.equal(contract.fixtures.homework.questionCount, 16)
   assert.deepEqual(contract.fixtures.problem, {
     env: 'HEX_K12_PROBLEM_IMAGE',
     path: '/Users/guoyanjun/work/hexclaw-docs/test/k12-test-解题.JPG',
@@ -112,6 +131,13 @@ test('dedicated config, runner and package scripts exist without a managed serve
     pkg.scripts['test:e2e:k12-current-bug-live:strict'],
     'node ./scripts/ci/k12-current-bug-live-gate.mjs --strict',
   )
+})
+
+test('recognition-only target lineage is not mutated before stopped evidence collection', async () => {
+  const spec = await readFile(repoFile('tests/live/k12-current-bug-real-matrix.spec.ts'), 'utf8')
+  assert.match(spec, /let recognitionV2ClaimPublished = false/)
+  assert.match(spec, /if \(!recognitionV2ClaimPublished\) \{\s*if \(sessionID\)/s)
+  assert.match(spec, /recognitionV2ClaimPublished = true\s*await attachJSON/s)
 })
 
 test('strict environment requires exact provider/model and explicit fixture orchestration inputs', async () => {
@@ -335,7 +361,9 @@ test('BUG-TEST-INFRA-K12-REAL-10X parent-owned C01 mode never creates a nested f
   }
   const env = {
     ...approvedContract.requiredStrictEnvironment,
-    ...Object.fromEntries(approvedContract.requiredStrictValues.map((name) => [name, `value-${name}`])),
+    ...Object.fromEntries(
+      approvedContract.requiredStrictValues.map((name) => [name, `value-${name}`]),
+    ),
     HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: '/tmp/grading-calibration.json',
     HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: 'c'.repeat(64),
     HEX_K12_REAL_10X_CYCLE_ID: 'C01',
@@ -469,3 +497,200 @@ for (const [cycle, title] of [
     )
   })
 }
+
+test('K12-LIVE-RECOGNITION-PLAN-V2 recognition-only mode selects one exact fail-closed scenario', async () => {
+  const {
+    auditCurrentBugLiveReport,
+    normalizeCurrentBugLiveArguments,
+    recognitionOnlyV2ScenarioGrep,
+    validateCurrentBugLiveArguments,
+  } = await loadRunner()
+  const parsed = normalizeCurrentBugLiveArguments(['--strict', '--recognition-only-v2'])
+  assert.deepEqual(parsed, {
+    strict: true,
+    diagnostic: 'recognition-only-v2',
+    playwrightArgs: [],
+  })
+  assert.doesNotThrow(() => validateCurrentBugLiveArguments(parsed, {}))
+  assert.throws(
+    () =>
+      validateCurrentBugLiveArguments(
+        { ...parsed, cycle: 'C02' },
+        {
+          HEX_K12_REAL_10X_CYCLE_ID: 'C02',
+          HEX_K12_REAL_10X_PARENT_OWNS_LIFECYCLE: '1',
+        },
+      ),
+    /cannot be combined/i,
+  )
+  assert.equal(
+    recognitionOnlyV2ScenarioGrep(),
+    '.*C02 recognition-only v2 stops at finalized exact-set before grading$',
+  )
+  assert.deepEqual(
+    auditCurrentBugLiveReport(
+      {
+        errors: [],
+        suites: [
+          {
+            specs: [
+              {
+                title: 'C02 recognition-only v2 stops at finalized exact-set before grading',
+                file: `/workspace/tests/live/${specFile}`,
+                tests: [
+                  {
+                    projectName: 'chromium',
+                    expectedStatus: 'passed',
+                    results: [{ status: 'passed' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { diagnostic: 'recognition-only-v2' },
+    ),
+    {
+      total: 1,
+      file: specFile,
+      project: 'chromium',
+      diagnostic: 'recognition-only-v2',
+    },
+  )
+})
+
+test('K12-LIVE-RECOGNITION-PLAN-V2 recognition-only mode cannot bypass calibration approval', async () => {
+  const { runGate } = await loadRunner()
+  const contract = JSON.parse(
+    await readFile(repoFile('tests/live/k12-current-bug-real-matrix.contract.json'), 'utf8'),
+  )
+  const approvedContract = structuredClone(contract)
+  approvedContract.gradingCalibrationApproval = {
+    status: 'approved',
+    approval_ref: 'unit-test:grading-calibration',
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    artifact_sha256: 'c'.repeat(64),
+    release_config_sha256: 'b'.repeat(64),
+  }
+  const env = {
+    ...approvedContract.requiredStrictEnvironment,
+    ...Object.fromEntries(
+      approvedContract.requiredStrictValues.map((name) => [name, `value-${name}`]),
+    ),
+    HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT: '/tmp/grading-calibration.json',
+    HEX_K12_LIVE_GRADING_CALIBRATION_SHA256: 'c'.repeat(64),
+    HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT: '/tmp/recognition-calibration.json',
+    HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256: 'd'.repeat(64),
+  }
+  const events = []
+  const stderr = []
+  const processLike = {
+    exitCode: undefined,
+    stderr: { write: (value) => stderr.push(value) },
+  }
+
+  await runGate(['--strict', '--recognition-only-v2'], {
+    env,
+    processLike,
+    contractValue: approvedContract,
+    validateEnvironment: () => events.push('validate-environment'),
+    createRuntime: () => events.push('create-runtime'),
+    runLifecycle: () => events.push('run-lifecycle'),
+    runPlaywrightGate: () => events.push('run-browser'),
+    installSignalCleanup: () => {
+      const uninstall = () => {}
+      uninstall.wait = async () => {}
+      return uninstall
+    },
+  })
+
+  assert.equal(processLike.exitCode, 2)
+  assert.deepEqual(events, [])
+  assert.match(stderr.join(''), /recognition calibration approval/i)
+})
+
+test('K12-LIVE-RECOGNITION-PLAN-V2 recognition-only mode audits stopped evidence before cleanup', async () => {
+  const { runGate } = await loadRunner()
+  const contract = JSON.parse(
+    await readFile(repoFile('tests/live/k12-current-bug-real-matrix.contract.json'), 'utf8'),
+  )
+  const approvedContract = structuredClone(contract)
+  approvedContract.recognitionCalibrationApproval = {
+    status: 'approved',
+    approval_ref: 'unit-test:recognition-v2-calibration',
+    stage: 'recognizing',
+    recognition_plan_version: 2,
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    artifact_sha256: 'd'.repeat(64),
+    release_config_sha256: 'b'.repeat(64),
+  }
+  approvedContract.recognitionOnlyRequiredStrictValues = [
+    'HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT',
+    'HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256',
+  ]
+  const env = {
+    ...approvedContract.requiredStrictEnvironment,
+    ...Object.fromEntries(
+      approvedContract.requiredStrictValues.map((name) => [name, `value-${name}`]),
+    ),
+    HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT: '/tmp/recognition-calibration.json',
+    HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256: 'd'.repeat(64),
+  }
+  const events = []
+  const runtime = {
+    stopSidecar: async () => {},
+    startFixture: async () => {},
+    readManifest: async () => ({}),
+    startSidecar: async () => {},
+    cleanupFixture: async () => {},
+    cancelActive: async () => {},
+    cleanup: async () => {},
+    recognitionV2ClaimPath: '/tmp/recognition-v2-target-claim.json',
+    collectRecognitionV2Evidence: async () => ({ receipt: true }),
+  }
+  const processLike = { exitCode: undefined, stderr: { write() {} } }
+  const recognitionPolicy = {
+    budget_buckets_millis: {
+      up_to_1_problem_millis: 30_000,
+      up_to_8_problems_millis: 60_000,
+      up_to_16_problems_millis: 120_000,
+      up_to_32_problems_millis: 240_000,
+    },
+    physical_call_cap_millis: 120_000,
+    adapter_worker_hard_cap: 2,
+    effective_concurrency: 1,
+  }
+  await runGate(['--strict', '--recognition-only-v2'], {
+    env,
+    processLike,
+    contractValue: approvedContract,
+    validateEnvironment: () => ({ fixture: true, recognitionPolicy }),
+    createRuntime: () => runtime,
+    installSignalCleanup: () => {
+      const uninstall = () => {}
+      uninstall.wait = async () => {}
+      return uninstall
+    },
+    auditRecognitionEvidence: (receipt, options) => {
+      assert.deepEqual(receipt, { receipt: true })
+      assert.deepEqual(options, {
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        questionCount: 16,
+        recognitionPolicy,
+      })
+      events.push('audit-stopped-evidence')
+    },
+    runLifecycle: async (_config, deps) => {
+      assert.equal(typeof deps.collectStoppedEvidence, 'function')
+      await deps.collectStoppedEvidence()
+      return { playwrightStatus: 0, auditPassed: true }
+    },
+  })
+
+  assert.deepEqual(events, ['audit-stopped-evidence'])
+  assert.equal(processLike.exitCode, 0)
+})

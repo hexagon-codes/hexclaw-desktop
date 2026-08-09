@@ -220,11 +220,23 @@ function parseYAMLGradingBudget(raw) {
     'rendering_seconds',
     'projecting_seconds',
     'item_concurrency',
+    'recognition_plan_version',
+    'physical_call_cap_millis',
+    'worker_hard_cap',
+    'effective_concurrency',
+  ])
+  const recognizingBucketFields = new Set([
+    'up_to_1_problem_millis',
+    'up_to_8_problems_millis',
+    'up_to_16_problems_millis',
+    'up_to_32_problems_millis',
   ])
   let k12Indent
   let k12ChildIndent
   let gradingBudgetIndent
+  let gradingBudgetChildIndent
   let bucketsIndent
+  let recognizingBucketsIndent
   let currentBucket
   let gradingBudget
 
@@ -246,6 +258,7 @@ function parseYAMLGradingBudget(raw) {
       continue
     }
     if (indent <= gradingBudgetIndent) break
+    gradingBudgetChildIndent ??= indent
 
     if (bucketsIndent !== undefined && indent > bucketsIndent) {
       let match = content.match(/^-\s*max_problems:\s*(.*?)\s*$/)
@@ -276,12 +289,37 @@ function parseYAMLGradingBudget(raw) {
       currentBucket = undefined
     }
 
+    if (recognizingBucketsIndent !== undefined && indent > recognizingBucketsIndent) {
+      const scalar = content.match(/^([a-z0-9_]+):\s*(.*?)\s*$/)
+      if (!scalar || !recognizingBucketFields.has(scalar[1])) {
+        fail('sidecar config contains an unknown recognition v2 bucket field')
+      }
+      assignUnique(
+        gradingBudget.recognizing_buckets,
+        scalar[1],
+        parseYAMLInteger(scalar[2]),
+        `k12.grading_budget.recognizing_buckets.${scalar[1]}`,
+      )
+      continue
+    }
+    if (recognizingBucketsIndent !== undefined) recognizingBucketsIndent = undefined
+
     if (/^assessing_buckets:\s*(?:#.*)?$/.test(content)) {
       assignUnique(gradingBudget, 'assessing_buckets', [], 'k12.grading_budget.assessing_buckets')
       bucketsIndent = indent
       continue
     }
-    const scalar = content.match(/^([a-z_]+):\s*(.*?)\s*$/)
+    if (/^recognizing_buckets:\s*(?:#.*)?$/.test(content)) {
+      assignUnique(
+        gradingBudget,
+        'recognizing_buckets',
+        {},
+        'k12.grading_budget.recognizing_buckets',
+      )
+      recognizingBucketsIndent = indent
+      continue
+    }
+    const scalar = content.match(/^([a-z0-9_]+):\s*(.*?)\s*$/)
     if (scalar && scalarFields.has(scalar[1])) {
       assignUnique(
         gradingBudget,
@@ -289,9 +327,68 @@ function parseYAMLGradingBudget(raw) {
         parseYAMLInteger(scalar[2]),
         `k12.grading_budget.${scalar[1]}`,
       )
+      continue
+    }
+    if (indent === gradingBudgetChildIndent) {
+      fail('sidecar config contains an unknown K12 grading budget field')
     }
   }
   return gradingBudget
+}
+
+const RECOGNIZING_BUCKET_FIELDS = [
+  'up_to_1_problem_millis',
+  'up_to_8_problems_millis',
+  'up_to_16_problems_millis',
+  'up_to_32_problems_millis',
+]
+
+function exactObjectFields(value, fields) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return false
+  const actual = Object.keys(value).sort()
+  const expected = [...fields].sort()
+  return (
+    actual.length === expected.length && actual.every((field, index) => field === expected[index])
+  )
+}
+
+export function frozenRecognitionV2Policy(binding) {
+  const gradingBudget = binding?.gradingBudget
+  if (!gradingBudget || Array.isArray(gradingBudget) || typeof gradingBudget !== 'object') {
+    fail('recognition v2 requires a frozen K12 grading budget')
+  }
+  if (gradingBudget.recognition_plan_version !== 2) {
+    fail('recognition v2 requires recognition_plan_version=2')
+  }
+  const buckets = gradingBudget.recognizing_buckets
+  if (!exactObjectFields(buckets, RECOGNIZING_BUCKET_FIELDS)) {
+    fail('recognition v2 requires exact 1/8/16/32 recognizing buckets')
+  }
+  const values = RECOGNIZING_BUCKET_FIELDS.map((field) => buckets[field])
+  if (
+    values.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+    values.some((value, index) => index > 0 && value < values[index - 1])
+  ) {
+    fail('recognition v2 requires positive monotonic 1/8/16/32 recognizing buckets')
+  }
+  if (gradingBudget.physical_call_cap_millis !== 120_000) {
+    fail('recognition v2 physical_call_cap_millis must be 120000')
+  }
+  if (gradingBudget.worker_hard_cap !== 2) {
+    fail('recognition v2 worker_hard_cap must be 2')
+  }
+  if (gradingBudget.effective_concurrency !== 1) {
+    fail('recognition v2 release effective_concurrency must be 1')
+  }
+  if (gradingBudget.recognizing_seconds !== Math.ceil(buckets.up_to_32_problems_millis / 1_000)) {
+    fail('recognition v2 recognizing_seconds must match the 32-problem bucket')
+  }
+  return Object.freeze({
+    budget_buckets_millis: Object.freeze({ ...buckets }),
+    physical_call_cap_millis: gradingBudget.physical_call_cap_millis,
+    adapter_worker_hard_cap: gradingBudget.worker_hard_cap,
+    effective_concurrency: gradingBudget.effective_concurrency,
+  })
 }
 
 export function parseSidecarBinding(raw) {
@@ -376,6 +473,18 @@ function requireFrozenGradingBudget(binding) {
     gradingBudget.item_concurrency > 32
   ) {
     fail('k12.grading_budget.item_concurrency must be an integer from 1 through 32')
+  }
+  if (gradingBudget.recognition_plan_version === 1) {
+    if (
+      gradingBudget.recognizing_buckets !== undefined ||
+      gradingBudget.physical_call_cap_millis !== undefined ||
+      gradingBudget.worker_hard_cap !== undefined ||
+      gradingBudget.effective_concurrency !== undefined
+    ) {
+      fail('recognition plan v1 must not carry v2 release parameters')
+    }
+  } else {
+    frozenRecognitionV2Policy(binding)
   }
 }
 

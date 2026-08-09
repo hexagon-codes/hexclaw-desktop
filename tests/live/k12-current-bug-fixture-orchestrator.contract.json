@@ -9,6 +9,16 @@
     "sidecar_stop",
     "fixture_cleanup"
   ],
+  "recognitionOnlySequence": [
+    "sidecar_stop",
+    "fixture_start",
+    "manifest_validate",
+    "sidecar_start",
+    "strict_gate",
+    "sidecar_stop",
+    "recognition_v2_evidence",
+    "fixture_cleanup"
+  ],
   "builderCommand": ["go", "run", "-tags", "testtools", "./cmd/k12-live-fixture-testtools"],
   "manifestExactFields": [
     "schema_version",
@@ -22,6 +32,11 @@
     "HEX_K12_LIVE_RETRYABLE_DISPATCH_ID",
     "HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID"
   ],
+  "recognitionOnlyInjectedEnvironment": ["HEX_K12_LIVE_RECOGNITION_V2_CLAIM"],
+  "recognitionOnlyRequiredEnvironment": [
+    "HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT",
+    "HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256"
+  ],
   "requiredEnvironment": [
     "HEXCLAW_LOCAL_SRC",
     "HEX_K12_LIVE_FIXTURE_PROFILE",
@@ -30,11 +45,13 @@
     "HEX_K12_LIVE_SIDECAR_CONTROL",
     "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
     "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
-    "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
-    "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256",
     "HEX_K12_LIVE_APP_URL",
     "HEX_K12_LIVE_SIDECAR_URL",
     "HEX_K12_LIVE_APP_SHA256"
+  ],
+  "gradingRequiredEnvironment": [
+    "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
+    "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256"
   ],
   "manifestCleanup": {
     "order": [

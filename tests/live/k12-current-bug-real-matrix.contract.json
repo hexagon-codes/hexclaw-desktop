@@ -22,6 +22,16 @@
     "artifact_sha256": null,
     "release_config_sha256": null
   },
+  "recognitionCalibrationApproval": {
+    "status": "blocked",
+    "approval_ref": null,
+    "stage": "recognizing",
+    "recognition_plan_version": 2,
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "artifact_sha256": null,
+    "release_config_sha256": null
+  },
   "submissions": {
     "plannedTopLevel": 6,
     "maximumTopLevel": 8
@@ -41,7 +51,8 @@
       "sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
       "bytes": 2178059,
       "width": 1086,
-      "height": 1448
+      "height": 1448,
+      "questionCount": 16
     },
     "problem": {
       "env": "HEX_K12_PROBLEM_IMAGE",
@@ -82,9 +93,15 @@
     "HEX_K12_LIVE_FIXTURE_MANIFEST",
     "HEX_K12_LIVE_SIDECAR_CONTROL",
     "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
-    "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
+    "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG"
+  ],
+  "gradingRequiredStrictValues": [
     "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
     "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256"
+  ],
+  "recognitionOnlyRequiredStrictValues": [
+    "HEX_K12_LIVE_RECOGNITION_CALIBRATION_ARTIFACT",
+    "HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256"
   ],
   "forbiddenRequestPathPrefixes": [
     "/api/k12/tutoring-tips/send",

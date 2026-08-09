@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "reportPath": "test-results/k12-fixtures/report.json",
   "currentSource": {
     "description": "The caller starts the current-source Desktop UI and Sidecar; this gate never creates or substitutes either service.",
@@ -15,31 +15,66 @@
   "specs": [
     {
       "file": "ftue-dynamic.spec.ts",
+      "tests": [
+        "§1.2 FTUE upload anchor reads the frozen real-fixture SHA",
+        "dynamic K12 first-use owner and thread › non-default textbook persists through the visible template flow and refresh",
+        "dynamic K12 first-use owner and thread › the first request creates a visible durable thread and survives refresh",
+        "dynamic K12 first-use owner and thread › two equal display names keep distinct learner and TutorAgent identities when one is renamed"
+      ],
       "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
       "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR"]
     },
     {
       "file": "grading-real-fixtures.spec.ts",
+      "tests": [
+        "§1.2 grading manifest has all three immutable image identities",
+        "real grading/solving fixture oracle › clear sheet preserves the correct result plus process error and visible annotation evidence",
+        "real grading/solving fixture oracle › messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross",
+        "real grading/solving fixture oracle › blank sheet stays solve-only and does not create a mistake projection"
+      ],
       "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
       "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR", "HEX_K12_PHOTO_MESSY", "HEX_K12_PHOTO_BLANK"]
     },
     {
       "file": "creative-real-fixtures.spec.ts",
+      "tests": [
+        "§1.2 creative manifest freezes writing and art source bytes",
+        "real creative source, OCR, owner and feedback › art upload stores the frozen image under the exact Tutor owner and round-trips its bytes",
+        "real creative source, OCR, owner and feedback › writing photo requires OCR confirmation, source-grounded feedback and a separate non-empty second work",
+        "real creative source, OCR, owner and feedback › art save automatically produces feedback that cites visible elements",
+        "real creative source, OCR, owner and feedback › BUG-20260725-009 real initial feedback and regeneration preserve generation identity"
+      ],
       "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL", "HEX_K12_CREATIVE_AI"],
       "fixtureOverrides": ["HEX_K12_WRITING_IMAGE", "HEX_K12_ART_IMAGE"]
     },
     {
       "file": "grounding-pdf.spec.ts",
+      "tests": [
+        "§1.2 tracked PDF manifest and verifier match both immutable sources",
+        "real K12 grounding PDF lifecycle › 131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval",
+        "real K12 grounding PDF lifecycle › 122-page scanned PDF exposes OCR progress and a persisted cancel/resume boundary"
+      ],
       "zeroSkipGates": ["HEX_K12_KNOWLEDGE_LIVE", "HEX_K12_SCAN_OCR_LIVE"],
       "fixtureOverrides": ["HEX_FIXTURE_TEXTBOOK_PDF", "HEX_FIXTURE_SCANNED_TEXTBOOK_PDF"]
     },
     {
       "file": "practice-integrity.spec.ts",
+      "tests": [
+        "§1.2 practice return source reads the frozen photo SHA",
+        "real practice basket, paper projection and return evidence › verified and blocked items produce one immutable question/answer exact-set"
+      ],
       "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_PRACTICE_LIVE"],
       "fixtureOverrides": ["HEX_K12_PHOTO_BLANK"]
     },
     {
       "file": "role-privacy.spec.ts",
+      "tests": [
+        "§1.2 privacy source reads the frozen art SHA without logging payload bytes",
+        "K12 role and privacy release boundary › same real image remains owner-scoped in DOM, asset HTTP and CreativeWork detail",
+        "K12 role and privacy release boundary › common privacy notice remains in Settings without a K12-only data-route promise",
+        "K12 role and privacy release boundary › child role cannot reach answer/export/delete/model controls or mutate them",
+        "K12 role and privacy release boundary › third-party embedding payload boundary is checked by an external capture fixture"
+      ],
       "zeroSkipGates": [
         "HEX_K12_ACCEPTANCE_LIVE",
         "HEX_K12_ROLE_MODE",
@@ -50,6 +85,13 @@
     },
     {
       "file": "responsive-a11y.spec.ts",
+      "tests": [
+        "§1.2 responsive/a11y gate freezes the clear-sheet source identity",
+        "K12 responsive and accessibility release gate › core archive and add-work dialog stay operable at four canonical viewports and 200% zoom",
+        "K12 responsive and accessibility release gate › archive controls and add-work modal expose names, roles, states, focus and Escape return",
+        "K12 responsive and accessibility release gate › reduced-motion keeps the core journey stable and disables infinite decorative motion",
+        "K12 responsive and accessibility release gate › real photo recognition is completable by keyboard with named live status and non-color verdicts"
+      ],
       "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
       "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR"]
     }

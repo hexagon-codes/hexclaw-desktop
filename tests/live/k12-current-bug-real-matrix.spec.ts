@@ -33,6 +33,7 @@ import {
 } from './k12-operation-receipt-poll'
 import { installDiagnosticBrowserSidecarBridge } from './k12-diagnostic-browser-sidecar-transport'
 import { summarizePhotoAnnotationCoverage } from './k12-photo-annotation-coverage'
+import { writeRecognitionV2TargetClaim } from '../../scripts/ci/k12-recognition-v2-target-claim.mjs'
 
 type Json = Record<string, unknown>
 type FixtureKey = 'writing' | 'homework' | 'problem' | 'art'
@@ -85,6 +86,7 @@ const blockers = [
   ),
 ]
 const real10xCycle = envValue('HEX_K12_REAL_10X_CYCLE_ID')
+const recognitionOnlyV2 = envValue('HEX_K12_LIVE_DIAGNOSTIC_MODE') === 'recognition-only-v2'
 
 /**
  * The canonical release lane serves the frozen UI and its Sidecar on :16060.
@@ -958,8 +960,9 @@ function normalizeSemantic(value: unknown): string {
   return String(value ?? '')
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/(\d+)\\frac/g, '$1又\\frac')
-    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '$1/$2')
+    .replace(/\$([^$\n]+)\$/g, '$1')
+    .replace(/(\d+)(\\(?:d?frac|tfrac))/g, '$1又$2')
+    .replace(/\\(?:d?frac|tfrac)\{([^{}]+)\}\{([^{}]+)\}/g, '$1/$2')
     .replace(/\\times/g, '*')
     .replace(/\\div/g, '/')
     .replace(/[×x*]/g, '*')
@@ -968,6 +971,7 @@ function normalizeSemantic(value: unknown): string {
     .replace(/[＋]/g, '+')
     .replace(/[＝]/g, '=')
     .replace(/平方/g, '2')
+    .replace(/(?<=\d)、(?=\d)/g, '')
     .replace(/[（）(){}，,。；;：:\s^]/g, '')
 }
 
@@ -978,6 +982,50 @@ function expectSemanticAlternative(value: unknown, alternatives: readonly string
     `${label}: ${JSON.stringify(alternatives)} must match normalized semantic text`,
   ).toBe(true)
 }
+
+test('K12-LIVE-C02-SEMANTIC-ORACLE-001 recognizes approved TeX fraction macro aliases', () => {
+  for (const fraction of [
+    String.raw`\frac{3}{8}是24`,
+    String.raw`\dfrac{3}{8}是24`,
+    String.raw`\tfrac{3}{8}是24`,
+  ]) {
+    expectSemanticAlternative(fraction, ['3/8是24'], 'approved fraction syntax')
+  }
+})
+
+test('K12-LIVE-C02-SEMANTIC-ORACLE-001 recognizes approved mixed-fraction aliases', () => {
+  for (const fraction of [
+    String.raw`6\frac{2}{7}`,
+    String.raw`6\dfrac{2}{7}`,
+    String.raw`6\tfrac{2}{7}`,
+  ]) {
+    expectSemanticAlternative(fraction, ['6又2/7'], 'approved mixed-fraction syntax')
+  }
+})
+
+test('K12-LIVE-C02-SEMANTIC-ORACLE-001 recognizes standard math delimiters and numeric enumeration separators', () => {
+  expectSemanticAlternative(
+    String.raw`一个数的 $\frac{3}{8}$ 是 $24$，求这个数？`,
+    ['3/8是24'],
+    'standard math delimiters',
+  )
+  for (const separator of [',', '，', '、']) {
+    expectSemanticAlternative(
+      `在下列六个数：5${separator}6${separator}12${separator}14${separator}23${separator}29中`,
+      ['5,6,12,14,23,29'],
+      'numeric enumeration separators',
+    )
+  }
+})
+
+test('K12-LIVE-C02-SEMANTIC-ORACLE-001 keeps non-equivalent fractions distinct', () => {
+  expect(normalizeSemantic(String.raw`\dfrac{3}{7}是24`)).not.toContain(
+    normalizeSemantic('3/8是24'),
+  )
+  expect(normalizeSemantic(String.raw`\unknownfrac{3}{8}是24`)).not.toContain(
+    normalizeSemantic('3/8是24'),
+  )
+})
 
 function assertParentGuide(value: unknown, label: string): Json {
   const guide = record(value, `${label} parent guide`)
@@ -1014,24 +1062,64 @@ function recognizedQuestions(dispatch: Json, label: string): Json[] {
   return array(recognition.questions, `${label} recognition questions`)
 }
 
-function assertHomeworkSourceFacts(questions: Json[], label: string): void {
-  expect(questions, `${label} question count`).toHaveLength(homeworkGroundTruth.length)
+type HomeworkSourceField =
+  | 'source_number_path'
+  | 'display_label'
+  | 'source_section_path'
+  | 'source_section_label'
+  | 'system_section_ordinal'
+  | 'system_display_label'
+
+function assertHomeworkSourceFact(
+  index: number,
+  field: HomeworkSourceField,
+  actual: unknown,
+  expected: unknown,
+): void {
+  try {
+    expect(actual).toEqual(expected)
+  } catch {
+    throw new Error(`C02 source exact-set mismatch index=${index + 1} field=${field}`)
+  }
+}
+
+function assertHomeworkSourceFacts(questions: Json[]): void {
+  if (questions.length !== homeworkGroundTruth.length) {
+    throw new Error(
+      `C02 recognition exact-set count mismatch expected=${homeworkGroundTruth.length} actual=${questions.length}`,
+    )
+  }
   questions.forEach((question, index) => {
     const expected = homeworkGroundTruth[index]!.source
-    expect(question.source_number_path, `${expected.label} source_number_path`).toEqual(
+    assertHomeworkSourceFact(
+      index,
+      'source_number_path',
+      question.source_number_path,
       expected.sourceNumberPath,
     )
-    expect(question.display_label, `${expected.label} display_label`).toBe(expected.displayLabel)
-    expect(question.source_section_path, `${expected.label} source_section_path`).toEqual(
+    assertHomeworkSourceFact(index, 'display_label', question.display_label, expected.displayLabel)
+    assertHomeworkSourceFact(
+      index,
+      'source_section_path',
+      question.source_section_path,
       expected.sourceSectionPath,
     )
-    expect(question.source_section_label, `${expected.label} source_section_label`).toBe(
+    assertHomeworkSourceFact(
+      index,
+      'source_section_label',
+      question.source_section_label,
       expected.sourceSectionLabel,
     )
-    expect(question.system_section_ordinal, `${expected.label} system_section_ordinal`).toBe(
+    assertHomeworkSourceFact(
+      index,
+      'system_section_ordinal',
+      question.system_section_ordinal,
       expected.systemSectionOrdinal,
     )
-    expect(question.system_display_label, `${expected.label} system_display_label`).toBe(
+    assertHomeworkSourceFact(
+      index,
+      'system_display_label',
+      question.system_display_label,
       expected.systemDisplayLabel,
     )
   })
@@ -1106,10 +1194,7 @@ function assertHomeworkResult(payload: Json): void {
   expect(typeof payload.image_warning).toBe('string')
   const items = array(payload.items, 'homework result items')
   expect(items).toHaveLength(homeworkGroundTruth.length)
-  assertHomeworkSourceFacts(
-    items.map((item) => record(item.question, 'homework result question')),
-    'homework result',
-  )
+  assertHomeworkSourceFacts(items.map((item) => record(item.question, 'homework result question')))
   items.forEach((item, index) => {
     const oracle = homeworkGroundTruth[index]!
     const label = oracle.source.label
@@ -1315,6 +1400,7 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
 
   let sessionID = ''
   let sessionTitle = ''
+  let recognitionV2ClaimPublished = false
   const createdWorkIDs: string[] = []
 
   test.afterEach(async ({ request }) => {
@@ -1326,11 +1412,167 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         `/api/k12/creative-works/${encodeURIComponent(workID)}?agent=${encodeURIComponent(agent)}`,
       ).catch(() => undefined)
     }
-    if (sessionID) await cleanupLiveSession(request, sessionID)
-    else if (sessionTitle) await cleanupLiveSessionsByTitle(request, sessionTitle)
+    if (!recognitionV2ClaimPublished) {
+      if (sessionID) await cleanupLiveSession(request, sessionID)
+      else if (sessionTitle) await cleanupLiveSessionsByTitle(request, sessionTitle)
+    }
+    recognitionV2ClaimPublished = false
     sessionID = ''
     sessionTitle = ''
   })
+
+  if (recognitionOnlyV2) {
+    test('C02 recognition-only v2 stops at finalized exact-set before grading', async ({
+      page,
+      request,
+    }, testInfo: TestInfo) => {
+      await assertLiveRuntime(page, request, testInfo)
+      const llm = await liveJSON<{ providers?: Record<string, Json> }>(
+        request,
+        'GET',
+        '/api/v1/config/llm',
+      )
+      const configured = llm.providers?.[contract.provider.identity]
+      expect(configured?.display_name).toBe(contract.provider.displayName)
+      expect([
+        configured?.model,
+        ...(Array.isArray(configured?.models) ? configured.models : []),
+      ]).toContain(contract.provider.model)
+
+      sessionTitle = `LIVE-K12-C02-RECOGNITION-ONLY-${randomUUID().slice(0, 8)}`
+      await page.goto(
+        liveAppURL(
+          `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
+        ),
+        { waitUntil: 'domcontentloaded' },
+      )
+      expect(new URL(page.url()).pathname, 'authorized profile must not enter onboarding').not.toBe(
+        '/welcome',
+      )
+      await expect(page.getByTestId('chat-input')).toBeVisible()
+      sessionID = await findLiveSessionByTitle(request, sessionTitle)
+
+      const forbiddenRequests: string[] = []
+      const gradingMutations: string[] = []
+      page.on('request', (outgoing) => {
+        const path = new URL(outgoing.url()).pathname.replace(/^\/_hexclaw/, '')
+        if (contract.forbiddenRequestPathPrefixes.some((prefix) => path.startsWith(prefix))) {
+          forbiddenRequests.push(`forbidden:${outgoing.method()}`)
+        }
+        if (
+          outgoing.method() === 'POST' &&
+          (/^\/api\/k12\/image-tasks\/[^/]+\/(?:confirm|retry|cancel)$/.test(path) ||
+            /^\/api\/k12\/image-tasks\/[^/]+\/problems\/[^/]+\/source-actions$/.test(path))
+        ) {
+          gradingMutations.push(`grading-mutation:${outgoing.method()}`)
+        }
+      })
+
+      const homework = await submitImage(page, 'homework', true)
+      const homeworkDispatchId = await dispatchID(homework.shell)
+      const deadline = Date.now() + 12 * 60_000
+      let homeworkDispatch: Json | undefined
+      let snapshots: FacadeSnapshot[] = []
+      try {
+        while (Date.now() < deadline) {
+          homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
+          snapshots = await homework.trace!.snapshots(homeworkDispatchId)
+          const forbiddenStage = snapshots.find((snapshot) =>
+            ['locating', 'assessing', 'projecting'].includes(snapshot.projection_stage),
+          )
+          if (forbiddenStage) {
+            throw new Error(
+              `recognition-only v2 entered forbidden stage ${forbiddenStage.projection_stage}`,
+            )
+          }
+          const projection =
+            homeworkDispatch.target_projection &&
+            typeof homeworkDispatch.target_projection === 'object' &&
+            !Array.isArray(homeworkDispatch.target_projection)
+              ? (homeworkDispatch.target_projection as Json)
+              : undefined
+          const recognition =
+            projection?.recognition &&
+            typeof projection.recognition === 'object' &&
+            !Array.isArray(projection.recognition)
+              ? (projection.recognition as Json)
+              : undefined
+          const questionCount = Array.isArray(recognition?.questions)
+            ? recognition.questions.length
+            : 0
+          if (
+            projection?.stage === 'awaiting_confirmation' &&
+            projection.confirmation_state === 'pending' &&
+            questionCount === homeworkGroundTruth.length
+          ) {
+            break
+          }
+          if (
+            ['failed', 'cancelled'].includes(String(homeworkDispatch.status ?? '')) ||
+            ['failed_retryable', 'failed_terminal', 'cancelled'].includes(
+              String(projection?.stage ?? ''),
+            )
+          ) {
+            throw new Error(
+              `recognition-only v2 terminated at ${String(homeworkDispatch.status ?? '')}/${String(projection?.stage ?? '')}`,
+            )
+          }
+          await page.waitForTimeout(250)
+        }
+      } finally {
+        snapshots = await homework.trace!.snapshots(homeworkDispatchId)
+        homework.trace!.stop()
+        await attachJSON(testInfo, 'k12-recognition-only-v2-facade-trace', {
+          dispatch_id_sha256: sha256Text(homeworkDispatchId),
+          request_count: snapshots.length,
+          snapshots,
+        })
+      }
+      expect(homeworkDispatch, 'recognition-only v2 must reach one public dispatch').toBeTruthy()
+      const projection = record(
+        homeworkDispatch!.target_projection,
+        'recognition-only homework projection',
+      )
+      expect(projection.stage).toBe('awaiting_confirmation')
+      expect(projection.confirmation_state).toBe('pending')
+      const questions = recognizedQuestions(
+        homeworkDispatch!,
+        'recognition-only completed homework',
+      )
+      assertHomeworkSourceFacts(questions)
+      await expect(homework.shell.getByTestId('rq-item')).toHaveCount(homeworkGroundTruth.length)
+      await expect(homework.shell.getByTestId('photo-grade-overlay')).toHaveCount(0)
+
+      const history = await listHistory(request, sessionID)
+      expect(history.filter((message) => message.role === 'user')).toHaveLength(1)
+      const persisted = history.find(
+        (message) => record(message, 'history message').id === homework.sourceId,
+      )
+      expect(persisted).toBeTruthy()
+      const persistedBytes = attachmentBytes(persisted!)
+      expect(persistedBytes.length).toBe(contract.fixtures.homework.bytes)
+      expect(sha256(persistedBytes)).toBe(contract.fixtures.homework.sha256)
+      expect(forbiddenRequests).toEqual([])
+      expect(gradingMutations).toEqual([])
+
+      const claim = await writeRecognitionV2TargetClaim({
+        profilePath: envValue('HEX_K12_LIVE_FIXTURE_PROFILE'),
+        claimPath: envValue('HEX_K12_LIVE_RECOGNITION_V2_CLAIM'),
+        targetAgent: envValue('HEX_K12_LIVE_AGENT'),
+        dispatchID: homeworkDispatchId,
+        sourceSessionID: sessionID,
+        sourceDigest: contract.fixtures.homework.sha256,
+      })
+      recognitionV2ClaimPublished = true
+      await attachJSON(testInfo, 'k12-recognition-only-v2-target-claim', {
+        fixture_sha256: contract.fixtures.homework.sha256,
+        question_count: questions.length,
+        ...claim,
+        forbidden_delivery_requests: forbiddenRequests,
+        grading_mutations: gradingMutations,
+      })
+    })
+  }
 
   if (real10xCycle === 'C01') {
     test('C01 solve image preserves one durable receipt and attachment identity', async ({
@@ -1351,6 +1593,7 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       ]).toContain(contract.provider.model)
 
       sessionTitle = `LIVE-K12-C01-${randomUUID().slice(0, 8)}`
+      await page.setViewportSize({ width: 1440, height: 900 })
       await page.goto(
         liveAppURL(
           `/chat?role=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}&roleTitle=${encodeURIComponent(sessionTitle)}&model=${encodeURIComponent(contract.provider.model)}`,
@@ -1397,6 +1640,47 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       expect(persistedProblemBytes.length).toBe(contract.fixtures.problem.bytes)
       expect(sha256(persistedProblemBytes)).toBe(contract.fixtures.problem.sha256)
       expect(forbiddenRequests).toEqual([])
+      const guide = problem.shell.getByTestId('blank-worksheet-parent-guide')
+      await expect(guide, 'real blank worksheet result must project its parent guide').toBeVisible({
+        timeout: 120_000,
+      })
+      const scrollHost = page.locator('.hc-chat__messages')
+      const [assistantBox, guideBox, scrollHostBox, guideStyle] = await Promise.all([
+        problem.shell.boundingBox(),
+        guide.boundingBox(),
+        scrollHost.boundingBox(),
+        guide.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return {
+            boxSizing: style.boxSizing,
+            width: style.width,
+            margin: style.margin,
+            padding: style.padding,
+            overflowX: style.overflowX,
+          }
+        }),
+      ])
+      expect(assistantBox, 'real installed assistant row geometry').not.toBeNull()
+      expect(guideBox, 'real installed guide geometry').not.toBeNull()
+      expect(scrollHostBox, 'real installed conversation viewport geometry').not.toBeNull()
+      expect(Math.round(assistantBox!.width)).toBe(826)
+      expect(Math.round(guideBox!.width)).toBe(780)
+      expect(Math.round(guideBox!.x - assistantBox!.x)).toBe(46)
+      expect(
+        guideBox!.y,
+        'first real guide reveal must keep its title inside the conversation viewport',
+      ).toBeGreaterThanOrEqual(scrollHostBox!.y)
+      await testInfo.attach('BUG-20260724-014-installed-real-guide.png', {
+        body: await page.screenshot({ animations: 'disabled' }),
+        contentType: 'image/png',
+      })
+      await attachJSON(testInfo, 'BUG-20260724-014-installed-real-guide-geometry', {
+        viewport: { width: 1440, height: 900, device_scale_factor: 1 },
+        assistant_row: assistantBox,
+        guide: guideBox,
+        scroll_host: scrollHostBox,
+        guide_computed_style: guideStyle,
+      })
       await attachJSON(testInfo, 'k12-real-10x-C01-receipt', {
         cycle: 'C01',
         dispatch_id_sha256: sha256Text(problemDispatchId),
@@ -1459,16 +1743,12 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       const homeworkDispatchId = await dispatchID(homework.shell)
       const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
       const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
-      assertHomeworkSourceFacts(homeworkQuestions, 'completed homework')
+      assertHomeworkSourceFacts(homeworkQuestions)
       const rows = guard.getByTestId('rq-item')
       await expect(rows).toHaveCount(sourceLabels.length)
       const gradeAll = guard.getByTestId('recognize-grade-all')
       if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
-      const overlay = await waitForHomeworkOverlayOrTerminalFailure(
-        page,
-        guard,
-        homeworkDispatchId,
-      )
+      const overlay = await waitForHomeworkOverlayOrTerminalFailure(page, guard, homeworkDispatchId)
 
       const homeworkResult = await liveJSON<Json>(
         request,
@@ -1728,7 +2008,7 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       const homeworkDispatchId = await dispatchID(homework.shell)
       const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)
       const homeworkQuestions = recognizedQuestions(homeworkDispatch, 'completed homework')
-      assertHomeworkSourceFacts(homeworkQuestions, 'completed homework')
+      assertHomeworkSourceFacts(homeworkQuestions)
       homeworkQuestions.forEach((question, index) => {
         const oracle = homeworkGroundTruth[index]!
         const source = oracle.source

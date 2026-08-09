@@ -11,8 +11,10 @@ import {
   runFixtureLifecycle,
   validateGradingCalibrationApproval,
   validateFixtureEnvironment,
+  validateRecognitionCalibrationApproval,
 } from './k12-current-bug-fixture-orchestrator.mjs'
 import { parseStrictJSON } from './k12-strict-json.mjs'
+import { auditRecognitionOnlyV2Evidence } from './k12-recognition-only-v2-evidence.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
@@ -41,6 +43,10 @@ const real10xCycleScenarios = Object.freeze({
     title: 'C06 art review preserves one canonical work',
   }),
 })
+const recognitionOnlyV2Diagnostic = Object.freeze({
+  mode: 'recognition-only-v2',
+  title: 'C02 recognition-only v2 stops at finalized exact-set before grading',
+})
 
 function real10xScenario(cycle) {
   return real10xCycleScenarios[cycle]
@@ -52,6 +58,10 @@ export function real10xScenarioGrep(cycle) {
   return `.*${scenario.title.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`
 }
 
+export function recognitionOnlyV2ScenarioGrep() {
+  return `.*${recognitionOnlyV2Diagnostic.title.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`
+}
+
 function collectSpecs(suites, target = []) {
   for (const suite of suites ?? []) {
     target.push(...(suite.specs ?? []))
@@ -60,7 +70,7 @@ function collectSpecs(suites, target = []) {
   return target
 }
 
-export function auditCurrentBugLiveReport(report, { cycle } = {}) {
+export function auditCurrentBugLiveReport(report, { cycle, diagnostic } = {}) {
   if (!report || typeof report !== 'object') {
     throw new Error('K12 current-bug LIVE strict gate: report is not an object')
   }
@@ -76,7 +86,14 @@ export function auditCurrentBugLiveReport(report, { cycle } = {}) {
   if (cycle !== undefined && !scenario) {
     throw new Error(`K12 current-bug LIVE strict gate: unsupported real-10x cycle ${cycle}`)
   }
-  const expectedTotal = scenario ? 1 : 3
+  if (diagnostic !== undefined && diagnostic !== recognitionOnlyV2Diagnostic.mode) {
+    throw new Error(`K12 current-bug LIVE strict gate: unsupported diagnostic ${diagnostic}`)
+  }
+  if (scenario && diagnostic) {
+    throw new Error('K12 current-bug LIVE strict gate: cycle and diagnostic cannot be combined')
+  }
+  const expectedTitle = scenario?.title ?? (diagnostic ? recognitionOnlyV2Diagnostic.title : '')
+  const expectedTotal = expectedTitle ? 1 : 3
   let total = 0
   const invalid = []
   for (const spec of specs) {
@@ -88,7 +105,7 @@ export function auditCurrentBugLiveReport(report, { cycle } = {}) {
         test.expectedStatus !== 'passed' ||
         results.length === 0 ||
         results.some(({ status }) => status !== 'passed') ||
-        (scenario && spec.title !== scenario.title)
+        (expectedTitle && spec.title !== expectedTitle)
       ) {
         invalid.push(
           `${spec.title ?? test.title ?? 'unnamed'} [${test.projectName ?? 'no-project'}]`,
@@ -106,7 +123,13 @@ export function auditCurrentBugLiveReport(report, { cycle } = {}) {
       `K12 current-bug LIVE strict gate: skipped/incomplete/non-passing results\n - ${invalid.join('\n - ')}`,
     )
   }
-  return { total, file: contract.specFile, project: contract.project, ...(scenario ? { cycle } : {}) }
+  return {
+    total,
+    file: contract.specFile,
+    project: contract.project,
+    ...(scenario ? { cycle } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
+  }
 }
 
 export function normalizeCurrentBugLiveArguments(argv) {
@@ -114,24 +137,41 @@ export function normalizeCurrentBugLiveArguments(argv) {
   const strict = playwrightArgs[0] === '--strict'
   if (strict) playwrightArgs.shift()
   if (playwrightArgs[0] === '--') playwrightArgs.shift()
+  let diagnostic
+  if (strict && playwrightArgs[0] === '--recognition-only-v2') {
+    diagnostic = recognitionOnlyV2Diagnostic.mode
+    playwrightArgs.shift()
+  }
   let cycle
   if (strict && playwrightArgs[0] === '--cycle') {
     cycle = playwrightArgs[1]
     playwrightArgs.splice(0, 2)
   }
-  return { strict, ...(cycle === undefined ? {} : { cycle }), playwrightArgs }
+  return {
+    strict,
+    ...(cycle === undefined ? {} : { cycle }),
+    ...(diagnostic === undefined ? {} : { diagnostic }),
+    playwrightArgs,
+  }
 }
 
 export function validateCurrentBugLiveArguments(
-  { strict, cycle, playwrightArgs },
+  { strict, cycle, diagnostic, playwrightArgs },
   env = process.env,
 ) {
   if (strict && playwrightArgs.length > 0) {
     throw new Error('K12 current-bug LIVE strict gate does not accept Playwright filters')
   }
+  if (diagnostic !== undefined) {
+    if (!strict || diagnostic !== recognitionOnlyV2Diagnostic.mode || cycle !== undefined) {
+      throw new Error('K12 current-bug LIVE strict gate diagnostic cannot be combined with a cycle')
+    }
+  }
   if (cycle === undefined) return
   if (!strict || typeof cycle !== 'string' || !real10xScenario(cycle)) {
-    throw new Error('K12 current-bug LIVE strict gate accepts only a supported parent-injected cycle')
+    throw new Error(
+      'K12 current-bug LIVE strict gate accepts only a supported parent-injected cycle',
+    )
   }
   if (
     env.HEX_K12_REAL_10X_CYCLE_ID !== cycle ||
@@ -141,7 +181,7 @@ export function validateCurrentBugLiveArguments(
   }
 }
 
-export function strictEnvironmentBlockers(env, contractValue = contract) {
+export function strictEnvironmentBlockers(env, contractValue = contract, { diagnostic } = {}) {
   const blockers = []
   for (const [name, expected] of Object.entries(contractValue.requiredStrictEnvironment)) {
     if ((env[name] ?? '').trim() !== expected) blockers.push(`${name}=${expected}`)
@@ -149,13 +189,31 @@ export function strictEnvironmentBlockers(env, contractValue = contract) {
   for (const name of contractValue.requiredStrictValues) {
     if (!(env[name] ?? '').trim()) blockers.push(name)
   }
-  try {
-    validateGradingCalibrationApproval(contractValue.gradingCalibrationApproval, {
-      provider: contractValue.provider?.identity,
-      model: contractValue.provider?.model,
-    })
-  } catch {
-    blockers.push('grading calibration approval')
+  if (diagnostic === recognitionOnlyV2Diagnostic.mode) {
+    for (const name of contractValue.recognitionOnlyRequiredStrictValues ?? []) {
+      if (!(env[name] ?? '').trim()) blockers.push(name)
+    }
+    try {
+      validateRecognitionCalibrationApproval(contractValue.recognitionCalibrationApproval, {
+        provider: contractValue.provider?.identity,
+        model: contractValue.provider?.model,
+        artifactSHA256: env.HEX_K12_LIVE_RECOGNITION_CALIBRATION_SHA256?.trim().toLowerCase(),
+      })
+    } catch {
+      blockers.push('recognition calibration approval')
+    }
+  } else {
+    for (const name of contractValue.gradingRequiredStrictValues ?? []) {
+      if (!(env[name] ?? '').trim()) blockers.push(name)
+    }
+    try {
+      validateGradingCalibrationApproval(contractValue.gradingCalibrationApproval, {
+        provider: contractValue.provider?.identity,
+        model: contractValue.provider?.model,
+      })
+    } catch {
+      blockers.push('grading calibration approval')
+    }
   }
   return blockers
 }
@@ -196,17 +254,22 @@ function redactedWriter(stream, target, secrets) {
   }
 }
 
-function runStrictPlaywright(playwrightArgs, fixtureEnvironment, { cycle } = {}) {
+function runStrictPlaywright(playwrightArgs, fixtureEnvironment, { cycle, diagnostic } = {}) {
   const secrets = Object.values(fixtureEnvironment)
   const scenario = cycle === undefined ? undefined : real10xScenario(cycle)
-  const cycleArgs = scenario ? ['--grep', real10xScenarioGrep(cycle)] : []
+  const selectionArgs = scenario
+    ? ['--grep', real10xScenarioGrep(cycle)]
+    : diagnostic === recognitionOnlyV2Diagnostic.mode
+      ? ['--grep', recognitionOnlyV2ScenarioGrep()]
+      : []
   return new Promise((resolvePromise) => {
-    const child = spawn('pnpm', [...playwrightCommand, ...cycleArgs, ...playwrightArgs], {
+    const child = spawn('pnpm', [...playwrightCommand, ...selectionArgs, ...playwrightArgs], {
       cwd: repoRoot,
       env: {
         ...process.env,
         DINGTALK_LIVE_SEND: '0',
         HEX_K12_CURRENT_BUG_LIVE_REQUIRED: '1',
+        ...(diagnostic ? { HEX_K12_LIVE_DIAGNOSTIC_MODE: diagnostic } : {}),
         ...fixtureEnvironment,
       },
       shell: false,
@@ -250,9 +313,16 @@ async function cancelStrictPlaywright() {
   })
 }
 
-async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment, { cycle } = {}) {
+async function runStrictPlaywrightGate(
+  playwrightArgs,
+  fixtureEnvironment,
+  { cycle, diagnostic } = {},
+) {
   await rm(absoluteReportPath, { force: true })
-  const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment, { cycle })
+  const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment, {
+    cycle,
+    diagnostic,
+  })
   if (playwright.error) {
     process.stderr.write(
       `K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`,
@@ -263,12 +333,14 @@ async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment, { cyc
   if (playwright.status === 0) {
     try {
       const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
-      const audit = auditCurrentBugLiveReport(report, { cycle })
+      const audit = auditCurrentBugLiveReport(report, { cycle, diagnostic })
       auditPassed = true
       process.stdout.write(
         cycle
           ? `K12 current-bug LIVE strict gate: ${cycle} ${audit.total}/1 executed, zero skipped\n`
-          : `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and six-submission matrix passed\n`,
+          : diagnostic
+            ? 'K12 current-bug LIVE strict gate: recognition-only v2 1/1 executed, zero skipped\n'
+            : `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and six-submission matrix passed\n`,
       )
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
@@ -288,25 +360,34 @@ export async function runGate(
     installSignalCleanup = installFixtureSignalCleanup,
     runLifecycle = runFixtureLifecycle,
     runPlaywrightGate = runStrictPlaywrightGate,
+    auditRecognitionEvidence = auditRecognitionOnlyV2Evidence,
     removeReport = rm,
     spawnPlaywright = spawnSync,
   } = {},
 ) {
-  const { strict, cycle, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
+  const { strict, cycle, diagnostic, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
   let fixtureConfig
   try {
-    validateCurrentBugLiveArguments({ strict, cycle, playwrightArgs }, env)
+    validateCurrentBugLiveArguments({ strict, cycle, diagnostic, playwrightArgs }, env)
     if (strict) {
-      const blockers = strictEnvironmentBlockers(env, contractValue)
+      const blockers = strictEnvironmentBlockers(env, contractValue, { diagnostic })
       if (blockers.length > 0) {
         throw new Error(
           `K12 current-bug LIVE strict gate missing exact authorization: ${blockers.join(', ')}`,
         )
       }
       if (!cycle) {
-        fixtureConfig = validateEnvironment(env, {
-          gradingCalibrationApproval: contractValue.gradingCalibrationApproval,
-        })
+        fixtureConfig = validateEnvironment(
+          env,
+          diagnostic === recognitionOnlyV2Diagnostic.mode
+            ? {
+                requireRecognitionV2: true,
+                recognitionCalibrationApproval: contractValue.recognitionCalibrationApproval,
+              }
+            : {
+                gradingCalibrationApproval: contractValue.gradingCalibrationApproval,
+              },
+        )
       }
     }
   } catch (error) {
@@ -345,7 +426,9 @@ export async function runGate(
       HEX_K12_LIVE_RETRYABLE_DISPATCH_ID: env.HEX_K12_LIVE_RETRYABLE_DISPATCH_ID,
       HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID: env.HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID,
     }
-    if (Object.values(fixtureEnvironment).some((value) => typeof value !== 'string' || !value.trim())) {
+    if (
+      Object.values(fixtureEnvironment).some((value) => typeof value !== 'string' || !value.trim())
+    ) {
       processLike.stderr.write('K12 current-bug LIVE strict gate parent fixture IDs are required\n')
       processLike.exitCode = 2
       return
@@ -375,7 +458,28 @@ export async function runGate(
     startFixture: runtime.startFixture,
     readManifest: runtime.readManifest,
     startSidecar: runtime.startSidecar,
-    runStrictGate: (fixtureEnvironment) => runPlaywrightGate(playwrightArgs, fixtureEnvironment),
+    runStrictGate: (fixtureEnvironment) =>
+      runPlaywrightGate(
+        playwrightArgs,
+        diagnostic === recognitionOnlyV2Diagnostic.mode
+          ? {
+              ...fixtureEnvironment,
+              HEX_K12_LIVE_RECOGNITION_V2_CLAIM: runtime.recognitionV2ClaimPath,
+            }
+          : fixtureEnvironment,
+        { diagnostic },
+      ),
+    ...(diagnostic === recognitionOnlyV2Diagnostic.mode
+      ? {
+          collectStoppedEvidence: async () =>
+            auditRecognitionEvidence(await runtime.collectRecognitionV2Evidence(), {
+              provider: contractValue.provider.identity,
+              model: contractValue.provider.model,
+              questionCount: contractValue.fixtures.homework.questionCount,
+              recognitionPolicy: fixtureConfig.recognitionPolicy,
+            }),
+        }
+      : {}),
     cleanupFixture: runtime.cleanupFixture,
   })
 

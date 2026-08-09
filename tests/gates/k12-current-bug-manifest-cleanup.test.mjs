@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { constants as fsConstants } from 'node:fs'
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import {
   syntheticArtifactSHA256,
   syntheticGradingBudget,
@@ -16,6 +31,8 @@ const requestedManifest = '/tmp/k12-cleanup/profile/fixture-manifest.json'
 const canonicalManifest = '/private/tmp/k12-cleanup/profile/fixture-manifest.json'
 const canonicalProfile = '/private/tmp/k12-cleanup/profile'
 const digest = 'c'.repeat(64)
+const execFileAsync = promisify(execFile)
+const hexclawSource = fileURLToPath(new URL('../../../hexclaw/', import.meta.url))
 
 async function loadOrchestrator() {
   return import(repoFile('scripts/ci/k12-current-bug-fixture-orchestrator.mjs'))
@@ -260,3 +277,285 @@ test('unsafe manifest identity or permissions fail closed without unlink', async
     assert.equal(unlinked, false)
   }
 })
+
+test(
+  'real Go fixture process removes canonical manifest after a pre-model child failure and permits the next run',
+  { timeout: 120_000 },
+  async (t) => {
+    const {
+      createFixtureCleanup,
+      readOpaqueManifest,
+      removeCanonicalManifest,
+      runFixtureLifecycle,
+    } = await loadOrchestrator()
+    const requestedProfile = await mkdtemp('/tmp/hexclaw-k12-manifest-cleanup-')
+    await chmod(requestedProfile, 0o700)
+    t.after(async () => rm(requestedProfile, { recursive: true, force: true }))
+
+    const profilePath = await realpath(requestedProfile)
+    const privateDirectory = join(profilePath, '.hexclaw')
+    const storePath = join(privateDirectory, 'data.db')
+    const manifestRequestedPath = join(requestedProfile, 'fixture-manifest.json')
+    const manifestPath = join(profilePath, 'fixture-manifest.json')
+    await mkdir(privateDirectory, { mode: 0o700 })
+    await writeFile(storePath, '', { mode: 0o600 })
+    await chmod(storePath, 0o600)
+
+    const outputs = []
+    const subprocessEnvironment = Object.fromEntries(
+      [
+        'HOME',
+        'PATH',
+        'TMPDIR',
+        'GOCACHE',
+        'GOMODCACHE',
+        'GOPATH',
+        'GOPROXY',
+        'GOSUMDB',
+        'CGO_ENABLED',
+        'SSL_CERT_FILE',
+        'SSL_CERT_DIR',
+      ]
+        .filter((name) => process.env[name] !== undefined)
+        .map((name) => [name, process.env[name]]),
+    )
+    subprocessEnvironment.DINGTALK_LIVE_SEND = '0'
+
+    const runBuilder = async (action, cycle) => {
+      const args = [
+        'run',
+        '-tags',
+        'testtools',
+        './cmd/k12-live-fixture-testtools',
+        action,
+        '--profile',
+        profilePath,
+        '--store',
+        storePath,
+        '--manifest',
+        manifestPath,
+      ]
+      if (action === 'start') {
+        args.push(
+          '--run-id',
+          `manifest-cleanup-real-${cycle}`,
+          '--learner',
+          `learner-${cycle}`,
+          '--provider',
+          'hexclaw-gpt',
+          '--model',
+          'gpt-5.6-sol',
+          '--lease',
+          '30m',
+        )
+      }
+      const result = await execFileAsync('go', args, {
+        cwd: hexclawSource,
+        env: subprocessEnvironment,
+        maxBuffer: 1024 * 1024,
+      })
+      outputs.push({ action, stdout: result.stdout.trim(), stderr: result.stderr.trim() })
+      return result
+    }
+
+    const assertManifestAbsent = async () => {
+      for (const pathname of new Set([manifestRequestedPath, manifestPath])) {
+        await assert.rejects(
+          () => access(pathname, fsConstants.F_OK),
+          (error) => error?.code === 'ENOENT',
+        )
+      }
+    }
+
+    const runFailedCycle = async (cycle) => {
+      const receipts = []
+      let childFailure
+      const config = {
+        localSource: hexclawSource,
+        profilePath,
+        storePath,
+        manifestRequestedPath,
+        manifestPath,
+        runID: `manifest-cleanup-real-${cycle}`,
+        learnerID: `learner-${cycle}`,
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+      }
+      const cleanup = createFixtureCleanup(config, {
+        cleanupFixtureRecords: () => runBuilder('cleanup', cycle),
+        removeManifest: () => removeCanonicalManifest(config),
+        emitReceipt: (receipt) => receipts.push(receipt),
+      })
+      let manifestIDs
+
+      await assert.rejects(
+        () =>
+          runFixtureLifecycle(config, {
+            stopSidecar: async () => undefined,
+            startFixture: () => runBuilder('start', cycle),
+            readManifest: async () => {
+              const manifestStat = await stat(manifestPath)
+              manifestIDs = readOpaqueManifest(await readFile(manifestPath), {
+                regularFile: manifestStat.isFile(),
+                mode: manifestStat.mode & 0o777,
+                manifestPath,
+                profilePath,
+              })
+              return manifestIDs
+            },
+            startSidecar: async () => undefined,
+            runStrictGate: async () => {
+              try {
+                await execFileAsync(process.execPath, ['-e', 'process.exit(17)'], {
+                  env: subprocessEnvironment,
+                })
+              } catch (error) {
+                childFailure = error
+                throw error
+              }
+            },
+            cleanupFixture: cleanup,
+          }),
+        (error) => error === childFailure && error?.code === 17,
+      )
+
+      assert.deepEqual(receipts, [
+        {
+          schema_version: 1,
+          existed: true,
+          mode: '0600',
+          sha256: receipts[0]?.sha256,
+          canonical_alias_equal: true,
+          removed: true,
+        },
+      ])
+      assert.match(receipts[0].sha256, /^[a-f0-9]{64}$/)
+      await assertManifestAbsent()
+      return manifestIDs
+    }
+
+    const firstIDs = await runFailedCycle(1)
+    const secondIDs = await runFailedCycle(2)
+    assert.notDeepEqual(firstIDs, secondIDs)
+
+    const startResults = outputs
+      .filter(({ action }) => action === 'start')
+      .map(({ stdout }) => JSON.parse(stdout.split(/\r?\n/).at(-1)))
+    assert.equal(startResults.length, 2)
+    assert.deepEqual(
+      startResults.map(({ status, boundary_calls: boundaryCalls }) => ({ status, boundaryCalls })),
+      [
+        {
+          status: 'started',
+          boundaryCalls: { dingtalk_sends: 0, im_sends: 0, model_calls: 0 },
+        },
+        {
+          status: 'started',
+          boundaryCalls: { dingtalk_sends: 0, im_sends: 0, model_calls: 0 },
+        },
+      ],
+    )
+    const safeEvidence = JSON.stringify({ outputs, receiptFields: Object.keys({
+      schema_version: 1,
+      existed: true,
+      mode: '0600',
+      sha256: digest,
+      canonical_alias_equal: true,
+      removed: true,
+    }).sort() })
+    for (const opaqueID of [
+      firstIDs.retryableDispatchID,
+      firstIDs.outcomeUnknownDispatchID,
+      secondIDs.retryableDispatchID,
+      secondIDs.outcomeUnknownDispatchID,
+    ]) {
+      assert.equal(safeEvidence.includes(opaqueID), false)
+    }
+  },
+)
+
+test(
+  'installed attested controller removes the real manifest after child nonzero and leaves the second cycle unblocked',
+  {
+    skip: process.env.HEX_K12_MANIFEST_CLEANUP_INSTALLED !== '1',
+    timeout: 120_000,
+  },
+  async () => {
+    const { createFixtureRuntime, runFixtureLifecycle } = await loadOrchestrator()
+    const requiredEnvironment = [
+      'HEXCLAW_LOCAL_SRC',
+      'HEX_K12_LIVE_FIXTURE_PROFILE',
+      'HEX_K12_LIVE_FIXTURE_STORE',
+      'HEX_K12_LIVE_FIXTURE_MANIFEST',
+      'HEX_K12_LIVE_SIDECAR_CONTROL',
+      'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
+      'HEX_K12_LIVE_APP_URL',
+      'HEX_K12_LIVE_SIDECAR_URL',
+    ]
+    for (const name of requiredEnvironment) {
+      assert.ok(process.env[name]?.trim(), `${name} is required for installed cleanup evidence`)
+    }
+
+    const profilePath = await realpath(process.env.HEX_K12_LIVE_FIXTURE_PROFILE)
+    const manifestRequestedPath = process.env.HEX_K12_LIVE_FIXTURE_MANIFEST
+    const manifestPath = join(profilePath, manifestRequestedPath.split('/').at(-1))
+    const common = {
+      localSource: await realpath(process.env.HEXCLAW_LOCAL_SRC),
+      profilePath,
+      storePath: await realpath(process.env.HEX_K12_LIVE_FIXTURE_STORE),
+      manifestRequestedPath,
+      manifestPath,
+      controllerPath: await realpath(process.env.HEX_K12_LIVE_SIDECAR_CONTROL),
+      controllerConfigPath: await realpath(process.env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG),
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+    }
+
+    for (const cycle of [1, 2]) {
+      const config = {
+        ...common,
+        runID: `installed-manifest-cleanup-${cycle}`,
+        learnerID: `installed-learner-${cycle}`,
+      }
+      const runtime = createFixtureRuntime(config)
+      let childFailure
+      await assert.rejects(
+        () =>
+          runFixtureLifecycle(config, {
+            ...runtime,
+            runStrictGate: async () => {
+              try {
+                await execFileAsync(process.execPath, ['-e', 'process.exit(17)'])
+              } catch (error) {
+                childFailure = error
+                throw error
+              }
+            },
+          }),
+        (error) => error === childFailure && error?.code === 17,
+      )
+      for (const pathname of new Set([manifestRequestedPath, manifestPath])) {
+        await assert.rejects(
+          () => access(pathname, fsConstants.F_OK),
+          (error) => error?.code === 'ENOENT',
+        )
+      }
+      for (const pathname of [
+        join(profilePath, '.hexclaw', '.k12-sidecar.pid'),
+        join(profilePath, '.hexclaw', '.sidecar.lock'),
+      ]) {
+        await assert.rejects(
+          () => access(pathname, fsConstants.F_OK),
+          (error) => error?.code === 'ENOENT',
+        )
+      }
+      const stoppedHealth = await fetch(`${process.env.HEX_K12_LIVE_SIDECAR_URL}/health`).catch(
+        () => undefined,
+      )
+      assert.equal(stoppedHealth, undefined)
+    }
+
+    const releaseUI = await fetch(process.env.HEX_K12_LIVE_APP_URL)
+    assert.equal(releaseUI.status, 200)
+  },
+)
