@@ -5,19 +5,43 @@
     "platforms": {
       "darwin-arm64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-arm64-macOS.zip",
-        "sha256": "6e9eca844076bcbb599bbeebbba78a70f93b5307782b85c2c272872812c88875"
+        "sha256": "6e9eca844076bcbb599bbeebbba78a70f93b5307782b85c2c272872812c88875",
+        "archive_format": "zip",
+        "archive_bytes": 36687858,
+        "archive_member": "pandoc-3.9.0.2-arm64/bin/pandoc",
+        "archive_max_entries": 64,
+        "expanded_bytes_max": 536870912,
+        "binary_bytes": 187727808
       },
       "darwin-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-x86_64-macOS.zip",
-        "sha256": "b9fbceabccbc8f34ac021a50483fc32f8160568d0b4b2c22d81bb29e3054fd82"
+        "sha256": "b9fbceabccbc8f34ac021a50483fc32f8160568d0b4b2c22d81bb29e3054fd82",
+        "archive_format": "zip",
+        "archive_bytes": 25764704,
+        "archive_member": "pandoc-3.9.0.2-x86_64/bin/pandoc",
+        "archive_max_entries": 64,
+        "expanded_bytes_max": 536870912,
+        "binary_bytes": 119823904
       },
       "linux-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz",
-        "sha256": "a69abfababda8a56969a254b09f9553a7be89ddec00d4e0fe9fd585d71a67508"
+        "sha256": "a69abfababda8a56969a254b09f9553a7be89ddec00d4e0fe9fd585d71a67508",
+        "archive_format": "tar.gz",
+        "archive_bytes": 34520947,
+        "archive_member": "pandoc-3.9.0.2/bin/pandoc",
+        "archive_max_entries": 64,
+        "expanded_bytes_max": 536870912,
+        "binary_bytes": 161618224
       },
       "windows-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-windows-x86_64.zip",
-        "sha256": "c97542f2800f446e788d9f74237856d995421ad1bb3cc8324286840c5f272d3a"
+        "sha256": "c97542f2800f446e788d9f74237856d995421ad1bb3cc8324286840c5f272d3a",
+        "archive_format": "zip",
+        "archive_bytes": 41250425,
+        "archive_member": "pandoc-3.9.0.2/pandoc.exe",
+        "archive_max_entries": 64,
+        "expanded_bytes_max": 536870912,
+        "binary_bytes": 231056136
       }
     }
   },
@@ -26,19 +50,77 @@
     "platforms": {
       "darwin-arm64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-aarch64-apple-darwin.tar.xz",
-        "sha256": "541e4f9eaca3f34ee865f81fc663e4839cb84d6253f71a372cd855b0a7283213"
+        "sha256": "541e4f9eaca3f34ee865f81fc663e4839cb84d6253f71a372cd855b0a7283213",
+        "archive_format": "tar.xz",
+        "archive_bytes": 11034064,
+        "archive_member": "typst-aarch64-apple-darwin/typst",
+        "archive_max_entries": 32,
+        "expanded_bytes_max": 134217728,
+        "binary_bytes": 33631720
       },
       "darwin-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-apple-darwin.tar.xz",
-        "sha256": "4dabfe647f7f01ed9cc13ad8196a6c7f5e16f0732821b522d50740d3a9f5207b"
+        "sha256": "4dabfe647f7f01ed9cc13ad8196a6c7f5e16f0732821b522d50740d3a9f5207b",
+        "archive_format": "tar.xz",
+        "archive_bytes": 11789644,
+        "archive_member": "typst-x86_64-apple-darwin/typst",
+        "archive_max_entries": 32,
+        "expanded_bytes_max": 134217728,
+        "binary_bytes": 35338680
       },
       "linux-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-unknown-linux-musl.tar.xz",
-        "sha256": "7d214bfeffc2e585dc422d1a09d2b144969421281e8c7f5d784b65fc69b5673f"
+        "sha256": "7d214bfeffc2e585dc422d1a09d2b144969421281e8c7f5d784b65fc69b5673f",
+        "archive_format": "tar.xz",
+        "archive_bytes": 13608296,
+        "archive_member": "typst-x86_64-unknown-linux-musl/typst",
+        "archive_max_entries": 32,
+        "expanded_bytes_max": 134217728,
+        "binary_bytes": 42134240
       },
       "windows-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-pc-windows-msvc.zip",
-        "sha256": "44170d0632298ba68cbabc43dbfb6908b17ca9236859e0767b0e5d54b2d19f48"
+        "sha256": "44170d0632298ba68cbabc43dbfb6908b17ca9236859e0767b0e5d54b2d19f48",
+        "archive_format": "zip",
+        "archive_bytes": 17259573,
+        "archive_member": "typst-x86_64-pc-windows-msvc/typst.exe",
+        "archive_max_entries": 32,
+        "expanded_bytes_max": 134217728,
+        "binary_bytes": 38361088
+      }
+    },
+    "source_build": {
+      "archive_max_entries": 32,
+      "cargo_version": "1.94.0",
+      "cargo_commit": "85eff7c80277b57f78b11e28d14154ab12fcf643",
+      "cargo_locked": true,
+      "cargo_lock_sha256": "1205a2c4536bd0ac6e42f2ad07f1e9a28ba35ea44f42dd8a4366c012559884ab",
+      "crate": "typst-cli",
+      "crate_bytes": 61815,
+      "crate_root": "typst-cli-0.13.1",
+      "crate_sha256": "a634de7356f417bb09250a926714f87be71777c26e1f62ce640ca2f38debb683",
+      "crate_url": "https://static.crates.io/crates/typst-cli/typst-cli-0.13.1.crate",
+      "expanded_bytes_max": 1048576,
+      "rustc_version": "1.94.0",
+      "rustc_commit": "4a4ef493e3a1488c6e321570238084b38948f6db",
+      "source_date_epoch": 1743811200,
+      "version_requirement": "=0.13.1"
+    }
+  },
+  "ollama": {
+    "version": "0.30.10",
+    "platforms": {
+      "darwin-universal2": {
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.10/ollama-darwin.tgz",
+        "sha256": "ad8a4d2918ed09480b8160419570602b4f49e48c9e3792efb601c0f54619e48e",
+        "archive_bytes": 143171908,
+        "checksum_manifest_sha256": "4d4271700fa8173dc0fad0e2f20749c5f68040ff5b78059bc28dd4b069e4d034",
+        "binary": "ollama",
+        "binary_bytes": 66855424,
+        "module_path": "github.com/ollama/ollama",
+        "module_version": "v0.30.10+dirty",
+        "vcs_revision": "e1f7f9cbdbdad30b9811d5b673cf3d3f9c624dc2",
+        "architectures": ["x86_64", "arm64"]
       }
     }
   }

@@ -1,6 +1,6 @@
 # HexClaw Desktop — 开发命令
 
-.PHONY: dev build build-local package-local clean verify-local-deps verify-sidecar-version sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
+.PHONY: dev build build-local package-local verify-package-local clean verify-local-deps verify-sidecar-version sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
 HEXCLAW_REF ?= refs/tags/v0.5.0-beta
@@ -21,16 +21,15 @@ HEXCLAW_LOCAL_MODULES := github.com/hexagon-codes/hexclaw github.com/hexagon-cod
 DESKTOP_VERSION := $(shell node -p "require('./package.json').version")
 SIDECAR_RELEASE_VERSION := $(patsubst v%,%,$(DESKTOP_VERSION))
 HOST_TRIPLE := $(shell rustc -vV | awk '/host:/ {print $$2}')
-LOCAL_DMG_ARCH := $(if $(findstring aarch64,$(HOST_TRIPLE)),aarch64,x64)
-LOCAL_APP_BUNDLE := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/macos/HexClaw.app
-LOCAL_DMG_DIR := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/dmg
-LOCAL_DMG_ROOT := $(LOCAL_DMG_DIR)/HexClaw.dmgroot
-LOCAL_DMG_PATH := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).dmg
+CANONICAL_LOCAL_CARGO_TARGET_DIR := $(DESKTOP_ROOT)/src-tauri/target
+PACKAGE_LOCAL_CARGO_TARGET_DIR ?= $(CANONICAL_LOCAL_CARGO_TARGET_DIR)
 LOCAL_PACKAGE_TAURI_CONFIG := $(DESKTOP_ROOT)/src-tauri/tauri.package-local.conf.json
-LOCAL_APP_EXECUTABLE := $(LOCAL_APP_BUNDLE)/Contents/MacOS/hexclaw-desktop
-LOCAL_APP_SIDECAR := $(LOCAL_APP_BUNDLE)/Contents/MacOS/hexclaw
-LOCAL_RELEASE_UI_MANIFEST := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).release-ui-dist-manifest.json
-LOCAL_RELEASE_UI_RECEIPT := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).release-ui-attestation.json
+PACKAGE_LOCAL_DIST_DIR ?=
+NODE_BIN ?= $(shell command -v node)
+PNPM_BIN ?= $(shell command -v pnpm)
+PACKAGE_LOCAL_RUSTFLAGS := --remap-path-prefix=$(HOME)=/build/home --remap-path-prefix=$(DESKTOP_ROOT)=/build/hexclaw-desktop --remap-path-prefix=$(HOME)/.cargo=/build/cargo
+override PACKAGE_LOCAL_NODE := $(if $(filter arm64,$(shell /usr/bin/uname -m)),/opt/homebrew/bin/node,/usr/local/bin/node)
+override PACKAGE_LOCAL_ORCHESTRATOR := $(abspath scripts/ci/package-local.mjs)
 
 # Ollama 版本控制（更新版本只需改这一处）
 OLLAMA_VERSION ?= 0.30.10
@@ -44,29 +43,34 @@ dev:
 build:
 	pnpm tauri build
 
-# 本机装机包：先用本地全生态 Go workspace 重建 sidecar，并校验下载
-# tauri.conf.json 声明的 pandoc/typst externalBin，再构建 Tauri 包。
-build-local package-local: sidecar-local render-bundle
-	node ./scripts/ci/verify-sidecar-version.mjs "$(SIDECAR_BIN_DIR)/hexclaw-$(HOST_TRIPLE)"
-	pnpm tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		rm -rf "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_PATH)"; \
-		mkdir -p "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_DIR)"; \
-		ditto "$(LOCAL_APP_BUNDLE)" "$(LOCAL_DMG_ROOT)/HexClaw.app"; \
-			ln -s /Applications "$(LOCAL_DMG_ROOT)/Applications"; \
-			hdiutil create -volname "HexClaw" -srcfolder "$(LOCAL_DMG_ROOT)" -ov -format UDZO "$(LOCAL_DMG_PATH)"; \
-			rm -rf "$(LOCAL_DMG_ROOT)"; \
-			node ./scripts/ci/k12-release-ui-attestation.mjs create \
-				--dist "$(DESKTOP_ROOT)/dist" \
-				--release-version "$(DESKTOP_VERSION)" \
-				--installed-app "$(LOCAL_APP_EXECUTABLE)" \
-				--sidecar "$(LOCAL_APP_SIDECAR)" \
-				--package "$(LOCAL_DMG_PATH)" \
-				--manifest "$(LOCAL_RELEASE_UI_MANIFEST)" \
-				--receipt "$(LOCAL_RELEASE_UI_RECEIPT)"; \
-			echo "本地装机 DMG: $(LOCAL_DMG_PATH)"; \
-			echo "Release UI attestation: $(LOCAL_RELEASE_UI_RECEIPT)"; \
-		fi
+# 本机构建：使用本地全生态 Go workspace 重建 Sidecar、渲染依赖并生成 App。
+build-local: sidecar-local render-bundle
+	$(NODE_BIN) ./scripts/ci/verify-sidecar-version.mjs "$(SIDECAR_BIN_DIR)/hexclaw-$(HOST_TRIPLE)"
+	@if [ -n "$(strip $(PACKAGE_LOCAL_DIST_DIR))" ]; then \
+		$(NODE_BIN) ./scripts/ci/package-sensitive-boundary.mjs verify-root \
+			--root "$(SIDECAR_BIN_DIR)" \
+			--label generation-binaries; \
+		HEXCLAW_PACKAGE_LOCAL_DIST_DIR="$(PACKAGE_LOCAL_DIST_DIR)" \
+		SIDECAR_BIN_DIR="$(SIDECAR_BIN_DIR)" \
+		CARGO_TARGET_DIR="$(PACKAGE_LOCAL_CARGO_TARGET_DIR)" \
+		RUSTFLAGS="$(PACKAGE_LOCAL_RUSTFLAGS)" CARGO_INCREMENTAL=0 \
+		$(PNPM_BIN) tauri build \
+			--config "$(LOCAL_PACKAGE_TAURI_CONFIG)" \
+			--config '{"build":{"frontendDist":"$(PACKAGE_LOCAL_DIST_DIR)"},"bundle":{"externalBin":["$(SIDECAR_BIN_DIR)/hexclaw","$(SIDECAR_BIN_DIR)/pandoc","$(SIDECAR_BIN_DIR)/typst"]}}' \
+			--bundles app; \
+	else \
+		CARGO_TARGET_DIR="$(PACKAGE_LOCAL_CARGO_TARGET_DIR)" \
+		RUSTFLAGS="$(PACKAGE_LOCAL_RUSTFLAGS)" CARGO_INCREMENTAL=0 \
+		$(PNPM_BIN) tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app; \
+	fi
+
+# 本机装机包：Make 仅进入唯一 Node 状态机。
+package-local:
+	@$(PACKAGE_LOCAL_NODE) $(PACKAGE_LOCAL_ORCHESTRATOR) build
+
+# 仅验证 receipt 与 generation result 共同绑定的 canonical 制品。
+verify-package-local:
+	@$(PACKAGE_LOCAL_NODE) $(PACKAGE_LOCAL_ORCHESTRATOR) verify
 
 # 仅构建前端
 build-web:
@@ -107,13 +111,13 @@ sidecar-assets: prepare-sidecar-src
 # 编译 hexclaw sidecar 并放入 binaries 目录 (自动检测当前平台)
 sidecar: prepare-sidecar-src
 	@echo "编译 hexclaw sidecar..."
-	@mkdir -p src-tauri/binaries
+	@mkdir -p "$(SIDECAR_BIN_DIR)"
 	cd "$(HEXCLAW_BUILD_SRC)" && \
 		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		HEXAGON_VER="$$(git -C "$(HEXAGON_SRC_DIR)" describe --tags --dirty 2>/dev/null || true)" && \
-		$(HEXCLAW_GO_ENV) go build -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE -X github.com/hexagon-codes/hexagon.injectedVersion=$$HEXAGON_VER" \
+		$(HEXCLAW_GO_ENV) go build -trimpath -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE -X github.com/hexagon-codes/hexagon.injectedVersion=$$HEXAGON_VER" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-$$(rustc -vV | grep 'host:' | awk '{print $$2}')" ./cmd/hexclaw
 	@echo "sidecar 编译完成"
 
@@ -148,42 +152,42 @@ sidecar-all-local: verify-local-deps
 	$(MAKE) sidecar-all HEXCLAW_LOCAL_SRC="$(HEXCLAW_DEFAULT_LOCAL_SRC)" HEXCLAW_GOWORK="$(HEXCLAW_DEFAULT_GOWORK)"
 
 sidecar-darwin-arm64: prepare-sidecar-src
-	@mkdir -p src-tauri/binaries
+	@mkdir -p "$(SIDECAR_BIN_DIR)"
 	cd "$(HEXCLAW_BUILD_SRC)" && \
 		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-		GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
+		GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-aarch64-apple-darwin" ./cmd/hexclaw
 
 sidecar-darwin-amd64: prepare-sidecar-src
-	@mkdir -p src-tauri/binaries
+	@mkdir -p "$(SIDECAR_BIN_DIR)"
 	cd "$(HEXCLAW_BUILD_SRC)" && \
 		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-		GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
+		GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-apple-darwin" ./cmd/hexclaw
 
 sidecar-linux-amd64: prepare-sidecar-src
-	@mkdir -p src-tauri/binaries
+	@mkdir -p "$(SIDECAR_BIN_DIR)"
 	cd "$(HEXCLAW_BUILD_SRC)" && \
 		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-unknown-linux-gnu" ./cmd/hexclaw
 
 sidecar-windows-amd64: prepare-sidecar-src
-	@mkdir -p src-tauri/binaries
+	@mkdir -p "$(SIDECAR_BIN_DIR)"
 	cd "$(HEXCLAW_BUILD_SRC)" && \
 		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-pc-windows-msvc.exe" ./cmd/hexclaw
 
@@ -196,10 +200,12 @@ sidecar-windows-amd64: prepare-sidecar-src
 
 # 下载当前平台的 pandoc + typst，按 externalBin 命名落到 binaries/ 根目录
 # （pandoc-<triple> / typst-<triple>，与 hexclaw sidecar 同目录，tauri 自动签名）。
-# 版本号 + SHA256 维护在 release/scripts/versions.json；脚本支持通过
-# RENDER_BUNDLE_TARGET={darwin-arm64|darwin-x86_64|linux-x86_64|windows-x86_64} 交叉打包。
+# 版本与供应链校验合同维护在 release/scripts/versions.json。
+# 跨平台制品由对应平台的原生构建矩阵生成；显式非本机 RENDER_BUNDLE_TARGET 会失败关闭。
 render-bundle:
-	./release/scripts/render-bundle.sh $(SIDECAR_BIN_DIR)
+	RENDER_BUNDLE_MODE=prebuilt \
+		RENDER_BUNDLE_TARGET=$(if $(findstring aarch64,$(HOST_TRIPLE)),darwin-arm64,darwin-x86_64) \
+		./release/scripts/render-bundle.sh $(SIDECAR_BIN_DIR)
 
 # ─── Ollama 二进制下载 ──────────────────────────────────
 # 从 GitHub Releases 下载预编译 Ollama 二进制，重命名为 Rust target triple

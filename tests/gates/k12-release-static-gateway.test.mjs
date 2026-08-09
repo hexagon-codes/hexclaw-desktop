@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { createServer, request as httpRequest } from 'node:http'
 import { connect as connectTCP } from 'node:net'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { access, chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { promisify } from 'node:util'
 
 const gatewayModuleURL = new URL('../../scripts/ci/k12-release-static-gateway.mjs', import.meta.url)
 const attestationModuleURL = new URL('../../scripts/ci/k12-release-ui-attestation.mjs', import.meta.url)
 const contractURL = new URL('../live/k12-release-static-gateway.contract.json', import.meta.url)
+const execFileAsync = promisify(execFile)
 
 async function loadGateway() {
   return import(gatewayModuleURL)
@@ -478,3 +482,99 @@ test('gateway fails before listen on release identity or exact-byte drift', asyn
   )
   assert.equal(listened, false)
 })
+
+test(
+  'installed attested release gateway serves exact UI HTTP and System Chrome WebSocket boundaries',
+  {
+    skip: process.env.HEX_K12_RELEASE_UI_INSTALLED !== '1',
+    timeout: 120_000,
+  },
+  async (t) => {
+    const requiredEnvironment = [
+      'HEX_K12_LIVE_SIDECAR_CONTROL',
+      'HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG',
+      'HEX_K12_LIVE_APP_URL',
+      'HEX_K12_LIVE_SIDECAR_URL',
+      'HEX_K12_LIVE_RELEASE_ATTESTATION_SHA256',
+    ]
+    for (const name of requiredEnvironment) {
+      assert.ok(process.env[name]?.trim(), `${name} is required for installed release UI evidence`)
+    }
+
+    const controllerPath = await realpath(process.env.HEX_K12_LIVE_SIDECAR_CONTROL)
+    const controllerConfigPath = await realpath(
+      process.env.HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG,
+    )
+    const controllerConfig = JSON.parse(await readFile(controllerConfigPath, 'utf8'))
+    const runController = (action) =>
+      execFileAsync(controllerPath, [action, '--config', controllerConfigPath], {
+        maxBuffer: 1024 * 1024,
+      })
+    const stopController = async () => runController('stop').catch(() => undefined)
+    t.after(stopController)
+    await stopController()
+    await runController('start')
+
+    const { chromium } = await import('playwright')
+    const browser = await chromium.launch({ channel: 'chrome', headless: true })
+    try {
+      const page = await browser.newPage()
+      const root = await page.goto(process.env.HEX_K12_LIVE_APP_URL, {
+        waitUntil: 'domcontentloaded',
+      })
+      assert.equal(root?.status(), 200)
+      await page.locator('#app').waitFor({ state: 'attached' })
+      const runtime = await page.evaluate(async () => {
+        const health = await fetch('/_hexclaw/health')
+        const version = await fetch('/_hexclaw/api/v1/version')
+        const attestation = await fetch('/__hexclaw_release_attestation')
+        const websocket = await new Promise((resolve) => {
+          const socket = new WebSocket(`ws://${location.host}/_hexclaw/ws`)
+          const timer = setTimeout(() => resolve({ opened: false, reason: 'timeout' }), 10_000)
+          socket.addEventListener('open', () => {
+            clearTimeout(timer)
+            socket.close()
+            resolve({ opened: true })
+          })
+          socket.addEventListener('error', () => {
+            clearTimeout(timer)
+            resolve({ opened: false, reason: 'error' })
+          })
+        })
+        return {
+          healthStatus: health.status,
+          versionStatus: version.status,
+          version: (await version.json()).version,
+          attestationStatus: attestation.status,
+          attestation: await attestation.json(),
+          websocket,
+        }
+      })
+      assert.equal(runtime.healthStatus, 200)
+      assert.equal(runtime.versionStatus, 200)
+      assert.equal(runtime.version, controllerConfig.expected_version)
+      assert.equal(runtime.attestationStatus, 200)
+      assert.equal(
+        runtime.attestation.receipt_sha256,
+        process.env.HEX_K12_LIVE_RELEASE_ATTESTATION_SHA256,
+      )
+      assert.deepEqual(runtime.websocket, { opened: true })
+      const sidecarRoot = await fetch(process.env.HEX_K12_LIVE_SIDECAR_URL)
+      assert.equal(sidecarRoot.status, 404)
+    } finally {
+      await browser.close()
+      await runController('stop')
+    }
+
+    for (const pathname of [controllerConfig.pid_file, controllerConfig.lock_file]) {
+      await assert.rejects(
+        () => access(pathname, fsConstants.F_OK),
+        (error) => error?.code === 'ENOENT',
+      )
+    }
+    const stoppedHealth = await fetch(`${process.env.HEX_K12_LIVE_SIDECAR_URL}/health`).catch(
+      () => undefined,
+    )
+    assert.equal(stoppedHealth, undefined)
+  },
+)

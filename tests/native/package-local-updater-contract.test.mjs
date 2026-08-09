@@ -10,33 +10,34 @@ async function readRepoFile(path) {
   return readFile(resolve(repoRoot, path), 'utf8')
 }
 
-test('package-local disables updater artifacts without changing release configuration', async () => {
+test('package-local and verifier are thin immutable Node orchestrator entries', async () => {
   const makefile = await readRepoFile('Makefile')
   const localConfig = JSON.parse(await readRepoFile('src-tauri/tauri.package-local.conf.json'))
 
-  assert.match(
-    makefile,
-    /build-local package-local:\s+sidecar-local\s+render-bundle/,
-    'local packages must stage every externalBin declared by tauri.conf.json',
-  )
-  assert.match(
-    makefile,
-    /LOCAL_PACKAGE_TAURI_CONFIG\s*:=\s*\$\(DESKTOP_ROOT\)\/src-tauri\/tauri\.package-local\.conf\.json/,
-  )
-  assert.match(
-    makefile,
-    /pnpm tauri build --config "\$\(LOCAL_PACKAGE_TAURI_CONFIG\)" --bundles app/,
-  )
+  assert.match(makefile, /^package-local:\s*$/m)
+  const packageStart = makefile.indexOf('package-local:')
+  const packageEnd = makefile.indexOf('\nverify-package-local:', packageStart)
+  const packageRecipe = makefile.slice(packageStart, packageEnd)
+  assert.match(packageRecipe, /\$\(PACKAGE_LOCAL_NODE\) \$\(PACKAGE_LOCAL_ORCHESTRATOR\) build/)
+  assert.doesNotMatch(packageRecipe, /build-local|\$\(MAKE\)|SIDECAR_BIN_DIR|CARGO_TARGET_DIR|generation=/)
+  const verifyStart = makefile.indexOf('verify-package-local:')
+  const verifyEnd = makefile.indexOf('\n# 仅构建前端', verifyStart)
+  const verifyRecipe = makefile.slice(verifyStart, verifyEnd)
+  assert.match(verifyRecipe, /\$\(PACKAGE_LOCAL_NODE\) \$\(PACKAGE_LOCAL_ORCHESTRATOR\) verify/)
+  assert.doesNotMatch(verifyRecipe, /shasum|expected-receipt|PACKAGE_LOCAL_NOT_BEFORE/)
+  assert.equal(localConfig.build.beforeBuildCommand, '')
   assert.equal(localConfig.bundle.createUpdaterArtifacts, false)
 })
 
-test('render bundle replaces read-only external binaries atomically', async () => {
+test('render bundle publishes one fully verified staged pair without an implicit fallback', async () => {
   const script = await readRepoFile('release/scripts/render-bundle.sh')
 
-  assert.match(script, /local output_name output staged/)
-  assert.match(script, /staged="\$DEST_DIR\/\.\$output_name\.tmp\.\$\$"/)
-  assert.match(script, /cp "\$found" "\$staged"/)
-  assert.match(script, /chmod \+x "\$staged"/)
-  assert.match(script, /mv -f "\$staged" "\$output"/)
-  assert.doesNotMatch(script, /cp "\$found" "\$DEST_DIR\/\$name-\$triple"/)
+  assert.match(script, /case "\$\{RENDER_BUNDLE_MODE:-\}" in/)
+  assert.match(script, /prebuilt\) render_mode=prebuilt/)
+  assert.match(script, /source\) render_mode=source/)
+  assert.match(script, /python_helper prepare-source/)
+  assert.match(script, /python_helper prepare-prebuilt/)
+  assert.match(script, /python_helper "publish-\$render_mode" "\$STAGE_DIR" "\$DEST_DIR"/)
+  assert.match(script, /os\.rename\(stage, destination\)/)
+  assert.doesNotMatch(script, /find\s+[^\n]+\|\s*head\s+-1/u)
 })

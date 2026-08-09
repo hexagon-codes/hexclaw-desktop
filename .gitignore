@@ -21,8 +21,8 @@ Thumbs.db
 Casks/
 
 # Environment (本地覆盖文件，不提交)
-.env.local
-.env.*.local
+.env*
+!.env.example
 
 # Test
 coverage/

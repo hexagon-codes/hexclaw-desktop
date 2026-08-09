@@ -38,6 +38,8 @@
     "mock:cleanup": "./tests/mock/mock-stack.sh cleanup",
     "test:bench": "vitest bench --run",
     "build-only": "vite build",
+    "build-only:package-local": "vite build --mode package-local",
+    "build:package-local": "run-s type-check build-only:package-local",
     "type-check": "vue-tsc --build",
     "lint": "run-s lint:oxlint lint:eslint",
     "lint:fix": "run-s lint:oxlint:fix lint:eslint:fix",

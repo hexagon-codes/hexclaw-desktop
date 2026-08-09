@@ -152,8 +152,15 @@ jobs:
               ;;
           esac
 
-      - name: Stage render engines (pandoc + typst)
+      - name: Install Rust 1.94.0
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 固定 Rust 1.94.0
+        with:
+          toolchain: '1.94.0'
+          targets: ${{ matrix.target }}
+
+      - name: Stage prebuilt render engines (pandoc + typst)
         env:
+          RENDER_BUNDLE_MODE: prebuilt
           RENDER_BUNDLE_TARGET: ${{ matrix.render_target }}
         run: |
           ./release/scripts/render-bundle.sh src-tauri/binaries
@@ -165,11 +172,6 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-        with:
-          targets: ${{ matrix.platform == 'macos-26' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
