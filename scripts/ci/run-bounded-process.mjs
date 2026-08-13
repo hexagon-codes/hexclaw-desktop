@@ -150,16 +150,12 @@ function processGroupExists(processGroupID) {
 }
 
 function processTable() {
-  const result = spawnSync(
-    '/bin/ps',
-    ['-axo', 'pid=,ppid=,pgid=,lstart='],
-    {
-      encoding: 'utf8',
-      env: { LANG: 'C', LC_ALL: 'C', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
-      maxBuffer: PROCESS_TABLE_MAX_BYTES,
-      timeout: 2_000,
-    },
-  )
+  const result = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], {
+    encoding: 'utf8',
+    env: { LANG: 'C', LC_ALL: 'C', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    maxBuffer: PROCESS_TABLE_MAX_BYTES,
+    timeout: 2_000,
+  })
   if (result.status !== 0 || result.signal !== null || result.error) {
     throw new BoundedProcessError('process-tree-state')
   }
@@ -312,11 +308,7 @@ async function runBoundedProcessInternal(command, args, options, fileDescriptorM
     'terminate-confirm',
   )
   const acceptedExitCodes = acceptedExitCodeSet(options.acceptedExitCodes)
-  if (
-    typeof options.cwd !== 'string' ||
-    !isAbsolute(options.cwd) ||
-    options.cwd.includes('\0')
-  ) {
+  if (typeof options.cwd !== 'string' || !isAbsolute(options.cwd) || options.cwd.includes('\0')) {
     return Promise.reject(new BoundedProcessError('invalid-cwd'))
   }
   let environment
@@ -457,12 +449,7 @@ export async function runBoundedProcess(command, args, options = {}) {
 }
 
 // 该入口仅供可信内部模块把预先安全打开的描述符传给子进程，不暴露任意 stdio 配置。
-export async function runBoundedProcessWithFileDescriptors(
-  command,
-  args,
-  options = {},
-  mappings,
-) {
+export async function runBoundedProcessWithFileDescriptors(command, args, options = {}, mappings) {
   let validatedMappings
   try {
     validatedMappings = validateFileDescriptorMappings(mappings)
@@ -489,8 +476,7 @@ function parseCLI(argv) {
       const equals = raw.indexOf('=')
       if (equals < 1) throw new BoundedProcessError('cli-arguments')
       options.env[raw.slice(0, equals)] = raw.slice(equals + 1)
-    }
-    else throw new BoundedProcessError('cli-arguments')
+    } else throw new BoundedProcessError('cli-arguments')
   }
   return { command: argv[separator + 1], args: argv.slice(separator + 2), options }
 }
@@ -508,7 +494,9 @@ if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
       const fields = [`ERROR: bounded-process category=${category}`]
       if (Number.isInteger(error?.exitCode)) fields.push(`exit=${error.exitCode}`)
       if (typeof error?.signal === 'string') fields.push(`signal=${error.signal}`)
-      await new Promise((resolveWrite) => process.stderr.write(`${fields.join(' ')}\n`, resolveWrite))
+      await new Promise((resolveWrite) =>
+        process.stderr.write(`${fields.join(' ')}\n`, resolveWrite),
+      )
       if (typeof error?.signal === 'string') {
         process.kill(process.pid, error.signal)
         return

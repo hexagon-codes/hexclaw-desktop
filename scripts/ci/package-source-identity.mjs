@@ -7,25 +7,41 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readdir,
   realpath,
   rm,
   unlink,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { BoundedProcessError, runBoundedProcess } from './run-bounded-process.mjs'
 
-const SOURCE_MANIFEST_SCHEMA = 'hexclaw.package-source-identity.v1'
+const SOURCE_MANIFEST_SCHEMA = 'hexclaw.package-source-identity.v2'
 const HASH_CHUNK_BYTES = 1024 * 1024
 const COMMAND_TIMEOUT_MS = 60_000
 const COMMAND_OUTPUT_LIMIT_BYTES = 512 * 1024
 const GIT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024
 const MANIFEST_LIMIT_BYTES = 64 * 1024 * 1024
 const TOOLCHAIN_FILE_LIMIT_BYTES = 256 * 1024 * 1024
+const PNPM_BUNDLE_FILE_LIMIT = 2_048
+const PNPM_BUNDLE_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024
+const RUST_BUNDLE_FILE_LIMIT = 1_024
+const RUST_BUNDLE_TOTAL_LIMIT_BYTES = 768 * 1024 * 1024
 const PRODUCTION_GIT_EXECUTABLE = '/usr/bin/git'
+const PRODUCTION_CODESIGN_EXECUTABLE = '/usr/bin/codesign'
+const MACH_O_MAGICS = new Set([
+  'bebafeca',
+  'bfbafeca',
+  'cafebabe',
+  'cafebabf',
+  'cefaedfe',
+  'cffaedfe',
+  'feedface',
+  'feedfacf',
+])
 
 const DEFAULT_LIMITS = Object.freeze({
   maxFiles: 10_000,
@@ -137,6 +153,61 @@ function validateTarget(target) {
 
 function validateToolchainTarget(toolchains, target) {
   if (!isPlainObject(toolchains)) fail('toolchain:manifest')
+  for (const name of ['cargo', 'git', 'go', 'node', 'pnpm', 'rustc']) {
+    const tool = toolchains[name]
+    if (
+      !isPlainObject(tool) ||
+      typeof tool.executablePath !== 'string' ||
+      !isAbsolute(tool.executablePath) ||
+      tool.executablePath.includes('\0') ||
+      typeof tool.version !== 'string' ||
+      tool.version.trim() === '' ||
+      Buffer.byteLength(tool.version, 'utf8') > COMMAND_OUTPUT_LIMIT_BYTES
+    ) {
+      fail('toolchain:manifest')
+    }
+    validateSha256(tool.executableSha256, 'toolchain:manifest')
+    validateSha256(tool.sourceSha256, 'toolchain:manifest')
+  }
+  if (
+    typeof toolchains.go.compileVersion !== 'string' ||
+    toolchains.go.compileVersion.trim() === '' ||
+    !isPlainObject(toolchains.go.env) ||
+    typeof toolchains.go.env.GOROOT !== 'string' ||
+    !isAbsolute(toolchains.go.env.GOROOT)
+  ) {
+    fail('toolchain:manifest')
+  }
+  if (!Array.isArray(toolchains.pnpm.supportFiles)) fail('toolchain:manifest')
+  for (const support of toolchains.pnpm.supportFiles) {
+    if (
+      !isPlainObject(support) ||
+      typeof support.path !== 'string' ||
+      normalizedRepositoryPath(support.path) !== support.path ||
+      typeof support.sourcePath !== 'string' ||
+      !isAbsolute(support.sourcePath) ||
+      !Number.isSafeInteger(support.size) ||
+      support.size < 0
+    ) {
+      fail('toolchain:manifest')
+    }
+    validateSha256(support.executableSha256, 'toolchain:manifest')
+    validateSha256(support.sourceSha256, 'toolchain:manifest')
+  }
+  if (toolchains.rustup !== undefined) {
+    const rustup = toolchains.rustup
+    if (
+      !isPlainObject(rustup) ||
+      typeof rustup.executablePath !== 'string' ||
+      !isAbsolute(rustup.executablePath) ||
+      typeof rustup.version !== 'string' ||
+      rustup.version.trim() === ''
+    ) {
+      fail('toolchain:manifest')
+    }
+    validateSha256(rustup.executableSha256, 'toolchain:manifest')
+    validateSha256(rustup.sourceSha256, 'toolchain:manifest')
+  }
   const contract = NATIVE_MAC_TARGETS[target]
   if (
     toolchains.target !== target ||
@@ -253,6 +324,10 @@ function isSensitiveEnvironmentPath(path) {
   const name = path.slice(path.lastIndexOf('/') + 1)
   if (name === '.env.example') return false
   return name.startsWith('.env') || ['.netrc', '.npmrc', '.pypirc'].includes(name)
+}
+
+function isCodexWorkspacePath(path) {
+  return path.split('/').some((component) => component.toLowerCase().startsWith('.codex'))
 }
 
 function isExcludedOutputPath(path) {
@@ -553,7 +628,7 @@ async function requireCommand(executable, args, category, options = {}) {
       timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
     })
   } catch (error) {
-    if (error instanceof BoundedProcessError) fail(`command:${error.category}`)
+    if (error instanceof BoundedProcessError) fail(`${category}:${error.category}`)
     fail(category)
   }
   return Buffer.from(result.stdout, 'utf8')
@@ -577,7 +652,7 @@ async function resolveExecutable(name, pathValue) {
     try {
       const sourcePath = await realpath(selectionPath)
       const stat = await lstat(sourcePath, { bigint: true })
-      assertRegularSourceStat(stat, { allowRootOwner: true })
+      assertRegularSourceStat(stat, { allowHardLinks: true, allowRootOwner: true })
       if (selectionStat.uid !== currentUserID() && selectionStat.uid !== 0n) {
         fail(`toolchain:${name}`)
       }
@@ -601,7 +676,7 @@ async function resolveFixedExecutable(name, path) {
   try {
     const sourcePath = await realpath(path)
     const stat = await lstat(sourcePath, { bigint: true })
-    assertRegularSourceStat(stat, { allowRootOwner: true })
+    assertRegularSourceStat(stat, { allowHardLinks: true, allowRootOwner: true })
     if ((stat.mode & 0o111n) !== 0n && stat.size <= BigInt(TOOLCHAIN_FILE_LIMIT_BYTES)) {
       return Object.freeze({ selectionPath: resolve(path), sourcePath })
     }
@@ -616,10 +691,24 @@ async function resolveFixedGitExecutable(path = PRODUCTION_GIT_EXECUTABLE) {
   return resolveFixedExecutable('git', path)
 }
 
+async function selectionsShareFile(left, right) {
+  try {
+    const [leftStat, rightStat] = await Promise.all([
+      lstat(left.sourcePath, { bigint: true }),
+      lstat(right.sourcePath, { bigint: true }),
+    ])
+    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino
+  } catch {
+    fail('toolchain:source')
+  }
+}
+
 function productionToolchainOptions() {
   const hostHome = homedir()
   return Object.freeze({
+    corepackHome: join(hostHome, 'Library', 'Caches', 'node', 'corepack'),
     gitPath: PRODUCTION_GIT_EXECUTABLE,
+    goRoot: '/usr/local/go',
     nodePath: process.execPath,
     path: [
       dirname(process.execPath),
@@ -633,6 +722,40 @@ function productionToolchainOptions() {
       '/sbin',
     ].join(delimiter),
     rustupHome: join(hostHome, '.rustup'),
+    snapshotRustToolchain: true,
+  })
+}
+
+async function resolvePnpmPackage(desktopRoot, options) {
+  if (options.corepackHome === undefined) {
+    return Object.freeze({
+      selection: await resolveExecutable('pnpm', options.path),
+      tree: null,
+    })
+  }
+  const packageBytes = await readSmallSecureFile(
+    join(desktopRoot, 'package.json'),
+    1024 * 1024,
+    'toolchain:package-json',
+    desktopRoot,
+  )
+  let packageDocument
+  try {
+    packageDocument = JSON.parse(packageBytes.toString('utf8'))
+  } catch {
+    fail('toolchain:package-json')
+  }
+  const version = /^pnpm@(\d+\.\d+\.\d+)$/u.exec(packageDocument.packageManager)?.[1]
+  if (!version || typeof options.corepackHome !== 'string' || !isAbsolute(options.corepackHome)) {
+    fail('toolchain:pnpm-package')
+  }
+  const packageRoot = resolve(options.corepackHome, 'v1', 'pnpm', version)
+  const tree = await enumerateSecureToolTree(packageRoot)
+  const entryPath = join(tree.root, 'bin', 'pnpm.cjs')
+  if (!tree.files.includes('bin/pnpm.cjs')) fail('toolchain:pnpm-package')
+  return Object.freeze({
+    selection: Object.freeze({ selectionPath: entryPath, sourcePath: entryPath }),
+    tree,
   })
 }
 
@@ -649,7 +772,10 @@ async function capturePathWitness(selection) {
   }
   for (const stat of [selectionParentStat, sourceParentStat]) {
     if (stat.isSymbolicLink() || !stat.isDirectory()) fail('toolchain:source')
-    assertSecureOwnershipAndMode(stat, { allowRootOwner: true })
+    // 开发工具目录可由本机 admin 组维护；目录身份会在每次执行前后复核。
+    if ((stat.uid !== currentUserID() && stat.uid !== 0n) || (stat.mode & 0o002n) !== 0n) {
+      fail('toolchain:source')
+    }
   }
   if (selectionStat.uid !== currentUserID() && selectionStat.uid !== 0n) {
     fail('toolchain:source')
@@ -659,6 +785,90 @@ async function capturePathWitness(selection) {
     selectionParentIdentity: statIdentity(selectionParentStat),
     sourceParentIdentity: statIdentity(sourceParentStat),
   })
+}
+
+async function verifySelectedSource(selection, witness, sourceHandle, sourceIdentity, category) {
+  let sourceHandleStat
+  let sourcePathStat
+  let sourceParentStat
+  let selectionStat
+  let selectionParentStat
+  let resolvedSelection
+  try {
+    ;[
+      sourceHandleStat,
+      sourcePathStat,
+      sourceParentStat,
+      selectionStat,
+      selectionParentStat,
+      resolvedSelection,
+    ] = await Promise.all([
+      sourceHandle.stat({ bigint: true }),
+      lstat(selection.sourcePath, { bigint: true }),
+      lstat(dirname(selection.sourcePath), { bigint: true }),
+      lstat(selection.selectionPath, { bigint: true }),
+      lstat(dirname(selection.selectionPath), { bigint: true }),
+      realpath(selection.selectionPath),
+    ])
+  } catch {
+    fail(category)
+  }
+  if (
+    resolvedSelection !== selection.sourcePath ||
+    !sameFileIdentity(sourceIdentity, statIdentity(sourceHandleStat)) ||
+    !sameFileIdentity(sourceIdentity, statIdentity(sourcePathStat)) ||
+    !sameFileIdentity(witness.sourceParentIdentity, statIdentity(sourceParentStat)) ||
+    !sameFileIdentity(witness.selectionIdentity, statIdentity(selectionStat)) ||
+    !sameFileIdentity(witness.selectionParentIdentity, statIdentity(selectionParentStat))
+  ) {
+    fail(category)
+  }
+}
+
+async function signMachOSnapshot(snapshotPath, snapshotRoot, magic) {
+  if (!MACH_O_MAGICS.has(magic)) return
+  // 平台 Mach-O 离开只读系统卷后需重新签名；固定系统 signer 是该引导链的信任锚。
+  const selection = await resolveFixedExecutable('codesign', PRODUCTION_CODESIGN_EXECUTABLE)
+  const witness = await capturePathWitness(selection)
+  const sourceStat = await safeLstat(selection.sourcePath)
+  let sourceHandle
+  try {
+    sourceHandle = await open(selection.sourcePath, fsConstants.O_RDONLY | noFollowFlag())
+    const sourceIdentity = statIdentity(await sourceHandle.stat({ bigint: true }))
+    if (!sameFileIdentity(statIdentity(sourceStat), sourceIdentity)) {
+      fail('toolchain:signer-drift')
+    }
+    const signerSha256 = await hashOpenFile(sourceHandle, Number(sourceIdentity.size))
+    await verifySelectedSource(
+      selection,
+      witness,
+      sourceHandle,
+      sourceIdentity,
+      'toolchain:signer-drift',
+    )
+    await requireCommand(
+      selection.sourcePath,
+      ['--force', '--sign', '-', snapshotPath],
+      'toolchain:codesign',
+      {
+        cwd: snapshotRoot,
+        env: commandEnvironment(snapshotRoot),
+        maxOutputBytes: COMMAND_OUTPUT_LIMIT_BYTES,
+      },
+    )
+    await verifySelectedSource(
+      selection,
+      witness,
+      sourceHandle,
+      sourceIdentity,
+      'toolchain:signer-drift',
+    )
+    if ((await hashOpenFile(sourceHandle, Number(sourceIdentity.size))) !== signerSha256) {
+      fail('toolchain:signer-drift')
+    }
+  } finally {
+    await sourceHandle?.close().catch(() => undefined)
+  }
 }
 
 async function createToolchainSnapshotRoot(parent) {
@@ -678,20 +888,17 @@ async function createToolchainSnapshotRoot(parent) {
     fail('toolchain:snapshot-root')
   }
   const stat = await safeLstat(snapshotRoot)
-  if (
-    !stat.isDirectory() ||
-    stat.uid !== currentUserID() ||
-    (stat.mode & 0o777n) !== 0o700n
-  ) {
+  if (!stat.isDirectory() || stat.uid !== currentUserID() || (stat.mode & 0o777n) !== 0o700n) {
     fail('toolchain:snapshot-root')
   }
   return snapshotRoot
 }
 
 async function copyExecutableToSnapshot(selection, snapshotRoot, name) {
+  normalizedRepositoryPath(name)
   const witness = await capturePathWitness(selection)
   const sourcePathStat = await safeLstat(selection.sourcePath)
-  assertRegularSourceStat(sourcePathStat, { allowRootOwner: true })
+  assertRegularSourceStat(sourcePathStat, { allowHardLinks: true, allowRootOwner: true })
   if (
     (sourcePathStat.mode & 0o111n) === 0n ||
     sourcePathStat.size > BigInt(TOOLCHAIN_FILE_LIMIT_BYTES)
@@ -702,12 +909,15 @@ async function copyExecutableToSnapshot(selection, snapshotRoot, name) {
   let snapshotHandle
   const snapshotPath = join(snapshotRoot, name)
   const digest = createHash('sha256')
+  const magicBytes = Buffer.alloc(4)
+  let magicLength = 0
   try {
     sourceHandle = await open(selection.sourcePath, fsConstants.O_RDONLY | noFollowFlag())
     const sourceBefore = await sourceHandle.stat({ bigint: true })
     if (!sameFileIdentity(statIdentity(sourcePathStat), statIdentity(sourceBefore))) {
       fail('toolchain:source-drift')
     }
+    await mkdir(dirname(snapshotPath), { mode: 0o700, recursive: true })
     snapshotHandle = await open(
       snapshotPath,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag(),
@@ -720,6 +930,11 @@ async function copyExecutableToSnapshot(selection, snapshotRoot, name) {
       const requested = Math.min(buffer.length, size - position)
       const { bytesRead } = await sourceHandle.read(buffer, 0, requested, position)
       if (bytesRead <= 0) fail('toolchain:source-drift')
+      if (magicLength < magicBytes.length) {
+        const copied = Math.min(bytesRead, magicBytes.length - magicLength)
+        buffer.copy(magicBytes, magicLength, 0, copied)
+        magicLength += copied
+      }
       digest.update(buffer.subarray(0, bytesRead))
       let written = 0
       while (written < bytesRead) {
@@ -734,32 +949,191 @@ async function copyExecutableToSnapshot(selection, snapshotRoot, name) {
       }
       position += bytesRead
     }
-    await snapshotHandle.chmod(0o500)
+    await snapshotHandle.chmod(0o700)
     await snapshotHandle.sync()
-    const snapshotStat = await snapshotHandle.stat({ bigint: true })
-    if (
-      !snapshotStat.isFile() ||
-      snapshotStat.nlink !== 1n ||
-      snapshotStat.uid !== currentUserID() ||
-      (snapshotStat.mode & 0o777n) !== 0o500n ||
-      snapshotStat.size !== sourceBefore.size
-    ) {
-      fail('toolchain:snapshot-write')
-    }
     const sourceAfter = await sourceHandle.stat({ bigint: true })
     if (!sameFileIdentity(statIdentity(sourceBefore), statIdentity(sourceAfter))) {
       fail('toolchain:source-drift')
     }
     await snapshotHandle.close()
     snapshotHandle = null
+    const sourceSha256 = digest.digest('hex')
+    await signMachOSnapshot(snapshotPath, snapshotRoot, magicBytes.toString('hex'))
+    await chmod(snapshotPath, 0o500)
+    snapshotHandle = await open(snapshotPath, fsConstants.O_RDONLY | noFollowFlag())
+    const snapshotStat = await snapshotHandle.stat({ bigint: true })
+    if (
+      !snapshotStat.isFile() ||
+      snapshotStat.nlink !== 1n ||
+      snapshotStat.uid !== currentUserID() ||
+      (snapshotStat.mode & 0o777n) !== 0o500n ||
+      snapshotStat.size < 1n ||
+      snapshotStat.size > BigInt(TOOLCHAIN_FILE_LIMIT_BYTES)
+    ) {
+      fail('toolchain:snapshot-write')
+    }
+    const executableSha256 = await hashOpenFile(snapshotHandle, Number(snapshotStat.size))
+    await snapshotHandle.close()
+    snapshotHandle = null
     return Object.freeze({
-      executableSha256: digest.digest('hex'),
+      executableSha256,
       name,
       selection,
       snapshotIdentity: statIdentity(snapshotStat),
       snapshotPath,
       sourceHandle,
       sourceIdentity: statIdentity(sourceBefore),
+      sourceSha256,
+      witness,
+    })
+  } catch (error) {
+    await sourceHandle?.close().catch(() => undefined)
+    await snapshotHandle?.close().catch(() => undefined)
+    if (error instanceof SourceIdentityError) throw error
+    fail('toolchain:snapshot-write')
+  }
+}
+
+async function enumerateSecureToolTree(root, limits = {}) {
+  const category = limits.category ?? 'toolchain:pnpm-bundle'
+  const maxFiles = limits.maxFiles ?? PNPM_BUNDLE_FILE_LIMIT
+  const maxTotalBytes = limits.maxTotalBytes ?? PNPM_BUNDLE_TOTAL_LIMIT_BYTES
+  let canonicalRoot
+  try {
+    canonicalRoot = await realpath(root)
+  } catch {
+    fail(category)
+  }
+  if (canonicalRoot !== resolve(root)) fail(category)
+  const pending = ['']
+  const files = []
+  const directories = []
+  let totalBytes = 0
+  while (pending.length > 0) {
+    const relativeDirectory = pending.shift()
+    const directoryPath = relativeDirectory ? join(canonicalRoot, relativeDirectory) : canonicalRoot
+    const directoryStat = await safeLstat(directoryPath)
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      fail(category)
+    }
+    assertSecureOwnershipAndMode(directoryStat)
+    if ((await realpath(directoryPath).catch(() => '')) !== directoryPath) {
+      fail(category)
+    }
+    directories.push(
+      Object.freeze({ path: relativeDirectory, identity: statIdentity(directoryStat) }),
+    )
+    let entries
+    try {
+      entries = await readdir(directoryPath, { withFileTypes: true })
+    } catch {
+      fail(category)
+    }
+    entries.sort((left, right) => compareUTF8(left.name, right.name))
+    for (const entry of entries) {
+      if (entry.name === '' || entry.name.includes('/') || entry.name.includes('\0')) {
+        fail(category)
+      }
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+      normalizedRepositoryPath(relativePath)
+      const absolutePath = join(canonicalRoot, relativePath)
+      const stat = await safeLstat(absolutePath)
+      if (stat.isDirectory()) {
+        pending.push(relativePath)
+        continue
+      }
+      assertRegularSourceStat(stat)
+      totalBytes += Number(stat.size)
+      if (files.length + 1 > maxFiles) fail(`${category}-file-count`)
+      if (totalBytes > maxTotalBytes) fail(`${category}-total-bytes`)
+      files.push(relativePath)
+    }
+  }
+  return Object.freeze({
+    directories: Object.freeze(directories),
+    files: Object.freeze(files.sort(compareUTF8)),
+    limits: Object.freeze({ category, maxFiles, maxTotalBytes }),
+    root: canonicalRoot,
+  })
+}
+
+async function copyToolSupportFile(treeRoot, relativePath, snapshotRoot, snapshotPrefix) {
+  const sourcePath = join(treeRoot, relativePath)
+  const selection = Object.freeze({ selectionPath: sourcePath, sourcePath })
+  const witness = await capturePathWitness(selection)
+  const sourceStat = await safeLstat(sourcePath)
+  assertRegularSourceStat(sourceStat)
+  const snapshotPath = join(snapshotRoot, snapshotPrefix, relativePath)
+  let sourceHandle
+  let snapshotHandle
+  try {
+    sourceHandle = await open(sourcePath, fsConstants.O_RDONLY | noFollowFlag())
+    const sourceBefore = await sourceHandle.stat({ bigint: true })
+    if (!sameFileIdentity(statIdentity(sourceStat), statIdentity(sourceBefore))) {
+      fail('toolchain:source-drift')
+    }
+    const snapshotMode = (sourceBefore.mode & 0o111n) === 0n ? 0o400 : 0o500
+    await mkdir(dirname(snapshotPath), { mode: 0o700, recursive: true })
+    snapshotHandle = await open(
+      snapshotPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag(),
+      0o600,
+    )
+    const size = Number(sourceBefore.size)
+    const buffer = Buffer.allocUnsafe(Math.min(HASH_CHUNK_BYTES, Math.max(size, 1)))
+    const digest = createHash('sha256')
+    let position = 0
+    while (position < size) {
+      const requested = Math.min(buffer.length, size - position)
+      const { bytesRead } = await sourceHandle.read(buffer, 0, requested, position)
+      if (bytesRead <= 0) fail('toolchain:source-drift')
+      digest.update(buffer.subarray(0, bytesRead))
+      let written = 0
+      while (written < bytesRead) {
+        const { bytesWritten } = await snapshotHandle.write(
+          buffer,
+          written,
+          bytesRead - written,
+          position + written,
+        )
+        if (bytesWritten <= 0) fail('toolchain:snapshot-write')
+        written += bytesWritten
+      }
+      position += bytesRead
+    }
+    await snapshotHandle.chmod(snapshotMode)
+    await snapshotHandle.sync()
+    const snapshotStat = await snapshotHandle.stat({ bigint: true })
+    if (
+      !snapshotStat.isFile() ||
+      snapshotStat.nlink !== 1n ||
+      snapshotStat.uid !== currentUserID() ||
+      (snapshotStat.mode & 0o777n) !== BigInt(snapshotMode) ||
+      snapshotStat.size !== sourceBefore.size
+    ) {
+      fail('toolchain:snapshot-write')
+    }
+    await verifySelectedSource(
+      selection,
+      witness,
+      sourceHandle,
+      statIdentity(sourceBefore),
+      'toolchain:source-drift',
+    )
+    const sourceSha256 = digest.digest('hex')
+    await sourceHandle.close()
+    sourceHandle = null
+    await snapshotHandle.close()
+    snapshotHandle = null
+    return Object.freeze({
+      executableSha256: sourceSha256,
+      name: relativePath,
+      selection,
+      snapshotIdentity: statIdentity(snapshotStat),
+      snapshotPath,
+      sourceHandle: null,
+      sourceIdentity: statIdentity(sourceBefore),
+      sourceSha256,
       witness,
     })
   } catch (error) {
@@ -771,46 +1145,18 @@ async function copyExecutableToSnapshot(selection, snapshotRoot, name) {
 }
 
 async function verifyToolBinding(binding) {
-  let sourceHandleStat
-  let sourcePathStat
-  let sourceParentStat
-  let selectionStat
-  let selectionParentStat
   let snapshotStat
-  let resolvedSelection
+  await verifySelectedSource(
+    binding.selection,
+    binding.witness,
+    binding.sourceHandle,
+    binding.sourceIdentity,
+    'toolchain:source-drift',
+  )
   try {
-    ;[
-      sourceHandleStat,
-      sourcePathStat,
-      sourceParentStat,
-      selectionStat,
-      selectionParentStat,
-      snapshotStat,
-      resolvedSelection,
-    ] = await Promise.all([
-      binding.sourceHandle.stat({ bigint: true }),
-      lstat(binding.selection.sourcePath, { bigint: true }),
-      lstat(dirname(binding.selection.sourcePath), { bigint: true }),
-      lstat(binding.selection.selectionPath, { bigint: true }),
-      lstat(dirname(binding.selection.selectionPath), { bigint: true }),
-      lstat(binding.snapshotPath, { bigint: true }),
-      realpath(binding.selection.selectionPath),
-    ])
+    snapshotStat = await lstat(binding.snapshotPath, { bigint: true })
   } catch {
-    fail('toolchain:source-drift')
-  }
-  if (
-    resolvedSelection !== binding.selection.sourcePath ||
-    !sameFileIdentity(binding.sourceIdentity, statIdentity(sourceHandleStat)) ||
-    !sameFileIdentity(binding.sourceIdentity, statIdentity(sourcePathStat)) ||
-    !sameFileIdentity(binding.witness.sourceParentIdentity, statIdentity(sourceParentStat)) ||
-    !sameFileIdentity(binding.witness.selectionIdentity, statIdentity(selectionStat)) ||
-    !sameFileIdentity(
-      binding.witness.selectionParentIdentity,
-      statIdentity(selectionParentStat),
-    )
-  ) {
-    fail('toolchain:source-drift')
+    fail('toolchain:snapshot-drift')
   }
   if (!sameFileIdentity(binding.snapshotIdentity, statIdentity(snapshotStat))) {
     fail('toolchain:snapshot-drift')
@@ -849,6 +1195,41 @@ async function hashOpenFile(handle, size) {
 }
 
 async function finalizeToolBinding(binding) {
+  if (binding.sourceHandle === null) {
+    let sourceHandle
+    let snapshotHandle
+    try {
+      sourceHandle = await open(binding.selection.sourcePath, fsConstants.O_RDONLY | noFollowFlag())
+      await verifySelectedSource(
+        binding.selection,
+        binding.witness,
+        sourceHandle,
+        binding.sourceIdentity,
+        'toolchain:source-drift',
+      )
+      if (
+        (await hashOpenFile(sourceHandle, Number(binding.sourceIdentity.size))) !==
+        binding.sourceSha256
+      ) {
+        fail('toolchain:source-drift')
+      }
+      snapshotHandle = await open(binding.snapshotPath, fsConstants.O_RDONLY | noFollowFlag())
+      const snapshotStat = await snapshotHandle.stat({ bigint: true })
+      if (!sameFileIdentity(binding.snapshotIdentity, statIdentity(snapshotStat))) {
+        fail('toolchain:snapshot-drift')
+      }
+      if (
+        (await hashOpenFile(snapshotHandle, Number(binding.snapshotIdentity.size))) !==
+        binding.executableSha256
+      ) {
+        fail('toolchain:snapshot-drift')
+      }
+      return
+    } finally {
+      await sourceHandle?.close().catch(() => undefined)
+      await snapshotHandle?.close().catch(() => undefined)
+    }
+  }
   await verifyToolBinding(binding)
   const sourceDigest = await hashOpenFile(binding.sourceHandle, Number(binding.sourceIdentity.size))
   let snapshotHandle
@@ -862,7 +1243,7 @@ async function finalizeToolBinding(binding) {
   } finally {
     await snapshotHandle?.close().catch(() => undefined)
   }
-  if (sourceDigest !== binding.executableSha256) fail('toolchain:source-drift')
+  if (sourceDigest !== binding.sourceSha256) fail('toolchain:source-drift')
   if (snapshotDigest !== binding.executableSha256) fail('toolchain:snapshot-drift')
 }
 
@@ -872,45 +1253,67 @@ function orchestratorBinding(binding, extra = {}) {
     executableSha256: binding.executableSha256,
     invocation: binding.snapshotPath,
     sourceCanonical: binding.selection.sourcePath,
+    sourceSha256: binding.sourceSha256,
     ...extra,
   })
 }
 
-async function collectProductionToolchains(target, snapshotParent, suppliedOptions) {
+async function collectProductionToolchains(target, snapshotParent, suppliedOptions, desktopRoot) {
   assertProductionPlatform()
   const options = suppliedOptions ?? productionToolchainOptions()
   const snapshotRoot = await createToolchainSnapshotRoot(snapshotParent)
   const bindings = []
+  const treeContracts = []
   const bind = async (selection, name) => {
     const binding = await copyExecutableToSnapshot(selection, snapshotRoot, name)
     bindings.push(binding)
     return binding
   }
   try {
-    const [gitSelection, goSelection, pnpmSelection, nodeSelection, rustcSelection, cargoSelection] =
+    const [gitSelection, goSelection, pnpmPackage, nodeSelection, rustcSelection, cargoSelection] =
       await Promise.all([
         resolveFixedGitExecutable(options.gitPath),
         resolveExecutable('go', options.path),
-        resolveExecutable('pnpm', options.path),
+        resolvePnpmPackage(desktopRoot, options),
         resolveFixedExecutable('node', options.nodePath),
         resolveExecutable('rustc', options.path),
         resolveExecutable('cargo', options.path),
       ])
-    const [git, go, pnpm, node] = await Promise.all([
+    const [git, go, node] = await Promise.all([
       bind(gitSelection, 'git'),
       bind(goSelection, 'go'),
-      bind(pnpmSelection, 'pnpm'),
       bind(nodeSelection, 'node'),
     ])
+    let pnpm
+    const pnpmSupport = []
+    if (pnpmPackage.tree === null) {
+      pnpm = await bind(pnpmPackage.selection, 'pnpm')
+    } else {
+      treeContracts.push(pnpmPackage.tree)
+      pnpm = await bind(pnpmPackage.selection, 'pnpm-package/bin/pnpm.cjs')
+      const supportPaths = pnpmPackage.tree.files.filter((path) => path !== 'bin/pnpm.cjs')
+      for (let index = 0; index < supportPaths.length; index += 16) {
+        const copied = await Promise.all(
+          supportPaths
+            .slice(index, index + 16)
+            .map((path) =>
+              copyToolSupportFile(pnpmPackage.tree.root, path, snapshotRoot, 'pnpm-package'),
+            ),
+        )
+        bindings.push(...copied)
+        pnpmSupport.push(...copied)
+      }
+    }
     let rustup
+    let rustupVersion = null
     let rustcResolved = rustcSelection
     let cargoResolved = cargoSelection
     const rustupSelection = await resolveExecutable('rustup', options.path).catch(() => null)
-    if (
-      rustupSelection &&
-      (rustcSelection.sourcePath === rustupSelection.sourcePath ||
-        cargoSelection.sourcePath === rustupSelection.sourcePath)
-    ) {
+    const rustcUsesRustup =
+      rustupSelection !== null && (await selectionsShareFile(rustcSelection, rustupSelection))
+    const cargoUsesRustup =
+      rustupSelection !== null && (await selectionsShareFile(cargoSelection, rustupSelection))
+    if (rustupSelection && (rustcUsesRustup || cargoUsesRustup)) {
       rustup = await bind(rustupSelection, 'rustup')
       let rustupHome
       try {
@@ -923,9 +1326,12 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
         fail('toolchain:rustup-home')
       }
       const rustupEnv = commandEnvironment(snapshotRoot, { RUSTUP_HOME: rustupHome })
-      if (rustcSelection.sourcePath === rustupSelection.sourcePath) {
+      if (rustcUsesRustup) {
         const reported = (
-          await runTrustedTool(rustup, ['which', 'rustc'], rustupEnv, { cwd: snapshotRoot })
+          await runTrustedTool(rustup, ['which', 'rustc'], rustupEnv, {
+            category: 'toolchain:rustup',
+            cwd: desktopRoot,
+          })
         )
           .toString('utf8')
           .trim()
@@ -933,9 +1339,12 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
         const sourcePath = await realpath(reported).catch(() => fail('toolchain:rustc'))
         rustcResolved = Object.freeze({ selectionPath: resolve(reported), sourcePath })
       }
-      if (cargoSelection.sourcePath === rustupSelection.sourcePath) {
+      if (cargoUsesRustup) {
         const reported = (
-          await runTrustedTool(rustup, ['which', 'cargo'], rustupEnv, { cwd: snapshotRoot })
+          await runTrustedTool(rustup, ['which', 'cargo'], rustupEnv, {
+            category: 'toolchain:rustup',
+            cwd: desktopRoot,
+          })
         )
           .toString('utf8')
           .trim()
@@ -943,14 +1352,75 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
         const sourcePath = await realpath(reported).catch(() => fail('toolchain:cargo'))
         cargoResolved = Object.freeze({ selectionPath: resolve(reported), sourcePath })
       }
+      rustupVersion = await runTrustedTool(rustup, ['--version'], rustupEnv, {
+        category: 'toolchain:rustup',
+        cwd: desktopRoot,
+      })
     }
-    const [rustc, cargo] = await Promise.all([
-      bind(rustcResolved, 'rustc'),
-      bind(cargoResolved, 'cargo'),
-    ])
+    let rustc
+    let cargo
+    const rustSupport = []
+    let rustSnapshotRoot = null
+    if (options.snapshotRustToolchain === true) {
+      const rustTreeRoot = resolve(dirname(rustcResolved.sourcePath), '..')
+      if (
+        !isPathInside(rustTreeRoot, rustcResolved.sourcePath) ||
+        !isPathInside(rustTreeRoot, cargoResolved.sourcePath)
+      ) {
+        fail('toolchain:rust-bundle')
+      }
+      const rustTree = await enumerateSecureToolTree(rustTreeRoot, {
+        category: 'toolchain:rust-bundle',
+        maxFiles: RUST_BUNDLE_FILE_LIMIT,
+        maxTotalBytes: RUST_BUNDLE_TOTAL_LIMIT_BYTES,
+      })
+      const rustcRelative = relative(rustTree.root, rustcResolved.sourcePath)
+      const cargoRelative = relative(rustTree.root, cargoResolved.sourcePath)
+      if (!rustTree.files.includes(rustcRelative) || !rustTree.files.includes(cargoRelative)) {
+        fail('toolchain:rust-bundle')
+      }
+      treeContracts.push(rustTree)
+      rustSnapshotRoot = join(snapshotRoot, 'rust-toolchain')
+      ;[rustc, cargo] = await Promise.all([
+        bind(rustcResolved, `rust-toolchain/${rustcRelative}`),
+        bind(cargoResolved, `rust-toolchain/${cargoRelative}`),
+      ])
+      const supportPaths = rustTree.files.filter(
+        (path) => path !== rustcRelative && path !== cargoRelative,
+      )
+      for (let index = 0; index < supportPaths.length; index += 8) {
+        const copied = await Promise.all(
+          supportPaths
+            .slice(index, index + 8)
+            .map((path) =>
+              copyToolSupportFile(rustTree.root, path, snapshotRoot, 'rust-toolchain'),
+            ),
+        )
+        bindings.push(...copied)
+        rustSupport.push(...copied)
+      }
+    } else {
+      ;[rustc, cargo] = await Promise.all([
+        bind(rustcResolved, 'rustc'),
+        bind(cargoResolved, 'cargo'),
+      ])
+    }
     const baseEnv = commandEnvironment(snapshotRoot)
+    let expectedGoRoot
+    try {
+      expectedGoRoot = await realpath(
+        options.goRoot ?? resolve(dirname(go.selection.sourcePath), '..'),
+      )
+      const goRootStat = await lstat(expectedGoRoot, { bigint: true })
+      if (!goRootStat.isDirectory()) fail('toolchain:go-env')
+      assertSecureOwnershipAndMode(goRootStat, { allowRootOwner: true })
+    } catch (error) {
+      if (error instanceof SourceIdentityError) throw error
+      fail('toolchain:go-env')
+    }
     const goEnv = commandEnvironment(snapshotRoot, {
       GOENV: 'off',
+      GOROOT: expectedGoRoot,
       GONOSUMDB: '*',
       GOPROXY: 'off',
       GOTOOLCHAIN: 'local',
@@ -961,10 +1431,14 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
       git,
       ['--version'],
       gitCommandEnvironment(snapshotRoot),
-      { cwd: snapshotRoot },
+      { category: 'toolchain:git', cwd: snapshotRoot },
     )
-    const goVersion = await runTrustedTool(go, ['version'], goEnv, { cwd: snapshotRoot })
+    const goVersion = await runTrustedTool(go, ['version'], goEnv, {
+      category: 'toolchain:go',
+      cwd: snapshotRoot,
+    })
     const goCompileVersion = await runTrustedTool(go, ['tool', 'compile', '-V=full'], goEnv, {
+      category: 'toolchain:go',
       cwd: snapshotRoot,
     })
     const goEnvironment = await runTrustedTool(
@@ -981,21 +1455,27 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
         'GOVERSION',
       ],
       goEnv,
-      { cwd: snapshotRoot },
+      { category: 'toolchain:go', cwd: snapshotRoot },
     )
     const rustcVersion = await runTrustedTool(rustc, ['-vV'], baseEnv, {
+      category: 'toolchain:rustc',
       cwd: snapshotRoot,
     })
     const cargoVersion = await runTrustedTool(cargo, ['-Vv'], baseEnv, {
+      category: 'toolchain:cargo',
       cwd: snapshotRoot,
     })
     const pnpmVersion = await runTrustedTool(pnpm, ['--version'], baseEnv, {
+      category: 'toolchain:pnpm',
       cwd: snapshotRoot,
     })
     const nodeVersion = await runTrustedTool(node, ['--version'], baseEnv, {
+      category: 'toolchain:node',
       cwd: snapshotRoot,
     })
-    await Promise.all(bindings.map(finalizeToolBinding))
+    for (let index = 0; index < bindings.length; index += 32) {
+      await Promise.all(bindings.slice(index, index + 32).map(finalizeToolBinding))
+    }
     let parsedGoEnvironment
     try {
       parsedGoEnvironment = JSON.parse(goEnvironment.toString('utf8'))
@@ -1013,6 +1493,7 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
       fail('toolchain:go-env')
     }
     parsedGoEnvironment.GOROOT = canonicalGoRoot
+    if (canonicalGoRoot !== expectedGoRoot) fail('toolchain:go-env')
     const rustcText = rustcVersion.toString('utf8').trim()
     const rustHost = /^host:\s*(\S+)$/mu.exec(rustcText)?.[1]
     if (!rustHost) fail('toolchain:rustc-version')
@@ -1021,11 +1502,13 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
       cargo: Object.freeze({
         executablePath: cargo.selection.sourcePath,
         executableSha256: cargo.executableSha256,
+        sourceSha256: cargo.sourceSha256,
         version: cargoVersion.toString('utf8').trim(),
       }),
       git: Object.freeze({
         executablePath: git.selection.sourcePath,
         executableSha256: git.executableSha256,
+        sourceSha256: git.sourceSha256,
         version: gitVersion.toString('utf8').trim(),
       }),
       go: Object.freeze({
@@ -1037,42 +1520,114 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
         ),
         executablePath: go.selection.sourcePath,
         executableSha256: go.executableSha256,
+        sourceSha256: go.sourceSha256,
         version: goVersion.toString('utf8').trim(),
       }),
       node: Object.freeze({
         architecture: process.arch,
         executablePath: node.selection.sourcePath,
         executableSha256: node.executableSha256,
+        sourceSha256: node.sourceSha256,
         platform: process.platform,
         version: nodeVersion.toString('utf8').trim(),
       }),
       pnpm: Object.freeze({
         executablePath: pnpm.selection.sourcePath,
         executableSha256: pnpm.executableSha256,
+        sourceSha256: pnpm.sourceSha256,
+        supportFiles: Object.freeze(
+          pnpmSupport.map((binding) =>
+            Object.freeze({
+              executableSha256: binding.executableSha256,
+              path: binding.name,
+              size: Number(binding.sourceIdentity.size),
+              sourcePath: binding.selection.sourcePath,
+              sourceSha256: binding.sourceSha256,
+            }),
+          ),
+        ),
         version: pnpmVersion.toString('utf8').trim(),
       }),
       rustc: Object.freeze({
         executablePath: rustc.selection.sourcePath,
         executableSha256: rustc.executableSha256,
+        sourceSha256: rustc.sourceSha256,
         host: rustHost,
         version: rustcText,
       }),
+      ...(rustSnapshotRoot
+        ? {
+            rustToolchain: Object.freeze({
+              sourceRoot: resolve(dirname(rustc.selection.sourcePath), '..'),
+              supportFiles: Object.freeze(
+                rustSupport.map((binding) =>
+                  Object.freeze({
+                    executableSha256: binding.executableSha256,
+                    path: binding.name,
+                    size: Number(binding.sourceIdentity.size),
+                    sourcePath: binding.selection.sourcePath,
+                    sourceSha256: binding.sourceSha256,
+                  }),
+                ),
+              ),
+            }),
+          }
+        : {}),
       ...(rustup
         ? {
             rustup: Object.freeze({
               executablePath: rustup.selection.sourcePath,
               executableSha256: rustup.executableSha256,
+              sourceSha256: rustup.sourceSha256,
+              version: rustupVersion.toString('utf8').trim(),
             }),
           }
         : {}),
     })
     const orchestrator = Object.freeze({
-      cargo: orchestratorBinding(cargo),
-      git: orchestratorBinding(git),
-      go: orchestratorBinding(go, { goroot: canonicalGoRoot }),
-      node: orchestratorBinding(node),
-      pnpm: orchestratorBinding(pnpm),
-      rustc: orchestratorBinding(rustc),
+      cargo: orchestratorBinding(cargo, {
+        toolchainRoot: rustSnapshotRoot,
+        version: manifest.cargo.version,
+      }),
+      git: orchestratorBinding(git, { version: manifest.git.version }),
+      go: orchestratorBinding(go, { goroot: canonicalGoRoot, version: manifest.go.version }),
+      node: orchestratorBinding(node, { version: manifest.node.version }),
+      pnpm: orchestratorBinding(pnpm, {
+        supportFiles: Object.freeze(
+          pnpmSupport.map((binding) =>
+            Object.freeze({
+              canonical: binding.snapshotPath,
+              executableSha256: binding.executableSha256,
+              path: binding.name,
+              sourceCanonical: binding.selection.sourcePath,
+              sourceSha256: binding.sourceSha256,
+            }),
+          ),
+        ),
+        version: manifest.pnpm.version,
+      }),
+      rustc: orchestratorBinding(rustc, {
+        toolchainRoot: rustSnapshotRoot,
+        version: manifest.rustc.version,
+      }),
+      ...(rustSnapshotRoot
+        ? {
+            rustToolchain: Object.freeze({
+              canonical: rustSnapshotRoot,
+              supportFiles: Object.freeze(
+                rustSupport.map((binding) =>
+                  Object.freeze({
+                    canonical: binding.snapshotPath,
+                    executableSha256: binding.executableSha256,
+                    path: binding.name,
+                    sourceCanonical: binding.selection.sourcePath,
+                    sourceSha256: binding.sourceSha256,
+                  }),
+                ),
+              ),
+            }),
+          }
+        : {}),
       ...(rustup ? { rustup: orchestratorBinding(rustup) } : {}),
       snapshotRoot,
     })
@@ -1083,9 +1638,12 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
       privateBindings: Object.freeze([...bindings]),
       manifest,
       snapshotRoot,
+      treeContracts: Object.freeze(treeContracts),
     })
   } catch (error) {
-    await Promise.all(bindings.map((binding) => binding.sourceHandle.close().catch(() => undefined)))
+    await Promise.all(
+      bindings.map((binding) => binding.sourceHandle?.close().catch(() => undefined)),
+    )
     await rm(snapshotRoot, { force: true, recursive: true }).catch(() => undefined)
     throw error
   }
@@ -1094,7 +1652,7 @@ async function collectProductionToolchains(target, snapshotParent, suppliedOptio
 async function closeToolchainCapture(capture, removeSnapshot) {
   await Promise.all(
     (capture.privateBindings ?? []).map((binding) =>
-      binding.sourceHandle.close().catch(() => undefined),
+      binding.sourceHandle?.close().catch(() => undefined),
     ),
   )
   if (removeSnapshot && typeof capture.snapshotRoot === 'string') {
@@ -1103,7 +1661,24 @@ async function closeToolchainCapture(capture, removeSnapshot) {
 }
 
 async function finalizeToolchainCapture(capture) {
-  await Promise.all((capture.privateBindings ?? []).map(finalizeToolBinding))
+  const bindings = capture.privateBindings ?? []
+  for (let index = 0; index < bindings.length; index += 32) {
+    await Promise.all(bindings.slice(index, index + 32).map(finalizeToolBinding))
+  }
+  for (const contract of capture.treeContracts ?? []) {
+    const current = await enumerateSecureToolTree(contract.root, contract.limits)
+    if (!sameStringArray(current.files, contract.files)) fail('toolchain:source-drift')
+    if (current.directories.length !== contract.directories.length) {
+      fail('toolchain:source-drift')
+    }
+    for (let index = 0; index < current.directories.length; index += 1) {
+      const left = current.directories[index]
+      const right = contract.directories[index]
+      if (left.path !== right.path || !sameFileIdentity(left.identity, right.identity)) {
+        fail('toolchain:source-drift')
+      }
+    }
+  }
 }
 
 async function collectFixtureToolchains(target, snapshotParent, collector) {
@@ -1114,20 +1689,19 @@ async function collectFixtureToolchains(target, snapshotParent, collector) {
     const gitSelection = await resolveFixedGitExecutable()
     const gitBinding = await copyExecutableToSnapshot(gitSelection, snapshotRoot, 'git')
     privateBindings.push(gitBinding)
-    const manifest = await collector(target)
-    validateToolchainTarget(manifest, target)
     await finalizeToolBinding(gitBinding)
     return Object.freeze({
       bindings: null,
       gitBinding,
       gitExecutable: gitBinding.snapshotPath,
-      manifest,
+      manifest: null,
+      manifestPromise: Promise.resolve().then(() => collector(target)),
       privateBindings: Object.freeze(privateBindings),
       snapshotRoot,
     })
   } catch (error) {
     await Promise.all(
-      privateBindings.map((binding) => binding.sourceHandle.close().catch(() => undefined)),
+      privateBindings.map((binding) => binding.sourceHandle?.close().catch(() => undefined)),
     )
     await rm(snapshotRoot, { force: true, recursive: true }).catch(() => undefined)
     throw error
@@ -1151,24 +1725,105 @@ function parseNullTerminatedPaths(bytes) {
   return paths.sort(compareUTF8)
 }
 
-async function runGitCommand(gitBinding, args, category, options) {
-  return runTrustedTool(
-    gitBinding,
-    args,
-    gitCommandEnvironment(dirname(gitBinding.snapshotPath)),
-    {
-      ...options,
-      category,
-    },
-  )
+async function runGitCommand(gitBinding, args, category, options, onGitCommand) {
+  if (onGitCommand) await onGitCommand(category)
+  return runTrustedTool(gitBinding, args, gitCommandEnvironment(dirname(gitBinding.snapshotPath)), {
+    ...options,
+    category,
+  })
 }
 
-async function listRepositoryPaths(repository, gitBinding) {
+function parseSingleGitLine(bytes, category, pattern) {
+  const text = bytes.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(bytes)) fail(category)
+  const value = text.endsWith('\n') ? text.slice(0, -1) : text
+  if (
+    value === '' ||
+    Buffer.byteLength(value, 'utf8') > 512 ||
+    /[\u0000-\u001f\u007f]/u.test(value) ||
+    !pattern.test(value)
+  ) {
+    fail(category)
+  }
+  return value
+}
+
+function parseGitTags(bytes) {
+  const text = bytes.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(bytes) || /[\u0000\r\u007f]/u.test(text)) {
+    fail('git:vcs-tags')
+  }
+  const content = text.endsWith('\n') ? text.slice(0, -1) : text
+  if (content === '') return Object.freeze([])
+  const tags = content.split('\n')
+  if (
+    tags.length > 1024 ||
+    tags.some(
+      (tag) =>
+        tag === '' || Buffer.byteLength(tag, 'utf8') > 512 || /[\s\u0000-\u001f\u007f]/u.test(tag),
+    )
+  ) {
+    fail('git:vcs-tags')
+  }
+  const sorted = tags.sort(compareUTF8)
+  if (new Set(sorted).size !== sorted.length) fail('git:vcs-tags')
+  return Object.freeze(sorted)
+}
+
+async function captureRepositoryVCS(repository, gitBinding, onGitCommand) {
+  // 同仓查询保持串行，限制并发子进程与信号监听器数量。
+  const head = parseSingleGitLine(
+    await runGitCommand(
+      gitBinding,
+      ['rev-parse', '--verify', 'HEAD'],
+      'git:vcs-head',
+      { cwd: repository.root, maxOutputBytes: 1024 },
+      onGitCommand,
+    ),
+    'git:vcs-head',
+    /^[a-f0-9]{40,64}$/u,
+  )
+  const commitDate = parseSingleGitLine(
+    await runGitCommand(
+      gitBinding,
+      ['show', '-s', '--format=%cI', 'HEAD'],
+      'git:vcs-date',
+      { cwd: repository.root, maxOutputBytes: 1024 },
+      onGitCommand,
+    ),
+    'git:vcs-date',
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u,
+  )
+  const describe = parseSingleGitLine(
+    await runGitCommand(
+      gitBinding,
+      ['describe', '--tags', '--always', '--dirty'],
+      'git:vcs-describe',
+      { cwd: repository.root, maxOutputBytes: 1024 },
+      onGitCommand,
+    ),
+    'git:vcs-describe',
+    /^\S+$/u,
+  )
+  const tags = parseGitTags(
+    await runGitCommand(
+      gitBinding,
+      ['tag', '--points-at', 'HEAD'],
+      'git:vcs-tags',
+      { cwd: repository.root, maxOutputBytes: 512 * 1024 },
+      onGitCommand,
+    ),
+  )
+  return Object.freeze({ commitDate, describe, head, tags })
+}
+
+async function listRepositoryPaths(repository, gitBinding, onGitCommand) {
   const topLevelBytes = await runGitCommand(
     gitBinding,
     ['rev-parse', '--show-toplevel'],
     'git:repository-root',
     { cwd: repository.root },
+    onGitCommand,
   )
   let topLevel
   try {
@@ -1183,12 +1838,14 @@ async function listRepositoryPaths(repository, gitBinding) {
     ['ls-files', '--cached', '--full-name', '-z'],
     'git:tracked-files',
     { cwd: repository.root, maxOutputBytes: GIT_OUTPUT_LIMIT_BYTES },
+    onGitCommand,
   )
   const untrackedBytes = await runGitCommand(
     gitBinding,
     ['ls-files', '--others', '--exclude-standard', '--full-name', '-z'],
     'git:untracked-files',
     { cwd: repository.root, maxOutputBytes: GIT_OUTPUT_LIMIT_BYTES },
+    onGitCommand,
   )
   const ignoredBytes = await runGitCommand(
     gitBinding,
@@ -1205,6 +1862,7 @@ async function listRepositoryPaths(repository, gitBinding) {
     ],
     'git:ignored-files',
     { cwd: repository.root, maxOutputBytes: GIT_OUTPUT_LIMIT_BYTES },
+    onGitCommand,
   )
   const ignoredSensitiveBytes = await runGitCommand(
     gitBinding,
@@ -1217,18 +1875,24 @@ async function listRepositoryPaths(repository, gitBinding) {
       '-z',
       '--',
       ...GIT_SENSITIVE_PATHS,
+      ...GIT_EXCLUDED_PATHS,
     ],
     'git:ignored-sensitive-files',
     { cwd: repository.root, maxOutputBytes: GIT_OUTPUT_LIMIT_BYTES },
+    onGitCommand,
   )
   const allTracked = parseNullTerminatedPaths(trackedBytes)
-  const allUntracked = parseNullTerminatedPaths(untrackedBytes)
-  const allIgnored = [
+  const listedUntracked = parseNullTerminatedPaths(untrackedBytes)
+  const listedIgnored = [
     ...new Set([
       ...parseNullTerminatedPaths(ignoredBytes),
       ...parseNullTerminatedPaths(ignoredSensitiveBytes),
     ]),
   ].sort(compareUTF8)
+  if (allTracked.some(isCodexWorkspacePath)) fail('source:codex-path')
+  // 宿主未跟踪/忽略的 .codex* 只按 Git 路径名排除，绝不触碰其元数据或内容。
+  const allUntracked = listedUntracked.filter((path) => !isCodexWorkspacePath(path))
+  const allIgnored = listedIgnored.filter((path) => !isCodexWorkspacePath(path))
   if ([...allUntracked, ...allIgnored].some(isSensitiveEnvironmentPath)) {
     fail('source:sensitive-file')
   }
@@ -1276,8 +1940,9 @@ async function verifyIdentities(records) {
   }
 }
 
-async function scanRepository(repository, gitBinding, budget) {
-  const initialPaths = await listRepositoryPaths(repository, gitBinding)
+async function scanRepository(repository, gitBinding, budget, hooks) {
+  const initialVCS = await captureRepositoryVCS(repository, gitBinding, hooks?.onGitCommand)
+  const initialPaths = await listRepositoryPaths(repository, gitBinding, hooks?.onGitCommand)
   const files = []
   const deletedTracked = []
   const identities = []
@@ -1321,13 +1986,18 @@ async function scanRepository(repository, gitBinding, budget) {
     }
   }
   await verifyIdentities(identities)
-  const finalPaths = await listRepositoryPaths(repository, gitBinding)
+  if (hooks?.afterInitialRepositoryScan) await hooks.afterInitialRepositoryScan(repository.id)
+  const finalPaths = await listRepositoryPaths(repository, gitBinding, hooks?.onGitCommand)
+  const finalVCS = await captureRepositoryVCS(repository, gitBinding, hooks?.onGitCommand)
   if (
     !sameStringArray(initialPaths.tracked, finalPaths.tracked) ||
     !sameStringArray(initialPaths.untracked, finalPaths.untracked) ||
     !sameStringArray(initialPaths.ignored, finalPaths.ignored)
   ) {
     fail('drift:file-list')
+  }
+  if (!canonicalManifestBytes(initialVCS).equals(canonicalManifestBytes(finalVCS))) {
+    fail('drift:vcs')
   }
   return Object.freeze({
     initialPaths,
@@ -1336,20 +2006,26 @@ async function scanRepository(repository, gitBinding, budget) {
       files: files.sort((left, right) => compareUTF8(left.path, right.path)),
       id: repository.id,
       module: repository.module,
+      vcs: initialVCS,
     }),
     identities,
+    vcs: initialVCS,
   })
 }
 
-async function verifyRepositoryScan(repository, scan, gitBinding) {
+async function verifyRepositoryScan(repository, scan, gitBinding, hooks) {
   await verifyIdentities(scan.identities)
-  const currentPaths = await listRepositoryPaths(repository, gitBinding)
+  const currentPaths = await listRepositoryPaths(repository, gitBinding, hooks?.onGitCommand)
+  const currentVCS = await captureRepositoryVCS(repository, gitBinding, hooks?.onGitCommand)
   if (
     !sameStringArray(scan.initialPaths.tracked, currentPaths.tracked) ||
     !sameStringArray(scan.initialPaths.untracked, currentPaths.untracked) ||
     !sameStringArray(scan.initialPaths.ignored, currentPaths.ignored)
   ) {
     fail('drift:file-list')
+  }
+  if (!canonicalManifestBytes(scan.vcs).equals(canonicalManifestBytes(currentVCS))) {
+    fail('drift:vcs')
   }
 }
 
@@ -1420,34 +2096,35 @@ function tokenizeGoConfiguration(text) {
   return tokens
 }
 
-function parseWorkspaceUses(text) {
-  const tokens = tokenizeGoConfiguration(text)
-  const uses = []
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index] !== 'use') continue
-    const next = tokens[index + 1]
-    if (next === '(') {
-      index += 2
-      while (index < tokens.length && tokens[index] !== ')') {
-        uses.push(tokens[index])
-        index += 1
-      }
-      if (tokens[index] !== ')') fail('workspace:syntax')
-    } else if (typeof next === 'string' && next !== ')') {
-      uses.push(next)
-      index += 1
-    } else {
-      fail('workspace:syntax')
-    }
-  }
-  return uses
-}
-
 function parseModulePath(text) {
   const tokens = tokenizeGoConfiguration(text)
   const index = tokens.indexOf('module')
   if (index < 0 || typeof tokens[index + 1] !== 'string') fail('workspace:module')
   return tokens[index + 1]
+}
+
+function parseGoVersion(text) {
+  const matches = [...text.matchAll(/^go[ \t]+(1\.[0-9]+(?:\.[0-9]+)?)[ \t]*$/gmu)]
+  if (matches.length !== 1) fail('workspace:go-version')
+  return matches[0][1]
+}
+
+function compareGoVersions(left, right) {
+  const leftParts = left.split('.').map(Number)
+  const rightParts = right.split('.').map(Number)
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+function dedicatedWorkspaceBytes(goVersion) {
+  const moduleRepositories = REPOSITORY_CONTRACT.filter((entry) => entry.module !== null)
+  return Buffer.from(
+    `go ${goVersion}\n\nuse (\n${moduleRepositories.map(({ id }) => `\t./${id}\n`).join('')})\n`,
+    'utf8',
+  )
 }
 
 function isLocalReplacementPath(path) {
@@ -1496,7 +2173,9 @@ async function validateLocalReplacements(text, configurationPath, source, layout
     if (canonicalTarget !== candidate || targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
       fail('workspace:replace')
     }
-    const repository = layout.repositories.find((item) => isPathInside(item.root, canonicalTarget))
+    const repository = layout.repositories.find(
+      (item) => item.module !== null && isPathInside(item.root, canonicalTarget),
+    )
     if (!repository) fail('workspace:replace')
     const targetPath = relative(repository.root, canonicalTarget).split('\\').join('/') || '.'
     replacements.push(
@@ -1511,44 +2190,12 @@ async function validateLocalReplacements(text, configurationPath, source, layout
 }
 
 async function validateWorkspace(layout) {
-  const workspaceBytes = await readSmallSecureFile(
-    layout.goWork,
-    1024 * 1024,
-    'workspace:read',
-    layout.workRoot,
-  )
-  const workspaceText = workspaceBytes.toString('utf8')
-  const uses = parseWorkspaceUses(workspaceText)
   const expectedRepositories = layout.repositories.filter(
     (repository) => repository.module !== null,
   )
-  if (uses.length !== expectedRepositories.length || new Set(uses).size !== uses.length) {
-    fail('workspace:mapping')
-  }
-  const actualRoots = []
-  for (const usePath of uses) {
-    const candidate = isAbsolute(usePath)
-      ? resolve(usePath)
-      : resolve(dirname(layout.goWork), usePath)
-    let resolved
-    try {
-      resolved = await realpath(candidate)
-    } catch {
-      fail('workspace:mapping')
-    }
-    if (resolved !== candidate) fail('workspace:mapping')
-    actualRoots.push(resolved)
-  }
-  const expectedRoots = expectedRepositories.map((repository) => repository.root).sort(compareUTF8)
-  if (!sameStringArray([...actualRoots].sort(compareUTF8), expectedRoots)) fail('workspace:mapping')
-
   const modules = []
-  const localReplacements = await validateLocalReplacements(
-    workspaceText,
-    layout.goWork,
-    'go.work',
-    layout,
-  )
+  const localReplacements = []
+  const goVersions = []
   for (const repository of expectedRepositories) {
     const goModPath = join(repository.root, 'go.mod')
     const goMod = await readSmallSecureFile(
@@ -1559,6 +2206,7 @@ async function validateWorkspace(layout) {
     )
     const goModText = goMod.toString('utf8')
     if (parseModulePath(goModText) !== repository.module) fail('workspace:mapping')
+    goVersions.push(parseGoVersion(goModText))
     localReplacements.push(
       ...(await validateLocalReplacements(goModText, goModPath, `${repository.id}/go.mod`, layout)),
     )
@@ -1570,7 +2218,18 @@ async function validateWorkspace(layout) {
       `${right.source}\0${right.targetRepository}\0${right.targetPath}`,
     ),
   )
+  const goVersion = goVersions.reduce((highest, candidate) =>
+    compareGoVersions(candidate, highest) > 0 ? candidate : highest,
+  )
+  const workspaceBytes = dedicatedWorkspaceBytes(goVersion)
   return Object.freeze({
+    file: Object.freeze({
+      mode: '100600',
+      path: 'go.work',
+      sha256: sha256(workspaceBytes),
+      size: workspaceBytes.length,
+    }),
+    goVersion,
     localReplacements: Object.freeze(localReplacements),
     modules: Object.freeze(modules.sort((left, right) => compareUTF8(left.module, right.module))),
   })
@@ -1600,29 +2259,8 @@ async function resolveLayoutFromDesktop(desktopRoot) {
   }
   const desktop = repositories.find((repository) => repository.id === 'hexclaw-desktop')
   if (desktop?.root !== canonicalDesktopRoot) fail('layout:desktop-root')
-  const goWorkCandidate = join(workRoot, 'go.work')
-  let goWork
-  try {
-    goWork = await realpath(goWorkCandidate)
-  } catch {
-    fail('layout:go-work')
-  }
-  if (goWork !== goWorkCandidate) fail('layout:go-work')
-  const goWorkSumCandidate = join(workRoot, 'go.work.sum')
-  let goWorkSum = null
-  try {
-    const goWorkSumStat = await lstat(goWorkSumCandidate, { bigint: true })
-    if (goWorkSumStat.isSymbolicLink() || !goWorkSumStat.isFile()) fail('layout:go-work-sum')
-    goWorkSum = await realpath(goWorkSumCandidate)
-    if (goWorkSum !== goWorkSumCandidate) fail('layout:go-work-sum')
-  } catch (error) {
-    if (error instanceof SourceIdentityError) throw error
-    if (error?.code !== 'ENOENT') fail('layout:go-work-sum')
-  }
   return Object.freeze({
     desktopRoot: canonicalDesktopRoot,
-    goWork,
-    goWorkSum,
     repositories: Object.freeze(repositories),
     workRoot,
   })
@@ -1657,12 +2295,9 @@ export async function resolveRustToolExecutableForTest(options) {
   try {
     rustup = await copyExecutableToSnapshot(rustupSelection, snapshotRoot, 'rustup')
     const reported = (
-      await runTrustedTool(
-        rustup,
-        ['which', options.name],
-        commandEnvironment(snapshotRoot),
-        { cwd: snapshotRoot },
-      )
+      await runTrustedTool(rustup, ['which', options.name], commandEnvironment(snapshotRoot), {
+        cwd: snapshotRoot,
+      })
     )
       .toString('utf8')
       .trim()
@@ -1678,7 +2313,7 @@ export async function resolveRustToolExecutableForTest(options) {
 
 export function validateProductionPlatformForTest(options) {
   assertExactOptions(options, ['hasUid', 'platform'])
-  assertProductionPlatform(options.platform, options.hasUid === true ? () => 0 : undefined)
+  assertProductionPlatform(options.platform, options.hasUid === true ? () => 0 : null)
   return true
 }
 
@@ -1723,11 +2358,7 @@ function assertNoSourceOverrides(env) {
 
 async function resolveLayoutAgain(layout) {
   const current = await resolveLayoutFromDesktop(layout.desktopRoot)
-  if (
-    current.workRoot !== layout.workRoot ||
-    current.goWork !== layout.goWork ||
-    current.goWorkSum !== layout.goWorkSum
-  ) {
+  if (current.workRoot !== layout.workRoot) {
     fail('drift:layout')
   }
   for (let index = 0; index < layout.repositories.length; index += 1) {
@@ -1736,9 +2367,6 @@ async function resolveLayoutAgain(layout) {
 }
 
 function assertManifestDestination(layout, manifestPath) {
-  if (manifestPath === layout.goWork || manifestPath === join(layout.workRoot, 'go.work.sum')) {
-    fail('input:manifest-path')
-  }
   for (const repository of layout.repositories) {
     if (!isPathInside(repository.root, manifestPath)) continue
     const rel = relative(repository.root, manifestPath).split('\\').join('/')
@@ -1746,7 +2374,21 @@ function assertManifestDestination(layout, manifestPath) {
   }
 }
 
-async function captureManifest(layout, target, limits, toolchainConfiguration, manifestPath) {
+async function captureWorkspaceInputs(layout, budget) {
+  const workspaceContract = await validateWorkspace(layout)
+  budget.reserve(workspaceContract.file.size)
+  return workspaceContract
+}
+
+async function captureManifest(
+  layout,
+  target,
+  limits,
+  toolchainConfiguration,
+  manifestPath,
+  hooks,
+) {
+  if (hooks?.onCapture) await hooks.onCapture()
   const toolchainCapture = toolchainConfiguration?.collector
     ? await collectFixtureToolchains(
         target,
@@ -1757,40 +2399,31 @@ async function captureManifest(layout, target, limits, toolchainConfiguration, m
         target,
         dirname(manifestPath),
         toolchainConfiguration?.options,
+        layout.desktopRoot,
       )
   const budget = createBudget(limits)
   try {
-    const workspaceContract = await validateWorkspace(layout)
-    const workspaceFiles = []
-    const workspaceIdentities = []
-    for (const input of [
-      Object.freeze({ absolutePath: layout.goWork, path: 'go.work' }),
-      ...(layout.goWorkSum === null
-        ? []
-        : [Object.freeze({ absolutePath: layout.goWorkSum, path: 'go.work.sum' })]),
-    ]) {
-      const result = await hashRegularFile(input.absolutePath, {
-        budget,
-        containmentRoot: layout.workRoot,
-      })
-      workspaceIdentities.push(
-        Object.freeze({ absolutePath: input.absolutePath, identity: result.identity }),
-      )
-      workspaceFiles.push(
-        Object.freeze({
-          mode: result.mode,
-          path: input.path,
-          sha256: result.sha256,
-          size: result.size,
-        }),
-      )
-    }
-    validateToolchainTarget(toolchainCapture.manifest, target)
-    const repositoryScans = await Promise.all(
+    const workspacePromise = captureWorkspaceInputs(layout, budget)
+    const manifestPromise =
+      toolchainCapture.manifestPromise ?? Promise.resolve(toolchainCapture.manifest)
+    const scansPromise = Promise.all(
       layout.repositories.map((repository) =>
-        scanRepository(repository, toolchainCapture.gitBinding, budget),
+        scanRepository(repository, toolchainCapture.gitBinding, budget, hooks),
       ),
     )
+    // 三个并发边界都收敛后再处理失败，避免清理仍被扫描进程使用的快照。
+    const [workspaceResult, manifestResult, scansResult] = await Promise.allSettled([
+      workspacePromise,
+      manifestPromise,
+      scansPromise,
+    ])
+    if (workspaceResult.status === 'rejected') throw workspaceResult.reason
+    if (manifestResult.status === 'rejected') throw manifestResult.reason
+    if (scansResult.status === 'rejected') throw scansResult.reason
+    const workspaceContract = workspaceResult.value
+    const toolchainManifest = manifestResult.value
+    const repositoryScans = scansResult.value
+    validateToolchainTarget(toolchainManifest, target)
     const finalWorkspaceContract = await validateWorkspace(layout)
     if (
       !canonicalManifestBytes(finalWorkspaceContract).equals(
@@ -1802,10 +2435,9 @@ async function captureManifest(layout, target, limits, toolchainConfiguration, m
     await resolveLayoutAgain(layout)
     await Promise.all(
       repositoryScans.map((scan, index) =>
-        verifyRepositoryScan(layout.repositories[index], scan, toolchainCapture.gitBinding),
+        verifyRepositoryScan(layout.repositories[index], scan, toolchainCapture.gitBinding, hooks),
       ),
     )
-    await verifyIdentities(workspaceIdentities)
     await finalizeToolchainCapture(toolchainCapture)
     const totals = budget.snapshot()
     const manifest = {
@@ -1813,12 +2445,9 @@ async function captureManifest(layout, target, limits, toolchainConfiguration, m
       repositories: repositoryScans.map((scan) => scan.manifest),
       schema: SOURCE_MANIFEST_SCHEMA,
       target,
-      toolchains: toolchainCapture.manifest,
+      toolchains: toolchainManifest,
       totals,
-      workspace: {
-        files: workspaceFiles,
-        ...workspaceContract,
-      },
+      workspace: workspaceContract,
     }
     canonicalManifestBytes(manifest)
     const preserveSnapshot = toolchainCapture.bindings !== null
@@ -1923,7 +2552,122 @@ function resultFromManifest(manifest, digest, toolchains = null) {
   })
 }
 
-function createIdentityOperations(layoutResolver, toolchainConfiguration, allowLimitOverrides) {
+/** 冻结后的校验只验证清单自身及其摘要，不再访问宿主源码或 Git。 */
+function validateFrozenManifest(manifest, target, allowLimitOverrides) {
+  const topLevelKeys = isPlainObject(manifest) ? Object.keys(manifest).sort() : []
+  if (
+    topLevelKeys.join(',') !== 'limits,repositories,schema,target,toolchains,totals,workspace' ||
+    manifest.schema !== SOURCE_MANIFEST_SCHEMA ||
+    manifest.target !== target
+  ) {
+    fail('manifest:schema')
+  }
+  const limits = validateRecordedLimits(manifest.limits, allowLimitOverrides)
+  validateToolchainTarget(manifest.toolchains, target)
+  if (
+    !Array.isArray(manifest.repositories) ||
+    manifest.repositories.length !== REPOSITORY_CONTRACT.length
+  ) {
+    fail('manifest:repositories')
+  }
+
+  let files = 0
+  let deletedTracked = 0
+  let bytes = 0
+  for (let index = 0; index < REPOSITORY_CONTRACT.length; index += 1) {
+    const repository = manifest.repositories[index]
+    const contract = REPOSITORY_CONTRACT[index]
+    if (
+      !isPlainObject(repository) ||
+      repository.id !== contract.id ||
+      repository.module !== contract.module ||
+      !Array.isArray(repository.files) ||
+      !Array.isArray(repository.deletedTracked) ||
+      !isPlainObject(repository.vcs)
+    ) {
+      fail('manifest:repositories')
+    }
+    let previousPath = null
+    for (const file of repository.files) {
+      if (
+        !isPlainObject(file) ||
+        normalizedRepositoryPath(file.path) !== file.path ||
+        (previousPath !== null && compareUTF8(previousPath, file.path) >= 0) ||
+        !/^100[0-7]{3}$/u.test(file.mode ?? '') ||
+        !['ignored-untracked', 'tracked', 'untracked'].includes(file.sourceKind) ||
+        !Number.isSafeInteger(file.size) ||
+        file.size < 0 ||
+        file.size > limits.maxFileBytes
+      ) {
+        fail('manifest:repositories')
+      }
+      validateSha256(file.sha256, 'manifest:repositories')
+      previousPath = file.path
+      files += 1
+      bytes += file.size
+    }
+    let previousDeleted = null
+    for (const path of repository.deletedTracked) {
+      if (
+        normalizedRepositoryPath(path) !== path ||
+        (previousDeleted !== null && compareUTF8(previousDeleted, path) >= 0)
+      ) {
+        fail('manifest:repositories')
+      }
+      previousDeleted = path
+      deletedTracked += 1
+    }
+    const vcsKeys = Object.keys(repository.vcs).sort().join(',')
+    if (
+      vcsKeys !== 'commitDate,describe,head,tags' ||
+      !/^[a-f0-9]{40,64}$/u.test(repository.vcs.head ?? '') ||
+      typeof repository.vcs.commitDate !== 'string' ||
+      typeof repository.vcs.describe !== 'string' ||
+      !Array.isArray(repository.vcs.tags)
+    ) {
+      fail('manifest:vcs')
+    }
+  }
+
+  const workspace = manifest.workspace
+  if (
+    !isPlainObject(workspace) ||
+    !isPlainObject(workspace.file) ||
+    !Array.isArray(workspace.modules) ||
+    typeof workspace.goVersion !== 'string' ||
+    workspace.file.path !== 'go.work' ||
+    workspace.file.mode !== '100600' ||
+    !Number.isSafeInteger(workspace.file.size) ||
+    workspace.file.size < 0 ||
+    workspace.file.size > limits.maxFileBytes
+  ) {
+    fail('manifest:workspace')
+  }
+  validateSha256(workspace.file.sha256, 'manifest:workspace')
+  files += 1
+  bytes += workspace.file.size
+  const totals = manifest.totals
+  if (
+    !isPlainObject(totals) ||
+    Object.keys(totals).sort().join(',') !== 'bytes,deletedTracked,entries,files' ||
+    totals.files !== files ||
+    totals.deletedTracked !== deletedTracked ||
+    totals.entries !== files + deletedTracked ||
+    totals.bytes !== bytes ||
+    totals.entries > limits.maxFiles ||
+    totals.bytes > limits.maxTotalBytes
+  ) {
+    fail('manifest:totals')
+  }
+  return manifest
+}
+
+function createIdentityOperations(
+  layoutResolver,
+  toolchainConfiguration,
+  allowLimitOverrides,
+  hooks = null,
+) {
   return Object.freeze({
     async create(options) {
       assertExactOptions(
@@ -1943,6 +2687,7 @@ function createIdentityOperations(layoutResolver, toolchainConfiguration, allowL
           limits,
           toolchainConfiguration,
           manifestPath,
+          hooks,
         )
         const bytes = canonicalManifestBytes(capture.manifest)
         const digest = sha256(bytes)
@@ -1960,29 +2705,9 @@ function createIdentityOperations(layoutResolver, toolchainConfiguration, allowL
       const manifestPath = validateManifestPath(options.manifestPath)
       const expectedSha256 = validateSha256(options.expectedSha256)
       const target = validateTarget(options.target)
-      const layout = await layoutResolver()
-      assertManifestDestination(layout, manifestPath)
       const manifest = await readCanonicalManifest(manifestPath, expectedSha256)
-      if (manifest.target !== target) fail('manifest:target')
-      const limits = validateRecordedLimits(manifest.limits, allowLimitOverrides)
-      let capture
-      try {
-        capture = await captureManifest(
-          layout,
-          target,
-          limits,
-          toolchainConfiguration,
-          manifestPath,
-        )
-        const currentBytes = canonicalManifestBytes(capture.manifest)
-        if (!currentBytes.equals(canonicalManifestBytes(manifest))) fail('drift:source-manifest')
-        return resultFromManifest(capture.manifest, sha256(currentBytes), capture.toolchains)
-      } catch (error) {
-        if (capture?.snapshotRoot) {
-          await rm(capture.snapshotRoot, { force: true, recursive: true }).catch(() => undefined)
-        }
-        throw error
-      }
+      validateFrozenManifest(manifest, target, allowLimitOverrides)
+      return resultFromManifest(manifest, expectedSha256)
     },
   })
 }
@@ -1995,12 +2720,18 @@ export async function createPackageSourceManifest(options) {
 }
 
 export async function verifyPackageSourceManifest(options) {
-  assertNoSourceOverrides(process.env)
   return productionOperations.verify(options)
 }
 
 export function createPackageSourceIdentityTestAdapter(options) {
-  assertExactOptions(options, ['collectToolchains', 'desktopRoot', 'toolchainOptions'])
+  assertExactOptions(options, [
+    'afterInitialRepositoryScan',
+    'collectToolchains',
+    'desktopRoot',
+    'onCapture',
+    'onGitCommand',
+    'toolchainOptions',
+  ])
   if (typeof options.desktopRoot !== 'string' || !isAbsolute(options.desktopRoot)) {
     fail('input:test-adapter')
   }
@@ -2010,21 +2741,63 @@ export function createPackageSourceIdentityTestAdapter(options) {
   if (options.collectToolchains !== undefined && options.toolchainOptions !== undefined) {
     fail('input:test-adapter')
   }
+  if (
+    options.afterInitialRepositoryScan !== undefined &&
+    typeof options.afterInitialRepositoryScan !== 'function'
+  ) {
+    fail('input:test-adapter')
+  }
+  for (const name of ['onCapture', 'onGitCommand']) {
+    if (options[name] !== undefined && typeof options[name] !== 'function') {
+      fail('input:test-adapter')
+    }
+  }
   let toolchainConfiguration = null
   if (options.collectToolchains !== undefined) {
     toolchainConfiguration = Object.freeze({ collector: options.collectToolchains })
   } else if (options.toolchainOptions !== undefined) {
-    assertExactOptions(options.toolchainOptions, ['gitPath', 'nodePath', 'path', 'rustupHome'])
+    assertExactOptions(options.toolchainOptions, [
+      'corepackHome',
+      'gitPath',
+      'goRoot',
+      'nodePath',
+      'path',
+      'rustupHome',
+      'snapshotRustToolchain',
+    ])
     for (const name of ['gitPath', 'nodePath', 'rustupHome']) {
-      if (typeof options.toolchainOptions[name] !== 'string' || !isAbsolute(options.toolchainOptions[name])) {
+      if (
+        typeof options.toolchainOptions[name] !== 'string' ||
+        !isAbsolute(options.toolchainOptions[name])
+      ) {
         fail('input:test-adapter')
       }
+    }
+    if (
+      options.toolchainOptions.goRoot !== undefined &&
+      (typeof options.toolchainOptions.goRoot !== 'string' ||
+        !isAbsolute(options.toolchainOptions.goRoot))
+    ) {
+      fail('input:test-adapter')
+    }
+    if (
+      options.toolchainOptions.corepackHome !== undefined &&
+      (typeof options.toolchainOptions.corepackHome !== 'string' ||
+        !isAbsolute(options.toolchainOptions.corepackHome))
+    ) {
+      fail('input:test-adapter')
     }
     if (
       typeof options.toolchainOptions.path !== 'string' ||
       options.toolchainOptions.path
         .split(delimiter)
         .some((directory) => directory === '' || !isAbsolute(directory))
+    ) {
+      fail('input:test-adapter')
+    }
+    if (
+      options.toolchainOptions.snapshotRustToolchain !== undefined &&
+      typeof options.toolchainOptions.snapshotRustToolchain !== 'boolean'
     ) {
       fail('input:test-adapter')
     }
@@ -2044,6 +2817,13 @@ export function createPackageSourceIdentityTestAdapter(options) {
     },
     toolchainConfiguration,
     true,
+    options.afterInitialRepositoryScan || options.onCapture || options.onGitCommand
+      ? Object.freeze({
+          afterInitialRepositoryScan: options.afterInitialRepositoryScan,
+          onCapture: options.onCapture,
+          onGitCommand: options.onGitCommand,
+        })
+      : null,
   )
 }
 

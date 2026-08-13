@@ -218,18 +218,23 @@ export function runBoundedCommand(
       'start-failed': 'command could not be started',
       timeout: 'command timed out',
     }
-    throw new VerifierError(categories[error.category] ?? 'command-failed', messages[error.category] ?? 'command failed', {
-      exitCode: error.exitCode,
-      signal: error.signal,
-    })
+    throw new VerifierError(
+      categories[error.category] ?? 'command-failed',
+      messages[error.category] ?? 'command failed',
+      {
+        exitCode: error.exitCode,
+        signal: error.signal,
+      },
+    )
   })
 }
 
-async function verifyPackageReadiness(packagePath) {
+async function verifyPackageReadiness(packagePath, expectedGenerationId) {
   const evidenceDirectory = dirname(packagePath)
   const controlDirectory = join(evidenceDirectory, PACKAGE_GENERATION_CONTROL_BASENAME)
   try {
     await assertPackageGenerationReady({
+      expectedGenerationId,
       lockPath: join(controlDirectory, PACKAGE_GENERATION_LOCK_BASENAME),
       tombstonePath: join(controlDirectory, PACKAGE_GENERATION_TOMBSTONE_BASENAME),
     })
@@ -328,7 +333,7 @@ export async function verifyPackageLocal(options, adapters = {}) {
     adapters.createMountDirectory ?? (() => mkdtemp(join(tmpdir(), 'hexclaw-package-local.')))
 
   const packagePath = requireAbsolutePath(options?.packagePath, 'package')
-  await verifyReadiness(packagePath)
+  await verifyReadiness(packagePath, options?.expectedGenerationId)
 
   let attestation
   try {
@@ -384,7 +389,8 @@ export async function verifyPackageLocal(options, adapters = {}) {
         ),
         'DMG mount',
       )
-      if (attach.code !== 0 || attach.signal !== null) throw commandFailure('DMG mount failed', attach)
+      if (attach.code !== 0 || attach.signal !== null)
+        throw commandFailure('DMG mount failed', attach)
       mounted = true
 
       await verifyDMGRoot(mountDirectory)
@@ -438,7 +444,7 @@ export async function verifyPackageLocal(options, adapters = {}) {
 
     const combinedError = combineErrors(primaryError, cleanupErrors)
     if (combinedError) throw combinedError
-    await verifyReadiness(packagePath)
+    await verifyReadiness(packagePath, options?.expectedGenerationId)
     return Object.freeze({
       ...attestation,
       sensitiveBoundaryVerified: true,
@@ -482,7 +488,8 @@ function parseCLI(argv) {
     values[name] = value
   }
   const actual = Object.keys(values).sort()
-  if (actual.some((name, index) => name !== names[index])) fail('invalid CLI arguments', 'cli-input')
+  if (actual.some((name, index) => name !== names[index]))
+    fail('invalid CLI arguments', 'cli-input')
   return {
     localAppBundle: values['--app-bundle'],
     distRoot: values['--dist'],

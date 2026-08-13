@@ -59,6 +59,9 @@ jobs:
       - name: Run Tests
         run: pnpm test:unit
 
+      - name: Package Security Gates
+        run: pnpm test:package-gates
+
   rust-check:
     name: Rust Check
     runs-on: ubuntu-24.04

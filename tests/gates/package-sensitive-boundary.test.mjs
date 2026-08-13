@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -38,9 +39,9 @@ async function fixture(name) {
   return { root, distRoot, appBundle }
 }
 
-async function expectCategory(paths, category, forbiddenValue = '') {
+async function expectCategory(paths, category, forbiddenValue = '', adapters = {}) {
   const verify = await loadBoundary()
-  await assert.rejects(verify(paths), (error) => {
+  await assert.rejects(verify(paths, adapters), (error) => {
     assert.match(error.message, new RegExp(`\\[${category.replaceAll(':', '\\:')}\\]`))
     if (forbiddenValue) assert.equal(error.message.includes(forbiddenValue), false)
     return true
@@ -81,6 +82,141 @@ test('ordinary minified identifiers and public loopback endpoints pass', async (
   const result = await verify(paths)
   assert.equal(result.findingCount, 0)
   assert.equal(result.scannedRoots, 2)
+})
+
+test('lowercase user API routes are not treated as macOS home paths', async (t) => {
+  const paths = await fixture('lowercase-user-api-route')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  await writeFile(
+    join(paths.distRoot, 'api-routes.js'),
+    'const currentUser = "/users/me"; const page = "/users/me?page_size=20"',
+  )
+
+  const verify = await loadBoundary()
+  const result = await verify(paths)
+  assert.equal(result.findingCount, 0)
+})
+
+test(
+  'current macOS user home is rejected case-insensitively',
+  { skip: process.platform !== 'darwin' },
+  async (t) => {
+    const paths = await fixture('current-macos-user-home-case')
+    t.after(() => rm(paths.root, { recursive: true, force: true }))
+    const privatePath = `${userInfo().homedir.toLowerCase()}/private-project/source.go`
+    await writeFile(join(paths.distRoot, 'private-home.bin'), privatePath)
+
+    await expectCategory(paths, 'path:user-home', privatePath)
+  },
+)
+
+test('public Ollama CI provenance is allowed only inside bundled Ollama resources', async (t) => {
+  const accepted = await fixture('ollama-public-provenance')
+  const outsideResource = await fixture('ollama-public-provenance-outside')
+  const unrelatedHome = await fixture('ollama-unrelated-runner-home')
+  t.after(() =>
+    Promise.all(
+      [accepted, outsideResource, unrelatedHome].map((paths) =>
+        rm(paths.root, { recursive: true, force: true }),
+      ),
+    ),
+  )
+  const publicBuildPath =
+    '/Users/runner/work/ollama/ollama/build/darwin-sources/_deps/llama_cpp-src/ggml/src/ggml.c'
+  const publicBuildSHA256 = createHash('sha256').update(publicBuildPath).digest('hex')
+  const adapters = { ollamaProvenanceSHA256: new Set([publicBuildSHA256]) }
+  const acceptedOllama = join(accepted.appBundle, 'Contents', 'Resources', 'ollama')
+  await mkdir(acceptedOllama, { recursive: true })
+  await writeFile(join(acceptedOllama, 'libggml.dylib'), publicBuildPath)
+
+  const verify = await loadBoundary()
+  const result = await verify(accepted, adapters)
+  assert.equal(result.findingCount, 0)
+
+  const module = await import(boundaryModuleURL)
+  const preflightRoot = join(accepted.root, 'ollama-preflight')
+  await mkdir(preflightRoot)
+  await writeFile(join(preflightRoot, 'libggml.dylib'), publicBuildPath)
+  const preflightResult = await module.verifyPackageRootBoundary(
+    { root: preflightRoot, label: 'ollama' },
+    adapters,
+  )
+  assert.equal(preflightResult.findingCount, 0)
+
+  await writeFile(join(outsideResource.distRoot, 'upstream-path.bin'), publicBuildPath)
+  await expectCategory(outsideResource, 'path:user-home', publicBuildPath, adapters)
+
+  const unrelatedOllama = join(unrelatedHome.appBundle, 'Contents', 'Resources', 'ollama')
+  const privatePath = '/Users/runner/private-project/source.go'
+  await mkdir(unrelatedOllama, { recursive: true })
+  await writeFile(join(unrelatedOllama, 'private-path.bin'), privatePath)
+  await expectCategory(unrelatedHome, 'path:user-home', privatePath)
+})
+
+test('public Ollama CI provenance remains allowed across a scan chunk boundary', async (t) => {
+  const paths = await fixture('ollama-public-provenance-cross-chunk')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const publicBuildPath =
+    '/Users/runner/work/ollama/ollama/build/darwin-sources/_deps/llama_cpp-src/ggml/src/ggml.c'
+  const homePrefixBytes = Buffer.byteLength('/Users/runner')
+  const padding = Buffer.alloc(1024 * 1024 - homePrefixBytes, 0x78)
+  padding[padding.length - 1] = 0x20
+  const payload = Buffer.concat([padding, Buffer.from(publicBuildPath), Buffer.from([0])])
+  const adapters = {
+    ollamaProvenanceSHA256: new Set([createHash('sha256').update(payload).digest('hex')]),
+  }
+  const appOllama = join(paths.appBundle, 'Contents', 'Resources', 'ollama')
+  const preflightRoot = join(paths.root, 'ollama-preflight')
+  await mkdir(appOllama, { recursive: true })
+  await mkdir(preflightRoot)
+  await writeFile(join(appOllama, 'libggml.dylib'), payload)
+  await writeFile(join(preflightRoot, 'libggml.dylib'), payload)
+
+  const verify = await loadBoundary()
+  const packageResult = await verify(paths, adapters)
+  assert.equal(packageResult.findingCount, 0)
+
+  const module = await import(boundaryModuleURL)
+  const preflightResult = await module.verifyPackageRootBoundary(
+    { root: preflightRoot, label: 'ollama' },
+    adapters,
+  )
+  assert.equal(preflightResult.findingCount, 0)
+})
+
+test('Ollama provenance exception rejects escaping and lookalike paths', async (t) => {
+  const samples = [
+    '/Users/runner/work/ollama/ollama/build/../../private-project/source.cc',
+    '/Users/runner/work/ollama/ollama-copy/build/source.cc',
+  ]
+  for (const [index, privatePath] of samples.entries()) {
+    const paths = await fixture(`ollama-provenance-lookalike-${index}`)
+    t.after(() => rm(paths.root, { recursive: true, force: true }))
+    const appOllama = join(paths.appBundle, 'Contents', 'Resources', 'ollama')
+    await mkdir(appOllama, { recursive: true })
+    await writeFile(join(appOllama, 'private-path.bin'), privatePath)
+    await expectCategory(paths, 'path:user-home', privatePath)
+  }
+
+  const wrongRoot = await fixture('ollama-provenance-wrong-resource-root')
+  t.after(() => rm(wrongRoot.root, { recursive: true, force: true }))
+  const lookalikeRoot = join(wrongRoot.appBundle, 'Contents', 'Resources', 'ollama-copy')
+  const publicBuildPath = '/Users/runner/work/ollama/ollama/build/source.cc'
+  await mkdir(lookalikeRoot, { recursive: true })
+  await writeFile(join(lookalikeRoot, 'private-path.bin'), publicBuildPath)
+  await expectCategory(wrongRoot, 'path:user-home', publicBuildPath)
+})
+
+test('Ollama provenance exception never suppresses other sensitive content in the same file', async (t) => {
+  const paths = await fixture('ollama-provenance-mixed-sensitive-content')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const appOllama = join(paths.appBundle, 'Contents', 'Resources', 'ollama')
+  const publicBuildPath = '/Users/runner/work/ollama/ollama/build/source.cc'
+  const privatePath = '/Users/private-account/private-project/source.cc'
+  await mkdir(appOllama, { recursive: true })
+  await writeFile(join(appOllama, 'mixed.bin'), `${publicBuildPath}\0${privatePath}`)
+
+  await expectCategory(paths, 'path:user-home', privatePath)
 })
 
 test('dist and App consume one shared global scan budget', async (t) => {
@@ -372,6 +508,22 @@ test('environment and credential configuration basenames are rejected', async (t
     await writeFile(join(paths.distRoot, basename), 'ordinary synthetic bytes\n')
     await expectCategory(paths, category, basename)
   }
+})
+
+test('case-insensitive .codex-prefixed path components fail closed during preflight', async (t) => {
+  const paths = await fixture('codex-prefix')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const module = await import(boundaryModuleURL)
+  const privateDirectory = join(paths.distRoot, '.CoDeX-private')
+  await mkdir(privateDirectory)
+  await writeFile(join(privateDirectory, 'opaque.bin'), 'synthetic opaque bytes\n', { mode: 0o000 })
+
+  const startedAt = performance.now()
+  await assert.rejects(
+    module.verifyPackageRootBoundary({ root: paths.distRoot, label: 'generation-dist' }),
+    /\[file:codex-workspace\]/u,
+  )
+  assert.ok(performance.now() - startedAt < 2_000)
 })
 
 test('shared entry preflight rejects directory-heavy trees before metadata commands', async (t) => {

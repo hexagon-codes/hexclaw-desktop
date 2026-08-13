@@ -5,6 +5,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
+import { createPDFWorkerPackageAssetPlugin } from './scripts/ci/pdf-worker-package-asset.mjs'
+
 const packageLocalMode = 'package-local'
 
 export default defineConfig(({ mode }) => {
@@ -43,7 +45,7 @@ export default defineConfig(({ mode }) => {
   return {
     // Tauri 生产页由自定义 asset 协议加载，构建产物必须使用相对路径。
     base: './',
-    plugins: [vue(), tailwindcss()],
+    plugins: [createPDFWorkerPackageAssetPlugin(), vue(), tailwindcss()],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),

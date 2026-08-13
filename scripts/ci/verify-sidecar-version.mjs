@@ -13,6 +13,9 @@ import {
 
 const GO_METADATA_TIMEOUT_MS = 30_000
 const GO_METADATA_MAX_BUFFER_BYTES = 4 * 1024 * 1024
+const SIDECAR_IDENTITY_CHUNK_BYTES = 1024 * 1024
+const SIDECAR_VERSION_IDENTITY_PREFIX = 'hexclaw-sidecar-version='
+const SIDECAR_VERSION_IDENTITY_SUFFIX = ';'
 export const OLLAMA_PACKAGE_CONTRACT = Object.freeze({
   architectures: Object.freeze(['x86_64', 'arm64']),
   archiveBytes: 143_171_908,
@@ -42,25 +45,54 @@ export function normalizeReleaseVersion(version) {
   return version.replace(/^v/, '')
 }
 
-export function extractEmbeddedVersion(metadata) {
-  const matches = [...metadata.matchAll(/(?:^|[\s"])main\.version=([^\s"']+)/g)].map(
-    (match) => match[1],
+function sidecarVersionIdentity(expectedVersion) {
+  return Buffer.from(
+    `${SIDECAR_VERSION_IDENTITY_PREFIX}${normalizeReleaseVersion(expectedVersion)}${SIDECAR_VERSION_IDENTITY_SUFFIX}`,
   )
-  if (matches.length !== 1) {
-    throw new Error(
-      `expected exactly one embedded main.version in Go metadata, found ${matches.length}`,
-    )
-  }
-  return matches[0]
 }
 
-export function assertSidecarVersion(metadata, expectedVersion) {
-  const canonicalVersion = normalizeReleaseVersion(expectedVersion)
-  const embeddedVersion = extractEmbeddedVersion(metadata)
-  if (embeddedVersion !== canonicalVersion) {
-    throw new Error('sidecar main.version must match Desktop release version')
+function countBufferMatches(bytes, marker) {
+  let count = 0
+  let offset = -1
+  while ((offset = bytes.indexOf(marker, offset + 1)) !== -1) {
+    count += 1
   }
-  return embeddedVersion
+  return count
+}
+
+function assertSidecarVersionMatchCount(count, expectedVersion) {
+  const canonicalVersion = normalizeReleaseVersion(expectedVersion)
+  if (count !== 1) {
+    throw new Error(`expected exactly one embedded sidecar version identity, found ${count}`)
+  }
+  return canonicalVersion
+}
+
+export function assertEmbeddedSidecarVersion(input, expectedVersion) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input)
+  const marker = sidecarVersionIdentity(expectedVersion)
+  return assertSidecarVersionMatchCount(countBufferMatches(bytes, marker), expectedVersion)
+}
+
+async function assertOpenSidecarVersion(file, size, expectedVersion) {
+  const totalSize = Number(size)
+  if (!Number.isSafeInteger(totalSize)) throw new Error('sidecar binary is too large')
+
+  const marker = sidecarVersionIdentity(expectedVersion)
+  const chunk = Buffer.alloc(Math.min(SIDECAR_IDENTITY_CHUNK_BYTES, Math.max(totalSize, 1)))
+  let carry = Buffer.alloc(0)
+  let count = 0
+  let position = 0
+  while (position < totalSize) {
+    const wanted = Math.min(chunk.length, totalSize - position)
+    const { bytesRead } = await file.read(chunk, 0, wanted, position)
+    if (bytesRead !== wanted) throw new Error('sidecar binary is truncated')
+    const window = Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+    count += countBufferMatches(window, marker)
+    carry = window.subarray(Math.max(0, window.length - marker.length + 1))
+    position += bytesRead
+  }
+  return assertSidecarVersionMatchCount(count, expectedVersion)
 }
 
 function parseBuildSettings(metadata) {
@@ -330,12 +362,15 @@ async function withSecureGoInspection(binaryPath, options, operation) {
         { snapshotRoot: goSnapshot.nestedSnapshotRoot },
         async (binarySnapshot) => {
           const metadata = await runGoBuildMetadata(goSnapshot, binarySnapshot, goToolchain)
-          return operation({
-            architecture: binarySnapshot.architecture,
-            goToolchainSnapshot: goSnapshot.evidence,
-            metadata,
-            snapshot: binarySnapshot.evidence,
-          })
+          return operation(
+            {
+              architecture: binarySnapshot.architecture,
+              goToolchainSnapshot: goSnapshot.evidence,
+              metadata,
+              snapshot: binarySnapshot.evidence,
+            },
+            binarySnapshot,
+          )
         },
       )
     },
@@ -404,7 +439,7 @@ export async function inspectOllamaArtifact(binaryPath, options) {
   )
 }
 
-export function assertSidecarArtifact({ metadata, architecture, expectedVersion, targetTriple }) {
+export function assertSidecarArtifact({ metadata, architecture, targetTriple }) {
   const artifact = assertGoBinaryArtifact({ metadata, architecture, targetTriple })
   if (artifact.buildInfo.packagePath !== 'github.com/hexagon-codes/hexclaw/cmd/hexclaw') {
     throw new Error('sidecar Go package path must match exactly')
@@ -413,7 +448,6 @@ export function assertSidecarArtifact({ metadata, architecture, expectedVersion,
     throw new Error('sidecar Go main module path must match exactly')
   }
   return {
-    version: assertSidecarVersion(metadata, expectedVersion),
     targetTriple: artifact.targetTriple,
     goos: artifact.goos,
     goarch: artifact.goarch,
@@ -431,8 +465,13 @@ export async function inspectSidecarArtifact(binaryPath, expectedVersion, option
   return withSecureGoInspection(
     binaryPath,
     options,
-    async ({ architecture, goToolchainSnapshot, metadata, snapshot }) => ({
-      ...assertSidecarArtifact({ architecture, expectedVersion, metadata, targetTriple }),
+    async ({ architecture, goToolchainSnapshot, metadata, snapshot }, binarySnapshot) => ({
+      ...assertSidecarArtifact({ architecture, metadata, targetTriple }),
+      version: await assertOpenSidecarVersion(
+        binarySnapshot.file,
+        binarySnapshot.size,
+        expectedVersion,
+      ),
       goToolchainSnapshot,
       snapshot,
     }),

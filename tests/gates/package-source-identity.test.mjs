@@ -17,12 +17,12 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const identityModuleURL = new URL('../../scripts/ci/package-source-identity.mjs', import.meta.url)
+const boundedProcessModuleURL = new URL('../../scripts/ci/run-bounded-process.mjs', import.meta.url)
 const repositoryIDs = ['toolkit', 'ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop']
 const moduleByRepository = new Map([
   ['toolkit', 'github.com/hexagon-codes/toolkit'],
@@ -41,6 +41,7 @@ async function loadIdentity() {
     'createPackageSourceIdentityTestAdapter',
     'resolveExecutableForTest',
     'resolveRustToolExecutableForTest',
+    'validateProductionPlatformForTest',
   ]) {
     assert.equal(typeof module[name], 'function', `package source identity must export ${name}`)
   }
@@ -68,6 +69,7 @@ async function write(root, relativePath, content, mode) {
 
 function fixtureToolchains(requestedTarget) {
   const digest = (value) => createHash('sha256').update(value).digest('hex')
+  const executablePath = (name) => `/fixture/toolchains/${name}`
   const goArchitecture =
     requestedTarget === 'x86_64-apple-darwin'
       ? 'amd64'
@@ -82,22 +84,53 @@ function fixtureToolchains(requestedTarget) {
         : 'fixture'
   return {
     target: requestedTarget,
-    git: { version: 'git version fixture', executableSha256: digest('git') },
+    git: {
+      executablePath: executablePath('git'),
+      version: 'git version fixture',
+      executableSha256: digest('git'),
+      sourceSha256: digest('git'),
+    },
     go: {
       version: 'go version go1.fixture fixture/fixture',
       compileVersion: 'compile version fixture',
+      executablePath: executablePath('go'),
       executableSha256: digest('go'),
-      env: { GOOS: 'darwin', GOARCH: goArchitecture, GOVERSION: 'go1.fixture' },
+      sourceSha256: digest('go'),
+      env: {
+        GOOS: 'darwin',
+        GOARCH: goArchitecture,
+        GOROOT: '/fixture/toolchains/goroot',
+        GOVERSION: 'go1.fixture',
+      },
     },
     node: {
       version: 'vfixture',
+      executablePath: executablePath('node'),
       executableSha256: digest('node'),
+      sourceSha256: digest('node'),
       platform: 'darwin',
       architecture: nodeArchitecture,
     },
-    pnpm: { version: 'fixture', executableSha256: digest('pnpm') },
-    rustc: { version: 'rustc fixture', host: requestedTarget, executableSha256: digest('rustc') },
-    cargo: { version: 'cargo fixture', executableSha256: digest('cargo') },
+    pnpm: {
+      version: 'fixture',
+      executablePath: executablePath('pnpm'),
+      executableSha256: digest('pnpm'),
+      sourceSha256: digest('pnpm'),
+      supportFiles: [],
+    },
+    rustc: {
+      version: 'rustc fixture',
+      executablePath: executablePath('rustc'),
+      host: requestedTarget,
+      executableSha256: digest('rustc'),
+      sourceSha256: digest('rustc'),
+    },
+    cargo: {
+      version: 'cargo fixture',
+      executablePath: executablePath('cargo'),
+      executableSha256: digest('cargo'),
+      sourceSha256: digest('cargo'),
+    },
   }
 }
 
@@ -112,6 +145,9 @@ async function createFakeToolchain(root, options = {}) {
   await mkdir(bin, { mode: 0o700, recursive: true })
   await mkdir(goRoot, { mode: 0o700 })
   await mkdir(rustupHome, { mode: 0o700 })
+  const rustToolchainRoot = join(root, 'rust-toolchain')
+  const rustToolchainBin = join(rustToolchainRoot, 'bin')
+  await mkdir(rustToolchainBin, { mode: 0o700, recursive: true })
   const environmentProbe = options.environmentLog
     ? `/usr/bin/env > ${shellQuote(options.environmentLog)}\n`
     : ''
@@ -129,13 +165,13 @@ async function createFakeToolchain(root, options = {}) {
     0o500,
   )
   const rustcPath = await write(
-    bin,
+    rustToolchainBin,
     'rustc-real',
     "#!/bin/sh\nprintf '%s\\n' 'rustc 1.94.0 (fixture)' 'binary: rustc' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: x86_64-apple-darwin' 'release: 1.94.0' 'LLVM version: fixture'\n",
     0o500,
   )
   const cargoPath = await write(
-    bin,
+    rustToolchainBin,
     'cargo-real',
     "#!/bin/sh\nprintf '%s\\n' 'cargo 1.94.0 (fixture)' 'release: 1.94.0' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: x86_64-apple-darwin' 'libgit2: fixture' 'libcurl: fixture' 'ssl: fixture' 'os: macos fixture'\n",
     0o500,
@@ -143,18 +179,24 @@ async function createFakeToolchain(root, options = {}) {
   const rustupPath = await write(
     bin,
     'rustup',
-    `#!/bin/sh\nif [ "$1" = which ] && [ "$2" = rustc ]; then printf '%s\\n' ${shellQuote(rustcPath)}; exit 0; fi\nif [ "$1" = which ] && [ "$2" = cargo ]; then printf '%s\\n' ${shellQuote(cargoPath)}; exit 0; fi\nexit 64\n`,
+    `#!/bin/sh\nif [ "$1" = which ] && [ "$2" = rustc ]; then printf '%s\\n' ${shellQuote(rustcPath)}; exit 0; fi\nif [ "$1" = which ] && [ "$2" = cargo ]; then printf '%s\\n' ${shellQuote(cargoPath)}; exit 0; fi\nif [ "$1" = --version ]; then printf '%s\\n' 'rustup 1.28.2 (fixture)'; exit 0; fi\nexit 64\n`,
     0o500,
   )
-  await symlink(rustupPath, join(bin, 'rustc'))
-  await symlink(rustupPath, join(bin, 'cargo'))
+  await link(rustupPath, join(bin, 'rustc'))
+  await link(rustupPath, join(bin, 'cargo'))
+  const rustObjcopyRelative = 'lib/rustlib/x86_64-apple-darwin/bin/rust-objcopy'
+  const rustLibraryRelative = 'lib/rustlib/x86_64-apple-darwin/lib/libstd.rlib'
+  await write(rustToolchainRoot, rustObjcopyRelative, '#!/bin/sh\nexit 0\n', 0o500)
+  await write(rustToolchainRoot, rustLibraryRelative, 'fixture rust library\n', 0o400)
   await write(bin, 'pnpm', "#!/bin/sh\nprintf '%s\\n' '10.0.0'\n", 0o500)
   const nodePath = await write(bin, 'node', "#!/bin/sh\nprintf '%s\\n' 'v24.0.0'\n", 0o500)
   return Object.freeze({
     gitPath,
+    goRoot,
     nodePath,
     path: bin,
     rustupHome,
+    snapshotRustToolchain: true,
   })
 }
 
@@ -172,6 +214,18 @@ async function createFixture(name) {
       await write(roots[id], 'package.json', '{"name":"hexclaw-desktop","private":true}\n')
       await git(roots[id], 'add', 'package.json')
     }
+    await git(
+      roots[id],
+      '-c',
+      'user.name=Package Fixture',
+      '-c',
+      'user.email=package-fixture@example.invalid',
+      'commit',
+      '--quiet',
+      '--no-gpg-sign',
+      '-m',
+      'initial fixture',
+    )
   }
 
   await writeFile(
@@ -220,7 +274,8 @@ test('production layout is derived from the script realpath and resolves the can
 
   assert.equal(layout.desktopRoot, desktopRoot)
   assert.equal(layout.workRoot, workRoot)
-  assert.equal(layout.goWork, await realpath(join(workRoot, 'go.work')))
+  assert.equal(Object.hasOwn(layout, 'goWork'), false)
+  assert.equal(Object.hasOwn(layout, 'goWorkSum'), false)
   assert.deepEqual(
     layout.repositories.map(({ id, root }) => [id, root]),
     await Promise.all(repositoryIDs.map(async (id) => [id, await realpath(join(workRoot, id))])),
@@ -328,13 +383,23 @@ test('canonical manifest covers dirty tracked and relevant untracked source inpu
     manifest.workspace.modules.map(({ module, repository: id }) => [module, id]),
     [...moduleByRepository.entries()].map(([id, module]) => [module, id]).sort(),
   )
+  const expectedWorkspace = Buffer.from(
+    'go 1.25.7\n\nuse (\n\t./toolkit\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n',
+  )
+  assert.equal(manifest.workspace.goVersion, '1.25.7')
+  assert.deepEqual(manifest.workspace.file, {
+    mode: '100600',
+    path: 'go.work',
+    sha256: createHash('sha256').update(expectedWorkspace).digest('hex'),
+    size: expectedWorkspace.length,
+  })
   assert.equal(manifest.target, target)
   assert.equal(manifest.toolchains.target, target)
   const listedFiles = manifest.repositories.flatMap((item) => item.files)
-  assert.equal(manifest.totals.files, listedFiles.length + manifest.workspace.files.length)
+  assert.equal(manifest.totals.files, listedFiles.length + 1)
   assert.equal(
     manifest.totals.bytes,
-    [...listedFiles, ...manifest.workspace.files].reduce((total, file) => total + file.size, 0),
+    listedFiles.reduce((total, file) => total + file.size, manifest.workspace.file.size),
   )
   assert.equal(manifest.totals.entries, manifest.totals.files + manifest.totals.deletedTracked)
 })
@@ -384,7 +449,82 @@ test('existing sensitive build inputs fail closed before content hashing', async
   }
 })
 
-test('a deleted tracked sensitive path remains bound as deleted source state', async (t) => {
+test('untracked and ignored .codex-prefixed paths are excluded before content reads', async (t) => {
+  for (const classification of ['untracked', 'ignored']) {
+    await t.test(classification, async (caseTest) => {
+      const fixture = await createFixture(`codex-excluded-${classification}`)
+      caseTest.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+      const relativePath = 'nested/.CoDeX-private/opaque.bin'
+      if (classification === 'ignored') {
+        await write(fixture.roots.toolkit, '.gitignore', 'nested/.CoDeX-private/\n')
+        await git(fixture.roots.toolkit, 'add', '.gitignore')
+      }
+      const privatePath = await write(
+        fixture.roots.toolkit,
+        relativePath,
+        'synthetic opaque bytes\n',
+        0o000,
+      )
+      const adapter = await adapterFor(fixture)
+      const manifestPath = join(fixture.outputRoot, 'manifest.json')
+
+      const created = await adapter.create({ manifestPath, target })
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+      assert.equal(JSON.stringify(manifest).toLowerCase().includes('.codex'), false)
+      await chmod(privatePath, 0o600)
+      await writeFile(privatePath, 'changed host-only bytes\n', { mode: 0o000 })
+      await adapter.verify({ expectedSha256: created.sha256, manifestPath, target })
+    })
+  }
+})
+
+test('tracked .codex-prefixed paths fail before source content reads', async (t) => {
+  const fixture = await createFixture('codex-tracked')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const privatePath = await write(
+    fixture.roots.toolkit,
+    'nested/.CoDeX-private/opaque.bin',
+    'synthetic opaque bytes\n',
+  )
+  await git(fixture.roots.toolkit, 'add', 'nested/.CoDeX-private/opaque.bin')
+  await chmod(privatePath, 0o000)
+  const adapter = await adapterFor(fixture)
+
+  await assert.rejects(
+    adapter.create({ manifestPath: join(fixture.outputRoot, 'manifest.json'), target }),
+    (error) => {
+      assert.match(error.message, /\[source:codex-path\]/u)
+      assert.equal(error.message.includes(privatePath), false)
+      return true
+    },
+  )
+})
+
+test('ignored sensitive names inside excluded build outputs do not poison the next source snapshot', async (t) => {
+  const fixture = await createFixture('excluded-sensitive-output')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const desktopRoot = fixture.roots['hexclaw-desktop']
+  await write(desktopRoot, '.gitignore', 'src-tauri/target/\n')
+  await git(desktopRoot, 'add', '.gitignore')
+  await write(
+    desktopRoot,
+    'src-tauri/target/release/private-cache/deploy/.env.dev.example',
+    'SYNTHETIC=fixture\n',
+  )
+  const adapter = await adapterFor(fixture)
+  const manifestPath = join(fixture.outputRoot, 'manifest.json')
+
+  await adapter.create({ manifestPath, target })
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const desktop = repository(manifest, 'hexclaw-desktop')
+
+  assert.equal(
+    desktop.files.some((file) => file.path.startsWith('src-tauri/target/')),
+    false,
+  )
+})
+
+test('a deleted tracked sensitive path remains frozen without re-reading the host after capture', async (t) => {
   const fixture = await createFixture('deleted-sensitive')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   await write(fixture.roots['hexclaw-desktop'], '.env', 'SECRET=synthetic\n')
@@ -402,13 +542,11 @@ test('a deleted tracked sensitive path remains bound as deleted source state', a
     false,
   )
   await write(fixture.roots['hexclaw-desktop'], '.env', 'SECRET=appeared\n')
-  await assert.rejects(
-    adapter.verify({ manifestPath, expectedSha256: created.sha256, target }),
-    /\[source:sensitive-file\]/u,
-  )
+  const verified = await adapter.verify({ manifestPath, expectedSha256: created.sha256, target })
+  assert.equal(verified.sha256, created.sha256)
 })
 
-test('before and after verification fails closed on current-source drift', async (t) => {
+test('frozen verification ignores later host-source drift', async (t) => {
   const fixture = await createFixture('drift')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   await write(fixture.roots.hexclaw, 'current.go', 'package hexclaw\n')
@@ -425,13 +563,60 @@ test('before and after verification fails closed on current-source drift', async
   assert.equal(verified.sha256, created.sha256)
 
   await write(fixture.roots.hexclaw, 'current.go', 'package hexclaw\n\nconst Drift = true\n')
-  await assert.rejects(
-    adapter.verify({ manifestPath, expectedSha256: created.sha256, target }),
-    /\[drift:source-manifest\]/u,
-  )
+  const verifiedAfterDrift = await adapter.verify({
+    manifestPath,
+    expectedSha256: created.sha256,
+    target,
+  })
+  assert.equal(verifiedAfterDrift.sha256, created.sha256)
 })
 
-test('ignored untracked source is bound and its later drift fails closed', async (t) => {
+test('frozen manifest verification never recaptures source, Git or toolchains', async (t) => {
+  const fixture = await createFixture('frozen-verification-call-graph')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const sourcePath = await write(
+    fixture.roots.hexclaw,
+    'frozen.go',
+    'package hexclaw\n\nconst Frozen = "before"\n',
+  )
+  await git(fixture.roots.hexclaw, 'add', 'frozen.go')
+  let captureCalls = 0
+  let gitCalls = 0
+  let toolchainCalls = 0
+  const module = await loadIdentity()
+  const adapter = module.createPackageSourceIdentityTestAdapter({
+    desktopRoot: fixture.roots['hexclaw-desktop'],
+    onCapture: () => {
+      captureCalls += 1
+    },
+    onGitCommand: () => {
+      gitCalls += 1
+    },
+    collectToolchains: async (requestedTarget) => {
+      toolchainCalls += 1
+      return fixtureToolchains(requestedTarget)
+    },
+  })
+  const manifestPath = join(fixture.outputRoot, 'source-manifest.json')
+  const created = await adapter.create({ manifestPath, target })
+  const callsAfterFreeze = { captureCalls, gitCalls, toolchainCalls }
+
+  await writeFile(sourcePath, 'package hexclaw\n\nconst Frozen = "after"\n')
+  await git(fixture.roots.hexclaw, 'tag', 'post-freeze-tag')
+  const verified = await adapter.verify({
+    expectedSha256: created.sha256,
+    manifestPath,
+    target,
+  })
+
+  assert.equal(verified.sha256, created.sha256)
+  assert.deepEqual({ captureCalls, gitCalls, toolchainCalls }, callsAfterFreeze)
+  assert.equal(captureCalls, 1)
+  assert.ok(gitCalls > 0)
+  assert.equal(toolchainCalls, 1)
+})
+
+test('ignored untracked source is frozen and later host drift is not recaptured', async (t) => {
   const fixture = await createFixture('ignored-drift')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   await write(fixture.roots.hexclaw, '.gitignore', 'ignored.go\n')
@@ -449,10 +634,8 @@ test('ignored untracked source is bound and its later drift fails closed', async
   assert.equal(ignored?.sourceKind, 'ignored-untracked')
 
   await writeFile(ignoredPath, 'package hexclaw\n\nconst Ignored = "after"\n')
-  await assert.rejects(
-    adapter.verify({ manifestPath, expectedSha256: created.sha256, target }),
-    /\[drift:source-manifest\]/u,
-  )
+  const verified = await adapter.verify({ manifestPath, expectedSha256: created.sha256, target })
+  assert.equal(verified.sha256, created.sha256)
 })
 
 test('one snapshot rechecks early repositories after concurrent toolchain collection completes', async (t) => {
@@ -464,11 +647,18 @@ test('one snapshot rechecks early repositories after concurrent toolchain collec
     'package toolkit\n\nconst CaptureTail = "before"\n',
   )
   await git(fixture.roots.toolkit, 'add', 'capture-tail.go')
+  let markToolkitScanned
+  const toolkitScanned = new Promise((resolveScanned) => {
+    markToolkitScanned = resolveScanned
+  })
   const module = await loadIdentity()
   const adapter = module.createPackageSourceIdentityTestAdapter({
+    afterInitialRepositoryScan: async (repositoryID) => {
+      if (repositoryID === 'toolkit') markToolkitScanned()
+    },
     desktopRoot: fixture.roots['hexclaw-desktop'],
     collectToolchains: async (requestedTarget) => {
-      await delay(1_500)
+      await toolkitScanned
       await writeFile(sourcePath, 'package toolkit\n\nconst CaptureTail = "after"\n')
       return fixtureToolchains(requestedTarget)
     },
@@ -483,103 +673,68 @@ test('one snapshot rechecks early repositories after concurrent toolchain collec
   )
 })
 
-test('workspace use entries must map one-to-one to the four canonical sibling modules', async (t) => {
-  const fixture = await createFixture('workspace-map')
+test('manifest freezes VCS metadata without querying later tag drift', async (t) => {
+  const fixture = await createFixture('vcs-drift')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const hexagonRoot = fixture.roots.hexagon
+  await git(hexagonRoot, 'tag', 'v1.2.3')
+  const manifestPath = join(fixture.outputRoot, 'manifest.json')
+  const adapter = await adapterFor(fixture)
+  const created = await adapter.create({ manifestPath, target })
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const hexagon = repository(manifest, 'hexagon')
+
+  assert.match(hexagon.vcs.head, /^[a-f0-9]{40,64}$/u)
+  assert.match(hexagon.vcs.commitDate, /^\d{4}-\d{2}-\d{2}T/u)
+  assert.equal(hexagon.vcs.describe, 'v1.2.3')
+  assert.deepEqual(hexagon.vcs.tags, ['v1.2.3'])
+
+  await git(hexagonRoot, 'tag', 'v1.2.4')
+  const verified = await adapter.verify({ manifestPath, expectedSha256: created.sha256, target })
+  assert.equal(verified.sha256, created.sha256)
+})
+
+test('global go.work and go.work.sum never influence the dedicated manifest workspace', async (t) => {
+  const fixture = await createFixture('workspace-isolation')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   await writeFile(
     join(fixture.workRoot, 'go.work'),
-    'go 1.25.7\n\nuse (\n\t./toolkit\n\t./ai-core\n\t./hexagon\n\t./hexclaw-desktop\n)\n',
+    'go 1.26.0\n\nuse (\n\t./yc-server\n)\n\nreplace example.com/external => ./outside\n',
+  )
+  await writeFile(join(fixture.workRoot, 'go.work.sum'), 'synthetic global sum\n', { mode: 0o000 })
+  const adapter = await adapterFor(fixture)
+  const manifestPath = join(fixture.outputRoot, 'manifest.json')
+  const created = await adapter.create({ manifestPath, target })
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+
+  assert.equal(manifest.workspace.goVersion, '1.25.7')
+  assert.equal(JSON.stringify(manifest).includes('yc-server'), false)
+  assert.equal(JSON.stringify(manifest).includes('go.work.sum'), false)
+
+  await writeFile(join(fixture.workRoot, 'go.work'), 'not a workspace\n', { mode: 0o000 })
+  await unlink(join(fixture.workRoot, 'go.work.sum'))
+  await adapter.verify({ expectedSha256: created.sha256, manifestPath, target })
+})
+
+test('go.mod rejects local filesystem replacements outside canonical repositories', async (t) => {
+  const fixture = await createFixture('external-replace-go-mod')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const outside = join(fixture.workRoot, 'external-module')
+  await write(outside, 'go.mod', 'module example.com/external\n\ngo 1.25.7\n')
+  const goMod = await readFile(join(fixture.roots.toolkit, 'go.mod'), 'utf8')
+  await writeFile(
+    join(fixture.roots.toolkit, 'go.mod'),
+    `${goMod}\nreplace example.com/external => ../external-module\n`,
   )
   const adapter = await adapterFor(fixture)
 
   await assert.rejects(
     adapter.create({ manifestPath: join(fixture.outputRoot, 'manifest.json'), target }),
-    /\[workspace:mapping\]/u,
-  )
-})
-
-test('go.work and go.mod reject local filesystem replacements outside canonical repositories', async (t) => {
-  for (const source of ['go.work', 'go.mod']) {
-    const fixture = await createFixture(`external-replace-${source.replace('.', '-')}`)
-    t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
-    const outside = join(fixture.workRoot, 'external-module')
-    await write(outside, 'go.mod', 'module example.com/external\n\ngo 1.25.7\n')
-    if (source === 'go.work') {
-      const goWork = await readFile(join(fixture.workRoot, 'go.work'), 'utf8')
-      await writeFile(
-        join(fixture.workRoot, 'go.work'),
-        `${goWork}\nreplace example.com/external => ./external-module\n`,
-      )
-    } else {
-      const goMod = await readFile(join(fixture.roots.toolkit, 'go.mod'), 'utf8')
-      await writeFile(
-        join(fixture.roots.toolkit, 'go.mod'),
-        `${goMod}\nreplace example.com/external => ../external-module\n`,
-      )
-    }
-    const adapter = await adapterFor(fixture)
-    await assert.rejects(
-      adapter.create({
-        manifestPath: join(fixture.outputRoot, `manifest-${source}.json`),
-        target,
-      }),
-      (error) => {
-        assert.match(error.message, /\[workspace:replace\]/u)
-        assert.equal(error.message.includes(fixture.workRoot), false)
-        return true
-      },
-    )
-  }
-})
-
-test('go.work.sum is bound when present and appearance or disappearance is source drift', async (t) => {
-  const withSum = await createFixture('workspace-sum-present')
-  const withoutSum = await createFixture('workspace-sum-absent')
-  t.after(() =>
-    Promise.all(
-      [withSum, withoutSum].map((fixture) =>
-        rm(fixture.workRoot, { recursive: true, force: true }),
-      ),
-    ),
-  )
-
-  const sumContent = 'example.com/module v1.0.0 h1:fixture\n'
-  const sumPath = await write(withSum.workRoot, 'go.work.sum', sumContent)
-  const withSumAdapter = await adapterFor(withSum)
-  const withSumManifestPath = join(withSum.outputRoot, 'manifest.json')
-  const withSumResult = await withSumAdapter.create({
-    manifestPath: withSumManifestPath,
-    target,
-  })
-  const withSumManifest = JSON.parse(await readFile(withSumManifestPath, 'utf8'))
-  const sumEntry = withSumManifest.workspace.files.find((file) => file.path === 'go.work.sum')
-  assert.match(sumEntry.sha256, /^[a-f0-9]{64}$/u)
-  assert.match(sumEntry.mode, /^100[0-7]{3}$/u)
-  assert.equal(sumEntry.size, Buffer.byteLength(sumContent))
-  await unlink(sumPath)
-  await assert.rejects(
-    withSumAdapter.verify({
-      manifestPath: withSumManifestPath,
-      expectedSha256: withSumResult.sha256,
-      target,
-    }),
-    /\[drift:source-manifest\]/u,
-  )
-
-  const withoutSumAdapter = await adapterFor(withoutSum)
-  const withoutSumManifestPath = join(withoutSum.outputRoot, 'manifest.json')
-  const withoutSumResult = await withoutSumAdapter.create({
-    manifestPath: withoutSumManifestPath,
-    target,
-  })
-  await write(withoutSum.workRoot, 'go.work.sum', 'example.com/new v1.0.0 h1:new\n')
-  await assert.rejects(
-    withoutSumAdapter.verify({
-      manifestPath: withoutSumManifestPath,
-      expectedSha256: withoutSumResult.sha256,
-      target,
-    }),
-    /\[drift:source-manifest\]/u,
+    (error) => {
+      assert.match(error.message, /\[workspace:replace\]/u)
+      assert.equal(error.message.includes(fixture.workRoot), false)
+      return true
+    },
   )
 })
 
@@ -656,7 +811,7 @@ test('a tracked directory replaced by an escaping symbolic link fails closed', a
   )
 })
 
-test('source files, workspace files, and source ancestors reject group or other writes', async (t) => {
+test('source files and source ancestors reject group or other writes', async (t) => {
   const cases = [
     {
       name: 'source-file',
@@ -673,10 +828,6 @@ test('source files, workspace files, and source ancestors reject group or other 
         await git(fixture.roots.toolkit, 'add', 'unsafe/source.go')
         await chmod(join(fixture.roots.toolkit, 'unsafe'), 0o777)
       },
-    },
-    {
-      name: 'workspace-file',
-      prepare: async (fixture) => chmod(join(fixture.workRoot, 'go.work'), 0o666),
     },
   ]
 
@@ -768,7 +919,7 @@ test('deleted tracked paths consume the entry limit and are explicit in totals',
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   assert.deepEqual(manifest.totals, {
     bytes:
-      manifest.workspace.files.reduce((total, file) => total + file.size, 0) +
+      manifest.workspace.file.size +
       manifest.repositories
         .flatMap((item) => item.files)
         .reduce((total, file) => total + file.size, 0),
@@ -813,6 +964,94 @@ test('target must be a canonical native macOS target', async (t) => {
     }),
     /\[toolchain:target\]/u,
   )
+})
+
+test('persistent toolchain identity requires exact executable paths, digests, versions, and GOROOT', async (t) => {
+  const fixture = await createFixture('toolchain-manifest-contract')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const module = await loadIdentity()
+  const adapter = module.createPackageSourceIdentityTestAdapter({
+    desktopRoot: fixture.roots['hexclaw-desktop'],
+    collectToolchains: async (requestedTarget) => {
+      const toolchains = fixtureToolchains(requestedTarget)
+      return {
+        ...toolchains,
+        cargo: {
+          executableSha256: toolchains.cargo.executableSha256,
+          sourceSha256: toolchains.cargo.sourceSha256,
+          version: toolchains.cargo.version,
+        },
+      }
+    },
+  })
+
+  await assert.rejects(
+    adapter.create({
+      manifestPath: join(fixture.outputRoot, 'manifest.json'),
+      target,
+    }),
+    /\[toolchain:manifest\]/u,
+  )
+})
+
+test('production source identity has an explicit macOS and uid contract', async () => {
+  const module = await loadIdentity()
+  assert.equal(module.validateProductionPlatformForTest({ hasUid: true, platform: 'darwin' }), true)
+  assert.throws(
+    () => module.validateProductionPlatformForTest({ hasUid: true, platform: 'linux' }),
+    /\[platform:unsupported\]/u,
+  )
+  assert.throws(
+    () => module.validateProductionPlatformForTest({ hasUid: false, platform: 'darwin' }),
+    /\[platform:unsupported\]/u,
+  )
+})
+
+test('source identity reuses the bounded runner for timeout, output, and process-tree enforcement', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hexclaw-source-runner-'))
+  const childPIDPath = join(root, 'child.pid')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const { runBoundedProcess } = await import(boundedProcessModuleURL)
+  const base = {
+    cwd: root,
+    env: {},
+    maxOutputBytes: 1024,
+    terminateConfirmMs: 1_000,
+    terminateGraceMs: 100,
+    timeoutMs: 2_000,
+  }
+
+  await assert.rejects(
+    runBoundedProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      ...base,
+      timeoutMs: 100,
+    }),
+    /category=timeout/u,
+  )
+  await assert.rejects(
+    runBoundedProcess(process.execPath, ['-e', 'process.stdout.write("x".repeat(4096))'], {
+      ...base,
+      maxOutputBytes: 32,
+    }),
+    /category=output-limit/u,
+  )
+
+  const processTreeProgram = [
+    "const {spawn}=require('node:child_process')",
+    "const {writeFileSync}=require('node:fs')",
+    "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.send('ready');process.disconnect();setInterval(()=>{},1000)\"],{stdio:['ignore','ignore','ignore','ipc']})",
+    `child.once('message',()=>{writeFileSync(${JSON.stringify(childPIDPath)},String(child.pid));child.disconnect();child.unref();process.exit(0)})`,
+  ].join(';')
+  await assert.rejects(
+    runBoundedProcess(process.execPath, ['-e', processTreeProgram], base),
+    /category=process-tree-leak/u,
+  )
+  const childPID = Number(await readFile(childPIDPath, 'utf8'))
+  assert.throws(() => process.kill(childPID, 0), { code: 'ESRCH' })
+
+  const source = await readFile(identityModuleURL, 'utf8')
+  assert.equal(source.includes("from './run-bounded-process.mjs'"), true)
+  assert.equal(source.includes("from 'node:child_process'"), false)
 })
 
 test('toolchain capture executes private snapshots with a clean environment and returns frozen bindings', async (t) => {
@@ -868,9 +1107,32 @@ test('toolchain capture executes private snapshots with a clean environment and 
   )
   assert.equal(bindings.git.executableSha256, manifest.toolchains.git.executableSha256)
   assert.equal(manifest.toolchains.git.executablePath, await realpath(toolchainOptions.gitPath))
+  for (const name of ['cargo', 'git', 'go', 'node', 'pnpm', 'rustc', 'rustup']) {
+    assert.equal(Object.isFrozen(bindings[name]), true)
+    assert.equal(bindings[name].sourceCanonical, manifest.toolchains[name].executablePath)
+    assert.equal(bindings[name].sourceSha256, manifest.toolchains[name].sourceSha256)
+    assert.equal(bindings[name].executableSha256, manifest.toolchains[name].executableSha256)
+    assert.match(manifest.toolchains[name].version, /\S/u)
+  }
   assert.equal(bindings.go.goroot, await realpath(join(fixture.workRoot, 'tools', 'go-root')))
   assert.equal(manifest.toolchains.go.env.GOROOT, bindings.go.goroot)
   assert.equal(manifestBytes.includes(Buffer.from(bindings.snapshotRoot)), false)
+  assert.equal(
+    (
+      await stat(
+        join(bindings.rustToolchain.canonical, 'lib/rustlib/x86_64-apple-darwin/bin/rust-objcopy'),
+      )
+    ).mode & 0o777,
+    0o500,
+  )
+  assert.equal(
+    (
+      await stat(
+        join(bindings.rustToolchain.canonical, 'lib/rustlib/x86_64-apple-darwin/lib/libstd.rlib'),
+      )
+    ).mode & 0o777,
+    0o400,
+  )
 
   const environment = Object.fromEntries(
     (await readFile(environmentLog, 'utf8'))

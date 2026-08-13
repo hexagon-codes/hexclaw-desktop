@@ -66,7 +66,8 @@ async function waitForRecordedProcesses(identities, timeoutMs = 3_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const current = await Promise.all(identities.map(({ pid }) => processIdentity(pid)))
-    if (current.every((value, index) => !sameStableProcessIdentity(identities[index], value))) return
+    if (current.every((value, index) => !sameStableProcessIdentity(identities[index], value)))
+      return
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 20))
   }
   assert.fail('Recorded fixture processes did not exit')
@@ -85,6 +86,27 @@ async function cleanupRecordedProcesses(identities) {
     )
   }
   await waitForRecordedProcesses(identities)
+}
+
+function waitForChild(child, timeoutMs = 5_000) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(
+      () => rejectPromise(new Error('Timed out waiting for fixture process')),
+      timeoutMs,
+    )
+    timer.unref?.()
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      rejectPromise(error)
+    })
+    child.once('close', (code, signal) => {
+      clearTimeout(timer)
+      resolvePromise({ code, signal })
+    })
+  })
 }
 
 test('bounded process runner returns finite output for a successful command', async () => {
@@ -109,10 +131,10 @@ test('bounded process runner waits until a TERM-resistant descendant is killed',
   const program = [
     "const {spawn}=require('node:child_process')",
     "const {writeFileSync}=require('node:fs')",
-    "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.send('ready');process.disconnect();setInterval(()=>{},1000)\"],{stdio:['ignore','ignore','ignore','ipc']})",
+    "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.send('ready');process.disconnect();setTimeout(()=>process.exit(74),15000)\"],{stdio:['ignore','ignore','ignore','ipc']})",
     `child.once('message',()=>writeFileSync(${JSON.stringify(pidFile)},String(child.pid)))`,
     "process.on('SIGTERM',()=>process.exit(0))",
-    'setInterval(()=>{},1000)',
+    'setTimeout(()=>process.exit(74),15000)',
   ].join(';')
 
   const startedAt = Date.now()
@@ -121,13 +143,13 @@ test('bounded process runner waits until a TERM-resistant descendant is killed',
       cwd: root,
       env: {},
       maxOutputBytes: 1024,
-      timeoutMs: 500,
+      timeoutMs: 2_000,
       terminateGraceMs: 150,
       terminateConfirmMs: 1_000,
     }),
     /category=timeout/,
   )
-  assert.ok(Date.now() - startedAt >= 600, 'runner must wait through the TERM grace period')
+  assert.ok(Date.now() - startedAt >= 2_100, 'runner must wait through the TERM grace period')
   const grandchildPID = Number(await readFile(pidFile, 'utf8'))
   assert.throws(() => process.kill(grandchildPID, 0), { code: 'ESRCH' })
 })
@@ -140,7 +162,7 @@ test('bounded process runner rejects a successful parent whose process group sti
   const program = [
     "const {spawn}=require('node:child_process')",
     "const {writeFileSync}=require('node:fs')",
-    "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.send('ready');process.disconnect();setInterval(()=>{},1000)\"],{stdio:['ignore','ignore','ignore','ipc']})",
+    "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.send('ready');process.disconnect();setTimeout(()=>process.exit(74),15000)\"],{stdio:['ignore','ignore','ignore','ipc']})",
     `child.once('message',()=>{writeFileSync(${JSON.stringify(pidFile)},String(child.pid));child.disconnect();child.unref();process.exit(0)})`,
   ].join(';')
 
@@ -197,7 +219,13 @@ test('bounded process runner returns only explicitly accepted nonzero exit codes
   assert.equal(result.code, 1)
   assert.equal(result.stdout, marker)
 
-  for (const acceptedExitCodes of [[], [0, 0], [-1], [256], Array.from({ length: 17 }, (_, i) => i)]) {
+  for (const acceptedExitCodes of [
+    [],
+    [0, 0],
+    [-1],
+    [256],
+    Array.from({ length: 17 }, (_, i) => i),
+  ]) {
     await assert.rejects(
       runBoundedProcess(process.execPath, [], { ...options, acceptedExitCodes }),
       /category=invalid-exit-policy/,
@@ -352,14 +380,13 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
   test(`bounded process runner drains its descendant group before handling ${signal}`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'hexclaw-parent-signal-'))
     const pidFile = join(root, 'descendants.json')
-    t.after(() => rm(root, { recursive: true, force: true }))
-    const runnerPath = fileURLToPath(moduleURL)
+    const recorded = []
     const childProgram = [
       "const {spawn}=require('node:child_process')",
       "const {writeFileSync}=require('node:fs')",
-      "const grandchild=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'})",
+      "const grandchild=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(74),15000)\"],{stdio:'ignore'})",
       `writeFileSync(${JSON.stringify(pidFile)},JSON.stringify({child:process.pid,grandchild:grandchild.pid}))`,
-      'setInterval(()=>{},1000)',
+      'setTimeout(()=>process.exit(74),15000)',
     ].join(';')
     const harnessProgram = [
       `import(${JSON.stringify(new URL(moduleURL).href)}).then(async({runBoundedProcess})=>{`,
@@ -367,12 +394,12 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
       "catch(error){process.stderr.write(error.category+'\\n');process.exitCode=1}})",
     ].join('')
     const harness = execFile(process.execPath, ['-e', harnessProgram])
-    t.after(() => {
-      try {
-        harness.kill('SIGKILL')
-      } catch {
-        // 测试进程已经退出时无需处理。
-      }
+    const harnessIdentity = await processIdentity(harness.pid)
+    assert.ok(harnessIdentity, 'Harness identity must be recorded before signaling')
+    recorded.push(harnessIdentity)
+    t.after(async () => {
+      await cleanupRecordedProcesses(recorded)
+      await rm(root, { recursive: true, force: true })
     })
 
     const deadline = Date.now() + 3_000
@@ -384,14 +411,15 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
       }
     }
-    const identities = JSON.parse(await readFile(pidFile, 'utf8'))
-    harness.kill(signal)
-    const [code] = await new Promise((resolvePromise) =>
-      harness.once('close', (...values) => resolvePromise(values)),
-    )
-    assert.equal(code, 1)
-    assert.throws(() => process.kill(identities.child, 0), { code: 'ESRCH' })
-    assert.throws(() => process.kill(identities.grandchild, 0), { code: 'ESRCH' })
+    const pids = JSON.parse(await readFile(pidFile, 'utf8'))
+    for (const pid of [pids.child, pids.grandchild]) {
+      const identity = await processIdentity(pid)
+      assert.ok(identity, 'Fixture process identity must be recorded before signaling')
+      recorded.push(identity)
+    }
+    await signalRecordedProcess(harnessIdentity, recorded, signal)
+    assert.deepEqual(await waitForChild(harness), { code: 1, signal: null })
+    await waitForRecordedProcesses(recorded)
   })
 }
 
@@ -402,9 +430,9 @@ test('bounded process runner drains descendants before restoring SIGQUIT termina
   const childProgram = [
     "const {spawn}=require('node:child_process')",
     "const {writeFileSync}=require('node:fs')",
-    "const grandchild=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'})",
+    "const grandchild=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(74),15000)\"],{stdio:'ignore'})",
     `writeFileSync(${JSON.stringify(pidFile)},JSON.stringify({child:process.pid,grandchild:grandchild.pid}))`,
-    'setInterval(()=>{},1000)',
+    'setTimeout(()=>process.exit(74),15000)',
   ].join(';')
   const harnessProgram = [
     `import(${JSON.stringify(new URL(moduleURL).href)}).then(({runBoundedProcess})=>`,
@@ -419,11 +447,6 @@ test('bounded process runner drains descendants before restoring SIGQUIT termina
   assert.ok(harnessIdentity, 'Harness identity must be recorded before signaling')
   recorded.push(harnessIdentity)
   t.after(async () => {
-    try {
-      harness.kill('SIGKILL')
-    } catch {
-      // 测试进程已经退出时无需处理。
-    }
     await cleanupRecordedProcesses(recorded)
     await rm(root, { recursive: true, force: true })
   })
@@ -444,10 +467,8 @@ test('bounded process runner drains descendants before restoring SIGQUIT termina
     recorded.push(identity)
   }
 
-  harness.kill('SIGQUIT')
-  const result = await new Promise((resolvePromise) =>
-    harness.once('close', (code, signal) => resolvePromise({ code, signal })),
-  )
+  await signalRecordedProcess(harnessIdentity, recorded, 'SIGQUIT')
+  const result = await waitForChild(harness)
   assert.deepEqual(result, { code: null, signal: 'SIGQUIT' }, harnessStderr)
   await waitForRecordedProcesses(recorded)
 })

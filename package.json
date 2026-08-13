@@ -11,6 +11,7 @@
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "test:unit": "vitest",
+    "test:package-gates": "node --test tests/gates/package-local-orchestrator.test.mjs tests/gates/package-local-security-contract.test.mjs tests/gates/package-sensitive-boundary.test.mjs tests/gates/pdf-worker-package-asset.test.mjs tests/native/package-local-environment-contract.test.mjs tests/native/render-bundle-reproducibility-contract.test.mjs",
     "test:e2e": "playwright test -c playwright.config.ts",
     "test:e2e:current-source": "playwright test -c playwright.config.ts",
     "test:e2e:live": "playwright test -c playwright.browser.live.config.ts",

@@ -3,40 +3,47 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
 import {
-  chmod,
   lstat,
   mkdir,
   open,
-  readFile,
   readdir,
-  readlink,
   realpath,
   rename,
   rm,
+  rmdir,
   symlink,
-  writeFile,
+  unlink,
 } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createGunzip } from 'node:zlib'
 
 import { createReleaseAttestation } from './k12-release-ui-attestation.mjs'
 import {
+  PackageDependencyProvenanceError,
   preparePackageDependencyProvenance,
   verifyPackageDependencyProvenance,
 } from './package-dependency-provenance.mjs'
 import {
-  assertPackageGenerationReady,
+  consumePackageGenerationCapability,
   PACKAGE_GENERATION_CONTROL_BASENAME,
-  PACKAGE_GENERATION_CONTEXT_ENV,
   PACKAGE_GENERATION_LOCK_BASENAME,
   PACKAGE_GENERATION_PLAN_PARENT_BASENAME,
   PACKAGE_GENERATION_TOMBSTONE_BASENAME,
   PackageGenerationLockError,
   runWithPackageGenerationLock,
 } from './package-generation-lock.mjs'
+import {
+  cleanupPackageStaging,
+  commitPackageGeneration,
+  createPackagePublicationLayout,
+  PackagePublicationError,
+  publishPackageGeneration,
+  recoverPackagePublication,
+  resolveCurrentPackageGeneration,
+} from './package-generation-publication.mjs'
 import {
   createPackageSourceManifest,
   verifyPackageSourceManifest,
@@ -59,17 +66,42 @@ const DEFAULT_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 const OLLAMA_ARCHIVE_MAX_ENTRIES = 4096
 const OLLAMA_EXPANDED_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const OLLAMA_MEMBER_MAX_BYTES = 1024 * 1024 * 1024
+const OLLAMA_APPLEDOUBLE_MAX_BYTES = 64 * 1024
+const OLLAMA_PAX_MAX_BYTES = 64 * 1024
+const OLLAMA_PAX_XATTR_NAMES = Object.freeze(['CodeSignature', 'CodeRequirements', 'CodeDirectory'])
+const OLLAMA_APPLEDOUBLE_CONTRACTS = Object.freeze({
+  'mlx_metal_v3/._mlx.metallib': Object.freeze({
+    bytes: 9662,
+    sha256: 'bfc1c0059a8522c59e3befa0906d1487b0f513b53d5b3b68a6979c053fc2bcdc',
+  }),
+  'mlx_metal_v4/._mlx.metallib': Object.freeze({
+    bytes: 9662,
+    sha256: '4f4128deb87ddfcc5bd30a9e8035c2add6c6d316180c606a29a1d4f0208bfcb6',
+  }),
+})
+const PROJECTED_SOURCE_MAX_ENTRIES = 100_000
+const PROJECTED_SOURCE_MAX_BYTES = 8 * 1024 * 1024 * 1024
+const FRONTEND_TYPECHECK_CACHE_FILES = Object.freeze([
+  'tsconfig.app.tsbuildinfo',
+  'tsconfig.node.tsbuildinfo',
+  'tsconfig.vitest.tsbuildinfo',
+])
+const FRONTEND_VITE_CACHE_DIRECTORY = '.vite-temp'
 const PACKAGE_RESULT_SCHEMA = 'hexclaw.package-local-result.v1'
 const MODULE_PATH = fileURLToPath(import.meta.url)
 const DESKTOP_ROOT = resolve(dirname(MODULE_PATH), '..', '..')
-const SENSITIVE_BOUNDARY_PATH = join(DESKTOP_ROOT, 'scripts', 'ci', 'package-sensitive-boundary.mjs')
+const SENSITIVE_BOUNDARY_PATH = join(
+  DESKTOP_ROOT,
+  'scripts',
+  'ci',
+  'package-sensitive-boundary.mjs',
+)
 const RENDER_BUNDLE_PATH = join(DESKTOP_ROOT, 'release', 'scripts', 'render-bundle.sh')
 
 const FIXED_TOOLS = Object.freeze({
   bash: '/bin/bash',
   curl: '/usr/bin/curl',
   ditto: '/usr/bin/ditto',
-  git: '/usr/bin/git',
   hdiutil: '/usr/bin/hdiutil',
 })
 
@@ -92,10 +124,23 @@ const TARGETS = Object.freeze({
   }),
 })
 
+const PACKAGE_REPOSITORY_IDS = Object.freeze([
+  'toolkit',
+  'ai-core',
+  'hexagon',
+  'hexclaw',
+  'hexclaw-desktop',
+])
+const PACKAGE_GO_MODULES = Object.freeze([
+  Object.freeze({ module: 'github.com/hexagon-codes/toolkit', repository: 'toolkit' }),
+  Object.freeze({ module: 'github.com/hexagon-codes/ai-core', repository: 'ai-core' }),
+  Object.freeze({ module: 'github.com/hexagon-codes/hexagon', repository: 'hexagon' }),
+  Object.freeze({ module: 'github.com/hexagon-codes/hexclaw', repository: 'hexclaw' }),
+])
+
 const PIPELINE_OPERATION_NAMES = Object.freeze([
-  'invalidateCanonical',
   'createSourceManifest',
-  'resolveToolchains',
+  'cleanupToolchains',
   'projectDesktopSource',
   'prepareFrontendDependencies',
   'verifyGoDependencies',
@@ -108,19 +153,14 @@ const PIPELINE_OPERATION_NAMES = Object.freeze([
   'prepareCargoDependencies',
   'buildTauriApp',
   'verifyAppResources',
+  'stageReleaseApp',
   'verifySourceManifest',
   'sanitizeAndVerify',
   'createDmg',
   'createAttestation',
-  'verifyStagedPackage',
-  'publishDist',
-  'publishApp',
-  'publishDmg',
-  'publishManifest',
-  'publishSourceManifest',
   'writeBuildResult',
-  'publishReceipt',
-  'cleanupCanonical',
+  'verifyStagedPackage',
+  'cleanupStaging',
 ])
 
 export class PackageLocalError extends Error {
@@ -146,7 +186,7 @@ export function getOllamaPackageContract() {
 }
 
 /** 将依赖安装绑定到本轮投影源码与 source manifest 记录的工具链。 */
-export function createDependencyProvenanceOptions(plan, toolchains) {
+export function createDependencyProvenanceOptions(plan, toolchains, sourceManifestSHA256) {
   if (
     !isPlainObject(plan) ||
     !isPlainObject(plan.paths) ||
@@ -160,27 +200,100 @@ export function createDependencyProvenanceOptions(plan, toolchains) {
     !isAbsolute(toolchains.pnpm.canonical ?? '') ||
     !SHA256_PATTERN.test(toolchains.go.executableSha256 ?? '') ||
     !SHA256_PATTERN.test(toolchains.node.executableSha256 ?? '') ||
-    !SHA256_PATTERN.test(toolchains.pnpm.executableSha256 ?? '')
+    !SHA256_PATTERN.test(toolchains.pnpm.executableSha256 ?? '') ||
+    !SHA256_PATTERN.test(sourceManifestSHA256 ?? '') ||
+    [toolchains.go, toolchains.node, toolchains.pnpm].some(
+      (tool) =>
+        typeof tool.version !== 'string' ||
+        tool.version.length === 0 ||
+        /[\u0000-\u001f\u007f]/u.test(tool.version),
+    )
+  ) {
+    fail('dependency-provenance-options')
+  }
+  const hasGoSourceBinding =
+    toolchains.go.sourceCanonical !== undefined || toolchains.go.sourceSha256 !== undefined
+  if (
+    hasGoSourceBinding &&
+    (!isAbsolute(toolchains.go.sourceCanonical ?? '') ||
+      !SHA256_PATTERN.test(toolchains.go.sourceSha256 ?? '') ||
+      toolchains.go.sourceCanonical !== join(toolchains.go.goroot, 'bin', 'go'))
+  ) {
+    fail('dependency-provenance-options')
+  }
+  const pnpmStandalone = Array.isArray(toolchains.pnpm.supportFiles)
+    ? toolchains.pnpm.supportFiles.find((file) => file?.path === 'dist/pnpm.cjs')
+    : undefined
+  const pnpmWorker = Array.isArray(toolchains.pnpm.supportFiles)
+    ? toolchains.pnpm.supportFiles.find((file) => file?.path === 'dist/worker.js')
+    : undefined
+  const pnpmPackage = Array.isArray(toolchains.pnpm.supportFiles)
+    ? toolchains.pnpm.supportFiles.find((file) => file?.path === 'package.json')
+    : undefined
+  const pnpmWorkerNative = Array.isArray(toolchains.pnpm.supportFiles)
+    ? toolchains.pnpm.supportFiles.filter((file) =>
+        new RegExp(`^dist/reflink\\.darwin-${process.arch}-[A-Za-z0-9]+\\.node$`, 'u').test(
+          file?.path ?? '',
+        ),
+      )
+    : []
+  if (
+    pnpmStandalone !== undefined &&
+    (!isAbsolute(pnpmStandalone.canonical ?? '') ||
+      !SHA256_PATTERN.test(pnpmStandalone.executableSha256 ?? ''))
+  ) {
+    fail('dependency-provenance-options')
+  }
+  if (
+    pnpmWorker !== undefined &&
+    (!isAbsolute(pnpmWorker.canonical ?? '') ||
+      !SHA256_PATTERN.test(pnpmWorker.executableSha256 ?? ''))
+  ) {
+    fail('dependency-provenance-options')
+  }
+  if (
+    pnpmWorker !== undefined &&
+    (pnpmPackage === undefined ||
+      !isAbsolute(pnpmPackage.canonical ?? '') ||
+      !SHA256_PATTERN.test(pnpmPackage.executableSha256 ?? '') ||
+      pnpmWorkerNative.length !== 1 ||
+      !isAbsolute(pnpmWorkerNative[0].canonical ?? '') ||
+      !SHA256_PATTERN.test(pnpmWorkerNative[0].executableSha256 ?? ''))
   ) {
     fail('dependency-provenance-options')
   }
   return Object.freeze({
     generationRoot: plan.paths.generationRoot,
     go: Object.freeze({
-      executable: toolchains.go.canonical,
+      executable: hasGoSourceBinding ? toolchains.go.sourceCanonical : toolchains.go.canonical,
       goWork: plan.paths.projectedGoWork,
       goroot: toolchains.go.goroot,
       moduleRoots: plan.paths.projectedGoModuleRoots,
-      sha256: toolchains.go.executableSha256,
+      sha256: hasGoSourceBinding ? toolchains.go.sourceSha256 : toolchains.go.executableSha256,
+      version: toolchains.go.version,
     }),
     node: Object.freeze({
       executable: toolchains.node.canonical,
       sha256: toolchains.node.executableSha256,
+      version: toolchains.node.version,
     }),
     pnpm: Object.freeze({
-      executable: toolchains.pnpm.canonical,
-      sha256: toolchains.pnpm.executableSha256,
+      executable: pnpmStandalone?.canonical ?? toolchains.pnpm.canonical,
+      sha256: pnpmStandalone?.executableSha256 ?? toolchains.pnpm.executableSha256,
+      version: toolchains.pnpm.version,
+      ...(pnpmWorker
+        ? {
+            packageExecutable: pnpmPackage.canonical,
+            packageSha256: pnpmPackage.executableSha256,
+            workerExecutable: pnpmWorker.canonical,
+            workerNativeExecutable: pnpmWorkerNative[0].canonical,
+            workerNativeName: basename(pnpmWorkerNative[0].canonical),
+            workerNativeSha256: pnpmWorkerNative[0].executableSha256,
+            workerSha256: pnpmWorker.executableSha256,
+          }
+        : {}),
     }),
+    sourceManifest: Object.freeze({ sha256: sourceManifestSHA256 }),
     sourceRoot: plan.paths.projectedDesktopRoot,
   })
 }
@@ -275,12 +388,35 @@ async function assertPrivateDirectory(pathname) {
   }
 }
 
+async function assertTrustedOwnedDirectory(pathname) {
+  const metadata = await lstat(pathname, { bigint: true }).catch(() => fail('directory-metadata'))
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    (Number(metadata.mode & 0o777n) & 0o022) !== 0
+  ) {
+    fail('directory-security')
+  }
+  if (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid())) {
+    fail('directory-owner')
+  }
+  const canonical = await realpath(pathname).catch(() => fail('directory-metadata'))
+  if (canonical !== pathname) fail('directory-security')
+}
+
 async function makePrivateDirectory(pathname, options = {}) {
+  const existing = await lstat(pathname, { bigint: true }).catch((error) => {
+    if (error?.code === 'ENOENT') return undefined
+    fail('directory-metadata')
+  })
+  if (existing !== undefined) {
+    await assertPrivateDirectory(pathname)
+    return
+  }
   await mkdir(pathname, {
     mode: PRIVATE_DIRECTORY_MODE,
     recursive: options.recursive === true,
   }).catch(() => fail('directory-create'))
-  await chmod(pathname, PRIVATE_DIRECTORY_MODE).catch(() => fail('directory-permissions'))
   await assertPrivateDirectory(pathname)
 }
 
@@ -314,10 +450,7 @@ async function copyManifestBoundFile(sourcePath, destinationPath, file) {
     if (
       !sourceBefore.isFile() ||
       sourceBefore.nlink !== 1n ||
-      !sameMetadataIdentity(
-        metadataIdentity(sourcePathMetadata),
-        metadataIdentity(sourceBefore),
-      )
+      !sameMetadataIdentity(metadataIdentity(sourcePathMetadata), metadataIdentity(sourceBefore))
     ) {
       fail('source-projection-identity')
     }
@@ -420,43 +553,15 @@ export async function projectDesktopSourceFromManifest(options) {
   if (repositories.length !== 1) fail('source-projection-manifest')
   await makePrivateDirectory(dirname(projectedRoot), { recursive: true })
   await makePrivateDirectory(projectedRoot)
-  return Object.freeze(
-    await copyManifestRecords(desktopRoot, projectedRoot, repositories[0].files),
-  )
+  return Object.freeze(await copyManifestRecords(desktopRoot, projectedRoot, repositories[0].files))
 }
 
-/** 将五仓与 go.work 按同一 source manifest 投影到唯一 generation。 */
+/** 将五仓与清单派生的专用 Go workspace 投影到唯一 generation。 */
 export async function projectPackageSourceFromManifest(options) {
   exactOptions(options, ['manifest', 'projectedWorkRoot', 'sourceWorkRoot'])
   const sourceWorkRoot = absolutePath(options.sourceWorkRoot, 'source-projection-root')
   const projectedWorkRoot = absolutePath(options.projectedWorkRoot, 'source-projection-root')
-  if (
-    !isPlainObject(options.manifest) ||
-    !Array.isArray(options.manifest.repositories) ||
-    !isPlainObject(options.manifest.workspace) ||
-    !Array.isArray(options.manifest.workspace.files)
-  ) {
-    fail('source-projection-manifest')
-  }
-  const expectedRepositories = ['ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop', 'toolkit']
-  const repositories = [...options.manifest.repositories].sort((left, right) =>
-    Buffer.compare(Buffer.from(left?.id ?? ''), Buffer.from(right?.id ?? '')),
-  )
-  if (
-    repositories.length !== expectedRepositories.length ||
-    repositories.some((repository, index) => repository?.id !== expectedRepositories[index])
-  ) {
-    fail('source-projection-manifest')
-  }
-  const workspacePaths = options.manifest.workspace.files.map((file) => file?.path).sort()
-  if (
-    workspacePaths.length < 1 ||
-    workspacePaths.length > 2 ||
-    workspacePaths[0] !== 'go.work' ||
-    (workspacePaths.length === 2 && workspacePaths[1] !== 'go.work.sum')
-  ) {
-    fail('source-projection-manifest')
-  }
+  const { repositories } = packageProjectionManifest(options.manifest)
 
   await makePrivateDirectory(dirname(projectedWorkRoot), { recursive: true })
   await makePrivateDirectory(projectedWorkRoot)
@@ -471,14 +576,276 @@ export async function projectPackageSourceFromManifest(options) {
     copiedBytes += result.copiedBytes
     copiedFiles += result.copiedFiles
   }
-  const workspace = await copyManifestRecords(
-    sourceWorkRoot,
-    projectedWorkRoot,
-    options.manifest.workspace.files,
-  )
-  copiedBytes += workspace.copiedBytes
-  copiedFiles += workspace.copiedFiles
+  const workspace = await packageWorkspace(options.manifest, projectedWorkRoot, repositories)
+  await writePrivateFileExclusive(join(projectedWorkRoot, workspace.record.path), workspace.bytes)
+  copiedBytes += workspace.record.size
+  copiedFiles += 1
   return Object.freeze({ copiedBytes, copiedFiles })
+}
+
+function packageWorkspaceContract(manifest) {
+  const modules = manifest.workspace?.modules
+  const recordedModules = Array.isArray(modules)
+    ? [...modules].sort((left, right) =>
+        Buffer.compare(Buffer.from(left?.repository ?? ''), Buffer.from(right?.repository ?? '')),
+      )
+    : []
+  const expectedModules = [...PACKAGE_GO_MODULES].sort((left, right) =>
+    Buffer.compare(Buffer.from(left.repository), Buffer.from(right.repository)),
+  )
+  if (
+    recordedModules.length !== expectedModules.length ||
+    recordedModules.some(
+      (entry, index) =>
+        entry?.module !== expectedModules[index].module ||
+        entry?.repository !== expectedModules[index].repository,
+    )
+  ) {
+    fail('source-projection-workspace')
+  }
+  const localReplacements = manifest.workspace?.localReplacements
+  const file = manifest.workspace?.file
+  if (!Array.isArray(localReplacements) || !isPlainObject(file)) {
+    fail('source-projection-workspace')
+  }
+  if (
+    file.mode !== '100600' ||
+    file.path !== 'go.work' ||
+    !SHA256_PATTERN.test(file.sha256 ?? '') ||
+    !Number.isSafeInteger(file.size) ||
+    file.size <= 0 ||
+    typeof manifest.workspace.goVersion !== 'string'
+  ) {
+    fail('source-projection-workspace')
+  }
+  const toolchainMatch = /^go(1\.[0-9]+(?:\.[0-9]+)?)$/u.exec(
+    manifest.toolchains?.go?.env?.GOVERSION ?? '',
+  )
+  if (!toolchainMatch) fail('source-projection-workspace')
+  return Object.freeze({
+    file: Object.freeze({ ...file }),
+    goVersion: manifest.workspace.goVersion,
+    toolchainVersion: toolchainMatch[1],
+  })
+}
+
+function compareGoVersions(left, right) {
+  const leftParts = left.split('.').map(Number)
+  const rightParts = right.split('.').map(Number)
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+async function readProjectedGoModule(projectedWorkRoot, repository, expectedModule) {
+  const records = repository.files.filter((file) => file?.path === 'go.mod')
+  if (records.length !== 1) fail('source-projection-workspace')
+  const record = records[0]
+  if (
+    !Number.isSafeInteger(record.size) ||
+    record.size <= 0 ||
+    record.size > 1024 * 1024 ||
+    !SHA256_PATTERN.test(record.sha256 ?? '')
+  ) {
+    fail('source-projection-workspace')
+  }
+  const expectedMode = manifestFileMode(record.mode)
+  const pathname = join(projectedWorkRoot, repository.id, 'go.mod')
+  return withSecureRegularFile(pathname, record.size, async (handle, metadata) => {
+    if (
+      metadata.size !== BigInt(record.size) ||
+      Number(metadata.mode & 0o777n) !== expectedMode ||
+      (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid()))
+    ) {
+      fail('source-projection-workspace')
+    }
+    const bytes = Buffer.alloc(record.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead <= 0) fail('source-projection-workspace')
+      offset += bytesRead
+    }
+    if (createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
+      fail('source-projection-workspace')
+    }
+    const text = bytes.toString('utf8')
+    if (!Buffer.from(text, 'utf8').equals(bytes)) fail('source-projection-workspace')
+    const module = /^module[ \t]+([^\s]+)[ \t]*$/mu.exec(text)?.[1]
+    const versions = [...text.matchAll(/^go[ \t]+(1\.[0-9]+(?:\.[0-9]+)?)[ \t]*$/gmu)]
+    if (module !== expectedModule || versions.length !== 1) fail('source-projection-workspace')
+    return versions[0][1]
+  })
+}
+
+async function packageWorkspace(manifest, projectedWorkRoot, repositories) {
+  const contract = packageWorkspaceContract(manifest)
+  const versions = []
+  for (const expected of PACKAGE_GO_MODULES) {
+    const repository = repositories.find((candidate) => candidate.id === expected.repository)
+    if (!repository) fail('source-projection-workspace')
+    versions.push(await readProjectedGoModule(projectedWorkRoot, repository, expected.module))
+  }
+  const goVersion = versions.reduce((highest, candidate) =>
+    compareGoVersions(candidate, highest) > 0 ? candidate : highest,
+  )
+  if (compareGoVersions(contract.toolchainVersion, goVersion) < 0) {
+    fail('source-projection-workspace')
+  }
+  const bytes = Buffer.from(
+    `go ${goVersion}\n\nuse (\n${PACKAGE_GO_MODULES.map(({ repository }) => `\t./${repository}\n`).join('')})\n`,
+    'utf8',
+  )
+  if (
+    contract.goVersion !== goVersion ||
+    contract.file.size !== bytes.length ||
+    contract.file.sha256 !== createHash('sha256').update(bytes).digest('hex')
+  ) {
+    fail('source-projection-workspace')
+  }
+  return Object.freeze({ bytes, record: contract.file })
+}
+
+function packageProjectionManifest(manifest) {
+  if (
+    !isPlainObject(manifest) ||
+    !Array.isArray(manifest.repositories) ||
+    !isPlainObject(manifest.workspace)
+  ) {
+    fail('source-projection-manifest')
+  }
+  packageWorkspaceContract(manifest)
+  const expectedRepositories = [...PACKAGE_REPOSITORY_IDS].sort((left, right) =>
+    Buffer.compare(Buffer.from(left), Buffer.from(right)),
+  )
+  const repositories = [...manifest.repositories].sort((left, right) =>
+    Buffer.compare(Buffer.from(left?.id ?? ''), Buffer.from(right?.id ?? '')),
+  )
+  if (
+    repositories.length !== expectedRepositories.length ||
+    repositories.some(
+      (repository, index) =>
+        repository?.id !== expectedRepositories[index] || !Array.isArray(repository.files),
+    )
+  ) {
+    fail('source-projection-manifest')
+  }
+  return Object.freeze({
+    repositories: Object.freeze(repositories),
+  })
+}
+
+async function projectedSourceRecords(manifest, projectedWorkRoot) {
+  const { repositories } = packageProjectionManifest(manifest)
+  const workspace = await packageWorkspace(manifest, projectedWorkRoot, repositories)
+  const records = new Map()
+  const add = (prefix, files) => {
+    for (const file of files) {
+      if (!isPlainObject(file)) fail('source-projection-record')
+      const relativePath = normalizedRelativePath(file.path)
+      const path = prefix === '' ? relativePath : `${prefix}/${relativePath}`
+      if (records.has(path)) fail('source-projection-record')
+      manifestFileMode(file.mode)
+      if (
+        !Number.isSafeInteger(file.size) ||
+        file.size < 0 ||
+        !SHA256_PATTERN.test(file.sha256 ?? '')
+      ) {
+        fail('source-projection-record')
+      }
+      records.set(path, file)
+    }
+  }
+  for (const repository of repositories) add(repository.id, repository.files)
+  add('', [workspace.record])
+  return records
+}
+
+/** 构建前后按同一 manifest 复核实际参与构建的 generation 投影源码。 */
+export async function verifyProjectedPackageSourceFromManifest(options) {
+  exactOptions(options, ['allowDependencyTree', 'manifest', 'projectedWorkRoot'])
+  if (typeof options.allowDependencyTree !== 'boolean') fail('source-projection-options')
+  const projectedWorkRoot = absolutePath(options.projectedWorkRoot, 'source-projection-root')
+  const records = await projectedSourceRecords(options.manifest, projectedWorkRoot)
+  const expectedDirectories = new Set(['.'])
+  let expectedBytes = 0
+  for (const [path, file] of records) {
+    expectedBytes += file.size
+    if (!Number.isSafeInteger(expectedBytes) || expectedBytes > PROJECTED_SOURCE_MAX_BYTES) {
+      fail('source-projection-limit')
+    }
+    const components = path.split('/')
+    for (let index = 1; index < components.length; index += 1) {
+      expectedDirectories.add(components.slice(0, index).join('/'))
+    }
+  }
+  if (records.size > PROJECTED_SOURCE_MAX_ENTRIES) fail('source-projection-limit')
+
+  const dependencyRoot = 'hexclaw-desktop/node_modules'
+  const seen = new Set()
+  let visitedEntries = 0
+  let verifiedBytes = 0
+  const visit = async (pathname, relativePath) => {
+    visitedEntries += 1
+    if (visitedEntries > PROJECTED_SOURCE_MAX_ENTRIES) fail('source-projection-limit')
+    const metadata = await lstat(pathname, { bigint: true }).catch(() =>
+      fail('source-projection-drift'),
+    )
+    if (metadata.isSymbolicLink()) fail('source-projection-drift')
+    if (metadata.isDirectory()) {
+      if (relativePath === dependencyRoot && options.allowDependencyTree) {
+        if (
+          Number(metadata.mode & 0o022n) !== 0 ||
+          (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid()))
+        ) {
+          fail('source-projection-drift')
+        }
+        return
+      }
+      if (
+        Number(metadata.mode & 0o777n) !== PRIVATE_DIRECTORY_MODE ||
+        (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid()))
+      ) {
+        fail('source-projection-drift')
+      }
+      if (!expectedDirectories.has(relativePath)) fail('source-projection-drift')
+      const children = await readdir(pathname)
+      children.sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+      for (const child of children) {
+        await visit(
+          join(pathname, child),
+          relativePath === '.' ? child : `${relativePath}/${child}`,
+        )
+      }
+      return
+    }
+    const record = records.get(relativePath)
+    if (!record || !metadata.isFile() || metadata.nlink !== 1n) {
+      fail('source-projection-drift')
+    }
+    const expectedMode = manifestFileMode(record.mode)
+    if (
+      metadata.size !== BigInt(record.size) ||
+      Number(metadata.mode & 0o777n) !== expectedMode ||
+      (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid()))
+    ) {
+      fail('source-projection-drift')
+    }
+    const digest = await secureFileSHA256(pathname, record.size)
+    if (digest.size !== record.size || digest.sha256 !== record.sha256) {
+      fail('source-projection-drift')
+    }
+    seen.add(relativePath)
+    verifiedBytes += record.size
+  }
+
+  await visit(projectedWorkRoot, '.')
+  if (seen.size !== records.size || verifiedBytes !== expectedBytes) {
+    fail('source-projection-drift')
+  }
+  return Object.freeze({ verifiedBytes, verifiedFiles: seen.size })
 }
 
 async function withSecureRegularFile(pathname, maximumBytes, operation) {
@@ -525,9 +892,7 @@ async function secureFileSHA256(pathname, maximumBytes) {
     let offset = 0n
     while (offset < metadata.size) {
       const remaining = metadata.size - offset
-      const length = Number(
-        remaining > BigInt(buffer.length) ? BigInt(buffer.length) : remaining,
-      )
+      const length = Number(remaining > BigInt(buffer.length) ? BigInt(buffer.length) : remaining)
       const { bytesRead } = await handle.read(buffer, 0, length, Number(offset))
       if (bytesRead <= 0) fail('file-identity')
       digest.update(buffer.subarray(0, bytesRead))
@@ -636,21 +1001,71 @@ function sourceIdentityEnvironment(plan) {
     LC_ALL: 'C',
     PATH: trustedToolPath(plan),
     RUSTUP_HOME: join(plan.hostHome, '.rustup'),
-    TMPDIR: tmpdir(),
+    TMPDIR: plan.paths.privateTemp,
   })
+}
+
+export function classifySafePackageCommandError(stderr) {
+  const boundary =
+    /^ERROR: package-sensitive-boundary category=([a-z0-9]+(?::[a-z0-9-]+)*)(?: exit=-?[0-9]{1,3})?(?: signal=[A-Z0-9]{1,32})?\n$/u.exec(
+      stderr,
+    )
+  if (boundary !== null && Buffer.byteLength(boundary[1], 'utf8') <= 80) {
+    return `sensitive-boundary-${boundary[1].replaceAll(':', '-')}`
+  }
+  switch (stderr) {
+    case 'ERROR: Typst dependency fetch failed.\n':
+      return 'render-typst-dependency-fetch'
+    case 'ERROR: Typst source build failed.\n':
+      return 'render-typst-source-build'
+    case 'ERROR: Typst executable architecture verification failed.\n':
+      return 'render-typst-architecture'
+    case 'ERROR: Typst executable sensitive-data scan failed.\n':
+      return 'render-typst-sensitive-scan'
+    case 'ERROR: Typst executable version verification failed.\n':
+      return 'render-typst-version'
+    default:
+      return undefined
+  }
+}
+
+export function classifyPackageDependencyError(error) {
+  if (!(error instanceof PackageDependencyProvenanceError)) return undefined
+  const category = error.category
+  if (
+    typeof category !== 'string' ||
+    Buffer.byteLength(category, 'utf8') > 80 ||
+    !/^[a-z0-9]+(?::[a-z0-9-]+)*$/u.test(category)
+  ) {
+    return undefined
+  }
+  return category.replaceAll(':', '-')
+}
+
+function failPackageDependency(stage, error) {
+  const category = classifyPackageDependencyError(error)
+  fail(category === undefined ? stage : `${stage}-${category}`)
 }
 
 async function runPackageCommand(command, args, options) {
   try {
-    return await runBoundedProcess(command, args, {
-      acceptedExitCodes: options.acceptedExitCodes,
+    const acceptedExitCodes = options.acceptedExitCodes ?? [0]
+    const observedExitCodes = acceptedExitCodes.includes(1)
+      ? acceptedExitCodes
+      : [...acceptedExitCodes, 1]
+    const result = await runBoundedProcess(command, args, {
+      acceptedExitCodes: observedExitCodes,
       cwd: options.cwd,
       env: options.env,
       maxOutputBytes: options.maxOutputBytes ?? DEFAULT_COMMAND_OUTPUT_BYTES,
-      terminateConfirmMs: 5_000,
-      terminateGraceMs: 5_000,
       timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
     })
+    if (!acceptedExitCodes.includes(result.code)) {
+      fail(`command-${classifySafePackageCommandError(result.stderr) ?? 'exit'}`, {
+        exitCode: result.code,
+      })
+    }
+    return result
   } catch (error) {
     if (error instanceof BoundedProcessError) {
       fail(`command-${error.category}`, {
@@ -658,84 +1073,57 @@ async function runPackageCommand(command, args, options) {
         signal: error.signal,
       })
     }
+    if (error instanceof PackageLocalError) throw error
     fail('command-internal')
   }
 }
 
-async function resolveExecutableFromPath(name, pathValue) {
-  if (!/^[A-Za-z0-9._-]+$/u.test(name)) fail('toolchain')
-  for (const directory of pathValue.split(':')) {
-    if (!isAbsolute(directory)) continue
-    const candidate = join(directory, name)
-    try {
-      const canonical = await realpath(candidate)
-      const metadata = await lstat(canonical, { bigint: true })
-      if (!metadata.isFile() || Number(metadata.mode & 0o111n) === 0) continue
-      return Object.freeze({ canonical, invocation: candidate })
-    } catch {
-      // 当前固定目录中不存在该工具时继续检查下一项。
+function capturedBuildToolchains(value) {
+  if (!isPlainObject(value) || typeof value.snapshotRoot !== 'string') {
+    fail('toolchain-capture')
+  }
+  for (const name of ['cargo', 'git', 'go', 'node', 'pnpm', 'rustc']) {
+    const tool = value[name]
+    if (
+      !isPlainObject(tool) ||
+      typeof tool.canonical !== 'string' ||
+      !isAbsolute(tool.canonical) ||
+      typeof tool.invocation !== 'string' ||
+      !isAbsolute(tool.invocation) ||
+      !SHA256_PATTERN.test(tool.executableSha256 ?? '') ||
+      typeof tool.version !== 'string' ||
+      tool.version.length === 0
+    ) {
+      fail('toolchain-capture')
     }
   }
-  fail('toolchain')
+  if (typeof value.go.goroot !== 'string' || !isAbsolute(value.go.goroot)) {
+    fail('toolchain-capture')
+  }
+  return value
 }
 
-async function resolveRustExecutable(name, environment, plan) {
-  const selected = await resolveExecutableFromPath(name, environment.PATH)
-  const rustup = await resolveExecutableFromPath('rustup', environment.PATH).catch(() => undefined)
-  if (!rustup || selected.canonical !== rustup.canonical) return selected
-  const result = await runPackageCommand(rustup.canonical, ['which', name], {
-    cwd: plan.desktopRoot,
-    env: environment,
-    maxOutputBytes: 64 * 1024,
-    timeoutMs: 15_000,
-  })
-  const reported = result.stdout.trim()
-  if (!isAbsolute(reported) || reported.includes('\0') || result.stderr !== '') fail('toolchain')
-  const canonical = await realpath(reported).catch(() => fail('toolchain'))
-  const metadata = await lstat(canonical, { bigint: true }).catch(() => fail('toolchain'))
-  if (!metadata.isFile() || Number(metadata.mode & 0o111n) === 0) fail('toolchain')
-  return Object.freeze({ canonical, invocation: canonical })
-}
-
-async function requireToolDigest(tool, expectedSha256) {
-  if (!SHA256_PATTERN.test(expectedSha256 ?? '')) fail('toolchain-manifest')
-  const identity = await secureFileSHA256(tool.canonical, 1024 * 1024 * 1024)
-  if (identity.sha256 !== expectedSha256) fail('toolchain-digest')
-  return Object.freeze({ ...tool, executableSha256: identity.sha256 })
-}
-
-async function bindManifestToolchains(plan, manifest) {
-  const recorded = manifest?.toolchains
-  if (!isPlainObject(recorded)) fail('toolchain-manifest')
-  const environment = sourceIdentityEnvironment(plan)
-  const [go, pnpm, cargo, rustc] = await Promise.all([
-    resolveExecutableFromPath('go', environment.PATH),
-    resolveExecutableFromPath('pnpm', environment.PATH),
-    resolveRustExecutable('cargo', environment, plan),
-    resolveRustExecutable('rustc', environment, plan),
-  ])
-  const nodeCanonical = await realpath(process.execPath).catch(() => fail('toolchain'))
-  const node = Object.freeze({ canonical: nodeCanonical, invocation: nodeCanonical })
-  const gitCanonical = await realpath(FIXED_TOOLS.git).catch(() => fail('toolchain'))
-  const git = Object.freeze({ canonical: gitCanonical, invocation: gitCanonical })
-  const [boundGo, boundPnpm, boundCargo, boundRustc, boundNode, boundGit] = await Promise.all([
-    requireToolDigest(go, recorded.go?.executableSha256),
-    requireToolDigest(pnpm, recorded.pnpm?.executableSha256),
-    requireToolDigest(cargo, recorded.cargo?.executableSha256),
-    requireToolDigest(rustc, recorded.rustc?.executableSha256),
-    requireToolDigest(node, recorded.node?.executableSha256),
-    requireToolDigest(git, recorded.git?.executableSha256),
-  ])
-  const goroot = recorded.go?.env?.GOROOT
-  if (typeof goroot !== 'string' || !isAbsolute(goroot)) fail('toolchain-manifest')
-  return Object.freeze({
-    cargo: boundCargo,
-    git: boundGit,
-    go: Object.freeze({ ...boundGo, goroot: resolve(goroot) }),
-    node: boundNode,
-    pnpm: boundPnpm,
-    rustc: boundRustc,
-  })
+/** 只删除 source identity 在指定私有父目录中创建的工具链快照。 */
+async function cleanupCapturedToolchains(value, expectedParent) {
+  const toolchains = capturedBuildToolchains(value)
+  const snapshotRoot = absolutePath(toolchains.snapshotRoot, 'toolchain-cleanup')
+  const parent = absolutePath(expectedParent, 'toolchain-cleanup')
+  if (
+    dirname(snapshotRoot) !== parent ||
+    !basename(snapshotRoot).startsWith('.package-source-toolchains-')
+  ) {
+    fail('toolchain-cleanup')
+  }
+  await assertPrivateDirectory(snapshotRoot)
+  await rm(snapshotRoot, { force: false, recursive: true }).catch(() => fail('toolchain-cleanup'))
+  const remains = await lstat(snapshotRoot).then(
+    () => true,
+    (error) => {
+      if (error?.code === 'ENOENT') return false
+      fail('toolchain-cleanup')
+    },
+  )
+  if (remains) fail('toolchain-cleanup')
 }
 
 async function loadBoundSourceManifest(
@@ -743,10 +1131,7 @@ async function loadBoundSourceManifest(
   expectedSha256,
   manifestPath = plan.paths.generationSourceManifest,
 ) {
-  const bytes = await readSecureFileBytes(
-    manifestPath,
-    SOURCE_MANIFEST_MAX_BYTES,
-  )
+  const bytes = await readSecureFileBytes(manifestPath, SOURCE_MANIFEST_MAX_BYTES)
   if (createHash('sha256').update(bytes).digest('hex') !== expectedSha256) {
     fail('source-manifest-digest')
   }
@@ -758,7 +1143,7 @@ async function loadBoundSourceManifest(
   }
   if (
     !isPlainObject(manifest) ||
-    manifest.schema !== 'hexclaw.package-source-identity.v1' ||
+    manifest.schema !== 'hexclaw.package-source-identity.v2' ||
     manifest.target !== plan.target.triple
   ) {
     fail('source-manifest-contract')
@@ -766,35 +1151,25 @@ async function loadBoundSourceManifest(
   return manifest
 }
 
-async function removeCanonicalArtifacts(plan) {
-  for (const pathname of plan.canonicalArtifacts) {
-    await rm(pathname, { force: true, recursive: true }).catch(() => fail('canonical-cleanup'))
+async function moveBuiltAppIntoReleaseGeneration(plan) {
+  const sourceMetadata = await lstat(plan.paths.builtApp, { bigint: true }).catch(() =>
+    fail('release-app-source'),
+  )
+  if (!sourceMetadata.isDirectory() || sourceMetadata.isSymbolicLink()) {
+    fail('release-app-source')
   }
-  for (const pathname of plan.canonicalArtifacts) {
-    const exists = await lstat(pathname).then(
-      () => true,
-      (error) => {
-        if (error?.code === 'ENOENT') return false
-        fail('canonical-cleanup')
-      },
-    )
-    if (exists) fail('canonical-cleanup')
-  }
-}
-
-async function publishPath(source, destination) {
-  const sourceMetadata = await lstat(source, { bigint: true }).catch(() => fail('publish-source'))
-  if (sourceMetadata.isSymbolicLink()) fail('publish-source')
-  const destinationExists = await lstat(destination).then(
+  const destinationExists = await lstat(plan.paths.generationApp).then(
     () => true,
     (error) => {
       if (error?.code === 'ENOENT') return false
-      fail('publish-destination')
+      fail('release-app-destination')
     },
   )
-  if (destinationExists) fail('publish-destination')
-  await makePrivateDirectory(dirname(destination), { recursive: true })
-  await rename(source, destination).catch(() => fail('publish-rename'))
+  if (destinationExists) fail('release-app-destination')
+  await assertPrivateDirectory(plan.paths.generationReleaseRoot)
+  await rename(plan.paths.builtApp, plan.paths.generationApp).catch(() =>
+    fail('release-app-rename'),
+  )
 }
 
 async function scanRegularTree(root, limits = {}) {
@@ -841,8 +1216,79 @@ async function assertExactRegularTrees(left, right) {
   if (JSON.stringify(leftTree) !== JSON.stringify(rightTree)) fail('resource-identity')
 }
 
-function packageVerificationOptions(plan, result, canonical) {
-  const prefix = canonical ? 'canonical' : 'generation'
+async function inspectFrontendCacheDirectory(cacheRoot, expectedFiles, maxTotalBytes) {
+  const cacheMetadata = await lstat(cacheRoot, { bigint: true }).catch((error) => {
+    if (error?.code === 'ENOENT') return undefined
+    fail('frontend-typecheck-cache')
+  })
+  if (cacheMetadata === undefined) return false
+  if (
+    !cacheMetadata.isDirectory() ||
+    cacheMetadata.isSymbolicLink() ||
+    (Number(cacheMetadata.mode & 0o777n) & 0o022) !== 0 ||
+    (typeof process.getuid === 'function' && cacheMetadata.uid !== BigInt(process.getuid())) ||
+    (await realpath(cacheRoot).catch(() => fail('frontend-typecheck-cache'))) !== cacheRoot
+  ) {
+    fail('frontend-typecheck-cache')
+  }
+  const tree = await scanRegularTree(cacheRoot, {
+    maxEntries: expectedFiles.length + 1,
+    maxTotalBytes,
+  }).catch(() => fail('frontend-typecheck-cache'))
+  const files = tree.entries.slice(1)
+  if (
+    tree.entries[0]?.path !== '.' ||
+    tree.entries[0]?.type !== 'directory' ||
+    files.length !== expectedFiles.length ||
+    files.some(
+      (entry, index) =>
+        entry.type !== 'file' || entry.path !== expectedFiles[index] || (entry.mode & 0o022) !== 0,
+    )
+  ) {
+    fail('frontend-typecheck-cache')
+  }
+  return true
+}
+
+/** 删除前端构建在私有依赖树中生成的已知缓存，恢复依赖来源基线。 */
+export async function cleanupFrontendTypecheckCache(plan) {
+  if (!isPlainObject(plan) || !isPlainObject(plan.paths)) fail('frontend-typecheck-cache')
+  const generationRoot = absolutePath(plan.paths.generationRoot, 'frontend-typecheck-cache')
+  const nodeModules = absolutePath(plan.paths.frontendNodeModules, 'frontend-typecheck-cache')
+  const relativeNodeModules = relative(generationRoot, nodeModules)
+  if (
+    basename(nodeModules) !== 'node_modules' ||
+    relativeNodeModules === '' ||
+    relativeNodeModules === '..' ||
+    relativeNodeModules.startsWith(`..${sep}`) ||
+    isAbsolute(relativeNodeModules)
+  ) {
+    fail('frontend-typecheck-cache')
+  }
+  await assertPrivateDirectory(generationRoot)
+  const typecheckCacheRoot = join(nodeModules, '.tmp')
+  const viteCacheRoot = join(nodeModules, FRONTEND_VITE_CACHE_DIRECTORY)
+  const typecheckCacheExists = await inspectFrontendCacheDirectory(
+    typecheckCacheRoot,
+    FRONTEND_TYPECHECK_CACHE_FILES,
+    64 * 1024 * 1024,
+  )
+  const viteCacheExists = await inspectFrontendCacheDirectory(viteCacheRoot, [], 0)
+
+  if (typecheckCacheExists) {
+    for (const name of FRONTEND_TYPECHECK_CACHE_FILES) {
+      await unlink(join(typecheckCacheRoot, name)).catch(() => fail('frontend-typecheck-cache'))
+    }
+    await rmdir(typecheckCacheRoot).catch(() => fail('frontend-typecheck-cache'))
+  }
+  if (viteCacheExists) {
+    await rmdir(viteCacheRoot).catch(() => fail('frontend-typecheck-cache'))
+  }
+}
+
+function packageVerificationOptions(plan, result, location) {
+  if (!['generation', 'published'].includes(location)) fail('verification-location')
+  const prefix = location
   const appBundle = plan.paths[`${prefix}App`]
   return Object.freeze({
     distRoot: plan.paths[`${prefix}Dist`],
@@ -874,8 +1320,10 @@ async function writeBuildResult(plan, result) {
   await writePrivateFileExclusive(plan.paths.buildResult, canonicalJSON(record))
 }
 
-async function readBuildResult(plan) {
-  const bytes = await readSecureFileBytes(plan.paths.buildResult, RESULT_MAX_BYTES)
+async function readBuildResult(plan, location = 'generation') {
+  if (!['generation', 'published'].includes(location)) fail('build-result')
+  const pathname = location === 'generation' ? plan.paths.buildResult : plan.paths.publishedResult
+  const bytes = await readSecureFileBytes(pathname, RESULT_MAX_BYTES)
   let record
   try {
     record = JSON.parse(bytes.toString('utf8'))
@@ -917,7 +1365,10 @@ function tarString(field) {
 
 function tarOctal(field) {
   if (field.length === 0 || (field[0] & 0x80) !== 0) fail('ollama-archive')
-  const text = field.toString('ascii').replace(/[\0 ]+$/u, '').replace(/^ +/u, '')
+  const text = field
+    .toString('ascii')
+    .replace(/[\0 ]+$/u, '')
+    .replace(/^ +/u, '')
   if (!/^[0-7]+$/u.test(text)) fail('ollama-archive')
   const value = Number.parseInt(text, 8)
   if (!Number.isSafeInteger(value) || value < 0) fail('ollama-archive')
@@ -999,6 +1450,198 @@ class BoundedByteReader {
   }
 }
 
+function normalizedTarLinkTarget(name, linkName) {
+  if (
+    typeof linkName !== 'string' ||
+    linkName.length === 0 ||
+    linkName.includes('\0') ||
+    linkName.includes('\\') ||
+    linkName.startsWith('/') ||
+    /^[A-Za-z]:/u.test(linkName) ||
+    /[\u0000-\u001f\u007f]/u.test(linkName)
+  ) {
+    fail('ollama-archive')
+  }
+  const components = linkName.split('/')
+  if (components.some((component) => component === '' || component === '.' || component === '..')) {
+    fail('ollama-archive')
+  }
+  const separatorIndex = name.lastIndexOf('/')
+  const parent = separatorIndex < 0 ? '' : name.slice(0, separatorIndex)
+  return normalizedTarMember(parent === '' ? linkName : parent + '/' + linkName)
+}
+
+function ollamaMetallibAppleDoubleTarget(name) {
+  const match = /^(mlx_metal_v[34])\/\._(mlx\.metallib)$/u.exec(name)
+  return match ? `${match[1]}/${match[2]}` : undefined
+}
+
+function ollamaMetallibPaxTarget(name) {
+  const match = /^(mlx_metal_v[34])\/PaxHeader\/(mlx\.metallib)$/u.exec(name)
+  return match ? `${match[1]}/${match[2]}` : undefined
+}
+
+function normalizedOllamaAppleDoubleContracts(value) {
+  if (value === undefined) return new Map()
+  if (!isPlainObject(value)) fail('ollama-archive')
+  const entries = Object.entries(value)
+  if (entries.length === 0 || entries.length > 2) fail('ollama-archive')
+  const contracts = new Map()
+  for (const [name, contract] of entries) {
+    if (
+      !ollamaMetallibAppleDoubleTarget(name) ||
+      !isPlainObject(contract) ||
+      Object.keys(contract).sort().join(',') !== 'bytes,sha256' ||
+      !Number.isSafeInteger(contract.bytes) ||
+      contract.bytes <= 0 ||
+      contract.bytes > OLLAMA_APPLEDOUBLE_MAX_BYTES ||
+      !SHA256_PATTERN.test(contract.sha256 ?? '')
+    ) {
+      fail('ollama-archive')
+    }
+    contracts.set(
+      name,
+      Object.freeze({
+        bytes: contract.bytes,
+        sha256: contract.sha256,
+        target: ollamaMetallibAppleDoubleTarget(name),
+      }),
+    )
+  }
+  return contracts
+}
+
+function validateOllamaAppleDouble(payload, contract) {
+  if (
+    !contract ||
+    payload.length !== contract.bytes ||
+    createHash('sha256').update(payload).digest('hex') !== contract.sha256
+  ) {
+    fail('ollama-archive')
+  }
+}
+
+function decodeCanonicalPaxBase64(value) {
+  const text = value.toString('ascii')
+  if (
+    text.length === 0 ||
+    !Buffer.from(text, 'ascii').equals(value) ||
+    !/^[A-Za-z0-9+/]+$/u.test(text) ||
+    text.length % 4 === 1
+  ) {
+    fail('ollama-archive')
+  }
+  const padding = '='.repeat((4 - (text.length % 4)) % 4)
+  const decoded = Buffer.from(text + padding, 'base64')
+  if (decoded.length === 0 || decoded.toString('base64').replace(/=+$/u, '') !== text) {
+    fail('ollama-archive')
+  }
+  return decoded
+}
+
+/** 严格验证固定归档的本地 PAX 元数据；签名属性仅作来源一致性校验，不进入最终无扩展属性的包。 */
+function validateOllamaMetallibPax(payload) {
+  if (payload.length === 0 || payload.length > OLLAMA_PAX_MAX_BYTES) fail('ollama-archive')
+  const records = new Map()
+  let offset = 0
+  while (offset < payload.length) {
+    const separator = payload.indexOf(0x20, offset)
+    if (separator <= offset || separator - offset > 5) fail('ollama-archive')
+    const lengthBytes = payload.subarray(offset, separator)
+    const lengthText = lengthBytes.toString('ascii')
+    if (
+      !Buffer.from(lengthText, 'ascii').equals(lengthBytes) ||
+      !/^[1-9][0-9]*$/u.test(lengthText)
+    ) {
+      fail('ollama-archive')
+    }
+    const length = Number.parseInt(lengthText, 10)
+    const end = offset + length
+    if (!Number.isSafeInteger(length) || end > payload.length || payload[end - 1] !== 0x0a) {
+      fail('ollama-archive')
+    }
+    const record = payload.subarray(separator + 1, end - 1)
+    const equals = record.indexOf(0x3d)
+    if (equals <= 0) fail('ollama-archive')
+    const keyBytes = record.subarray(0, equals)
+    const key = keyBytes.toString('ascii')
+    if (!Buffer.from(key, 'ascii').equals(keyBytes) || records.has(key)) fail('ollama-archive')
+    records.set(key, Buffer.from(record.subarray(equals + 1)))
+    offset = end
+  }
+
+  const expectedKeys = new Set(['mtime'])
+  for (const name of OLLAMA_PAX_XATTR_NAMES) {
+    expectedKeys.add(`LIBARCHIVE.xattr.com.apple.cs.${name}`)
+    expectedKeys.add(`SCHILY.xattr.com.apple.cs.${name}`)
+  }
+  if (
+    records.size !== expectedKeys.size ||
+    [...records.keys()].some((key) => !expectedKeys.has(key))
+  ) {
+    fail('ollama-archive')
+  }
+  const mtimeBytes = records.get('mtime') ?? Buffer.alloc(0)
+  const mtime = mtimeBytes.toString('ascii')
+  if (
+    !Buffer.from(mtime, 'ascii').equals(mtimeBytes) ||
+    !/^[0-9]{1,20}(?:\.[0-9]{1,20})?$/u.test(mtime)
+  ) {
+    fail('ollama-archive')
+  }
+  for (const name of OLLAMA_PAX_XATTR_NAMES) {
+    const decoded = decodeCanonicalPaxBase64(
+      records.get(`LIBARCHIVE.xattr.com.apple.cs.${name}`) ?? Buffer.alloc(0),
+    )
+    const raw = records.get(`SCHILY.xattr.com.apple.cs.${name}`) ?? Buffer.alloc(0)
+    if (raw.length === 0 || raw.length > OLLAMA_PAX_MAX_BYTES || !decoded.equals(raw)) {
+      fail('ollama-archive')
+    }
+  }
+}
+
+async function materializeTarRegularFile(sourcePath, outputPath, expectedSize, mode) {
+  await makePrivateDirectory(dirname(outputPath), { recursive: true })
+  let output
+  try {
+    await withSecureRegularFile(sourcePath, expectedSize, async (source, sourceMetadata) => {
+      if (sourceMetadata.size !== BigInt(expectedSize)) fail('ollama-archive')
+      output = await open(
+        outputPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        mode,
+      ).catch(() => fail('ollama-archive'))
+      const buffer = Buffer.allocUnsafe(Math.min(FILE_HASH_CHUNK_BYTES, expectedSize))
+      let offset = 0
+      while (offset < expectedSize) {
+        const length = Math.min(buffer.length, expectedSize - offset)
+        const { bytesRead } = await source.read(buffer, 0, length, offset)
+        if (bytesRead <= 0) fail('ollama-archive')
+        let written = 0
+        while (written < bytesRead) {
+          const result = await output.write(buffer, written, bytesRead - written, offset + written)
+          if (result.bytesWritten <= 0) fail('ollama-archive')
+          written += result.bytesWritten
+        }
+        offset += bytesRead
+      }
+      await output.chmod(mode)
+      await output.sync()
+      const metadata = await output.stat({ bigint: true })
+      if (
+        !metadata.isFile() ||
+        metadata.nlink !== 1n ||
+        metadata.size !== BigInt(expectedSize) ||
+        Number(metadata.mode & 0o777n) !== mode
+      ) {
+        fail('ollama-archive')
+      }
+    })
+  } finally {
+    await output?.close().catch(() => undefined)
+  }
+}
+
 async function extractTarRegularFile(reader, outputPath, size, mode) {
   await makePrivateDirectory(dirname(outputPath), { recursive: true })
   let output
@@ -1030,9 +1673,10 @@ async function extractTarRegularFile(reader, outputPath, size, mode) {
   }
 }
 
-/** 解压已固定摘要的 Ollama tar.gz；任何链接、特殊文件或路径逃逸都会在发布前拒绝。 */
+/** 解压已固定摘要的 Ollama tar.gz；受限相对软链接链物化为普通文件，路径逃逸、前向/循环链接和特殊文件一律拒绝。 */
 export async function extractPinnedTarGzipArchive(options) {
   exactOptions(options, [
+    'appleDoubleContracts',
     'archivePath',
     'destination',
     'expectedArchiveBytes',
@@ -1045,6 +1689,7 @@ export async function extractPinnedTarGzipArchive(options) {
   ])
   const archivePath = absolutePath(options.archivePath, 'ollama-archive')
   const destination = absolutePath(options.destination, 'ollama-archive')
+  const appleDoubleContracts = normalizedOllamaAppleDoubleContracts(options.appleDoubleContracts)
   const integers = [
     options.expectedArchiveBytes,
     options.expectedBinaryBytes,
@@ -1070,9 +1715,12 @@ export async function extractPinnedTarGzipArchive(options) {
     fail('ollama-archive')
   }
 
+  let destinationOwnedByInvocation = false
   try {
     await makePrivateDirectory(dirname(destination), { recursive: true })
-    await makePrivateDirectory(destination)
+    await mkdir(destination, { mode: PRIVATE_DIRECTORY_MODE }).catch(() => fail('ollama-archive'))
+    destinationOwnedByInvocation = true
+    await assertPrivateDirectory(destination).catch(() => fail('ollama-archive'))
     const result = await withSecureRegularFile(
       archivePath,
       options.expectedArchiveBytes,
@@ -1088,12 +1736,26 @@ export async function extractPinnedTarGzipArchive(options) {
           options.maxExpandedBytes + options.maxEntries * 1024 + 1024,
         )
         const seen = new Set()
+        const regularFiles = new Map()
+        const completedMetadataTargets = new Set()
         let entries = 0
         let files = 0
+        let pendingAppleDoubleTarget
+        let pendingPaxTarget
         let totalBytes = 0
         while (true) {
           const header = await reader.readExactly(512)
           if (header.every((value) => value === 0)) {
+            if (
+              pendingAppleDoubleTarget ||
+              pendingPaxTarget ||
+              completedMetadataTargets.size !== appleDoubleContracts.size ||
+              [...appleDoubleContracts.values()].some(
+                (contract) => !completedMetadataTargets.has(contract.target),
+              )
+            ) {
+              fail('ollama-archive')
+            }
             const second = await reader.readExactly(512)
             if (second.some((value) => value !== 0)) fail('ollama-archive')
             await reader.drainZeros()
@@ -1114,10 +1776,59 @@ export async function extractPinnedTarGzipArchive(options) {
           const type = String.fromCharCode(header[156] || 48)
           const size = tarOctal(header.subarray(124, 136))
           const archivedMode = tarOctal(header.subarray(100, 108))
-          if (type !== '0' && type !== '5') fail('ollama-archive')
-          if (type === '5' && size !== 0) fail('ollama-archive')
+          if (type !== '0' && type !== '2' && type !== '5' && type !== 'x') {
+            fail('ollama-archive')
+          }
+          if ((type === '2' || type === '5') && size !== 0) fail('ollama-archive')
           if (size > options.maxFileBytes) fail('ollama-archive')
-          totalBytes += size
+          const components = name.split('/')
+          const reservesAppleDouble = components.some((component) => component.startsWith('._'))
+          const reservesPaxHeader = components.some(
+            (component) => component.toLowerCase() === 'paxheader',
+          )
+          const appleDoubleTarget = ollamaMetallibAppleDoubleTarget(name)
+          const paxTarget = ollamaMetallibPaxTarget(name)
+          const linkName = tarString(header.subarray(157, 257))
+          if (reservesAppleDouble && (type !== '0' || !appleDoubleTarget || linkName !== '')) {
+            fail('ollama-archive')
+          }
+          if (reservesPaxHeader && (type !== 'x' || !paxTarget || linkName !== '')) {
+            fail('ollama-archive')
+          }
+          const appleDoubleContract = appleDoubleContracts.get(name)
+          if (
+            appleDoubleTarget &&
+            (!appleDoubleContract ||
+              size !== appleDoubleContract.bytes ||
+              size <= 0 ||
+              size > OLLAMA_APPLEDOUBLE_MAX_BYTES)
+          ) {
+            fail('ollama-archive')
+          }
+          if (type === 'x' && (size <= 0 || size > OLLAMA_PAX_MAX_BYTES)) {
+            fail('ollama-archive')
+          }
+          if (pendingPaxTarget && (type !== '0' || name !== pendingPaxTarget)) {
+            fail('ollama-archive')
+          }
+          if (
+            pendingAppleDoubleTarget &&
+            (type !== 'x' || paxTarget !== pendingAppleDoubleTarget)
+          ) {
+            fail('ollama-archive')
+          }
+          if (type === 'x' && (!reservesPaxHeader || !pendingAppleDoubleTarget || !paxTarget)) {
+            fail('ollama-archive')
+          }
+          let linkTarget
+          if (type === '2') {
+            const targetName = normalizedTarLinkTarget(name, linkName)
+            linkTarget = regularFiles.get(targetName)
+            if (!linkTarget) fail('ollama-archive')
+          }
+          const expandedSize = linkTarget?.size ?? size
+          if (expandedSize > options.maxFileBytes) fail('ollama-archive')
+          totalBytes += expandedSize
           if (!Number.isSafeInteger(totalBytes) || totalBytes > options.maxExpandedBytes) {
             fail('ollama-archive')
           }
@@ -1128,10 +1839,36 @@ export async function extractPinnedTarGzipArchive(options) {
           }
           if (type === '5') {
             await makePrivateDirectory(outputPath, { recursive: true })
+          } else if (type === '2') {
+            await materializeTarRegularFile(
+              linkTarget.outputPath,
+              outputPath,
+              linkTarget.size,
+              linkTarget.mode,
+            )
+            regularFiles.set(
+              name,
+              Object.freeze({ mode: linkTarget.mode, outputPath, size: linkTarget.size }),
+            )
+            files += 1
+          } else if (appleDoubleTarget) {
+            const payload = await reader.readExactly(size)
+            validateOllamaAppleDouble(payload, appleDoubleContract)
+            pendingAppleDoubleTarget = appleDoubleTarget
+          } else if (type === 'x') {
+            const payload = await reader.readExactly(size)
+            validateOllamaMetallibPax(payload)
+            pendingAppleDoubleTarget = undefined
+            pendingPaxTarget = paxTarget
           } else {
             const outputMode = (archivedMode & 0o111) === 0 ? PRIVATE_FILE_MODE : 0o700
             await extractTarRegularFile(reader, outputPath, size, outputMode)
+            regularFiles.set(name, Object.freeze({ mode: outputMode, outputPath, size }))
             files += 1
+            if (pendingPaxTarget === name) {
+              completedMetadataTargets.add(name)
+              pendingPaxTarget = undefined
+            }
           }
           const padding = (512 - (size % 512)) % 512
           if (padding > 0) {
@@ -1155,7 +1892,9 @@ export async function extractPinnedTarGzipArchive(options) {
     }
     return result
   } catch (error) {
-    await rm(destination, { force: true, recursive: true }).catch(() => undefined)
+    if (destinationOwnedByInvocation) {
+      await rm(destination, { force: true, recursive: true }).catch(() => undefined)
+    }
     if (error instanceof PackageLocalError && error.category === 'ollama-archive') throw error
     fail('ollama-archive')
   }
@@ -1199,53 +1938,58 @@ export function createPackageLocalPlan(options) {
   const target = TARGETS[options.targetTriple]
   if (!target) fail('invalid-target')
 
-  const canonicalTarget = join(desktopRoot, 'src-tauri', 'target')
-  const canonicalDmgDirectory = join(canonicalTarget, 'release', 'bundle', 'dmg')
-  const generationRoot = join(
-    canonicalDmgDirectory,
-    PACKAGE_GENERATION_PLAN_PARENT_BASENAME,
-    options.generationId,
-  )
-  const packageControlDirectory = join(
-    canonicalDmgDirectory,
-    PACKAGE_GENERATION_CONTROL_BASENAME,
-  )
+  const tauriTargetRoot = join(desktopRoot, 'src-tauri', 'target')
+  const releaseRoot = join(tauriTargetRoot, 'release', 'bundle', 'dmg')
+  const publication = createPackagePublicationLayout({
+    generationId: options.generationId,
+    releaseRoot,
+  })
+  const generationRoot = publication.stagingGenerationRoot
+  if (basename(publication.stagingRoot) !== PACKAGE_GENERATION_PLAN_PARENT_BASENAME) {
+    fail('publication-layout')
+  }
+  const packageControlDirectory = join(releaseRoot, PACKAGE_GENERATION_CONTROL_BASENAME)
   const generationBinaries = join(generationRoot, 'binaries')
   const generationOllamaRoot = join(generationRoot, 'ollama')
   const generationCargoTarget = join(generationRoot, 'cargo-target')
   const projectedWorkRoot = join(generationRoot, 'source')
   const projectedDesktopRoot = join(projectedWorkRoot, 'hexclaw-desktop')
-  const packageStem = `HexClaw_${options.version}_${target.dmgArchitecture}`
+  const builtApp = join(
+    generationCargoTarget,
+    target.triple,
+    'release',
+    'bundle',
+    'macos',
+    'HexClaw.app',
+  )
   const paths = Object.freeze({
-    buildResult: join(generationRoot, 'package-local-result.json'),
-    canonicalApp: join(canonicalTarget, 'release', 'bundle', 'macos', 'HexClaw.app'),
-    canonicalDist: join(desktopRoot, 'dist'),
-    canonicalDmg: join(canonicalDmgDirectory, `${packageStem}.dmg`),
-    canonicalDmgDirectory,
-    canonicalManifest: join(canonicalDmgDirectory, `${packageStem}.release-ui-dist-manifest.json`),
-    canonicalReceipt: join(canonicalDmgDirectory, `${packageStem}.release-ui-attestation.json`),
-    canonicalSourceManifest: join(canonicalDmgDirectory, 'package-source-manifest.json'),
+    buildResult: publication.resultPath,
+    builtApp,
+    currentPointer: publication.currentPointerPath,
     frontendNodeModules: join(projectedDesktopRoot, 'node_modules'),
-    generationApp: join(
-      generationCargoTarget,
-      target.triple,
-      'release',
-      'bundle',
-      'macos',
-      'HexClaw.app',
-    ),
+    generationApp: publication.appBundle,
     generationBinaries,
     generationCargoTarget,
-    generationDist: join(generationRoot, 'dist'),
-    generationDmg: join(generationRoot, `${packageStem}.dmg`),
+    generationDist: publication.distRoot,
+    generationDmg: publication.packagePath,
     generationDmgRoot: join(generationRoot, 'dmg-root'),
-    generationManifest: join(generationRoot, `${packageStem}.release-ui-dist-manifest.json`),
+    generationManifest: publication.manifestPath,
     generationOllamaArchive: join(generationRoot, 'downloads', 'ollama-darwin.tgz'),
     generationOllamaRoot,
-    generationReceipt: join(generationRoot, `${packageStem}.release-ui-attestation.json`),
+    generationReceipt: publication.receiptPath,
+    generationReleaseRoot: publication.candidateRoot,
     generationRoot,
-    generationSourceManifest: join(generationRoot, 'package-source-manifest.json'),
+    generationSourceManifest: publication.sourceManifestPath,
     lock: join(packageControlDirectory, PACKAGE_GENERATION_LOCK_BASENAME),
+    publishedApp: publication.published.appBundle,
+    publishedDist: publication.published.distRoot,
+    publishedDmg: publication.published.packagePath,
+    publishedGenerationRoot: publication.publishedGenerationRoot,
+    publishedManifest: publication.published.manifestPath,
+    publishedReceipt: publication.published.receiptPath,
+    publishedResult: publication.published.resultPath,
+    publishedRoot: publication.publishedRoot,
+    publishedSourceManifest: publication.published.sourceManifestPath,
     privateCargoHome: join(generationRoot, 'cargo-home'),
     privateCargoTarget: generationCargoTarget,
     privateHome: join(generationRoot, 'home'),
@@ -1256,24 +2000,17 @@ export function createPackageLocalPlan(options) {
     ),
     projectedGoWork: join(projectedWorkRoot, 'go.work'),
     projectedWorkRoot,
+    releaseRoot,
     tauriOverlay: join(generationRoot, 'tauri.package-local.generated.json'),
     tombstone: join(packageControlDirectory, PACKAGE_GENERATION_TOMBSTONE_BASENAME),
   })
-  const canonicalArtifacts = Object.freeze([
-    paths.canonicalDist,
-    paths.canonicalApp,
-    paths.canonicalDmg,
-    paths.canonicalManifest,
-    paths.canonicalSourceManifest,
-    paths.canonicalReceipt,
-  ])
   return Object.freeze({
-    canonicalArtifacts,
     desktopRoot,
     generationId: options.generationId,
     hostHome,
     notBeforeEpochSeconds,
     paths,
+    publication,
     target,
     version: options.version,
     workRoot: resolve(desktopRoot, '..'),
@@ -1301,12 +2038,7 @@ export function createPackageLocalLockInvocation(plan, options) {
   const nodeExecutable = absolutePath(options.nodeExecutable, 'invalid-node')
   const argumentsForPlan = heldCommandArguments(plan)
   return Object.freeze({
-    command: Object.freeze([
-      nodeExecutable,
-      modulePath,
-      'build-held',
-      ...argumentsForPlan,
-    ]),
+    command: Object.freeze([nodeExecutable, modulePath, 'build-held', ...argumentsForPlan]),
     cwd: plan.desktopRoot,
     environment: sourceIdentityEnvironment(plan),
     finalVerificationCommand: Object.freeze([
@@ -1325,18 +2057,11 @@ export function createPackageLocalLockInvocation(plan, options) {
 }
 
 async function ensurePackageControlDirectory(plan) {
-  await mkdir(plan.paths.canonicalDmgDirectory, {
+  await mkdir(plan.paths.releaseRoot, {
     mode: PRIVATE_DIRECTORY_MODE,
     recursive: true,
   }).catch(() => fail('control-directory'))
-  const canonical = await realpath(plan.paths.canonicalDmgDirectory).catch(() =>
-    fail('control-directory'),
-  )
-  if (canonical !== plan.paths.canonicalDmgDirectory) fail('control-directory')
-  await chmod(plan.paths.canonicalDmgDirectory, PRIVATE_DIRECTORY_MODE).catch(() =>
-    fail('control-directory'),
-  )
-  await assertPrivateDirectory(plan.paths.canonicalDmgDirectory)
+  await assertTrustedOwnedDirectory(plan.paths.releaseRoot).catch(() => fail('control-directory'))
 }
 
 /** 外层只负责准备控制目录并委托 generation lock，绝不直接构建或发布。 */
@@ -1356,40 +2081,47 @@ export async function runPackageLocalBuild(plan, adapters = {}) {
 /** 生成仅供本轮 Tauri 构建使用的 merge-patch overlay。 */
 export function createTauriPackageOverlay(plan) {
   if (!isPlainObject(plan) || !isPlainObject(plan.paths)) fail('invalid-plan')
+  const tauriRoot = join(plan.paths.projectedDesktopRoot, 'src-tauri')
+  const tauriPath = (pathname) => {
+    const value = relative(tauriRoot, pathname)
+    if (value === '' || isAbsolute(value) || value.includes('\0')) fail('invalid-plan')
+    return value.split(sep).join('/')
+  }
   return Object.freeze({
     build: Object.freeze({
       beforeBuildCommand: '',
-      frontendDist: plan.paths.generationDist,
+      frontendDist: tauriPath(plan.paths.generationDist),
     }),
     bundle: Object.freeze({
       createUpdaterArtifacts: false,
       externalBin: Object.freeze([
-        join(plan.paths.generationBinaries, 'hexclaw'),
-        join(plan.paths.generationBinaries, 'pandoc'),
-        join(plan.paths.generationBinaries, 'typst'),
+        tauriPath(join(plan.paths.generationBinaries, 'hexclaw')),
+        tauriPath(join(plan.paths.generationBinaries, 'pandoc')),
+        tauriPath(join(plan.paths.generationBinaries, 'typst')),
       ]),
       resources: Object.freeze({
         'binaries/ollama-bundle': null,
         'render-assets/*': 'assets/render/',
-        [plan.paths.generationOllamaRoot]: 'ollama',
+        [tauriPath(plan.paths.generationOllamaRoot)]: 'ollama',
       }),
     }),
   })
 }
 
-/** 唯一构建状态机；失败时统一撤下全部 canonical 制品。 */
+/** 唯一构建状态机只生成私有候选 generation，不触碰 current pointer。 */
 export async function runPackageBuildPipeline(plan, suppliedOperations) {
-  if (!isPlainObject(plan) || !Array.isArray(plan.canonicalArtifacts)) fail('invalid-plan')
+  if (!isPlainObject(plan) || !isPlainObject(plan.publication)) fail('invalid-plan')
   const operations = requireOperations(suppliedOperations)
+  let toolchainsCleaned = false
   let context = Object.freeze({
-    canonicalArtifacts: plan.canonicalArtifacts,
     generationId: plan.generationId,
     plan,
     targetTriple: plan.target.triple,
   })
   try {
-    await operations.invalidateCanonical(context)
     const sourceManifest = await operations.createSourceManifest(context)
+    const toolchains = capturedBuildToolchains(sourceManifest?.toolchains)
+    context = Object.freeze({ ...context, toolchains })
     if (!/^[a-f0-9]{64}$/u.test(sourceManifest?.sha256 ?? '')) {
       fail('source-manifest-result')
     }
@@ -1397,9 +2129,8 @@ export async function runPackageBuildPipeline(plan, suppliedOperations) {
       ...context,
       sourceManifest: sourceManifest.manifest,
       sourceManifestSHA256: sourceManifest.sha256,
+      toolchains,
     })
-    const toolchains = await operations.resolveToolchains(context)
-    context = Object.freeze({ ...context, toolchains })
     await operations.projectDesktopSource(context)
     const dependencies = await operations.prepareFrontendDependencies(context)
     if (!isPlainObject(dependencies)) fail('dependency-provenance-result')
@@ -1415,6 +2146,7 @@ export async function runPackageBuildPipeline(plan, suppliedOperations) {
     await operations.prepareCargoDependencies(context)
     await operations.buildTauriApp(context)
     await operations.verifyAppResources(context)
+    await operations.stageReleaseApp(context)
     await operations.verifySourceManifest(context)
     await operations.sanitizeAndVerify(context)
     await operations.createDmg(context)
@@ -1423,14 +2155,10 @@ export async function runPackageBuildPipeline(plan, suppliedOperations) {
       fail('attestation-result')
     }
     context = Object.freeze({ ...context, receiptSHA256: attestation.receiptSHA256 })
-    await operations.verifyStagedPackage(context)
-    await operations.publishDist(context)
-    await operations.publishApp(context)
-    await operations.publishDmg(context)
-    await operations.publishManifest(context)
-    await operations.publishSourceManifest(context)
+    await operations.cleanupToolchains(context).catch(() => fail('toolchain-cleanup'))
+    toolchainsCleaned = true
     await operations.writeBuildResult(context)
-    await operations.publishReceipt(context)
+    await operations.verifyStagedPackage(context)
     return Object.freeze({
       generationId: plan.generationId,
       receiptSHA256: context.receiptSHA256,
@@ -1438,16 +2166,17 @@ export async function runPackageBuildPipeline(plan, suppliedOperations) {
       targetTriple: plan.target.triple,
     })
   } catch (error) {
-    try {
-      await operations.cleanupCanonical(
-        Object.freeze({
-          ...context,
-          canonicalArtifacts: plan.canonicalArtifacts,
-        }),
-      )
-    } catch {
-      fail('canonical-cleanup')
+    let toolchainCleanupError
+    if (!toolchainsCleaned && context.toolchains !== undefined) {
+      try {
+        await operations.cleanupToolchains(context)
+        toolchainsCleaned = true
+      } catch {
+        toolchainCleanupError = new PackageLocalError('toolchain-cleanup')
+      }
     }
+    await operations.cleanupStaging(context).catch(() => fail('staging-cleanup'))
+    if (toolchainCleanupError) throw toolchainCleanupError
     throw error
   }
 }
@@ -1456,14 +2185,34 @@ async function prepareGenerationRoot(plan) {
   const generationsRoot = dirname(plan.paths.generationRoot)
   await makePrivateDirectory(generationsRoot, { recursive: true })
   const existing = await lstat(plan.paths.generationRoot).then(
-    () => true,
+    (metadata) => metadata,
     (error) => {
-      if (error?.code === 'ENOENT') return false
+      if (error?.code === 'ENOENT') return undefined
       fail('generation-state')
     },
   )
-  if (existing) fail('generation-exists')
-  await makePrivateDirectory(plan.paths.generationRoot)
+  if (existing === undefined) {
+    await makePrivateDirectory(plan.paths.generationRoot)
+  } else {
+    await assertPrivateDirectory(plan.paths.generationRoot)
+    const entries = await readdir(plan.paths.generationRoot).catch(() => fail('generation-state'))
+    const allowedCapability = '.package-local-build-capability-consumed.json'
+    if (entries.some((name) => name !== allowedCapability)) fail('generation-exists')
+    if (entries.includes(allowedCapability)) {
+      const metadata = await lstat(join(plan.paths.generationRoot, allowedCapability), {
+        bigint: true,
+      }).catch(() => fail('generation-state'))
+      if (
+        !metadata.isFile() ||
+        metadata.isSymbolicLink() ||
+        metadata.nlink !== 1n ||
+        Number(metadata.mode & 0o777n) !== PRIVATE_FILE_MODE ||
+        (typeof process.getuid === 'function' && metadata.uid !== BigInt(process.getuid()))
+      ) {
+        fail('generation-state')
+      }
+    }
+  }
   await Promise.all([
     makePrivateDirectory(plan.paths.privateHome),
     makePrivateDirectory(plan.paths.privateTemp),
@@ -1474,6 +2223,10 @@ async function prepareGenerationRoot(plan) {
 /** lockf 持锁后创建唯一 generation，并进入唯一构建状态机。 */
 export async function runHeldPackageBuild(plan, operations = productionOperations()) {
   if (!isPlainObject(plan) || !isPlainObject(plan.paths)) fail('invalid-plan')
+  await recoverPackagePublication({
+    activeGenerationId: plan.generationId,
+    releaseRoot: plan.paths.releaseRoot,
+  }).catch(() => fail('publication-recovery'))
   await prepareGenerationRoot(plan)
   return runPackageBuildPipeline(plan, operations)
 }
@@ -1481,10 +2234,13 @@ export async function runHeldPackageBuild(plan, operations = productionOperation
 function requireFinalVerificationAdapters(adapters) {
   const names = [
     'readBuildResult',
-    'verifyCanonicalSource',
-    'verifyDependencies',
-    'verifyCanonicalResources',
-    'verifyCanonicalPackage',
+    'verifyCandidateSource',
+    'verifyCandidatePackage',
+    'publishGeneration',
+    'verifyPublishedSource',
+    'verifyPublishedPackage',
+    'commitCurrent',
+    'cleanupStaging',
   ]
   exactOptions(adapters, names)
   if (names.some((name) => typeof adapters[name] !== 'function')) {
@@ -1493,7 +2249,7 @@ function requireFinalVerificationAdapters(adapters) {
   return adapters
 }
 
-/** receipt 发布后仍在同一生命周期锁内完成 canonical 路径最终验证。 */
+/** final capability 内完成候选验证、目录原子发布及 current pointer 提交。 */
 export async function runHeldFinalVerification(
   plan,
   suppliedAdapters = productionFinalVerificationAdapters(),
@@ -1511,10 +2267,12 @@ export async function runHeldFinalVerification(
   }
   let context = Object.freeze({ plan, result })
   for (const name of [
-    'verifyCanonicalSource',
-    'verifyDependencies',
-    'verifyCanonicalResources',
-    'verifyCanonicalPackage',
+    'verifyCandidateSource',
+    'verifyCandidatePackage',
+    'publishGeneration',
+    'verifyPublishedSource',
+    'verifyPublishedPackage',
+    'commitCurrent',
   ]) {
     const extension = await adapters[name](context)
     if (extension !== undefined) {
@@ -1522,17 +2280,46 @@ export async function runHeldFinalVerification(
       context = Object.freeze({ ...context, ...extension })
     }
   }
+  await adapters.cleanupStaging(context).catch(() => undefined)
   return result
+}
+
+/** current 提交前失败只回收未提交 generation，既有 current 永不受影响。 */
+export async function runHeldBuildFinalVerification(plan, options = {}) {
+  exactOptions(options, ['recoverPublication', 'verificationAdapters'])
+  const recoverPublicationAdapter =
+    options.recoverPublication ??
+    (async (selectedPlan) =>
+      recoverPackagePublication({ releaseRoot: selectedPlan.paths.releaseRoot }))
+  if (typeof recoverPublicationAdapter !== 'function') fail('publication-recovery')
+  try {
+    return await runHeldFinalVerification(
+      plan,
+      options.verificationAdapters ?? productionFinalVerificationAdapters(),
+    )
+  } catch (error) {
+    await recoverPublicationAdapter(plan).catch(() => fail('publication-recovery'))
+    throw error
+  }
 }
 
 /** 生成只读离线 Go 构建环境，并固定本机 macOS 目标。 */
 export function createGoBuildEnvironment(plan, dependencies) {
   const environment = dependencies?.go?.environment
+  if (!isPlainObject(plan) || !isPlainObject(plan.paths) || !isPlainObject(environment)) {
+    fail('go-build-environment')
+  }
+  const workspace = dependencies?.go?.workspace
+  const workspaceRelative =
+    typeof workspace === 'string' && isAbsolute(workspace)
+      ? relative(plan.paths.generationRoot, workspace)
+      : undefined
   if (
-    !isPlainObject(plan) ||
-    !isPlainObject(plan.paths) ||
-    !isPlainObject(environment) ||
-    environment.GOWORK !== plan.paths.projectedGoWork ||
+    workspaceRelative === undefined ||
+    workspaceRelative === '' ||
+    workspaceRelative.startsWith(`..${sep}`) ||
+    isAbsolute(workspaceRelative) ||
+    environment.GOWORK !== workspace ||
     environment.GOTOOLCHAIN !== 'local' ||
     environment.GOPROXY !== 'off'
   ) {
@@ -1581,6 +2368,7 @@ function rustRemapFlags(plan) {
 function cargoEnvironment(context, offline) {
   const { plan, toolchains } = context
   return nodePackageEnvironment(context, {
+    CI: 'true',
     CARGO: toolchains.cargo.canonical,
     CARGO_ENCODED_RUSTFLAGS: rustRemapFlags(plan).join('\x1f'),
     CARGO_HOME: plan.paths.privateCargoHome,
@@ -1592,6 +2380,14 @@ function cargoEnvironment(context, offline) {
     CARGO_TERM_COLOR: 'never',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
+    PATH: [
+      dirname(toolchains.node.canonical),
+      dirname(toolchains.cargo.canonical),
+      '/usr/bin',
+      '/bin',
+      '/usr/sbin',
+      '/sbin',
+    ].join(delimiter),
     RUSTC: toolchains.rustc.canonical,
     RUSTC_WORKSPACE_WRAPPER: '',
     RUSTDOCFLAGS: '',
@@ -1603,14 +2399,7 @@ function cargoEnvironment(context, offline) {
 async function runSensitiveBoundary(context, action, distRoot, appBundle) {
   const result = await runPackageCommand(
     context.toolchains.node.canonical,
-    [
-      SENSITIVE_BOUNDARY_PATH,
-      action,
-      '--app-bundle',
-      appBundle,
-      '--dist',
-      distRoot,
-    ],
+    [SENSITIVE_BOUNDARY_PATH, action, '--app-bundle', appBundle, '--dist', distRoot],
     {
       cwd: context.plan.desktopRoot,
       env: cleanEnvironment(context.plan),
@@ -1633,27 +2422,55 @@ async function runRootSensitiveBoundary(context, root, label) {
   if (result.code !== 0 || result.signal !== null) fail('sensitive-boundary')
 }
 
-async function gitValue(context, repository, args) {
-  const result = await runPackageCommand(context.toolchains.git.canonical, args, {
-    cwd: repository,
-    env: cleanEnvironment(context.plan, {
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_OPTIONAL_LOCKS: '0',
-    }),
-    maxOutputBytes: 64 * 1024,
-    timeoutMs: 15_000,
-  })
-  const value = result.stdout.trim()
-  if (
-    result.stderr !== '' ||
-    value.length === 0 ||
-    value.length > 512 ||
-    /[\u0000-\u001f\u007f]/u.test(value)
-  ) {
-    fail('git-metadata')
+function manifestRepositoryVCS(manifest, repositoryID) {
+  if (!isPlainObject(manifest) || !Array.isArray(manifest.repositories)) {
+    fail('source-vcs-metadata')
   }
-  return value
+  const matches = manifest.repositories.filter((repository) => repository?.id === repositoryID)
+  if (matches.length !== 1) fail('source-vcs-metadata')
+  const vcs = matches[0].vcs
+  const keys = isPlainObject(vcs) ? Object.keys(vcs).sort() : []
+  const expectedKeys = ['commitDate', 'describe', 'head', 'tags']
+  if (
+    !isPlainObject(vcs) ||
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index]) ||
+    !/^[a-f0-9]{40,64}$/u.test(vcs.head ?? '') ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+      vcs.commitDate ?? '',
+    ) ||
+    typeof vcs.describe !== 'string' ||
+    vcs.describe.length === 0 ||
+    Buffer.byteLength(vcs.describe, 'utf8') > 512 ||
+    /[\s\u0000-\u001f\u007f]/u.test(vcs.describe) ||
+    !Array.isArray(vcs.tags) ||
+    vcs.tags.some(
+      (tag) =>
+        typeof tag !== 'string' ||
+        tag.length === 0 ||
+        Buffer.byteLength(tag, 'utf8') > 512 ||
+        /[\s\u0000-\u001f\u007f]/u.test(tag),
+    ) ||
+    new Set(vcs.tags).size !== vcs.tags.length ||
+    vcs.tags.some(
+      (tag, index) =>
+        index > 0 && Buffer.compare(Buffer.from(vcs.tags[index - 1]), Buffer.from(tag)) >= 0,
+    )
+  ) {
+    fail('source-vcs-metadata')
+  }
+  return vcs
+}
+
+/** Sidecar 构建元数据只消费同一 source manifest 冻结的 VCS 记录。 */
+export function sidecarBuildMetadataFromManifest(manifest) {
+  const hexclaw = manifestRepositoryVCS(manifest, 'hexclaw')
+  const hexagon = manifestRepositoryVCS(manifest, 'hexagon')
+  return Object.freeze({
+    buildDate: hexclaw.commitDate,
+    commit: hexclaw.head.slice(0, 12),
+    hexagonVersion: hexagon.describe,
+  })
 }
 
 function validateOllamaContract(contract) {
@@ -1687,7 +2504,11 @@ function validateOllamaContract(contract) {
   } catch {
     fail('ollama-contract')
   }
-  if (archiveURL.protocol !== 'https:' || archiveURL.username !== '' || archiveURL.password !== '') {
+  if (
+    archiveURL.protocol !== 'https:' ||
+    archiveURL.username !== '' ||
+    archiveURL.password !== ''
+  ) {
     fail('ollama-contract')
   }
   return contract
@@ -1695,21 +2516,26 @@ function validateOllamaContract(contract) {
 
 function productionOperations() {
   return {
-    async invalidateCanonical({ plan }) {
-      await removeCanonicalArtifacts(plan)
-    },
-
     async createSourceManifest({ plan }) {
       const result = await createPackageSourceManifest({
         manifestPath: plan.paths.generationSourceManifest,
         target: plan.target.triple,
       }).catch(() => fail('source-manifest-create'))
-      const manifest = await loadBoundSourceManifest(plan, result.sha256)
-      return Object.freeze({ manifest, sha256: result.sha256 })
+      let toolchains
+      try {
+        toolchains = capturedBuildToolchains(result.toolchains)
+        const manifest = await loadBoundSourceManifest(plan, result.sha256)
+        return Object.freeze({ manifest, sha256: result.sha256, toolchains })
+      } catch (error) {
+        if (toolchains !== undefined) {
+          await cleanupCapturedToolchains(toolchains, plan.paths.generationReleaseRoot)
+        }
+        throw error
+      }
     },
 
-    async resolveToolchains({ plan, sourceManifest }) {
-      return bindManifestToolchains(plan, sourceManifest)
+    async cleanupToolchains({ plan, toolchains }) {
+      await cleanupCapturedToolchains(toolchains, plan.paths.generationReleaseRoot)
     },
 
     async projectDesktopSource({ plan, sourceManifest }) {
@@ -1718,19 +2544,28 @@ function productionOperations() {
         projectedWorkRoot: plan.paths.projectedWorkRoot,
         sourceWorkRoot: plan.workRoot,
       })
+      await verifyProjectedPackageSourceFromManifest({
+        allowDependencyTree: false,
+        manifest: sourceManifest,
+        projectedWorkRoot: plan.paths.projectedWorkRoot,
+      })
     },
 
     async prepareFrontendDependencies(context) {
       return preparePackageDependencyProvenance(
-        createDependencyProvenanceOptions(context.plan, context.toolchains),
-      ).catch(() => fail('dependency-provenance-prepare'))
+        createDependencyProvenanceOptions(
+          context.plan,
+          context.toolchains,
+          context.sourceManifestSHA256,
+        ),
+      ).catch((error) => failPackageDependency('dependency-provenance-prepare', error))
     },
 
     async verifyGoDependencies(context) {
-      const { dependencies, plan, toolchains } = context
+      const { dependencies, plan, sourceManifestSHA256, toolchains } = context
       const verified = await verifyPackageDependencyProvenance(
-        createDependencyProvenanceOptions(plan, toolchains),
-      ).catch(() => fail('dependency-provenance-verify'))
+        createDependencyProvenanceOptions(plan, toolchains, sourceManifestSHA256),
+      ).catch((error) => failPackageDependency('dependency-provenance-verify', error))
       if (
         verified.go.executable !== dependencies.go.executable ||
         verified.node.executable !== dependencies.node.executable ||
@@ -1803,18 +2638,9 @@ function productionOperations() {
     },
 
     async buildSidecar(context) {
-      const { dependencies, plan } = context
+      const { dependencies, plan, sourceManifest } = context
       const hexclawRoot = join(plan.paths.projectedWorkRoot, 'hexclaw')
-      const [commit, buildDate, hexagonVersion] = await Promise.all([
-        gitValue(context, hexclawRoot, ['rev-parse', '--short=12', 'HEAD']),
-        gitValue(context, hexclawRoot, ['show', '-s', '--format=%cI', 'HEAD']),
-        gitValue(context, join(plan.workRoot, 'hexagon'), [
-          'describe',
-          '--tags',
-          '--always',
-          '--dirty',
-        ]),
-      ])
+      const { buildDate, commit, hexagonVersion } = sidecarBuildMetadataFromManifest(sourceManifest)
       const output = join(plan.paths.generationBinaries, `hexclaw-${plan.target.triple}`)
       await runPackageCommand(
         dependencies.go.executable,
@@ -1823,7 +2649,7 @@ function productionOperations() {
           '-trimpath',
           '-buildvcs=false',
           '-ldflags',
-          `-s -w -X main.version=${plan.version} -X main.commit=${commit} -X main.date=${buildDate} -X github.com/hexagon-codes/hexagon.injectedVersion=${hexagonVersion}`,
+          `-s -w -X main.version=${plan.version} -X main.sidecarVersionIdentity=hexclaw-sidecar-version=${plan.version}; -X main.commit=${commit} -X main.date=${buildDate} -X github.com/hexagon-codes/hexagon.injectedVersion=${hexagonVersion}`,
           '-o',
           output,
           './cmd/hexclaw',
@@ -1845,7 +2671,7 @@ function productionOperations() {
           {
             goToolchain: {
               executable: dependencies.go.executable,
-              executableSha256: toolchains.go.executableSha256,
+              executableSha256: toolchains.go.sourceSha256,
               goroot: toolchains.go.goroot,
             },
             snapshotRoot: plan.paths.generationRoot,
@@ -1908,6 +2734,7 @@ function productionOperations() {
         fail('ollama-archive-digest')
       }
       await extractPinnedTarGzipArchive({
+        appleDoubleContracts: OLLAMA_APPLEDOUBLE_CONTRACTS,
         archivePath: plan.paths.generationOllamaArchive,
         destination: plan.paths.generationOllamaRoot,
         expectedArchiveBytes: contract.archiveBytes,
@@ -1931,7 +2758,7 @@ function productionOperations() {
           archiveUrl: contract.url,
           goToolchain: {
             executable: dependencies.go.executable,
-            executableSha256: toolchains.go.executableSha256,
+            executableSha256: toolchains.go.sourceSha256,
             goroot: toolchains.go.goroot,
           },
           snapshotRoot: plan.paths.generationRoot,
@@ -1939,6 +2766,7 @@ function productionOperations() {
         })
         .catch(() => fail('ollama-identity'))
       await scanRegularTree(plan.paths.generationOllamaRoot)
+      await runRootSensitiveBoundary(context, plan.paths.generationOllamaRoot, 'ollama')
     },
 
     async buildFrontend(context) {
@@ -1949,12 +2777,13 @@ function productionOperations() {
         {
           cwd: plan.paths.projectedDesktopRoot,
           env: nodePackageEnvironment(context, {
-          CI: 'true',
-          HEXCLAW_PACKAGE_LOCAL_DIST_DIR: plan.paths.generationDist,
+            CI: 'true',
+            HEXCLAW_PACKAGE_LOCAL_DIST_DIR: plan.paths.generationDist,
           }),
           timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
         },
-      )
+      ).catch(() => fail('frontend-build'))
+      await cleanupFrontendTypecheckCache(plan)
     },
 
     async prepareCargoDependencies(context) {
@@ -1972,7 +2801,7 @@ function productionOperations() {
           env: cargoEnvironment(context, false),
           timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
         },
-      )
+      ).catch(() => fail('cargo-fetch'))
       await runPackageCommand(
         toolchains.cargo.canonical,
         ['metadata', '--locked', '--offline', '--format-version', '1', '--no-deps'],
@@ -1981,7 +2810,7 @@ function productionOperations() {
           env: cargoEnvironment(context, true),
           timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
         },
-      )
+      ).catch(() => fail('cargo-metadata'))
     },
 
     async buildTauriApp(context) {
@@ -2011,14 +2840,14 @@ function productionOperations() {
           env: cargoEnvironment(context, true),
           timeoutMs: BUILD_COMMAND_TIMEOUT_MS,
         },
-      )
+      ).catch(() => fail('tauri-build'))
     },
 
     async verifyAppResources({ plan }) {
-      const appMacOS = join(plan.paths.generationApp, 'Contents', 'MacOS')
+      const appMacOS = join(plan.paths.builtApp, 'Contents', 'MacOS')
       await assertExactRegularTrees(
         plan.paths.generationOllamaRoot,
-        join(plan.paths.generationApp, 'Contents', 'Resources', 'ollama'),
+        join(plan.paths.builtApp, 'Contents', 'Resources', 'ollama'),
       )
       for (const name of ['hexclaw', 'pandoc', 'typst']) {
         const source = join(plan.paths.generationBinaries, `${name}-${plan.target.triple}`)
@@ -2036,11 +2865,15 @@ function productionOperations() {
       }
     },
 
+    async stageReleaseApp({ plan }) {
+      await moveBuiltAppIntoReleaseGeneration(plan)
+    },
+
     async verifySourceManifest(context) {
-      const { dependencies, plan, sourceManifestSHA256, toolchains } = context
+      const { dependencies, plan, sourceManifest, sourceManifestSHA256, toolchains } = context
       const verifiedDependencies = await verifyPackageDependencyProvenance(
-        createDependencyProvenanceOptions(plan, toolchains),
-      ).catch(() => fail('dependency-provenance-drift'))
+        createDependencyProvenanceOptions(plan, toolchains, sourceManifestSHA256),
+      ).catch((error) => failPackageDependency('dependency-provenance-drift', error))
       if (
         verifiedDependencies.go.executable !== dependencies.go.executable ||
         verifiedDependencies.node.executable !== dependencies.node.executable ||
@@ -2049,12 +2882,19 @@ function productionOperations() {
       ) {
         fail('dependency-provenance-drift')
       }
+      await verifyProjectedPackageSourceFromManifest({
+        allowDependencyTree: true,
+        manifest: sourceManifest,
+        projectedWorkRoot: plan.paths.projectedWorkRoot,
+      })
       const result = await verifyPackageSourceManifest({
         expectedSha256: sourceManifestSHA256,
         manifestPath: plan.paths.generationSourceManifest,
         target: plan.target.triple,
       }).catch(() => fail('source-manifest-drift'))
-      if (result.sha256 !== sourceManifestSHA256) fail('source-manifest-drift')
+      if (result.sha256 !== sourceManifestSHA256 || result.toolchains !== undefined) {
+        fail('source-manifest-drift')
+      }
     },
 
     async sanitizeAndVerify(context) {
@@ -2079,14 +2919,7 @@ function productionOperations() {
       const dmgApp = join(plan.paths.generationDmgRoot, 'HexClaw.app')
       await runPackageCommand(
         FIXED_TOOLS.ditto,
-        [
-          '--norsrc',
-          '--noextattr',
-          '--noqtn',
-          '--noacl',
-          plan.paths.generationApp,
-          dmgApp,
-        ],
+        ['--norsrc', '--noextattr', '--noqtn', '--noacl', plan.paths.generationApp, dmgApp],
         {
           cwd: plan.paths.generationRoot,
           env: cleanEnvironment(plan),
@@ -2121,12 +2954,7 @@ function productionOperations() {
       return createReleaseAttestation({
         distRoot: plan.paths.generationDist,
         generationId: plan.generationId,
-        installedAppBinary: join(
-          plan.paths.generationApp,
-          'Contents',
-          'MacOS',
-          'hexclaw-desktop',
-        ),
+        installedAppBinary: join(plan.paths.generationApp, 'Contents', 'MacOS', 'hexclaw-desktop'),
         manifestPath: plan.paths.generationManifest,
         packagePath: plan.paths.generationDmg,
         receiptPath: plan.paths.generationReceipt,
@@ -2139,108 +2967,97 @@ function productionOperations() {
     },
 
     async verifyStagedPackage(context) {
-      await verifyPackageLocal(packageVerificationOptions(context.plan, context, false), {
+      await verifyPackageLocal(packageVerificationOptions(context.plan, context, 'generation'), {
         verifyReadiness: async () => undefined,
       }).catch(() => fail('staged-verification'))
-    },
-
-    async publishDist({ plan }) {
-      await publishPath(plan.paths.generationDist, plan.paths.canonicalDist)
-    },
-
-    async publishApp({ plan }) {
-      await publishPath(plan.paths.generationApp, plan.paths.canonicalApp)
-    },
-
-    async publishDmg({ plan }) {
-      await publishPath(plan.paths.generationDmg, plan.paths.canonicalDmg)
-    },
-
-    async publishManifest({ plan }) {
-      await publishPath(plan.paths.generationManifest, plan.paths.canonicalManifest)
-    },
-
-    async publishSourceManifest({ plan }) {
-      await publishPath(plan.paths.generationSourceManifest, plan.paths.canonicalSourceManifest)
     },
 
     async writeBuildResult(context) {
       await writeBuildResult(context.plan, context)
     },
 
-    async publishReceipt({ plan }) {
-      await publishPath(plan.paths.generationReceipt, plan.paths.canonicalReceipt)
-    },
-
-    async cleanupCanonical({ plan }) {
-      await removeCanonicalArtifacts(plan)
+    async cleanupStaging({ plan }) {
+      await cleanupPackageStaging({ layout: plan.publication })
     },
   }
 }
 
 function productionFinalVerificationAdapters() {
   return Object.freeze({
-    readBuildResult,
+    async readBuildResult(plan) {
+      return readBuildResult(plan, 'generation')
+    },
 
-    async verifyCanonicalSource({ plan, result }) {
+    async verifyCandidateSource({ plan, result }) {
       const verified = await verifyPackageSourceManifest({
         expectedSha256: result.sourceManifestSHA256,
-        manifestPath: plan.paths.canonicalSourceManifest,
+        manifestPath: plan.paths.generationSourceManifest,
         target: plan.target.triple,
       }).catch(() => fail('source-manifest-drift'))
-      if (verified.sha256 !== result.sourceManifestSHA256) fail('source-manifest-drift')
+      if (verified.sha256 !== result.sourceManifestSHA256 || verified.toolchains !== undefined) {
+        fail('source-manifest-drift')
+      }
       const sourceManifest = await loadBoundSourceManifest(
         plan,
         result.sourceManifestSHA256,
-        plan.paths.canonicalSourceManifest,
+        plan.paths.generationSourceManifest,
       )
-      const toolchains = await bindManifestToolchains(plan, sourceManifest)
-      return Object.freeze({ sourceManifest, toolchains })
+      return Object.freeze({
+        sourceManifest,
+        sourceManifestSHA256: result.sourceManifestSHA256,
+      })
     },
 
-    async verifyDependencies({ plan, toolchains }) {
-      const dependencies = await verifyPackageDependencyProvenance(
-        createDependencyProvenanceOptions(plan, toolchains),
-      ).catch(() => fail('dependency-provenance-drift'))
-      return Object.freeze({ dependencies })
-    },
-
-    async verifyCanonicalResources({ dependencies, plan, toolchains }) {
-      const appMacOS = join(plan.paths.canonicalApp, 'Contents', 'MacOS')
-      const ollamaResources = join(plan.paths.canonicalApp, 'Contents', 'Resources', 'ollama')
-      await assertExactRegularTrees(plan.paths.generationOllamaRoot, ollamaResources)
-      await sidecarVerifier
-        .inspectSidecarArtifact(join(appMacOS, 'hexclaw'), plan.version, {
-          goToolchain: {
-            executable: dependencies.go.executable,
-            executableSha256: toolchains.go.executableSha256,
-            goroot: toolchains.go.goroot,
-          },
-          snapshotRoot: join(plan.desktopRoot, 'src-tauri', 'target'),
-          targetTriple: plan.target.triple,
-        })
-        .catch(() => fail('sidecar-identity'))
-      const contract = validateOllamaContract(getOllamaPackageContract())
-      await sidecarVerifier
-        .inspectOllamaArtifact(join(ollamaResources, contract.binaryName), {
-          archiveBytes: contract.archiveBytes,
-          archiveSha256: contract.archiveSha256,
-          archiveUrl: contract.url,
-          goToolchain: {
-            executable: dependencies.go.executable,
-            executableSha256: toolchains.go.executableSha256,
-            goroot: toolchains.go.goroot,
-          },
-          snapshotRoot: join(plan.desktopRoot, 'src-tauri', 'target'),
-          targetTriple: plan.target.triple,
-        })
-        .catch(() => fail('ollama-identity'))
-    },
-
-    async verifyCanonicalPackage({ plan, result }) {
-      await verifyPackageLocal(packageVerificationOptions(plan, result, true), {
+    async verifyCandidatePackage({ plan, result }) {
+      await verifyPackageLocal(packageVerificationOptions(plan, result, 'generation'), {
         verifyReadiness: async () => undefined,
-      }).catch(() => fail('canonical-verification'))
+      }).catch(() => fail('candidate-verification'))
+    },
+
+    async publishGeneration({ plan }) {
+      const published = await publishPackageGeneration({ layout: plan.publication }).catch(
+        (error) => {
+          if (error instanceof PackagePublicationError) fail(`publication-${error.category}`)
+          fail('publication-internal')
+        },
+      )
+      if (!SHA256_PATTERN.test(published.generationSHA256 ?? '')) fail('publication-identity')
+      return Object.freeze({ generationSHA256: published.generationSHA256 })
+    },
+
+    async verifyPublishedSource({ plan, result }) {
+      const verified = await verifyPackageSourceManifest({
+        expectedSha256: result.sourceManifestSHA256,
+        manifestPath: plan.paths.publishedSourceManifest,
+        target: plan.target.triple,
+      }).catch(() => fail('published-source-manifest'))
+      if (verified.sha256 !== result.sourceManifestSHA256 || verified.toolchains !== undefined) {
+        fail('published-source-manifest')
+      }
+    },
+
+    async verifyPublishedPackage({ plan, result }) {
+      await verifyPackageLocal(packageVerificationOptions(plan, result, 'published'), {
+        verifyReadiness: async () => undefined,
+      }).catch(() => fail('published-verification'))
+    },
+
+    async commitCurrent({ generationSHA256, plan, result }) {
+      await commitPackageGeneration({
+        generationSHA256,
+        layout: plan.publication,
+        receiptSHA256: result.receiptSHA256,
+        releaseVersion: plan.version,
+        sourceManifestSHA256: result.sourceManifestSHA256,
+        targetTriple: plan.target.triple,
+      }).catch((error) => {
+        if (error instanceof PackagePublicationError) fail(`publication-${error.category}`)
+        fail('publication-internal')
+      })
+    },
+
+    async cleanupStaging({ plan }) {
+      await cleanupPackageStaging({ layout: plan.publication })
     },
   })
 }
@@ -2281,12 +3098,7 @@ async function createProductionPlan({ generationId, notBeforeEpochSeconds }) {
 }
 
 function parseHeldArguments(argv) {
-  const expected = [
-    '--generation-id',
-    '--not-before-epoch-seconds',
-    '--target-triple',
-    '--version',
-  ]
+  const expected = ['--generation-id', '--not-before-epoch-seconds', '--target-triple', '--version']
   if (argv.length !== expected.length * 2) fail('cli-input')
   const values = Object.create(null)
   for (let index = 0; index < argv.length; index += 2) {
@@ -2310,49 +3122,19 @@ function parseHeldArguments(argv) {
   })
 }
 
-function assertHeldGenerationContext(plan) {
-  const encoded = process.env[PACKAGE_GENERATION_CONTEXT_ENV]
-  let value
-  try {
-    value = JSON.parse(Buffer.from(encoded ?? '', 'base64url').toString('utf8'))
-  } catch {
-    fail('generation-context')
-  }
-  if (
-    !isPlainObject(value) ||
-    value.generationId !== plan.generationId ||
-    value.lockPath !== plan.paths.lock ||
-    value.tombstonePath !== plan.paths.tombstone
-  ) {
-    fail('generation-context')
-  }
-}
-
-async function planFromHeldArguments(argv) {
+async function planFromHeldArguments(argv, phase) {
   const requested = parseHeldArguments(argv)
   const plan = await createProductionPlan(requested)
   if (plan.target.triple !== requested.targetTriple || plan.version !== requested.version) {
     fail('generation-context')
   }
-  assertHeldGenerationContext(plan)
+  await consumePackageGenerationCapability({
+    expectedGenerationId: plan.generationId,
+    expectedLockPath: plan.paths.lock,
+    expectedPlanRoot: plan.paths.generationRoot,
+    phase,
+  }).catch(() => fail('generation-capability'))
   return plan
-}
-
-async function assertPublishedReady(plan) {
-  try {
-    await assertPackageGenerationReady({
-      lockPath: plan.paths.lock,
-      tombstonePath: plan.paths.tombstone,
-    })
-  } catch (error) {
-    if (
-      error instanceof PackageGenerationLockError &&
-      (error.category === 'active' || error.category === 'in-progress')
-    ) {
-      fail('package-in-progress', { exitCode: error.exitCode, signal: error.signal })
-    }
-    fail('readiness')
-  }
 }
 
 async function resolvePublishedPlan() {
@@ -2360,47 +3142,46 @@ async function resolvePublishedPlan() {
     generationId: '0'.repeat(32),
     notBeforeEpochSeconds: 1,
   })
-  await assertPublishedReady(base)
-  const receiptBytes = await readSecureFileBytes(base.paths.canonicalReceipt, RESULT_MAX_BYTES)
-  let receipt
-  try {
-    receipt = JSON.parse(receiptBytes.toString('utf8'))
-  } catch {
-    fail('canonical-receipt')
-  }
-  if (
-    !isPlainObject(receipt) ||
-    receipt.schema_version !== 2 ||
-    receipt.release_version !== base.version ||
-    receipt.target_triple !== base.target.triple ||
-    !GENERATION_ID_PATTERN.test(receipt.generation_id ?? '') ||
-    !SHA256_PATTERN.test(receipt.source_manifest_sha256 ?? '')
-  ) {
-    fail('canonical-receipt')
-  }
+  const resolved = await resolveCurrentPackageGeneration({
+    releaseRoot: base.paths.releaseRoot,
+    releaseVersion: base.version,
+    targetTriple: base.target.triple,
+  }).catch((error) => {
+    if (error instanceof PackagePublicationError) fail(`publication-${error.category}`)
+    fail('publication-internal')
+  })
   const interim = await createProductionPlan({
-    generationId: receipt.generation_id,
+    generationId: resolved.generationId,
     notBeforeEpochSeconds: 1,
   })
-  const result = await readBuildResult(interim)
+  const result = await readBuildResult(interim, 'published')
   const plan = await createProductionPlan({
-    generationId: receipt.generation_id,
+    generationId: resolved.generationId,
     notBeforeEpochSeconds: result.notBeforeEpochSeconds,
   })
-  const receiptSHA256 = createHash('sha256').update(receiptBytes).digest('hex')
   if (
-    receiptSHA256 !== result.receiptSHA256 ||
-    receipt.source_manifest_sha256 !== result.sourceManifestSHA256
+    resolved.generationRoot !== plan.paths.publishedGenerationRoot ||
+    resolved.receiptSHA256 !== result.receiptSHA256 ||
+    resolved.sourceManifestSHA256 !== result.sourceManifestSHA256
   ) {
-    fail('canonical-receipt')
+    fail('publication-identity')
   }
   return Object.freeze({ plan, result })
 }
 
 async function verifyPublishedPackage() {
   const { plan, result } = await resolvePublishedPlan()
-  await runHeldFinalVerification(plan)
-  await assertPublishedReady(plan)
+  const verified = await verifyPackageSourceManifest({
+    expectedSha256: result.sourceManifestSHA256,
+    manifestPath: plan.paths.publishedSourceManifest,
+    target: plan.target.triple,
+  }).catch(() => fail('published-source-manifest'))
+  if (verified.sha256 !== result.sourceManifestSHA256 || verified.toolchains !== undefined) {
+    fail('published-source-manifest')
+  }
+  await verifyPackageLocal(packageVerificationOptions(plan, result, 'published'), {
+    verifyReadiness: async () => undefined,
+  }).catch(() => fail('published-verification'))
   return result
 }
 
@@ -2436,11 +3217,11 @@ async function main(argv) {
     return
   }
   if (action === 'build-held') {
-    await runHeldPackageBuild(await planFromHeldArguments(argv.slice(1)))
+    await runHeldPackageBuild(await planFromHeldArguments(argv.slice(1), 'build'))
     return
   }
   if (action === 'verify-held') {
-    await runHeldFinalVerification(await planFromHeldArguments(argv.slice(1)))
+    await runHeldBuildFinalVerification(await planFromHeldArguments(argv.slice(1), 'final'))
     return
   }
   fail('cli-input')

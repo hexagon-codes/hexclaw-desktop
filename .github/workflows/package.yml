@@ -42,6 +42,9 @@ jobs:
       - name: Test
         run: pnpm test:unit
 
+      - name: Package Security Gates
+        run: pnpm test:package-gates
+
   build:
     name: Package (${{ matrix.target }})
     needs: checks
@@ -100,19 +103,12 @@ jobs:
           repository: hexagon-codes/hexclaw
           ref: ${{ steps.sidecar_ref.outputs.ref }}
           path: hexclaw
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.25'
           cache-dependency-path: hexclaw/go.sum
-
-      - name: Configure private modules
-        run: |
-          if [ -n "${{ secrets.PRIVATE_REPO_TOKEN }}" ]; then
-            git config --global url."https://${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
-          fi
 
       - name: Build hexclaw sidecar
         env:
@@ -127,7 +123,7 @@ jobs:
           VERSION="${DESKTOP_VERSION}"
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+          go build -ldflags="-s -w -X main.version=${VERSION} -X main.sidecarVersionIdentity=hexclaw-sidecar-version=${VERSION}; -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
           cd ..
           node ./scripts/ci/verify-sidecar-version.mjs "src-tauri/binaries/${{ matrix.sidecar_name }}"

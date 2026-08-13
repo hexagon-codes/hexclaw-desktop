@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { constants, fstatSync } from 'node:fs'
-import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises'
+import { constants, fstatSync, readSync } from 'node:fs'
+import { link, lstat, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import {
   BoundedProcessError,
-  runBoundedProcess,
   runBoundedProcessWithFileDescriptors,
 } from './run-bounded-process.mjs'
 
 const LOCKF_PATH = '/usr/bin/lockf'
 const LOCK_DESCRIPTOR = 3
+const LOCKF_DESCRIPTOR = 4
+const CAPABILITY_DESCRIPTOR = 4
+const CAPABILITY_LOCK_PROBE_DESCRIPTOR = 5
 const EX_USAGE = 64
 const EX_SOFTWARE = 70
 const EX_TEMPFAIL = 75
@@ -21,6 +23,7 @@ const PRIVATE_FILE_MODE = 0o600
 const PRIVATE_DIRECTORY_MODE = 0o700
 const MAX_STATE_BYTES = 16 * 1024
 const MAX_STATE_RECORDS = 4_096
+const MAX_STAGED_RECORDS = 8_192
 const MAX_CONTROL_OUTPUT_BYTES = 64 * 1024
 const DEFAULT_COMMAND_TIMEOUT_MS = 45 * 60 * 1_000
 const MAX_COMMAND_TIMEOUT_MS = 55 * 60 * 1_000
@@ -38,19 +41,25 @@ const TOKEN_PATTERN = /^[a-f0-9]{64}$/u
 const STATE_ID_PATTERN = /^[a-f0-9]{64}$/u
 const LOCK_SCHEMA = 'hexclaw.package-generation-lock.v2'
 const START_SCHEMA = 'hexclaw.package-generation-start.v2'
-const RESOLUTION_SCHEMA = 'hexclaw.package-generation-resolution.v2'
+const RESOLUTION_SCHEMA = 'hexclaw.package-generation-resolution.v3'
 const CONTEXT_SCHEMA = 'hexclaw.package-generation-context.v2'
+const CAPABILITY_SCHEMA = 'hexclaw.package-generation-capability.v1'
+const CAPABILITY_CONSUMPTION_SCHEMA = 'hexclaw.package-generation-capability-consumption.v1'
 const STATE_ENTRY_PATTERN = /^([a-f0-9]{64})\.(started|resolved)\.json$/u
+const STAGED_ENTRY_PATTERN = /^[a-f0-9]{64}\.record$/u
 const INTERNAL_STATUS_PATTERN =
   /^STATUS package-generation-lock category=([a-z0-9-]+) exit=([0-9]{1,3})(?: signal=([A-Z0-9]+))?\n$/u
 const INTERNAL_ERROR_PATTERN =
   /^ERROR: package-generation-lock category=([a-z0-9-]+) exit=([0-9]{1,3})(?: signal=([A-Z0-9]+))?\n$/u
+const PACKAGE_LOCAL_ERROR_PATTERN =
+  /^ERROR: package-local category=([a-z0-9-]+)(?: exit=[0-9]{1,3})?(?: signal=[A-Z0-9]+)?\n$/u
 
 export const PACKAGE_GENERATION_CONTEXT_ENV = 'HEXCLAW_PACKAGE_GENERATION_CONTEXT'
 export const PACKAGE_GENERATION_CONTROL_BASENAME = '.package-local.control'
 export const PACKAGE_GENERATION_PLAN_PARENT_BASENAME = '.package-local.generations'
 export const PACKAGE_GENERATION_LOCK_BASENAME = '.package-local.lock'
 export const PACKAGE_GENERATION_TOMBSTONE_BASENAME = '.package-local.in-progress'
+export const PACKAGE_GENERATION_RECORDS_BASENAME = '.package-local.records'
 
 export class PackageGenerationLockError extends Error {
   constructor(category, details = {}) {
@@ -197,7 +206,7 @@ function fileIdentityFromMetadata(metadata) {
   })
 }
 
-function validFileIdentity(value) {
+function validFileIdentity(value, expectedLinks) {
   return (
     isPlainObject(value) &&
     typeof value.ctime_ns === 'string' &&
@@ -209,7 +218,8 @@ function validFileIdentity(value) {
     value.mode === PRIVATE_FILE_MODE &&
     typeof value.mtime_ns === 'string' &&
     /^[0-9]+$/u.test(value.mtime_ns) &&
-    value.nlink === '1' &&
+    ['0', '1', '2'].includes(value.nlink) &&
+    (expectedLinks === undefined || value.nlink === String(expectedLinks)) &&
     typeof value.size === 'string' &&
     /^[0-9]+$/u.test(value.size) &&
     typeof value.uid === 'string' &&
@@ -258,9 +268,9 @@ function sameDirectoryIdentity(left, right) {
   )
 }
 
-function validateRegularFileMetadata(metadata, label) {
+function validateRegularFileMetadata(metadata, label, allowedLinks = [1n]) {
   if (!metadata.isFile()) fail(`${label}-type`)
-  if (metadata.nlink !== 1n) fail(`${label}-hard-link`)
+  if (!allowedLinks.includes(metadata.nlink)) fail(`${label}-hard-link`)
   if (Number(metadata.mode & 0o777n) !== PRIVATE_FILE_MODE) fail(`${label}-permissions`)
   const uid = currentUID()
   if (uid !== undefined && metadata.uid !== uid) fail(`${label}-owner`)
@@ -368,6 +378,10 @@ async function prepareGenerationLayout(options) {
   const planParent = await ensurePrivateDirectory(dirname(expectedPlanRoot), 'plan-parent')
   const plan = await ensurePrivateDirectory(join(planParent.path, generationId), 'plan')
   const control = await ensurePrivateDirectory(paths.controlDirectory, 'control')
+  const records = await ensurePrivateDirectory(
+    join(control.path, PACKAGE_GENERATION_RECORDS_BASENAME),
+    'records',
+  )
   const tombstone = await ensurePrivateDirectory(paths.tombstonePath, 'marker')
   return Object.freeze({
     ...paths,
@@ -376,6 +390,7 @@ async function prepareGenerationLayout(options) {
     evidenceRoot: evidenceRoot.path,
     generationId,
     planRoot: plan.path,
+    recordsPath: records.path,
     tombstoneIdentity: tombstone.identity,
   })
 }
@@ -390,11 +405,16 @@ async function prepareReadinessLayout(lockValue, tombstoneValue) {
     fail('invalid-control-path', { exitCode: EX_USAGE })
   }
   const control = await ensurePrivateDirectory(paths.controlDirectory, 'control')
+  const records = await ensurePrivateDirectory(
+    join(control.path, PACKAGE_GENERATION_RECORDS_BASENAME),
+    'records',
+  )
   const tombstone = await ensurePrivateDirectory(paths.tombstonePath, 'marker')
   return Object.freeze({
     ...paths,
     controlIdentity: control.identity,
     evidenceRoot: evidenceRoot.path,
+    recordsPath: records.path,
     tombstoneIdentity: tombstone.identity,
   })
 }
@@ -406,9 +426,9 @@ function mapOpenError(error, label, allowMissing) {
   fail(`${label}-open`)
 }
 
-async function inspectOpenFile(handle, pathname, label, read) {
+async function inspectOpenFile(handle, pathname, label, read, allowedLinks = [1n]) {
   const before = await handle.stat({ bigint: true })
-  validateRegularFileMetadata(before, label)
+  validateRegularFileMetadata(before, label, allowedLinks)
   const identity = fileIdentityFromMetadata(before)
   const pathBefore = await lstat(pathname, { bigint: true }).catch(() => fail(`${label}-identity`))
   if (!sameFileIdentity(identity, fileIdentityFromMetadata(pathBefore))) fail(`${label}-identity`)
@@ -433,7 +453,11 @@ async function inspectOpenFile(handle, pathname, label, read) {
   return Object.freeze({ bytes, identity })
 }
 
-async function inspectSecureFile(pathname, label, { allowMissing = false, read = false } = {}) {
+async function inspectSecureFile(
+  pathname,
+  label,
+  { allowMissing = false, allowedLinks = [1n], read = false } = {},
+) {
   let handle
   try {
     handle = await open(pathname, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -441,7 +465,7 @@ async function inspectSecureFile(pathname, label, { allowMissing = false, read =
     return mapOpenError(error, label, allowMissing)
   }
   try {
-    return await inspectOpenFile(handle, pathname, label, read)
+    return await inspectOpenFile(handle, pathname, label, read, allowedLinks)
   } finally {
     await handle.close().catch(() => undefined)
   }
@@ -534,28 +558,58 @@ function resolutionPath(tombstonePath, stateId) {
   return join(tombstonePath, `${stateId}.resolved.json`)
 }
 
-async function createImmutableRecord(pathname, record, label) {
+async function createImmutableRecord(layout, pathname, record, label) {
+  const bytes = canonicalJSON(record)
+  const expectedRecordsPath = join(
+    dirname(layout.tombstonePath),
+    PACKAGE_GENERATION_RECORDS_BASENAME,
+  )
+  const records = await canonicalExistingDirectory(expectedRecordsPath, 'records', true)
+  if (records.path !== expectedRecordsPath) fail('records-path')
+  const sourcePath = join(records.path, `${randomBytes(32).toString('hex')}.record`)
   let handle
   try {
     handle = await open(
-      pathname,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      sourcePath,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       PRIVATE_FILE_MODE,
     )
     await handle.chmod(PRIVATE_FILE_MODE)
-    await handle.writeFile(canonicalJSON(record))
+    await handle.writeFile(bytes)
     await handle.sync()
+    const staged = await inspectOpenFile(handle, sourcePath, 'staged-record', true)
+    if (!staged.bytes.equals(bytes)) fail('staged-record-identity')
+    await syncDirectory(records.path)
+
+    try {
+      // hard-link 只会在目标不存在时原子发布，绝不覆盖或删除已有调用方路径。
+      await link(sourcePath, pathname)
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        await inspectSecureFile(pathname, label, { allowedLinks: [2n], read: true })
+        fail(`${label}-exists`)
+      }
+      fail(`${label}-publish`)
+    }
+    await syncDirectory(dirname(pathname))
+    const [source, published] = await Promise.all([
+      inspectOpenFile(handle, sourcePath, 'staged-record', true, [2n]),
+      inspectSecureFile(pathname, label, { allowedLinks: [2n], read: true }),
+    ])
+    if (
+      !sameFileIdentity(source.identity, published.identity) ||
+      !source.bytes.equals(bytes) ||
+      !published.bytes.equals(bytes)
+    ) {
+      fail(`${label}-identity`)
+    }
+    return published
   } catch (error) {
-    if (error?.code === 'EEXIST') fail(`${label}-exists`)
     if (error instanceof PackageGenerationLockError) throw error
     fail(`${label}-create`)
   } finally {
     await handle?.close().catch(() => undefined)
   }
-  await syncDirectory(dirname(pathname))
-  const inspected = await inspectSecureFile(pathname, label, { read: true })
-  if (!inspected.bytes.equals(canonicalJSON(record))) fail(`${label}-identity`)
-  return inspected
 }
 
 function validateStartRecord(record, stateId, evidenceRoot) {
@@ -566,11 +620,7 @@ function validateStartRecord(record, stateId, evidenceRoot) {
     typeof record.plan_root !== 'string' ||
     !isAbsolute(record.plan_root) ||
     record.plan_root !==
-      join(
-        evidenceRoot,
-        PACKAGE_GENERATION_PLAN_PARENT_BASENAME,
-        record.generation_id,
-      ) ||
+      join(evidenceRoot, PACKAGE_GENERATION_PLAN_PARENT_BASENAME, record.generation_id) ||
     generationStateID(record.generation_id, record.token_sha256, record.plan_root) !== stateId
   ) {
     fail('marker-content')
@@ -584,7 +634,14 @@ function validateResolutionRecord(record, state, starts) {
     record.generation_id !== state.record.generation_id ||
     record.token_sha256 !== state.record.token_sha256 ||
     !sameFileIdentity(record.start_identity, state.identity) ||
-    !STATE_ID_PATTERN.test(record.resolver_state_id)
+    !STATE_ID_PATTERN.test(record.resolver_state_id) ||
+    !Array.isArray(record.superseded_completion_state_ids) ||
+    record.superseded_completion_state_ids.some((stateId) => !STATE_ID_PATTERN.test(stateId)) ||
+    new Set(record.superseded_completion_state_ids).size !==
+      record.superseded_completion_state_ids.length ||
+    record.superseded_completion_state_ids.some(
+      (stateId, index, values) => index > 0 && stateId <= values[index - 1],
+    )
   ) {
     fail('marker-content')
   }
@@ -592,13 +649,14 @@ function validateResolutionRecord(record, state, starts) {
     if (
       record.resolver_state_id !== record.state_id ||
       record.lock_identity !== null ||
-      record.final_verification_succeeded !== false
+      record.final_verification_succeeded !== false ||
+      record.superseded_completion_state_ids.length !== 0
     ) {
       fail('marker-content')
     }
     return
   }
-  if (!validFileIdentity(record.lock_identity)) fail('marker-content')
+  if (!validFileIdentity(record.lock_identity, 1)) fail('marker-content')
   if (record.resolution === 'completed') {
     if (
       record.resolver_state_id !== record.state_id ||
@@ -611,24 +669,60 @@ function validateResolutionRecord(record, state, starts) {
   if (
     record.resolver_state_id === record.state_id ||
     record.final_verification_succeeded !== false ||
-    !starts.has(record.resolver_state_id)
+    !starts.has(record.resolver_state_id) ||
+    record.superseded_completion_state_ids.length !== 0
   ) {
     fail('marker-content')
   }
 }
 
+async function scanRecordSources(layout) {
+  const expectedPath = join(dirname(layout.tombstonePath), PACKAGE_GENERATION_RECORDS_BASENAME)
+  const records = await canonicalExistingDirectory(expectedPath, 'records', true)
+  if (records.path !== expectedPath) fail('records-path')
+  const entries = await readdir(records.path, { withFileTypes: true }).catch(() =>
+    fail('records-open'),
+  )
+  if (entries.length > MAX_STAGED_RECORDS) fail('records-capacity')
+  const linked = new Map()
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !STAGED_ENTRY_PATTERN.test(entry.name)) {
+      fail('records-content')
+    }
+    const inspected = await inspectSecureFile(join(records.path, entry.name), 'staged-record', {
+      allowedLinks: [1n, 2n],
+    })
+    if (inspected.identity.nlink !== '2') continue
+    const key = `${inspected.identity.dev}:${inspected.identity.ino}`
+    if (linked.has(key)) fail('records-content')
+    linked.set(key, inspected.identity)
+  }
+  return linked
+}
+
 async function scanGenerationStates(layout) {
+  const linkedSources = await scanRecordSources(layout)
   const entries = await readdir(layout.tombstonePath, { withFileTypes: true }).catch(() =>
     fail('marker-open'),
   )
   if (entries.length > MAX_STATE_RECORDS) fail('marker-capacity')
   const starts = new Map()
   const pendingResolutions = []
+  const usedSources = new Set()
   for (const entry of entries) {
     const match = STATE_ENTRY_PATTERN.exec(entry.name)
     if (!entry.isFile() || entry.isSymbolicLink() || !match) fail('marker-content')
     const pathname = join(layout.tombstonePath, entry.name)
-    const inspected = await inspectSecureFile(pathname, 'marker-record', { read: true })
+    const inspected = await inspectSecureFile(pathname, 'marker-record', {
+      allowedLinks: [2n],
+      read: true,
+    })
+    const sourceKey = `${inspected.identity.dev}:${inspected.identity.ino}`
+    const sourceIdentity = linkedSources.get(sourceKey)
+    if (!sameFileIdentity(sourceIdentity, inspected.identity) || usedSources.has(sourceKey)) {
+      fail('marker-record-identity')
+    }
+    usedSources.add(sourceKey)
     if (match[2] === 'started') {
       const record = parseExactRecord(
         inspected.bytes,
@@ -638,10 +732,7 @@ async function scanGenerationStates(layout) {
       )
       validateStartRecord(record, match[1], layout.evidenceRoot)
       if (starts.has(record.state_id)) fail('marker-content')
-      starts.set(
-        record.state_id,
-        Object.freeze({ identity: inspected.identity, pathname, record }),
-      )
+      starts.set(record.state_id, Object.freeze({ identity: inspected.identity, pathname, record }))
       continue
     }
     const record = parseExactRecord(
@@ -655,6 +746,7 @@ async function scanGenerationStates(layout) {
         'schema_version',
         'start_identity',
         'state_id',
+        'superseded_completion_state_ids',
         'token_sha256',
       ],
       RESOLUTION_SCHEMA,
@@ -669,11 +761,35 @@ async function scanGenerationStates(layout) {
     validateResolutionRecord(resolution.record, state, starts)
     resolutions.set(resolution.record.state_id, resolution)
   }
+  for (const resolution of resolutions.values()) {
+    if (resolution.record.resolution !== 'completed') continue
+    for (const stateId of resolution.record.superseded_completion_state_ids) {
+      const superseded = resolutions.get(stateId)
+      if (stateId === resolution.record.state_id || superseded?.record.resolution !== 'completed') {
+        fail('marker-content')
+      }
+    }
+  }
+  if (usedSources.size !== linkedSources.size) fail('records-content')
   return Object.freeze({
     resolutions,
     starts,
     unresolved: [...starts.values()].filter(({ record }) => !resolutions.has(record.state_id)),
   })
+}
+
+function activeCompletedResolutions(states) {
+  const superseded = new Set()
+  const completed = []
+  for (const resolution of states.resolutions.values()) {
+    if (resolution.record.resolution !== 'completed') continue
+    completed.push(resolution)
+    for (const stateId of resolution.record.superseded_completion_state_ids) {
+      if (superseded.has(stateId)) fail('marker-content')
+      superseded.add(stateId)
+    }
+  }
+  return completed.filter(({ record }) => !superseded.has(record.state_id))
 }
 
 function ownedStart(states, context) {
@@ -690,7 +806,7 @@ function ownedStart(states, context) {
   return state
 }
 
-function resolutionRecord(state, context, resolution) {
+function resolutionRecord(state, context, resolution, supersededCompletionStateIDs = []) {
   return Object.freeze({
     final_verification_succeeded: resolution === 'completed',
     generation_id: state.record.generation_id,
@@ -700,14 +816,20 @@ function resolutionRecord(state, context, resolution) {
     schema_version: RESOLUTION_SCHEMA,
     start_identity: state.identity,
     state_id: state.record.state_id,
+    superseded_completion_state_ids: Object.freeze([...supersededCompletionStateIDs].sort()),
     token_sha256: state.record.token_sha256,
   })
 }
 
-async function publishResolution(context, state, resolution) {
+async function publishResolution(context, state, resolution, supersededCompletionStateIDs = []) {
   const pathname = resolutionPath(context.tombstonePath, state.record.state_id)
   try {
-    await createImmutableRecord(pathname, resolutionRecord(state, context, resolution), 'resolution')
+    await createImmutableRecord(
+      context,
+      pathname,
+      resolutionRecord(state, context, resolution, supersededCompletionStateIDs),
+      'resolution',
+    )
   } catch (error) {
     if (!(error instanceof PackageGenerationLockError) || error.category !== 'resolution-exists') {
       throw error
@@ -762,6 +884,7 @@ export async function ensureGenerationTombstone(options) {
     })
   }
   const created = await createImmutableRecord(
+    layout,
     startPath(layout.tombstonePath, record.state_id),
     record,
     'marker-record',
@@ -794,20 +917,272 @@ function assertHeldLockDescriptor(context) {
   }
 }
 
+function capabilityRecord(context, phase) {
+  return Object.freeze({
+    generation_id: context.generationId,
+    lock_identity: context.lockIdentity,
+    lock_path: context.lockPath,
+    nonce: randomBytes(32).toString('hex'),
+    owner_token: context.ownerToken,
+    phase,
+    plan_root: context.planRoot,
+    schema_version: CAPABILITY_SCHEMA,
+    start_identity: context.startIdentity,
+    state_id: context.stateId,
+    tombstone_path: context.tombstonePath,
+  })
+}
+
+async function createAnonymousCapability(context, phase) {
+  const plan = await canonicalExistingDirectory(context.planRoot, 'capability-plan', true)
+  if (plan.path !== context.planRoot) fail('capability-plan')
+  const pathname = join(
+    plan.path,
+    `.package-local-capability-${phase}-${randomBytes(16).toString('hex')}`,
+  )
+  const bytes = canonicalJSON(capabilityRecord(context, phase))
+  let handle
+  try {
+    handle = await open(
+      pathname,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      PRIVATE_FILE_MODE,
+    )
+    await handle.chmod(PRIVATE_FILE_MODE)
+    await handle.writeFile(bytes)
+    await handle.sync()
+    await unlink(pathname)
+    await syncDirectory(plan.path)
+    const metadata = await handle.stat({ bigint: true })
+    validateRegularFileMetadata(metadata, 'capability', [0n])
+    if (Number(metadata.size) !== bytes.length) fail('capability-identity')
+    return Object.freeze({ handle, sha256: createHash('sha256').update(bytes).digest('hex') })
+  } catch (error) {
+    await handle?.close().catch(() => undefined)
+    if (error instanceof PackageGenerationLockError) throw error
+    fail('capability-create')
+  }
+}
+
+function readAnonymousCapabilityDescriptor() {
+  let before
+  try {
+    before = fstatSync(CAPABILITY_DESCRIPTOR, { bigint: true })
+    validateRegularFileMetadata(before, 'capability', [0n])
+  } catch {
+    fail('capability-descriptor')
+  }
+  const size = Number(before.size)
+  if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_STATE_BYTES) {
+    fail('capability-size')
+  }
+  const bytes = Buffer.alloc(size)
+  let offset = 0
+  try {
+    while (offset < size) {
+      const count = readSync(CAPABILITY_DESCRIPTOR, bytes, offset, size - offset, offset)
+      if (count <= 0) fail('capability-identity')
+      offset += count
+    }
+  } catch (error) {
+    if (error instanceof PackageGenerationLockError) throw error
+    fail('capability-read')
+  }
+  let after
+  try {
+    after = fstatSync(CAPABILITY_DESCRIPTOR, { bigint: true })
+    validateRegularFileMetadata(after, 'capability', [0n])
+  } catch {
+    fail('capability-descriptor')
+  }
+  if (!sameFileIdentity(fileIdentityFromMetadata(before), fileIdentityFromMetadata(after))) {
+    fail('capability-identity')
+  }
+  return bytes
+}
+
+async function assertCapabilityLockHeld(lockIdentity, lockPath, layout) {
+  let descriptor
+  try {
+    descriptor = fstatSync(LOCK_DESCRIPTOR, { bigint: true })
+    validateRegularFileMetadata(descriptor, 'lock')
+  } catch {
+    fail('lock-descriptor')
+  }
+  if (!sameFileIdentity(fileIdentityFromMetadata(descriptor), lockIdentity)) {
+    fail('lock-descriptor')
+  }
+  await assertLockPathIdentity({ controlIdentity: layout.controlIdentity, lockIdentity, lockPath })
+  const independent = await openLockFile(lockPath, layout.controlIdentity)
+  if (!sameFileIdentity(independent.identity, lockIdentity)) {
+    await independent.handle.close().catch(() => undefined)
+    fail('lock-identity')
+  }
+  let result
+  try {
+    result = await runBoundedProcessWithFileDescriptors(
+      LOCKF_PATH,
+      ['-s', '-t', '0', '-k', '-w', `/dev/fd/${CAPABILITY_LOCK_PROBE_DESCRIPTOR}`, '/usr/bin/true'],
+      {
+        acceptedExitCodes: [0, EX_TEMPFAIL],
+        cwd: layout.evidenceRoot,
+        env: defaultEnvironment(),
+        maxOutputBytes: MAX_CONTROL_OUTPUT_BYTES,
+        timeoutMs: READINESS_TIMEOUT_MS,
+      },
+      [
+        Object.freeze({
+          childFd: CAPABILITY_LOCK_PROBE_DESCRIPTOR,
+          sourceFd: independent.handle.fd,
+        }),
+      ],
+    )
+  } catch (error) {
+    if (error instanceof BoundedProcessError) fail('capability-lock-probe')
+    throw error
+  } finally {
+    await independent.handle.close().catch(() => undefined)
+  }
+  if (
+    result.code !== EX_TEMPFAIL ||
+    result.signal !== null ||
+    result.stdout !== '' ||
+    result.stderr !== ''
+  ) {
+    fail(result.code === 0 ? 'capability-lock-not-held' : 'capability-lock-probe')
+  }
+}
+
+async function consumeCapabilityRecord(planRoot, phase, record, capabilitySha256) {
+  const plan = await canonicalExistingDirectory(planRoot, 'capability-plan', true)
+  if (plan.path !== planRoot) fail('capability-plan')
+  const pathname = join(plan.path, `.package-local-${phase}-capability-consumed.json`)
+  const bytes = canonicalJSON(
+    Object.freeze({
+      capability_sha256: capabilitySha256,
+      generation_id: record.generation_id,
+      lock_identity: record.lock_identity,
+      phase,
+      schema_version: CAPABILITY_CONSUMPTION_SCHEMA,
+      state_id: record.state_id,
+    }),
+  )
+  let handle
+  try {
+    handle = await open(
+      pathname,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      PRIVATE_FILE_MODE,
+    )
+    await handle.chmod(PRIVATE_FILE_MODE)
+    await handle.writeFile(bytes)
+    await handle.sync()
+    const inspected = await inspectOpenFile(handle, pathname, 'capability-consumption', true)
+    if (!inspected.bytes.equals(bytes)) fail('capability-consumption-identity')
+    await syncDirectory(plan.path)
+  } catch (error) {
+    if (error?.code === 'EEXIST') fail('capability-replay')
+    if (error instanceof PackageGenerationLockError) throw error
+    fail('capability-consumption')
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
+/** 子阶段消费匿名 capability，并用真实 lockf 竞争证明父生命周期仍持锁。 */
+export async function consumePackageGenerationCapability(options) {
+  requireExactOptions(options, [
+    'expectedGenerationId',
+    'expectedLockPath',
+    'expectedPlanRoot',
+    'phase',
+  ])
+  if (process.platform !== 'darwin') fail('unsupported-platform', { exitCode: EX_USAGE })
+  if (!['build', 'final'].includes(options.phase))
+    fail('invalid-capability-phase', { exitCode: EX_USAGE })
+  const bytes = readAnonymousCapabilityDescriptor()
+  const capabilitySha256 = createHash('sha256').update(bytes).digest('hex')
+  const record = parseExactRecord(
+    bytes,
+    [
+      'generation_id',
+      'lock_identity',
+      'lock_path',
+      'nonce',
+      'owner_token',
+      'phase',
+      'plan_root',
+      'schema_version',
+      'start_identity',
+      'state_id',
+      'tombstone_path',
+    ],
+    CAPABILITY_SCHEMA,
+    'capability-content',
+  )
+  bytes.fill(0)
+  const expectedGenerationId = requireGenerationID(options.expectedGenerationId)
+  const expectedLockPath = requireAbsolutePath(options.expectedLockPath, 'capability-content')
+  const expectedPlanRoot = requireAbsolutePath(options.expectedPlanRoot, 'capability-content')
+  if (
+    record.phase !== options.phase ||
+    record.generation_id !== expectedGenerationId ||
+    record.lock_path !== expectedLockPath ||
+    record.plan_root !== expectedPlanRoot ||
+    !TOKEN_PATTERN.test(record.nonce) ||
+    !validFileIdentity(record.lock_identity, 1) ||
+    !validFileIdentity(record.start_identity, 2)
+  ) {
+    fail('capability-content')
+  }
+  const ownerToken = requireToken(record.owner_token)
+  const stateId = requireStateID(record.state_id)
+  const tombstonePath = requireAbsolutePath(record.tombstone_path, 'capability-content')
+  const layout = await prepareReadinessLayout(expectedLockPath, tombstonePath)
+  if (
+    expectedPlanRoot !==
+      join(layout.evidenceRoot, PACKAGE_GENERATION_PLAN_PARENT_BASENAME, expectedGenerationId) ||
+    generationStateID(expectedGenerationId, tokenSHA256(ownerToken), expectedPlanRoot) !== stateId
+  ) {
+    fail('capability-content')
+  }
+  const states = await scanGenerationStates(layout)
+  const state = states.starts.get(stateId)
+  if (
+    !state ||
+    states.resolutions.has(stateId) ||
+    !sameFileIdentity(state.identity, record.start_identity) ||
+    !equalDigest(state.record.token_sha256, tokenSHA256(ownerToken))
+  ) {
+    fail('capability-state')
+  }
+  await assertCapabilityLockHeld(record.lock_identity, expectedLockPath, layout)
+  await consumeCapabilityRecord(expectedPlanRoot, options.phase, record, capabilitySha256)
+  return Object.freeze({ generationId: expectedGenerationId, phase: options.phase, stateId })
+}
+
 /** readiness 同时验证不可变状态全集和真实 macOS advisory lock。 */
 export async function assertPackageGenerationReady(options) {
-  requireExactOptions(options, ['lockPath', 'tombstonePath'])
+  requireExactOptions(options, ['expectedGenerationId', 'lockPath', 'tombstonePath'])
   if (process.platform !== 'darwin') fail('unsupported-platform', { exitCode: EX_USAGE })
+  const expectedGenerationId = requireGenerationID(options.expectedGenerationId)
   const layout = await prepareReadinessLayout(options.lockPath, options.tombstonePath)
   const statesBefore = await scanGenerationStates(layout)
   if (statesBefore.unresolved.length > 0) fail('in-progress', { exitCode: EX_TEMPFAIL })
+  const completedBefore = activeCompletedResolutions(statesBefore)
+  if (
+    completedBefore.length !== 1 ||
+    completedBefore[0].record.generation_id !== expectedGenerationId
+  ) {
+    fail('not-ready', { exitCode: EX_TEMPFAIL })
+  }
   const lock = await openLockFile(layout.lockPath, layout.controlIdentity)
   try {
     let result
     try {
       result = await runBoundedProcessWithFileDescriptors(
         LOCKF_PATH,
-        ['-s', '-t', '0', '-k', '-w', `/dev/fd/${LOCK_DESCRIPTOR}`, '/usr/bin/true'],
+        ['-s', '-t', '0', '-k', '-w', `/dev/fd/${LOCKF_DESCRIPTOR}`, '/usr/bin/true'],
         {
           acceptedExitCodes: [0, EX_TEMPFAIL],
           cwd: layout.evidenceRoot,
@@ -815,7 +1190,7 @@ export async function assertPackageGenerationReady(options) {
           maxOutputBytes: MAX_CONTROL_OUTPUT_BYTES,
           timeoutMs: READINESS_TIMEOUT_MS,
         },
-        [Object.freeze({ childFd: LOCK_DESCRIPTOR, sourceFd: lock.handle.fd })],
+        [Object.freeze({ childFd: LOCKF_DESCRIPTOR, sourceFd: lock.handle.fd })],
       )
     } catch (error) {
       if (error instanceof BoundedProcessError) {
@@ -834,7 +1209,16 @@ export async function assertPackageGenerationReady(options) {
     await assertLockPathIdentity({ ...layout, lockIdentity: lock.identity })
     const statesAfter = await scanGenerationStates(layout)
     if (statesAfter.unresolved.length > 0) fail('in-progress', { exitCode: EX_TEMPFAIL })
-    return Object.freeze({ ready: true })
+    const completedAfter = activeCompletedResolutions(statesAfter)
+    if (
+      completedAfter.length !== 1 ||
+      completedAfter[0].record.generation_id !== expectedGenerationId ||
+      completedAfter[0].record.state_id !== completedBefore[0].record.state_id ||
+      !sameFileIdentity(completedAfter[0].identity, completedBefore[0].identity)
+    ) {
+      fail('not-ready', { exitCode: EX_TEMPFAIL })
+    }
+    return Object.freeze({ generationId: expectedGenerationId, ready: true })
   } finally {
     await lock.handle.close().catch(() => undefined)
   }
@@ -885,8 +1269,8 @@ function parseContext(environment = process.env) {
     !exactContext(value) ||
     value.schemaVersion !== CONTEXT_SCHEMA ||
     !validDirectoryIdentity(value.controlIdentity) ||
-    !validFileIdentity(value.lockIdentity) ||
-    !validFileIdentity(value.startIdentity)
+    !validFileIdentity(value.lockIdentity, 1) ||
+    !validFileIdentity(value.startIdentity, 2)
   ) {
     fail('context-invalid', { exitCode: EX_USAGE })
   }
@@ -921,6 +1305,7 @@ function parseContext(environment = process.env) {
     lockPath,
     ownerToken,
     planRoot,
+    recordsPath: join(dirname(tombstonePath), PACKAGE_GENERATION_RECORDS_BASENAME),
     schemaVersion: value.schemaVersion,
     startIdentity: value.startIdentity,
     stateId,
@@ -989,13 +1374,32 @@ async function runHeldPhase(command, environment, context, deadline, label) {
   if (remaining <= 0) {
     return Object.freeze({ category: `${label}-timeout`, exitCode: EX_SOFTWARE })
   }
+  let capability
   try {
-    await runBoundedProcess(command[0], command.slice(1), {
-      cwd: context.cwd,
-      env: environment,
-      maxOutputBytes: context.commandOutputBytes,
-      timeoutMs: remaining,
-    })
+    const phase = label === 'subcommand' ? 'build' : 'final'
+    capability = await createAnonymousCapability(context, phase)
+    const result = await runBoundedProcessWithFileDescriptors(
+      command[0],
+      command.slice(1),
+      {
+        acceptedExitCodes: [0, 1],
+        cwd: context.cwd,
+        env: environment,
+        maxOutputBytes: context.commandOutputBytes,
+        timeoutMs: remaining,
+      },
+      [
+        Object.freeze({ childFd: LOCK_DESCRIPTOR, sourceFd: LOCK_DESCRIPTOR }),
+        Object.freeze({ childFd: CAPABILITY_DESCRIPTOR, sourceFd: capability.handle.fd }),
+      ],
+    )
+    if (result.code === 1) {
+      const structured = PACKAGE_LOCAL_ERROR_PATTERN.exec(result.stderr)
+      return Object.freeze({
+        category: structured ? `${label}-${structured[1]}` : `${label}-exit`,
+        exitCode: 1,
+      })
+    }
     return undefined
   } catch (error) {
     if (!(error instanceof BoundedProcessError)) {
@@ -1013,6 +1417,8 @@ async function runHeldPhase(command, environment, context, deadline, label) {
       exitCode: EX_SOFTWARE,
       signal: error.signal,
     })
+  } finally {
+    await capability?.handle.close().catch(() => undefined)
   }
 }
 
@@ -1054,7 +1460,10 @@ async function heldGeneration(command, finalVerificationCommand) {
     const states = await scanGenerationStates(context)
     const state = ownedStart(states, context)
     if (states.resolutions.has(context.stateId)) fail('marker-owner')
-    await publishResolution(context, state, 'completed')
+    const supersededCompletionStateIDs = activeCompletedResolutions(states).map(
+      ({ record }) => record.state_id,
+    )
+    await publishResolution(context, state, 'completed', supersededCompletionStateIDs)
   } catch (error) {
     if (error instanceof PackageGenerationLockError) {
       emitHeldStatus(error.category, error.exitCode, error.signal)
@@ -1114,7 +1523,9 @@ export async function runWithPackageGenerationLock(options) {
     tombstonePath: options.tombstonePath,
   })
   const environment =
-    options.environment === undefined ? defaultEnvironment() : validateEnvironment(options.environment)
+    options.environment === undefined
+      ? defaultEnvironment()
+      : validateEnvironment(options.environment)
   const lock = await openLockFile(prepared.lockPath, prepared.controlIdentity)
   const context = Object.freeze({
     commandOutputBytes,
@@ -1147,7 +1558,7 @@ export async function runWithPackageGenerationLock(options) {
           '0',
           '-k',
           '-w',
-          `/dev/fd/${LOCK_DESCRIPTOR}`,
+          `/dev/fd/${LOCKF_DESCRIPTOR}`,
           process.execPath,
           modulePath,
           'held',
@@ -1163,7 +1574,11 @@ export async function runWithPackageGenerationLock(options) {
           maxOutputBytes: MAX_CONTROL_OUTPUT_BYTES,
           timeoutMs: Math.min(commandTimeoutMs + OUTER_TIMEOUT_GRACE_MS, MAX_RUNNER_TIMEOUT_MS),
         },
-        [Object.freeze({ childFd: LOCK_DESCRIPTOR, sourceFd: lock.handle.fd })],
+        [
+          // lockf 会消费自己的描述符；独立保留 fd3，供 held 阶段绑定同一锁对象。
+          Object.freeze({ childFd: LOCK_DESCRIPTOR, sourceFd: lock.handle.fd }),
+          Object.freeze({ childFd: LOCKF_DESCRIPTOR, sourceFd: lock.handle.fd }),
+        ],
       )
       shouldRetry =
         result.code === EX_TEMPFAIL &&
@@ -1199,6 +1614,7 @@ export async function runWithPackageGenerationLock(options) {
       fail(status.category, { exitCode: status.exitCode, signal: status.signal })
     }
     await assertPackageGenerationReady({
+      expectedGenerationId: prepared.generationId,
       lockPath: prepared.lockPath,
       tombstonePath: prepared.tombstonePath,
     })
@@ -1291,10 +1707,19 @@ async function main(argv) {
     return 0
   }
   if (action === 'assert-ready') {
-    if (argv.length !== 5 || argv[1] !== '--lock-file' || argv[3] !== '--tombstone') {
+    if (
+      argv.length !== 7 ||
+      argv[1] !== '--generation-id' ||
+      argv[3] !== '--lock-file' ||
+      argv[5] !== '--tombstone'
+    ) {
       fail('invalid-arguments', { exitCode: EX_USAGE })
     }
-    await assertPackageGenerationReady({ lockPath: argv[2], tombstonePath: argv[4] })
+    await assertPackageGenerationReady({
+      expectedGenerationId: argv[2],
+      lockPath: argv[4],
+      tombstonePath: argv[6],
+    })
     process.stdout.write('PASS: package-generation-lock category=ready\n')
     return 0
   }

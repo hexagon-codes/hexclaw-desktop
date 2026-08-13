@@ -78,16 +78,30 @@ fi
 if [ "\${1:-}" != -C ]; then
   exit 43
 fi
+command_dir="$2"
 shift 2
+if [ "\${1:-}" = work ] && [ "\${2:-}" = init ]; then
+  shift 2
+  {
+    echo 'go 1.26.5'
+    echo
+    echo 'use ('
+    for module_root in "$@"; do echo "  $module_root"; done
+    echo ')'
+  } > "$command_dir/go.work"
+  echo "$GOPROXY|$GOSUMDB|$GOTOOLCHAIN|$GOWORK|\${GOPRIVATE:-}|\${GONOSUMDB:-}|workspace-init" >> "$GOTMPDIR/../go-command.log"
+  exit 0
+fi
 if [ "\${1:-}" != mod ]; then
   exit 44
 fi
 if [ "\${2:-}" = download ]; then
-  if [ "$GOPROXY" = off ]; then
+  if [ "$GOPROXY" = off ] || [ "\${3:-}" != all ]; then
     exit 45
   fi
   mkdir -p "$GOMODCACHE/example.invalid/fixture@v1.0.0"
   printf '%s\\n' 'package fixture' > "$GOMODCACHE/example.invalid/fixture@v1.0.0/fixture.go"
+  echo 'fixture workspace sum' > "\${GOWORK}.sum"
 elif [ "\${2:-}" != verify ]; then
   exit 46
 fi
@@ -145,14 +159,16 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
   const options = {
     generationRoot,
     sourceRoot,
-    node: { executable: nodeExecutable, sha256: nodeSha256 },
-    pnpm: { executable: pnpmExecutable, sha256: pnpmSha256 },
+    sourceManifest: { sha256: sha256('fixture source manifest') },
+    node: { executable: nodeExecutable, sha256: nodeSha256, version: process.version },
+    pnpm: { executable: pnpmExecutable, sha256: pnpmSha256, version: '10.30.3' },
     go: {
       executable: goExecutable,
       sha256: goSha256,
       goroot,
       goWork,
       moduleRoots: [moduleRoot],
+      version: 'go version go1.26.5 darwin/amd64',
     },
     limits,
   }
@@ -169,6 +185,26 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
     sourceRoot,
   }
 }
+
+test('configuration digest ignores generation and snapshot paths but binds manifest identity', async (t) => {
+  const left = await createFixture('stable-digest-left')
+  const right = await createFixture('stable-digest-right')
+  t.after(() => rm(left.root, { recursive: true, force: true }))
+  t.after(() => rm(right.root, { recursive: true, force: true }))
+  const module = await import(moduleURL)
+
+  const leftResult = await module.preparePackageDependencyProvenance(left.options)
+  const rightResult = await module.preparePackageDependencyProvenance(right.options)
+  const leftReceipt = JSON.parse(await readFile(leftResult.receiptPath, 'utf8'))
+  const rightReceipt = JSON.parse(await readFile(rightResult.receiptPath, 'utf8'))
+  assert.equal(leftReceipt.configurationDigest, rightReceipt.configurationDigest)
+
+  right.options.sourceManifest.sha256 = sha256('different source manifest')
+  await rejectsCategory(
+    module.verifyPackageDependencyProvenance(right.options),
+    'receipt:configuration',
+  )
+})
 
 async function replaceTool(fixture, name, content) {
   const path = fixture[`${name}Executable`]
@@ -197,7 +233,10 @@ test('prepare installs and verifies Node and Go dependencies inside one private 
   assert.equal(prepared.node.cwd, fixture.sourceRoot)
   assert.equal(prepared.go.environment.GOPROXY, 'off')
   assert.equal(prepared.go.environment.GOTOOLCHAIN, 'local')
-  assert.equal(prepared.go.environment.GOWORK, fixture.goWork)
+  assert.equal(prepared.go.environment.GOFLAGS, '-mod=readonly -modcacherw')
+  assert.equal(prepared.go.environment.GOWORK, prepared.go.workspace)
+  assert.notEqual(prepared.go.workspace, fixture.goWork)
+  assert.equal(relative(fixture.generationRoot, prepared.go.workspace).startsWith('..'), false)
   assert.deepEqual(verified, prepared)
 
   const receiptMetadata = await stat(prepared.receiptPath)
@@ -218,7 +257,51 @@ test('prepare installs and verifies Node and Go dependencies inside one private 
   assert.match(goCommands, /^https:\/\/proxy\.golang\.org\|sum\.golang\.org\|local\|/mu)
   assert.match(goCommands, /^off\|sum\.golang\.org\|local\|/mu)
   assert.doesNotMatch(goCommands, /^off\|[^\n]*\|download$/mu)
+  assert.match(goCommands, /^https:\/\/proxy\.golang\.org\|[^\n]*\|download$/mu)
   assert.equal(goCommands.includes('GOPRIVATE'), false)
+})
+
+test('records bounded pnpm symlinks and verifies the frozen receipt', async (t) => {
+  const fixture = await createFixture('bounded-symlink', {
+    pnpmExtra: [
+      "fs.mkdirSync(path.join(process.cwd(), 'node_modules', '.bin'), { recursive: true, mode: 0o700 })",
+      "fs.symlinkSync('../fixture-package/index.js', path.join(process.cwd(), 'node_modules', '.bin', 'fixture'))",
+    ].join('\n'),
+  })
+  t.after(() => rm(fixture.root, { recursive: true, force: true }))
+  const module = await import(moduleURL)
+
+  const prepared = await module.preparePackageDependencyProvenance(fixture.options)
+  const verified = await module.verifyPackageDependencyProvenance(fixture.options)
+
+  assert.deepEqual(verified, prepared)
+})
+
+test('prepares Go modules without mutating the frozen workspace sums', async (t) => {
+  const fixture = await createFixture('workspace-sum', {
+    goExtra: [
+      'if [ "${2:-}" = download ] && [ "${3:-}" = all ]; then printf "%s\\n" drift >> "${GOWORK}.sum"; fi',
+    ].join('\n'),
+  })
+  t.after(() => rm(fixture.root, { recursive: true, force: true }))
+  const module = await import(moduleURL)
+
+  const prepared = await module.preparePackageDependencyProvenance(fixture.options)
+  const verified = await module.verifyPackageDependencyProvenance(fixture.options)
+
+  assert.deepEqual(verified, prepared)
+  assert.equal(await readFile(join(fixture.generationRoot, 'go.work.sum'), 'utf8'), 'fixture\n')
+  assert.equal(
+    await readFile(join(fixture.moduleRoot, 'go.sum'), 'utf8'),
+    'example.invalid/dependency v1.0.0 h1:fixture\n',
+  )
+  assert.equal(
+    await readFile(
+      join(fixture.generationRoot, '.package-dependencies', 'go-workspace', 'go.work.sum'),
+      'utf8',
+    ),
+    'fixture workspace sum\ndrift\n',
+  )
 })
 
 test('rejects a generation below an ancestor host node_modules before installing', async (t) => {

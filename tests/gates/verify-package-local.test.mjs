@@ -28,9 +28,7 @@ async function loadVerifier() {
 }
 
 async function fixture(name) {
-  const root = await realpath(
-    await mkdtemp(join(tmpdir(), `hexclaw-package-verifier-${name}-`)),
-  )
+  const root = await realpath(await mkdtemp(join(tmpdir(), `hexclaw-package-verifier-${name}-`)))
   const distRoot = join(root, 'dist')
   const localAppBundle = join(root, 'HexClaw.app')
   const macOSDirectory = join(localAppBundle, 'Contents', 'MacOS')
@@ -114,6 +112,7 @@ function commandResult(code, stderr = '', stdout = '') {
 
 async function commandAdapter(paths, scenario = '') {
   const calls = []
+  const readinessCalls = []
   let mountDirectory = ''
 
   const clearMountedTree = async () => {
@@ -126,12 +125,18 @@ async function commandAdapter(paths, scenario = '') {
 
   return {
     calls,
+    readinessCalls,
     get mountDirectory() {
       return mountDirectory
     },
     createMountDirectory: async () => {
       mountDirectory = await mkdtemp(join(tmpdir(), 'hexclaw-package-mount-'))
       return mountDirectory
+    },
+    verifyReadiness: async (packagePath, generationId) => {
+      assert.equal(packagePath, paths.packagePath)
+      assert.equal(generationId, paths.expectedGenerationId)
+      readinessCalls.push({ generationId, packagePath })
     },
     runCommand: async (command, args, options) => {
       calls.push({ command, args: [...args], options: { ...options } })
@@ -270,6 +275,7 @@ test('canonical package verifier checks attestation, DMG, mounted app, symlink a
 
   assert.equal(result.receiptSHA256, paths.expectedReceiptSHA256)
   assert.equal(result.sensitiveBoundaryVerified, true)
+  assert.equal(adapter.readinessCalls.length, 2)
   assert.deepEqual(
     adapter.calls.map(({ command, args }) => `${command}:${args[0]}`),
     [
@@ -295,18 +301,9 @@ test('canonical package verifier checks attestation, DMG, mounted app, symlink a
   const attachCall = adapter.calls.find(
     ({ command, args }) => command === '/usr/bin/hdiutil' && args[0] === 'attach',
   )
-  assert.equal(
-    attachCall.args.includes('-readonly') && attachCall.args.includes('-nobrowse'),
-    true,
-  )
+  assert.equal(attachCall.args.includes('-readonly') && attachCall.args.includes('-nobrowse'), true)
   const codesignCall = adapter.calls.find(({ command }) => command === '/usr/bin/codesign')
   assert.deepEqual(codesignCall.options.acceptedExitCodes, [0, 1])
-  const lockMetadata = await lstat(
-    join(paths.root, '.package-local.control', '.package-local.lock'),
-  )
-  assert.equal(lockMetadata.mode & 0o777, 0o600)
-  assert.equal(lockMetadata.nlink, 1)
-  if (typeof process.getuid === 'function') assert.equal(lockMetadata.uid, process.getuid())
   await assertMountRemoved(adapter)
 })
 
@@ -314,6 +311,7 @@ test('canonical package verifier rejects a tombstone or held lock before attesta
   const paths = await fixture('readiness-first')
   paths.expectedReceiptSHA256 = '0'.repeat(64)
   const adapter = await commandAdapter(paths)
+  delete adapter.verifyReadiness
   const { verifyPackageLocal } = await loadVerifier()
   const controlPath = join(paths.root, '.package-local.control')
   const markerPath = join(controlPath, '.package-local.in-progress')
@@ -326,8 +324,28 @@ test('canonical package verifier rejects a tombstone or held lock before attesta
   await assert.rejects(verifyPackageLocal(paths, adapter), /package readiness check failed/)
   await rm(markerPath, { recursive: true })
 
-  // 先由唯一 readiness 实现创建并验证安全 lock 文件，再竞争同一 inode。
+  const buildPath = join(paths.root, 'readiness-build.mjs')
+  const finalPath = join(paths.root, 'readiness-final.mjs')
+  await writeFile(buildPath, '', { mode: 0o600 })
+  await writeFile(finalPath, '', { mode: 0o600 })
+  const { runWithPackageGenerationLock } =
+    await import('../../scripts/ci/package-generation-lock.mjs')
+  await runWithPackageGenerationLock({
+    command: [process.execPath, buildPath],
+    cwd: paths.root,
+    finalVerificationCommand: [process.execPath, finalPath],
+    generationId: paths.expectedGenerationId,
+    lockPath,
+    planRoot: join(paths.root, '.package-local.generations', paths.expectedGenerationId),
+    tombstonePath: markerPath,
+  })
+
+  // 唯一 completed generation 已建立，readiness 通过后才会进入 attestation。
   await assert.rejects(verifyPackageLocal(paths, adapter), /release attestation failed/)
+  const lockMetadata = await lstat(lockPath)
+  assert.equal(lockMetadata.mode & 0o777, 0o600)
+  assert.equal(lockMetadata.nlink, 1)
+  if (typeof process.getuid === 'function') assert.equal(lockMetadata.uid, process.getuid())
 
   const readyPath = join(paths.root, 'lock-ready')
   const holder = spawn(
@@ -369,7 +387,9 @@ test('canonical package verifier reuses the sensitive boundary before every syst
     return true
   })
   assert.equal(
-    adapter.calls.some(({ command }) => ['/usr/bin/hdiutil', '/usr/bin/diff', '/usr/bin/codesign'].includes(command)),
+    adapter.calls.some(({ command }) =>
+      ['/usr/bin/hdiutil', '/usr/bin/diff', '/usr/bin/codesign'].includes(command),
+    ),
     false,
   )
   assert.equal(adapter.mountDirectory, '')
@@ -460,10 +480,7 @@ test('canonical package verifier cleans a partial attach and preserves the attac
   const adapter = await commandAdapter(paths, 'partial-attach')
   const { verifyPackageLocal } = await loadVerifier()
 
-  await assert.rejects(
-    verifyPackageLocal(paths, adapter),
-    /DMG mount failed \(exit 1\)/,
-  )
+  await assert.rejects(verifyPackageLocal(paths, adapter), /DMG mount failed \(exit 1\)/)
   assert.equal(
     adapter.calls.some(
       ({ command, args }) => command === '/usr/bin/hdiutil' && args[0] === 'detach',
@@ -555,7 +572,10 @@ test(
       }),
       (error) => {
         const output = `${error.stdout ?? ''}\n${error.stderr ?? ''}`
-        assert.match(output, /^\s*ERROR: package-local-verifier category=[a-z0-9-]+(?: exit=\d+| signal=[A-Z0-9]+)*\s*$/u)
+        assert.match(
+          output,
+          /^\s*ERROR: package-local-verifier category=[a-z0-9-]+(?: exit=\d+| signal=[A-Z0-9]+)*\s*$/u,
+        )
         assert.equal(output.includes(marker), false)
         assert.equal(output.includes(paths.root), false)
         assert.doesNotMatch(output, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u)

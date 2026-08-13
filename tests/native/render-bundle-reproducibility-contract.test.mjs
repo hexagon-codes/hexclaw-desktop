@@ -85,6 +85,7 @@ test('typst is built from an exact locked source graph with all build roots rema
   assert.match(script, /"\$ENV_BIN" -i/)
   assert.match(script, /CARGO_HOME="\$private_cargo_home"/)
   assert.match(script, /SOURCE_DATE_EPOCH="\$source_date_epoch"/)
+  assert.match(script, /GIT_CEILING_DIRECTORIES="\$WORK_ROOT"/)
   assert.match(script, /verify-rust-source-root/)
   assert.match(script, /binary-architecture\.mjs/)
   assert.match(script, /typst \$expected_version \(unknown hash\)/)
@@ -197,12 +198,14 @@ test('package build scans generation binaries before the expensive Tauri build',
   assert.match(recipe, /--label generation-binaries/)
 })
 
-test('scanner does not carry a broad CI-runner or typst digest exception', async () => {
+test('scanner binds any CI provenance exception to pinned artifact digests', async () => {
   const scanner = await readFile(
     new URL('../../scripts/ci/package-sensitive-boundary.mjs', import.meta.url),
     'utf8',
   )
 
-  assert.doesNotMatch(scanner, /\/Users\/runner/)
+  assert.match(scanner, /OLLAMA_PUBLIC_PROVENANCE_SHA256/u)
+  assert.match(scanner, /allowedOllamaProvenance\.has\(sha256/u)
+  assert.doesNotMatch(scanner, /replaceAll\(OLLAMA_PUBLIC_BUILD_PROVENANCE, '\/build\/ollama\/'\)/u)
   assert.doesNotMatch(scanner, /c8d4f613159ac9d2d180f64a857df2d37ce008c0f1751fee82352a829af5524d/)
 })

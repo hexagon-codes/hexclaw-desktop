@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, readFile, stat, symlink, truncate, utimes, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import {
+  chmod,
+  mkdir,
+  readFile,
+  stat,
+  symlink,
+  truncate,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { tmpdir } from 'node:os'
@@ -13,6 +23,12 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const makefilePath = join(repoRoot, 'Makefile')
 const execFileAsync = promisify(execFile)
 const receiptSHA256 = '1'.repeat(64)
+const generationId = 'generation-k12-release-fixture'
+const targetTriple = 'x86_64-apple-darwin'
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex')
+}
 
 async function loadAttestation() {
   return import(moduleURL)
@@ -31,6 +47,12 @@ async function fixture(name) {
   await writeFile(installedAppBinary, 'installed-app-bytes\n')
   await writeFile(sidecarBinary, 'sidecar-bytes\n')
   await writeFile(packagePath, 'package-bytes\n')
+  const sourceManifestPath = join(root, 'package-source-manifest.json')
+  const sourceManifestBytes = Buffer.from(
+    '{"schema":"hexclaw.package-source-identity.v2"}\n',
+    'utf8',
+  )
+  await writeFile(sourceManifestPath, sourceManifestBytes, { mode: 0o600 })
   await chmod(installedAppBinary, 0o700)
   await chmod(sidecarBinary, 0o700)
   return {
@@ -41,16 +63,52 @@ async function fixture(name) {
     packagePath,
     manifestPath: join(root, 'release-ui-dist-manifest.json'),
     receiptPath: join(root, 'release-ui-attestation.json'),
+    generationId,
+    sourceManifestPath,
+    sourceManifestSHA256: sha256(sourceManifestBytes),
+    targetTriple,
+  }
+}
+
+function creationOptions(paths, overrides = {}) {
+  return {
+    distRoot: paths.distRoot,
+    generationId: paths.generationId,
+    installedAppBinary: paths.installedAppBinary,
+    manifestPath: paths.manifestPath,
+    packagePath: paths.packagePath,
+    receiptPath: paths.receiptPath,
+    releaseVersion: '0.5.0-beta',
+    sidecarBinary: paths.sidecarBinary,
+    sourceManifestPath: paths.sourceManifestPath,
+    sourceManifestSHA256: paths.sourceManifestSHA256,
+    targetTriple: paths.targetTriple,
+    ...overrides,
+  }
+}
+
+function verificationOptions(paths, expectedReceiptSHA256, overrides = {}) {
+  return {
+    distRoot: paths.distRoot,
+    expectedGenerationId: paths.generationId,
+    expectedReceiptSHA256,
+    expectedSourceManifestSHA256: paths.sourceManifestSHA256,
+    expectedTargetTriple: paths.targetTriple,
+    installedAppBinary: paths.installedAppBinary,
+    manifestPath: paths.manifestPath,
+    packagePath: paths.packagePath,
+    receiptPath: paths.receiptPath,
+    releaseVersion: '0.5.0-beta',
+    sidecarBinary: paths.sidecarBinary,
+    sourceManifestPath: paths.sourceManifestPath,
+    ...overrides,
   }
 }
 
 async function create(name) {
   const paths = await fixture(name)
   const { createReleaseAttestation } = await loadAttestation()
-  const result = await createReleaseAttestation({
-    ...paths,
-    releaseVersion: '0.5.0-beta',
-  })
+  const result = await createReleaseAttestation(creationOptions(paths))
   return { ...paths, ...result }
 }
 
@@ -65,7 +123,14 @@ async function runLocalMake(target = 'package-local', failStep = '') {
   const bin = join(root, 'bin')
   const commandLog = join(root, 'commands.log')
   const overlay = join(root, 'Makefile.contract')
+  const packageScripts = join(root, 'scripts', 'ci')
   await mkdir(bin, { recursive: true, mode: 0o700 })
+  await mkdir(packageScripts, { recursive: true, mode: 0o700 })
+  await writeFile(
+    join(packageScripts, 'package-local.mjs'),
+    `import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.PACKAGE_LOCAL_COMMAND_LOG, 'orchestrator\\n')\nif (process.env.PACKAGE_LOCAL_FAIL_STEP === 'orchestrator') process.exit(73)\nprocess.stdout.write('PASS: package-local category=complete\\n')\n`,
+    { mode: 0o600 },
+  )
   await writeFile(
     overlay,
     `include ${makefilePath}\n\nverify-local-deps:\n\t@:\n\nsidecar-local:\n\t@:\n\nrender-bundle:\n\t@:\n`,
@@ -213,8 +278,16 @@ function verifyCLIArguments(paths, expectedReceiptSHA256, notBeforeEpochSeconds)
     paths.manifestPath,
     '--receipt',
     paths.receiptPath,
+    '--source-manifest',
+    paths.sourceManifestPath,
     '--expected-receipt-sha256',
     expectedReceiptSHA256,
+    '--expected-generation-id',
+    paths.generationId,
+    '--expected-source-manifest-sha256',
+    paths.sourceManifestSHA256,
+    '--expected-target-triple',
+    paths.targetTriple,
     '--not-before-epoch-seconds',
     String(notBeforeEpochSeconds),
   ]
@@ -229,8 +302,8 @@ test('build receipt is deterministic, private and links exact dist/app/sidecar/p
   await utimes(join(second.distRoot, 'index.html'), future, future)
 
   const { createReleaseAttestation } = await loadAttestation()
-  const a = await createReleaseAttestation({ ...first, releaseVersion: '0.5.0-beta' })
-  const b = await createReleaseAttestation({ ...second, releaseVersion: '0.5.0-beta' })
+  const a = await createReleaseAttestation(creationOptions(first))
+  const b = await createReleaseAttestation(creationOptions(second))
   const manifestA = await readFile(first.manifestPath, 'utf8')
   const manifestB = await readFile(second.manifestPath, 'utf8')
   const receiptA = await readFile(first.receiptPath, 'utf8')
@@ -260,6 +333,7 @@ test('build receipt is deterministic, private and links exact dist/app/sidecar/p
     'dist_manifest_file',
     'dist_manifest_sha256',
     'dist_total_bytes',
+    'generation_id',
     'installed_app_file',
     'installed_app_sha256',
     'package_file',
@@ -268,11 +342,18 @@ test('build receipt is deterministic, private and links exact dist/app/sidecar/p
     'schema_version',
     'sidecar_file',
     'sidecar_sha256',
+    'source_manifest_file',
+    'source_manifest_sha256',
+    'target_triple',
   ])
   assert.equal(receipt.dist_manifest_file, 'release-ui-dist-manifest.json')
   assert.equal(receipt.installed_app_file, 'hexclaw-desktop')
   assert.equal(receipt.sidecar_file, 'hexclaw')
   assert.equal(receipt.package_file, 'HexClaw.dmg')
+  assert.equal(receipt.generation_id, generationId)
+  assert.equal(receipt.source_manifest_file, 'package-source-manifest.json')
+  assert.equal(receipt.source_manifest_sha256, first.sourceManifestSHA256)
+  assert.equal(receipt.target_triple, targetTriple)
   assert.equal(receipt.dist_manifest_sha256, a.manifestSHA256)
   assert.equal(receipt.dist_file_count, 2)
   assert.equal(
@@ -285,11 +366,7 @@ test('build receipt is deterministic, private and links exact dist/app/sidecar/p
 test('verification accepts only the exact attested tree and release identities', async () => {
   const built = await create('verify')
   const { verifyReleaseAttestation } = await loadAttestation()
-  const verified = await verifyReleaseAttestation({
-    ...built,
-    releaseVersion: '0.5.0-beta',
-    expectedReceiptSHA256: built.receiptSHA256,
-  })
+  const verified = await verifyReleaseAttestation(verificationOptions(built, built.receiptSHA256))
   assert.equal(verified.distFileCount, 2)
   assert.equal(verified.receiptSHA256, built.receiptSHA256)
   assert.equal(verified.manifestSHA256, built.manifestSHA256)
@@ -353,11 +430,9 @@ test('verification fails closed on every asset and identity drift without repair
     const built = await create(name.replaceAll(' ', '-'))
     await mutate(built)
     await assert.rejects(
-      verifyReleaseAttestation({
-        ...built,
-        releaseVersion: '0.5.0-beta',
-        expectedReceiptSHA256: built.expectedReceiptSHA256 ?? built.receiptSHA256,
-      }),
+      verifyReleaseAttestation(
+        verificationOptions(built, built.expectedReceiptSHA256 ?? built.receiptSHA256),
+      ),
       undefined,
       name,
     )
@@ -373,11 +448,7 @@ test('verification rejects non-private manifest and receipt permissions', async 
     const built = await create(`verify-private-${name}`)
     await chmod(built[pathname], 0o644)
     await assert.rejects(
-      verifyReleaseAttestation({
-        ...built,
-        releaseVersion: '0.5.0-beta',
-        expectedReceiptSHA256: built.receiptSHA256,
-      }),
+      verifyReleaseAttestation(verificationOptions(built, built.receiptSHA256)),
       message,
     )
   }
@@ -394,7 +465,7 @@ test('attestation hashes artifacts with bounded streaming and no whole-file read
   assert.equal(Number.isSafeInteger(ATTESTATION_LIMITS.maxArtifactBytes), true)
   await truncate(paths.packagePath, ATTESTATION_LIMITS.maxArtifactBytes + 1)
   await assert.rejects(
-    createReleaseAttestation({ ...paths, releaseVersion: '0.5.0-beta' }),
+    createReleaseAttestation(creationOptions(paths)),
     /package exceeds the file size limit/,
   )
 })
@@ -423,10 +494,7 @@ test('attestation enforces dist file count per-file and aggregate byte limits', 
   ]) {
     const paths = await fixture(`limit-${name}`)
     await mutate(paths)
-    await assert.rejects(
-      createReleaseAttestation({ ...paths, releaseVersion: '0.5.0-beta', limits }),
-      message,
-    )
+    await assert.rejects(createReleaseAttestation(creationOptions(paths, { limits })), message)
   }
 })
 
@@ -439,7 +507,7 @@ test('attestation refuses symlinked artifact identities even when the target is 
   await symlink(target, paths.packagePath)
   const { createReleaseAttestation } = await loadAttestation()
   await assert.rejects(
-    createReleaseAttestation({ ...paths, releaseVersion: '0.5.0-beta' }),
+    createReleaseAttestation(creationOptions(paths)),
     /package must be a regular non-symlink file/,
   )
 })
@@ -468,75 +536,40 @@ test('build-local builds only the local app while package-local performs packagi
   const packaged = await runLocalMake('package-local')
   assert.equal(packaged.code, 0, packaged.stderr)
   assert.deepEqual(
-    packaged.commands.filter((command) => command !== 'node' && command !== 'uname'),
-    [
-      'pnpm',
-      'date',
-      'sensitive',
-      'rm-root-before',
-      'rm-artifacts',
-      'mkdir',
-      'ditto',
-      'ln',
-      'hdiutil',
-      'rm-root-after',
-      'attestation',
-      'shasum',
-      'verify',
-    ],
+    packaged.commands.filter((command) => command !== 'node'),
+    ['orchestrator'],
   )
+  assert.equal(packaged.stdout, 'PASS: package-local category=complete\n')
 })
 
-test('package-local propagates sensitive-boundary failure before DMG copy', async () => {
-  const result = await runLocalMake('package-local', 'sensitive')
+test('package-local propagates the unique orchestrator failure', async () => {
+  const result = await runLocalMake('package-local', 'orchestrator')
 
   assert.notEqual(result.code, 0)
-  assert.equal(result.commands.includes('sensitive'), true)
-  assert.equal(result.commands.includes('ditto'), false)
-  assert.equal(result.commands.includes('hdiutil'), false)
-  assert.equal(result.commands.includes('attestation'), false)
-  assert.equal(result.commands.includes('verify'), false)
+  assert.deepEqual(
+    result.commands.filter((command) => command !== 'node'),
+    ['orchestrator'],
+  )
+  assert.equal(result.stdout, '')
 })
 
-test('package-local fails closed at every Darwin packaging stage and prints PASS only from verifier', async () => {
-  for (const step of [
-    'node',
-    'pnpm',
-    'date',
-    'rm-root-before',
-    'rm-root-after',
-    'rm-artifacts',
-    'mkdir',
-    'ditto',
-    'ln',
-    'hdiutil',
-    'attestation',
-    'shasum',
-    'verify',
-  ]) {
-    const result = await runLocalMake('package-local', step)
-    assert.notEqual(result.code, 0, `${step} failure must propagate out of package-local`)
-    assert.equal(result.stdout.includes('PASS: package-local artifact identity verified.'), false)
-  }
-
+test('package-local prints one fixed PASS only after the orchestrator succeeds', async () => {
   const result = await runLocalMake('package-local')
   assert.equal(result.code, 0, result.stderr)
-  assert.ok(result.commands.includes('verify'))
-  assert.ok(result.stdout.indexOf('VERIFY_COMPLETE') >= 0)
-  assert.equal(result.stdout.match(/PASS: package-local artifact identity verified\./g)?.length, 1)
-  assert.ok(
-    result.stdout.indexOf('PASS: package-local artifact identity verified.') >
-      result.stdout.indexOf('VERIFY_COMPLETE'),
+  assert.deepEqual(
+    result.commands.filter((command) => command !== 'node'),
+    ['orchestrator'],
   )
+  assert.equal(result.stdout.match(/PASS: package-local category=complete/g)?.length, 1)
 })
 
 test('verify CLI rejects each stale package-local artifact before accepting exact-second identities', async () => {
   const notBeforeEpochSeconds = Math.floor(new Date('2020-01-01T00:00:00Z').getTime() / 1000)
   const stale = new Date('2001-01-01T00:00:00Z')
-  for (const [name, pathname, message] of [
-    ['package', 'packagePath', /package predates current package-local build/],
-    ['manifest', 'manifestPath', /dist manifest predates current package-local build/],
-    ['receipt', 'receiptPath', /release receipt predates current package-local build/],
+  for (const [name, pathname] of [
+    ['package', 'packagePath'],
+    ['manifest', 'manifestPath'],
+    ['receipt', 'receiptPath'],
   ]) {
     const built = await create(`verify-cli-stale-${name}`)
     await utimes(built[pathname], stale, stale)
@@ -546,7 +579,11 @@ test('verify CLI rejects each stale package-local artifact before accepting exac
         verifyCLIArguments(built, built.receiptSHA256, notBeforeEpochSeconds),
         { cwd: repoRoot },
       ),
-      message,
+      (error) => {
+        assert.equal(error.stdout, '')
+        assert.equal(error.stderr, 'ERROR: release-attestation category=stale-artifact\n')
+        return true
+      },
     )
   }
 

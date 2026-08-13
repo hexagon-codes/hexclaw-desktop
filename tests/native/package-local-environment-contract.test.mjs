@@ -51,6 +51,10 @@ test('package-local uses one explicit environment-free frontend build mode', asy
   assert.equal(release.envDir, false)
   assert.deepEqual(release.envPrefix, ['HEXCLAW_PACKAGE_LOCAL_PUBLIC_'])
   assert.equal(
+    release.plugins.some((plugin) => plugin.name === 'hexclaw-pdf-worker-package-asset'),
+    true,
+  )
+  assert.equal(
     Object.keys(release.env).some((name) => /^(?:VITE_|TAURI_)/.test(name)),
     false,
   )
@@ -70,6 +74,10 @@ test('ordinary development keeps the local env mechanism', async () => {
 
   assert.notEqual(development.envDir, false)
   assert.deepEqual(development.envPrefix, ['VITE_'])
+  assert.equal(
+    development.plugins.some((plugin) => plugin.name === 'hexclaw-pdf-worker-package-asset'),
+    false,
+  )
 })
 
 test('an actual package-local build excludes host VITE and TAURI canaries', async (t) => {

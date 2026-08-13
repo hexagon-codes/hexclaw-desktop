@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, opendir } from 'node:fs/promises'
+import { userInfo } from 'node:os'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -20,6 +22,45 @@ const METADATA_TIMEOUT_MS = 120_000
 const METADATA_OUTPUT_BYTES = 4 * 1024 * 1024
 const MACOS_PROVENANCE_XATTR = 'com.apple.provenance'
 const MACOS_PROVENANCE_BYTES = 11
+const OLLAMA_PUBLIC_BUILD_PROVENANCE = '/Users/runner/work/ollama/ollama/'
+const OLLAMA_PUBLIC_BUILD_PROVENANCE_MASK = '_'.repeat(OLLAMA_PUBLIC_BUILD_PROVENANCE.length)
+const OLLAMA_RESOURCE_PREFIXES = Object.freeze([
+  'HexClaw.app/Contents/Resources/ollama/',
+  'ollama/',
+])
+// 仅固定 Ollama v0.30.10 中携带上述公开 CI 路径的文件可以使用例外；
+// 任何字节变化都会改变 SHA-256，并恢复普通用户目录拒绝规则。
+const OLLAMA_PUBLIC_PROVENANCE_SHA256 = Object.freeze(
+  new Set([
+    '00a375a2c23ad478d4f403b3160d7e79214074605f52947ba063836a47fd447a',
+    '0b5d45e319355b04115d3eba2c226a6857fae885744b775be52d8463d2de0a9f',
+    '1bcf60454d2f95124e9bc32967e93e6bebcc46900e905368bc4e747527ab4e08',
+    '1cecd5f0c4d0b73f33ea4f23490d3132526754262274611394e8eb8b9a135fcf',
+    '203ae2eac7e3fd1397f94cf82aca77115056c702681684342dac545e6bee1cf0',
+    '21fb418f21ff06ae09d63ec5250ee49671c67fcccfaeb8ff7e84bc1e949fb909',
+    '34eb4ee88e2ecdf4e48c561990e704ec9150f4eca7ae6ff741eb47a27e2bae78',
+    '42b552cdf255b201c2996cc9b2010fd04f695e7ac46724fe3062b0e19de9b11f',
+    '5926ba03fca5722bf4d03308f08ea409912f16ec7a28e88875e2cda3e475a811',
+    '5982d61eb30df5caca8375854ef5e16c7c1459f22ed7eb1aa3befebfab5c2142',
+    '633c2eb96912f18ccc44e457bcd6de377805b3a8efa95b8eaeea9d2da43abff4',
+    '68d2170f93781afdce87398ffb1be33d770dba7c3bfb709a59d3f55fce7a06a6',
+    '73a3a71eeb295a5dcdd5dc0689e074ecca4099db1ec6541a406cd0fa1fb0bc71',
+    '79894ca114a137ac82872ace85e75fee20be5be883c590d0f73aa279d3081ccd',
+    '7b76e25484a2fa3b86e95d0e24423581339eb418237426ed61f2a3e25e3bf605',
+    '8c0d3e40f250a25b4480a66da165cad3d0269ee91b11e3513c92d4573f692e35',
+    '9c196b9e9afa7a47ab105f9c4565d5f9e7da62dbc7f6007b024e74fb16863c7e',
+    '9ee43dd2cb3c93b713a41e751455ff80f1abe4854abe548bed5975ba41b1d0e4',
+    'c1110cc91be7c17f26d640e78047f86109f9c7f86b433179a64e8084dc18355d',
+    'ca9c1058b90d2b13c80b8387b4037d26e4d6e7cb286f91f9df80acf5f05b889f',
+    'cd19e1a35b3d5d37c78d0b1ad33a62099a08ea255d63592eee9ca34937a9bd11',
+    'd02803fc1968943f9e7ae6f9e8b19a45198b37640ea65a6fea281d3c4397cdde',
+    'dddb5f902b7cd4c671ecd15c5ae87d940653ace7f2392a7bdf2ed05799120c40',
+    'ed8e8158fee6c131a1d9eb5fe804501e04d0ed2b5e5716fc69d33d46e2a6450b',
+    'ef4a73ef68f0125d085d931d1fd3c68b7d77a5d990995933eb19687dcdc74dd1',
+    'f080d6d463aa4281a4d293cae58017f916c77273c4b779ba707a04ad7c40a54c',
+    'f16d38256a089e81a5016dd42a2c088a79baef031d5122ff5799d28089063437',
+  ]),
+)
 
 // 用户目录只接受可证明的登录名语法；255 字节上限覆盖 POSIX LOGIN_NAME_MAX，
 // 同时阻止压缩代码或二进制中的长标点片段被误判为真实 home 路径。
@@ -28,8 +69,39 @@ const POSIX_LOGIN_NAME = String.raw`[A-Za-z_](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9_
 const WINDOWS_PROFILE_NAME = String.raw`[A-Za-z0-9_](?:[A-Za-z0-9._ $-]{0,253}[A-Za-z0-9_$-])?`
 const USER_HOME_PATTERN = new RegExp(
   String.raw`(?<![A-Za-z0-9._~%/\\-])(?:file:\/\/)?(?:\/Users\/${POSIX_LOGIN_NAME}(?=$|[^A-Za-z0-9._$-])|\/home\/${POSIX_LOGIN_NAME}(?=$|[^A-Za-z0-9._$-])|\/(?:var\/)?root(?=$|[^A-Za-z0-9._$-])|[A-Za-z]:[\\/]Users[\\/]${WINDOWS_PROFILE_NAME}(?=$|[^A-Za-z0-9._ $-]))`,
-  'iu',
+  'u',
 )
+// Windows 路径大小写不敏感；POSIX 路径保持大小写敏感，避免把小写 API 路由误判为用户目录。
+const WINDOWS_USER_HOME_PATTERN =
+  /(?<![A-Za-z0-9._~%/\\-])[A-Za-z]:[\\/]Users[\\/][A-Za-z0-9_](?:[A-Za-z0-9._ $-]{0,253}[A-Za-z0-9_$-])?(?=$|[^A-Za-z0-9._ $-])/iu
+let darwinCurrentUserHomePattern
+
+function currentDarwinUserHomePattern() {
+  if (process.platform !== 'darwin') return undefined
+  if (darwinCurrentUserHomePattern) return darwinCurrentUserHomePattern
+
+  let home
+  try {
+    home = userInfo().homedir
+  } catch {
+    fail('input:current-user-home')
+  }
+  if (
+    typeof home !== 'string' ||
+    !isAbsolute(home) ||
+    home === '/' ||
+    Buffer.byteLength(home, 'utf8') >= SCAN_OVERLAP_BYTES
+  ) {
+    fail('input:current-user-home')
+  }
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  // macOS 默认文件系统大小写不敏感；仅匹配当前系统账户的完整 home，避免误判普通 /users API 路由。
+  darwinCurrentUserHomePattern = new RegExp(
+    String.raw`(?<![A-Za-z0-9._~%/\\-])(?:file:\/\/)?${escaped}(?=$|[^A-Za-z0-9._$-])`,
+    'iu',
+  )
+  return darwinCurrentUserHomePattern
+}
 
 const CREDENTIAL_CONFIG_BASENAMES = Object.freeze(
   new Set([
@@ -54,6 +126,10 @@ const CONTENT_RULES = Object.freeze([
   Object.freeze({
     category: 'path:user-home',
     pattern: USER_HOME_PATTERN,
+  }),
+  Object.freeze({
+    category: 'path:user-home',
+    pattern: WINDOWS_USER_HOME_PATTERN,
   }),
   Object.freeze({
     category: 'path:test-home',
@@ -119,7 +195,7 @@ function filenameCategory(pathname) {
     if (lower.startsWith('.env')) return 'file:environment'
     if (CREDENTIAL_CONFIG_BASENAMES.has(lower)) return 'file:credential-config'
     if (lower === '.hexclaw') return 'file:private-profile'
-    if (lower === '.codex') return 'file:codex-workspace'
+    if (lower.startsWith('.codex')) return 'file:codex-workspace'
     if (lower.startsWith('._')) return 'file:apple-double'
     if (['test', 'tests', 'fixtures', 'test-results', 'playwright-report'].includes(lower)) {
       return 'file:test-artifact'
@@ -147,12 +223,41 @@ function filenameCategory(pathname) {
   return null
 }
 
-function contentCategory(text) {
+function stablePatternMatch(pattern, text, stableLength) {
+  pattern.lastIndex = 0
+  const match = pattern.exec(text)
+  return match && match.index + match[0].length <= stableLength
+}
+
+function contentCategory(text, displayPath, stableLength = text.length) {
+  // 固定摘要的 Ollama 官方制品带有公开 CI 源码路径；仅在其专属资源目录内忽略该精确前缀，
+  // 其它用户目录、其它位置及任何相似前缀仍按普通敏感路径拒绝。
+  const homeInspectionText = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
+    displayPath?.startsWith(prefix),
+  )
+    ? text.replaceAll(OLLAMA_PUBLIC_BUILD_PROVENANCE, OLLAMA_PUBLIC_BUILD_PROVENANCE_MASK)
+    : text
+  const currentUserHome = currentDarwinUserHomePattern()
+  if (currentUserHome && stablePatternMatch(currentUserHome, homeInspectionText, stableLength)) {
+    return 'path:user-home'
+  }
   for (const rule of CONTENT_RULES) {
-    rule.pattern.lastIndex = 0
-    if (rule.pattern.test(text)) return rule.category
+    const inspectedText = rule.category === 'path:user-home' ? homeInspectionText : text
+    if (stablePatternMatch(rule.pattern, inspectedText, stableLength)) return rule.category
   }
   return null
+}
+
+function ollamaProvenanceDigests(adapters) {
+  const configured = adapters?.ollamaProvenanceSHA256
+  if (configured === undefined) return OLLAMA_PUBLIC_PROVENANCE_SHA256
+  if (
+    !(configured instanceof Set) ||
+    [...configured].some((value) => typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value))
+  ) {
+    fail('input:ollama-provenance')
+  }
+  return configured
 }
 
 function scanLimits(overrides = {}) {
@@ -265,7 +370,6 @@ async function requireCommand(runCommand, command, args, category) {
   let result
   try {
     result = await runCommand(command, args, {
-      shell: false,
       timeoutMs: METADATA_TIMEOUT_MS,
       maxOutputBytes: METADATA_OUTPUT_BYTES,
     })
@@ -411,7 +515,14 @@ export async function sanitizeMacPackageMetadata(options, adapters = {}) {
   }
 }
 
-async function scanFile(pathname, displayPath, budget, limits, observations) {
+async function scanFile(
+  pathname,
+  displayPath,
+  budget,
+  limits,
+  observations,
+  allowedOllamaProvenance,
+) {
   let handle
   try {
     handle = await open(pathname, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -427,19 +538,35 @@ async function scanFile(pathname, displayPath, budget, limits, observations) {
     }
 
     const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES)
+    const isOllamaResource = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
+      displayPath.startsWith(prefix),
+    )
+    const digest = isOllamaResource ? createHash('sha256') : undefined
     const expectedBytes = Number(before.size)
     let carry = ''
+    let observedOllamaProvenance = false
     let position = 0
     while (position < expectedBytes) {
       const length = Math.min(chunk.length, expectedBytes - position)
       const { bytesRead } = await handle.read(chunk, 0, length, position)
       if (bytesRead <= 0) fail('file:identity-changed', displayPath)
-      const text = `${carry}${chunk.subarray(0, bytesRead).toString('latin1')}`
-      const category = contentCategory(text)
+      const bytes = chunk.subarray(0, bytesRead)
+      digest?.update(bytes)
+      const text = `${carry}${bytes.toString('latin1')}`
+      const finalChunk = position + bytesRead === expectedBytes
+      const stableLength = finalChunk ? text.length : Math.max(0, text.length - SCAN_OVERLAP_BYTES)
+      if (isOllamaResource && text.includes(OLLAMA_PUBLIC_BUILD_PROVENANCE)) {
+        observedOllamaProvenance = true
+      }
+      const category = contentCategory(text, displayPath, stableLength)
       if (category) fail(category, displayPath)
       if (text.includes('/build/cargo/')) observations.rustCargoRemap = true
       carry = text.slice(-SCAN_OVERLAP_BYTES)
       position += bytesRead
+    }
+    const sha256 = digest?.digest('hex')
+    if (observedOllamaProvenance && !allowedOllamaProvenance.has(sha256 ?? '')) {
+      fail('path:user-home', displayPath)
     }
     const after = await handle.stat({ bigint: true })
     if (!sameFileIdentity(before, after)) fail('file:identity-changed', displayPath)
@@ -451,7 +578,14 @@ async function scanFile(pathname, displayPath, budget, limits, observations) {
   }
 }
 
-async function scanRoot(root, label, budget, limits, observations = {}) {
+async function scanRoot(
+  root,
+  label,
+  budget,
+  limits,
+  observations = {},
+  allowedOllamaProvenance = OLLAMA_PUBLIC_PROVENANCE_SHA256,
+) {
   const rootMetadata = await lstat(root).catch(() => undefined)
   if (!rootMetadata?.isDirectory() || rootMetadata.isSymbolicLink()) {
     fail(`input:${label}`)
@@ -480,7 +614,7 @@ async function scanRoot(root, label, budget, limits, observations = {}) {
         fail('file:symbolic-link', displayPath)
       }
       if (!metadata.isFile()) fail('file:non-regular', displayPath)
-      await scanFile(pathname, displayPath, budget, limits, observations)
+      await scanFile(pathname, displayPath, budget, limits, observations, allowedOllamaProvenance)
     }
   }
   await visit(root)
@@ -491,12 +625,12 @@ async function scanRoot(root, label, budget, limits, observations = {}) {
   })
 }
 
-async function scanPackageRoots(options, limits) {
+async function scanPackageRoots(options, limits, allowedOllamaProvenance) {
   const distRoot = requireAbsoluteDirectory(options?.distRoot, 'dist-root')
   const appBundle = requireAbsoluteDirectory(options?.appBundle, 'app-bundle')
   const budget = { bytes: 0, entries: 0, files: 0 }
-  const dist = await scanRoot(distRoot, 'dist', budget, limits)
-  const app = await scanRoot(appBundle, 'HexClaw.app', budget, limits)
+  const dist = await scanRoot(distRoot, 'dist', budget, limits, {}, allowedOllamaProvenance)
+  const app = await scanRoot(appBundle, 'HexClaw.app', budget, limits, {}, allowedOllamaProvenance)
   if (
     budget.entries > limits.maxEntries ||
     budget.files > limits.maxFiles ||
@@ -526,7 +660,11 @@ export async function verifyPackageSensitiveBoundary(options, adapters = {}) {
       await verifyMacTreeMetadataAfterPreflight(distRoot, runCommand)
       await verifyMacTreeMetadataAfterPreflight(appBundle, runCommand)
     }
-    const result = await scanPackageRoots({ distRoot, appBundle }, limits)
+    const result = await scanPackageRoots(
+      { distRoot, appBundle },
+      limits,
+      ollamaProvenanceDigests(adapters),
+    )
     return Object.freeze({ ...result, metadataVerified: process.platform === 'darwin' })
   } catch (error) {
     if (error instanceof BoundaryError) throw error
@@ -543,7 +681,14 @@ export async function verifyPackageRootBoundary(options, adapters = {}) {
     }
     const limits = scanLimits(adapters.limits)
     const budget = { bytes: 0, entries: 0, files: 0 }
-    const result = await scanRoot(root, label, budget, limits)
+    const result = await scanRoot(
+      root,
+      label,
+      budget,
+      limits,
+      {},
+      ollamaProvenanceDigests(adapters),
+    )
     return Object.freeze({ findingCount: 0, ...result, scannedRoots: 1 })
   } catch (error) {
     if (error instanceof BoundaryError) throw error

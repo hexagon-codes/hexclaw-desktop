@@ -13,10 +13,9 @@ import {
   assertGoBuildTarget,
   assertGoMainModule,
   assertOllamaArtifact,
+  assertEmbeddedSidecarVersion,
   assertSidecarArtifact,
-  assertSidecarVersion,
   extractGoBuildSetting,
-  extractEmbeddedVersion,
   inferSidecarTarget,
   inspectSidecarArtifact,
   normalizeReleaseVersion,
@@ -56,7 +55,7 @@ function x86MachO64() {
   const header = Buffer.alloc(32)
   header.writeUInt32LE(0xfeedfacf, 0)
   header.writeUInt32LE(0x01000007, 4)
-  return header
+  return Buffer.concat([header, Buffer.from('hexclaw-sidecar-version=0.5.0-beta;')])
 }
 
 function shellQuote(value) {
@@ -71,7 +70,7 @@ printf '%s\\n' \\
   'snapshot: go1.25.0' \\
   '\tpath\tgithub.com/hexagon-codes/hexclaw/cmd/hexclaw' \\
   '\tmod\tgithub.com/hexagon-codes/hexclaw\t(devel)' \\
-  '\tbuild\t-ldflags="-X main.version=0.5.0-beta"' \\
+  '\tbuild\t-trimpath=true' \\
   '\tbuild\tGOARCH=amd64' \\
   '\tbuild\tGOOS=darwin'
 `
@@ -100,7 +99,7 @@ printf '%s\\n' \\
   'snapshot: go1.25.0' \\
   '\tpath\tgithub.com/hexagon-codes/hexclaw/cmd/hexclaw' \\
   '\tmod\tgithub.com/hexagon-codes/hexclaw\t(devel)' \\
-  '\tbuild\t-ldflags="-X main.version=0.5.0-beta"' \\
+  '\tbuild\t-trimpath=true' \\
   '\tbuild\tGOARCH=amd64' \\
   '\tbuild\tGOOS=darwin'
 printf '\tbuild\tprobe.inherited=%s\\n' "$inherited"
@@ -111,28 +110,26 @@ printf '\tbuild\tprobe.allowed=%s|%s|%s\\n' "\${GOENV-}" "\${GOROOT-}" "\${GOTOO
   return { executable, executableSha256: sha256(source), goroot: root }
 }
 
-test('sidecar release version parser is fail-closed and normalizes one optional leading v', () => {
+test('sidecar release identity is fail-closed and independent of trimmed Go metadata', () => {
   assert.equal(normalizeReleaseVersion('0.5.0-beta'), '0.5.0-beta')
   assert.equal(normalizeReleaseVersion('v0.5.0-beta'), '0.5.0-beta')
   assert.equal(normalizeReleaseVersion('vv0.5.0-beta'), 'v0.5.0-beta')
 
-  const metadata = 'build\t-ldflags="-s -w -X main.version=0.5.0-beta -X main.commit=abc123"'
-  assert.equal(extractEmbeddedVersion(metadata), '0.5.0-beta')
-  assert.equal(assertSidecarVersion(metadata, 'v0.5.0-beta'), '0.5.0-beta')
-  assert.throws(() => extractEmbeddedVersion('build\t-compiler=gc'), /found 0/)
+  const marker = Buffer.from('hexclaw-sidecar-version=0.5.0-beta;')
+  assert.equal(assertEmbeddedSidecarVersion(marker, 'v0.5.0-beta'), '0.5.0-beta')
+  assert.throws(() => assertEmbeddedSidecarVersion(Buffer.alloc(0), '0.5.0-beta'), /found 0/)
   assert.throws(
-    () =>
-      extractEmbeddedVersion('build\t-ldflags="-X main.version=0.5.0-beta -X main.version=other"'),
+    () => assertEmbeddedSidecarVersion(Buffer.concat([marker, marker]), '0.5.0-beta'),
     /found 2/,
   )
-  assert.throws(() => assertSidecarVersion(metadata, '0.5.1'), /must match/)
+  assert.throws(() => assertEmbeddedSidecarVersion(marker, '0.5.1'), /found 0/)
 
   const sensitiveExpectedVersion = '/Users/private-account/secret/release'
   assert.throws(
-    () => assertSidecarVersion(metadata, sensitiveExpectedVersion),
+    () => assertEmbeddedSidecarVersion(marker, sensitiveExpectedVersion),
     (error) =>
       error instanceof Error &&
-      /must match/.test(error.message) &&
+      /found 0/.test(error.message) &&
       !error.message.includes(sensitiveExpectedVersion),
   )
 })
@@ -153,11 +150,9 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
     assertSidecarArtifact({
       metadata,
       architecture,
-      expectedVersion: '0.5.0-beta',
       targetTriple: 'x86_64-apple-darwin',
     }),
     {
-      version: '0.5.0-beta',
       targetTriple: 'x86_64-apple-darwin',
       goos: 'darwin',
       goarch: 'amd64',
@@ -171,7 +166,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
       assertSidecarArtifact({
         metadata: metadata.replace('GOOS=darwin', 'GOOS=linux'),
         architecture,
-        expectedVersion: '0.5.0-beta',
         targetTriple: 'x86_64-apple-darwin',
       }),
     /Go build metadata GOOS must match the target/,
@@ -181,7 +175,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
       assertSidecarArtifact({
         metadata: metadata.replace('GOARCH=amd64', 'GOARCH=arm64'),
         architecture,
-        expectedVersion: '0.5.0-beta',
         targetTriple: 'x86_64-apple-darwin',
       }),
     /Go build metadata GOARCH must match the target/,
@@ -191,7 +184,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
       assertSidecarArtifact({
         metadata,
         architecture: { format: 'mach-o', architectures: ['arm64'] },
-        expectedVersion: '0.5.0-beta',
         targetTriple: 'x86_64-apple-darwin',
       }),
     /binary architecture must match the target/,
@@ -204,7 +196,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
           'example.com/lookalike/cmd/hexclaw',
         ),
         architecture,
-        expectedVersion: '0.5.0-beta',
         targetTriple: 'x86_64-apple-darwin',
       }),
     /sidecar Go package path must match exactly/,
@@ -217,7 +208,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
           '\tmod\texample.com/lookalike\t',
         ),
         architecture,
-        expectedVersion: '0.5.0-beta',
         targetTriple: 'x86_64-apple-darwin',
       }),
     /sidecar Go main module path must match exactly/,
@@ -231,7 +221,6 @@ test('sidecar target assertion binds Go metadata and the binary header to one ta
     assertSidecarArtifact({
       metadata: develMetadata,
       architecture,
-      expectedVersion: '0.5.0-beta',
       targetTriple: 'x86_64-apple-darwin',
     }),
   )
@@ -704,14 +693,24 @@ test('currently staged sidecar embeds the canonical Tauri release version', asyn
   assert.doesNotMatch(JSON.stringify(result.snapshot), /Users|private|snapshot/u)
 })
 
-test('all local and CI sidecar build paths inject Desktop version and verify before bundling', async () => {
-  const [makefile, packageWorkflow, releaseWorkflow] = await Promise.all([
+test('all local and CI sidecar build paths inject Desktop version identity and verify before bundling', async () => {
+  const [makefile, packageLocal, packageWorkflow, releaseWorkflow] = await Promise.all([
     readRepoFile('Makefile'),
+    readRepoFile('scripts/ci/package-local.mjs'),
     readRepoFile('.github/workflows/package.yml'),
     readRepoFile('.github/workflows/release.yml'),
   ])
 
   assert.match(makefile, /SIDECAR_RELEASE_VERSION\s*:=\s*\$\(patsubst v%,%,\$\(DESKTOP_VERSION\)\)/)
+  assert.equal(
+    [...makefile.matchAll(/-X main\.sidecarVersionIdentity=hexclaw-sidecar-version=\$\$VERSION;/gu)]
+      .length,
+    5,
+  )
+  assert.match(
+    packageLocal,
+    /-X main\.sidecarVersionIdentity=hexclaw-sidecar-version=\$\{plan\.version\};/u,
+  )
   assert.doesNotMatch(makefile, /VERSION="\$\$\(git describe --tags --always --dirty/)
   assert.match(
     makefile,
@@ -734,10 +733,28 @@ test('all local and CI sidecar build paths inject Desktop version and verify bef
       /DESKTOP_VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version\.replace\(\/\^v\/, ''\)"\)"/,
     )
     assert.match(workflow, /verify-sidecar-version\.mjs/)
+    assert.match(
+      workflow,
+      /-X main\.sidecarVersionIdentity=hexclaw-sidecar-version=\$\{VERSION\};/u,
+    )
     assert.doesNotMatch(workflow, /verify-sidecar-version\.mjs[^\n]*DESKTOP_VERSION/)
     assert.ok(
       workflow.indexOf('verify-sidecar-version.mjs') < workflow.indexOf('tauri-apps/tauri-action'),
       'CI sidecar version gate must execute before Tauri bundling',
     )
   }
+})
+
+test('package-local sidecar and Ollama inspections bind the dependency Go copy to its source digest', async () => {
+  const packageLocal = await readRepoFile('scripts/ci/package-local.mjs')
+  const dependencyGoInspections = [
+    ...packageLocal.matchAll(
+      /goToolchain:\s*\{\s*executable:\s*dependencies\.go\.executable,\s*executableSha256:\s*toolchains\.go\.(?<digestField>[A-Za-z0-9_]+),/gu,
+    ),
+  ]
+  assert.equal(dependencyGoInspections.length, 2)
+  assert.deepEqual(
+    dependencyGoInspections.map((match) => match.groups.digestField),
+    ['sourceSha256', 'sourceSha256'],
+  )
 })

@@ -19,7 +19,10 @@ test('package-local and verifier are thin immutable Node orchestrator entries', 
   const packageEnd = makefile.indexOf('\nverify-package-local:', packageStart)
   const packageRecipe = makefile.slice(packageStart, packageEnd)
   assert.match(packageRecipe, /\$\(PACKAGE_LOCAL_NODE\) \$\(PACKAGE_LOCAL_ORCHESTRATOR\) build/)
-  assert.doesNotMatch(packageRecipe, /build-local|\$\(MAKE\)|SIDECAR_BIN_DIR|CARGO_TARGET_DIR|generation=/)
+  assert.doesNotMatch(
+    packageRecipe,
+    /build-local|\$\(MAKE\)|SIDECAR_BIN_DIR|CARGO_TARGET_DIR|generation=/,
+  )
   const verifyStart = makefile.indexOf('verify-package-local:')
   const verifyEnd = makefile.indexOf('\n# 仅构建前端', verifyStart)
   const verifyRecipe = makefile.slice(verifyStart, verifyEnd)

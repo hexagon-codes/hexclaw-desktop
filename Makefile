@@ -1,5 +1,9 @@
 # HexClaw Desktop — 开发命令
 
+# 固定 Make 执行边界，禁止宿主变量替换 package-local 的命令解释器。
+override SHELL := /bin/sh
+override .SHELLFLAGS := -c
+
 .PHONY: dev build build-local package-local verify-package-local clean verify-local-deps verify-sidecar-version sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
@@ -117,7 +121,7 @@ sidecar: prepare-sidecar-src
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		HEXAGON_VER="$$(git -C "$(HEXAGON_SRC_DIR)" describe --tags --dirty 2>/dev/null || true)" && \
-		$(HEXCLAW_GO_ENV) go build -trimpath -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE -X github.com/hexagon-codes/hexagon.injectedVersion=$$HEXAGON_VER" \
+		$(HEXCLAW_GO_ENV) go build -trimpath -ldflags="-X main.version=$$VERSION -X main.sidecarVersionIdentity=hexclaw-sidecar-version=$$VERSION; -X main.commit=$$COMMIT -X main.date=$$DATE -X github.com/hexagon-codes/hexagon.injectedVersion=$$HEXAGON_VER" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-$$(rustc -vV | grep 'host:' | awk '{print $$2}')" ./cmd/hexclaw
 	@echo "sidecar 编译完成"
 
@@ -158,7 +162,7 @@ sidecar-darwin-arm64: prepare-sidecar-src
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
-			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.sidecarVersionIdentity=hexclaw-sidecar-version=$$VERSION; -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-aarch64-apple-darwin" ./cmd/hexclaw
 
 sidecar-darwin-amd64: prepare-sidecar-src
@@ -168,7 +172,7 @@ sidecar-darwin-amd64: prepare-sidecar-src
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
-			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.sidecarVersionIdentity=hexclaw-sidecar-version=$$VERSION; -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-apple-darwin" ./cmd/hexclaw
 
 sidecar-linux-amd64: prepare-sidecar-src
@@ -178,7 +182,7 @@ sidecar-linux-amd64: prepare-sidecar-src
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
-			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.sidecarVersionIdentity=hexclaw-sidecar-version=$$VERSION; -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-unknown-linux-gnu" ./cmd/hexclaw
 
 sidecar-windows-amd64: prepare-sidecar-src
@@ -188,7 +192,7 @@ sidecar-windows-amd64: prepare-sidecar-src
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build -trimpath \
-			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.sidecarVersionIdentity=hexclaw-sidecar-version=$$VERSION; -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-pc-windows-msvc.exe" ./cmd/hexclaw
 
 # ─── 文档渲染二进制下载（pandoc + typst）─────────────────

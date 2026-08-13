@@ -2,13 +2,13 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { chmod, lstat, mkdir, open, opendir, realpath, unlink } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, opendir, readlink, realpath, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { BoundedProcessError, runBoundedProcess } from './run-bounded-process.mjs'
 
-const RECEIPT_SCHEMA = 'hexclaw.package-dependency-provenance.v1'
+const RECEIPT_SCHEMA = 'hexclaw.package-dependency-provenance.v2'
 const RECEIPT_BASENAME = 'receipt.json'
 const CONTROL_BASENAME = '.package-dependencies'
 const PRIVATE_DIRECTORY_MODE = 0o700
@@ -78,6 +78,18 @@ function requireAbsolutePath(value, category = 'input:path') {
 
 function requireSHA256(value, category = 'input:sha256') {
   if (typeof value !== 'string' || !HASH_PATTERN.test(value)) fail(category)
+  return value
+}
+
+function requireVersion(value, category = 'input:version') {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 1024 ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    fail(category)
+  }
   return value
 }
 
@@ -427,13 +439,13 @@ function nodeEnvironment(paths) {
   })
 }
 
-function goEnvironment(paths, online) {
+function goEnvironment(paths, online, goWork = paths.goDependencyWork) {
   return Object.freeze({
     ...cleanBaseEnvironment(paths.goHome, paths.goTemp, '/usr/bin:/bin:/usr/sbin:/sbin'),
     GOAUTH: 'off',
     GOCACHE: paths.goBuildCache,
     GOENV: 'off',
-    GOFLAGS: '-mod=readonly',
+    GOFLAGS: '-mod=readonly -modcacherw',
     GOINSECURE: '',
     GOMODCACHE: paths.goModuleCache,
     GONOPROXY: '',
@@ -446,7 +458,7 @@ function goEnvironment(paths, online) {
     GOTELEMETRY: 'off',
     GOTMPDIR: paths.goTemp,
     GOTOOLCHAIN: 'local',
-    GOWORK: paths.goWork,
+    GOWORK: goWork,
   })
 }
 
@@ -517,7 +529,7 @@ async function dependencyInputs(paths) {
   return Object.freeze(values.sort((left, right) => left.path.localeCompare(right.path, 'en')))
 }
 
-async function scanTree(root, generationRoot, label, limits) {
+async function scanTree(root, generationRoot, label, limits, symlinkBoundary) {
   await requireDirectory(root, `tree:${label}`, { inside: generationRoot })
   const records = []
   let entries = 0
@@ -548,7 +560,25 @@ async function scanTree(root, generationRoot, label, limits) {
       const metadata = await lstat(path, { bigint: true }).catch(() =>
         fail(`tree:${label}:identity`),
       )
-      if (metadata.isSymbolicLink()) fail(`tree:${label}:symlink`)
+      if (metadata.isSymbolicLink()) {
+        if (symlinkBoundary === undefined) fail(`tree:${label}:symlink`)
+        requireOwned(metadata, `tree:${label}`)
+        const target = await readlink(path).catch(() => fail(`tree:${label}:symlink`))
+        if (
+          target.length === 0 ||
+          target.includes('\0') ||
+          isAbsolute(target) ||
+          Buffer.byteLength(target, 'utf8') > MAX_PATH_BYTES
+        ) {
+          fail(`tree:${label}:symlink`)
+        }
+        const lexicalTarget = resolve(dirname(path), target)
+        relativePath(symlinkBoundary, lexicalTarget, `tree:${label}:symlink`)
+        const canonicalTarget = await realpath(path).catch(() => fail(`tree:${label}:symlink`))
+        relativePath(symlinkBoundary, canonicalTarget, `tree:${label}:symlink`)
+        records.push({ path: relativePath(root, path), target, type: 'symlink' })
+        continue
+      }
       requireOwned(metadata, `tree:${label}`)
       requireSafeMode(metadata, `tree:${label}`)
       const nameFromRoot = relativePath(root, path)
@@ -593,19 +623,20 @@ async function scanTree(root, generationRoot, label, limits) {
 
 async function scanDependencyTrees(paths, limits) {
   const definitions = [
-    ['node-modules', paths.nodeModules],
-    ['pnpm-home', paths.pnpmHome],
-    ['pnpm-store', paths.pnpmStore],
-    ['pnpm-virtual-store', paths.pnpmVirtualStore],
-    ['npm-cache', paths.npmCache],
-    ['corepack-home', paths.corepackHome],
-    ['go-module-cache', paths.goModuleCache],
+    ['node-modules', paths.nodeModules, paths.nodeModules],
+    ['pnpm-home', paths.pnpmHome, undefined],
+    ['pnpm-store', paths.pnpmStore, paths.generationRoot],
+    ['pnpm-virtual-store', paths.pnpmVirtualStore, undefined],
+    ['npm-cache', paths.npmCache, undefined],
+    ['corepack-home', paths.corepackHome, undefined],
+    ['go-module-cache', paths.goModuleCache, undefined],
+    ['go-workspace', paths.goWorkspaceRoot, undefined],
   ]
   const result = {}
   let totalEntries = 0
   let totalBytes = 0
-  for (const [label, path] of definitions) {
-    const tree = await scanTree(path, paths.generationRoot, label, limits)
+  for (const [label, path, symlinkBoundary] of definitions) {
+    const tree = await scanTree(path, paths.generationRoot, label, limits, symlinkBoundary)
     totalEntries += tree.entries
     totalBytes += tree.bytes
     if (totalEntries > limits.maxEntries) fail('tree:aggregate:entries')
@@ -616,12 +647,36 @@ async function scanDependencyTrees(paths, limits) {
 }
 
 function validateConfigShape(options) {
-  requireExactOptions(options, ['generationRoot', 'sourceRoot', 'node', 'pnpm', 'go', 'limits'])
-  requireExactOptions(options.node, ['executable', 'sha256'], 'input:node')
-  requireExactOptions(options.pnpm, ['executable', 'sha256'], 'input:pnpm')
+  requireExactOptions(options, [
+    'generationRoot',
+    'sourceRoot',
+    'sourceManifest',
+    'node',
+    'pnpm',
+    'go',
+    'limits',
+  ])
+  requireExactOptions(options.sourceManifest, ['sha256'], 'input:source-manifest')
+  requireExactOptions(options.node, ['executable', 'sha256', 'version'], 'input:node')
+  requireExactOptions(
+    options.pnpm,
+    [
+      'executable',
+      'packageExecutable',
+      'packageSha256',
+      'sha256',
+      'workerExecutable',
+      'workerNativeExecutable',
+      'workerNativeName',
+      'workerNativeSha256',
+      'workerSha256',
+      'version',
+    ],
+    'input:pnpm',
+  )
   requireExactOptions(
     options.go,
-    ['executable', 'sha256', 'goroot', 'goWork', 'moduleRoots'],
+    ['executable', 'sha256', 'goroot', 'goWork', 'moduleRoots', 'version'],
     'input:go',
   )
   if (
@@ -630,6 +685,28 @@ function validateConfigShape(options) {
     options.go.moduleRoots.length > MAX_MODULE_ROOTS
   ) {
     fail('input:module-roots')
+  }
+  const hasPnpmWorker =
+    options.pnpm.packageExecutable !== undefined ||
+    options.pnpm.packageSha256 !== undefined ||
+    options.pnpm.workerExecutable !== undefined ||
+    options.pnpm.workerNativeExecutable !== undefined ||
+    options.pnpm.workerNativeName !== undefined ||
+    options.pnpm.workerNativeSha256 !== undefined ||
+    options.pnpm.workerSha256 !== undefined
+  if (
+    hasPnpmWorker &&
+    (options.pnpm.packageExecutable === undefined ||
+      options.pnpm.packageSha256 === undefined ||
+      options.pnpm.workerExecutable === undefined ||
+      options.pnpm.workerNativeExecutable === undefined ||
+      !/^reflink\.darwin-(?:x64|arm64)-[A-Za-z0-9]+\.node$/u.test(
+        options.pnpm.workerNativeName ?? '',
+      ) ||
+      options.pnpm.workerNativeSha256 === undefined ||
+      options.pnpm.workerSha256 === undefined)
+  ) {
+    fail('input:pnpm-worker')
   }
 }
 
@@ -671,10 +748,12 @@ async function resolveConfig(options, preparing) {
     corepackHome: join(controlRoot, 'corepack-home'),
     generationRoot,
     goBuildCache: join(controlRoot, 'go-build-cache'),
+    goDependencyWork: join(controlRoot, 'go-workspace', 'go.work'),
     goHome: join(controlRoot, 'go-home'),
     goModuleCache: join(controlRoot, 'go-module-cache'),
     goPath: join(controlRoot, 'go-path'),
     goTemp: join(controlRoot, 'go-tmp'),
+    goWorkspaceRoot: join(controlRoot, 'go-workspace'),
     goWork,
     goroot,
     moduleRoots: Object.freeze(moduleRoots),
@@ -709,6 +788,7 @@ async function resolveConfig(options, preparing) {
     paths.goModuleCache,
     paths.goBuildCache,
     paths.goTemp,
+    paths.goWorkspaceRoot,
   ]
   if (preparing) {
     const existingModules = await lstat(paths.nodeModules).catch((error) => {
@@ -734,40 +814,96 @@ async function resolveConfig(options, preparing) {
       go: Object.freeze({
         executable: goExecutable,
         sha256: requireSHA256(options.go.sha256, 'input:go-sha256'),
+        version: requireVersion(options.go.version, 'input:go-version'),
       }),
       node: Object.freeze({
         executable: requireAbsolutePath(options.node.executable, 'input:node-executable'),
         sha256: requireSHA256(options.node.sha256, 'input:node-sha256'),
+        version: requireVersion(options.node.version, 'input:node-version'),
       }),
       pnpm: Object.freeze({
         executable: requireAbsolutePath(options.pnpm.executable, 'input:pnpm-executable'),
         sha256: requireSHA256(options.pnpm.sha256, 'input:pnpm-sha256'),
+        version: requireVersion(options.pnpm.version, 'input:pnpm-version'),
+        ...(options.pnpm.workerExecutable !== undefined
+          ? {
+              packageExecutable: requireAbsolutePath(
+                options.pnpm.packageExecutable,
+                'input:pnpm-package-executable',
+              ),
+              packageSha256: requireSHA256(options.pnpm.packageSha256, 'input:pnpm-package-sha256'),
+              workerExecutable: requireAbsolutePath(
+                options.pnpm.workerExecutable,
+                'input:pnpm-worker-executable',
+              ),
+              workerNativeExecutable: requireAbsolutePath(
+                options.pnpm.workerNativeExecutable,
+                'input:pnpm-worker-native-executable',
+              ),
+              workerNativeName: options.pnpm.workerNativeName,
+              workerNativeSha256: requireSHA256(
+                options.pnpm.workerNativeSha256,
+                'input:pnpm-worker-native-sha256',
+              ),
+              workerSha256: requireSHA256(options.pnpm.workerSha256, 'input:pnpm-worker-sha256'),
+            }
+          : {}),
       }),
     }),
+    sourceManifestSha256: requireSHA256(
+      options.sourceManifest.sha256,
+      'input:source-manifest-sha256',
+    ),
   })
 }
 
 function configBinding(config) {
-  const { paths, requestedTools, limits } = config
-  return Object.freeze({
-    generationRoot: paths.generationRoot,
-    go: {
-      executable: requestedTools.go.executable,
-      goWork: paths.goWork,
-      goroot: paths.goroot,
-      moduleRoots: paths.moduleRoots,
+  const { requestedTools } = config
+  const tools = [
+    Object.freeze({
+      role: 'go',
       sha256: requestedTools.go.sha256,
-    },
-    limits,
-    node: requestedTools.node,
-    pnpm: requestedTools.pnpm,
-    sourceRoot: paths.sourceRoot,
+      version: requestedTools.go.version,
+    }),
+    Object.freeze({
+      role: 'node',
+      sha256: requestedTools.node.sha256,
+      version: requestedTools.node.version,
+    }),
+    Object.freeze({
+      role: 'pnpm',
+      sha256: requestedTools.pnpm.sha256,
+      version: requestedTools.pnpm.version,
+    }),
+  ]
+  if (requestedTools.pnpm.workerExecutable !== undefined) {
+    tools.push(
+      Object.freeze({
+        role: 'pnpm-package',
+        sha256: requestedTools.pnpm.packageSha256,
+        version: requestedTools.pnpm.version,
+      }),
+      Object.freeze({
+        role: 'pnpm-worker',
+        sha256: requestedTools.pnpm.workerSha256,
+        version: requestedTools.pnpm.version,
+      }),
+      Object.freeze({
+        role: 'pnpm-worker-native',
+        sha256: requestedTools.pnpm.workerNativeSha256,
+        version: requestedTools.pnpm.version,
+      }),
+    )
+  }
+  return Object.freeze({
+    sourceManifestSha256: config.sourceManifestSha256,
+    tools: Object.freeze(tools),
   })
 }
 
 async function createToolBindings(config) {
   const { paths, requestedTools } = config
-  return Object.freeze({
+  const bindings = {
     go: await copyPinnedTool(
       requestedTools.go.executable,
       join(paths.tools, 'go'),
@@ -789,7 +925,31 @@ async function createToolBindings(config) {
       'pnpm',
       false,
     ),
-  })
+  }
+  if (requestedTools.pnpm.workerExecutable !== undefined) {
+    bindings.pnpmPackage = await copyPinnedTool(
+      requestedTools.pnpm.packageExecutable,
+      join(paths.tools, 'package.json'),
+      requestedTools.pnpm.packageSha256,
+      'pnpm-package',
+      false,
+    )
+    bindings.pnpmWorker = await copyPinnedTool(
+      requestedTools.pnpm.workerExecutable,
+      join(paths.tools, 'worker.js'),
+      requestedTools.pnpm.workerSha256,
+      'pnpm-worker',
+      false,
+    )
+    bindings.pnpmWorkerNative = await copyPinnedTool(
+      requestedTools.pnpm.workerNativeExecutable,
+      join(paths.tools, requestedTools.pnpm.workerNativeName),
+      requestedTools.pnpm.workerNativeSha256,
+      'pnpm-worker-native',
+      false,
+    )
+  }
+  return Object.freeze(bindings)
 }
 
 function toolBindingRecord(binding, generationRoot) {
@@ -831,9 +991,13 @@ async function collectVersions(config, tools) {
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\n?$/u.test(node.stdout)) {
     fail('node:version:format')
   }
+  if (node.stdout.trim() !== config.requestedTools.node.version) fail('node:version:mismatch')
   const pnpm = await runPinned(
     tools.node,
-    [tools.pnpm],
+    [
+      tools.pnpm,
+      ...(tools.pnpmWorker ? [tools.pnpmPackage, tools.pnpmWorker, tools.pnpmWorkerNative] : []),
+    ],
     [tools.pnpm.privatePath, '--version'],
     processOptions(config, config.paths.sourceRoot, nodeEnvironment(config.paths)),
     'pnpm:version',
@@ -856,21 +1020,31 @@ async function collectVersions(config, tools) {
     ? PACKAGE_MANAGER_PATTERN.exec(packageManifest.packageManager ?? '')
     : null
   if (!packageManager || packageManager[1] !== pnpm.stdout.trim()) fail('pnpm:version:mismatch')
+  if (pnpm.stdout.trim() !== config.requestedTools.pnpm.version) fail('pnpm:version:mismatch')
   const go = await runPinned(
     tools.go,
     [],
     ['version'],
-    processOptions(config, config.paths.sourceRoot, goEnvironment(config.paths, true)),
+    processOptions(
+      config,
+      config.paths.sourceRoot,
+      goEnvironment(config.paths, true, config.paths.goWork),
+    ),
     'go:version',
   )
   if (!/^go version go[0-9]+\.[0-9]+(?:\.[0-9]+)? [a-z0-9]+\/[a-z0-9]+\n?$/u.test(go.stdout)) {
     fail('go:version:format')
   }
+  if (go.stdout.trim() !== config.requestedTools.go.version) fail('go:version:mismatch')
   const goroot = await runPinned(
     tools.go,
     [],
     ['env', 'GOROOT'],
-    processOptions(config, config.paths.sourceRoot, goEnvironment(config.paths, true)),
+    processOptions(
+      config,
+      config.paths.sourceRoot,
+      goEnvironment(config.paths, true, config.paths.goWork),
+    ),
     'go:goroot',
   )
   if (goroot.stdout.trim() !== config.paths.goroot) fail('go:goroot:mismatch')
@@ -878,7 +1052,11 @@ async function collectVersions(config, tools) {
     tools.go,
     [],
     ['env', 'GOWORK'],
-    processOptions(config, config.paths.sourceRoot, goEnvironment(config.paths, true)),
+    processOptions(
+      config,
+      config.paths.sourceRoot,
+      goEnvironment(config.paths, true, config.paths.goWork),
+    ),
     'go:work',
   )
   if (goWork.stdout.trim() !== config.paths.goWork) fail('go:work:mismatch')
@@ -889,7 +1067,10 @@ async function installNodeDependencies(config, tools) {
   const { paths } = config
   await runPinned(
     tools.node,
-    [tools.pnpm],
+    [
+      tools.pnpm,
+      ...(tools.pnpmWorker ? [tools.pnpmPackage, tools.pnpmWorker, tools.pnpmWorkerNative] : []),
+    ],
     [
       tools.pnpm.privatePath,
       'install',
@@ -914,16 +1095,24 @@ async function installNodeDependencies(config, tools) {
 }
 
 async function prepareGoDependencies(config, tools) {
+  const bootstrap = Object.freeze({ ...goEnvironment(config.paths, true), GOWORK: 'off' })
+  await runPinned(
+    tools.go,
+    [],
+    ['-C', config.paths.goWorkspaceRoot, 'work', 'init', ...config.paths.moduleRoots],
+    processOptions(config, config.paths.goWorkspaceRoot, bootstrap),
+    'go:workspace-init',
+  )
   const online = goEnvironment(config.paths, true)
   const offline = goEnvironment(config.paths, false)
+  await runPinned(
+    tools.go,
+    [],
+    ['-C', config.paths.moduleRoots[0], 'mod', 'download', 'all'],
+    processOptions(config, config.paths.moduleRoots[0], online),
+    'go:download',
+  )
   for (const moduleRoot of config.paths.moduleRoots) {
-    await runPinned(
-      tools.go,
-      [],
-      ['-C', moduleRoot, 'mod', 'download', 'all'],
-      processOptions(config, moduleRoot, online),
-      'go:download',
-    )
     await runPinned(
       tools.go,
       [],
@@ -947,6 +1136,7 @@ function publicResult(config, tools) {
       environment: goEnvironment(config.paths, false),
       executable: tools.go.privatePath,
       moduleRoots: config.paths.moduleRoots,
+      workspace: config.paths.goDependencyWork,
     }),
     node: Object.freeze({
       cwd: config.paths.sourceRoot,
@@ -1024,14 +1214,24 @@ export async function verifyPackageDependencyProvenance(options) {
       ]),
     ),
   )
-  if (!tools.go || !tools.node || !tools.pnpm || Object.keys(tools).length !== 3) {
+  const toolNames = Object.keys(tools).sort()
+  const expectedToolNames = tools.pnpmWorker
+    ? ['go', 'node', 'pnpm', 'pnpmPackage', 'pnpmWorker', 'pnpmWorkerNative']
+    : ['go', 'node', 'pnpm']
+  if (
+    !tools.go ||
+    !tools.node ||
+    !tools.pnpm ||
+    toolNames.length !== expectedToolNames.length ||
+    toolNames.some((name, index) => name !== expectedToolNames[index])
+  ) {
     fail('receipt:tools')
   }
   const inputsBefore = await dependencyInputs(config.paths)
   if (digestValue(inputsBefore) !== digestValue(receipt.inputs)) fail('input:drift')
   const versions = await collectVersions(config, tools)
   if (digestValue(versions) !== digestValue(receipt.versions)) fail('tool:version-drift')
-  const offline = goEnvironment(config.paths, false)
+  const offline = Object.freeze({ ...goEnvironment(config.paths, false), GOWORK: 'off' })
   for (const moduleRoot of config.paths.moduleRoots) {
     await runPinned(
       tools.go,
