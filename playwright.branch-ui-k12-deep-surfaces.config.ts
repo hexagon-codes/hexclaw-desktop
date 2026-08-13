@@ -27,6 +27,10 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
     {
+      name: 'chromium-narrow',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 680 } },
+    },
+    {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } },
     },

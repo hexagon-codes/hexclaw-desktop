@@ -24,6 +24,10 @@ type State = {
   fixture: string
   classification: Classification
   reason: string
+  criticalSelectors?: {
+    reference: Record<string, string>
+    source: Record<string, string>
+  }
   reference(page: Page): Promise<OpenResult>
   source(page: Page): Promise<OpenResult>
 }
@@ -985,6 +989,26 @@ const states: State[] = [
     manifestIds: ['k12.work-add-modal'],
     fixture: 'new creative work',
     ...NC('manifest blocks works modals behind open works visual gate'),
+    criticalSelectors: {
+      reference: {
+        modal: '#overlayCard .modal',
+        body: '#overlayCard .modal-b',
+        footer: '#overlayCard .modal-f',
+        form: '#overlayCard .modal-form',
+        type: '#k12CreativeWorkType',
+        photo: '#k12CreativeWorkFile',
+        content: '#k12CreativeWorkDraft',
+      },
+      source: {
+        modal: '.k12cw-modal',
+        body: '.k12cw-modal__body',
+        footer: '.k12cw-modal__foot',
+        form: '.k12cw-modal__body',
+        type: '.k12cw__seg',
+        photo: '[data-testid="cw-add-photo"]',
+        content: '[data-testid="cw-add-draft"]',
+      },
+    },
     reference: (page) => referenceWork(page, 'add'),
     source: (page) =>
       clickSource(
@@ -1098,8 +1122,8 @@ async function freeze(page: Page) {
   await page.mouse.move(1, 1)
 }
 
-async function geometry(page: Page, root?: string) {
-  return page.evaluate((selector) => {
+async function geometry(page: Page, root?: string, criticalSelectors: Record<string, string> = {}) {
+  return page.evaluate(({ selector, criticalSelectors }) => {
     const node = selector ? (document.querySelector(selector) as HTMLElement | null) : null
     const body = document.body
     const inspect = (element: HTMLElement | null) => {
@@ -1139,10 +1163,16 @@ async function geometry(page: Page, root?: string) {
       url: location.href,
       rootSelector: selector,
       root: inspect(node),
+      critical: Object.fromEntries(
+        Object.entries(criticalSelectors).map(([name, criticalSelector]) => [
+          name,
+          inspect(document.querySelector(criticalSelector) as HTMLElement | null),
+        ]),
+      ),
       body: inspect(body),
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
     }
-  }, root)
+  }, { selector: root, criticalSelectors })
 }
 
 async function capture(referencePage: Page, sourcePage: Page, state: State, testInfo: TestInfo) {
@@ -1152,6 +1182,13 @@ async function capture(referencePage: Page, sourcePage: Page, state: State, test
   const source = await state.source(sourcePage).catch((error: unknown) => ({
     issues: [`source opener threw: ${error instanceof Error ? error.message : String(error)}`],
   }))
+  const targetViewport = testInfo.project.use.viewport
+  if (targetViewport) {
+    await Promise.all([
+      referencePage.setViewportSize(targetViewport),
+      sourcePage.setViewportSize(targetViewport),
+    ])
+  }
   await Promise.all([freeze(referencePage).catch(() => {}), freeze(sourcePage).catch(() => {})])
   const dir = path.join(EVIDENCE, testInfo.project.name, state.name)
   await mkdir(dir, { recursive: true })
@@ -1163,16 +1200,18 @@ async function capture(referencePage: Page, sourcePage: Page, state: State, test
     animations: 'disabled',
     caret: 'hide',
     scale: 'css',
+    timeout: 30_000,
   })
   await sourcePage.screenshot({
     path: srcPath,
     animations: 'disabled',
     caret: 'hide',
     scale: 'css',
+    timeout: 30_000,
   })
   const [refGeometry, srcGeometry] = await Promise.all([
-    geometry(referencePage, reference.root),
-    geometry(sourcePage, source.root),
+    geometry(referencePage, reference.root, state.criticalSelectors?.reference),
+    geometry(sourcePage, source.root, state.criticalSelectors?.source),
   ])
   let diff: Record<string, unknown> = {}
   let diffError = ''
