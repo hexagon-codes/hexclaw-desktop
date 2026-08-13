@@ -33,6 +33,8 @@ import {
   k12SendWeeklyPracticeSnapshot,
   k12SubmitWeeklyPracticeAttempt,
   k12UpdateProfileBundle,
+  type CurriculumProgressResp,
+  type ProfileBundleResp,
   type UpdateProfileBundleReq,
 } from '@/api/k12'
 
@@ -110,7 +112,7 @@ describe('K12 weekly-practice HTTP contract', () => {
       page_max: 120,
       units: [],
     }
-    const progress = { progress: null }
+    const progress: CurriculumProgressResp = { progress: null, revision: 0 }
     const settings = {
       agent: 'mingming',
       revision: 0,
@@ -128,7 +130,10 @@ describe('K12 weekly-practice HTTP contract', () => {
     await expect(
       k12GetCurriculumCatalog('mingming', '人教版', '五年级下册'),
     ).resolves.toBe(catalog)
-    await expect(k12GetCurriculumProgress('mingming')).resolves.toEqual({ progress: null })
+    await expect(k12GetCurriculumProgress('mingming')).resolves.toEqual({
+      progress: null,
+      revision: 0,
+    })
     await expect(k12GetWeeklyPracticeSettings('mingming')).resolves.toBe(settings)
 
     expect(h.get).toHaveBeenNthCalledWith(1, '/api/k12/curriculum-catalog', {
@@ -235,6 +240,16 @@ describe('K12 weekly-practice HTTP contract', () => {
       'science',
     ])
     expect(response.profile.textbook_edition).toBe(response.profile.subject_textbooks.math)
+  })
+
+  it('models the nullable progress lifecycle in the profile-bundle contract', () => {
+    const clearedProgress: UpdateProfileBundleReq['curriculum_progress'] = null
+    const clearedResponseProgress: ProfileBundleResp['curriculum_progress'] = null
+    const noProgress: CurriculumProgressResp = { progress: null, revision: 0 }
+
+    expect(clearedProgress).toBeNull()
+    expect(clearedResponseProgress).toBeNull()
+    expect(noProgress).toEqual({ progress: null, revision: 0 })
   })
 
   it('preserves plan/current/history/snapshot wrapper and bare shapes', async () => {

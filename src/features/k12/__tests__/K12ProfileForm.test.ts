@@ -119,6 +119,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         }),
     )
     h.progressSpy.mockReset().mockResolvedValue({
+      revision: 1,
       progress: {
         progress_id: 'progress-1',
         agent: 'k12-tutor-x',

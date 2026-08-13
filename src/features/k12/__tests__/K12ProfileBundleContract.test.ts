@@ -3,6 +3,7 @@ import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import { k12GetCurriculumProgress } from '@/api/k12'
 import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
 
@@ -91,6 +92,7 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     ],
   }),
   k12GetCurriculumProgress: vi.fn().mockResolvedValue({
+    revision: 4,
     progress: {
       progress_id: 'progress-1',
       agent: 'k12-tutor-x',
@@ -259,6 +261,33 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
       }),
     )
     expect(h.updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('preserves the lifecycle revision after the current progress has been cleared', async () => {
+    vi.mocked(k12GetCurriculumProgress).mockResolvedValueOnce({ progress: null, revision: 2 })
+    mount(K12ProfileForm, {
+      props: { agent: editAgent },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const unitSelect = body().find('[data-testid="k12-current-unit-value"]')
+    await unitSelect.find('button').trigger('click')
+    await flushPromises()
+    const unitOption = body()
+      .findAll('.hc-select__option')
+      .find((option) => option.text().includes('第4单元'))
+    expect(unitOption).toBeDefined()
+    await unitOption!.trigger('mousedown')
+    await flushPromises()
+
+    await body().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.bundle).toHaveBeenCalledWith(
+      expect.objectContaining({ expected_progress_revision: 2 }),
+    )
   })
 
   it('does not write Agent metadata or compensation state when the bundle fails', async () => {

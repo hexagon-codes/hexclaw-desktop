@@ -169,6 +169,7 @@ const error = ref('')
 const mathProgressSection = ref<HTMLElement | null>(null)
 const curriculumCatalog = ref<TextbookManifestCatalogDTO | null>(null)
 const curriculumProgress = ref<CurriculumProgressDTO | null>(null)
+const curriculumProgressRevision = ref(0)
 const textbookBindingOptions = ref<TextbookBindingOptionDTO[]>([])
 const textbookManifestID = ref('')
 const effectiveTextbookManifestID = computed(
@@ -270,6 +271,7 @@ async function loadCurriculumProjection() {
       k12GetTextbookBindingOptions(props.agent.name),
     ])
     curriculumProgress.value = progressResp.progress
+    curriculumProgressRevision.value = progressResp.revision
     weeklySettings.value = settingsResp
     textbookBindingOptions.value = bindingResp.items
     if (progressResp.progress) {
@@ -530,7 +532,7 @@ async function submit() {
         expected_profile_revision: Number(
           props.agent.metadata?.['k12.profile_revision'] ?? '0',
         ),
-        expected_progress_revision: curriculumProgress.value?.revision ?? 0,
+        expected_progress_revision: curriculumProgressRevision.value,
         expected_settings_revision: weeklySettings.value.revision,
         agent_config: {
           display_name: displayName.value,

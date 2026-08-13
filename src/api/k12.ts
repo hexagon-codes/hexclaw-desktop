@@ -723,6 +723,7 @@ export interface CurriculumProgressDTO {
 
 export interface CurriculumProgressResp {
   progress: CurriculumProgressDTO | null
+  revision: number
 }
 
 export interface WeeklyPracticeSettingsDTO {
@@ -761,16 +762,18 @@ export interface UpdateProfileBundleReq {
     grade_term: string
     subject_textbooks: SubjectTextbooksDTO
   }
-  curriculum_progress: {
-    subject: 'math'
-    textbook_manifest_id: string
-    volume: string
-    unit_id: string
-    lesson_id?: string
-    page_from?: number
-    page_to?: number
-    evidence_source: 'parent_confirmed'
-  }
+  curriculum_progress:
+    | {
+        subject: 'math'
+        textbook_manifest_id: string
+        volume: string
+        unit_id: string
+        lesson_id?: string
+        page_from?: number
+        page_to?: number
+        evidence_source: 'parent_confirmed'
+      }
+    | null
   weekly_practice_settings: {
     timezone: string
     textbook_consolidation_enabled: boolean
@@ -783,7 +786,7 @@ export interface UpdateProfileBundleReq {
 export interface ProfileBundleResp {
   agent_config: UpdateProfileBundleReq['agent_config']
   profile: ProfileBundleProfileDTO
-  curriculum_progress: CurriculumProgressDTO
+  curriculum_progress: CurriculumProgressDTO | null
   weekly_practice_settings: WeeklyPracticeSettingsDTO
   replayed: boolean
 }
