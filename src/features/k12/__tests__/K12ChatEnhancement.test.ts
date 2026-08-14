@@ -220,7 +220,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
       '#hc-chat-scenario-inline-message-1 [data-testid="recognize-guard"]',
     )
     expect(collapsedGuard?.classList.contains('rec-panel--collapsed')).toBe(true)
-    expect(taskToggle.getAttribute('aria-label')).toBe('展开任务')
+    expect(taskToggle.getAttribute('aria-label')).toBe('展开任务详情')
     // 收起保留同一消息与后台任务，因此父层 inline slot 仍处于活动态。
     const collapsedInlineEvents = w.emitted('update:inlineActive') ?? []
     expect(collapsedInlineEvents[collapsedInlineEvents.length - 1]).toEqual([true])

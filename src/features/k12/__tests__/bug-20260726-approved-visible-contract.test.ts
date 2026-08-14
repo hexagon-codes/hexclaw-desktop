@@ -33,17 +33,19 @@ describe('2026-07-26 approved chat task UI contract', () => {
     const enhancement = source('src/features/k12/views/K12ChatEnhancement.vue')
     const chat = source('src/views/ChatView.vue')
 
-    expect(guard).toContain("(e: 'contentUpdated'): void")
-    expect(guard).toContain("emit('contentUpdated')")
-    expect(enhancement).toContain("(e: 'contentUpdated'): void")
-    expect(enhancement).toContain('@content-updated="emit(\'contentUpdated\')"')
+    expect(guard).toContain(
+      "(e: 'contentUpdated', payload: { sourceMessageId?: string; reveal?: 'start' }): void",
+    )
+    expect(guard).toContain("emit('contentUpdated', {")
+    expect(enhancement).toContain("e: 'contentUpdated',")
+    expect(enhancement).toContain('@content-updated="emit(\'contentUpdated\', $event)"')
     expect(chat).toContain('@content-updated="handleScenarioContentUpdated"')
     expect(chat).toContain('useConversationScrollCoordinator')
     expect(chat).toMatch(
-      /function handleScenarioContentUpdated\(\)[\s\S]*?scrollCoordinator\.publishContentUpdated/,
+      /function handleScenarioContentUpdated\(payload[\s\S]*?scrollCoordinator\.publishContentUpdated/,
     )
     expect(chat).not.toMatch(
-      /function handleScenarioContentUpdated\(\)[\s\S]*?nextTick\(\(\) => scrollToBottom\(false\)\)/,
+      /function handleScenarioContentUpdated\([\s\S]*?nextTick\(\(\) => scrollToBottom\(false\)\)/,
     )
   })
 
