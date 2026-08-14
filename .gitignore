@@ -49,3 +49,6 @@ tmp/
 .playwright-mcp/
 /*.png
 .eslintcache-review
+
+# Codex 会话临时运行脚本（不入库）
+.codex-*.mjs
