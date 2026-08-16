@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
   exportDocument: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  getAssetBlob: vi.fn(),
 }))
 
 vi.mock('@/api/k12', () => ({
@@ -62,6 +63,10 @@ vi.mock('@/api/k12', () => ({
 
 vi.mock('@/api/desktop', () => ({
   setClipboard: (...args: unknown[]) => h.clipboard(...args),
+}))
+
+vi.mock('@/api/k12-asset-url', () => ({
+  k12GetAssetBlob: (...args: unknown[]) => h.getAssetBlob(...args),
 }))
 
 vi.mock('../export', () => ({
@@ -165,6 +170,7 @@ describe('K12CreativeWorksPanel current contract', () => {
     h.exportDocument.mockReset().mockResolvedValue(undefined)
     h.toastSuccess.mockReset()
     h.toastError.mockReset()
+    h.getAssetBlob.mockReset().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
   })
 
   afterEach(() => {
@@ -205,9 +211,7 @@ describe('K12CreativeWorksPanel current contract', () => {
     await wrapper.findAll('.k12cw__filter button')[2]!.trigger('click')
     expect(wrapper.findAll('.k12cw__card')).toHaveLength(1)
     expect(wrapper.get('.k12cw__card').attributes('data-work-id')).toBe('work-art')
-    expect(wrapper.get('[data-testid="cw-thumb"]').attributes('src')).toContain(
-      '/api/k12/assets/art.png?agent=agent-1',
-    )
+    expect(wrapper.get('[data-testid="cw-thumb"]').attributes('src')).toMatch(/^blob:/)
     wrapper.unmount()
   })
 

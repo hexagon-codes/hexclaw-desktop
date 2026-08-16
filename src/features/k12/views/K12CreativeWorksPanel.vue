@@ -4,10 +4,9 @@
   当前 UI 不投影 legacy 版本、修改稿、归档、手写点评或观察练习卡。
 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  k12AssetURL,
   k12CancelImageTask,
   k12ConfirmImageTask,
   k12CreateCreativeWork,
@@ -25,6 +24,7 @@ import {
   type WorkFeedbackDTO,
   type WorkType,
 } from '@/api/k12'
+import { k12GetAssetBlob } from '@/api/k12-asset-url'
 import { setClipboard } from '@/api/desktop'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
@@ -150,9 +150,49 @@ function cardTime(work: CreativeWorkDTO): {
   }
 }
 
-function workThumbURL(work: CreativeWorkDTO): string {
+// ── 缩略图：经认证客户端拉取资产转 blob URL ─────────────────
+// `<img src>` 直连 /_hexclaw 资产路径没有 Bearer/IPC 通道（桌面 WebView
+// 无该 HTTP 服务、dev 代理无 token），故复用 k12GetAssetBlob 走 api 客户端。
+const thumbURLs = reactive(new Map<string, string>())
+const thumbAborters = new Map<string, AbortController>()
+
+function releaseThumb(workID: string) {
+  thumbAborters.get(workID)?.abort()
+  thumbAborters.delete(workID)
+  const url = thumbURLs.get(workID)
+  if (url) URL.revokeObjectURL(url)
+  thumbURLs.delete(workID)
+}
+
+async function loadThumb(work: CreativeWorkDTO) {
   const assetID = work.source_asset_id?.trim() ?? ''
-  return assetID.startsWith('asset://') ? k12AssetURL(props.agentId, assetID) : ''
+  if (!assetID.startsWith('asset://')) return
+  if (thumbURLs.has(work.work_id) || thumbAborters.has(work.work_id)) return
+  const controller = new AbortController()
+  thumbAborters.set(work.work_id, controller)
+  const blob = await k12GetAssetBlob(props.agentId, assetID, controller.signal)
+  if (!controller.signal.aborted && blob) {
+    thumbURLs.set(work.work_id, URL.createObjectURL(blob))
+  }
+  thumbAborters.delete(work.work_id)
+}
+
+watch(
+  () => works.value.map((work) => work.work_id).join('\u0000'),
+  (next, previous) => {
+    const removed = previous ? previous.split('\u0000').filter((id) => !next.includes(id)) : []
+    for (const id of removed) releaseThumb(id)
+    for (const work of works.value) void loadThumb(work)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  for (const workID of thumbURLs.keys()) releaseThumb(workID)
+})
+
+function workThumbURL(work: CreativeWorkDTO): string {
+  return thumbURLs.get(work.work_id) ?? ''
 }
 
 function stopPendingReviewPoll() {
