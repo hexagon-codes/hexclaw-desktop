@@ -18,19 +18,19 @@ const SIDECAR_VERSION_IDENTITY_PREFIX = 'hexclaw-sidecar-version='
 const SIDECAR_VERSION_IDENTITY_SUFFIX = ';'
 export const OLLAMA_PACKAGE_CONTRACT = Object.freeze({
   architectures: Object.freeze(['x86_64', 'arm64']),
-  archiveBytes: 143_171_908,
-  archiveSha256: 'ad8a4d2918ed09480b8160419570602b4f49e48c9e3792efb601c0f54619e48e',
-  binaryBytes: 66_855_424,
+  archiveBytes: 153_973_425,
+  archiveSha256: '71efd44f3b5f2019f42bae17ae58eb3de8bd25ce3ca3bc89aea58e53e5d091d1',
+  binaryBytes: 68_255_232,
   binaryName: 'ollama',
-  binarySha256: '88abf6776aa83f8d975a486ddac82a285be61cdadd5705153338a49e0f2c5139',
+  binarySha256: 'dee2ad206ec73dc19d4eeaf13f35ff54022977242ed38d53dda65da4c70a9c95',
   goos: 'darwin',
   modulePath: 'github.com/ollama/ollama',
-  moduleVersion: 'v0.30.10+dirty',
+  moduleVersion: 'v0.32.13+dirty',
   packagePath: 'github.com/ollama/ollama',
-  url: 'https://github.com/ollama/ollama/releases/download/v0.30.10/ollama-darwin.tgz',
+  url: 'https://github.com/ollama/ollama/releases/download/v0.32.13/ollama-darwin.tgz',
   vcsModified: true,
-  vcsRevision: 'e1f7f9cbdbdad30b9811d5b673cf3d3f9c624dc2',
-  version: '0.30.10',
+  vcsRevision: '0f25c31bd53b64dc3fcc8fce0bde954159a67a58',
+  version: '0.32.13',
 })
 const SUPPORTED_SIDECAR_TARGETS = new Set([
   'aarch64-apple-darwin',

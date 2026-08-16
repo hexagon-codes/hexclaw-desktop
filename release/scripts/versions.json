@@ -108,18 +108,18 @@
     }
   },
   "ollama": {
-    "version": "0.30.10",
+    "version": "0.32.13",
     "platforms": {
       "darwin-universal2": {
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.10/ollama-darwin.tgz",
-        "sha256": "ad8a4d2918ed09480b8160419570602b4f49e48c9e3792efb601c0f54619e48e",
-        "archive_bytes": 143171908,
+        "url": "https://github.com/ollama/ollama/releases/download/v0.32.13/ollama-darwin.tgz",
+        "sha256": "71efd44f3b5f2019f42bae17ae58eb3de8bd25ce3ca3bc89aea58e53e5d091d1",
+        "archive_bytes": 153973425,
         "checksum_manifest_sha256": "4d4271700fa8173dc0fad0e2f20749c5f68040ff5b78059bc28dd4b069e4d034",
         "binary": "ollama",
-        "binary_bytes": 66855424,
+        "binary_bytes": 68255232,
         "module_path": "github.com/ollama/ollama",
-        "module_version": "v0.30.10+dirty",
-        "vcs_revision": "e1f7f9cbdbdad30b9811d5b673cf3d3f9c624dc2",
+        "module_version": "v0.32.13+dirty",
+        "vcs_revision": "0f25c31bd53b64dc3fcc8fce0bde954159a67a58",
         "architectures": ["x86_64", "arm64"]
       }
     }

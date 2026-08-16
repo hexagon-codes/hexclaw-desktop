@@ -40,7 +40,7 @@ override PACKAGE_LOCAL_NODE := $(if $(filter arm64,$(shell /usr/bin/uname -m)),/
 override PACKAGE_LOCAL_ORCHESTRATOR := $(abspath scripts/ci/package-local.mjs)
 
 # Ollama 版本控制（更新版本只需改这一处）
-OLLAMA_VERSION ?= 0.30.10
+OLLAMA_VERSION ?= 0.32.13
 OLLAMA_RELEASE_BASE ?= https://github.com/ollama/ollama/releases/download/v$(OLLAMA_VERSION)
 
 # 开发模式 (前端 + Tauri 窗口)
