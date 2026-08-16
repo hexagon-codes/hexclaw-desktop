@@ -104,6 +104,7 @@ const FIXED_TOOLS = Object.freeze({
   curl: '/usr/bin/curl',
   ditto: '/usr/bin/ditto',
   hdiutil: '/usr/bin/hdiutil',
+  cp: '/bin/cp',
 })
 
 const TARGETS = Object.freeze({
@@ -1186,9 +1187,16 @@ async function moveBuiltAppIntoReleaseGeneration(plan) {
   }
   if (!stable) fail('release-app-unstable')
   // 复制而非 rename：builtApp 位于宿主持久共享 cargo target，rename 会破坏后续构建的增量缓存。
-  await cp(plan.paths.builtApp, plan.paths.generationApp, { recursive: true }).catch(() =>
-    fail('release-app-copy'),
-  )
+  // APFS clonefile（cp -c）CoW 复制：O(1) 元数据，不占实际写；源只读，克隆后内容逐字节一致。
+  await runPackageCommand(
+    FIXED_TOOLS.cp,
+    ['-c', '-R', plan.paths.builtApp, plan.paths.generationApp],
+    {
+      cwd: plan.paths.generationRoot,
+      env: cleanEnvironment(plan),
+      timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    },
+  ).catch(() => fail('release-app-copy'))
   const copied = await lstat(plan.paths.generationApp, { bigint: true }).catch(() =>
     fail('release-app-copy'),
   )
@@ -2780,18 +2788,37 @@ function productionOperations() {
       if (archive.size !== contract.archiveBytes || archive.sha256 !== contract.archiveSha256) {
         fail('ollama-archive-digest')
       }
-      await extractPinnedTarGzipArchive({
-        appleDoubleContracts: OLLAMA_APPLEDOUBLE_CONTRACTS,
-        archivePath: plan.paths.sharedOllamaArchive,
-        destination: plan.paths.generationOllamaRoot,
-        expectedArchiveBytes: contract.archiveBytes,
-        expectedArchiveSha256: contract.archiveSha256,
-        expectedBinaryBytes: contract.binaryBytes,
-        expectedBinaryRelativePath: contract.binaryName,
-        maxEntries: OLLAMA_ARCHIVE_MAX_ENTRIES,
-        maxExpandedBytes: OLLAMA_EXPANDED_MAX_BYTES,
-        maxFileBytes: OLLAMA_MEMBER_MAX_BYTES,
+      // 解包树由归档 sha256 完全决定：落到宿主持久缓存跨代复用，generation 内 clonefile 引用。
+      const cachedTreeRoot = join(plan.paths.cacheRoot, `ollama-tree-${contract.archiveSha256.slice(0, 16)}`)
+      const cachedTree = await lstat(cachedTreeRoot, { bigint: true }).catch((error) => {
+        if (error?.code === 'ENOENT') return undefined
+        fail('ollama-cache-state')
       })
+      if (cachedTree === undefined) {
+        await extractPinnedTarGzipArchive({
+          appleDoubleContracts: OLLAMA_APPLEDOUBLE_CONTRACTS,
+          archivePath: plan.paths.sharedOllamaArchive,
+          destination: cachedTreeRoot,
+          expectedArchiveBytes: contract.archiveBytes,
+          expectedArchiveSha256: contract.archiveSha256,
+          expectedBinaryBytes: contract.binaryBytes,
+          expectedBinaryRelativePath: contract.binaryName,
+          maxEntries: OLLAMA_ARCHIVE_MAX_ENTRIES,
+          maxExpandedBytes: OLLAMA_EXPANDED_MAX_BYTES,
+          maxFileBytes: OLLAMA_MEMBER_MAX_BYTES,
+        })
+      } else if (!cachedTree.isDirectory() || cachedTree.isSymbolicLink()) {
+        fail('ollama-cache-state')
+      }
+      await runPackageCommand(
+        FIXED_TOOLS.cp,
+        ['-c', '-R', cachedTreeRoot, plan.paths.generationOllamaRoot],
+        {
+          cwd: plan.paths.generationRoot,
+          env: cleanEnvironment(plan),
+          timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+        },
+      ).catch(() => fail('ollama-tree-copy'))
       return Object.freeze({ archiveSha256: archive.sha256, contract, toolchains })
     },
 
@@ -2989,6 +3016,8 @@ function productionOperations() {
           plan.paths.generationDmgRoot,
           '-format',
           'UDZO',
+          '-imagekey',
+          'zlib-level=6',
           plan.paths.generationDmg,
         ],
         {

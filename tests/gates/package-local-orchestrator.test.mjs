@@ -158,6 +158,20 @@ function pipelineOperations(events, failureStage = '', toolchains = fixtureCaptu
   }
 }
 
+test('build performance batch 1: clonefile copies, ollama tree cache, fast hdiutil', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(moduleURL, 'utf8')
+  // P0-1：moveBuiltApp 必须用 APFS clonefile（cp -c）替代全量复制
+  const move = source.slice(source.indexOf('async function moveBuiltAppIntoReleaseGeneration'), source.indexOf('async function verifyAppResources'))
+  assert.equal(move.includes('FIXED_TOOLS.cp'), true)
+  assert.equal(move.includes("'-c'"), true)
+  // P1-1：ollama 解包树进入宿主持久缓存（归档 sha256 决定，跨代复用）
+  assert.match(source, /ollama-tree-/u)
+  assert.equal(source.includes("'-c'"), true)
+  // P4：hdiutil UDZO 用 zlib-level=6
+  assert.equal(source.includes("'zlib-level=6'"), true)
+})
+
 test('package-local plan binds one native generation and never consumes shared package outputs', async () => {
   const { createPackageLocalPlan } = await import(moduleURL)
   const desktopRoot = '/workspace/hexclaw-desktop'
