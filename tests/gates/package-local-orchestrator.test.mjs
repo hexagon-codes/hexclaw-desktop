@@ -172,6 +172,16 @@ test('build performance batch 1: clonefile copies, ollama tree cache, fast hdiut
   assert.equal(source.includes("'zlib-level=6'"), true)
 })
 
+test('build performance batch 2: fingerprint skip wiring in Makefile and script', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const makefile = await readFile(join(process.cwd(), 'Makefile'), 'utf8')
+  assert.equal(makefile.includes('verify-build-local-fingerprint.mjs'), true)
+  const script = await readFile(join(process.cwd(), 'scripts/ci/verify-build-local-fingerprint.mjs'), 'utf8')
+  assert.equal(script.includes('git', 0) || script.includes("'git'"), true)
+  assert.equal(script.includes('build-local-fingerprint.json'), true)
+  assert.equal(script.includes('reusing existing app bundle'), true)
+})
+
 test('package-local plan binds one native generation and never consumes shared package outputs', async () => {
   const { createPackageLocalPlan } = await import(moduleURL)
   const desktopRoot = '/workspace/hexclaw-desktop'

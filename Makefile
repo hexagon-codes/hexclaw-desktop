@@ -89,9 +89,14 @@ verify-package-local:
 build-web:
 	pnpm build
 
-# 装机性能门禁：执行 build-local 并校验增量预算（首次记录基线，之后 ≤5 分钟）。
+# 装机性能门禁：源码五仓未变（指纹命中）→ 直接复用已有 App 产物（秒级）；
+# 变更 → 全量 build-local 并校验增量预算（≤5 分钟）。
 verify-build-local-budget:
-	@$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-budget.mjs
+	@$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-fingerprint.mjs; \
+	case $$? in \
+		0) echo "build-local 指纹命中：源码未变，复用现有产物";; \
+		*) $(MAKE) build-local; $(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-budget.mjs;; \
+	esac
 
 # 从 GitHub 远程仓库同步后端源码；设置 HEXCLAW_LOCAL_SRC 时改用本地源码。
 prepare-sidecar-src:
