@@ -125,6 +125,10 @@ export interface AutonomyGrant {
   task_ref: string
   source: string
   entries: string[]
+  /** 服务端从可信上下文冻结的授权归属者（客户端不可伪造）。 */
+  owner_id?: string
+  /** 可选精确参数作用域 digest；空 = 工具级授权。 */
+  security_scope_digest?: string
   note?: string
   created_at: string
 }
@@ -140,6 +144,8 @@ export function createAutonomyGrant(data: {
   task_ref: string
   source?: string
   entries: string[]
+  /** 可选：冻结参数级精确授权（BUG-20260801-003）；缺省 = 工具级授权。 */
+  security_scope_digest?: string
   note?: string
 }) {
   return apiPost<{ grant: AutonomyGrant }>('/api/v1/autonomy/grants', data)
