@@ -304,8 +304,27 @@ test('prepares Go modules without mutating the frozen workspace sums', async (t)
   )
 })
 
-test('rejects a generation below an ancestor host node_modules before installing', async (t) => {
+test('rejects node_modules inside the private generation before installing', async (t) => {
   const fixture = await createFixture('host-modules')
+  t.after(() => rm(fixture.root, { recursive: true, force: true }))
+  await mkdir(join(fixture.generationRoot, 'node_modules', 'host-canary'), {
+    recursive: true,
+    mode: 0o700,
+  })
+  await writeFile(
+    join(fixture.generationRoot, 'node_modules', 'host-canary', 'index.js'),
+    'host\n',
+  )
+  const module = await import(moduleURL)
+
+  await rejectsCategory(
+    module.preparePackageDependencyProvenance(fixture.options),
+    'node:host-node-modules',
+  )
+})
+
+test('allows an ancestor host node_modules outside the private generation', async (t) => {
+  const fixture = await createFixture('host-modules-ancestor')
   t.after(() => rm(fixture.root, { recursive: true, force: true }))
   await mkdir(join(fixture.root, 'node_modules', 'host-canary'), {
     recursive: true,
@@ -314,10 +333,8 @@ test('rejects a generation below an ancestor host node_modules before installing
   await writeFile(join(fixture.root, 'node_modules', 'host-canary', 'index.js'), 'host\n')
   const module = await import(moduleURL)
 
-  await rejectsCategory(
-    module.preparePackageDependencyProvenance(fixture.options),
-    'node:host-node-modules',
-  )
+  const result = await module.preparePackageDependencyProvenance(fixture.options)
+  assert.ok(result.receiptPath)
 })
 
 test('rejects source and Go module directories outside the private generation', async (t) => {

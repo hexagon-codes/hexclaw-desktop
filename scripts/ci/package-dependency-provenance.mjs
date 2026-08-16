@@ -192,7 +192,7 @@ async function requireDirectory(
   return path
 }
 
-async function rejectHostNodeModules(sourceRoot) {
+async function rejectHostNodeModules(sourceRoot, generationRoot) {
   let cursor = dirname(sourceRoot)
   while (true) {
     const candidate = join(cursor, 'node_modules')
@@ -201,8 +201,9 @@ async function rejectHostNodeModules(sourceRoot) {
       fail('node:host-node-modules')
     })
     if (metadata !== undefined) fail('node:host-node-modules')
+    if (cursor === generationRoot) return
     const parent = dirname(cursor)
-    if (parent === cursor) return
+    if (!pathInside(generationRoot, parent)) return
     cursor = parent
   }
 }
@@ -717,7 +718,7 @@ async function resolveConfig(options, preparing) {
   const sourceRoot = requireAbsolutePath(options.sourceRoot, 'input:source-root')
   await requireDirectory(sourceRoot, 'source', { inside: generationRoot })
   if (sourceRoot === generationRoot) fail('source:layout')
-  await rejectHostNodeModules(sourceRoot)
+  await rejectHostNodeModules(sourceRoot, generationRoot)
   await rejectProjectPackageManagerConfig(sourceRoot, generationRoot)
   const goroot = requireAbsolutePath(options.go.goroot, 'input:goroot')
   await requireDirectory(goroot, 'goroot', { allowRootOwner: true })
