@@ -33,6 +33,8 @@ const props = defineProps<{
   view?: 'current' | 'history'
   practiceGenerationByMistake?: Record<string, MistakePracticeGenerationDTO>
   practiceGenerationBusy?: string[]
+  /** 学情趋势数据可用时投影原型「趋势 ↑ 在进步」pill（app.html 20260709 评审）。 */
+  trendPill?: boolean
 }>()
 
 type ArithmeticAction = 'create' | 'start' | 'resume' | 'retry'
@@ -40,6 +42,8 @@ type ArithmeticAction = 'create' | 'start' | 'resume' | 'retry'
 const emit = defineEmits<{
   (e: 'open-progress'): void
   (e: 'retry'): void
+  (e: 'join-practice', item: WeeklyPracticeItemDTO): void
+  (e: 'view-practice', item: WeeklyPracticeItemDTO): void
   (e: 'update:view', view: 'current' | 'history'): void
   (e: 'open-history', item: WeeklyPracticeHistorySummaryDTO): void
   (
@@ -72,6 +76,43 @@ function failedMistakePractice(item: WeeklyPracticeItemDTO) {
     item.source_kind === 'mistake' &&
     props.practiceGenerationByMistake?.[item.source_ref]?.state === 'failed'
   )
+}
+
+// 图 10 一键加入练习集状态投影：undefined=可加入，generating=正在出题…，
+// joined=✓ 已加入练习集（+查看新题），failed=出题失败·重试（复用既有按钮）。
+// 掌握状态投影（架构 :509 词表 + 原型 .stpill 三态色）：
+// new/explained=待复习（todo 红）· retried=已重做（done 黄）· mastered=证据已掌握（got 绿）· archived=已归档（todo 红）。
+function masteryPill(masteryStatus: string | undefined): { label: string; cls: string } | null {
+  switch (masteryStatus) {
+    case 'mastered':
+      return { label: '证据已掌握', cls: 'got' }
+    case 'retried':
+      return { label: '已重做', cls: 'done' }
+    case 'archived':
+      return { label: '已归档', cls: 'todo' }
+    case 'new':
+    case 'explained':
+      return { label: '待复习', cls: 'todo' }
+    default:
+      return null
+  }
+}
+
+function kpillSubjectClass(subject: string | undefined): string {
+  switch (subject) {
+    case '语文': return 'kpill--chi'
+    case '英语': return 'kpill--eng'
+    case '科学': return 'kpill--sci'
+    case '信息科技': return 'kpill--it'
+    default: return ''
+  }
+}
+
+function practiceJoinState(item: WeeklyPracticeItemDTO): 'available' | 'generating' | 'joined' {
+  const generation = props.practiceGenerationByMistake?.[item.source_ref]
+  if (generation?.state === 'pending') return 'generating'
+  if (generation?.state === 'joined') return 'joined'
+  return 'available'
 }
 const weeklyViewTabs = [
   { key: 'current', label: '本周' },
@@ -138,6 +179,17 @@ const verifiedItems = (track: WeeklyPracticeTrackDTO) =>
 const totalCount = computed(() =>
   visibleTracks.value.reduce((sum, track) => sum + verifiedItems(track).length, 0),
 )
+// hero meta 对齐原型（app.html:3101）：本周错题 = 到期复习项数；
+// 同步巩固/口算热身未就绪（recommendation 不可用）时投影「待准备/待开始」。
+const weeklyMistakeCount = computed(
+  () =>
+    verifiedItems(
+      visibleTracks.value.find((track) => track.plan_section === 'due_review')!,
+    ).length,
+)
+function supplementLabel(recommendation: { availability?: string } | undefined, count: number): string {
+  return recommendation?.availability === 'available' ? String(count) : '待准备'
+}
 const dueReviewCount = computed(
   () =>
     verifiedItems(
@@ -387,9 +439,10 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             </div>
           </div>
           <div class="weekly-hero__meta">
-            <span v-for="track in visibleTracks" :key="track.plan_section">
-              {{ sectionLabels[track.plan_section] }} {{ verifiedItems(track).length }}
-            </span>
+            <span class="kpill">本周错题 {{ weeklyMistakeCount }}</span>
+            <span class="kpill">同步巩固 {{ supplementLabel(textbookRecommendation, verifiedItems(visibleTracks.find((track) => track.plan_section === 'textbook_consolidation')!).length) }}</span>
+            <span class="kpill">口算热身 {{ supplementLabel(arithmeticRecommendation, verifiedItems(visibleTracks.find((track) => track.plan_section === 'arithmetic_warmup')!).length) }}</span>
+            <span v-if="trendPill" class="stpill got">趋势 ↑ 在进步</span>
           </div>
         </div>
 
@@ -600,11 +653,37 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 {{ sectionLabels[item.plan_section] }} ·
                 {{ generationLabels[item.generation_method] || item.generation_method }}
               </b>
-              <span>来源：{{ sourceLabels[item.source_kind] || item.source_kind }}</span>
             </div>
             <MarkdownRenderer class="weekly-item__prompt" :content="item.prompt_markdown" />
+            <div v-if="item.subject || item.knowledge_point || item.mastery_status" class="weekly-item__meta">
+              <span v-if="item.subject || item.knowledge_point" class="kpill" :class="kpillSubjectClass(item.subject)">{{ item.subject || '' }}{{ item.subject && item.knowledge_point ? '·' : '' }}{{ item.knowledge_point || '' }}</span>
+              <span v-if="masteryPill(item.mastery_status)" :class="['stpill', masteryPill(item.mastery_status)!.cls]">{{ masteryPill(item.mastery_status)!.label }}</span>
+            </div>
             <div class="weekly-item__foot">
               <small>依据：{{ evidenceLabel(item) || '已通过服务端验证' }}</small>
+              <button
+                v-if="track.plan_section === 'due_review' && practiceJoinState(item) === 'available'"
+                type="button"
+                class="btn"
+                :disabled="busy || practiceGenerationBusy?.includes(item.source_ref)"
+                @click="emit('join-practice', item)"
+              >
+                加入练习集
+              </button>
+              <button
+                v-if="track.plan_section === 'due_review' && practiceJoinState(item) === 'generating'"
+                type="button"
+                class="btn"
+                disabled
+              >
+                已加入 · 正在出题…
+              </button>
+              <template v-if="track.plan_section === 'due_review' && practiceJoinState(item) === 'joined'">
+                <span class="stpill got weekly-item__joined">✓ 已加入练习集</span>
+                <button type="button" class="btn btn-ghost" @click="emit('view-practice', item)">
+                  查看新题
+                </button>
+              </template>
               <button
                 v-if="track.plan_section === 'due_review' && failedMistakePractice(item)"
                 type="button"
@@ -791,6 +870,46 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   display: grid;
   gap: 4px;
 }
+.weekly-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.kpill {
+  font-size: 10.5px;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.kpill--chi { background: color-mix(in srgb, #e8590c 12%, transparent); color: #e8590c; }
+.kpill--eng { background: color-mix(in srgb, #7048e8 10%, transparent); color: #7048e8; }
+.kpill--sci { background: color-mix(in srgb, #2b8a3e 11%, transparent); color: #2b8a3e; }
+.kpill--it { background: color-mix(in srgb, #0b7285 11%, transparent); color: #0b7285; }
+.stpill {
+  font-size: 10.5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.stpill.todo {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+.stpill.done {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+}
+.stpill.got {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+
 .weekly-progress b {
   font-size: 13.5px;
 }
@@ -799,6 +918,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   color: var(--hc-text-secondary);
   line-height: 1.5;
 }
+
 .weekly-hero {
   overflow: visible;
   border: 0.5px solid var(--hc-border);
@@ -1051,11 +1171,19 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   gap: 3px;
   max-width: 760px;
 }
+.weekly-progress--missing > div > b {
+  white-space: nowrap;
+}
 .weekly-progress--missing > div > span {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
 }
+.weekly-progress--missing > button {
+  flex: none;
+  white-space: nowrap;
+}
+
 
 .weekly-hero {
   margin: 0;

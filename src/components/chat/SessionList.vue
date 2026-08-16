@@ -102,12 +102,17 @@ function resolveSessionAgent(s: ChatSession) {
 function isScenarioSession(s: ChatSession): boolean {
   // 注意不能要求 config 必中：resolver 可仅凭 agentId 判定，agent 未注册到 store 时也要能置顶
   //（SessionList.test「场景实例会话自动置顶」回归锁）。
+  // agentId 形状兜底（matchesInstanceId）：冷启动 agents 目录未就绪、metadata 缺失时，
+  // K12 等场景实例仍按实例 ID 模式（如 k12-tutor-*）置顶，避免"打开 App 有时不置顶"
+  //（BUG-20260816-003；原型 app.html .cs-item data-pin-locked）。
   const resolved = resolveSessionAgent(s)
   if (!resolved.agentId) return false
-  return scenarioRegistry.isScenarioInstance({
-    agentId: resolved.agentId,
-    metadata: resolved.config?.metadata,
-  })
+  return (
+    scenarioRegistry.isScenarioInstance({
+      agentId: resolved.agentId,
+      metadata: resolved.config?.metadata,
+    }) || scenarioRegistry.matchesInstanceId(resolved.agentId)
+  )
 }
 // 有效置顶 = 手动置顶 或 场景实例（场景实例常驻顶部）
 function isPinnedSession(s: ChatSession): boolean {
@@ -1043,7 +1048,7 @@ onUnmounted(() => {
 
 .hc-sessions__title {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--hc-text-primary);
   white-space: nowrap;
   overflow: hidden;

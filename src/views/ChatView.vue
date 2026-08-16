@@ -2880,7 +2880,7 @@ function startSidebarResize(event: MouseEvent) {
                 <div class="hc-msg__bubble-wrap">
                   <div
                     class="hc-msg__bubble hc-msg__bubble--assistant"
-                    :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
+                    :class="{ 'hc-msg__bubble--empty': !isLiveAssistantMessage(msg) && isEmptyReply(msg.content) }"
                   >
                     <template v-if="isLiveAssistantMessage(msg)">
                       <MarkdownRenderer

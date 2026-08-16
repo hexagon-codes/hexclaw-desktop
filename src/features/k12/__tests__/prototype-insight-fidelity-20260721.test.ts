@@ -261,14 +261,12 @@ describe('app.html 学情几何契约', () => {
 
   it('保留 170px 指标列、14px 瓷片、1024px 对齐阅读列与右置 CTA', () => {
     expect(source).toMatch(/\.k12ins\s*\{[^}]*flex:\s*1[^}]*overflow:\s*auto/s)
-    expect(source).toMatch(/\.k12ins\s*\{[^}]*max-inline-size:\s*1024px/s)
+    // DD-019（2026-08-03 批准）：画布不缩窄，1024px 阅读列施加在直接可读子面（.k12ins > *）。
+    expect(source).toMatch(/\.k12ins\s*>\s*\*\s*\{[^}]*max-inline-size:\s*1024px/s)
     expect(source).toMatch(/\.k12ins__h\s*\{[^}]*font-size:\s*15px/s)
     expect(source).toContain('minmax(170px, 1fr)')
     expect(source).toMatch(/\.k12ins__tile\s*\{[^}]*border-radius:\s*14px/s)
     expect(source).toMatch(/\.k12ins__tile\s*\{[^}]*padding:\s*14px 16px/s)
-    expect(source).toMatch(
-      /\.k12ins__priority\s*\{[^}]*inline-size:\s*100%[^}]*max-inline-size:\s*none/s,
-    )
     expect(source).toMatch(/\.k12ins__action\s*\{[^}]*display:\s*flex/s)
   })
 })

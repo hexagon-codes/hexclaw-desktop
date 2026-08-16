@@ -444,10 +444,14 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('持久建档成功但列表刷新失败 → 仍返回已创建终态并提示刷新，不诱导重复建档', async () => {
-    h.getAgentsSpy.mockRejectedValueOnce(new Error('refresh failed'))
+    // 场景语义「列表刷新失败」= 持续失败（loadAgents 冷启动重试 3 次均失败才提示刷新）
+    h.getAgentsSpy.mockRejectedValue(new Error('refresh failed'))
     const w = render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+    // loadAgents 冷启动重试（BUG-20260816-003）为真实 300ms 定时器，flushPromises 不覆盖
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 700))
     await flushPromises()
 
     expect(h.registerSpy).toHaveBeenCalledOnce()

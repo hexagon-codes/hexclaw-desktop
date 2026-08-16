@@ -1804,7 +1804,8 @@ defineExpose({ load, openAdd })
 
 .k12cw__list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  /* 用户批准两列：作品卡片一行两个自然排列（对齐原型显示效果，BUG-20260816-005） */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: stretch;
   margin: 0;

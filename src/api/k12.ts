@@ -824,6 +824,9 @@ export interface WeeklyPracticeItemDTO {
   source_kind: string
   generation_method: WeeklyPracticeGenerationMethod
   source_ref: string
+  subject?: string
+  knowledge_point?: string
+  mastery_status?: string
   verification: WeeklyPracticeItemVerificationDTO
   prompt_markdown: string
 }

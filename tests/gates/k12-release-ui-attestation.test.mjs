@@ -190,7 +190,7 @@ case "$*" in
 esac`,
   )
 
-  for (const name of ['pnpm', 'mkdir', 'ditto', 'ln', 'hdiutil']) {
+  for (const name of ['pnpm', 'mkdir', 'chmod', 'ditto', 'ln', 'hdiutil']) {
     await writeCommandStub(
       bin,
       name,
@@ -516,18 +516,18 @@ test('build-local builds only the local app while package-local performs packagi
   const build = await runLocalMake('build-local')
   assert.equal(build.code, 0, build.stderr)
   assert.equal(build.commands.includes('pnpm'), true)
+  // build-local 允许 mkdir（校验快照目录）与 shasum（Go 工具链身份）；
+  // DMG 打包步骤必须全部缺席。
   for (const packagingStep of [
     'date',
     'sensitive',
     'rm-root-before',
     'rm-root-after',
     'rm-artifacts',
-    'mkdir',
     'ditto',
     'ln',
     'hdiutil',
     'attestation',
-    'shasum',
     'verify',
   ]) {
     assert.equal(build.commands.includes(packagingStep), false, packagingStep)

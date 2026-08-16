@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   confirmImageTaskSpy: vi.fn(),
   retryImageTaskSpy: vi.fn(),
   cancelImageTaskSpy: vi.fn(),
+  assetBlobSpy: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
 }))
@@ -52,6 +53,10 @@ vi.mock('@/api/k12', () => ({
 }))
 vi.mock('@/api/desktop', () => ({
   setClipboard: vi.fn(),
+}))
+vi.mock('@/api/k12-asset-url', () => ({
+  k12GetAssetBlob: (agent: string, id: string, signal?: AbortSignal) =>
+    h.assetBlobSpy(agent, id, signal),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: h.toastSuccess, error: h.toastError }),
@@ -239,13 +244,27 @@ describe('任务1 · 照片真实上传', () => {
     expect(h.toastError).toHaveBeenCalled()
   })
 
-  it('美术作品卡片显 asset:// 缩略图', async () => {
+  it('美术作品卡片显认证拉取的缩略图（00fddac：blob objectURL，非直连 URL）', async () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
-    const w = render()
-    await flushPromises()
-    const img = w.find('[data-testid="cw-thumb"]')
-    expect(img.exists()).toBe(true)
-    expect(img.attributes('src')).toContain('/api/k12/assets/deadbeef.png')
-    expect(img.attributes('src')).toContain('agent=k12-xiaoming')
+    h.assetBlobSpy.mockResolvedValue(new Blob(['fake-image'], { type: 'image/png' }))
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValue('blob:mock-thumb-deadbeef')
+    vi.stubGlobal('URL', { ...URL, createObjectURL })
+    try {
+      const w = render()
+      await flushPromises()
+      await flushPromises()
+      const img = w.find('[data-testid="cw-thumb"]')
+      expect(img.exists()).toBe(true)
+      expect(img.attributes('src')).toBe('blob:mock-thumb-deadbeef')
+      expect(h.assetBlobSpy).toHaveBeenCalledWith(
+        'k12-xiaoming',
+        'asset://k12-xiaoming/deadbeef.png',
+        expect.anything(),
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

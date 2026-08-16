@@ -29,13 +29,18 @@ export const useAgentsStore = defineStore('agents', () => {
    * 经单一可见性边界 userVisibleAgents 剔除匿名「频道默认模型」Agent（`@im/<platform>`）——它们是
    * IM 频道默认模型的承载体，不是用户管理对象，不应泄漏进 Agent 管理页 / 路由下拉 / 聊天 Agent 选择器。 */
   async function loadAgents() {
-    const [res, err] = await trySafe(() => getAgents(), '加载 Agent 列表')
-    error.value = err
-    if (res) {
-      registeredAgents.value = userVisibleAgents(res.agents || [])
-      defaultAgentName.value = res.default || ''
-      agentsLoaded.value = true
-      return true
+    // 冷启动有限重试（BUG-20260816-003 根因：sidecar-ready 事件窗口可能丢失，
+    // agents 永不就绪导致 K12 置顶/标题投影缺数据）。失败后短暂重试再放弃。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [res, err] = await trySafe(() => getAgents(), '加载 Agent 列表')
+      error.value = err
+      if (res) {
+        registeredAgents.value = userVisibleAgents(res.agents || [])
+        defaultAgentName.value = res.default || ''
+        agentsLoaded.value = true
+        return true
+      }
+      if (attempt < 2) await new Promise((resolveDelay) => setTimeout(resolveDelay, 300))
     }
     return false
   }

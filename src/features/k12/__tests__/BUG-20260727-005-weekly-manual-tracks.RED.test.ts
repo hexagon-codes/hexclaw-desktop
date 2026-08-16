@@ -256,10 +256,12 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
     const item = wrapper.get('.weekly-item')
     const actions = item.findAll('button').map((button) => button.text().trim())
 
-    expect(actions).toEqual(['本周先不练', '不再复习'])
+    // 架构图 10（2026-07-25 裁决）：到期复习行必须有一键加入练习集动作（用户 2026-08-16 对齐原型）
+    expect(actions).toEqual(['加入练习集', '本周先不练', '不再复习'])
     expect(item.find('[aria-label*="更多"]').exists()).toBe(false)
 
-    await item.findAll('button')[1]!.trigger('click')
+    // 按钮顺序：加入练习集 / 本周先不练 / 不再复习（suppress 弹层在第三个）
+    await item.findAll('button')[2]!.trigger('click')
     const confirm = document.body.querySelector<HTMLButtonElement>(
       '[data-testid="confirm-suppress-review"]',
     )

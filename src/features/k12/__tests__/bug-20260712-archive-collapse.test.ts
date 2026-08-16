@@ -130,8 +130,8 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     expect(w.find('.weekly-hero').exists()).toBe(true)
     expect(w.find('.rl-review').exists()).toBe(false)
     expect(w.find('[data-testid="go-insights"]').exists()).toBe(false)
-    expect(w.text()).not.toContain('趋势 ↑ 在进步')
-    expect(w.text()).not.toContain('趋势 → 待巩固')
+    // 用户 2026-08-16 批准：有学情趋势数据即显示「趋势 ↑ 在进步」（方案 1）；本 fixture 有趋势数据
+    expect(w.text()).toContain('趋势 ↑ 在进步')
   })
 
   it('⑤ 外层 target 变化可直达 week / mistakes / practiceSets，不丢学情路由目标', async () => {

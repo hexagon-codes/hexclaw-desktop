@@ -421,15 +421,15 @@ export function useChatActions(
       // Accepted branches are immutable user data. A session switch/cancel during the in-flight
       // submit may prevent automatic navigation, but must neither steal focus nor delete the
       // successfully accepted branch. It remains discoverable in the session list.
-      if (!editSubmissionIdentityIsCurrent(token, msgId)
-        || chatStore.currentSessionId !== sourceSessionID) {
-        return
+      // 编辑提交成功后编辑框必须关闭：切换到新分支只是导航，导航失败/被竞态覆盖
+      // 不得让编辑框残留（BUG-20260816-002）。
+      if (!editSubmissionIdentityIsCurrent(token, msgId)) return
+      if (chatStore.currentSessionId === sourceSessionID) {
+        await chatStore.selectSession(branchSessionID).catch((selectError) => {
+          logger.error('[useChatActions] failed to navigate to edited branch', selectError)
+        })
       }
-      await chatStore.selectSession(branchSessionID)
-      if (!editSubmissionIdentityIsCurrent(token, msgId)
-        || chatStore.currentSessionId !== branchSessionID) {
-        return
-      }
+      if (!editSubmissionIdentityIsCurrent(token, msgId)) return
       cancelEdit()
     } catch (error) {
       logger.error('[useChatActions] edited submission failed', error)

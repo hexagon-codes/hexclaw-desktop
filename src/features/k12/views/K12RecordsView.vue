@@ -121,6 +121,11 @@ const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
 const weeklyHistory = ref<WeeklyPracticeHistorySummaryDTO[]>([])
 const weeklyOutput = ref<WeeklyPracticePrepareOutputResp | null>(null)
 const weeklyHistorySnapshot = ref<WeeklyPracticeSnapshotDTO | null>(null)
+// 方案 1（用户批准）：学情趋势数据可用即显示「趋势 ↑ 在进步」pill，无数据不显示。
+const hasWeeklyTrend = computed(() => {
+  const trend = store.report?.trend
+  return Boolean(trend && (trend.total > 0 || trend.mastered > 0 || trend.retried > 0))
+})
 const weeklyLoading = ref(true)
 const weeklyBusy = ref(false)
 const weeklyError = ref('')
@@ -670,6 +675,29 @@ async function submitMistake() {
 
 // 自定义组卷（DD-027A）：失败时保留请求快照和 idempotency_key；原地重试同一正式命令，
 // 使“服务端已提交、客户端丢响应”能读取同一 committed 回执，不重复装篮。
+// 图 10 一键加入练习集：复用全部错题页的原子候选选择链路（BUG-20260725-010/011）。
+function joinWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
+  const record: RecordItem = {
+    recordId: item.source_ref,
+    agentId: props.agentId,
+    collection: 'mistakes',
+    schemaVersion: 'v1',
+    fields: {
+      question: item.prompt_markdown,
+      subject: item.subject ?? '',
+      knowledge_point: item.knowledge_point ?? '',
+    },
+    version: 1,
+  }
+  void openPracticeCandidateSelection(record)
+}
+
+// 查看新题（原型 openGeneratedPractice 弹层：新题/来源错题/同类依据/参考答案与验算）。
+const viewPracticeItem = ref<WeeklyPracticeItemDTO | null>(null)
+function viewWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
+  viewPracticeItem.value = item
+}
+
 async function suppressWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
   const source = view.value?.items.find((record) => record.recordId === item.source_ref)
   if (!source) {
@@ -1594,6 +1622,7 @@ async function doExportMd() {
           :view="weeklyView"
           :practice-generation-by-mistake="practiceGenerationByMistake"
           :practice-generation-busy="practiceGenerationBusy"
+          :trend-pill="hasWeeklyTrend"
           @retry="loadWeeklyPractice"
           @open-progress="openWeeklyProfile"
           @update:view="weeklyView = $event"
@@ -1604,6 +1633,8 @@ async function doExportMd() {
           @prepare-textbook="prepareWeeklyTextbookTrack"
           @refresh-textbook="refreshWeeklyTextbookTrack"
           @defer-item="deferWeeklyPracticeItem"
+          @join-practice="joinWeeklyPracticeItem"
+          @view-practice="viewWeeklyPracticeItem"
           @suppress-item="suppressWeeklyPracticeItem"
           @retry-mistake-practice="retryMistakePracticeGeneration"
         >
@@ -1621,6 +1652,26 @@ async function doExportMd() {
                   />
           </template>
         </K12WeeklyPracticePanel>
+        <div v-if="viewPracticeItem" class="hc-view-practice-overlay" @click.self="viewPracticeItem = null">
+          <div class="hc-view-practice-modal" role="dialog" aria-modal="true" aria-label="查看新题">
+            <div class="hc-view-practice-modal__head">
+              <b>查看新题</b>
+              <button type="button" aria-label="关闭" @click="viewPracticeItem = null">×</button>
+            </div>
+            <div class="hc-view-practice-modal__body">
+              <template v-if="viewPracticeItem && practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item">
+                <div class="hc-view-practice-row"><b>新题</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.question_markdown }}</span></div>
+                <div class="hc-view-practice-row"><b>来源错题</b><span>{{ viewPracticeItem.prompt_markdown }}</span></div>
+                <div class="hc-view-practice-row"><b>同类依据</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.verification_evidence ?? '已通过服务端验证' }}</span></div>
+                <div class="hc-view-practice-row"><b>参考答案与验算</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.expected_answer_markdown ?? '—' }}</span></div>
+              </template>
+              <p v-else class="hc-view-practice-empty">练习项尚未生成完成，稍后再查看。</p>
+            </div>
+            <div class="hc-view-practice-modal__foot">
+              <button type="button" class="btn btn-ghost" @click="viewPracticeItem = null">关闭</button>
+            </div>
+          </div>
+        </div>
         <K12PersistentPrintController
           ref="weeklyPrintController"
           mode="native-dialog"
@@ -3020,6 +3071,66 @@ async function doExportMd() {
   background: color-mix(in srgb, #7048e8 10%, transparent);
   color: #7048e8;
 }
+/* 查看新题弹层（原型 openGeneratedPractice：新题/来源/依据/答案，只读检查非审批门）。 */
+.hc-view-practice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.4);
+}
+.hc-view-practice-modal {
+  width: min(560px, calc(100vw - 48px));
+  max-height: min(70vh, 640px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--hc-bg-card);
+  border: 0.5px solid var(--hc-border);
+  border-radius: 16px;
+  box-shadow: var(--hc-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
+}
+.hc-view-practice-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+}
+.hc-view-practice-modal__head button {
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--hc-text-muted);
+}
+.hc-view-practice-modal__body {
+  overflow: auto;
+  padding: 8px 16px 12px;
+  display: grid;
+  gap: 8px;
+}
+.hc-view-practice-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.hc-view-practice-row b {
+  color: var(--hc-text-muted);
+  font-weight: 600;
+}
+.hc-view-practice-empty {
+  color: var(--hc-text-muted);
+  font-size: 12.5px;
+}
+.hc-view-practice-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 16px 14px;
+}
+
 /* 错题一键加入练习集的服务端状态投影；与通用 RecordList 状态 pill 同口径。 */
 .rl-status {
   font-size: 10.5px;

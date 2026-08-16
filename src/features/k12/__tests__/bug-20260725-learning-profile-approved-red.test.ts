@@ -50,10 +50,8 @@ describe('approved learning-profile contracts remain pinned before production im
     expect(recordsSource).not.toMatch(/@click=["']archiveMistake/)
   })
 
-  it('[BUG-20260725-020] keeps the approved fixed auto-fill creative-work collection geometry', () => {
-    expect(creativeSource).toContain(
-      'repeat(auto-fill, minmax(min(100%, 420px), 1fr))',
-    )
+  it('[BUG-20260725-020] keeps the approved two-column creative-work collection geometry (user 2026-08-16)', () => {
+    expect(creativeSource).toContain('repeat(2, minmax(0, 1fr))')
     expect(creativeSource).not.toContain('repeat(auto-fit')
     expect(creativeSource).toMatch(/min-height:\s*138px/)
     expect(creativeSource).toMatch(

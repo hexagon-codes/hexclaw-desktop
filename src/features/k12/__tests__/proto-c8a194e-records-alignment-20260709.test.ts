@@ -118,20 +118,19 @@ describe('原型 c8a194e 对齐 · 错题本行动卡与档案区（20260709 定
     expect(w.text()).not.toContain('语文 1')
   })
 
-  it('② 学情趋势不重复进入本周计划（mastered>0）', async () => {
+  it('② 学情趋势数据可用时 hero 显示「趋势 ↑ 在进步」（用户 2026-08-16 批准方案 1）', async () => {
     const w = render()
     await flushPromises()
     expect(w.find('.weekly-hero').exists()).toBe(true)
-    expect(w.text()).not.toContain('趋势 ↑ 在进步')
+    expect(w.text()).toContain('趋势 ↑ 在进步')
   })
 
-  it('② 学情趋势不重复进入本周计划（mastered=0）', async () => {
+  it('② 趋势数据仍可用（mastered=0 但 total>0）时 hero 继续显示趋势 pill', async () => {
     h.report.trend.mastered = 0
     const w = render()
     await flushPromises()
     expect(w.find('.weekly-hero').exists()).toBe(true)
-    expect(w.text()).not.toContain('趋势 → 待巩固')
-    expect(w.text()).not.toContain('在进步')
+    expect(w.text()).toContain('趋势 ↑ 在进步')
   })
 
   it('③ 旧自动装篮与整周菜单退役，保存到练习集只保留单题入口', async () => {

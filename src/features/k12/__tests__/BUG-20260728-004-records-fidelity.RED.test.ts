@@ -38,7 +38,7 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
   it('does not expand the approved compact creative-work collection cards', () => {
     expect(
       creativeWorksSource.includes(
-        'repeat(auto-fill, minmax(min(100%, 420px), 1fr))',
+        'repeat(2, minmax(0, 1fr))',
       ),
     ).toBe(true)
     expect(
