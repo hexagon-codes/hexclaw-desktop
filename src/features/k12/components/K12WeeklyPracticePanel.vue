@@ -151,6 +151,23 @@ const arithmeticRecommendation = computed(
   () => props.plan?.manual_track_recommendations?.arithmetic_warmup,
 )
 
+// BUG-20260815-001 ③：补充轨缺教材进度时投影已批准中文引导，不显示服务端英文
+// failure_message（如 curriculum progress setup required）。
+function setupRequiredFor(section: WeeklyPracticeSection): boolean {
+  const recommendation =
+    section === 'textbook_consolidation'
+      ? textbookRecommendation.value
+      : section === 'arithmetic_warmup'
+        ? arithmeticRecommendation.value
+        : undefined
+  return recommendation?.availability === 'setup_required'
+}
+
+const setupRequiredMessage: Record<string, string> = {
+  textbook_consolidation: '先设置教材进度，再生成同步巩固题',
+  arithmetic_warmup: '先设置教材进度，再生成口算热身题',
+}
+
 watch(
   () => textbookRecommendation.value?.selected_item_count,
   (itemCount) => {
@@ -415,14 +432,22 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             class="weekly-track__failure"
             role="status"
           >
-            {{ track.failure_message || '这一部分暂时无法生成，到期复习不受影响。' }}
+            {{
+              setupRequiredFor(track.plan_section)
+                ? setupRequiredMessage[track.plan_section]
+                : track.failure_message || '这一部分暂时无法生成，到期复习不受影响。'
+            }}
           </div>
           <div
             v-if="arithmeticFailure(track)"
             class="weekly-track__failure"
             role="status"
           >
-            {{ arithmeticFailure(track) }}
+            {{
+              setupRequiredFor(track.plan_section)
+                ? setupRequiredMessage[track.plan_section]
+                : arithmeticFailure(track)
+            }}
           </div>
           <button
             v-if="track.plan_section === 'textbook_consolidation' && track.status === 'stale'"
@@ -1013,6 +1038,23 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-progress--missing {
   border-style: dashed;
   background: var(--hc-bg-card);
+}
+
+/* BUG-20260815-001：缺教材进度提示卡恢复纵向堆叠与正常换行（权威原型
+   .rc-week-progress--missing>div{display:grid;gap:3px;max-width:760px}），
+   不被上方的 flex+nowrap 覆盖成单行溢出。 */
+.weekly-progress--missing {
+  align-items: flex-start;
+}
+.weekly-progress--missing > div {
+  display: grid;
+  gap: 3px;
+  max-width: 760px;
+}
+.weekly-progress--missing > div > span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .weekly-hero {
