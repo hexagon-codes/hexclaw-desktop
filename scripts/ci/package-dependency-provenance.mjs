@@ -292,6 +292,32 @@ async function makePrivateDirectory(pathname, root, category) {
   return requireDirectory(path, category, { inside: root, privateMode: true })
 }
 
+// 宿主持久共享缓存目录：允许已存在并复用，缺失时创建；仅要求目录、owner 与常规权限。
+// 缓存内容不参与 receipt 身份摘要，复用不破坏可复现性（BUG-20260816-001）。
+async function ensureSharedCacheDirectory(pathname, category) {
+  const absolute = requireAbsolutePath(pathname, `${category}:path`)
+  // 父目录缺失时先递归创建（宿主缓存根可能是全新的 ~/.cache），再校验 symlink 祖先。
+  const parent = dirname(absolute)
+  await mkdir(parent, { mode: PRIVATE_DIRECTORY_MODE, recursive: true }).catch(() =>
+    fail(`${category}:parent:create`),
+  )
+  await assertNoSymlinkAncestors(parent, `${category}:parent`)
+  const existing = await lstat(absolute, { bigint: true }).catch((error) => {
+    if (error?.code === 'ENOENT') return undefined
+    fail(`${category}:metadata`)
+  })
+  if (existing === undefined) {
+    await mkdir(absolute, { mode: PRIVATE_DIRECTORY_MODE }).catch(() => fail(`${category}:create`))
+    await chmod(absolute, PRIVATE_DIRECTORY_MODE).catch(() => fail(`${category}:permissions`))
+  } else {
+    if (existing.isSymbolicLink()) fail(`${category}:symlink`)
+    if (!existing.isDirectory()) fail(`${category}:type`)
+    requireOwned(existing, category)
+    requireSafeMode(existing, category)
+  }
+  return requireDirectory(absolute, category, { privateMode: true })
+}
+
 function canonicalValue(value) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
   if (typeof value === 'number') {
@@ -623,14 +649,13 @@ async function scanTree(root, generationRoot, label, limits, symlinkBoundary) {
 }
 
 async function scanDependencyTrees(paths, limits) {
+  // 可复用缓存目录（go/pnpm/npm）不进 receipt 树摘要：共享缓存内容可变，
+  // 身份可复现性由源码摘要、锁文件与工具链身份保证（BUG-20260816-001）。
   const definitions = [
     ['node-modules', paths.nodeModules, paths.nodeModules],
     ['pnpm-home', paths.pnpmHome, undefined],
-    ['pnpm-store', paths.pnpmStore, paths.generationRoot],
     ['pnpm-virtual-store', paths.pnpmVirtualStore, undefined],
-    ['npm-cache', paths.npmCache, undefined],
     ['corepack-home', paths.corepackHome, undefined],
-    ['go-module-cache', paths.goModuleCache, undefined],
     ['go-workspace', paths.goWorkspaceRoot, undefined],
   ]
   const result = {}
@@ -649,6 +674,7 @@ async function scanDependencyTrees(paths, limits) {
 
 function validateConfigShape(options) {
   requireExactOptions(options, [
+    'cacheRoot',
     'generationRoot',
     'sourceRoot',
     'sourceManifest',
@@ -713,6 +739,8 @@ function validateConfigShape(options) {
 
 async function resolveConfig(options, preparing) {
   validateConfigShape(options)
+  const cacheRoot = requireAbsolutePath(options.cacheRoot, 'input:cache-root')
+  await ensureSharedCacheDirectory(cacheRoot, 'cache')
   const generationRoot = requireAbsolutePath(options.generationRoot, 'input:generation-root')
   await requireDirectory(generationRoot, 'generation', { privateMode: true })
   const sourceRoot = requireAbsolutePath(options.sourceRoot, 'input:source-root')
@@ -745,13 +773,14 @@ async function resolveConfig(options, preparing) {
     await requireDirectory(controlRoot, 'control', { inside: generationRoot, privateMode: true })
   }
   const paths = {
+    cacheRoot,
     controlRoot,
     corepackHome: join(controlRoot, 'corepack-home'),
     generationRoot,
-    goBuildCache: join(controlRoot, 'go-build-cache'),
+    goBuildCache: join(cacheRoot, 'go-build-cache'),
     goDependencyWork: join(controlRoot, 'go-workspace', 'go.work'),
     goHome: join(controlRoot, 'go-home'),
-    goModuleCache: join(controlRoot, 'go-module-cache'),
+    goModuleCache: join(cacheRoot, 'go-module-cache'),
     goPath: join(controlRoot, 'go-path'),
     goTemp: join(controlRoot, 'go-tmp'),
     goWorkspaceRoot: join(controlRoot, 'go-workspace'),
@@ -761,9 +790,9 @@ async function resolveConfig(options, preparing) {
     nodeHome: join(controlRoot, 'node-home'),
     nodeModules: join(sourceRoot, 'node_modules'),
     nodeTemp: join(controlRoot, 'node-tmp'),
-    npmCache: join(controlRoot, 'npm-cache'),
+    npmCache: join(cacheRoot, 'npm-cache'),
     pnpmHome: join(controlRoot, 'pnpm-home'),
-    pnpmStore: join(controlRoot, 'pnpm-store'),
+    pnpmStore: join(cacheRoot, 'pnpm-store'),
     pnpmVirtualStore: join(controlRoot, 'pnpm-virtual-store'),
     receiptPath: join(controlRoot, RECEIPT_BASENAME),
     sourceRoot,
@@ -775,9 +804,7 @@ async function resolveConfig(options, preparing) {
   const privateDirectories = [
     paths.tools,
     paths.pnpmHome,
-    paths.pnpmStore,
     paths.pnpmVirtualStore,
-    paths.npmCache,
     paths.corepackHome,
     paths.nodeHome,
     paths.nodeTemp,
@@ -786,8 +813,6 @@ async function resolveConfig(options, preparing) {
     paths.xdgData,
     paths.goHome,
     paths.goPath,
-    paths.goModuleCache,
-    paths.goBuildCache,
     paths.goTemp,
     paths.goWorkspaceRoot,
   ]
@@ -800,12 +825,18 @@ async function resolveConfig(options, preparing) {
     for (const path of privateDirectories) {
       await makePrivateDirectory(path, generationRoot, `private:${basename(path)}`)
     }
+    for (const path of [paths.goBuildCache, paths.goModuleCache, paths.npmCache, paths.pnpmStore]) {
+      await ensureSharedCacheDirectory(path, `shared:${basename(path)}`)
+    }
   } else {
     for (const path of privateDirectories) {
       await requireDirectory(path, `private:${basename(path)}`, {
         inside: generationRoot,
         privateMode: true,
       })
+    }
+    for (const path of [paths.goBuildCache, paths.goModuleCache, paths.npmCache, paths.pnpmStore]) {
+      await ensureSharedCacheDirectory(path, `shared:${basename(path)}`)
     }
   }
   return Object.freeze({

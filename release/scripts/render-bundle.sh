@@ -893,6 +893,41 @@ if [ "$render_mode" = "source" ]; then
     exit 1
   fi
 else
+  # 装机幂等：两个 prebuilt 引擎已存在且摘要与版本清单匹配时直接复用，
+  # 不重复下载；摘要不匹配的旧二进制先移除再走既有下载校验流程（BUG-20260816-001）。
+  prebuilt_current=1
+  for name in pandoc typst; do
+    output_name="$(external_output_name "$name")"
+    path="$DEST_INPUT/$output_name"
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      prebuilt_current=0
+      break
+    fi
+    if ! metadata="$(python_helper manifest-platform "$VERSIONS_JSON" "$name" "$target")"; then
+      fail "render version manifest is invalid."
+      exit 1
+    fi
+    old_ifs="$IFS"
+    IFS=$'\x1f'
+    read -r version url expected_sha256 archive_format archive_bytes archive_member archive_max_entries expanded_bytes_max binary_bytes <<EOF
+$metadata
+EOF
+    IFS="$old_ifs"
+    if ! python_helper verify-hash "$path" "$expected_sha256" >/dev/null 2>&1; then
+      prebuilt_current=0
+      break
+    fi
+  done
+  if [ "$prebuilt_current" = "1" ]; then
+    echo "render prebuilt engines already present with matching digests, reusing."
+    exit 0
+  fi
+  for name in pandoc typst; do
+    path="$DEST_INPUT/$(external_output_name "$name")"
+    if [ -f "$path" ] && [ ! -L "$path" ]; then
+      rm -f "$path" || fail "stale render prebuilt removal failed."
+    fi
+  done
   if ! prepared="$(python_helper prepare-prebuilt "$DEST_INPUT" "$pandoc_output" "$typst_output")"; then
     fail "prebuilt render destination is invalid."
     exit 1
@@ -1123,8 +1158,25 @@ EOF
   case "$source_home" in /*) ;; *) fail "package source home must be absolute."; return 1 ;; esac
   case "$rustup_home" in /*) ;; *) fail "package Rust toolchain home must be absolute."; return 1 ;; esac
 
-  private_cargo_home="$WORK_ROOT/cargo"
-  private_target="$WORK_ROOT/cargo-target"
+  # 宿主持久共享缓存根（RENDER_BUNDLE_CACHE_ROOT）：跨 generation 复用 typst 的
+  # cargo 依赖与编译产物，装机不每次全量重建（BUG-20260816-001）；未设置时退回
+  # 本轮 WORK_ROOT 私有目录，保持与既有独立运行语义一致。
+  cache_root="${RENDER_BUNDLE_CACHE_ROOT:-}"
+  if [ -n "$cache_root" ]; then
+    case "$cache_root" in
+      /*) ;;
+      *) fail "render bundle cache root must be absolute."; return 1 ;;
+    esac
+    private_cargo_home="$cache_root/cargo-home"
+    private_target="$cache_root/cargo-target"
+    if [ ! -d "$private_cargo_home" ] || [ ! -d "$private_target" ]; then
+      fail "render bundle cache directories must exist."
+      return 1
+    fi
+  else
+    private_cargo_home="$WORK_ROOT/cargo"
+    private_target="$WORK_ROOT/cargo-target"
+  fi
   install_root="$WORK_ROOT/install"
   source_parent="$WORK_ROOT/source"
   source_root="$source_parent/$crate_root"
@@ -1191,8 +1243,9 @@ EOF
   encoded="--remap-path-prefix=$source_home=/build/home"
   encoded+="$separator--remap-path-prefix=$REPO_ROOT=/build/hexclaw-desktop"
   encoded+="$separator--remap-path-prefix=$source_home/.cargo=/build/cargo"
+  # WORK_ROOT 始终位于仓库（REPO_ROOT）内，由其 remap 覆盖；不单独 remap，
+  # 否则 RUSTFLAGS 每次构建变化导致 typst 全量重编（BUG-20260816-001 增量语义）。
   encoded+="$separator--remap-path-prefix=$rustup_home=/build/rustup"
-  encoded+="$separator--remap-path-prefix=$WORK_ROOT=/build/render"
   encoded+="$separator--remap-path-prefix=$private_cargo_home=/build/cargo"
   encoded+="$separator--remap-path-prefix=$private_target=/build/target"
   encoded+="$separator-C$separator"'link-arg=-Wl,-no_uuid'

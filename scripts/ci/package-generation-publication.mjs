@@ -5,6 +5,9 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 
 const GENERATION_ID_PATTERN = /^[a-f0-9]{32}$/u
+// macOS 会在被 Finder/终端访问的目录内自动生成 .DS_Store；它是本机系统元数据而非
+// 构建产物，recovery 时自动清理而不是 fail-closed（用户批准 2026-08-16）。
+const SYSTEM_METADATA_BASENAME = '.DS_Store'
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const TARGET_PATTERN = /^(?:aarch64|x86_64)-apple-darwin$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/u
@@ -596,6 +599,21 @@ async function removePrivateGeneration(pathname, parent, testAdapter) {
   checkpoint(testAdapter, 'cleanup:after')
 }
 
+async function removeSystemMetadata(pathname, parent, testAdapter) {
+  if (dirname(pathname) !== parent) fail('cleanup-path')
+  const metadata = await lstat(pathname, { bigint: true }).catch(() => fail('cleanup-path'))
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.uid !== currentUID() ||
+    Number(metadata.mode & 0o777n) !== 0o644
+  ) {
+    fail('cleanup-path')
+  }
+  checkpoint(testAdapter, 'cleanup')
+  await unlink(pathname).catch(() => fail('cleanup'))
+}
+
 /** 持锁启动时回收未提交 staging 与 orphan generation，绝不删除 current generation。 */
 export async function recoverPackagePublication(options, suppliedTestAdapter) {
   exactOptions(options, ['activeGenerationId', 'releaseRoot'])
@@ -636,6 +654,10 @@ export async function recoverPackagePublication(options, suppliedTestAdapter) {
 
   const stagingNames = await readdir(stagingRoot).catch(() => fail('cleanup'))
   for (const name of stagingNames) {
+    if (name === SYSTEM_METADATA_BASENAME) {
+      await removeSystemMetadata(join(stagingRoot, name), stagingRoot, testAdapter)
+      continue
+    }
     if (!GENERATION_ID_PATTERN.test(name)) fail('cleanup-path')
     if (name !== activeGenerationId) {
       await removePrivateGeneration(join(stagingRoot, name), stagingRoot, testAdapter)
@@ -643,6 +665,10 @@ export async function recoverPackagePublication(options, suppliedTestAdapter) {
   }
   const publishedNames = await readdir(publishedRoot).catch(() => fail('cleanup'))
   for (const name of publishedNames) {
+    if (name === SYSTEM_METADATA_BASENAME) {
+      await removeSystemMetadata(join(publishedRoot, name), publishedRoot, testAdapter)
+      continue
+    }
     if (!GENERATION_ID_PATTERN.test(name)) fail('cleanup-path')
     if (name !== current?.generation_id) {
       await removePrivateGeneration(join(publishedRoot, name), publishedRoot, testAdapter)

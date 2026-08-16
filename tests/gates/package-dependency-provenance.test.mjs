@@ -142,6 +142,10 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
   const nodeExecutable = join(toolRoot, 'node')
   const pnpmExecutable = join(toolRoot, 'pnpm.cjs')
   const goExecutable = join(goroot, 'bin', 'go')
+  // 宿主持久共享缓存根：与 generation 无关，跨构建复用（BUG-20260816-001）。
+  const cacheRoot = join(root, 'host-cache')
+  await mkdir(cacheRoot, { recursive: true, mode: 0o700 })
+  await chmod(cacheRoot, 0o700)
   const nodeSha256 = await writeExecutable(
     nodeExecutable,
     `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`,
@@ -157,6 +161,7 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
     nodeInstallTimeoutMs: 30_000,
   }
   const options = {
+    cacheRoot,
     generationRoot,
     sourceRoot,
     sourceManifest: { sha256: sha256('fixture source manifest') },
@@ -173,9 +178,9 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
     limits,
   }
   return {
+    cacheRoot,
     generationRoot,
     goExecutable,
-    goWork,
     limits,
     moduleRoot,
     nodeExecutable,
@@ -247,9 +252,10 @@ test('prepare installs and verifies Node and Go dependencies inside one private 
   assert.equal(nodeEnvironment.NODE_PATH, undefined)
   assert.equal(nodeEnvironment.npm_config_userconfig, undefined)
   assert.equal(nodeEnvironment.GOPRIVATE, undefined)
-  for (const name of ['PNPM_HOME', 'NPM_CONFIG_CACHE', 'HOME', 'TMPDIR']) {
+  for (const name of ['PNPM_HOME', 'HOME', 'TMPDIR']) {
     assert.equal(relative(fixture.generationRoot, nodeEnvironment[name]).startsWith('..'), false)
   }
+  assert.equal(nodeEnvironment.NPM_CONFIG_CACHE, join(fixture.cacheRoot, 'npm-cache'))
   const goCommands = await readFile(
     join(fixture.generationRoot, '.package-dependencies', 'go-command.log'),
     'utf8',
@@ -462,16 +468,19 @@ for (const attack of [
   })
 }
 
-test('rejects a symlink created in the private Go module cache', async (t) => {
-  const fixture = await createFixture('go-cache-symlink', {
-    goExtra: '[ -L "$GOMODCACHE/escape-link" ] || ln -s "$GOWORK" "$GOMODCACHE/escape-link"',
-  })
+test('rejects a symlink at the shared Go module cache directory', async (t) => {
+  const fixture = await createFixture('go-cache-symlink')
   t.after(() => rm(fixture.root, { recursive: true, force: true }))
   const module = await import(moduleURL)
 
+  // 共享缓存目录本身必须是常规目录：把 GOMODCACHE 换成 symlink 必须 fail-closed。
+  const cachePath = join(fixture.cacheRoot, 'go-module-cache')
+  const realPath = join(fixture.cacheRoot, 'go-module-cache-real')
+  await mkdir(realPath, { recursive: true, mode: 0o700 })
+  await symlink(realPath, cachePath)
   await rejectsCategory(
     module.preparePackageDependencyProvenance(fixture.options),
-    'tree:go-module-cache:symlink',
+    'shared:go-module-cache:symlink',
   )
 })
 

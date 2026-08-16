@@ -3,6 +3,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
 import {
+  cp,
   lstat,
   mkdir,
   open,
@@ -263,6 +264,7 @@ export function createDependencyProvenanceOptions(plan, toolchains, sourceManife
     fail('dependency-provenance-options')
   }
   return Object.freeze({
+    cacheRoot: plan.paths.cacheRoot,
     generationRoot: plan.paths.generationRoot,
     go: Object.freeze({
       executable: hasGoSourceBinding ? toolchains.go.sourceCanonical : toolchains.go.canonical,
@@ -1167,9 +1169,30 @@ async function moveBuiltAppIntoReleaseGeneration(plan) {
   )
   if (destinationExists) fail('release-app-destination')
   await assertPrivateDirectory(plan.paths.generationReleaseRoot)
-  await rename(plan.paths.builtApp, plan.paths.generationApp).catch(() =>
-    fail('release-app-rename'),
+  // 共享 .app 可能正被残留构建重建（删旧写新）：等待源目录稳定后再复制，
+  // 避免读到半成品；有限重试后仍不稳定则 fail-closed。
+  const stabilityProbe = join(plan.paths.builtApp, 'Contents', 'Info.plist')
+  let stable = false
+  for (let attempt = 0; attempt < 4 && !stable; attempt += 1) {
+    const before = await lstat(stabilityProbe, { bigint: true }).catch(() => null)
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300))
+    const after = await lstat(stabilityProbe, { bigint: true }).catch(() => null)
+    stable =
+      before !== null &&
+      after !== null &&
+      before.ino === after.ino &&
+      before.mtimeNs === after.mtimeNs &&
+      before.size === after.size
+  }
+  if (!stable) fail('release-app-unstable')
+  // 复制而非 rename：builtApp 位于宿主持久共享 cargo target，rename 会破坏后续构建的增量缓存。
+  await cp(plan.paths.builtApp, plan.paths.generationApp, { recursive: true }).catch(() =>
+    fail('release-app-copy'),
   )
+  const copied = await lstat(plan.paths.generationApp, { bigint: true }).catch(() =>
+    fail('release-app-copy'),
+  )
+  if (!copied.isDirectory() || copied.isSymbolicLink()) fail('release-app-copy')
 }
 
 async function scanRegularTree(root, limits = {}) {
@@ -1951,11 +1974,16 @@ export function createPackageLocalPlan(options) {
   const packageControlDirectory = join(releaseRoot, PACKAGE_GENERATION_CONTROL_BASENAME)
   const generationBinaries = join(generationRoot, 'binaries')
   const generationOllamaRoot = join(generationRoot, 'ollama')
-  const generationCargoTarget = join(generationRoot, 'cargo-target')
   const projectedWorkRoot = join(generationRoot, 'source')
   const projectedDesktopRoot = join(projectedWorkRoot, 'hexclaw-desktop')
+  // 宿主持久共享缓存根：依赖缓存跨 generation 复用，装机不每次全量重建（BUG-20260816-001）。
+  const cacheRoot = join(hostHome, '.cache', 'hexclaw-package')
+  const sharedCargoHome = join(cacheRoot, 'cargo-home')
+  const sharedCargoTarget = join(cacheRoot, 'cargo-target')
+  const sharedOllamaArchive = join(cacheRoot, 'downloads', 'ollama-darwin.tgz')
+  // Tauri 产物在共享 cargo target 下生成；从 generation 复制进发布目录（不移动共享缓存）。
   const builtApp = join(
-    generationCargoTarget,
+    sharedCargoTarget,
     target.triple,
     'release',
     'bundle',
@@ -1965,16 +1993,15 @@ export function createPackageLocalPlan(options) {
   const paths = Object.freeze({
     buildResult: publication.resultPath,
     builtApp,
+    cacheRoot,
     currentPointer: publication.currentPointerPath,
     frontendNodeModules: join(projectedDesktopRoot, 'node_modules'),
     generationApp: publication.appBundle,
     generationBinaries,
-    generationCargoTarget,
     generationDist: publication.distRoot,
     generationDmg: publication.packagePath,
     generationDmgRoot: join(generationRoot, 'dmg-root'),
     generationManifest: publication.manifestPath,
-    generationOllamaArchive: join(generationRoot, 'downloads', 'ollama-darwin.tgz'),
     generationOllamaRoot,
     generationReceipt: publication.receiptPath,
     generationReleaseRoot: publication.candidateRoot,
@@ -1990,8 +2017,6 @@ export function createPackageLocalPlan(options) {
     publishedResult: publication.published.resultPath,
     publishedRoot: publication.publishedRoot,
     publishedSourceManifest: publication.published.sourceManifestPath,
-    privateCargoHome: join(generationRoot, 'cargo-home'),
-    privateCargoTarget: generationCargoTarget,
     privateHome: join(generationRoot, 'home'),
     privateTemp: join(generationRoot, 'tmp'),
     projectedDesktopRoot,
@@ -2001,6 +2026,9 @@ export function createPackageLocalPlan(options) {
     projectedGoWork: join(projectedWorkRoot, 'go.work'),
     projectedWorkRoot,
     releaseRoot,
+    sharedCargoHome,
+    sharedCargoTarget,
+    sharedOllamaArchive,
     tauriOverlay: join(generationRoot, 'tauri.package-local.generated.json'),
     tombstone: join(packageControlDirectory, PACKAGE_GENERATION_TOMBSTONE_BASENAME),
   })
@@ -2145,8 +2173,10 @@ export async function runPackageBuildPipeline(plan, suppliedOperations) {
     await operations.buildFrontend(context)
     await operations.prepareCargoDependencies(context)
     await operations.buildTauriApp(context)
-    await operations.verifyAppResources(context)
+    // 先复制到 generation 私有目录再校验：共享 .app 可能被残留构建写入，
+    // verify 只扫描本代私有副本，消除并发写共享路径的 tree-metadata 竞态。
     await operations.stageReleaseApp(context)
+    await operations.verifyAppResources(context)
     await operations.verifySourceManifest(context)
     await operations.sanitizeAndVerify(context)
     await operations.createDmg(context)
@@ -2216,7 +2246,11 @@ async function prepareGenerationRoot(plan) {
   await Promise.all([
     makePrivateDirectory(plan.paths.privateHome),
     makePrivateDirectory(plan.paths.privateTemp),
-    makePrivateDirectory(plan.paths.privateCargoHome),
+    // 宿主持久共享缓存：允许跨 generation 复用，装机不每次全量重建（BUG-20260816-001）。
+    makePrivateDirectory(plan.paths.cacheRoot, { recursive: true }),
+    makePrivateDirectory(plan.paths.sharedCargoHome, { recursive: true }),
+    makePrivateDirectory(plan.paths.sharedCargoTarget, { recursive: true }),
+    makePrivateDirectory(dirname(plan.paths.sharedOllamaArchive), { recursive: true }),
   ])
 }
 
@@ -2355,13 +2389,14 @@ function nodePackageEnvironment(context, overrides = {}) {
 }
 
 function rustRemapFlags(plan) {
-  // rustc 对同一路径采用后出现的映射；顺序固定为 HOME→repo→HOME/.cargo，再覆盖本轮私有目录。
+  // rustc 对同一路径采用后出现的映射；顺序固定为 HOME→repo→HOME/.cargo→共享缓存。
+  // 注意：generationRoot/WORK_ROOT 均为 desktopRoot 子路径，由 desktopRoot remap 覆盖，
+  // 不得单独 remap——否则 RUSTFLAGS 每次构建变化，cargo fingerprint 全变导致全量重编。
   return Object.freeze([
     `--remap-path-prefix=${plan.hostHome}=/build/home`,
     `--remap-path-prefix=${plan.desktopRoot}=/build/hexclaw-desktop`,
     `--remap-path-prefix=${join(plan.hostHome, '.cargo')}=/build/cargo`,
-    `--remap-path-prefix=${plan.paths.generationRoot}=/build/generation`,
-    `--remap-path-prefix=${plan.paths.privateCargoHome}=/build/cargo`,
+    `--remap-path-prefix=${plan.paths.sharedCargoHome}=/build/cargo`,
   ])
 }
 
@@ -2371,12 +2406,12 @@ function cargoEnvironment(context, offline) {
     CI: 'true',
     CARGO: toolchains.cargo.canonical,
     CARGO_ENCODED_RUSTFLAGS: rustRemapFlags(plan).join('\x1f'),
-    CARGO_HOME: plan.paths.privateCargoHome,
+    CARGO_HOME: plan.paths.sharedCargoHome,
     CARGO_INCREMENTAL: '0',
     CARGO_NET_GIT_FETCH_WITH_CLI: 'false',
     CARGO_NET_OFFLINE: offline ? 'true' : 'false',
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL: 'sparse',
-    CARGO_TARGET_DIR: plan.paths.privateCargoTarget,
+    CARGO_TARGET_DIR: plan.paths.sharedCargoTarget,
     CARGO_TERM_COLOR: 'never',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
@@ -2619,6 +2654,7 @@ function productionOperations() {
           env: cleanEnvironment(plan, {
             PACKAGE_LOCAL_RUSTUP_HOME: join(plan.hostHome, '.rustup'),
             PACKAGE_LOCAL_SOURCE_HOME: plan.hostHome,
+            RENDER_BUNDLE_CACHE_ROOT: plan.paths.cacheRoot,
             RENDER_BUNDLE_CARGO: toolchains.cargo.canonical,
             RENDER_BUNDLE_CARGO_SHA256: toolchains.cargo.executableSha256,
             RENDER_BUNDLE_MODE: 'source',
@@ -2685,49 +2721,60 @@ function productionOperations() {
     async stageOllama(context) {
       const { plan, toolchains } = context
       const contract = validateOllamaContract(getOllamaPackageContract())
-      await makePrivateDirectory(dirname(plan.paths.generationOllamaArchive), { recursive: true })
-      await runPackageCommand(
-        FIXED_TOOLS.curl,
-        [
-          '--disable',
-          '--fail',
-          '--location',
-          '--max-filesize',
-          String(contract.archiveBytes),
-          '--max-redirs',
-          '5',
-          '--proto',
-          '=https',
-          '--proto-redir',
-          '=https',
-          '--silent',
-          '--show-error',
-          '--connect-timeout',
-          '20',
-          '--speed-limit',
-          '1024',
-          '--speed-time',
-          '30',
-          '--max-time',
-          '1200',
-          '--retry',
-          '3',
-          '--retry-delay',
-          '2',
-          '--retry-max-time',
-          '1200',
-          '--output',
-          plan.paths.generationOllamaArchive,
-          contract.url,
-        ],
-        {
-          cwd: plan.paths.generationRoot,
-          env: cleanEnvironment(plan),
-          timeoutMs: 21 * 60 * 1_000,
-        },
-      )
+      await makePrivateDirectory(dirname(plan.paths.sharedOllamaArchive), { recursive: true })
+      // 宿主持久缓存：已存在且摘要匹配的官方归档直接复用，不重复下载（BUG-20260816-001）。
+      const cached = await secureFileSHA256(
+        plan.paths.sharedOllamaArchive,
+        contract.archiveBytes,
+      ).catch(() => undefined)
+      if (
+        cached === undefined ||
+        cached.size !== contract.archiveBytes ||
+        cached.sha256 !== contract.archiveSha256
+      ) {
+        await runPackageCommand(
+          FIXED_TOOLS.curl,
+          [
+            '--disable',
+            '--fail',
+            '--location',
+            '--max-filesize',
+            String(contract.archiveBytes),
+            '--max-redirs',
+            '5',
+            '--proto',
+            '=https',
+            '--proto-redir',
+            '=https',
+            '--silent',
+            '--show-error',
+            '--connect-timeout',
+            '20',
+            '--speed-limit',
+            '1024',
+            '--speed-time',
+            '30',
+            '--max-time',
+            '1200',
+            '--retry',
+            '3',
+            '--retry-delay',
+            '2',
+            '--retry-max-time',
+            '1200',
+            '--output',
+            plan.paths.sharedOllamaArchive,
+            contract.url,
+          ],
+          {
+            cwd: plan.paths.generationRoot,
+            env: cleanEnvironment(plan),
+            timeoutMs: 21 * 60 * 1_000,
+          },
+        )
+      }
       const archive = await secureFileSHA256(
-        plan.paths.generationOllamaArchive,
+        plan.paths.sharedOllamaArchive,
         contract.archiveBytes,
       )
       if (archive.size !== contract.archiveBytes || archive.sha256 !== contract.archiveSha256) {
@@ -2735,7 +2782,7 @@ function productionOperations() {
       }
       await extractPinnedTarGzipArchive({
         appleDoubleContracts: OLLAMA_APPLEDOUBLE_CONTRACTS,
-        archivePath: plan.paths.generationOllamaArchive,
+        archivePath: plan.paths.sharedOllamaArchive,
         destination: plan.paths.generationOllamaRoot,
         expectedArchiveBytes: contract.archiveBytes,
         expectedArchiveSha256: contract.archiveSha256,
@@ -2844,10 +2891,12 @@ function productionOperations() {
     },
 
     async verifyAppResources({ plan }) {
-      const appMacOS = join(plan.paths.builtApp, 'Contents', 'MacOS')
+      // 校验 generation 私有副本（stageReleaseApp 已复制），不直接扫描共享 builtApp：
+      // 共享产物可能被残留构建重建，扫描私有副本可避免 tree-metadata 竞态。
+      const appMacOS = join(plan.paths.generationApp, 'Contents', 'MacOS')
       await assertExactRegularTrees(
         plan.paths.generationOllamaRoot,
-        join(plan.paths.builtApp, 'Contents', 'Resources', 'ollama'),
+        join(plan.paths.generationApp, 'Contents', 'Resources', 'ollama'),
       )
       for (const name of ['hexclaw', 'pandoc', 'typst']) {
         const source = join(plan.paths.generationBinaries, `${name}-${plan.target.triple}`)

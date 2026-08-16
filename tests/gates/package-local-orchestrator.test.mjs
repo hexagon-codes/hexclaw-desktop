@@ -184,8 +184,13 @@ test('package-local plan binds one native generation and never consumes shared p
     join(plan.paths.projectedWorkRoot, 'hexclaw'),
   ])
   assert.equal(plan.paths.frontendNodeModules.startsWith(plan.paths.generationRoot), true)
-  assert.equal(plan.paths.privateCargoHome.startsWith(plan.paths.generationRoot), true)
-  assert.equal(plan.paths.privateCargoTarget.startsWith(plan.paths.generationRoot), true)
+  // 依赖缓存位于宿主持久共享根，跨 generation 复用（BUG-20260816-001）。
+  assert.equal(plan.paths.cacheRoot, join('/Users/developer', '.cache', 'hexclaw-package'))
+  assert.equal(plan.paths.sharedCargoHome.startsWith(plan.paths.cacheRoot), true)
+  assert.equal(plan.paths.sharedCargoTarget.startsWith(plan.paths.cacheRoot), true)
+  assert.equal(plan.paths.sharedCargoHome.startsWith(plan.paths.generationRoot), false)
+  assert.equal(plan.paths.sharedCargoTarget.startsWith(plan.paths.generationRoot), false)
+  assert.equal(plan.paths.sharedOllamaArchive.startsWith(plan.paths.cacheRoot), true)
   assert.equal(plan.paths.generationBinaries.startsWith(plan.paths.generationRoot), true)
   assert.equal(plan.paths.generationOllamaRoot.startsWith(plan.paths.generationRoot), true)
   assert.equal(plan.paths.generationDist.startsWith(plan.paths.generationRoot), true)
@@ -576,8 +581,8 @@ test('package-local pipeline builds one complete private candidate without publi
     'build-frontend',
     'prepare-cargo-dependencies',
     'build-tauri-app',
-    'verify-app-resources',
     'stage-release-app',
+    'verify-app-resources',
     'verify-source-manifest',
     'sanitize-and-verify',
     'create-dmg',
@@ -726,7 +731,7 @@ test('held package build creates one private generation before entering the pipe
   const plan = createPackageLocalPlan({
     desktopRoot: join(root, 'hexclaw-desktop'),
     generationId: '7'.repeat(32),
-    hostHome: '/Users/developer',
+    hostHome: join(root, 'host-home'),
     targetTriple: 'x86_64-apple-darwin',
     version: '0.5.0-beta',
   })
@@ -749,7 +754,7 @@ test('held package build creates one private generation before entering the pipe
   const lockOwnedPlan = createPackageLocalPlan({
     desktopRoot: join(root, 'lock-owned-desktop'),
     generationId: 'd'.repeat(32),
-    hostHome: '/Users/developer',
+    hostHome: join(root, 'host-home-lock'),
     targetTriple: 'x86_64-apple-darwin',
     version: '0.5.0-beta',
   })

@@ -27,6 +27,10 @@ SIDECAR_RELEASE_VERSION := $(patsubst v%,%,$(DESKTOP_VERSION))
 HOST_TRIPLE := $(shell rustc -vV | awk '/host:/ {print $$2}')
 CANONICAL_LOCAL_CARGO_TARGET_DIR := $(DESKTOP_ROOT)/src-tauri/target
 PACKAGE_LOCAL_CARGO_TARGET_DIR ?= $(CANONICAL_LOCAL_CARGO_TARGET_DIR)
+# 装机（build-local）sidecar 校验用的 Go 工具链身份与固定快照目录。
+BUILD_LOCAL_GO_EXECUTABLE := $(shell command -v go)
+BUILD_LOCAL_GO_GOROOT := $(shell go env GOROOT)
+BUILD_LOCAL_SNAPSHOT_DIR := $(DESKTOP_ROOT)/src-tauri/binaries/.verify-snapshot
 LOCAL_PACKAGE_TAURI_CONFIG := $(DESKTOP_ROOT)/src-tauri/tauri.package-local.conf.json
 PACKAGE_LOCAL_DIST_DIR ?=
 NODE_BIN ?= $(shell command -v node)
@@ -49,6 +53,11 @@ build:
 
 # 本机构建：使用本地全生态 Go workspace 重建 Sidecar、渲染依赖并生成 App。
 build-local: sidecar-local render-bundle
+	mkdir -p "$(BUILD_LOCAL_SNAPSHOT_DIR)" && chmod 700 "$(BUILD_LOCAL_SNAPSHOT_DIR)"
+	HEXCLAW_PACKAGE_GO_EXECUTABLE="$(BUILD_LOCAL_GO_EXECUTABLE)" \
+	HEXCLAW_PACKAGE_GO_SHA256="$(shell shasum -a 256 "$(BUILD_LOCAL_GO_EXECUTABLE)" | awk '{print $$1}')" \
+	HEXCLAW_PACKAGE_GO_GOROOT="$(BUILD_LOCAL_GO_GOROOT)" \
+	HEXCLAW_PACKAGE_PRIVATE_GENERATION="$(BUILD_LOCAL_SNAPSHOT_DIR)" \
 	$(NODE_BIN) ./scripts/ci/verify-sidecar-version.mjs "$(SIDECAR_BIN_DIR)/hexclaw-$(HOST_TRIPLE)"
 	@if [ -n "$(strip $(PACKAGE_LOCAL_DIST_DIR))" ]; then \
 		$(NODE_BIN) ./scripts/ci/package-sensitive-boundary.mjs verify-root \
@@ -68,7 +77,7 @@ build-local: sidecar-local render-bundle
 		$(PNPM_BIN) tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app; \
 	fi
 
-# 本机装机包：Make 仅进入唯一 Node 状态机。
+# 本机装机包：Make 仅进入唯一 Node 状态机（发布/CI 路径）。
 package-local:
 	@$(PACKAGE_LOCAL_NODE) $(PACKAGE_LOCAL_ORCHESTRATOR) build
 
@@ -79,6 +88,10 @@ verify-package-local:
 # 仅构建前端
 build-web:
 	pnpm build
+
+# 装机性能门禁：执行 build-local 并校验增量预算（首次记录基线，之后 ≤5 分钟）。
+verify-build-local-budget:
+	@$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-budget.mjs
 
 # 从 GitHub 远程仓库同步后端源码；设置 HEXCLAW_LOCAL_SRC 时改用本地源码。
 prepare-sidecar-src:

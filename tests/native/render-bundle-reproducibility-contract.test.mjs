@@ -92,8 +92,10 @@ test('typst is built from an exact locked source graph with all build roots rema
   assert.match(script, /Typst executable architecture verification failed/)
   assert.doesNotMatch(script, /encoded="\$\{CARGO_ENCODED_RUSTFLAGS/)
   assert.match(script, /--remap-path-prefix=.*\/build\/cargo/)
-  assert.match(script, /--remap-path-prefix=.*\/build\/render/)
   assert.match(script, /--remap-path-prefix=.*\/build\/home/)
+  // WORK_ROOT 位于 REPO_ROOT 内，由 REPO_ROOT remap 覆盖；不得单独 remap，
+  // 否则 RUSTFLAGS 每次构建变化导致 typst 全量重编（BUG-20260816-001）。
+  assert.doesNotMatch(script, /\$WORK_ROOT=\/build\/render/)
   const homeRemap = script.indexOf('encoded="--remap-path-prefix=$source_home=/build/home"')
   const repositoryRemap = script.indexOf(
     'encoded+="$separator--remap-path-prefix=$REPO_ROOT=/build/hexclaw-desktop"',
