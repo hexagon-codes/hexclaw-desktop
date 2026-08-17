@@ -93,6 +93,18 @@ describe('BUG-20260801-012 · K12 v9 production contract (unchanged-production R
     expect(presentationSource).not.toMatch(/k12-blackboard|clip-path/i)
   })
 
+  it('keeps the ambient layers in the prototype reference frames', () => {
+    expect(presentationSource).toMatch(
+      /\.k12-global-presentation__sidebar-scene\s*\{[\s\S]*?bottom:\s*0;[\s\S]*?height:\s*340px;/,
+    )
+    expect(presentationSource).toMatch(
+      /\.k12-global-presentation__sidebar-scene\s*\{[\s\S]*?-webkit-mask-image:\s*linear-gradient\(/,
+    )
+    expect(presentationSource).toMatch(
+      /\.k12-global-presentation__fireflies\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;/,
+    )
+  })
+
   it('keeps every Dark firefly translate keyframe inside the approved 6px anchor radius', () => {
     const fireflyKeyframes = presentationSource.match(
       /@keyframes k12FireflyDrift\s*\{([\s\S]*?)\n\}\n\n@media/,

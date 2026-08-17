@@ -95,10 +95,27 @@ if (
 
 .k12-global-presentation__sidebar-scene {
   left: 0;
+  top: auto;
+  bottom: 0;
   width: 226px;
+  height: 340px;
   background-color: #fbf9ef;
   background-position: -57px bottom;
   background-size: auto 560px;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.12) 8%,
+    #000 30%,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.12) 8%,
+    #000 30%,
+    #000 100%
+  );
 }
 
 .k12-global-presentation__main-scene {
@@ -112,6 +129,11 @@ if (
 .k12-global-presentation__butterflies,
 .k12-global-presentation__fireflies {
   inset-inline: 0;
+}
+
+.k12-global-presentation__fireflies {
+  position: fixed;
+  inset: 0;
 }
 
 .k12-global-presentation__butterflies {
@@ -520,6 +542,10 @@ if (
 }
 
 @media (max-height: 680px) {
+  .k12-global-presentation__sidebar-scene {
+    height: 270px;
+  }
+
   :global(
     [data-theme='light'] body[data-k12-skin-active='k12'] .k12-global-presentation__sidebar-scene
   ) {
