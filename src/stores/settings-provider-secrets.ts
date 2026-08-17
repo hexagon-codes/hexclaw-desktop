@@ -33,9 +33,11 @@ export async function restoreProviderApiKeys(
         throw new Error('provider credential reference conflicts with stable identity')
       }
       if (provider.credentialPresent === true) {
-        // The Sidecar has a usable owner-YAML key (whether loaded on startup
-        // or just saved). Keep the masked presentation without Keychain.
-        provider.apiKey = '********'
+        // The Sidecar reports a usable owner-YAML key. Keep the returned value if
+        // present, otherwise keep legacy masked presentation.
+        if (!provider.apiKey || isMaskedApiKey(provider.apiKey)) {
+          provider.apiKey = '********'
+        }
         provider.apiKeyMutation = 'preserve'
       } else {
         // The Sidecar reports no usable YAML key. Do not probe Keychain or

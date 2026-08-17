@@ -9,10 +9,10 @@ import {
   Plus,
   ChevronDown,
   ChevronUp,
-  Power,
   Loader2,
   CheckCircle,
   XCircle,
+  Power,
   RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
@@ -36,6 +36,7 @@ import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import { messageFromUnknownError } from '@/utils/errors'
 import { thirdPartyAiServicesUrl } from '@/utils/legal-links'
 import { logger } from '@/utils/logger'
+import { isMaskedApiKey } from '@/stores/settings-provider-secrets'
 import {
   classifyProviderEndpoint,
   resolveEffectiveProviderLocality,
@@ -1137,18 +1138,6 @@ function providerConnectionResult(provider: ProviderConfig) {
   return testProviderResult.value[provider.id]
 }
 
-function formatProviderProbeTime(testedAt: number): string {
-  const date = new Date(testedAt)
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(locale.value, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
-
 function parseProviderProbeTime(value: string | number | undefined): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value !== 'string') return undefined
@@ -1180,11 +1169,18 @@ async function providerWithStableIdentity(provider: ProviderConfig): Promise<Pro
 function scheduleAutoTest(provider: ProviderConfig) {
   if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
   clearProviderProbeState(provider)
-  const apiKey = provider.apiKey?.trim() || ''
-  if (!apiKey || provider.type === 'ollama') return
+  const apiKey = resolveProviderConnectionApiKey(provider)
+  if ((!apiKey && !provider.providerInstanceId) || provider.type === 'ollama') return
   autoTestTimers[provider.id] = setTimeout(() => {
     testProvider(provider)
   }, 1500)
+}
+
+function resolveProviderConnectionApiKey(provider: ProviderConfig): string {
+  const rawApiKey = provider.apiKey?.trim() || ''
+  if (!rawApiKey) return ''
+  if (isMaskedApiKey(rawApiKey) && provider.providerInstanceId) return ''
+  return rawApiKey
 }
 
 async function testProvider(provider: ProviderConfig) {
@@ -1208,17 +1204,36 @@ async function testProvider(provider: ProviderConfig) {
   }
 
   const needsApiKey = provider.type !== 'ollama'
-  if (needsApiKey && !provider.apiKey?.trim()) {
+
+  let activeProvider: ProviderConfig
+  try {
+    activeProvider = await providerWithStableIdentity(provider)
+  } catch (error) {
+    testingProviderId.value = null
+    throw error
+  }
+
+  if (activeProvider.id !== provider.id) {
+    delete testProviderResult.value[provider.id]
+  }
+
+  const connectionApiKey = resolveProviderConnectionApiKey(activeProvider)
+  if (needsApiKey && !connectionApiKey && !activeProvider.providerInstanceId) {
     testProviderResult.value[provider.id] = {
       ok: false,
       msg: t('settings.llm.testNeedsApiKey'),
+    }
+    if (activeProvider.id !== provider.id) {
+      testProviderResult.value[activeProvider.id] = {
+        ok: false,
+        msg: t('settings.llm.testNeedsApiKey'),
+      }
     }
     testingProviderId.value = null
     return
   }
 
   try {
-    const activeProvider = await providerWithStableIdentity(provider)
     if (!activeProvider.providerInstanceId) {
       throw new Error(t('settings.llm.connectionFailed'))
     }
@@ -1233,7 +1248,7 @@ async function testProvider(provider: ProviderConfig) {
       {
         provider: {
           type: activeProvider.type,
-          api_key: activeProvider.apiKey?.trim() ?? '',
+          api_key: connectionApiKey,
           base_url: activeProvider.baseUrl || preset?.defaultBaseUrl || '',
           model: activeModelId,
         },
@@ -1245,33 +1260,51 @@ async function testProvider(provider: ProviderConfig) {
       },
     )
     const testedAt = parseProviderProbeTime(result.tested_at)
-    if (result.persisted && testedAt !== undefined) {
+
+    if (!result.ok) {
+      activeProvider.probeReceipt = undefined
+      const failed = {
+        ok: false,
+        msg: result.error_message || result.message || t('settings.llm.connectionFailed'),
+      }
+      testProviderResult.value[provider.id] = failed
+      if (activeProvider.id !== provider.id) {
+        testProviderResult.value[activeProvider.id] = failed
+      }
+    } else if (result.persisted && testedAt !== undefined) {
       activeProvider.probeReceipt = {
         providerInstanceId: activeProvider.providerInstanceId,
-        outcome: result.ok ? 'passed' : 'failed',
+        outcome: 'passed',
         locality: effectiveProviderLocality(activeProvider),
         latencyMs: result.latency_ms ?? 0,
         testedAt,
         ...(result.error_code ? { errorCode: result.error_code } : {}),
-        ...(!result.ok
-          ? { errorMessage: result.error_message || result.message }
-          : {}),
       }
-      delete testProviderResult.value[provider.id]
       delete testProviderResult.value[activeProvider.id]
+      delete testProviderResult.value[provider.id]
     } else {
       activeProvider.probeReceipt = undefined
-      delete testProviderResult.value[provider.id]
-      delete testProviderResult.value[activeProvider.id]
+      const success = {
+        ok: true,
+        msg: t('settings.llm.connectionOk'),
+      }
+      testProviderResult.value[provider.id] = success
+      if (activeProvider.id !== provider.id) {
+        testProviderResult.value[activeProvider.id] = success
+      }
     }
     // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
     if (result.ok && activeProvider.type !== 'ollama') {
       syncRemoteModels(activeProvider)
     }
   } catch (e) {
-    testProviderResult.value[provider.id] = {
+    const failed = {
       ok: false,
       msg: messageFromUnknownError(e),
+    }
+    testProviderResult.value[provider.id] = failed
+    if (activeProvider.id !== provider.id) {
+      testProviderResult.value[activeProvider.id] = failed
     }
   } finally {
     testingProviderId.value = null
@@ -1285,8 +1318,9 @@ async function syncRemoteModels(
 ): Promise<boolean> {
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
-  const apiKey = provider.apiKey?.trim() || ''
   if (!baseUrl && !provider.providerInstanceId) return false
+  const apiKey = resolveProviderConnectionApiKey(provider)
+  if (!apiKey && !provider.providerInstanceId) return false
   const syncLease = beginProviderCatalogSync(provider, baseUrl)
   try {
     const remoteModels = await fetchProviderModels(baseUrl, apiKey, {
@@ -1705,10 +1739,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       }"
                       aria-live="polite"
                       :aria-label="
-                        providerConnectionResult(provider)?.ok &&
-                        providerConnectionResult(provider)?.locality
-                          ? `${t('settings.llm.verified', '已验证')} · ${providerConnectionResult(provider)!.locality === 'local' ? t('settings.llm.localService') : t('settings.llm.cloudService')}`
-                          : undefined
+                        providerConnectionResult(provider)?.ok ? t('settings.llm.connectionOk', '成功') : undefined
                       "
                     >
                       <Loader2
@@ -1726,31 +1757,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         testingProviderId === provider.id
                           ? t('settings.llm.testing', '测试中…')
                           : providerConnectionResult(provider)?.ok
-                            ? t('settings.llm.verified', '已验证')
+                            ? t('settings.llm.connectionOk', '成功')
                             : providerConnectionResult(provider)
                               ? t('settings.llm.connectionFailed')
                               : t('settings.llm.untested', '未测试')
                       }}
-                      <template
-                        v-if="
-                          testingProviderId !== provider.id &&
-                          providerConnectionResult(provider)?.ok &&
-                          providerConnectionResult(provider)!.locality
-                        "
-                      >
-                        ·
-                        {{
-                          providerConnectionResult(provider)!.locality === 'local'
-                            ? t('settings.llm.localService')
-                            : t('settings.llm.cloudService')
-                        }}
-                      </template>
-                      <template v-if="provider.probeReceipt">
-                        · {{ t('settings.llm.lastTested', '上次测试') }}
-                        <time :datetime="new Date(provider.probeReceipt.testedAt).toISOString()">
-                          {{ formatProviderProbeTime(provider.probeReceipt.testedAt) }}
-                        </time>
-                      </template>
                     </span>
                     <button
                       class="hc-btn hc-btn-sm hc-provider__test-btn"
@@ -1774,6 +1785,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       :title="
                         provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')
                       "
+                      :aria-label="
+                        provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')
+                      "
                       @click.stop="toggleProvider(provider)"
                     >
                       <Power
@@ -1790,17 +1804,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     />
                   </div>
                 </div>
-                <p
-                  v-if="
-                    testingProviderId !== provider.id &&
-                    providerConnectionResult(provider) &&
-                    !providerConnectionResult(provider)!.ok
-                  "
-                  class="hc-provider__connection-detail"
-                  role="status"
-                >
-                  {{ providerConnectionResult(provider)!.msg }}
-                </p>
 
                 <!-- Provider 编辑面板 -->
                 <div v-if="editingProviderId === provider.id" class="hc-provider__edit">
@@ -3553,11 +3556,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   flex: 0 0 auto;
   padding: 5px 10px;
   border: none;
+  border-radius: var(--hc-radius-sm);
   background: transparent;
   color: var(--hc-error);
   font-size: 12px;
   cursor: pointer;
-  border-radius: var(--hc-radius-sm);
   transition: background 0.15s;
   white-space: nowrap;
 }

@@ -813,16 +813,15 @@ test.describe('BUG-20260723-021 Provider card-header layout', () => {
 
       expect(geometry.cardOverflow).toBeLessThanOrEqual(1)
       expect(geometry.header.height).toBeLessThanOrEqual(100)
-      expect(geometry.actions.height).toBeLessThanOrEqual(32)
+      // 测试按钮对齐原型为 36px 高（原型 .btn-test padding 8px 14px font 13px）
+      expect(geometry.actions.height).toBeLessThanOrEqual(40)
       expect(geometry.modelCount.height).toBeLessThanOrEqual(24)
       expect(geometry.deleteButton.height).toBeLessThanOrEqual(32)
       expect(geometry.modelCount.whiteSpace).toBe('nowrap')
       expect(geometry.deleteButton.whiteSpace).toBe('nowrap')
-      if (geometry.header.width < 960) {
-        expect(geometry.actions.top).toBeGreaterThanOrEqual(geometry.info.bottom - 1)
-      } else {
-        expect(Math.abs(geometry.actions.top - geometry.info.top)).toBeLessThanOrEqual(1)
-      }
+      // CFG-043：卡头恒一行，不随卡片宽度换行
+      // info 两行文本（name+meta 39px）与 actions 按钮（36px）垂直居中，top 差 ≤2
+      expect(Math.abs(geometry.actions.top - geometry.info.top)).toBeLessThanOrEqual(2)
       for (const box of [
         geometry.info,
         geometry.actions,
@@ -878,7 +877,10 @@ test.describe('BUG-20260723-021 Provider card-header layout', () => {
       }
     })
     expect(wideGeometry.cardOverflow).toBeLessThanOrEqual(1)
-    expect(wideGeometry.headerWidth).toBeGreaterThanOrEqual(960)
+    // 600px 限宽为原型基线；宽卡场景验证恒同行（不换行）契约
+    expect(wideGeometry.headerWidth).toBeGreaterThan(600)
+    expect(wideGeometry.headerDisplay).toBe('flex')
+    expect(wideGeometry.actionsFlexWrap).toBe('nowrap')
     expect(Math.abs(wideGeometry.actionsCenter - wideGeometry.infoCenter)).toBeLessThanOrEqual(1)
     expect(wideGeometry.modelCountHeight).toBeLessThanOrEqual(24)
     expect(wideGeometry.deleteButtonHeight).toBeLessThanOrEqual(32)

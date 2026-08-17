@@ -808,7 +808,7 @@ fn provider_value_is_empty(val: &str) -> bool {
         .is_empty()
 }
 
-fn desktop_config_path() -> Result<std::path::PathBuf, String> {
+pub(crate) fn desktop_config_path() -> Result<std::path::PathBuf, String> {
     if let Some(ctx) = test_runtime::current()? {
         return Ok(ctx.config_path());
     }

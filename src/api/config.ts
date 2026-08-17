@@ -97,7 +97,7 @@ function assertExternalBaseUrlAllowed(
 }
 
 /**
- * 从后端获取 LLM 配置（API Key 已脱敏）
+ * 从后端获取 LLM 配置（Tauri 命令会从 owner YAML 回灌明文 API key）
  */
 export async function getLLMConfig(): Promise<BackendLLMConfig> {
   if (isTauri()) {

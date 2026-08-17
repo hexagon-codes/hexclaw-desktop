@@ -47,4 +47,53 @@ describe('系统设置与权威原型对齐', () => {
       /\.hc-settings__info-label\s*\{[^}]*display:\s*block;[^}]*line-height:\s*1\.5;/s,
     )
   })
+
+  it('Provider 卡头按钮与模型名称同行，连接状态只显示测试成功/失败', () => {
+    // 按钮（测试/删除/启用/折叠）与模型名称必须位于同一行容器内
+    expect(settings).toMatch(
+      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/s,
+    )
+    expect(settings).toMatch(
+      /\.hc-provider__card-info\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s,
+    )
+    // 连接状态只允许 未测试 / 测试中… / 测试成功 / 测试失败 四态文案
+    expect(settings).toMatch(
+      /t\('settings\.llm\.verified',\s*'测试成功'\)/,
+    )
+    // 卡头不得再显示 云端/本地服务 或 上次测试时间
+    expect(settings).not.toMatch(
+      /providerConnectionResult\(provider\)!\.locality === 'local'[\s\S]{0,200}?\.locality === 'cloud'/,
+    )
+    expect(settings).not.toContain("t('settings.llm.lastTested', '上次测试')")
+    expect(settings).not.toContain('formatProviderProbeTime')
+  })
+
+  it('Provider 卡头恒一行且 LLM 区保持原型 600px 列宽', () => {
+    // 权威原型 app.html：settings 面板 ~600px 窄列，prov-top 为 flex 恒一行
+    // （仅视口 ≤780px 才 wrap）；1226×1548 实测原型卡片恰 600px。
+    // 实现必须与之一致：LLM 区 600px 限宽 + 卡头 flex 一行 + 无容器换行断点。
+    expect(settings).toMatch(
+      /activeSection === 'llm'[\s\S]{0,200}?class="hc-settings__section" style="max-width:\s*600px"/,
+    )
+    expect(settings).toMatch(
+      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/s,
+    )
+    expect(settings).toMatch(
+      /\.hc-provider__card-info\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s,
+    )
+    // 无容器换行断点：不得把状态/操作组整组换到下一行
+    expect(settings).not.toMatch(
+      /@container \(max-width:\s*959px\)\s*\{[^}]*\.hc-provider__card-head\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s,
+    )
+    // 连接状态只允许 未测试 / 测试中… / 测试成功 / 测试失败 四态文案
+    expect(settings).toMatch(
+      /t\('settings\.llm\.verified',\s*'测试成功'\)/,
+    )
+    // 卡头不得再显示 云端/本地服务 或 上次测试时间
+    expect(settings).not.toMatch(
+      /providerConnectionResult\(provider\)!\.locality === 'local'[\s\S]{0,200}?\.locality === 'cloud'/,
+    )
+    expect(settings).not.toContain("t('settings.llm.lastTested', '上次测试')")
+    expect(settings).not.toContain('formatProviderProbeTime')
+  })
 })

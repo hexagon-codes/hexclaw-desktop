@@ -510,6 +510,75 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.get('.hc-provider__connection-status').text()).toContain('云端服务')
   })
 
+  it('does not pass masked provider api keys in connection probes when the provider has stable identity', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+
+    mockTestLLMConnection.mockClear()
+    mockTestLLMConnection.mockResolvedValue({
+      ok: true,
+      message: 'connected',
+      persisted: true,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 12,
+    })
+
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    await vm.testProvider(provider)
+
+    expect(mockTestLLMConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: expect.objectContaining({
+          api_key: '',
+          type: provider.type,
+          base_url: provider.baseUrl || PROVIDER_PRESETS[provider.type]?.defaultBaseUrl,
+        }),
+      }),
+      expect.objectContaining({ providerInstanceId: provider.providerInstanceId }),
+    )
+  })
+
+  it('keeps masked connection-failure details inside the expanded edit panel only', async () => {
+    const errorMessage = 'openai api error: 401 Unauthorized, body: {"error":"Missing Authentication header"}'
+    mockTestLLMConnection.mockResolvedValue({
+      ok: false,
+      message: errorMessage,
+      persisted: false,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 12,
+    })
+
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    const card = wrapper.get('.hc-provider__card')
+
+    await vm.testProvider(provider)
+    await flushPromises()
+
+    expect(card.find('.hc-provider__connection-detail').exists()).toBe(false)
+    expect(card.text()).not.toContain(errorMessage)
+    expect(card.find('.hc-provider__connection-status').text()).toContain('连接失败')
+
+    await card.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+
+    expect(card.find('.hc-provider__connection-detail').exists()).toBe(true)
+    expect(card.text()).toContain(errorMessage)
+  })
+
   it('blocks protected system-network endpoints in the form', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()

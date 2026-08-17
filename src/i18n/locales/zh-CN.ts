@@ -2070,7 +2070,7 @@ export default {
       privateNetworkTrustHint: '选择后，仅授权访问当前地址；地址改变时需要重新确认。',
       localService: '本地服务',
       cloudService: '云端服务',
-      verified: '已验证',
+      verified: '测试成功',
       lastTested: '上次测试',
       providerServiceNotice: '云端模型由你配置的第三方 Provider 提供。Provider 可能处理传输内容。',
       providerServiceDocs: '查看第三方 AI 服务说明 ↗',

@@ -6,6 +6,7 @@
 //! through one request, but must never read, write, or recover it from
 //! Keychain or any other persistent store.
 
+use crate::sidecar::desktop_config_path;
 use crate::sidecar_client::{read_bounded, SidecarClient};
 use reqwest::{Method, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -16,6 +17,24 @@ use tauri::State;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
+
+#[derive(Debug, Deserialize)]
+struct OwnerProviderEntry {
+    provider_instance_id: Option<String>,
+    api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnerLlmSection {
+    #[serde(default)]
+    providers: BTreeMap<String, OwnerProviderEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnerConfig {
+    #[serde(default)]
+    llm: Option<OwnerLlmSection>,
+}
 
 const CONFIG_PATH: &str = "/api/v1/config/llm";
 const RESERVE_PATH: &str = "/api/internal/desktop/provider-credentials/reserve";
@@ -179,6 +198,58 @@ async fn response_json<T: DeserializeOwned>(
 
 async fn get_config(client: &SidecarClient) -> Result<Value, String> {
     response_json(client.get(CONFIG_PATH).await?, "read LLM config").await
+}
+
+async fn restore_api_keys_with_owner_yaml(config: &mut Value) -> Result<(), String> {
+    let path = desktop_config_path()?;
+    let yaml = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|error| format!("read owner config failed: {error}"))?;
+    let owner_config: OwnerConfig = serde_yaml::from_str(&yaml)
+        .map_err(|error| format!("decode owner config failed: {error}"))?;
+    let owner_providers = owner_config
+        .llm
+        .map(|llm| {
+            llm.providers
+                .into_iter()
+                .filter_map(|(provider_key, entry)| {
+                    let api_key = entry.api_key.filter(|value| !value.trim().is_empty())?;
+                    Some((provider_key, entry.provider_instance_id, api_key))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let runtime_providers = providers_object_mut(config)?;
+
+    for (provider_name, provider_value) in runtime_providers {
+        let provider = provider_value
+            .as_object_mut()
+            .ok_or_else(|| "LLM provider must be an object".to_string())?;
+        let owner_api_key = provider_instance_id(provider)
+            .ok()
+            .and_then(|identity| {
+                identity.as_deref().and_then(|provider_id| {
+                    owner_providers.iter().find_map(
+                        |(_, owner_provider_id, owner_api_key)| {
+                            (owner_provider_id.as_deref() == Some(provider_id))
+                                .then_some(owner_api_key.as_str())
+                        },
+                    )
+                })
+            })
+            .or_else(|| {
+                owner_providers.iter().find_map(|(owner_name, _, owner_api_key)| {
+                    (owner_name == provider_name).then_some(owner_api_key.as_str())
+                })
+            });
+
+        if let Some(api_key) = owner_api_key {
+            provider.insert("api_key".to_string(), Value::String(api_key.to_string()));
+        }
+    }
+
+    Ok(())
 }
 
 async fn reserve_provider_credential(
@@ -435,15 +506,20 @@ fn identity_receipt(config: &Value) -> Result<ProviderCredentialApplyReceipt, St
     })
 }
 
-/// Reads masked Sidecar configuration only. After an App or Sidecar restart,
-/// the Sidecar reloads the owner YAML; native code never restores a secret.
+/// Reads Sidecar configuration and fills plaintext API keys from the owner YAML.
+/// After an App or Sidecar restart, the Sidecar reloads the owner YAML;
+/// native code still avoids keychain persistence.
 #[tauri::command]
 pub async fn get_llm_config_with_credentials(
     state: State<'_, ProviderCredentialCoordinator>,
 ) -> Result<Value, String> {
     let _guard = state.operation_lock.lock().await;
     let client = SidecarClient::new(Duration::from_secs(30))?;
-    get_config(&client).await
+    let mut config = get_config(&client).await?;
+    if let Err(error) = restore_api_keys_with_owner_yaml(&mut config).await {
+        log::warn!("restore API keys from owner YAML failed: {error}");
+    }
+    Ok(config)
 }
 
 /// Hydrates only a newly supplied secret into the current Sidecar process,
@@ -491,6 +567,9 @@ pub async fn apply_llm_config_with_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
 
     const PROVIDER_ID: &str = "pvd_v1_00112233445566778899aabbccddeeff";
 
@@ -520,5 +599,52 @@ mod tests {
             "api_key_mutation": {"mode": "replace", "credential_ref": 7}
         });
         assert!(mutation_credential_ref(provider.as_object().expect("provider")).is_err());
+    }
+
+    #[tokio::test]
+    async fn get_llm_config_with_credentials_restores_plain_api_key_from_owner_yaml() {
+        let root = env::temp_dir().join(format!(
+            "hexclaw-owner-yaml-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let home = OsString::from(root.to_string_lossy().to_string());
+        let config_dir = root.join(".hexclaw");
+        let config_path = config_dir.join("hexclaw.yaml");
+
+        fs::create_dir_all(&config_dir).expect("create .hexclaw");
+        fs::write(
+            &config_path,
+            "llm:\n  providers:\n    openai:\n      provider_instance_id: pvd_v1_00112233445566778899aabbccddeeff\n      api_key: test-key-plain\n",
+        )
+        .expect("write owner yaml");
+
+        let prior_home = env::var_os("HOME");
+        let prior_user_profile = env::var_os("USERPROFILE");
+        env::set_var("HOME", &home);
+        env::set_var("USERPROFILE", &home);
+
+        let mut config = serde_json::json!({
+            "providers": {
+                "openai": {
+                    "provider_instance_id": PROVIDER_ID,
+                    "api_key": "********"
+                }
+            }
+        });
+
+        restore_api_keys_with_owner_yaml(&mut config)
+            .await
+            .expect("restore from owner yaml");
+        assert_eq!(config["providers"]["openai"]["api_key"], "test-key-plain");
+
+        match prior_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+        match prior_user_profile {
+            Some(value) => env::set_var("USERPROFILE", value),
+            None => env::remove_var("USERPROFILE"),
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }

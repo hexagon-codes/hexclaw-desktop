@@ -2114,7 +2114,7 @@ export default {
         'This grants access only to the current host. A new host requires confirmation again.',
       localService: 'Local service',
       cloudService: 'Cloud service',
-      verified: 'Verified',
+      verified: 'Test successful',
       lastTested: 'Last tested',
       providerServiceNotice:
         'Cloud models are provided by the third-party Provider you configure. The Provider may process transmitted content.',
