@@ -1033,7 +1033,8 @@ describe('restoreProviderApiKeys', () => {
       id: 'p1',
       providerInstanceId,
       credentialRef: `llm_provider/${providerInstanceId}/api_key`,
-      apiKey: '****mask',
+      apiKey: '',
+      credentialPresent: false,
     })]
 
     const result = await restoreProviderApiKeys(providers)
@@ -1041,6 +1042,22 @@ describe('restoreProviderApiKeys', () => {
     expect(result[0]!.credentialPresent).toBe(false)
     expect(result[0]!.credentialRef).toBeUndefined()
     expect(result[0]!.apiKeyMutation).toBe('delete')
+  })
+
+  it('keeps restored plaintext api key for preserve mutation', async () => {
+    const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    const providers = [makeProvider({
+      id: 'p1',
+      providerInstanceId,
+      credentialRef: `llm_provider/${providerInstanceId}/api_key`,
+      credentialPresent: true,
+      apiKey: 'recovered-plain-key',
+    })]
+
+    const result = await restoreProviderApiKeys(providers)
+    expect(result[0]!.apiKey).toBe('recovered-plain-key')
+    expect(result[0]!.credentialPresent).toBe(true)
+    expect(result[0]!.apiKeyMutation).toBe('preserve')
   })
 
   it('keeps original apiKey when no credential ref exists', async () => {
