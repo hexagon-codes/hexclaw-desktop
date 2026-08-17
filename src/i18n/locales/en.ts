@@ -2148,6 +2148,8 @@ export default {
       deleteProviderConfirm: 'Are you sure you want to delete this provider?',
       testAction: 'Test',
       testConnection: 'Test connection',
+      testSuccess: 'Success',
+      testFailed: 'Failed',
       untested: 'Not tested',
       testing: 'Testing…',
       connected: 'Connected',

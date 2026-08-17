@@ -2200,6 +2200,8 @@ export default {
       deleteProviderConfirm: 'بۇ Provider نى راستىنلا ئۆچۈرەمسىز؟',
       testAction: 'سىناش',
       testConnection: 'ئۇلىنىشنى سىناش',
+      testSuccess: 'مۇۋەپپەقىيەتلىك',
+      testFailed: 'مەغلۇپ',
       untested: 'سىنالمىدى',
       testing: 'سىنىلىۋاتىدۇ…',
       connected: 'ئۇلانغان',

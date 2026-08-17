@@ -2099,6 +2099,8 @@ export default {
       deleteProviderConfirm: '确定要删除此服务商吗？',
       testAction: '测试',
       testConnection: '测试连接',
+      testSuccess: '成功',
+      testFailed: '失败',
       untested: '未测试',
       testing: '测试中…',
       connected: '已连接',
