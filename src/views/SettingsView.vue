@@ -1739,7 +1739,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       }"
                       aria-live="polite"
                       :aria-label="
-                        providerConnectionResult(provider)?.ok ? t('settings.llm.connectionOk', '成功') : undefined
+                        providerConnectionResult(provider)?.ok
+                          ? t('settings.llm.testSuccess', '成功')
+                          : undefined
                       "
                     >
                       <Loader2
@@ -1757,9 +1759,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         testingProviderId === provider.id
                           ? t('settings.llm.testing', '测试中…')
                           : providerConnectionResult(provider)?.ok
-                            ? t('settings.llm.connectionOk', '成功')
+                            ? t('settings.llm.testSuccess', '成功')
                             : providerConnectionResult(provider)
-                              ? t('settings.llm.connectionFailed')
+                              ? t('settings.llm.testFailed', '失败')
                               : t('settings.llm.untested', '未测试')
                       }}
                     </span>
