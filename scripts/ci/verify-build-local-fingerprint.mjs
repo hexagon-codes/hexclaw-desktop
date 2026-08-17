@@ -44,11 +44,17 @@ function computeFingerprint() {
   return hash.digest('hex')
 }
 
-function productValid() {
+function productValid(fingerprint) {
   try {
-    const app = lstatSync(join(APP_BUNDLE, 'Contents', 'MacOS', 'hexclaw-desktop'))
+    const appPath = join(APP_BUNDLE, 'Contents', 'MacOS', 'hexclaw-desktop')
+    const app = lstatSync(appPath)
     const sidecar = lstatSync(SIDECAR)
-    return app.isFile() && sidecar.isFile()
+    if (!app.isFile() || !sidecar.isFile()) return false
+    // 产物新鲜度强门禁（BUG-20260816-007 防回归）：dist 内容指纹必须等于当前源码指纹，
+    // 且 App 二进制构建时间必须晚于该 manifest 写入（tauri-build 已嵌入该版本 dist）。
+    const manifest = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json'), 'utf8'))
+    if (manifest?.fingerprint !== fingerprint) return false
+    return app.mtimeMs >= lstatSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json')).mtimeMs
   } catch {
     return false
   }
@@ -64,7 +70,17 @@ function previous() {
 }
 
 const fingerprint = computeFingerprint()
-if (previous() === fingerprint && productValid()) {
+const writeManifest = process.argv.includes('--write-manifest')
+if (writeManifest) {
+  // 在 pnpm build 后、tauri build 前写入 dist 内容指纹；tauri-build 将其嵌入二进制，
+  // 装机复用时以二进制内嵌指纹校验产物新鲜度（BUG-20260816-007 防回归）。
+  mkdirSync(join(homedir(), '.cache', 'hexclaw-package'), { recursive: true, mode: 0o700 })
+  const manifest = JSON.stringify({ fingerprint, builtAt: new Date().toISOString() })
+  writeFileSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json'), `${manifest}\n`, { mode: 0o600 })
+  console.log('dist build-manifest written')
+  process.exit(0)
+}
+if (previous() === fingerprint && productValid(fingerprint)) {
   console.log('build-local fingerprint hit: sources unchanged, reusing existing app bundle')
   process.exit(0)
 }

@@ -51,9 +51,14 @@ dev:
 build:
 	pnpm tauri build
 
-# 本机构建：使用本地全生态 Go workspace 重建 Sidecar、渲染依赖并生成 App。
+# 本机构建：使用本地全生态 Go workspace 重建 Sidecar、渲染依赖、前端并生成 App。
+# tauri.package-local overlay 的 beforeBuildCommand 为空（发布链路合同），
+# 装机必须先重建最新前端 dist，否则打包的是上次构建的旧 dist（回滚现象，BUG-20260816-007）。
 build-local: sidecar-local render-bundle
 	mkdir -p "$(BUILD_LOCAL_SNAPSHOT_DIR)" && chmod 700 "$(BUILD_LOCAL_SNAPSHOT_DIR)"
+	$(PNPM_BIN) build
+	$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-fingerprint.mjs --write-manifest
+	@touch src-tauri/build.rs
 	HEXCLAW_PACKAGE_GO_EXECUTABLE="$(BUILD_LOCAL_GO_EXECUTABLE)" \
 	HEXCLAW_PACKAGE_GO_SHA256="$(shell shasum -a 256 "$(BUILD_LOCAL_GO_EXECUTABLE)" | awk '{print $$1}')" \
 	HEXCLAW_PACKAGE_GO_GOROOT="$(BUILD_LOCAL_GO_GOROOT)" \
