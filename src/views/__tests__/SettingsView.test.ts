@@ -44,6 +44,7 @@ vi.mock('@/api/config', () => ({
       openai: {
         provider_instance_id: 'pvd_v1_11112222333344445555666677778888',
         api_key: '****test',
+        api_key_length: 24,
         base_url: 'https://api.openai.com/v1',
         model: 'gpt-4o',
         compatible: '',
@@ -55,6 +56,10 @@ vi.mock('@/api/config', () => ({
   testLLMConnection: mockTestLLMConnection,
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
   fetchProviderModels: mockFetchProviderModels,
+  readProviderApiKey: vi.fn(async (providerId: string) => {
+    if (providerId === 'openai') return 'sk-test-plain-readback'
+    return ''
+  }),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -507,7 +512,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-provider__test-btn').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('.hc-provider__connection-status').text()).toContain('云端服务')
+    expect(wrapper.get('.hc-provider__connection-status').text()).toContain('成功')
   })
 
   it('does not pass masked provider api keys in connection probes when the provider has stable identity', async () => {
@@ -569,14 +574,166 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     expect(card.find('.hc-provider__connection-detail').exists()).toBe(false)
-    expect(card.text()).not.toContain(errorMessage)
-    expect(card.find('.hc-provider__connection-status').text()).toContain('连接失败')
+    expect(card.find('.hc-provider__connection-status').text()).toContain('失败')
+  })
 
-    await card.get('.hc-provider__card-head').trigger('click')
+  it('reveals the saved plaintext API key through readProviderApiKey in the display layer only (form value stays masked, no save triggered)', async () => {
+    const { readProviderApiKey, updateLLMConfig } = await import('@/api/config')
+    const readMock = readProviderApiKey as unknown as ReturnType<typeof vi.fn>
+    const updateMock = updateLLMConfig as unknown as ReturnType<typeof vi.fn>
+    readMock.mockClear()
+    updateMock.mockClear()
+
+    const wrapper = await mountSettingsView()
     await flushPromises()
 
-    expect(card.find('.hc-provider__connection-detail').exists()).toBe(true)
-    expect(card.text()).toContain(errorMessage)
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+    provider.apiKeyLength = 24
+    await flushPromises()
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    const apiKeyInput = wrapper
+      .findAll('input.hc-input')
+      .find((input) => input.attributes('data-provider-field') === 'api-key')
+    if (!apiKeyInput) throw new Error('missing api-key input')
+
+    // 2026-08-19 批准布局：API Key 字段整行（grid-column 1/-1，等长圆点不被两列宽度裁剪）
+    expect(apiKeyInput.element.closest('.hc-provider__config-key')).not.toBeNull()
+
+    // 掩码态：value 为空、placeholder 等长圆点（GitHub 同款）
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('password')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('')
+    expect((apiKeyInput.element as HTMLInputElement).placeholder).toBe('•'.repeat(24))
+    expect(provider.apiKey).toBe('********')
+
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+
+    expect(readMock).toHaveBeenCalledWith('openai')
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('text')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-test-plain-readback')
+    // 方案 B：表单保存值保持脱敏，眼睛不触发保存
+    expect(provider.apiKey).toBe('********')
+    expect(updateMock).not.toHaveBeenCalled()
+
+    // 关闭眼睛：恢复掩码（value 空 + placeholder 等长圆点）、展示明文清除、保存值仍不变
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('password')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('')
+    expect((apiKeyInput.element as HTMLInputElement).placeholder).toBe('•'.repeat(24))
+    expect(provider.apiKey).toBe('********')
+    expect(updateMock).not.toHaveBeenCalled()
+  })
+
+  it('shows freshly typed plaintext directly without calling readProviderApiKey and typing takes over the form value', async () => {
+    const { readProviderApiKey } = await import('@/api/config')
+    const readMock = readProviderApiKey as unknown as ReturnType<typeof vi.fn>
+    readMock.mockClear()
+
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+    provider.apiKeyLength = 24
+    await flushPromises()
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    const apiKeyInput = wrapper
+      .findAll('input.hc-input')
+      .find((input) => input.attributes('data-provider-field') === 'api-key')
+    if (!apiKeyInput) throw new Error('missing api-key input')
+
+    // 掩码态输入接管：用户在空 value（placeholder 圆点）上输入新明文
+    await apiKeyInput.setValue('sk-newly-typed-plain')
+    expect(provider.apiKey).toBe('sk-newly-typed-plain')
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+
+    expect(readMock).not.toHaveBeenCalled()
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('text')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-newly-typed-plain')
+    expect(provider.apiKey).toBe('sk-newly-typed-plain')
+  })
+
+  it('keeps mask and state unchanged when readProviderApiKey fails, with a toast', async () => {
+    const { readProviderApiKey } = await import('@/api/config')
+    const readMock = readProviderApiKey as unknown as ReturnType<typeof vi.fn>
+    readMock.mockClear()
+    readMock.mockResolvedValueOnce('')
+
+    const toastError = vi.fn()
+    ;(window as unknown as Record<string, unknown>).__hcToast = {
+      value: {
+        error: toastError,
+        success: vi.fn(),
+        warning: vi.fn(),
+        info: vi.fn(),
+        action: vi.fn(),
+      },
+    }
+
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+    provider.apiKeyLength = 24
+    await flushPromises()
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    const apiKeyInput = wrapper
+      .findAll('input.hc-input')
+      .find((input) => input.attributes('data-provider-field') === 'api-key')
+    if (!apiKeyInput) throw new Error('missing api-key input')
+
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('password')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('')
+    expect((apiKeyInput.element as HTMLInputElement).placeholder).toBe('•'.repeat(24))
+    expect(provider.apiKey).toBe('********')
+    expect(toastError).toHaveBeenCalledWith(expect.stringContaining('暂时无法读取已保存的 API Key'))
+  })
+
+  it('editing while the revealed plaintext is shown takes over the form value', async () => {
+    const { readProviderApiKey } = await import('@/api/config')
+    const readMock = readProviderApiKey as unknown as ReturnType<typeof vi.fn>
+    readMock.mockClear()
+
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.apiKey = '********'
+    await flushPromises()
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    const apiKeyInput = wrapper
+      .findAll('input.hc-input')
+      .find((input) => input.attributes('data-provider-field') === 'api-key')
+    if (!apiKeyInput) throw new Error('missing api-key input')
+
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-test-plain-readback')
+
+    await apiKeyInput.setValue('sk-edited-while-revealed')
+    expect(provider.apiKey).toBe('sk-edited-while-revealed')
+
+    // 关闭眼睛：展示明文已失效，值保持用户接管后的明文（不再回退掩码）
+    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    await flushPromises()
+    expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('password')
+    expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-edited-while-revealed')
+    expect(provider.apiKey).toBe('sk-edited-while-revealed')
   })
 
   it('blocks protected system-network endpoints in the form', async () => {
@@ -1302,11 +1459,11 @@ describe('SettingsView — E2E 关键路径', () => {
 
     await customCard.get('.hc-provider__test-btn').trigger('click')
     await flushPromises()
-    expect(customCard.get('.hc-provider__connection-status').text()).toContain('已验证')
+    expect(customCard.get('.hc-provider__connection-status').text()).toContain('成功')
 
     await customCard.get('[data-provider-field="name"]').setValue('Renamed Provider')
     await flushPromises()
-    expect(customCard.get('.hc-provider__connection-status').text()).toContain('已验证')
+    expect(customCard.get('.hc-provider__connection-status').text()).toContain('成功')
   })
 
   it('shows the connection-test lifecycle in the header and disables duplicate clicks', async () => {
@@ -1348,7 +1505,7 @@ describe('SettingsView — E2E 关键路径', () => {
       latency_ms: 12,
     })
     await flushPromises()
-    expect(card.get('.hc-provider__connection-status').text()).toContain('已验证')
+    expect(card.get('.hc-provider__connection-status').text()).toContain('成功')
     expect(testButton.element.disabled).toBe(false)
   })
 
@@ -1635,8 +1792,7 @@ describe('SettingsView — E2E 关键路径', () => {
     }
     await flushPromises()
 
-    const firstRenderedReceipt =
-      first.text().includes('已验证') && first.text().includes('上次测试')
+    const firstRenderedReceipt = first.text().includes('成功')
     first.unmount()
     mockTestLLMConnection.mockClear()
     const { getLLMConfig } = await import('@/api/config')
@@ -1671,8 +1827,8 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(mockTestLLMConnection).not.toHaveBeenCalled()
     expect(firstRenderedReceipt).toBe(true)
-    expect(remounted.text()).toContain('已验证')
-    expect(remounted.text()).toContain('上次测试')
+    expect(remounted.text()).toContain('成功')
+    expect(remounted.text()).not.toContain('上次测试')
   }, 15_000)
 
   it('invalidates shared probe receipts for fingerprint edits but preserves display-name edits', async () => {
@@ -1711,13 +1867,15 @@ describe('SettingsView — E2E 关键路径', () => {
     }
 
     const vm = wrapper.vm as unknown as {
-      onProviderApiKeyInput: (provider: unknown) => void
+      onProviderApiKeyTyped: (provider: unknown, event: Event) => void
       handleProviderBaseUrlInput: (provider: unknown) => void
       handleProviderModelChange: (provider: unknown) => void
     }
     currentProvider().probeReceipt = { ...receipt }
     currentProvider().apiKey = 'sk-direct-input'
-    vm.onProviderApiKeyInput(currentProvider())
+    vm.onProviderApiKeyTyped(currentProvider(), {
+      target: { value: 'sk-direct-input' },
+    } as unknown as Event)
     expect(currentProvider().probeReceipt).toBeUndefined()
 
     currentProvider().probeReceipt = { ...receipt }
@@ -1855,8 +2013,15 @@ describe('SettingsView — E2E 关键路径', () => {
     await vm.testProvider(provider)
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('已验证')
-    expect(wrapper.text()).toContain('未测试')
+    // 2026-08-18 三态文案：本次会话内瞬态反馈显示「成功」
+    expect(wrapper.get('.hc-provider__connection-status').text()).toContain('成功')
+    // 但 persisted=false 回执不得落库为持久化已通过状态
+    expect(provider.probeReceipt).toBeUndefined()
+    // 重新挂载（等价应用重启）后回到 未测试：无持久化回执
+    const restarted = await mountSettingsView()
+    await flushPromises()
+    expect(restarted.get('.hc-provider__connection-status').text()).toContain('未测试')
+    restarted.unmount()
   })
 
   it('formats restored provider receipt time with the active locale', async () => {
@@ -1876,7 +2041,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('2026-07-28 14:20')
-    expect(wrapper.text()).toContain('2026年7月28日')
+    expect(wrapper.text()).not.toContain('2026年7月28日')
   })
 
   it('coalesces duplicate testProvider invocations while one probe is pending', async () => {

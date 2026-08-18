@@ -381,6 +381,7 @@ export function backendToProviders(
       enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
       apiKey: p.api_key || (p.credential_ref ? '********' : localProvider?.apiKey || ''),
+      apiKeyLength: p.api_key_length ?? localProvider?.apiKeyLength,
       credentialRef: p.credential_ref,
       credentialPresent: p.credential_present,
       models: mergeProviderModels(localProvider, p.model, p.models, p.model_specs),

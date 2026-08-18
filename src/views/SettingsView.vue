@@ -31,7 +31,7 @@ import {
   resolveProviderSelectedModelId,
 } from '@/stores/settings-helpers'
 import { getRuntimeConfig } from '@/api/settings'
-import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
+import { getLLMConfig, testLLMConnection, fetchProviderModels, readProviderApiKey } from '@/api/config'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import { messageFromUnknownError } from '@/utils/errors'
 import { thirdPartyAiServicesUrl } from '@/utils/legal-links'
@@ -82,7 +82,8 @@ const saveFailed = ref(false)
 
 // Provider 编辑状态
 const editingProviderId = ref<string | null>(null)
-const showApiKeys = ref<Record<string, boolean>>({})
+/** 眼睛仅切换展示层：type 是否 text（显示明文） */
+const shownApiKeys = ref<Record<string, boolean>>({})
 const showAddProvider = ref(false)
 const addProviderType = ref<ProviderType>('openai')
 
@@ -1112,10 +1113,13 @@ function saveEditModel() {
 }
 
 // ─── Provider 连接测试 ────────────────────────────────
-const testingProviderId = ref<string | null>(null)
+const testingProviderIds = ref(new Set<string>())
 const testProviderResult = ref<
   Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>
 >({})
+
+/** 眼睛显示后的明文 API Key（仅独立展示层、内存短驻，关闭眼睛即清除，不写入表单保存值） */
+const revealedApiKeys = ref<Record<string, string>>({})
 
 function clearProviderProbeState(provider: ProviderConfig) {
   provider.probeReceipt = undefined
@@ -1183,9 +1187,64 @@ function resolveProviderConnectionApiKey(provider: ProviderConfig): string {
   return rawApiKey
 }
 
+/** 方案 B（2026-08-19 批准，业界标准）：眼睛仅切换展示层，永不改写表单保存值 provider.apiKey。
+ * 显示：新输入明文直接展示；脱敏值经一次性明文回读接口获取，只写入展示 ref（内存短驻）。
+ * 隐藏：恢复 password 并清除展示明文。回读失败 toast 且 type/值均不变。 */
+async function toggleApiKeyVisibility(provider: ProviderConfig) {
+  if (!shownApiKeys.value[provider.id]) {
+    const current = provider.apiKey?.trim() ?? ''
+    if (!isMaskedApiKey(current)) {
+      // 新输入明文（含空）：直接切换展示，不调用回读接口
+      shownApiKeys.value[provider.id] = true
+      return
+    }
+    try {
+      const plain = await readProviderApiKey(provider.backendKey || provider.providerInstanceId || provider.id)
+      if (!plain) {
+        toast.error(t('settings.llm.apiKeyRevealFailed', '暂时无法读取已保存的 API Key'))
+        return
+      }
+      revealedApiKeys.value[provider.id] = plain
+      shownApiKeys.value[provider.id] = true
+    } catch {
+      toast.error(t('settings.llm.apiKeyRevealFailed', '暂时无法读取已保存的 API Key'))
+    }
+    return
+  }
+  shownApiKeys.value[provider.id] = false
+  delete revealedApiKeys.value[provider.id]
+}
+
+/** 输入框展示值：眼睛显示中且有展示明文 → 明文；掩码态 → 空（等长圆点走 placeholder，GitHub 同款，
+ * 避免掩码串进入 value 被用户编辑带入保存值）；否则恒为表单保存值（新输入明文/空）。
+ * 表单值 provider.apiKey 掩码态恒 '********'（preserve 语义与 isMaskedApiKey 判定不破坏）。 */
+function apiKeyDisplayValue(provider: ProviderConfig): string {
+  const revealed = revealedApiKeys.value[provider.id]
+  if (shownApiKeys.value[provider.id] && revealed !== undefined) return revealed
+  if (isMaskedApiKey(provider.apiKey)) return ''
+  return provider.apiKey ?? ''
+}
+
+/** 掩码态 placeholder：有长度元数据时按真实 Key 长度等长圆点，否则固定 '********'。 */
+function apiKeyInputPlaceholder(provider: ProviderConfig): string {
+  if (isMaskedApiKey(provider.apiKey) && provider.apiKeyLength && provider.apiKeyLength > 0) {
+    return '•'.repeat(provider.apiKeyLength)
+  }
+  return PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'
+}
+
+/** 用户输入接管：展示层失效，明文写入表单保存值（replace 保存语义）。 */
+function onProviderApiKeyTyped(provider: ProviderConfig, event: Event) {
+  delete revealedApiKeys.value[provider.id]
+  provider.apiKey = (event.target as HTMLInputElement).value
+  clearProviderProbeState(provider)
+  autoSave()
+  scheduleAutoTest(provider)
+}
+
 async function testProvider(provider: ProviderConfig) {
-  if (testingProviderId.value !== null) return
-  testingProviderId.value = provider.id
+  if (testingProviderIds.value.has(provider.id)) return
+  testingProviderIds.value.add(provider.id)
   delete testProviderResult.value[provider.id]
 
   // 此入口只验证 chat-completions；Embedding-only 由知识库 profile preflight 验证。
@@ -1199,7 +1258,7 @@ async function testProvider(provider: ProviderConfig) {
       ok: false,
       msg: t('settings.llm.testNeedsModel'),
     }
-    testingProviderId.value = null
+    testingProviderIds.value.delete(provider.id)
     return
   }
 
@@ -1209,7 +1268,7 @@ async function testProvider(provider: ProviderConfig) {
   try {
     activeProvider = await providerWithStableIdentity(provider)
   } catch (error) {
-    testingProviderId.value = null
+    testingProviderIds.value.delete(provider.id)
     throw error
   }
 
@@ -1229,7 +1288,7 @@ async function testProvider(provider: ProviderConfig) {
         msg: t('settings.llm.testNeedsApiKey'),
       }
     }
-    testingProviderId.value = null
+    testingProviderIds.value.delete(provider.id)
     return
   }
 
@@ -1307,7 +1366,7 @@ async function testProvider(provider: ProviderConfig) {
       testProviderResult.value[activeProvider.id] = failed
     }
   } finally {
-    testingProviderId.value = null
+    testingProviderIds.value.delete(provider.id)
   }
 }
 
@@ -1435,12 +1494,6 @@ function autoSave() {
       logger.error('[HexClaw] 自动保存失败:', e)
     }
   }, 500)
-}
-
-function onProviderApiKeyInput(provider: ProviderConfig) {
-  clearProviderProbeState(provider)
-  autoSave()
-  scheduleAutoTest(provider)
 }
 
 function selectProviderModel(provider: ProviderConfig, modelId: string) {
@@ -1728,12 +1781,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       class="hc-provider__connection-status"
                       :class="{
                         'hc-provider__connection-status--testing':
-                          testingProviderId === provider.id,
+                          testingProviderIds.has(provider.id),
                         'hc-provider__connection-status--ok':
-                          testingProviderId !== provider.id &&
+                          !testingProviderIds.has(provider.id) &&
                           providerConnectionResult(provider)?.ok,
                         'hc-provider__connection-status--error':
-                          testingProviderId !== provider.id &&
+                          !testingProviderIds.has(provider.id) &&
                           providerConnectionResult(provider) &&
                           !providerConnectionResult(provider)!.ok,
                       }"
@@ -1745,7 +1798,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       "
                     >
                       <Loader2
-                        v-if="testingProviderId === provider.id"
+                        v-if="testingProviderIds.has(provider.id)"
                         :size="12"
                         class="animate-spin"
                       />
@@ -1756,7 +1809,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       <XCircle v-else-if="providerConnectionResult(provider)" :size="12" />
                       <span v-else class="hc-provider__connection-dot" aria-hidden="true" />
                       {{
-                        testingProviderId === provider.id
+                        testingProviderIds.has(provider.id)
                           ? t('settings.llm.testing', '测试中…')
                           : providerConnectionResult(provider)?.ok
                             ? t('settings.llm.testSuccess', '成功')
@@ -1769,7 +1822,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       class="hc-btn hc-btn-sm hc-provider__test-btn"
                       :title="t('settings.llm.testConnection', '测试连接')"
                       :disabled="
-                        testingProviderId !== null ||
+                        testingProviderIds.has(provider.id) ||
                         providerEndpointDecision(provider).classification === 'blocked'
                       "
                       @click.stop="testProvider(provider)"
@@ -1834,7 +1887,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </HcClearableField>
                     </div>
 
-                    <div class="hc-settings__field">
+                    <div class="hc-settings__field hc-provider__config-key">
                       <label class="hc-settings__label" :for="`provider-${provider.id}-api-key`"
                         >{{ t('settings.llm.apiKey') }}
                         <span class="hc-settings__required">*</span></label
@@ -1843,22 +1896,22 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         <HcClearableField :trailing="38">
                           <input
                             :id="`provider-${provider.id}-api-key`"
-                            v-model="provider.apiKey"
+                            :value="apiKeyDisplayValue(provider)"
                             data-provider-field="api-key"
-                            :type="showApiKeys[provider.id] ? 'text' : 'password'"
+                            :type="shownApiKeys[provider.id] ? 'text' : 'password'"
                             class="hc-input"
-                            :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
-                            @input="onProviderApiKeyInput(provider)"
+                            :placeholder="apiKeyInputPlaceholder(provider)"
+                            @input="onProviderApiKeyTyped(provider, $event)"
                           />
                         </HcClearableField>
                         <button
                           type="button"
                           class="hc-settings__eye-btn"
-                          :aria-label="showApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
-                          :title="showApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
-                          @click="showApiKeys[provider.id] = !showApiKeys[provider.id]"
+                          :aria-label="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                          :title="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                          @click="toggleApiKeyVisibility(provider)"
                         >
-                          <Eye v-if="!showApiKeys[provider.id]" :size="15" />
+                          <Eye v-if="!shownApiKeys[provider.id]" :size="15" />
                           <EyeOff v-else :size="15" />
                         </button>
                       </div>
@@ -3193,9 +3246,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   min-width: 0;
   padding: 10px 14px;
@@ -3387,22 +3440,37 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr);
   }
 
+  /* 2026-08-17 批准：内置卡 Base URL 左窄列、API Key 右宽列（顺序对调，列宽定义不变） */
+  .hc-provider__config-grid--builtin .hc-provider__config-url {
+    order: -1;
+  }
+
+  /* 2026-08-19 批准：URL 短、API Key 长（等长圆点掩码需整行宽度），API Key 占整行、URL 半行 */
+  .hc-provider__config-grid--builtin .hc-provider__config-key {
+    grid-column: 1 / -1;
+  }
+
   .hc-provider__config-grid--custom {
     grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
   }
 
-  .hc-provider__config-grid--custom .hc-provider__config-url {
+  /* 2026-08-19 批准：自定义卡 Provider 与 Base URL 同行（各半行）、API Key 占整行 */
+  .hc-provider__config-grid--custom .hc-provider__config-key {
     grid-column: 1 / -1;
+  }
+
+  /* Provider（grid 首项自动行1列1）与 Base URL 同行；API Key 整行后 URL 需显式行，否则落到第3行 */
+  .hc-provider__config-grid--custom .hc-provider__config-url {
+    grid-row: 1;
+    grid-column: 2;
   }
 }
 
 @container (min-width: 900px) {
+  /* 2026-08-17 批准：custom 字段顺序不变，API Key 列加宽、Base URL 列收窄；
+     2026-08-19 批准：API Key 整行后，custom 网格改为 Provider 与 Base URL 两列同行 */
   .hc-provider__config-grid--custom {
-    grid-template-columns: minmax(150px, 0.56fr) minmax(220px, 0.82fr) minmax(280px, 1.2fr);
-  }
-
-  .hc-provider__config-grid--custom .hc-provider__config-url {
-    grid-column: auto;
+    grid-template-columns: minmax(150px, 0.56fr) minmax(220px, 0.82fr);
   }
 }
 
@@ -3569,18 +3637,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-provider__delete-btn:hover {
   background: rgba(255, 69, 58, 0.1);
-}
-
-@container (max-width: 959px) {
-  .hc-provider__card-head {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .hc-provider__card-actions {
-    width: 100%;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
 }
 
 .hc-btn-sm {

@@ -58,7 +58,7 @@ describe('系统设置与权威原型对齐', () => {
     )
     // 连接状态只允许 未测试 / 测试中… / 测试成功 / 测试失败 四态文案
     expect(settings).toMatch(
-      /t\('settings\.llm\.verified',\s*'测试成功'\)/,
+      /t\('settings\.llm\.testSuccess',\s*'成功'\)/,
     )
     // 卡头不得再显示 云端/本地服务 或 上次测试时间
     expect(settings).not.toMatch(
@@ -87,7 +87,7 @@ describe('系统设置与权威原型对齐', () => {
     )
     // 连接状态只允许 未测试 / 测试中… / 测试成功 / 测试失败 四态文案
     expect(settings).toMatch(
-      /t\('settings\.llm\.verified',\s*'测试成功'\)/,
+      /t\('settings\.llm\.testSuccess',\s*'成功'\)/,
     )
     // 卡头不得再显示 云端/本地服务 或 上次测试时间
     expect(settings).not.toMatch(

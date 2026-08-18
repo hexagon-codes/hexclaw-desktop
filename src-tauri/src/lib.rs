@@ -194,6 +194,7 @@ pub fn run() {
             credential_vault::credential_present,
             provider_credentials::get_llm_config_with_credentials,
             provider_credentials::apply_llm_config_with_credentials,
+            provider_credentials::read_provider_api_key,
             print_coordinator::execute_print_job,
             commands::open_about,
             commands::set_autostart,

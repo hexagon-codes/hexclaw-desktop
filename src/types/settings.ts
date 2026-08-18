@@ -104,6 +104,8 @@ export interface ProviderConfig {
   type: ProviderType
   enabled: boolean
   apiKey: string
+  /** 已保存 Key 的真实长度（sidecar 脱敏元数据，仅长度不含 Key 内容；隐藏态掩码等长圆点用） */
+  apiKeyLength?: number
   /** Stable Provider identity for a typed update; never resolves to plaintext in the renderer. */
   credentialRef?: string
   /** Sidecar reports that the owner-YAML Provider key is usable in this process. */
@@ -295,6 +297,8 @@ export interface BackendLLMProvider {
   provider_instance_id?: string
   display_name?: string
   api_key?: string
+  /** 已保存 Key 的真实长度（sidecar 脱敏元数据，仅长度不含 Key 内容） */
+  api_key_length?: number
   credential_ref?: string
   credential_present?: boolean
   api_key_mutation?: {

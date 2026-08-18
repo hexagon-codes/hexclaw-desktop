@@ -53,6 +53,16 @@ async function proxyApiRequestText(method: string, path: string, body: string | 
   }
 }
 
+/** 一次性明文回读（方案A，2026-08-17 批准）：仅本机 Tauri 环境可用，浏览器环境直接失败。 */
+export async function readProviderApiKey(providerId: string): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('reading saved API keys is only available in the desktop app')
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const value = await invoke<string | null>('read_provider_api_key', { providerId })
+  return value ?? ''
+}
+
 interface ProviderEndpointContext {
   providerType?: ProviderType
   /** 已持久化 Provider 的稳定后端身份；目录同步据此使用后端保存的真实凭据。 */

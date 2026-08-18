@@ -200,58 +200,6 @@ async fn get_config(client: &SidecarClient) -> Result<Value, String> {
     response_json(client.get(CONFIG_PATH).await?, "read LLM config").await
 }
 
-async fn restore_api_keys_with_owner_yaml(config: &mut Value) -> Result<(), String> {
-    let path = desktop_config_path()?;
-    let yaml = tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|error| format!("read owner config failed: {error}"))?;
-    let owner_config: OwnerConfig = serde_yaml::from_str(&yaml)
-        .map_err(|error| format!("decode owner config failed: {error}"))?;
-    let owner_providers = owner_config
-        .llm
-        .map(|llm| {
-            llm.providers
-                .into_iter()
-                .filter_map(|(provider_key, entry)| {
-                    let api_key = entry.api_key.filter(|value| !value.trim().is_empty())?;
-                    Some((provider_key, entry.provider_instance_id, api_key))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let runtime_providers = providers_object_mut(config)?;
-
-    for (provider_name, provider_value) in runtime_providers {
-        let provider = provider_value
-            .as_object_mut()
-            .ok_or_else(|| "LLM provider must be an object".to_string())?;
-        let owner_api_key = provider_instance_id(provider)
-            .ok()
-            .and_then(|identity| {
-                identity.as_deref().and_then(|provider_id| {
-                    owner_providers.iter().find_map(
-                        |(_, owner_provider_id, owner_api_key)| {
-                            (owner_provider_id.as_deref() == Some(provider_id))
-                                .then_some(owner_api_key.as_str())
-                        },
-                    )
-                })
-            })
-            .or_else(|| {
-                owner_providers.iter().find_map(|(owner_name, _, owner_api_key)| {
-                    (owner_name == provider_name).then_some(owner_api_key.as_str())
-                })
-            });
-
-        if let Some(api_key) = owner_api_key {
-            provider.insert("api_key".to_string(), Value::String(api_key.to_string()));
-        }
-    }
-
-    Ok(())
-}
-
 async fn reserve_provider_credential(
     client: &SidecarClient,
 ) -> Result<ReservedProviderCredential, String> {
@@ -506,20 +454,46 @@ fn identity_receipt(config: &Value) -> Result<ProviderCredentialApplyReceipt, St
     })
 }
 
-/// Reads Sidecar configuration and fills plaintext API keys from the owner YAML.
-/// After an App or Sidecar restart, the Sidecar reloads the owner YAML;
-/// native code still avoids keychain persistence.
+/// 读取 owner YAML 中单个 Provider 的明文 API Key（方案 B，2026-08-19 批准）：
+/// 仅眼睛点击显示时调用，明文只写入前端独立展示层、内存短驻，不写入表单保存值；
+/// 不写入任何第二持久化路径，日志与审计保持脱敏。
+#[tauri::command]
+pub async fn read_provider_api_key(provider_id: String) -> Result<Option<String>, String> {
+    read_provider_api_key_from_owner_yaml(&provider_id).await
+}
+
+async fn read_provider_api_key_from_owner_yaml(provider_id: &str) -> Result<Option<String>, String> {
+    let path = desktop_config_path()?;
+    let yaml = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|error| format!("read owner config failed: {error}"))?;
+    let owner_config: OwnerConfig = serde_yaml::from_str(&yaml)
+        .map_err(|error| format!("decode owner config failed: {error}"))?;
+    Ok(owner_config
+        .llm
+        .map(|llm| {
+            llm.providers
+                .into_iter()
+                .find_map(|(owner_name, entry)| {
+                    let api_key = entry.api_key.filter(|value| !value.trim().is_empty())?;
+                    let matches = entry.provider_instance_id.as_deref() == Some(provider_id)
+                        || owner_name == provider_id;
+                    matches.then_some(api_key)
+                })
+        })
+        .unwrap_or_default())
+}
+
+/// Reads Sidecar configuration. Provider API keys stay masked in the response
+/// (sidecar masking); the frontend renders them as '********' and reveals
+/// plaintext only via read_provider_api_key on demand.
 #[tauri::command]
 pub async fn get_llm_config_with_credentials(
     state: State<'_, ProviderCredentialCoordinator>,
 ) -> Result<Value, String> {
     let _guard = state.operation_lock.lock().await;
     let client = SidecarClient::new(Duration::from_secs(30))?;
-    let mut config = get_config(&client).await?;
-    if let Err(error) = restore_api_keys_with_owner_yaml(&mut config).await {
-        log::warn!("restore API keys from owner YAML failed: {error}");
-    }
-    Ok(config)
+    get_config(&client).await
 }
 
 /// Hydrates only a newly supplied secret into the current Sidecar process,
@@ -602,9 +576,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_llm_config_with_credentials_restores_plain_api_key_from_owner_yaml() {
+    async fn read_provider_api_key_returns_plaintext_only_for_the_requested_provider() {
         let root = env::temp_dir().join(format!(
-            "hexclaw-owner-yaml-test-{}",
+            "hexclaw-owner-yaml-read-test-{}",
             uuid::Uuid::new_v4().simple()
         ));
         let home = OsString::from(root.to_string_lossy().to_string());
@@ -614,7 +588,7 @@ mod tests {
         fs::create_dir_all(&config_dir).expect("create .hexclaw");
         fs::write(
             &config_path,
-            "llm:\n  providers:\n    openai:\n      provider_instance_id: pvd_v1_00112233445566778899aabbccddeeff\n      api_key: test-key-plain\n",
+            "llm:\n  providers:\n    openai:\n      provider_instance_id: pvd_v1_00112233445566778899aabbccddeeff\n      api_key: test-key-plain\n    deepseek:\n      api_key: deepseek-key-plain\n",
         )
         .expect("write owner yaml");
 
@@ -623,19 +597,27 @@ mod tests {
         env::set_var("HOME", &home);
         env::set_var("USERPROFILE", &home);
 
-        let mut config = serde_json::json!({
-            "providers": {
-                "openai": {
-                    "provider_instance_id": PROVIDER_ID,
-                    "api_key": "********"
-                }
-            }
-        });
-
-        restore_api_keys_with_owner_yaml(&mut config)
-            .await
-            .expect("restore from owner yaml");
-        assert_eq!(config["providers"]["openai"]["api_key"], "test-key-plain");
+        // 按 provider_instance_id 匹配
+        assert_eq!(
+            read_provider_api_key_from_owner_yaml(PROVIDER_ID)
+                .await
+                .expect("read by instance id"),
+            Some("test-key-plain".to_string())
+        );
+        // 按 owner key 名称匹配（无实例 ID 的 Provider）
+        assert_eq!(
+            read_provider_api_key_from_owner_yaml("deepseek")
+                .await
+                .expect("read by name"),
+            Some("deepseek-key-plain".to_string())
+        );
+        // 未匹配 Provider 返回 None，绝不误读其他 Provider 的密钥
+        assert_eq!(
+            read_provider_api_key_from_owner_yaml("unknown-provider")
+                .await
+                .expect("read unknown"),
+            None
+        );
 
         match prior_home {
             Some(value) => env::set_var("HOME", value),
