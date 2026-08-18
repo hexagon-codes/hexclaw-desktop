@@ -127,21 +127,19 @@ function mountPanel(plan: unknown = makeSetupRequiredPlan()) {
   })
 }
 
-describe('BUG-20260815-001 approved weekly missing-progress surface', () => {
-  it('keeps the missing-progress card in a stacked grid that wraps long text', () => {
-    // 权威原型 app.html:1414：.rc-week-progress--missing>div{display:grid;gap:3px;max-width:760px}
-    // 生产必须保留纵向堆叠与正常换行，不得被 flex+nowrap 覆盖成单行溢出。
-    const innerRule =
-      panelSource.match(/\.weekly-progress--missing > div \{[\s\S]*?\n}/)?.[0] ?? ''
-    const outerRules =
+describe('BUG-20260818-002 approved weekly missing-progress surface (supersedes BUG-20260815-001 stacked layout)', () => {
+  it('keeps the missing-progress card on a single flex line like the set state', () => {
+    // 2026-08-18 用户决定（取代 BUG-20260815-001 的纵向堆叠）：
+    // 未设置进度卡与已设置卡一致单行——标题 + 「调整进度」按钮同一行，不换行不折字。
+    const rules = panelSource.match(/\.weekly-progress > div \{[\s\S]*?\n}/g) ?? []
+    const innerRule = rules.length > 0 ? rules[rules.length - 1] : ''
+    const missingRules =
       panelSource.match(/\.weekly-progress--missing \{[\s\S]*?\n}/g) ?? []
-    const spanRule =
-      panelSource.match(/\.weekly-progress--missing > div > span \{[\s\S]*?\n}/)?.[0] ?? ''
-    expect(innerRule).toContain('display: grid')
-    expect(innerRule).toContain('max-width: 760px')
-    expect(outerRules.some((rule) => rule.includes('align-items: flex-start'))).toBe(true)
-    expect(spanRule).toContain('white-space: normal')
-    expect(spanRule).not.toContain('white-space: nowrap')
+    expect(innerRule).toContain('display: flex')
+    expect(innerRule).not.toContain('display: grid')
+    expect(missingRules.some((rule) => rule.includes('align-items: flex-start'))).toBe(false)
+    expect(panelSource).not.toContain('max-width: 760px')
+    expect(panelSource).not.toContain('.weekly-progress--missing > div > span')
   })
 
   it('projects the approved Chinese setup guidance instead of the raw English failure message', () => {

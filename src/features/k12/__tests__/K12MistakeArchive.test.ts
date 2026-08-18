@@ -302,7 +302,7 @@ describe('BUG-20260725-017 · controlled suppression and restore', () => {
     expect(wrapper.text()).toContain('4.5 × 2 = ?')
   })
 
-  it('keeps long-term suppression out of 本周该练 and behind the single confirmed menu in 全部错题', async () => {
+  it('keeps long-term suppression out of 本周该练 and uses the always-visible button in 全部错题', async () => {
     const wrapper = render()
     await flushPromises()
 
@@ -311,8 +311,9 @@ describe('BUG-20260725-017 · controlled suppression and restore', () => {
     await openAllMistakes(wrapper)
 
     const menu = reviewMenuFor(wrapper, '4.5 × 2 = ?')
-    await menu.get('.mistake-more__trigger').trigger('click')
-    await menu.get('[role="menuitem"]').trigger('click')
+    expect(menu.props('display')).toBe('visible')
+    expect(menu.find('.mistake-more__trigger').exists()).toBe(false)
+    await menu.get('[data-testid="mistake-suppress-review"]').trigger('click')
     expect(document.body.querySelector('[role="alertdialog"]')).not.toBeNull()
     expect(h.suppressMistake).not.toHaveBeenCalled()
 

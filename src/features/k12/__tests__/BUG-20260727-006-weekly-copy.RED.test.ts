@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest'
 import panelSource from '../components/K12WeeklyPracticePanel.vue?raw'
 
 describe('BUG-20260727-006 weekly contextual copy authority', () => {
-  it('uses explicit progress actions without trailing ellipsis', () => {
-    expect(panelSource).toMatch(/>\s*设置教材进度\s*</)
+  it('uses the single approved progress action without trailing ellipsis', () => {
+    // 2026-08-18 用户决定：missing 卡与已设置卡按钮统一「调整进度」
     expect(panelSource).toMatch(/>\s*调整进度\s*</)
-    expect(panelSource).not.toContain('设置教材进度…')
-    expect(panelSource).not.toContain('调整…')
+    expect(panelSource).not.toMatch(/>\s*设置教材进度\s*</)
+    expect(panelSource).not.toContain('调整进度…')
   })
 
   it('keeps idle generation labels stable while count remains in the shared field', () => {

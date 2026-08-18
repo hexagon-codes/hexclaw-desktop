@@ -395,7 +395,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
         <div v-if="!progress" class="weekly-progress weekly-progress--missing">
           <div>
             <b>设置教材进度，推荐更贴合课堂</b>
-            <span>确认当前教材、单元和页码后，系统会补充与课堂同步的练习。错题巩固不受影响。</span>
           </div>
           <button
             type="button"
@@ -403,7 +402,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             data-testid="setup-weekly-progress"
             @click="emit('open-progress')"
           >
-            设置教材进度
+            调整进度
           </button>
         </div>
         <div v-else class="weekly-progress">
@@ -1160,24 +1159,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   background: var(--hc-bg-card);
 }
 
-/* BUG-20260815-001：缺教材进度提示卡恢复纵向堆叠与正常换行（权威原型
-   .rc-week-progress--missing>div{display:grid;gap:3px;max-width:760px}），
-   不被上方的 flex+nowrap 覆盖成单行溢出。 */
-.weekly-progress--missing {
-  align-items: flex-start;
-}
-.weekly-progress--missing > div {
-  display: grid;
-  gap: 3px;
-  max-width: 760px;
-}
+/* BUG-20260818-002：缺教材进度提示卡与已设置卡一致单行（2026-08-18 用户决定，
+   取代 BUG-20260815-001 的纵向堆叠）：标题一行 + 调整进度按钮一行。 */
 .weekly-progress--missing > div > b {
   white-space: nowrap;
-}
-.weekly-progress--missing > div > span {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
+  flex: none;
 }
 .weekly-progress--missing > button {
   flex: none;

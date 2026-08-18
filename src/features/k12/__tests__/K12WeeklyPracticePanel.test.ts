@@ -132,9 +132,8 @@ describe('K12WeeklyPracticePanel projection', () => {
     })
 
     expect(wrapper.text()).toContain('设置教材进度，推荐更贴合课堂')
-    expect(wrapper.text()).toContain(
-      '确认当前教材、单元和页码后，系统会补充与课堂同步的练习。错题巩固不受影响。',
-    )
+    expect(wrapper.text()).not.toContain('确认当前教材、单元和页码后')
+    expect(wrapper.get('[data-testid="setup-weekly-progress"]').text()).toBe('调整进度')
     expect(wrapper.text()).toContain('到期复习 · 原题')
     expect(wrapper.find('[data-track="textbook_consolidation"]').exists()).toBe(true)
 

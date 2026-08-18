@@ -1059,7 +1059,7 @@ defineExpose({ load, openAdd })
 <template>
   <section class="k12cw">
     <div class="k12cw__overview">
-      <p class="k12cw__desc">{{ t('k12.works.desc') }}</p>
+      <p class="k12cw__desc" :title="t('k12.works.desc')">{{ t('k12.works.desc') }}</p>
       <button
         v-if="showAddButton"
         type="button"
@@ -1665,10 +1665,14 @@ defineExpose({ load, openAdd })
 <style scoped>
 .k12cw__desc {
   flex: 1;
+  min-width: 0;
   margin: 0;
   color: var(--hc-text-muted);
   font-size: 12px;
   line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .k12cw__overview {

@@ -1793,6 +1793,7 @@ async function doExportMd() {
               </template>
               <template #list-row-actions="{ item }">
                 <K12MistakeReviewMenu
+                  display="visible"
                   :suppressed="item.status === 'suppressed'"
                   :restorable="item.fields.restorable === true"
                   :busy="archiveBusy.includes(item.recordId)"
