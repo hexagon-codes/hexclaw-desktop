@@ -894,7 +894,7 @@ describe('AgentsView', () => {
   // 的 agent 正常。根因：editAgentProviderOptions/editAgentModelOptions 缺少 value:'' 占位项，
   // HcSelect 的 v-model='' 找不到匹配选项 → 显示空白。
   // ──────────────────────────────────────────────────────────
-  it('BUG-20260622: 编辑空 provider 的 agent，下拉应含 value:"" 全局默认占位（不空白）', async () => {
+  it('BUG-20260622: 编辑空 provider 的 agent，服务商下拉与模型锁定态均不得空白', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
@@ -939,19 +939,15 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
-    expect(selects.length).toBe(3) // provider + model + 已批准的思考策略下拉
+    expect(selects.length).toBe(2) // provider + 思考策略；模型以全局默认锁定态展示
     const providerOpts = selects[0]!.props('options') as Array<{ value: string; label: string }>
-    const modelOpts = selects[1]!.props('options') as Array<{ value: string; label: string }>
 
-    // 空 provider/model 必须能匹配到一个 value==='' 的占位选项，否则 HcSelect 显示空白
+    // 空 provider 必须能匹配到 value===''；模型则直接展示全局默认真值，避免禁用下拉空白。
     expect(
       providerOpts.some((o) => o.value === ''),
       'provider 下拉缺少 value:"" 全局默认占位 → 空 provider 显示空白',
     ).toBe(true)
-    expect(
-      modelOpts.some((o) => o.value === ''),
-      'model 下拉缺少 value:"" 占位 → 空 model 显示空白',
-    ).toBe(true)
+    expect(wrapper.get('[data-testid="agent-edit-model-follow"]').text()).toContain('跟随全局默认')
   })
 
   // BUG-20260625 §3-1：编辑 Agent 死角——编辑弹窗不带 system_prompt(人设)，handleEditAgent 也不发送，
