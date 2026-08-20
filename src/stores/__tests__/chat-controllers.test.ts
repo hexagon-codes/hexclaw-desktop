@@ -76,7 +76,15 @@ describe('chat controller modules', () => {
       sendApprovalResponse: vi.fn((decision: RedApprovalDecision) => Promise.resolve({
         type: 'tool_approval_ack' as const,
         request_id: decision.request_id,
+        session_id: 's-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-2',
+        arguments_digest: 'c'.repeat(64),
+        security_scope_digest: 'd'.repeat(64),
+        scope_schema_version: 1,
         decision_id: decision.decision_id,
+        decision: decision.decision,
+        idempotency_key: decision.idempotency_key,
         status: 'accepted' as const,
       })),
     }
@@ -90,14 +98,24 @@ describe('chat controller modules', () => {
     controller.storePendingApproval({
       requestId: 'req-1',
       sessionId: 's-1',
+      ownerId: 'desktop-user',
+      invocationId: 'invocation-1',
       toolName: 'fetch',
+      argumentsDigest: 'a'.repeat(64),
+      securityScopeDigest: 'b'.repeat(64),
+      scopeSchemaVersion: 1,
       risk: 'medium',
       reason: 'need network',
     } as any)
     controller.storePendingApproval({
       requestId: 'req-2',
       sessionId: 's-1',
+      ownerId: 'desktop-user',
+      invocationId: 'invocation-2',
       toolName: 'write',
+      argumentsDigest: 'c'.repeat(64),
+      securityScopeDigest: 'd'.repeat(64),
+      scopeSchemaVersion: 1,
       risk: 'high',
       reason: 'modify file',
     } as any)
@@ -852,6 +870,44 @@ describe('chat controller modules', () => {
     })
   })
 
+  it('uses the frozen route thinking effort instead of mutable live settings', () => {
+    const controller = createChatSendDeliveryController({
+      chatParams: ref({ provider: 'openai', model: 'gpt-5.6-sol' }),
+      agentRole: ref(''),
+      thinkingEnabled: ref(false),
+      activeStreams: ref({}),
+      chatSvc: {} as any,
+      getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
+      clearSessionCancelled: vi.fn(),
+      isSessionCancelled: vi.fn().mockReturnValue(false),
+      setSessionPending: vi.fn(),
+      upsertStreamState: vi.fn(),
+      updateStreamChunk: vi.fn(),
+      resetSessionStream: vi.fn(),
+      finalizeAssistantMessage: vi.fn() as any,
+      handleSendError: vi.fn(),
+      storePendingApproval: vi.fn(),
+      streamHandles: new Map(),
+    })
+
+    expect(controller.buildRequestMetadata({
+      agentRole: '',
+      chatParams: { provider: 'openai', model: 'gpt-5.6-sol' },
+      thinkingEnabled: true,
+      reasoningSupport: 'supported',
+      reasoningPolicy: { mode: 'effort', effort: 'high' },
+      reasoningControl: {
+        dialect: 'reasoning_effort',
+        on: 'high',
+        off: 'none',
+        allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    } as never)).toMatchObject({
+      thinking: 'on',
+      thinking_effort: 'high',
+    })
+  })
+
   it('applies send guards for pending/streaming sessions and auto-title seeding rules', () => {
     expect(shouldBlockChatSend({
       initialSessionId: 's1',
@@ -1246,18 +1302,65 @@ type RedApprovalDecision = {
 type RedApprovalAck = {
   type: 'tool_approval_ack'
   request_id: string
+  session_id: string
+  owner_id: string
+  invocation_id: string
+  arguments_digest: string
+  security_scope_digest: string
+  scope_schema_version: number
   decision_id: string
-  status: 'accepted' | 'send_failed'
+  decision: 'approved_once' | 'approved_remember' | 'denied'
+  idempotency_key: string
+  status: 'accepted' | 'already_accepted' | 'send_failed'
+}
+
+type RedApprovalTerminal = {
+  type: 'tool_approval_terminal'
+  request_id: string
+  session_id: string
+  owner_id: string
+  invocation_id: string
+  arguments_digest: string
+  security_scope_digest: string
+  scope_schema_version: number
+  terminal_result: 'expired' | 'fenced'
+  deadline_at?: string
 }
 
 function redApprovalRequest(overrides: Record<string, unknown> = {}) {
   return {
     requestId: 'approval-request-1',
     sessionId: 'session-1',
+    ownerId: 'desktop-user',
+    invocationId: 'invocation-1',
     toolName: 'filesystem.write',
+    argumentsDigest: 'a'.repeat(64),
+    securityScopeDigest: 'b'.repeat(64),
+    scopeSchemaVersion: 1,
     risk: 'high',
     reason: 'Writes a generated file',
     deadlineAt: '2026-07-29T04:01:00.000Z',
+    ...overrides,
+  }
+}
+
+function redApprovalAcknowledgement(
+  decision: RedApprovalDecision,
+  overrides: Partial<RedApprovalAck> = {},
+): RedApprovalAck {
+  return {
+    type: 'tool_approval_ack',
+    request_id: decision.request_id,
+    session_id: 'session-1',
+    owner_id: 'desktop-user',
+    invocation_id: 'invocation-1',
+    arguments_digest: 'a'.repeat(64),
+    security_scope_digest: 'b'.repeat(64),
+    scope_schema_version: 1,
+    decision_id: decision.decision_id,
+    decision: decision.decision,
+    idempotency_key: decision.idempotency_key,
+    status: 'accepted',
     ...overrides,
   }
 }
@@ -1281,17 +1384,31 @@ async function createRedApprovalHarness(
   ])
   const pendingApprovals = ref<Record<string, Record<string, unknown>>>({})
   const globalSendApprovalResponse = vi.fn()
+  const sendRaw = vi.fn()
+  const approvalRequestListeners = new Set<(request: Record<string, unknown>) => void>()
+  const approvalWireListeners = new Set<(wire: Record<string, unknown>) => void>()
+  const reconnectListeners = new Set<() => void>()
   const ownerSendApprovalResponse = vi.fn(
     responder ??
       ((decision: RedApprovalDecision) =>
-        Promise.resolve({
-          type: 'tool_approval_ack' as const,
-          request_id: decision.request_id,
-          decision_id: decision.decision_id,
-          status: 'accepted' as const,
-        })),
+        Promise.resolve(redApprovalAcknowledgement(decision))),
   )
-  const globalWebSocket = { sendApprovalResponse: globalSendApprovalResponse }
+  const globalWebSocket = {
+    sendApprovalResponse: globalSendApprovalResponse,
+    sendRaw,
+    onApprovalRequest(callback: (request: Record<string, unknown>) => void) {
+      approvalRequestListeners.add(callback)
+      return () => approvalRequestListeners.delete(callback)
+    },
+    onApprovalWire(callback: (wire: Record<string, unknown>) => void) {
+      approvalWireListeners.add(callback)
+      return () => approvalWireListeners.delete(callback)
+    },
+    onReconnect(callback: () => void) {
+      reconnectListeners.add(callback)
+      return () => reconnectListeners.delete(callback)
+    },
+  }
   const state = {
     pendingApprovals,
     pendingToolApprovals: pendingApprovals,
@@ -1301,6 +1418,7 @@ async function createRedApprovalHarness(
     state,
     ws: globalWebSocket,
     websocket: globalWebSocket,
+    approvalCleanup: ref(null),
     approvalTransport: { sendApprovalResponse: ownerSendApprovalResponse },
   }
   const factory = (approvalModule as Record<string, unknown>)
@@ -1321,17 +1439,64 @@ async function createRedApprovalHarness(
   if (typeof respondApproval !== 'function') {
     throw new Error('Chat approval controller has no response method')
   }
+  const storeApprovalTerminal = controller.storeApprovalTerminal
+  if (typeof storeApprovalTerminal !== 'function') {
+    throw new Error('Chat approval controller has no terminal registration method')
+  }
+  const initApprovalListener = controller.initApprovalListener
+  if (typeof initApprovalListener !== 'function') {
+    throw new Error('Chat approval controller has no approval listener initializer')
+  }
+  const clearPendingApprovalsForSession = controller.clearPendingApprovalsForSession
+  if (typeof clearPendingApprovalsForSession !== 'function') {
+    throw new Error('Chat approval controller has no session approval cleanup method')
+  }
 
   return {
     pendingApprovals,
     globalSendApprovalResponse,
     ownerSendApprovalResponse,
+    sendRaw,
     store(request: Record<string, unknown>) {
       return storePendingApproval.call(controller, request)
     },
     respond(requestId: string, approved: boolean, remember: boolean) {
       return respondApproval.call(controller, requestId, approved, remember)
     },
+    terminal(terminal: RedApprovalTerminal) {
+      return storeApprovalTerminal.call(controller, terminal)
+    },
+    init() {
+      return initApprovalListener.call(controller)
+    },
+    request(request: Record<string, unknown>) {
+      approvalRequestListeners.forEach((listener) => listener(request))
+    },
+    wire(wire: Record<string, unknown>) {
+      approvalWireListeners.forEach((listener) => listener(wire))
+    },
+    reconnect() {
+      reconnectListeners.forEach((listener) => listener())
+    },
+    clearSession(sessionId: string) {
+      return clearPendingApprovalsForSession.call(controller, sessionId)
+    },
+  }
+}
+
+function redApprovalTerminal(overrides: Partial<RedApprovalTerminal> = {}): RedApprovalTerminal {
+  return {
+    type: 'tool_approval_terminal',
+    request_id: 'approval-request-1',
+    session_id: 'session-1',
+    owner_id: 'desktop-user',
+    invocation_id: 'invocation-1',
+    arguments_digest: 'a'.repeat(64),
+    security_scope_digest: 'b'.repeat(64),
+    scope_schema_version: 1,
+    terminal_result: 'expired',
+    deadline_at: '2026-07-29T04:01:00.000Z',
+    ...overrides,
   }
 }
 
@@ -1360,41 +1525,154 @@ describe('chat approval transport lifecycle RED contract', () => {
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
     const decision = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
 
-    acknowledgement.resolve({
-      type: 'tool_approval_ack',
-      request_id: decision.request_id,
-      decision_id: decision.decision_id,
-      status: 'accepted',
-    })
+    acknowledgement.resolve(redApprovalAcknowledgement(decision))
     await response
 
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
   })
 
-  it('retains the pending request after owner-transport send failure', async () => {
+  it('contains an expected owner-transport rejection and retains the pending request', async () => {
     const harness = await createRedApprovalHarness(() =>
-      Promise.reject(new Error('request socket closed')),
+      Promise.reject(new Error('Owning approval request socket is not connected')),
     )
     harness.store(redApprovalRequest())
 
-    await Promise.resolve(
+    await expect(Promise.resolve(
       harness.respond('approval-request-1', false, false),
-    ).catch(() => undefined)
+    )).resolves.toBeUndefined()
 
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it('contains a socket send failure and retains the pending request', async () => {
+    const harness = await createRedApprovalHarness(() =>
+      Promise.reject(new Error('Owning approval request socket send failed')),
+    )
+    harness.store(redApprovalRequest())
+
+    await expect(Promise.resolve(
+      harness.respond('approval-request-1', false, false),
+    )).resolves.toBeUndefined()
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it.each([
+    {
+      label: 'a mismatched acknowledgement',
+      acknowledgement: (decision: RedApprovalDecision) =>
+        redApprovalAcknowledgement(decision, { request_id: 'other-request' }),
+    },
+    {
+      label: 'an acknowledgement with an unsupported status',
+      acknowledgement: (decision: RedApprovalDecision) =>
+        redApprovalAcknowledgement(decision, { status: 'unknown' as unknown as 'accepted' }),
+    },
+  ])('contains $label, retains pending, and reuses the same decision', async ({ acknowledgement }) => {
+    const harness = await createRedApprovalHarness((decision) =>
+      Promise.resolve(acknowledgement(decision) as RedApprovalAck),
+    )
+    harness.store(redApprovalRequest())
+
+    await expect(Promise.resolve(
+      harness.respond('approval-request-1', true, false),
+    )).resolves.toBeUndefined()
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+    const first = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
+
+    await expect(Promise.resolve(
+      harness.respond('approval-request-1', true, false),
+    )).resolves.toBeUndefined()
+
+    const second = harness.ownerSendApprovalResponse.mock.calls[1]?.[0] as RedApprovalDecision
+    expect(second.decision_id).toBe(first.decision_id)
+    expect(second.idempotency_key).toBe(first.idempotency_key)
+  })
+
+  it.each([
+    ['session_id', { session_id: 'other-session' }],
+    ['owner_id', { owner_id: 'other-owner' }],
+    ['invocation_id', { invocation_id: 'other-invocation' }],
+    ['arguments_digest', { arguments_digest: 'c'.repeat(64) }],
+    ['security_scope_digest', { security_scope_digest: 'd'.repeat(64) }],
+    ['scope_schema_version', { scope_schema_version: 2 }],
+  ] as const)('retains pending when the owner acknowledgement mismatches %s', async (_field, overrides) => {
+    const harness = await createRedApprovalHarness((decision) =>
+      Promise.resolve(redApprovalAcknowledgement(decision, overrides)),
+    )
+    harness.store(redApprovalRequest())
+
+    await expect(Promise.resolve(
+      harness.respond('approval-request-1', true, false),
+    )).resolves.toBeUndefined()
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it.each(['expired', 'fenced'] as const)(
+    'clears a pending card only for a complete matching backend %s terminal identity',
+    async (terminalResult) => {
+      const harness = await createRedApprovalHarness()
+      harness.store(redApprovalRequest())
+
+      harness.terminal(redApprovalTerminal({
+        terminal_result: terminalResult,
+        // deadline_at 是传输上下文，不属于七项身份字段。
+        deadline_at: '2026-07-29T04:01:05.000Z',
+      }))
+
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+      expect(harness.ownerSendApprovalResponse).not.toHaveBeenCalled()
+      expect(harness.globalSendApprovalResponse).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    ['request_id', { request_id: 'different-request' }],
+    ['session_id', { session_id: 'different-session' }],
+    ['owner_id', { owner_id: 'different-owner' }],
+    ['invocation_id', { invocation_id: 'different-invocation' }],
+    ['arguments_digest', { arguments_digest: 'c'.repeat(64) }],
+    ['security_scope_digest', { security_scope_digest: 'd'.repeat(64) }],
+    ['scope_schema_version', { scope_schema_version: 2 }],
+  ] as const)('ignores a backend terminal with mismatched %s', async (_field, overrides) => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+
+    harness.terminal(redApprovalTerminal(overrides))
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it.each([
+    ['request_id', { requestId: '' }, { request_id: '' }],
+    ['session_id', { sessionId: undefined }, { session_id: undefined }],
+    ['owner_id', { ownerId: undefined }, { owner_id: undefined }],
+    ['invocation_id', { invocationId: undefined }, { invocation_id: undefined }],
+    ['arguments_digest', { argumentsDigest: undefined }, { arguments_digest: undefined }],
+    ['security_scope_digest', { securityScopeDigest: undefined }, { security_scope_digest: undefined }],
+    ['scope_schema_version', { scopeSchemaVersion: 0 }, { scope_schema_version: 0 }],
+  ] as const)('does not clear a pending card when terminal identity is incomplete at %s', async (_field, request, terminal) => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest(request))
+
+    const requestId = 'requestId' in request && typeof request.requestId === 'string'
+      ? request.requestId
+      : 'approval-request-1'
+    harness.terminal(redApprovalTerminal(terminal as Partial<RedApprovalTerminal>))
+
+    expect(Boolean(harness.pendingApprovals.value[requestId])).toBe(true)
   })
 
   it('reuses one stable decision_id when retrying the same user decision', async () => {
     let attempt = 0
     const harness = await createRedApprovalHarness((decision) => {
       attempt += 1
-      if (attempt === 1) return Promise.reject(new Error('request socket closed'))
-      return Promise.resolve({
-        type: 'tool_approval_ack',
-        request_id: decision.request_id,
-        decision_id: decision.decision_id,
-        status: 'accepted',
-      })
+      if (attempt === 1) {
+        return Promise.reject(new Error('Owning approval request socket is not connected'))
+      }
+      return Promise.resolve(redApprovalAcknowledgement(decision))
     })
     harness.store(redApprovalRequest())
 
@@ -1469,5 +1747,152 @@ describe('chat approval transport lifecycle RED contract', () => {
     expect(stored).toBe(original)
     expect(stored?.toolName).toBe('filesystem.write')
     expect(stored?.deadlineAt).toBe('2026-07-29T04:01:00.000Z')
+  })
+
+  it('sends one exact reconciliation query for every complete visible pending approval after global reconnect', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    harness.store(redApprovalRequest({
+      requestId: 'approval-request-2',
+      sessionId: 'session-2',
+      invocationId: 'invocation-2',
+      argumentsDigest: 'c'.repeat(64),
+      securityScopeDigest: 'd'.repeat(64),
+    }))
+    harness.init()
+    harness.sendRaw.mockClear()
+
+    harness.reconnect()
+
+    expect(harness.sendRaw.mock.calls.map(([wire]) => wire)).toEqual([
+      {
+        type: 'tool_approval_reconcile',
+        request_id: 'approval-request-1',
+        session_id: 'session-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-1',
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: 1,
+        deadline_at: '2026-07-29T04:01:00.000Z',
+      },
+      {
+        type: 'tool_approval_reconcile',
+        request_id: 'approval-request-2',
+        session_id: 'session-2',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-2',
+        arguments_digest: 'c'.repeat(64),
+        security_scope_digest: 'd'.repeat(64),
+        scope_schema_version: 1,
+        deadline_at: '2026-07-29T04:01:00.000Z',
+      },
+    ])
+  })
+
+  it.each([
+    ['owner identity', { ownerId: undefined }],
+    ['deadline', { deadlineAt: undefined }],
+  ] as const)('does not reconcile an incomplete pending approval missing %s and does not clear it on silence', async (_field, overrides) => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest(overrides))
+    harness.init()
+    harness.sendRaw.mockClear()
+
+    harness.reconnect()
+
+    expect(harness.sendRaw).not.toHaveBeenCalled()
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it.each([
+    ['approved_once', 'accepted'],
+    ['denied', 'accepted'],
+  ] as const)('clears only an exact durable %s reconciliation acknowledgement', async (decision, status) => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    harness.init()
+
+    harness.wire({
+      type: 'tool_approval_ack',
+      request_id: 'approval-request-1',
+      session_id: 'session-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      decision_id: `decision-${decision}`,
+      decision,
+      idempotency_key: `idempotency-${decision}`,
+      status,
+    })
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+  })
+
+  it('retains pending for a reconciliation acknowledgement with a nonterminal status or mismatched identity', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    harness.init()
+
+    harness.wire({
+      type: 'tool_approval_ack',
+      request_id: 'approval-request-1',
+      session_id: 'session-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      decision_id: 'decision-1',
+      decision: 'approved_once',
+      idempotency_key: 'idempotency-1',
+      status: 'rejected',
+    })
+    harness.wire({
+      type: 'tool_approval_ack',
+      request_id: 'approval-request-1',
+      session_id: 'session-1',
+      owner_id: 'other-owner',
+      invocation_id: 'invocation-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      decision_id: 'decision-1',
+      decision: 'approved_once',
+      idempotency_key: 'idempotency-1',
+      status: 'accepted',
+    })
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+  })
+
+  it('consumes a complete matching terminal reconciliation wire but not pending absence', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    harness.init()
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+    harness.wire(redApprovalTerminal())
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+  })
+
+  it('clears only the deleted session approval projection through the canonical controller exit', async () => {
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest())
+    harness.store(redApprovalRequest({
+      requestId: 'approval-request-2',
+      sessionId: 'session-2',
+      invocationId: 'invocation-2',
+      argumentsDigest: 'c'.repeat(64),
+      securityScopeDigest: 'd'.repeat(64),
+    }))
+
+    harness.clearSession('session-1')
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+    expect(Boolean(harness.pendingApprovals.value['approval-request-2'])).toBe(true)
   })
 })

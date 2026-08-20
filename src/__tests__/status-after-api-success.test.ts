@@ -1,8 +1,5 @@
 /**
- * 验证所有 API 成功调用后，前端状态更新为最终态（indexed/done/success）而非中间态（processing/pending）
- *
- * 根因回归：KnowledgeView.handleReindex 在 reindexDocument 成功后把 status 硬编码为 'processing'，
- * 导致永远显示"处理中"。此测试确保同类 bug 不再出现。
+ * 验证 API 成功后的状态仅由其真实的异步语义决定。
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
@@ -13,23 +10,39 @@ function readSrc(path: string): string {
   return readFileSync(resolve(SRC, path), 'utf-8')
 }
 
-describe('API 成功后状态不应卡在中间态', () => {
+describe('API 成功后的状态投影', () => {
   describe('KnowledgeView — reindex', () => {
     const src = readSrc('views/KnowledgeView.vue')
 
-    it('handleReindex 成功后使用后端返回的 result.status（不硬编码 processing）', () => {
+    it('重建受理期间显示读取权威状态，并只刷新同一文档投影', () => {
       const fn = src.match(/async function handleReindex[\s\S]*?^}/m)?.[0] || ''
       expect(fn).toBeTruthy()
-      // 同步 reindex 分支应使用 result.status；持久化失败重试分支在 202 后合法进入 processing。
-      const synchronousReindex = fn.slice(fn.indexOf('const result = await reindexDocument'))
-      expect(synchronousReindex).toContain('result.status')
-      expect(synchronousReindex).not.toContain("status: 'processing'")
+      const synchronousReindex = fn.slice(fn.indexOf('await reindexDocument(doc.id)'))
+      expect(synchronousReindex).toContain('await reindexDocument(doc.id)')
+      expect(synchronousReindex).toContain('await refreshDocumentProjection(doc.id)')
+      expect(synchronousReindex).not.toContain('await revalidateFromApi(true)')
+      expect(synchronousReindex).not.toContain('result.status')
+      expect(src).toContain("t('knowledge.authorityReading')")
+      expect(src).toContain("t('knowledge.syncingStatus')")
+      expect(src).toContain("t('knowledge.semanticIndex.enhancing')")
+      expect(src).not.toContain("return '正在读取权威状态…'")
+      expect(src).not.toContain("return '同步中'")
+      expect(src).not.toContain("return '增强中'")
     })
 
-    it('handleReindex 成功后更新 chunk_count 和 updated_at', () => {
+    it('向量 Job 终态只刷新对应文档，不重置已加载的分页窗口', () => {
+      const fn = src.match(/async function pollKnowledgeUploadJobs[\s\S]*?^}/m)?.[0] || ''
+      const terminalStart = fn.indexOf('if (isMounted && terminalDocumentIDs.size > 0)')
+      const uploadFallbackStart = fn.indexOf('} else if', terminalStart)
+      const terminalProjection = fn.slice(terminalStart, uploadFallbackStart)
+      expect(terminalProjection).toContain('await refreshDocumentProjection(documentID)')
+      expect(terminalProjection).not.toContain('await revalidateFromApi(true)')
+    })
+
+    it('live vector Job 会阻止同一文档重复提交重建', () => {
       const fn = src.match(/async function handleReindex[\s\S]*?^}/m)?.[0] || ''
-      expect(fn).toContain('result.chunk_count')
-      expect(fn).toContain('result.updated_at')
+      expect(fn).toContain('hasPollableVectorJob(doc)')
+      expect(src).toContain('hasPollableVectorJob(doc)')
     })
   })
 

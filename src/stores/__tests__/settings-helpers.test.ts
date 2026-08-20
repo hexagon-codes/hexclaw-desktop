@@ -886,6 +886,25 @@ describe('backendToProviders', () => {
 
 /* ======================== providersToBackend ======================== */
 describe('providersToBackend', () => {
+  it('serializes the global default reasoning policy without provider-local preferences', () => {
+    const serialize = providersToBackend as unknown as (
+      providers: ProviderConfig[],
+      defaultModel: string,
+      defaultProviderId: string,
+      routing: { enabled: boolean; strategy: string },
+      defaultReasoningPolicy: unknown,
+    ) => unknown
+    const result = serialize(
+      [makeProvider()],
+      'gpt-4',
+      'p1',
+      { enabled: false, strategy: 'cost-aware' },
+      { mode: 'off' },
+    ) as { default_reasoning_policy?: unknown }
+
+    expect(result.default_reasoning_policy).toEqual({ mode: 'off' })
+  })
+
   it('includes disabled providers with enabled:false（2026-06-22：禁用≠删除，随 enabled 上送）', () => {
     const providers = [
       makeProvider({ id: 'a', name: 'A', enabled: false }),

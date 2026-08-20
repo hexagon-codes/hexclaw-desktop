@@ -3,16 +3,18 @@ import { resolve } from 'node:path'
 import { createI18n } from 'vue-i18n'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import en from '@/i18n/locales/en'
 import zhCN from '@/i18n/locales/zh-CN'
+import ugCN from '@/i18n/locales/ug-CN'
 import type { RuntimeEvent } from '@/types/chat'
 import ThinkingProgress from '../ThinkingProgress.vue'
 
-function testI18n() {
+function testI18n(locale = 'zh-CN') {
   return createI18n({
     legacy: false,
-    locale: 'zh-CN',
+    locale,
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN, zh: zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN, en, 'ug-CN': ugCN },
   })
 }
 
@@ -25,10 +27,10 @@ type ProgressProps = {
   runtimeEvents?: RuntimeEvent[]
 }
 
-function mountProgress(props: ProgressProps) {
+function mountProgress(props: ProgressProps, locale?: string) {
   return mount(ThinkingProgress, {
     props,
-    global: { plugins: [testI18n()] },
+    global: { plugins: [testI18n(locale)] },
   })
 }
 
@@ -43,8 +45,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
     })
 
     const progress = wrapper.get('[data-thinking-state="running"]')
-    expect(progress.get('.hc-thinking__header').text()).toContain('正在思考')
-    expect(progress.get('.hc-thinking__elapsed').text()).toContain('19s')
+    expect(progress.get('.hc-thinking__header').text()).toContain('正在深度思考 · 19s')
     expect(progress.get('.hc-thinking__content').text()).toContain('正在检索教材中的相关知识点')
     expect(progress.find('.hc-thinking__activity').exists()).toBe(true)
   })
@@ -59,8 +60,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
     })
 
     const progress = wrapper.get('[data-thinking-state="completed"]')
-    expect(progress.get('summary').text()).toContain('思考了')
-    expect(progress.get('.hc-thinking__elapsed').text()).toContain('1m 40s')
+    expect(progress.get('summary').text()).toContain('思考了 1m 40s')
     expect(progress.get('details').attributes('open')).toBeUndefined()
     expect(progress.text()).toContain('梳理了题目中的运算顺序')
   })
@@ -79,6 +79,38 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
     expect(wrapper.find('.hc-thinking__content').exists()).toBe(false)
     expect(wrapper.find('details').exists()).toBe(false)
     expect(wrapper.find('.cv').exists()).toBe(false)
+  })
+
+  it('uses one live status host and sanitizes a trusted public Markdown summary', () => {
+    const wrapper = mountProgress({
+      state: 'running',
+      elapsedSeconds: 3,
+      reasoning: '**公开摘要**\n<img src="x" onerror="window.__private = 1">',
+      visibility: 'visible',
+    })
+
+    expect(wrapper.findAll('[role="status"]')).toHaveLength(1)
+    expect(wrapper.get('[data-thinking-state="running"]').attributes('role')).toBeUndefined()
+    expect(wrapper.find('script').exists()).toBe(false)
+    expect(wrapper.find('[onerror]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('公开摘要')
+  })
+
+  it.each([
+    ['zh-CN', '正在深度思考 · 3s'],
+    ['en', 'Deep thinking · 3s'],
+    ['ug-CN', 'چوڭقۇر ئويلىنىۋاتىدۇ · 3s'],
+  ])('renders the assistant-run thinking label in %s', (locale, expected) => {
+    const wrapper = mountProgress(
+      {
+        state: 'running',
+        elapsedSeconds: 3,
+        visibility: 'not_exposed',
+      },
+      locale,
+    )
+
+    expect(wrapper.get('[role="status"]').text()).toBe(expected)
   })
 
   it('projects safe runtime tool events through the shared timeline and coalesces one call', () => {
@@ -133,7 +165,9 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
     const source = readFileSync(chatViewPath, 'utf8')
     const usages = source.match(/<ThinkingProgress\b/g) ?? []
 
-    expect(source).toContain("import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'")
+    expect(source).toContain(
+      "import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'",
+    )
     expect(usages).toHaveLength(1)
   })
 
@@ -145,7 +179,10 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
       visibility: 'visible',
       defaultOpen: true,
     })
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ThinkingProgress.vue'), 'utf8')
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/components/chat/ThinkingProgress.vue'),
+      'utf8',
+    )
 
     expect(wrapper.get('summary').attributes('aria-label')).toBe('思考完成，点击收起')
     expect(wrapper.find('.ti svg').exists()).toBe(true)
@@ -155,7 +192,9 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
   })
 
   it('physically removes ResearchProgress and leaves one ThinkingProgress truth source', () => {
-    expect(existsSync(resolve(process.cwd(), 'src/components/chat/ResearchProgress.vue'))).toBe(false)
+    expect(existsSync(resolve(process.cwd(), 'src/components/chat/ResearchProgress.vue'))).toBe(
+      false,
+    )
     const chatViewSource = readFileSync(resolve(process.cwd(), 'src/views/ChatView.vue'), 'utf8')
     expect(chatViewSource).not.toContain('ResearchProgress')
     expect(chatViewSource.match(/<ThinkingProgress\b/g) ?? []).toHaveLength(1)

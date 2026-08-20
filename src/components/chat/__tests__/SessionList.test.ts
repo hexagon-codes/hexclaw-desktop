@@ -3,6 +3,7 @@ import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import SessionList from '../SessionList.vue'
+import sessionListSource from '../SessionList.vue?raw'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useChatStore } from '@/stores/chat'
@@ -11,13 +12,20 @@ import { scenarioRegistry } from '@/shell/scenario/registry'
 import type { ChatSession } from '@/types'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
-const { updateSessionTitle, listSessions, searchMessages, listActiveStreams, getSessionBranches } = vi.hoisted(() => ({
-  updateSessionTitle: vi.fn().mockResolvedValue({}),
-  listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
-  searchMessages: vi.fn().mockResolvedValue({ results: [], total: 0, query: '' }),
-  listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
-  getSessionBranches: vi.fn().mockResolvedValue({ branches: [], total: 0 }),
-}))
+const {
+  updateSessionTitle,
+  listSessions,
+  searchMessages,
+  listActiveStreams,
+  getSessionBranches,
+} =
+  vi.hoisted(() => ({
+    updateSessionTitle: vi.fn().mockResolvedValue({}),
+    listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
+    searchMessages: vi.fn().mockResolvedValue({ results: [], total: 0, query: '' }),
+    listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
+    getSessionBranches: vi.fn().mockResolvedValue({ branches: [], total: 0 }),
+  }))
 
 vi.mock('@/api/chat', () => ({
   updateSessionTitle,
@@ -83,9 +91,7 @@ function mountSessionList(customSessions?: ChatSession[]) {
 function pendingDeleteConfirmButton(): HTMLButtonElement {
   const overlays = Array.from(document.body.querySelectorAll<HTMLElement>('.hc-dialog-overlay'))
   const overlay = overlays[overlays.length - 1]
-  const buttons = overlay
-    ? Array.from(overlay.querySelectorAll<HTMLButtonElement>('button'))
-    : []
+  const buttons = overlay ? Array.from(overlay.querySelectorAll<HTMLButtonElement>('button')) : []
   const confirmBtn = buttons.find((button) => button.textContent?.trim() === '删除')
   expect(confirmBtn, '应弹出删除确认层').toBeTruthy()
   return confirmBtn as HTMLButtonElement
@@ -122,18 +128,40 @@ describe('SessionList', () => {
     scenarioRegistry.reset()
     scenarioRegistry.registerResolver((ctx) =>
       ctx.agentId === 'k12-x'
-        ? { schemaVersion: '1', headerTabs: [{ id: 'chat', labelKey: 'x', kind: 'chat' }], messageBadges: [], recordCollections: [], sidePanels: [], actions: [] }
+        ? {
+            schemaVersion: '1',
+            headerTabs: [{ id: 'chat', labelKey: 'x', kind: 'chat' }],
+            messageBadges: [],
+            recordCollections: [],
+            sidePanels: [],
+            actions: [],
+          }
         : null,
     )
     const { wrapper } = mountSessionList([
-      { id: 'normal', title: '普通会话', created_at: '2026-04-05T10:00:00Z', updated_at: '2026-04-05T10:00:00Z', message_count: 1 },
-      { id: 'tutor', title: '场景会话', agent_name: 'k12-x', created_at: '2026-04-01T10:00:00Z', updated_at: '2026-04-01T10:00:00Z', message_count: 1 },
+      {
+        id: 'normal',
+        title: '普通会话',
+        created_at: '2026-04-05T10:00:00Z',
+        updated_at: '2026-04-05T10:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'tutor',
+        title: '场景会话',
+        agent_name: 'k12-x',
+        created_at: '2026-04-01T10:00:00Z',
+        updated_at: '2026-04-01T10:00:00Z',
+        message_count: 1,
+      },
     ])
     await flushPromises()
     // 第一个 section = 置顶，含更旧的场景会话
     const firstSection = wrapper.findAll('.hc-sessions__section')[0]!
     expect(firstSection.text()).toContain('场景会话')
-    expect(wrapper.find('[data-session-id="tutor"]').classes()).toContain('hc-sessions__item--pinned')
+    expect(wrapper.find('[data-session-id="tutor"]').classes()).toContain(
+      'hc-sessions__item--pinned',
+    )
     const fixedPin = wrapper.get('[data-session-id="tutor"] .hc-sessions__pin-action')
     expect(fixedPin.attributes('aria-label')).toBe('固定置顶')
     expect(fixedPin.attributes('disabled')).toBeDefined()
@@ -244,6 +272,55 @@ describe('SessionList', () => {
     expect(wrapper.findAll('.hc-sessions__icon')).toHaveLength(0)
   })
 
+  it('renders today session rows as HH:mm, same-year dates as month/day, and cross-year dates with the year', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 20, 12, 0, 0))
+    const { wrapper } = mountSessionList([
+      {
+        id: 'today-date',
+        title: '今天会话',
+        created_at: new Date(2026, 7, 20, 9, 0, 0).toISOString(),
+        updated_at: new Date(2026, 7, 20, 9, 0, 0).toISOString(),
+        message_count: 1,
+      },
+      {
+        id: 'yesterday-date',
+        title: '昨天会话',
+        created_at: new Date(2026, 7, 19, 9, 0, 0).toISOString(),
+        updated_at: new Date(2026, 7, 19, 9, 0, 0).toISOString(),
+        message_count: 1,
+      },
+      {
+        id: 'older-date',
+        title: '更早会话',
+        created_at: new Date(2026, 7, 1, 9, 0, 0).toISOString(),
+        updated_at: new Date(2026, 7, 1, 9, 0, 0).toISOString(),
+        message_count: 1,
+      },
+      {
+        id: 'previous-year-date',
+        title: '去年会话',
+        created_at: new Date(2025, 11, 31, 9, 0, 0).toISOString(),
+        updated_at: new Date(2025, 11, 31, 9, 0, 0).toISOString(),
+        message_count: 1,
+      },
+    ])
+    await flushPromises()
+
+    expect(wrapper.get('[data-session-id="today-date"] .hc-sessions__time').text()).toBe('09:00')
+    expect(wrapper.get('[data-session-id="yesterday-date"] .hc-sessions__time').text()).toBe('8月19日')
+    expect(wrapper.get('[data-session-id="older-date"] .hc-sessions__time').text()).toBe('8月1日')
+    expect(
+      wrapper.get('[data-session-id="previous-year-date"] .hc-sessions__time').text(),
+    ).toBe('2025年12月31日')
+    expect(
+      wrapper
+        .findAll('.hc-sessions__time')
+        .map((node) => node.text())
+        .join(' '),
+    ).not.toMatch(/今天|昨天|周[一二三四五六日天]/)
+  })
+
   it('shows a spinner on the session that is still generating in the background', async () => {
     const { wrapper, store } = mountSessionList()
     store.currentSessionId = 's-1'
@@ -263,7 +340,13 @@ describe('SessionList', () => {
     const vm = wrapper.vm as unknown as {
       sessionMenuItems: Array<{ id: string; disabled?: boolean }>
     }
-    expect(vm.sessionMenuItems.map((item) => item.id)).toEqual(['rename', 'pin', 'branches', 'sep1', 'delete'])
+    expect(vm.sessionMenuItems.map((item) => item.id)).toEqual([
+      'rename',
+      'pin',
+      'branches',
+      'sep1',
+      'delete',
+    ])
     expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('share')
     expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('copy_title')
     expect(vm.sessionMenuItems.find((item) => item.id === 'branches')?.disabled).toBe(true)
@@ -357,6 +440,30 @@ describe('SessionList', () => {
     expect(store.deleteSession).toHaveBeenCalledWith('s-1')
   })
 
+  it('clears a session approval projection only after the backend confirms deletion', async () => {
+    let resolveDelete!: () => void
+    const { wrapper, store } = mountSessionList()
+    const clearPendingApprovalsForSession = vi.spyOn(store, 'clearPendingApprovalsForSession')
+    store.deleteSession = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    const vm = wrapper.vm as unknown as {
+      performDeleteSession: (sessionId: string) => Promise<void>
+    }
+
+    const deletion = vm.performDeleteSession('s-1')
+    expect(clearPendingApprovalsForSession).not.toHaveBeenCalled()
+
+    resolveDelete()
+    await deletion
+
+    expect(store.deleteSession).toHaveBeenCalledWith('s-1')
+    expect(clearPendingApprovalsForSession).toHaveBeenCalledExactlyOnceWith('s-1')
+  })
+
   it('keeps the latest renamed title when an earlier rename request resolves later', async () => {
     let resolveFirst!: () => void
     let resolveSecond!: () => void
@@ -448,6 +555,7 @@ describe('SessionList', () => {
     localStorage.setItem('hexclaw_pinned_sessions', JSON.stringify(['s-1']))
 
     const { wrapper, store } = mountSessionList()
+    const clearPendingApprovalsForSession = vi.spyOn(store, 'clearPendingApprovalsForSession')
     store.deleteSession = vi.fn().mockRejectedValue(new Error('delete failed'))
     await flushPromises()
 
@@ -463,6 +571,7 @@ describe('SessionList', () => {
     await confirmPendingDeleteAfterCooldown()
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-1')
+    expect(clearPendingApprovalsForSession).not.toHaveBeenCalled()
     expect(wrapper.find('.hc-sessions__item--pinned').text()).toContain('第一个会话')
     expect(JSON.parse(localStorage.getItem('hexclaw_pinned_sessions') || '[]')).toEqual(['s-1'])
   })
@@ -511,16 +620,38 @@ describe('SessionList', () => {
     expect(wrapper.text()).toContain('第三个会话')
   })
 
+  it('keeps the prototype metadata visible in layout while a session is being renamed', async () => {
+    const { wrapper } = mountSessionList()
+    await flushPromises()
+
+    const row = wrapper.get('[data-session-id="s-1"]')
+    await row.trigger('dblclick')
+    await flushPromises()
+
+    const meta = row.get('.hc-sessions__meta')
+    expect(meta.classes()).not.toContain('hc-sessions__meta--renaming')
+    expect(meta.attributes('aria-hidden')).toBeUndefined()
+    expect(meta.text()).toContain('2')
+  })
+
+  it('aligns the session count to the prototype right edge', () => {
+    expect(sessionListSource).toMatch(
+      /\.hc-sessions__count\s*\{[\s\S]*?margin-left:\s*auto;/,
+    )
+  })
+
   it('removes a successfully deleted paginated session from the extra-session cache', async () => {
     vi.useFakeTimers()
     listSessions.mockResolvedValueOnce({
-      sessions: [{
-        id: 's-extra',
-        title: '分页旧会话',
-        created_at: '2026-03-01T10:00:00Z',
-        updated_at: '2026-03-01T10:00:00Z',
-        message_count: 1,
-      }],
+      sessions: [
+        {
+          id: 's-extra',
+          title: '分页旧会话',
+          created_at: '2026-03-01T10:00:00Z',
+          updated_at: '2026-03-01T10:00:00Z',
+          message_count: 1,
+        },
+      ],
       total: 3,
     })
     const { wrapper, store } = mountSessionList()
@@ -577,18 +708,34 @@ describe('SessionList', () => {
     setActivePinia(pinia)
     const chat = useChatStore()
     chat.sessions = [
-      { id: 's-1', title: 'k12-tutor-abc', agent_name: 'k12-tutor-abc', created_at: '2026-07-08T10:00:00Z', updated_at: '2026-07-08T10:00:00Z', message_count: 6 },
+      {
+        id: 's-1',
+        title: 'k12-tutor-abc',
+        agent_name: 'k12-tutor-abc',
+        created_at: '2026-07-08T10:00:00Z',
+        updated_at: '2026-07-08T10:00:00Z',
+        message_count: 6,
+      },
     ]
     chat.currentSessionId = 's-1'
     chat.selectSession = vi.fn()
     // 该会话绑定的智能体带 display_name + metadata.avatar（🎓）
     const agents = useAgentsStore()
     agents.registeredAgents = [
-      { name: 'k12-tutor-abc', display_name: '小明的辅导老师 · 五年级', model: '', provider: '', metadata: { avatar: '🎓' } },
+      {
+        name: 'k12-tutor-abc',
+        display_name: '小明的辅导老师 · 五年级',
+        model: '',
+        provider: '',
+        metadata: { avatar: '🎓' },
+      },
     ]
 
     const wrapper = mount(SessionList, {
-      global: { plugins: [pinia, createTestI18n()], stubs: { ContextMenu: { template: '<div />' } } },
+      global: {
+        plugins: [pinia, createTestI18n()],
+        stubs: { ContextMenu: { template: '<div />' } },
+      },
     })
     await flushPromises()
 
@@ -603,7 +750,13 @@ describe('SessionList', () => {
 
   it('通用会话（无专属 agent）：标题不加 emoji 前缀', async () => {
     const { wrapper } = mountSessionList([
-      { id: 's-plain', title: '小数乘法讲解', created_at: '2026-07-08T10:00:00Z', updated_at: '2026-07-08T10:00:00Z', message_count: 2 },
+      {
+        id: 's-plain',
+        title: '小数乘法讲解',
+        created_at: '2026-07-08T10:00:00Z',
+        updated_at: '2026-07-08T10:00:00Z',
+        message_count: 2,
+      },
     ])
     await flushPromises()
     const item = wrapper.find('[data-session-id="s-plain"]')

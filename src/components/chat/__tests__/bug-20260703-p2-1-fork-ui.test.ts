@@ -105,8 +105,8 @@ describe('BUG-20260703 P2-1 — handleFork 行为', () => {
   })
 })
 
-describe('BUG-20260703 P2-1 — MessageActions 分支菜单项', () => {
-  it('assistant 把创建分支收进 More 菜单；user 菜单无此项', async () => {
+describe('BUG-20260703 P2-1 — MessageActions 分支入口', () => {
+  it('assistant 创建分支为一级按钮直接显示；user 无此入口', async () => {
     const i18n = createI18n({
       legacy: false,
       locale: 'zh-CN',
@@ -119,9 +119,9 @@ describe('BUG-20260703 P2-1 — MessageActions 分支菜单项', () => {
     })
     const btn = w.find('[data-testid="message-fork"]')
     expect(btn.exists()).toBe(true)
-    expect(w.find('.hc-msg-actions > [data-testid="message-fork"]').exists()).toBe(false)
-    await w.get('[data-testid="message-more"]').trigger('click')
-    expect(btn.text()).toContain('创建分支')
+    expect(w.find('.hc-msg-actions > [data-testid="message-fork"]').exists()).toBe(true)
+    expect(w.find('[data-testid="message-more"]').exists()).toBe(false)
+    expect(btn.attributes('title')).toContain('创建分支')
     await btn.trigger('click')
     expect(w.emitted('fork')).toHaveLength(1)
 

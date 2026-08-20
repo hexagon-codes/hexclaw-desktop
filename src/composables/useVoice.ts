@@ -33,6 +33,7 @@ declare global {
     onend: (() => void) | null
     start(): void
     stop(): void
+    abort?(): void
   }
 
   interface SpeechRecognitionEvent extends Event {
@@ -92,6 +93,7 @@ function stopActiveTTS() {
 
 export function useVoice() {
   const isListening = ref(false)
+  const isTranscribing = ref(false)
   const myVoiceId = `voice-${++voiceSeq}`
   // 本实例是否正在朗读：由模块级单例决定 → 别的实例开播时本实例自动变 false（互斥）。
   const isSpeaking = computed(() => activeSpeakerId.value === myVoiceId)
@@ -128,8 +130,18 @@ export function useVoice() {
   let recognition: SpeechRecognition | null = null
   // MediaRecorder fallback 状态
   let mediaRecorder: MediaRecorder | null = null
-  let recordedChunks: Blob[] = []
   let activeStream: MediaStream | null = null
+  let mediaCaptureId = 0
+  let pendingMediaStart: { id: number; promise: Promise<void> } | null = null
+  let captureSeq = 0
+  let activeCaptureId = 0
+  const discardedCaptureIds = new Set<number>()
+  let captureCompletion: {
+    id: number
+    promise: Promise<string>
+    resolve: (text: string) => void
+    settled: boolean
+  } | null = null
 
   // ─── STT (Speech-to-Text) ────────────────────────────
 
@@ -146,28 +158,52 @@ export function useVoice() {
     return sr
   }
 
-  function startListening() {
-    if (isListening.value) return
+  function beginCapture(): number {
+    const id = ++captureSeq
+    activeCaptureId = id
+    let resolveCompletion: (text: string) => void = () => {}
+    const promise = new Promise<string>((resolve) => {
+      resolveCompletion = resolve
+    })
+    captureCompletion = { id, promise, resolve: resolveCompletion, settled: false }
+    return id
+  }
+
+  function settleCapture(id: number, text: string) {
+    if (!captureCompletion || captureCompletion.id !== id || captureCompletion.settled) return
+    captureCompletion.settled = true
+    captureCompletion.resolve(text)
+  }
+
+  function startListening(): void | Promise<void> {
+    if (isListening.value || pendingMediaStart) return pendingMediaStart?.promise
     error.value = null
     transcript.value = ''
+    isTranscribing.value = false
+    const captureId = beginCapture()
 
     // 优先 Web Speech（实时识别），不可用则走 MediaRecorder + 后端
     if (hasWebSpeech.value) {
-      startWebSpeech()
+      startWebSpeech(captureId)
       return
     }
     if (hasMediaRecorder.value) {
-      void startMediaRecorder()
-      return
+      const promise = startMediaRecorder(captureId).finally(() => {
+        if (pendingMediaStart?.id === captureId) pendingMediaStart = null
+      })
+      pendingMediaStart = { id: captureId, promise }
+      return promise
     }
     error.value = 'Speech recognition is not supported on this device'
+    settleCapture(captureId, '')
     logger.warn('[useVoice] no STT channel available (no Web Speech, no MediaRecorder)')
   }
 
-  function startWebSpeech() {
+  function startWebSpeech(captureId: number) {
     recognition = createRecognition()
     if (!recognition) {
       error.value = 'Failed to create speech recognition instance'
+      settleCapture(captureId, '')
       return
     }
 
@@ -186,15 +222,23 @@ export function useVoice() {
     }
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // "aborted" is expected when we call stopListening()
+      // 主动丢弃录音时 aborted 是预期结果。
       if (event.error === 'aborted') return
       error.value = `Speech recognition error: ${event.error}`
       logger.warn(`[useVoice] recognition error: ${event.error}`)
       isListening.value = false
+      settleCapture(captureId, '')
     }
 
     recognition.onend = () => {
+      recognition = null
       isListening.value = false
+      if (discardedCaptureIds.has(captureId)) {
+        discardedCaptureIds.delete(captureId)
+        settleCapture(captureId, '')
+        return
+      }
+      settleCapture(captureId, transcript.value.trim())
     }
 
     try {
@@ -202,6 +246,8 @@ export function useVoice() {
       isListening.value = true
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to start speech recognition'
+      recognition = null
+      settleCapture(captureId, '')
       logger.error('[useVoice] start failed', e)
     }
   }
@@ -210,77 +256,161 @@ export function useVoice() {
    * MediaRecorder 兜底：录音 → blob → POST 后端 transcribe → 写入 transcript。
    * 在 Tauri WKWebView 下是唯一可用的 STT 路径。
    */
-  async function startMediaRecorder() {
+  async function startMediaRecorder(captureId: number) {
     try {
-      activeStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      recordedChunks = []
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (discardedCaptureIds.has(captureId) || activeCaptureId !== captureId) {
+        stream.getTracks().forEach((track) => track.stop())
+        discardedCaptureIds.delete(captureId)
+        settleCapture(captureId, '')
+        return
+      }
+      activeStream = stream
+      const recordedChunks: Blob[] = []
       // 优先 webm/opus（Chrome/Tauri 默认），回退 mp4
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/mp4')
           ? 'audio/mp4'
           : ''
-      mediaRecorder = mimeType
-        ? new MediaRecorder(activeStream, { mimeType })
-        : new MediaRecorder(activeStream)
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream)
+      mediaRecorder = recorder
+      mediaCaptureId = captureId
 
-      mediaRecorder.ondataavailable = (ev: BlobEvent) => {
+      recorder.ondataavailable = (ev: BlobEvent) => {
         if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data)
       }
-      mediaRecorder.onstop = async () => {
-        const stoppedRecorder = mediaRecorder
-        const stoppedStream = activeStream
-        mediaRecorder = null
-        activeStream = null
-        // 释放麦克风
-        stoppedStream?.getTracks().forEach(t => t.stop())
+      recorder.onstop = async () => {
+        if (mediaRecorder === recorder) mediaRecorder = null
+        if (activeStream === stream) activeStream = null
+        if (mediaCaptureId === captureId) mediaCaptureId = 0
+        stream.getTracks().forEach((track) => track.stop())
+        isListening.value = false
 
-        if (!recordedChunks.length) {
-          isListening.value = false
+        if (discardedCaptureIds.has(captureId)) {
+          discardedCaptureIds.delete(captureId)
+          recordedChunks.length = 0
+          settleCapture(captureId, '')
           return
         }
-        const usedMime = stoppedRecorder?.mimeType || 'audio/webm'
+
+        if (!recordedChunks.length) {
+          error.value = 'No speech was recognized'
+          settleCapture(captureId, '')
+          return
+        }
+        const usedMime = recorder.mimeType || 'audio/webm'
         const ext = usedMime.includes('mp4') ? 'mp4' : 'webm'
         const blob = new Blob(recordedChunks, { type: usedMime })
-        recordedChunks = []
+        recordedChunks.length = 0
+        isTranscribing.value = true
         try {
           const file = new File([blob], `recording.${ext}`, { type: usedMime })
           const result = await speechToText(file)
-          if (result?.text) transcript.value = result.text
+          const text = result?.text?.trim() ?? ''
+          if (text) transcript.value = text
+          else error.value = 'No speech was recognized'
+          settleCapture(captureId, text)
         } catch (e) {
           error.value = e instanceof Error ? e.message : 'Transcribe failed'
           logger.error('[useVoice] backend transcribe failed', e)
+          settleCapture(captureId, '')
         } finally {
-          isListening.value = false
+          isTranscribing.value = false
         }
       }
-      mediaRecorder.onerror = (ev: Event) => {
+      recorder.onerror = (ev: Event) => {
         error.value = `MediaRecorder error: ${(ev as ErrorEvent).message ?? 'unknown'}`
         logger.warn('[useVoice] MediaRecorder error', ev)
         isListening.value = false
+        isTranscribing.value = false
+        settleCapture(captureId, '')
       }
 
       // timeslice=1000ms：每秒切一次数据块，长录音避免单块过大；stop 时拼回整段 Blob。
-      mediaRecorder.start(1000)
+      recorder.start(1000)
       isListening.value = true
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Microphone access denied'
-      logger.error('[useVoice] getUserMedia failed', e)
+      if (!discardedCaptureIds.has(captureId)) {
+        error.value = e instanceof Error ? e.message : 'Microphone access denied'
+        logger.error('[useVoice] getUserMedia failed', e)
+      }
+      discardedCaptureIds.delete(captureId)
       isListening.value = false
+      settleCapture(captureId, '')
+    }
+  }
+
+  async function finishListening(): Promise<string> {
+    const captureId = activeCaptureId
+    const completion = captureCompletion?.id === captureId ? captureCompletion : null
+    if (!completion) return transcript.value.trim()
+
+    const mediaStart = pendingMediaStart?.id === captureId ? pendingMediaStart.promise : null
+    if (mediaStart) await mediaStart
+
+    if (recognition) {
+      try {
+        recognition.stop()
+      } catch {
+        recognition = null
+        isListening.value = false
+        settleCapture(captureId, transcript.value.trim())
+      }
+    }
+    if (mediaRecorder && mediaCaptureId === captureId && mediaRecorder.state !== 'inactive') {
+      try {
+        mediaRecorder.stop()
+      } catch {
+        isListening.value = false
+        settleCapture(captureId, '')
+      }
+    }
+
+    const text = await completion.promise
+    if (!text && !error.value && !discardedCaptureIds.has(captureId)) {
+      error.value = 'No speech was recognized'
+    }
+    return text
+  }
+
+  function cancelListening() {
+    const captureId = activeCaptureId
+    if (!captureId) return
+    discardedCaptureIds.add(captureId)
+    transcript.value = ''
+    error.value = null
+    isListening.value = false
+    isTranscribing.value = false
+    settleCapture(captureId, '')
+
+    if (recognition) {
+      const activeRecognition = recognition
+      recognition = null
+      try {
+        if (typeof activeRecognition.abort === 'function') activeRecognition.abort()
+        else activeRecognition.stop()
+      } catch {
+        discardedCaptureIds.delete(captureId)
+      }
+    }
+    if (mediaRecorder && mediaCaptureId === captureId && mediaRecorder.state !== 'inactive') {
+      try {
+        mediaRecorder.stop()
+      } catch {
+        activeStream?.getTracks().forEach((track) => track.stop())
+        activeStream = null
+        mediaRecorder = null
+        mediaCaptureId = 0
+        discardedCaptureIds.delete(captureId)
+      }
     }
   }
 
   function stopListening() {
-    if (recognition) {
-      try { recognition.stop() } catch { /* already stopped */ }
-      recognition = null
-    }
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      try { mediaRecorder.stop() } catch { /* already stopped */ }
-      // isListening 在 onstop 后端 transcribe 完成后置 false
-      return
-    }
-    isListening.value = false
+    void finishListening()
   }
 
   function toggleListening() {
@@ -332,7 +462,7 @@ export function useVoice() {
   // ─── Cleanup on unmount ──────────────────────────────
 
   function cleanup() {
-    stopListening()
+    cancelListening()
     stopSpeaking()
   }
 
@@ -342,12 +472,15 @@ export function useVoice() {
 
   return {
     isListening,
+    isTranscribing,
     isSpeaking,
     transcript,
     error,
     isSupported,
     startListening,
     stopListening,
+    finishListening,
+    cancelListening,
     toggleListening,
     speak,
     stopSpeaking,

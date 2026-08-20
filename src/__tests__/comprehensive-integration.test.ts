@@ -36,6 +36,7 @@ const {
   resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
+  onToolApprovalTerminal,
   approvalResponder,
   // api/chat
   updateMessageFeedback,
@@ -87,14 +88,38 @@ const {
     })),
     sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
     clearWebSocketCallbacks: vi.fn(),
-    approvalResponder: vi.fn((decision: { request_id: string; decision_id: string }) =>
-      Promise.resolve({
+    approvalResponder: vi.fn((decision: {
+      request_id: string
+      decision_id: string
+      decision: 'approved_once' | 'approved_remember' | 'denied'
+      idempotency_key: string
+    }) => {
+      const identity = decision.request_id === 'req-001'
+        ? {
+            session_id: 'session-A',
+            invocation_id: 'invocation-001',
+            arguments_digest: 'a'.repeat(64),
+            security_scope_digest: 'b'.repeat(64),
+          }
+        : {
+            session_id: 's1',
+            invocation_id: 'invocation-002',
+            arguments_digest: 'c'.repeat(64),
+            security_scope_digest: 'd'.repeat(64),
+          }
+      return Promise.resolve({
         type: 'tool_approval_ack' as const,
         request_id: decision.request_id,
+        owner_id: 'desktop-user',
+        scope_schema_version: 1,
+        ...identity,
         decision_id: decision.decision_id,
+        decision: decision.decision,
+        idempotency_key: decision.idempotency_key,
         status: 'accepted' as const,
-      }),
-    ),
+      })
+    }),
+    onToolApprovalTerminal: vi.fn().mockReturnValue(() => {}),
 
     updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 
@@ -141,6 +166,7 @@ vi.mock('@/services/chatService', () => ({
   resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
+  onToolApprovalTerminal,
   ChatRequestError: MockChatRequestError,
   withTimeout: vi.fn((p: Promise<unknown>) => p),
 }))
@@ -811,7 +837,12 @@ describe('Scenario 7: Tool approval chain', () => {
     // Simulate WebSocket sending a tool_approval_request
     const approvalReq = {
       requestId: 'req-001',
+      ownerId: 'desktop-user',
+      invocationId: 'invocation-001',
       toolName: 'execute_code',
+      argumentsDigest: 'a'.repeat(64),
+      securityScopeDigest: 'b'.repeat(64),
+      scopeSchemaVersion: 1,
       risk: 'high',
       reason: 'The tool wants to run arbitrary code',
       sessionId: 'session-A',
@@ -856,7 +887,12 @@ describe('Scenario 7: Tool approval chain', () => {
     wsCallbacks.approval!.forEach((cb) =>
       cb({
         requestId: 'req-002',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-002',
         toolName: 'file_write',
+        argumentsDigest: 'c'.repeat(64),
+        securityScopeDigest: 'd'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'sensitive',
         reason: 'Writing to disk',
         sessionId: 's1',

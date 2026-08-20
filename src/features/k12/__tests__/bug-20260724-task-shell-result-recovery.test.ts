@@ -344,7 +344,8 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(wrapper.get('[data-testid="task-shell-metadata"]').text()).toContain(
       'HexClaw-GPT·gpt-5.6-sol·小王的辅导助手·五年级下',
     )
-    expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="message-fork"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()
     expect(h.createTask).not.toHaveBeenCalled()

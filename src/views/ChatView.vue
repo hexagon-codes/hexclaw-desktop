@@ -20,9 +20,17 @@ import {
   markSessionAgentOrphaned,
 } from '@/stores/session-agent-binding'
 import {
-  getSessionDeepThinking,
-  setSessionDeepThinking,
+  getSessionThinkingPolicy,
+  setSessionThinkingPolicy,
 } from '@/stores/session-thinking-preference'
+import {
+  allowedReasoningEfforts,
+  nativeReasoningPolicyFromControl,
+  resolveReasoningPolicy,
+  toReasoningRequest,
+  type ReasoningEffort,
+  type ReasoningPolicy,
+} from '@/utils/reasoning-policy'
 import { healLegacySessionTitles } from '@/stores/session-title-heal'
 import { useThrottledText } from '@/composables/useThrottledText'
 import { isChannelDefaultAgent } from '@/utils/imChannelBinding'
@@ -51,8 +59,10 @@ import {
   type SessionModelBinding,
   type KnownNonChatModelIdentity,
 } from '@/stores/session-model-binding'
+import { getStreamThinkingDuration } from '@/stores/chat-stream-helpers'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
@@ -96,10 +106,7 @@ import {
   useCronCompileLabel,
 } from '@/composables'
 import type { EditedMessageSubmission } from '@/composables/useChatActions'
-import {
-  freezeChatRouteSnapshot,
-  type ChatRouteSnapshot,
-} from '@/stores/chat-route-snapshot'
+import { freezeChatRouteSnapshot, type ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
@@ -119,7 +126,14 @@ import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imageg
 import { getVideoGenStatus, videoToSrc, coverToSrc, type VideoTaskStatus } from '@/api/videogen'
 import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { nanoid } from 'nanoid'
-import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import type {
+  ChatAttachment,
+  ChatDocumentRef,
+  ChatMessage,
+  ModelReasoningControl,
+  ModelReasoningSupport,
+} from '@/types'
+import { parseReasoningReceipt, type ReasoningReceipt } from '@/types/chat'
 import type { RenderManifest } from '@/contracts/message-content'
 import { recordNestedRenderManifest, recordRenderManifest } from '@/contracts/render-evidence'
 import { getDocPreviewFile } from '@/utils/doc-preview'
@@ -176,10 +190,7 @@ function messageThinkingElapsed(message: ChatMessage): number {
 
 function messageThinkingState(message: ChatMessage): ThinkingProgressState {
   const state = message.metadata?.thinking_state
-  return state === 'running' ||
-    state === 'completed' ||
-    state === 'failed' ||
-    state === 'cancelled'
+  return state === 'running' || state === 'completed' || state === 'failed' || state === 'cancelled'
     ? state
     : 'completed'
 }
@@ -199,6 +210,11 @@ function hasThinkingProgress(message: ChatMessage): boolean {
     state === 'failed' ||
     state === 'cancelled'
   )
+}
+
+function messageReasoningReceipt(message: ChatMessage): ReasoningReceipt | null {
+  const receipt = message.metadata?.reasoning_receipt
+  return receipt === undefined ? null : (parseReasoningReceipt(receipt) ?? null)
 }
 const unreadScenarioResultCount = ref(0)
 const scrollCoordinator = useConversationScrollCoordinator({
@@ -264,7 +280,8 @@ watch(
   () => chatStore.showArtifacts,
   (open) => {
     if (open && chatWorkspaceMode.value !== 'artifacts') chatWorkspaceMode.value = 'artifacts'
-    else if (!open && chatWorkspaceMode.value === 'artifacts') restoreWorkspaceAfterRightPanelClose()
+    else if (!open && chatWorkspaceMode.value === 'artifacts')
+      restoreWorkspaceAfterRightPanelClose()
   },
   { flush: 'sync' },
 )
@@ -285,9 +302,7 @@ const SIDEBAR_MIN_WIDTH = SIDEBAR_DEFAULT_WIDTH
 const SIDEBAR_MAX_WIDTH = 420
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const effectiveSidebarWidth = computed(() =>
-  viewportWidth.value <= SIDEBAR_COMPACT_BREAKPOINT
-    ? SIDEBAR_COMPACT_WIDTH
-    : sidebarWidth.value,
+  viewportWidth.value <= SIDEBAR_COMPACT_BREAKPOINT ? SIDEBAR_COMPACT_WIDTH : sidebarWidth.value,
 )
 function updateViewportWidth() {
   viewportWidth.value = window.innerWidth
@@ -312,6 +327,7 @@ const attachmentPreview = ref<{
   file: File
 } | null>(null)
 const showModelSelector = ref(false)
+const showThinkingSelector = ref(false)
 const isDragging = ref(false)
 const availableSkills = ref<Skill[]>([])
 const knowledgeDocs = ref<KnowledgeDoc[]>([])
@@ -459,7 +475,7 @@ const visibleMessages = computed(() =>
 )
 const currentLiveStream = computed(() => {
   const sessionId = chatStore.currentSessionId
-  return sessionId ? (chatStore.activeStreams ?? {})[sessionId] ?? null : null
+  return sessionId ? ((chatStore.activeStreams ?? {})[sessionId] ?? null) : null
 })
 const liveAssistantMessage = computed<ChatMessage | null>(() => {
   const stream = currentLiveStream.value
@@ -469,15 +485,18 @@ const liveAssistantMessage = computed<ChatMessage | null>(() => {
     id: stream.assistantMessageId,
     role: 'assistant',
     content: throttledStreamContent.value,
-    reasoning: visibility === 'visible'
-      ? normalizeAssistantReasoning(stream.reasoning, { trim: false })
-      : undefined,
+    reasoning:
+      visibility === 'visible'
+        ? normalizeAssistantReasoning(stream.reasoning, { trim: false })
+        : undefined,
     timestamp: new Date(stream.startedAt ?? Date.now()).toISOString(),
     agent_name: stream.agentDisplayName,
     metadata: {
-      thinking_state: stream.thinkingEnabled ? stream.state ?? 'running' : undefined,
+      thinking_state: stream.thinkingEnabled ? (stream.state ?? 'running') : undefined,
       thinking_duration: stream.thinkingEnabled
-        ? chatStore.streamingThinkingElapsed
+        ? stream.reasoningEndTime
+          ? (getStreamThinkingDuration(stream) ?? 0)
+          : chatStore.streamingThinkingElapsed
         : undefined,
       reasoning_visibility: stream.thinkingEnabled ? visibility : undefined,
       recipient_display_name: stream.recipientDisplayName,
@@ -725,6 +744,10 @@ const selectedProviderKey = ref('')
 const selectedProviderName = ref('')
 const chatTemperature = ref(0.7)
 const chatMaxTokens = ref(4096)
+/** 新会话尚未取得 ID 前的临时显式选择；分配 ID 后立即写回会话偏好。 */
+const draftThinkingPolicy = ref<ReasoningPolicy>({ mode: 'inherit' })
+/** localStorage 偏好不是响应式数据源，版本号仅用于让当前会话解析重新取值。 */
+const thinkingPolicyRevision = ref(0)
 /** true when user explicitly picks a model via selectModel(), reset on agent/session switch */
 const userOverrodeModel = ref(false)
 /** 深度思考只改变推理能力，不改变已有收件人的模型所有权。
@@ -860,7 +883,9 @@ function currentScenarioTextRoute(): ScenarioTextModelRoute | undefined {
     const bound = scenarioTextRoute(cfg?.provider, cfg?.model)
     if (bound) return bound
     if (cfg?.model?.trim()) {
-      const matched = settingsStore.availableModels.find((candidate) => candidate.modelId === cfg.model)
+      const matched = settingsStore.availableModels.find(
+        (candidate) => candidate.modelId === cfg.model,
+      )
       const resolved = scenarioTextRoute(matched?.providerKey, cfg.model)
       if (resolved) return resolved
     }
@@ -875,14 +900,19 @@ function currentScenarioImageRoute(): ScenarioImageModelRoute | undefined {
     const bound = scenarioImageRoute(cfg?.provider, cfg?.model)
     if (bound) return bound
     if (cfg?.model?.trim()) {
-      const matched = settingsStore.availableModels.find((candidate) => candidate.modelId === cfg.model)
+      const matched = settingsStore.availableModels.find(
+        (candidate) => candidate.modelId === cfg.model,
+      )
       const resolved = scenarioImageRoute(matched?.providerKey, cfg.model)
       if (resolved) return resolved
     }
   }
   return scenarioImageRoute(selectedProviderKey.value, selectedModel.value)
 }
-async function persistScenarioImageMessage(message: ChatMessage, sessionId: string): Promise<boolean> {
+async function persistScenarioImageMessage(
+  message: ChatMessage,
+  sessionId: string,
+): Promise<boolean> {
   try {
     await appendSessionMessage(sessionId, {
       id: message.id,
@@ -902,8 +932,7 @@ async function handleScenarioImage(
   targetSessionId?: string,
   frozenRoute?: ScenarioImageModelRoute | null,
 ): Promise<boolean> {
-  const intendedSessionId =
-    targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
+  const intendedSessionId = targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
   if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
     return false
   }
@@ -918,7 +947,7 @@ async function handleScenarioImage(
   // 不能在 await 创建会话期间被后续 UI 操作改写。
   // undefined = ordinary composer submission resolves the current route now;
   // null/route = an edited submission already froze auto/explicit routing at confirmation.
-  const route = frozenRoute === undefined ? currentScenarioImageRoute() : frozenRoute ?? undefined
+  const route = frozenRoute === undefined ? currentScenarioImageRoute() : (frozenRoute ?? undefined)
   const directedSessionId = targetSessionId?.trim() || ''
   if (!directedSessionId) {
     chatStore.messages.push(message)
@@ -926,7 +955,7 @@ async function handleScenarioImage(
   }
   // 新会话首图必须先建立稳定 session，再启动场景；否则 source_session 为空，
   // 随后的会话 watcher 还会重建并清掉刚启动的识题面板。
-  const sessionId = directedSessionId || await chatStore.ensureSession()
+  const sessionId = directedSessionId || (await chatStore.ensureSession())
   const routedPayload: ScenarioComposerImagePayload = {
     attachment: payload.attachment,
     ...(payload.file ? { file: payload.file } : {}),
@@ -962,7 +991,9 @@ async function handleScenarioImage(
       const persisted = await persistScenarioImageMessage(message, sessionId)
       if (!persisted) {
         if (chatStore.currentSessionId === sessionId) {
-          const messageIndex = chatStore.messages.findIndex((candidate) => candidate.id === message.id)
+          const messageIndex = chatStore.messages.findIndex(
+            (candidate) => candidate.id === message.id,
+          )
           if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
         }
         chatStore.clearSessionExecution(sessionId, message.id)
@@ -1007,10 +1038,7 @@ function handleScenarioInlineActive(active: boolean) {
   if (active) nextTick(() => scrollToBottom(true))
 }
 
-function handleScenarioContentUpdated(payload?: {
-  sourceMessageId?: string
-  reveal?: 'start'
-}) {
+function handleScenarioContentUpdated(payload?: { sourceMessageId?: string; reveal?: 'start' }) {
   const contentIdentity =
     payload?.sourceMessageId?.trim() ||
     (typeof scenarioComposerImage.value === 'object'
@@ -1069,19 +1097,14 @@ const scenarioCtx = computed(() => {
   }
 })
 // Shell 只读取 descriptor 合同；任何场景都可声明自己的已批准头部，普通会话默认保留通用工具栏。
-const scenarioOwnsHeader = computed(
-  () => scenarioCtx.value?.descriptor.headerOwner === 'scenario',
-)
-watch(
-  [() => scenarioCtx.value?.agentId, () => scenarioCtx.value?.sessionId],
-  ([, sessionId]) => {
-    // 切孩子、切同一孩子的会话或离开场景时，上一会话的离散图片 attempt 均不得泄漏。
-    scenarioInlineActive.value = false
-    scenarioComposerImage.value = ''
-    scenarioComposerAction.value = undefined
-    if (sessionId) activateScenarioImageProjection(sessionId)
-  },
-)
+const scenarioOwnsHeader = computed(() => scenarioCtx.value?.descriptor.headerOwner === 'scenario')
+watch([() => scenarioCtx.value?.agentId, () => scenarioCtx.value?.sessionId], ([, sessionId]) => {
+  // 切孩子、切同一孩子的会话或离开场景时，上一会话的离散图片 attempt 均不得泄漏。
+  scenarioInlineActive.value = false
+  scenarioComposerImage.value = ''
+  scenarioComposerAction.value = undefined
+  if (sessionId) activateScenarioImageProjection(sessionId)
+})
 
 // 消息头/meta 里的 agent 名解析为可读 display_name（后端 msg.agent_name 常是内部 id，如
 // k12-tutor-KKE5v8zQ，家长看不懂）。命中注册 agent 显示 display_name，否则回退原值（BUG-20260708）。
@@ -1440,25 +1463,158 @@ const selectedModelCapabilities = computed(() => {
   return effectiveCaps(selectedModel.value || '', caps)
 })
 
+// 推理能力只读取当前实际路由模型的显式配置，未知时不按模型名或地址猜测。
+const selectedReasoningModel = computed(() => {
+  if (usesBoundAgentModel.value) {
+    const agent = agentsStore.findAgent(chatStore.agentRole)
+    return settingsStore.availableModels.find(
+      (model) =>
+        model.modelId === agent?.model &&
+        (!agent?.provider ||
+          model.providerId === agent.provider ||
+          model.providerKey === agent.provider),
+    )
+  }
+  return settingsStore.availableModels.find(
+    (model) =>
+      model.modelId === selectedModel.value &&
+      (!selectedProviderId.value || model.providerId === selectedProviderId.value),
+  )
+})
+const selectedModelReasoningSupport = computed<ModelReasoningSupport>(
+  () => selectedReasoningModel.value?.reasoningSupport ?? 'unknown',
+)
+const selectedModelReasoningControl = computed<ModelReasoningControl | undefined>(
+  () => selectedReasoningModel.value?.reasoningControl,
+)
+const selectedReasoningEfforts = computed(() =>
+  allowedReasoningEfforts(selectedModelReasoningControl.value),
+)
+const deepThinkingUnsupported = computed(
+  () =>
+    selectedModelReasoningSupport.value !== 'supported' ||
+    !selectedModelReasoningControl.value,
+)
+
 // 当前模型是否支持视觉/视频上传
 const supportsVision = computed(() => selectedModelCapabilities.value.includes('vision'))
 const supportsVideo = computed(() => selectedModelCapabilities.value.includes('video'))
 
-// Deep thinking = research mode + thinking enabled (merged UX)
-const isDeepThinking = computed(
-  () => chatStore.chatMode === 'research' && chatStore.thinkingEnabled,
+const activeSessionThinkingPolicy = computed<ReasoningPolicy>(() => {
+  void thinkingPolicyRevision.value
+  const sessionId = chatStore.currentSessionId
+  return sessionId ? getSessionThinkingPolicy(sessionId) : draftThinkingPolicy.value
+})
+const effectiveReasoningPolicy = computed(() =>
+  resolveReasoningPolicy({
+    sessionPolicy: activeSessionThinkingPolicy.value,
+    agentPolicy: chatStore.agentRole
+      ? agentsStore.findAgent(chatStore.agentRole)?.reasoning_policy
+      : undefined,
+    globalPolicy: settingsStore.config?.llm.defaultReasoningPolicy,
+    nativePolicy: nativeReasoningPolicyFromControl(
+      selectedModelReasoningSupport.value,
+      selectedModelReasoningControl.value,
+    ),
+  }),
 )
-function toggleDeepThinking() {
-  const enabled = !isDeepThinking.value
+const effectiveReasoningRequest = computed(() =>
+  toReasoningRequest(
+    effectiveReasoningPolicy.value.policy,
+    selectedModelReasoningSupport.value,
+    selectedModelReasoningControl.value,
+  ),
+)
+const isDeepThinking = computed(() => effectiveReasoningRequest.value.thinkingEnabled)
+const selectedThinkingEffort = computed(() => effectiveReasoningRequest.value.thinkingEffort)
+const thinkingControlLabel = computed(() => {
+  if (selectedModelReasoningSupport.value !== 'supported' || !isDeepThinking.value) {
+    return t('chat.reasoning.trigger')
+  }
+  const value = selectedThinkingEffort.value
+    ? t(`chat.reasoning.effortOption.${selectedThinkingEffort.value}`)
+    : t('chat.reasoning.on')
+  return t('chat.reasoning.display', { value })
+})
+const thinkingControlTitle = computed(() => {
+  if (deepThinkingUnsupported.value) return t('chat.reasoning.unavailable')
+  return selectedReasoningEfforts.value.length > 0
+    ? t('chat.reasoning.configureEffort')
+    : t('chat.reasoning.configureMode')
+})
+
+function applyThinkingRequestState(enabled: boolean) {
   chatStore.chatMode = enabled ? 'research' : chatStore.agentRole ? 'agent' : 'chat'
   chatStore.thinkingEnabled = enabled
-  if (chatStore.currentSessionId) {
-    setSessionDeepThinking(chatStore.currentSessionId, enabled)
-  }
   syncChatParams()
 }
 
-import { formatTime, formatElapsedSeconds } from '@/utils/time'
+function setActiveSessionThinkingPolicy(policy: ReasoningPolicy) {
+  const sessionId = chatStore.currentSessionId
+  if (sessionId) {
+    setSessionThinkingPolicy(sessionId, policy)
+  } else {
+    draftThinkingPolicy.value = policy
+  }
+  thinkingPolicyRevision.value += 1
+}
+
+function preferredEnabledThinkingPolicy(): ReasoningPolicy {
+  const sessionPolicy = activeSessionThinkingPolicy.value
+  if (
+    sessionPolicy.mode === 'effort' &&
+    selectedReasoningEfforts.value.includes(sessionPolicy.effort)
+  ) {
+    return sessionPolicy
+  }
+  const resolvedPolicy = effectiveReasoningPolicy.value.policy
+  if (
+    resolvedPolicy.mode === 'effort' &&
+    selectedReasoningEfforts.value.includes(resolvedPolicy.effort)
+  ) {
+    return resolvedPolicy
+  }
+  return nativeReasoningPolicyFromControl(
+    selectedModelReasoningSupport.value,
+    selectedModelReasoningControl.value,
+  )
+}
+
+function toggleDeepThinking() {
+  if (deepThinkingUnsupported.value) return
+  const enabled = !isDeepThinking.value
+  const policy = enabled ? preferredEnabledThinkingPolicy() : { mode: 'off' as const }
+  setActiveSessionThinkingPolicy(policy)
+  applyThinkingRequestState(enabled)
+}
+
+function selectThinkingEffort(effort: ReasoningEffort) {
+  if (!selectedReasoningEfforts.value.includes(effort)) return
+  setActiveSessionThinkingPolicy({ mode: 'effort', effort })
+  applyThinkingRequestState(true)
+}
+
+function toggleThinkingSelector() {
+  if (deepThinkingUnsupported.value) return
+  showThinkingSelector.value = !showThinkingSelector.value
+  if (showThinkingSelector.value) showModelSelector.value = false
+}
+
+watch(
+  () => effectiveReasoningRequest.value.thinkingEnabled,
+  (enabled) => {
+    if (
+      chatStore.thinkingEnabled === enabled &&
+      (enabled ? chatStore.chatMode === 'research' : chatStore.chatMode !== 'research')
+    ) {
+      return
+    }
+    applyThinkingRequestState(enabled)
+  },
+  { immediate: true },
+)
+
+import { formatClockTime, formatElapsedSeconds } from '@/utils/time'
 import { on } from '@/utils/eventBus'
 import { hexclawWS } from '@/api/websocket'
 
@@ -1562,8 +1718,8 @@ onMounted(async () => {
   agentsStore.loadRoles()
   await agentsStore.loadAgents()
   await chatStore.loadSessions()
-  await chatStore.recoverActiveStreams()
   chatStore.initApprovalListener()
+  await chatStore.recoverActiveStreams()
   // best-effort 预载：用 Promise.resolve 兜底，避免 API 同步返回 undefined 时
   // 在 .then 之前抛出未捕获 TypeError（'失败不阻塞会话' 的契约要落到实处）。
   Promise.resolve(getSkills())
@@ -1590,9 +1746,7 @@ onMounted(async () => {
     const roleTitle = projectedAgentDisplay(roleQuery, roleTitleQuery)
     // 查找是否已有同名会话；兼容存量旧会话（修复前标题 = agent 内部名），避免重复建会话
     const existing = chatStore.sessions.find(
-      (s) =>
-        projectedAgentDisplay(roleQuery, s.title) === roleTitle ||
-        s.title === roleQuery,
+      (s) => projectedAgentDisplay(roleQuery, s.title) === roleTitle || s.title === roleQuery,
     )
     if (existing) {
       await chatStore.selectSession(existing.id)
@@ -1683,6 +1837,7 @@ onMounted(async () => {
 async function toggleModelSelector() {
   showModelSelector.value = !showModelSelector.value
   if (showModelSelector.value) {
+    showThinkingSelector.value = false
     await settingsStore.loadConfig({ force: true })
     await settingsStore.syncOllamaModels()
     // 同时重新探测后端 gen Provider 状态 — 用户在设置里加了 API Key 后
@@ -1693,6 +1848,7 @@ async function toggleModelSelector() {
 
 function openProviderSettings() {
   showModelSelector.value = false
+  showThinkingSelector.value = false
   router.push('/settings')
 }
 
@@ -1707,6 +1863,7 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
   selectedProviderName.value = modelId === 'auto' ? '' : providerName
   pendingModelMeta.value = null // 从下拉里选的，模型必在 availableModels
   showModelSelector.value = false
+  showThinkingSelector.value = false
   userOverrodeModel.value = true
   syncChatParams()
   // 会话级模型绑定：用户在本会话显式选模型 → 持久化，切走再切回不被重置。
@@ -1999,15 +2156,53 @@ function routeDisplaySnapshot(agentRole: string): {
   recipientDisplayName: string
 } {
   const scenario = scenarioCtx.value
-  const agentDisplayName = scenario?.agentName
-    || (agentRole && !INTERNAL_AGENT_ROLES.has(agentRole)
+  const agentDisplayName =
+    scenario?.agentName ||
+    (agentRole && !INTERNAL_AGENT_ROLES.has(agentRole)
       ? projectedAgentDisplay(agentRole)
       : t('chat.botName'))
   const k12 = scenario?.metadata?.k12 as Record<string, unknown> | undefined
-  const recipientDisplayName = typeof k12?.child_name === 'string' && k12.child_name.trim()
-    ? k12.child_name.trim()
-    : agentDisplayName
+  const recipientDisplayName =
+    typeof k12?.child_name === 'string' && k12.child_name.trim()
+      ? k12.child_name.trim()
+      : agentDisplayName
   return { agentDisplayName, recipientDisplayName }
+}
+
+function routeReasoningModel(model?: string, provider?: string) {
+  return settingsStore.availableModels.find(
+    (candidate) =>
+      candidate.modelId === model &&
+      (!provider || candidate.providerId === provider || candidate.providerKey === provider),
+  )
+}
+
+function resolveRouteReasoning(
+  sessionId: string,
+  agentRole: string,
+  model?: string,
+  provider?: string,
+) {
+  const routeModel = routeReasoningModel(model, provider)
+  const reasoningSupport: ModelReasoningSupport = routeModel?.reasoningSupport ?? 'unknown'
+  const reasoningControl = routeModel?.reasoningControl
+  const reasoningPolicy = resolveReasoningPolicy({
+    sessionPolicy: getSessionThinkingPolicy(sessionId),
+    agentPolicy: agentRole ? agentsStore.findAgent(agentRole)?.reasoning_policy : undefined,
+    globalPolicy: settingsStore.config?.llm.defaultReasoningPolicy,
+    nativePolicy: nativeReasoningPolicyFromControl(reasoningSupport, reasoningControl),
+  }).policy
+  const reasoningRequest = toReasoningRequest(
+    reasoningPolicy,
+    reasoningSupport,
+    reasoningControl,
+  )
+  return {
+    thinkingEnabled: reasoningRequest.thinkingEnabled,
+    reasoningSupport,
+    reasoningPolicy,
+    reasoningControl,
+  }
 }
 
 function captureCurrentMessageRoute(): ChatRouteSnapshot {
@@ -2015,7 +2210,10 @@ function captureCurrentMessageRoute(): ChatRouteSnapshot {
   return freezeChatRouteSnapshot({
     agentRole: chatStore.agentRole || '',
     chatParams: chatStore.chatParams,
-    thinkingEnabled: chatStore.chatMode === 'research' && chatStore.thinkingEnabled,
+    thinkingEnabled: effectiveReasoningRequest.value.thinkingEnabled,
+    reasoningSupport: selectedModelReasoningSupport.value,
+    reasoningPolicy: effectiveReasoningPolicy.value.policy,
+    reasoningControl: selectedModelReasoningControl.value,
     ...display,
   })
 }
@@ -2032,12 +2230,22 @@ function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
         model: chatStore.chatParams.model || sourceAgent?.model,
       }
   const display = routeDisplaySnapshot(sourceAgentRole)
+  const routeModel = sourceSessionModel?.model ?? effectiveChatParams.model
+  const routeProvider =
+    sourceSessionModel?.providerId || sourceSessionModel?.providerKey || effectiveChatParams.provider
+  const reasoning = resolveRouteReasoning(
+    sourceSessionId,
+    sourceAgentRole,
+    routeModel,
+    routeProvider,
+  )
   return freezeChatRouteSnapshot({
     agentRole: sourceAgentRole,
     chatParams: effectiveChatParams,
-    thinkingEnabled:
-      getSessionDeepThinking(sourceSessionId) ||
-      (chatStore.chatMode === 'research' && chatStore.thinkingEnabled),
+    thinkingEnabled: reasoning.thinkingEnabled,
+    reasoningSupport: reasoning.reasoningSupport,
+    reasoningPolicy: reasoning.reasoningPolicy,
+    reasoningControl: reasoning.reasoningControl,
     sessionModel: sourceSessionModel,
     ...display,
   })
@@ -2054,14 +2262,18 @@ async function submitEditedMessage(submission: EditedMessageSubmission): Promise
     attachments[0]?.type === 'image'
   ) {
     const attachment = attachments[0]
-    return handleScenarioImage({
-      dataUrl: imageSrc(attachment),
-      attachment,
-      contextText: submission.content,
-    }, submission.targetSessionId, scenarioImageRoute(
-      submission.routeSnapshot?.chatParams.provider,
-      submission.routeSnapshot?.chatParams.model,
-    ) ?? null)
+    return handleScenarioImage(
+      {
+        dataUrl: imageSrc(attachment),
+        attachment,
+        contextText: submission.content,
+      },
+      submission.targetSessionId,
+      scenarioImageRoute(
+        submission.routeSnapshot?.chatParams.provider,
+        submission.routeSnapshot?.chatParams.model,
+      ) ?? null,
+    )
   }
   return submission.carry
     ? handleSend(submission.content, undefined, {
@@ -2085,13 +2297,7 @@ const {
   handleEdit,
   confirmEdit,
   cancelEdit,
-} = useChatActions(
-  chatStore,
-  toast,
-  handleSend,
-  submitEditedMessage,
-  captureEditedMessageRoute,
-)
+} = useChatActions(chatStore, toast, handleSend, submitEditedMessage, captureEditedMessageRoute)
 
 // 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
 // 「确认候选词」，不能误当「提交编辑」。compositionstart/end 跟踪 + 兜底 WKWebView 早结束竞态。
@@ -2462,15 +2668,19 @@ watch(
       // 否则下次选中「无绑定会话」时，残留的 userOverrodeModel 会被误判为「新会话首发」，
       // 把上一会话的模型偷偷绑过去（BUG-20260625 跨会话串模型）。
       userOverrodeModel.value = false
+      draftThinkingPolicy.value = { mode: 'inherit' }
+      thinkingPolicyRevision.value += 1
       chatStore.chatMode = 'chat'
       chatStore.thinkingEnabled = false
       loadLLMConfig()
       return
     }
-    // 空白新会话可在首发前开启深度思考；ensureSession 分配 id 后补记该会话偏好。
-    if (prevId === null && isDeepThinking.value) {
-      setSessionDeepThinking(newId, true)
+    // 空白新会话可在首发前设置显式思考策略；ensureSession 分配 ID 后仅持久化该覆盖。
+    if (prevId === null && draftThinkingPolicy.value.mode !== 'inherit') {
+      setSessionThinkingPolicy(newId, draftThinkingPolicy.value)
     }
+    draftThinkingPolicy.value = { mode: 'inherit' }
+    thinkingPolicyRevision.value += 1
     applySessionModel(newId, prevId ?? null)
   },
 )
@@ -2487,6 +2697,8 @@ watch(
 )
 
 function newSession() {
+  draftThinkingPolicy.value = { mode: 'inherit' }
+  thinkingPolicyRevision.value += 1
   chatStore.chatMode = 'chat'
   chatStore.thinkingEnabled = false
   chatStore.agentRole = ''
@@ -2802,556 +3014,588 @@ function startSidebarResize(event: MouseEvent) {
           </button>
 
           <!-- Message list -->
-          <template
-            v-for="(msg, idx) in renderedMessages"
-            :key="msg.id"
-          >
-          <div
-            :id="`msg-${msg.id}`"
-            class="hc-msg"
-            :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
-            :tabindex="0"
-            :data-scroll-anchor-id="msg.id"
-            :data-testid="
-              msg.role === 'user'
-                ? 'chat-message-user'
-                : isLiveAssistantMessage(msg)
-                  ? 'chat-assistant-pending'
-                  : 'chat-message-assistant'
-            "
-            :data-assistant-message-id="msg.role === 'assistant' ? msg.id : undefined"
-            @contextmenu="
-              !isLiveAssistantMessage(msg) &&
-              handleMsgContextMenu($event, windowOffset + idx, msg.role as 'user' | 'assistant')
-            "
-          >
-            <!-- Assistant message (Feishu style: avatar left + bubble) -->
-            <template v-if="msg.role === 'assistant'">
-              <div class="hc-msg__avatar">
-                <img :src="crabLogo" alt="HC" class="hc-msg__avatar-img" />
-                <span class="hc-msg__avatar-badge" />
-              </div>
-              <div class="hc-msg__body">
-                <div class="hc-msg__name">
-                  {{ msgAgentDisplay(msg.agent_name) || t('chat.botName') }}
+          <template v-for="(msg, idx) in renderedMessages" :key="msg.id">
+            <div
+              :id="`msg-${msg.id}`"
+              class="hc-msg"
+              :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
+              :tabindex="0"
+              :data-scroll-anchor-id="msg.id"
+              :data-testid="
+                msg.role === 'user'
+                  ? 'chat-message-user'
+                  : isLiveAssistantMessage(msg)
+                    ? 'chat-assistant-pending'
+                    : 'chat-message-assistant'
+              "
+              :data-assistant-message-id="msg.role === 'assistant' ? msg.id : undefined"
+              @contextmenu="
+                !isLiveAssistantMessage(msg) &&
+                handleMsgContextMenu($event, windowOffset + idx, msg.role as 'user' | 'assistant')
+              "
+            >
+              <!-- Assistant message (Feishu style: avatar left + bubble) -->
+              <template v-if="msg.role === 'assistant'">
+                <div class="hc-msg__avatar">
+                  <img :src="crabLogo" alt="HC" class="hc-msg__avatar-img" />
+                  <span class="hc-msg__avatar-badge" />
                 </div>
-                <!-- AgentBadge 仅在多智能体 handoff（本条 agent ≠ 上一条）时显,标示「换人接管」；
+                <div class="hc-msg__body">
+                  <div class="hc-msg__name">
+                    {{ msgAgentDisplay(msg.agent_name) || t('chat.botName') }}
+                  </div>
+                  <!-- AgentBadge 仅在多智能体 handoff（本条 agent ≠ 上一条）时显,标示「换人接管」；
                        非 handoff 时与 hc-msg__name 重复,故隐藏（BUG-20260708 原型只一个名字）。名字解析 display_name。 -->
-                <AgentBadge
-                  v-if="
-                    windowOffset + idx > 0 &&
-                    chatStore.messages[windowOffset + idx - 1]?.role === 'assistant' &&
-                    chatStore.messages[windowOffset + idx - 1]?.agent_name !== msg.agent_name &&
-                    (msg.agent_name || (msg.metadata?.agent_name as string))
-                  "
-                  :agent-name="
-                    msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string)) || ''
-                  "
-                  :is-handoff="true"
-                />
-                <ThinkingProgress
-                  v-if="hasThinkingProgress(msg)"
-                  :state="messageThinkingState(msg)"
-                  :elapsed-seconds="messageThinkingElapsed(msg)"
-                  :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
-                  :visibility="messageReasoningVisibility(msg)"
-                  :runtime-events="msg.metadata?.runtime_events ?? []"
-                  :default-open="isLiveAssistantMessage(msg)"
-                  :content-ref="isLiveAssistantMessage(msg) ? bindThinkingContentRef : undefined"
-                />
-                <!-- 子 Agent 协作面板（orchestrate/spawn fan-out 完成后结构化展示） -->
-                <SubAgentPanel
-                  v-if="subAgentReportsByMsg.get(msg.id)?.length"
-                  :reports="subAgentReportsByMsg.get(msg.id)!"
-                />
-                <!-- 工具调用卡：因果位 think → act → answer（P0-1）。
-                       有有序内容块时改由气泡内 MessageBlocks 按真实交错序渲染，这里不再单独堆叠（避免重复）。 -->
-                <div
-                  v-if="!msg.blocks?.length && displayToolCalls(msg).length"
-                  class="hc-msg__tools"
-                >
-                  <ToolCallCard
-                    v-for="tc in displayToolCalls(msg)"
-                    :key="tc.id"
-                    :call="tc"
-                    @rendered="captureNestedManifest(msg, $event)"
+                  <AgentBadge
+                    v-if="
+                      windowOffset + idx > 0 &&
+                      chatStore.messages[windowOffset + idx - 1]?.role === 'assistant' &&
+                      chatStore.messages[windowOffset + idx - 1]?.agent_name !== msg.agent_name &&
+                      (msg.agent_name || (msg.metadata?.agent_name as string))
+                    "
+                    :agent-name="
+                      msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string)) || ''
+                    "
+                    :is-handoff="true"
                   />
-                </div>
-                <div class="hc-msg__bubble-wrap">
+                  <AssistantRunStatus
+                    v-if="isLiveAssistantMessage(msg) || messageReasoningReceipt(msg)"
+                    :reasoning-request="
+                      isLiveAssistantMessage(msg)
+                        ? currentLiveStream?.thinkingEnabled
+                          ? 'on'
+                          : 'off'
+                        : (messageReasoningReceipt(msg)?.reasoning_request ?? 'off')
+                    "
+                    :reasoning-support="
+                      isLiveAssistantMessage(msg)
+                        ? (currentLiveStream?.reasoningSupport ?? 'unknown')
+                        : (messageReasoningReceipt(msg)?.reasoning_support ?? 'unknown')
+                    "
+                    :reasoning-execution="
+                      isLiveAssistantMessage(msg)
+                        ? (currentLiveStream?.reasoningExecution ?? 'unknown')
+                        : (messageReasoningReceipt(msg)?.reasoning_execution ?? 'unknown')
+                    "
+                    :has-visible-answer="Boolean(msg.content.trim())"
+                    :elapsed-seconds="messageThinkingElapsed(msg)"
+                    :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
+                    :visibility="messageReasoningVisibility(msg)"
+                    :runtime-events="msg.metadata?.runtime_events ?? []"
+                    :default-open="true"
+                    :content-ref="bindThinkingContentRef"
+                  />
+                  <ThinkingProgress
+                    v-else-if="hasThinkingProgress(msg)"
+                    :state="messageThinkingState(msg)"
+                    :elapsed-seconds="messageThinkingElapsed(msg)"
+                    :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
+                    :visibility="messageReasoningVisibility(msg)"
+                    :runtime-events="msg.metadata?.runtime_events ?? []"
+                    :default-open="isLiveAssistantMessage(msg)"
+                    :content-ref="isLiveAssistantMessage(msg) ? bindThinkingContentRef : undefined"
+                  />
+                  <!-- 子 Agent 协作面板（orchestrate/spawn fan-out 完成后结构化展示） -->
+                  <SubAgentPanel
+                    v-if="subAgentReportsByMsg.get(msg.id)?.length"
+                    :reports="subAgentReportsByMsg.get(msg.id)!"
+                  />
+                  <!-- 工具调用卡：因果位 think → act → answer（P0-1）。
+                       有有序内容块时改由气泡内 MessageBlocks 按真实交错序渲染，这里不再单独堆叠（避免重复）。 -->
                   <div
-                    class="hc-msg__bubble hc-msg__bubble--assistant"
-                    :class="{ 'hc-msg__bubble--empty': !isLiveAssistantMessage(msg) && isEmptyReply(msg.content) }"
+                    v-if="!msg.blocks?.length && displayToolCalls(msg).length"
+                    class="hc-msg__tools"
                   >
-                    <template v-if="isLiveAssistantMessage(msg)">
-                      <MarkdownRenderer
-                        v-if="msg.content"
-                        :content="sanitizeMessageContent(msg.content)"
-                        surface="desktop"
+                    <ToolCallCard
+                      v-for="tc in displayToolCalls(msg)"
+                      :key="tc.id"
+                      :call="tc"
+                      @rendered="captureNestedManifest(msg, $event)"
+                    />
+                  </div>
+                  <div
+                    v-if="!isLiveAssistantMessage(msg) || Boolean(msg.content.trim())"
+                    class="hc-msg__bubble-wrap"
+                  >
+                    <div
+                      class="hc-msg__bubble hc-msg__bubble--assistant"
+                      :class="{
+                        'hc-msg__bubble--empty':
+                          !isLiveAssistantMessage(msg) && isEmptyReply(msg.content),
+                      }"
+                    >
+                      <template v-if="isLiveAssistantMessage(msg)">
+                        <MarkdownRenderer
+                          v-if="msg.content"
+                          :content="sanitizeMessageContent(msg.content)"
+                          surface="desktop"
+                        />
+                      </template>
+                      <template v-else>
+                        <!-- 验算徽章（solve 结论透传，三态诚实 · shell 通用组件） -->
+                        <VerifyBadge v-if="messageVerify(msg)" :result="messageVerify(msg)!" />
+                        <!-- 图像 / 视频 / 音频附件 -->
+                        <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
+                          <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
+                            <span v-if="att.type === 'image'" class="hc-msg__img-wrap">
+                              <img
+                                class="hc-msg__attachment-img"
+                                :src="imageSrc(att)"
+                                :alt="att.name"
+                                @click="openImagePreview(imageSrc(att))"
+                              />
+                              <button
+                                class="hc-msg__media-download"
+                                :title="t('chat.downloadImage', '下载图片')"
+                                @click.stop="downloadImage(imageSrc(att), att.name)"
+                              >
+                                ⬇
+                              </button>
+                            </span>
+                            <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
+                              <!-- poster=后端持久化封面（BUG-20260712-J：数据一直在，此前未绑定→黑矩形）；
+                                 无封面回退 #t=0.1 强制 WebKit 渲染首帧 -->
+                              <video
+                                controls
+                                preload="metadata"
+                                class="hc-msg__video"
+                                :poster="videoPosterFromMetadata(msg.metadata)"
+                                :src="
+                                  videoDisplaySrc(
+                                    imageSrc(att),
+                                    videoPosterFromMetadata(msg.metadata),
+                                  )
+                                "
+                              />
+                              <button
+                                class="hc-msg__media-download"
+                                :title="t('chat.downloadVideo', '下载视频')"
+                                @click.stop="downloadImage(imageSrc(att), att.name)"
+                              >
+                                ⬇
+                              </button>
+                            </span>
+                            <audio
+                              v-else-if="att.type === 'audio' || att.mime?.startsWith('audio/')"
+                              controls
+                              preload="metadata"
+                              class="hc-msg__audio"
+                              :src="imageSrc(att)"
+                            />
+                            <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
+                          </template>
+                        </div>
+                        <!-- 有有序内容块 → 按真实执行序交错渲染 text↔工具卡（多步 ReAct 保真）；
+                           否则回退单串正文（兼容旧消息 / 重载 / 非流式）。 -->
+                        <MessageBlocks
+                          v-if="msg.blocks?.length"
+                          :blocks="msg.blocks"
+                          :tool-calls="msg.tool_calls"
+                          :fallback-content="sanitizeMessageContent(msg.content)"
+                          @rendered="captureNestedManifest(msg, $event)"
+                        />
+                        <MarkdownRenderer
+                          v-else
+                          :content="msg.message_content ?? sanitizeMessageContent(msg.content)"
+                          surface="desktop"
+                          @rendered="captureRenderManifest(msg, $event)"
+                        />
+                        <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
+                           优先 message.interactive 新协议，fallback 到 metadata.interactive_buttons 老路径 -->
+                        <InteractiveBlock
+                          v-if="getInteractivePayload(msg)"
+                          :payload="getInteractivePayload(msg)!"
+                          @select="(p) => handleInteractiveSelect(msg, p)"
+                        />
+                        <!-- 旧版兼容：metadata.source = 'video_generation' + metadata.video_url -->
+                        <video
+                          v-if="
+                            msg.metadata?.source === 'video_generation' &&
+                            msg.metadata?.video_url &&
+                            !getMessageAttachments(msg).some((a) => a.type === 'video')
+                          "
+                          controls
+                          preload="metadata"
+                          class="hc-msg__video"
+                          :poster="videoPosterFromMetadata(msg.metadata)"
+                          :src="
+                            videoDisplaySrc(
+                              String(msg.metadata.video_url),
+                              videoPosterFromMetadata(msg.metadata),
+                            )
+                          "
+                        />
+                        <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
+                        <RecordChip
+                          v-if="messageRecordChip(msg)"
+                          v-bind="messageRecordChip(msg)!"
+                        />
+                      </template>
+                    </div>
+                  </div>
+                  <div v-if="getMessageArtifacts(msg.id).length > 0" class="hc-msg__artifacts">
+                    <button
+                      v-for="art in getMessageArtifacts(msg.id)"
+                      :key="art.id"
+                      class="hc-msg__artifact-card"
+                      @click="chatStore.selectArtifact(art.id)"
+                    >
+                      <FileCode :size="13" />
+                      <span>{{ art.title }}</span>
+                    </button>
+                  </div>
+                  <!-- Meta footer: 时间 · 模型 · Agent 合并一行 -->
+                  <!-- (moved to hc-msg__footer below) -->
+                  <div
+                    v-if="msg.metadata?.knowledge_hits || msg.metadata?.memory_hits"
+                    class="hc-msg__sources"
+                  >
+                    <span
+                      v-if="msg.metadata?.knowledge_hits"
+                      class="hc-msg__source-tag hc-msg__source-tag--knowledge"
+                      :title="t('chat.knowledgeHit')"
+                    >
+                      <BookOpen :size="11" /> {{ t('chat.knowledgeHit') }}
+                    </span>
+                    <span
+                      v-if="msg.metadata?.memory_hits"
+                      class="hc-msg__source-tag hc-msg__source-tag--memory"
+                      :title="t('chat.memoryHit')"
+                    >
+                      <Zap :size="11" /> {{ t('chat.memoryHit') }}
+                    </span>
+                  </div>
+                  <div v-if="getKnowledgeHits(msg).length > 0" class="hc-msg__hit-list">
+                    <div
+                      v-for="(hit, hitIdx) in getKnowledgeHits(msg)"
+                      :key="`knowledge-${msg.id}-${hitIdx}`"
+                      class="hc-msg__hit"
+                    >
+                      <div class="hc-msg__hit-title">{{ getHitTitle(hit) }}</div>
+                      <div v-if="getHitSubtitle(hit)" class="hc-msg__hit-subtitle">
+                        {{ getHitSubtitle(hit) }}
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="getMemoryHits(msg).length > 0" class="hc-msg__hit-list">
+                    <div
+                      v-for="(hit, hitIdx) in getMemoryHits(msg)"
+                      :key="`memory-${msg.id}-${hitIdx}`"
+                      class="hc-msg__hit"
+                    >
+                      <div class="hc-msg__hit-title">
+                        {{ typeof hit.content === 'string' ? hit.content : t('chat.memoryHit') }}
+                      </div>
+                      <div
+                        v-if="typeof hit.source === 'string' && hit.source"
+                        class="hc-msg__hit-subtitle"
+                      >
+                        {{ hit.source }}
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Backend auto-extracted memory notification -->
+                  <div
+                    v-if="
+                      typeof msg.metadata?.memory_saved === 'string' && msg.metadata.memory_saved
+                    "
+                    class="hc-msg__memory-saved"
+                  >
+                    <Brain :size="12" />
+                    <span>{{ t('chat.memorySaved') }}: {{ msg.metadata.memory_saved }}</span>
+                  </div>
+
+                  <div
+                    v-if="getVisibleConversationActions(msg).length"
+                    class="hc-msg__automation-list"
+                  >
+                    <div
+                      v-for="action in getVisibleConversationActions(msg)"
+                      :key="action.id"
+                      class="hc-msg__automation-card"
+                      :class="`hc-msg__automation-card--${action.status}`"
+                    >
+                      <div class="hc-msg__automation-head">
+                        <div>
+                          <div class="hc-msg__automation-title">{{ action.title }}</div>
+                          <div class="hc-msg__automation-desc">{{ action.description }}</div>
+                        </div>
+                        <span class="hc-msg__automation-status">
+                          {{ automationStatusLabel(action.status) }}
+                        </span>
+                      </div>
+                      <div
+                        v-if="action.kind === 'create_task' && action.status === 'running'"
+                        class="hc-msg__automation-progress"
+                        data-testid="automation-progress"
+                      >
+                        <span class="hc-msg__automation-progress-dot" />
+                        <span class="hc-msg__automation-progress-text">
+                          {{
+                            action.progress
+                              ? cronStageLabel(action.progress.stage)
+                              : t('chat.cronStageStarting', '准备编译脚本…')
+                          }}
+                        </span>
+                        <span
+                          v-if="automationElapsedLabel(action.startedAt) !== null"
+                          class="hc-msg__automation-progress-elapsed"
+                        >
+                          {{ automationElapsedLabel(action.startedAt) }}
+                        </span>
+                        <span class="hc-msg__automation-progress-hint">
+                          <!-- Server progress messages carry richer detail than the
+                               stage label (e.g. the self-correction retry notice). -->
+                          {{
+                            action.progress?.message ||
+                            t('chat.cronCompileHint', '正在编译，无需重复点击')
+                          }}
+                        </span>
+                      </div>
+                      <div v-if="action.result" class="hc-msg__automation-result">
+                        <div class="hc-msg__automation-summary">{{ action.result.summary }}</div>
+                        <div v-if="action.result.items?.length" class="hc-msg__automation-items">
+                          <div
+                            v-for="(item, resultIdx) in action.result.items"
+                            :key="`${action.id}-${resultIdx}`"
+                            class="hc-msg__automation-item"
+                          >
+                            <div class="hc-msg__automation-item-title">{{ item.title }}</div>
+                            <div v-if="item.subtitle" class="hc-msg__automation-item-subtitle">
+                              {{ item.subtitle }}
+                            </div>
+                            <div v-if="item.content" class="hc-msg__automation-item-content">
+                              {{ item.content }}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div v-if="action.error" class="hc-msg__automation-error">
+                        {{ action.error }}
+                      </div>
+                      <div v-if="action.status !== 'completed'" class="hc-msg__automation-actions">
+                        <button
+                          class="hc-msg__automation-btn hc-msg__automation-btn--primary"
+                          :disabled="action.status === 'running'"
+                          @click="handleConversationAction(msg.id, action.id)"
+                        >
+                          {{ automationExecuteLabel(action) }}
+                        </button>
+                        <button
+                          class="hc-msg__automation-btn"
+                          :disabled="action.status === 'running'"
+                          @click="dismissConversationAction(msg.id, action.id)"
+                        >
+                          {{ t('chat.automationDismiss') }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
+                    <div class="hc-msg__meta">
+                      <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
+                        [messageProviderDisplay(msg), metadataValue(msg, 'model')]
+                          .filter(Boolean)
+                          .join(' · ')
+                      }}</span>
+                      <span
+                        v-if="
+                          msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent
+                        "
+                        >{{
+                          msgAgentDisplay(
+                            msg.agent_name ||
+                              (msg.metadata?.agent_name as string) ||
+                              (msg.metadata?.routed_agent as string),
+                          )
+                        }}</span
+                      >
+                    </div>
+                    <div class="hc-msg__actions-inline">
+                      <MessageActions
+                        role="assistant"
+                        :content="msg.content"
+                        :feedback="messageFeedbackValue(msg)"
+                        @retry="handleRetry(windowOffset + idx)"
+                        @fork="handleFork(windowOffset + idx)"
+                        @like="handleLike(msg.id)"
+                        @dislike="handleDislike(msg.id)"
                       />
-                      <span v-else class="hc-typing-dots">
-                        <span class="hc-typing-dots__dot" />
-                        <span class="hc-typing-dots__dot" />
-                        <span class="hc-typing-dots__dot" />
-                      </span>
-                    </template>
-                    <template v-else>
-                    <!-- 验算徽章（solve 结论透传，三态诚实 · shell 通用组件） -->
-                    <VerifyBadge v-if="messageVerify(msg)" :result="messageVerify(msg)!" />
-                    <!-- 图像 / 视频 / 音频附件 -->
-                    <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
-                      <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
-                        <span v-if="att.type === 'image'" class="hc-msg__img-wrap">
+                    </div>
+                    <span class="hc-msg__time">{{ formatClockTime(msg.timestamp) }}</span>
+                  </MessageFooter>
+                </div>
+              </template>
+
+              <!-- User message (Feishu style: right-aligned blue bubble, no avatar) -->
+              <template v-else-if="msg.role === 'user'">
+                <div class="hc-msg__body hc-msg__body--user">
+                  <div class="hc-msg__bubble-wrap hc-msg__bubble-wrap--user">
+                    <div v-if="editingMsgId !== msg.id" class="hc-msg__bubble hc-msg__bubble--user">
+                      <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
+                        <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
+                          <!-- BUG-20260709：CSS zoom-in 承诺可放大，与助手气泡同走 openImagePreview -->
                           <img
+                            v-if="att.type === 'image'"
                             class="hc-msg__attachment-img"
                             :src="imageSrc(att)"
                             :alt="att.name"
                             @click="openImagePreview(imageSrc(att))"
                           />
-                          <button
-                            class="hc-msg__media-download"
-                            :title="t('chat.downloadImage', '下载图片')"
-                            @click.stop="downloadImage(imageSrc(att), att.name)"
-                          >
-                            ⬇
-                          </button>
-                        </span>
-                        <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
-                          <!-- poster=后端持久化封面（BUG-20260712-J：数据一直在，此前未绑定→黑矩形）；
-                                 无封面回退 #t=0.1 强制 WebKit 渲染首帧 -->
-                          <video
-                            controls
-                            preload="metadata"
-                            class="hc-msg__video"
-                            :poster="videoPosterFromMetadata(msg.metadata)"
-                            :src="
-                              videoDisplaySrc(imageSrc(att), videoPosterFromMetadata(msg.metadata))
-                            "
-                          />
-                          <button
-                            class="hc-msg__media-download"
-                            :title="t('chat.downloadVideo', '下载视频')"
-                            @click.stop="downloadImage(imageSrc(att), att.name)"
-                          >
-                            ⬇
-                          </button>
-                        </span>
-                        <audio
-                          v-else-if="att.type === 'audio' || att.mime?.startsWith('audio/')"
-                          controls
-                          preload="metadata"
-                          class="hc-msg__audio"
-                          :src="imageSrc(att)"
-                        />
-                        <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
-                      </template>
-                    </div>
-                    <!-- 有有序内容块 → 按真实执行序交错渲染 text↔工具卡（多步 ReAct 保真）；
-                           否则回退单串正文（兼容旧消息 / 重载 / 非流式）。 -->
-                    <MessageBlocks
-                      v-if="msg.blocks?.length"
-                      :blocks="msg.blocks"
-                      :tool-calls="msg.tool_calls"
-                      :fallback-content="sanitizeMessageContent(msg.content)"
-                      @rendered="captureNestedManifest(msg, $event)"
-                    />
-                    <MarkdownRenderer
-                      v-else
-                      :content="msg.message_content ?? sanitizeMessageContent(msg.content)"
-                      surface="desktop"
-                      @rendered="captureRenderManifest(msg, $event)"
-                    />
-                    <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
-                           优先 message.interactive 新协议，fallback 到 metadata.interactive_buttons 老路径 -->
-                    <InteractiveBlock
-                      v-if="getInteractivePayload(msg)"
-                      :payload="getInteractivePayload(msg)!"
-                      @select="(p) => handleInteractiveSelect(msg, p)"
-                    />
-                    <!-- 旧版兼容：metadata.source = 'video_generation' + metadata.video_url -->
-                    <video
-                      v-if="
-                        msg.metadata?.source === 'video_generation' &&
-                        msg.metadata?.video_url &&
-                        !getMessageAttachments(msg).some((a) => a.type === 'video')
-                      "
-                      controls
-                      preload="metadata"
-                      class="hc-msg__video"
-                      :poster="videoPosterFromMetadata(msg.metadata)"
-                      :src="
-                        videoDisplaySrc(
-                          String(msg.metadata.video_url),
-                          videoPosterFromMetadata(msg.metadata),
-                        )
-                      "
-                    />
-                    <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
-                    <RecordChip v-if="messageRecordChip(msg)" v-bind="messageRecordChip(msg)!" />
-                    </template>
-                  </div>
-                </div>
-                <div v-if="getMessageArtifacts(msg.id).length > 0" class="hc-msg__artifacts">
-                  <button
-                    v-for="art in getMessageArtifacts(msg.id)"
-                    :key="art.id"
-                    class="hc-msg__artifact-card"
-                    @click="chatStore.selectArtifact(art.id)"
-                  >
-                    <FileCode :size="13" />
-                    <span>{{ art.title }}</span>
-                  </button>
-                </div>
-                <!-- Meta footer: 时间 · 模型 · Agent 合并一行 -->
-                <!-- (moved to hc-msg__footer below) -->
-                <div
-                  v-if="msg.metadata?.knowledge_hits || msg.metadata?.memory_hits"
-                  class="hc-msg__sources"
-                >
-                  <span
-                    v-if="msg.metadata?.knowledge_hits"
-                    class="hc-msg__source-tag hc-msg__source-tag--knowledge"
-                    :title="t('chat.knowledgeHit')"
-                  >
-                    <BookOpen :size="11" /> {{ t('chat.knowledgeHit') }}
-                  </span>
-                  <span
-                    v-if="msg.metadata?.memory_hits"
-                    class="hc-msg__source-tag hc-msg__source-tag--memory"
-                    :title="t('chat.memoryHit')"
-                  >
-                    <Zap :size="11" /> {{ t('chat.memoryHit') }}
-                  </span>
-                </div>
-                <div v-if="getKnowledgeHits(msg).length > 0" class="hc-msg__hit-list">
-                  <div
-                    v-for="(hit, hitIdx) in getKnowledgeHits(msg)"
-                    :key="`knowledge-${msg.id}-${hitIdx}`"
-                    class="hc-msg__hit"
-                  >
-                    <div class="hc-msg__hit-title">{{ getHitTitle(hit) }}</div>
-                    <div v-if="getHitSubtitle(hit)" class="hc-msg__hit-subtitle">
-                      {{ getHitSubtitle(hit) }}
-                    </div>
-                  </div>
-                </div>
-                <div v-if="getMemoryHits(msg).length > 0" class="hc-msg__hit-list">
-                  <div
-                    v-for="(hit, hitIdx) in getMemoryHits(msg)"
-                    :key="`memory-${msg.id}-${hitIdx}`"
-                    class="hc-msg__hit"
-                  >
-                    <div class="hc-msg__hit-title">
-                      {{ typeof hit.content === 'string' ? hit.content : t('chat.memoryHit') }}
-                    </div>
-                    <div
-                      v-if="typeof hit.source === 'string' && hit.source"
-                      class="hc-msg__hit-subtitle"
-                    >
-                      {{ hit.source }}
-                    </div>
-                  </div>
-                </div>
-                <!-- Backend auto-extracted memory notification -->
-                <div
-                  v-if="typeof msg.metadata?.memory_saved === 'string' && msg.metadata.memory_saved"
-                  class="hc-msg__memory-saved"
-                >
-                  <Brain :size="12" />
-                  <span>{{ t('chat.memorySaved') }}: {{ msg.metadata.memory_saved }}</span>
-                </div>
-
-                <div
-                  v-if="getVisibleConversationActions(msg).length"
-                  class="hc-msg__automation-list"
-                >
-                  <div
-                    v-for="action in getVisibleConversationActions(msg)"
-                    :key="action.id"
-                    class="hc-msg__automation-card"
-                    :class="`hc-msg__automation-card--${action.status}`"
-                  >
-                    <div class="hc-msg__automation-head">
-                      <div>
-                        <div class="hc-msg__automation-title">{{ action.title }}</div>
-                        <div class="hc-msg__automation-desc">{{ action.description }}</div>
+                          <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
+                        </template>
                       </div>
-                      <span class="hc-msg__automation-status">
-                        {{ automationStatusLabel(action.status) }}
-                      </span>
-                    </div>
-                    <div
-                      v-if="action.kind === 'create_task' && action.status === 'running'"
-                      class="hc-msg__automation-progress"
-                      data-testid="automation-progress"
-                    >
-                      <span class="hc-msg__automation-progress-dot" />
-                      <span class="hc-msg__automation-progress-text">
-                        {{
-                          action.progress
-                            ? cronStageLabel(action.progress.stage)
-                            : t('chat.cronStageStarting', '准备编译脚本…')
-                        }}
-                      </span>
-                      <span
-                        v-if="automationElapsedLabel(action.startedAt) !== null"
-                        class="hc-msg__automation-progress-elapsed"
-                      >
-                        {{ automationElapsedLabel(action.startedAt) }}
-                      </span>
-                      <span class="hc-msg__automation-progress-hint">
-                        <!-- Server progress messages carry richer detail than the
-                               stage label (e.g. the self-correction retry notice). -->
-                        {{
-                          action.progress?.message ||
-                          t('chat.cronCompileHint', '正在编译，无需重复点击')
-                        }}
-                      </span>
-                    </div>
-                    <div v-if="action.result" class="hc-msg__automation-result">
-                      <div class="hc-msg__automation-summary">{{ action.result.summary }}</div>
-                      <div v-if="action.result.items?.length" class="hc-msg__automation-items">
+                      <!-- 文档卡片（ChatGPT 风格）：彩色类型图标 + 名称 + 类型·大小 + 下载按钮；正文进隐藏上下文不灌气泡 -->
+                      <div v-if="getMessageDocuments(msg).length" class="hc-docfiles">
                         <div
-                          v-for="(item, resultIdx) in action.result.items"
-                          :key="`${action.id}-${resultIdx}`"
-                          class="hc-msg__automation-item"
+                          v-for="(doc, di) in getMessageDocuments(msg)"
+                          :key="di"
+                          class="hc-docfile"
+                          :class="{ 'hc-docfile--actionable': docActionable(doc) }"
                         >
-                          <div class="hc-msg__automation-item-title">{{ item.title }}</div>
-                          <div v-if="item.subtitle" class="hc-msg__automation-item-subtitle">
-                            {{ item.subtitle }}
-                          </div>
-                          <div v-if="item.content" class="hc-msg__automation-item-content">
-                            {{ item.content }}
-                          </div>
+                          <button
+                            type="button"
+                            class="hc-docfile__open"
+                            :title="docActionable(doc) ? '点击打开原文件' : doc.name"
+                            @click="openDocumentPreview(doc)"
+                          >
+                            <span class="hc-docfile__icon" :data-ext="docExt(doc)">{{
+                              docExt(doc)
+                            }}</span>
+                            <span class="hc-docfile__meta">
+                              <span class="hc-docfile__name">{{ doc.name }}</span>
+                              <span class="hc-docfile__sub"
+                                >{{ docExt(doc) }} · {{ formatDocSize(doc.size) }}</span
+                              >
+                            </span>
+                          </button>
+                          <button
+                            v-if="docActionable(doc)"
+                            type="button"
+                            class="hc-docfile__dl"
+                            title="下载"
+                            @click.stop="downloadDocument(doc)"
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M8 2.5v7m0 0L5.2 6.7M8 9.5l2.8-2.8M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1"
+                                stroke="currentColor"
+                                stroke-width="1.4"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </button>
                         </div>
                       </div>
-                    </div>
-                    <div v-if="action.error" class="hc-msg__automation-error">
-                      {{ action.error }}
-                    </div>
-                    <div v-if="action.status !== 'completed'" class="hc-msg__automation-actions">
-                      <button
-                        class="hc-msg__automation-btn hc-msg__automation-btn--primary"
-                        :disabled="action.status === 'running'"
-                        @click="handleConversationAction(msg.id, action.id)"
+                      <!-- BUG-20260622：发送时挂载的 skill 在气泡内显示 -->
+                      <div
+                        v-if="getMessageSkills(msg).length"
+                        style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px"
                       >
-                        {{ automationExecuteLabel(action) }}
-                      </button>
-                      <button
-                        class="hc-msg__automation-btn"
-                        :disabled="action.status === 'running'"
-                        @click="dismissConversationAction(msg.id, action.id)"
-                      >
-                        {{ t('chat.automationDismiss') }}
-                      </button>
+                        <span
+                          v-for="sn in getMessageSkills(msg)"
+                          :key="sn"
+                          style="
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 4px;
+                            padding: 2px 8px;
+                            border-radius: 12px;
+                            background: rgba(255, 255, 255, 0.2);
+                            font-size: 12px;
+                            line-height: 1.4;
+                          "
+                        >
+                          <SkillIcon :skill="skillForChip(sn)" :size="13" />
+                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                        </span>
+                      </div>
+                      <MessageText :content="msg.content" />
                     </div>
-                  </div>
-                </div>
-                <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
-                  <div class="hc-msg__meta">
-                    <span>{{ formatTime(msg.timestamp) }}</span>
-                    <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
-                      [messageProviderDisplay(msg), metadataValue(msg, 'model')]
-                        .filter(Boolean)
-                        .join(' · ')
-                    }}</span>
-                    <span
-                      v-if="
-                        msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent
-                      "
-                      >{{
-                        msgAgentDisplay(
-                          msg.agent_name ||
-                            (msg.metadata?.agent_name as string) ||
-                            (msg.metadata?.routed_agent as string),
-                        )
-                      }}</span
-                    >
-                  </div>
-                  <div class="hc-msg__actions-inline">
-                    <MessageActions
-                      role="assistant"
-                      :content="msg.content"
-                      :feedback="messageFeedbackValue(msg)"
-                      @retry="handleRetry(windowOffset + idx)"
-                      @fork="handleFork(windowOffset + idx)"
-                      @like="handleLike(msg.id)"
-                      @dislike="handleDislike(msg.id)"
-                      @delete="requestDeleteMessage(msg.id)"
-                    />
-                  </div>
-                </MessageFooter>
-              </div>
-            </template>
-
-            <!-- User message (Feishu style: right-aligned blue bubble, no avatar) -->
-            <template v-else-if="msg.role === 'user'">
-              <div class="hc-msg__body hc-msg__body--user">
-                <div class="hc-msg__bubble-wrap hc-msg__bubble-wrap--user">
-                  <div
-                    v-if="editingMsgId !== msg.id"
-                    class="hc-msg__bubble hc-msg__bubble--user"
-                  >
-                    <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
-                      <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
-                        <!-- BUG-20260709：CSS zoom-in 承诺可放大，与助手气泡同走 openImagePreview -->
+                    <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
+                    <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
+                      <!-- 编辑时图片缩略图常驻顶部（编辑文字不丢图，BUG-20260625） -->
+                      <div v-if="editingImages(msg).length" class="hc-msg__edit-attachments">
                         <img
-                          v-if="att.type === 'image'"
-                          class="hc-msg__attachment-img"
+                          v-for="(att, ai) in editingImages(msg)"
+                          :key="ai"
+                          class="hc-msg__edit-att-img"
                           :src="imageSrc(att)"
                           :alt="att.name"
-                          @click="openImagePreview(imageSrc(att))"
                         />
-                        <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
-                      </template>
-                    </div>
-                    <!-- 文档卡片（ChatGPT 风格）：彩色类型图标 + 名称 + 类型·大小 + 下载按钮；正文进隐藏上下文不灌气泡 -->
-                    <div v-if="getMessageDocuments(msg).length" class="hc-docfiles">
-                      <div
-                        v-for="(doc, di) in getMessageDocuments(msg)"
-                        :key="di"
-                        class="hc-docfile"
-                        :class="{ 'hc-docfile--actionable': docActionable(doc) }"
-                      >
-                        <button
-                          type="button"
-                          class="hc-docfile__open"
-                          :title="docActionable(doc) ? '点击打开原文件' : doc.name"
-                          @click="openDocumentPreview(doc)"
+                      </div>
+                      <!-- 编辑时挂载的 skill 同样常驻（编辑文字不丢技能，confirmEdit 已带回 carry）。 -->
+                      <div v-if="getMessageSkills(msg).length" class="hc-msg__edit-skills">
+                        <span
+                          v-for="sn in getMessageSkills(msg)"
+                          :key="sn"
+                          class="hc-msg__edit-skill-chip"
                         >
-                          <span class="hc-docfile__icon" :data-ext="docExt(doc)">{{
-                            docExt(doc)
-                          }}</span>
-                          <span class="hc-docfile__meta">
-                            <span class="hc-docfile__name">{{ doc.name }}</span>
-                            <span class="hc-docfile__sub"
-                              >{{ docExt(doc) }} · {{ formatDocSize(doc.size) }}</span
-                            >
-                          </span>
+                          <SkillIcon :skill="skillForChip(sn)" :size="13" />
+                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                        </span>
+                      </div>
+                      <HcClearableField>
+                        <MessageText
+                          v-model:content="editingText"
+                          class="hc-msg__edit-textarea"
+                          editable
+                          autofocus
+                          @keydown.enter.exact="onEditEnter($event, msg.id)"
+                          @keydown.escape="cancelEdit"
+                          @compositionstart="onEditCompositionStart"
+                          @compositionend="onEditCompositionEnd"
+                        />
+                      </HcClearableField>
+                      <div class="hc-msg__edit-actions">
+                        <button
+                          class="hc-msg__edit-btn hc-msg__edit-btn--cancel"
+                          @click="cancelEdit"
+                        >
+                          {{ t('common.cancel') }}
                         </button>
                         <button
-                          v-if="docActionable(doc)"
-                          type="button"
-                          class="hc-docfile__dl"
-                          title="下载"
-                          @click.stop="downloadDocument(doc)"
+                          class="hc-msg__edit-btn hc-msg__edit-btn--send"
+                          @click="confirmEdit(msg.id)"
                         >
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 16 16"
-                            fill="none"
-                            aria-hidden="true"
-                          >
-                            <path
-                              d="M8 2.5v7m0 0L5.2 6.7M8 9.5l2.8-2.8M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1"
-                              stroke="currentColor"
-                              stroke-width="1.4"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            />
-                          </svg>
+                          {{ t('chat.send') }}
                         </button>
                       </div>
                     </div>
-                    <!-- BUG-20260622：发送时挂载的 skill 在气泡内显示 -->
-                    <div
-                      v-if="getMessageSkills(msg).length"
-                      style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px"
-                    >
-                      <span
-                        v-for="sn in getMessageSkills(msg)"
-                        :key="sn"
-                        style="
-                          display: inline-flex;
-                          align-items: center;
-                          gap: 4px;
-                          padding: 2px 8px;
-                          border-radius: 12px;
-                          background: rgba(255, 255, 255, 0.2);
-                          font-size: 12px;
-                          line-height: 1.4;
-                        "
-                      >
-                        <SkillIcon :skill="skillForChip(sn)" :size="13" />
-                        <span>{{ skillForChip(sn).display_name || sn }}</span>
-                      </span>
-                    </div>
-                    <MessageText :content="msg.content" />
                   </div>
-                  <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
-                  <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
-                    <!-- 编辑时图片缩略图常驻顶部（编辑文字不丢图，BUG-20260625） -->
-                    <div v-if="editingImages(msg).length" class="hc-msg__edit-attachments">
-                      <img
-                        v-for="(att, ai) in editingImages(msg)"
-                        :key="ai"
-                        class="hc-msg__edit-att-img"
-                        :src="imageSrc(att)"
-                        :alt="att.name"
+                  <MessageFooter class="hc-msg__footer hc-msg__footer--right">
+                    <div class="hc-msg__actions-float hc-msg__actions-float--right">
+                      <span class="hc-msg__time hc-msg__time--right">{{
+                        formatClockTime(msg.timestamp)
+                      }}</span>
+                      <MessageActions
+                        role="user"
+                        :content="msg.content"
+                        @edit="handleEdit(windowOffset + idx)"
                       />
                     </div>
-                    <!-- 编辑时挂载的 skill 同样常驻（编辑文字不丢技能，confirmEdit 已带回 carry）。 -->
-                    <div v-if="getMessageSkills(msg).length" class="hc-msg__edit-skills">
-                      <span
-                        v-for="sn in getMessageSkills(msg)"
-                        :key="sn"
-                        class="hc-msg__edit-skill-chip"
-                      >
-                        <SkillIcon :skill="skillForChip(sn)" :size="13" />
-                        <span>{{ skillForChip(sn).display_name || sn }}</span>
-                      </span>
-                    </div>
-                    <HcClearableField>
-                      <MessageText
-                        v-model:content="editingText"
-                        class="hc-msg__edit-textarea"
-                        editable
-                        autofocus
-                        @keydown.enter.exact="onEditEnter($event, msg.id)"
-                        @keydown.escape="cancelEdit"
-                        @compositionstart="onEditCompositionStart"
-                        @compositionend="onEditCompositionEnd"
-                      />
-                    </HcClearableField>
-                    <div class="hc-msg__edit-actions">
-                      <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">
-                        {{ t('common.cancel') }}
-                      </button>
-                      <button
-                        class="hc-msg__edit-btn hc-msg__edit-btn--send"
-                        @click="confirmEdit(msg.id)"
-                      >
-                        {{ t('chat.send') }}
-                      </button>
-                    </div>
-                  </div>
+                  </MessageFooter>
                 </div>
-                <MessageFooter class="hc-msg__footer hc-msg__footer--right">
-                  <div class="hc-msg__actions-float hc-msg__actions-float--right">
-                    <MessageActions
-                      role="user"
-                      :content="msg.content"
-                      @edit="handleEdit(windowOffset + idx)"
-                      @delete="requestDeleteMessage(msg.id)"
-                    />
-                  </div>
-                  <div class="hc-msg__time hc-msg__time--right">
-                    {{ formatTime(msg.timestamp) }}
-                  </div>
-                </MessageFooter>
-              </div>
-            </template>
-          </div>
-          <div
-            :id="scenarioMessageAnchorId(msg.id)"
-            class="hc-chat__scenario-inline"
-            :data-source-message-id="msg.id"
-          />
+              </template>
+            </div>
+            <div
+              :id="scenarioMessageAnchorId(msg.id)"
+              class="hc-chat__scenario-inline"
+              :data-source-message-id="msg.id"
+            />
           </template>
 
           <!-- 工具审批卡片 -->
           <ToolApprovalCard
             v-if="chatStore.pendingApproval"
+            :class="{ 'hc-approval--message-track': !isConversationOnly }"
             :request-id="chatStore.pendingApproval.requestId"
             :tool-name="chatStore.pendingApproval.toolName"
             :risk="asToolApprovalRisk(chatStore.pendingApproval.risk)"
@@ -3605,14 +3849,84 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                 </div>
               </div>
-              <button
-                class="hc-chat__research-btn"
-                :class="{ 'hc-chat__research-btn--active': isDeepThinking }"
-                @click="toggleDeepThinking"
-              >
-                <Brain :size="12" />
-                {{ t('chat.deepThink', '深度思考') }}
-              </button>
+              <div class="hc-thinking-selector">
+                <button
+                  class="hc-chat__research-btn hc-chat__thinking-control"
+                  :class="{ 'hc-chat__research-btn--active': isDeepThinking }"
+                  :aria-pressed="isDeepThinking"
+                  :aria-disabled="deepThinkingUnsupported"
+                  :aria-expanded="showThinkingSelector"
+                  aria-haspopup="dialog"
+                  :disabled="deepThinkingUnsupported"
+                  :title="thinkingControlTitle"
+                  @click="toggleThinkingSelector"
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M9.5 2a4.5 4.5 0 0 0-4.42 5.34A4 4 0 0 0 6 15h.5" />
+                    <path d="M14.5 2a4.5 4.5 0 0 1 4.42 5.34A4 4 0 0 1 18 15h-.5" />
+                    <path d="M12 2v20M9 22h6" />
+                  </svg>
+                  <span>{{ thinkingControlLabel }}</span>
+                  <ChevronDown class="hc-thinking-selector__caret" :size="12" aria-hidden="true" />
+                </button>
+                <div
+                  v-if="showThinkingSelector"
+                  class="hc-thinking-selector__dropdown"
+                  role="dialog"
+                  :aria-label="t('chat.reasoning.settingsAriaLabel')"
+                  data-testid="chat-thinking-settings"
+                  @keydown.esc="showThinkingSelector = false"
+                >
+                  <div class="hc-thinking-selector__mode-row">
+                    <span class="hc-thinking-selector__label">{{ t('chat.reasoning.mode') }}</span>
+                    <button
+                      class="hc-thinking-selector__switch"
+                      type="button"
+                      role="switch"
+                      :aria-checked="isDeepThinking"
+                      :aria-label="t('chat.reasoning.modeAriaLabel')"
+                      data-testid="chat-thinking-mode"
+                      @click="toggleDeepThinking"
+                    >
+                      <span class="hc-thinking-selector__switch-thumb" />
+                    </button>
+                  </div>
+                  <template v-if="isDeepThinking && selectedReasoningEfforts.length > 0">
+                    <div class="hc-thinking-selector__divider" />
+                    <div class="hc-thinking-selector__section">{{ t('chat.reasoning.effort') }}</div>
+                    <div role="radiogroup" :aria-label="t('chat.reasoning.effortAriaLabel')">
+                      <button
+                        v-for="effort in selectedReasoningEfforts"
+                        :key="effort"
+                        class="hc-thinking-selector__effort"
+                        type="button"
+                        role="radio"
+                        :aria-checked="selectedThinkingEffort === effort"
+                        :data-testid="`chat-thinking-effort-${effort}`"
+                        @click="selectThinkingEffort(effort)"
+                      >
+                        <span>{{ t(`chat.reasoning.effortOption.${effort}`) }}</span>
+                        <span
+                          v-if="selectedThinkingEffort === effort"
+                          class="hc-thinking-selector__check"
+                          aria-hidden="true"
+                          >✓</span
+                        >
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </div>
             </template>
           </ChatInput>
         </div>
@@ -3974,6 +4288,15 @@ function startSidebarResize(event: MouseEvent) {
   gap: 22px;
 }
 
+/* 普通会话的审批卡跟随助手消息轨道；focus 会话保持完整可用宽度。 */
+.hc-chat:not(.hc-chat--conversation-only) .hc-chat__thread > :deep(.hc-approval--message-track) {
+  box-sizing: border-box;
+  width: min(780px, calc(100% - 46px));
+  margin-left: 46px;
+  margin-right: 0;
+  align-self: flex-start;
+}
+
 .hc-chat__scenario-inline {
   width: 100%;
   max-width: none;
@@ -4071,7 +4394,7 @@ function startSidebarResize(event: MouseEvent) {
   align-items: flex-end;
 }
 
-/* 助手操作紧跟元信息常驻；用户操作维持原有靠右渐显交互。 */
+/* 助手操作与时间保持单行；用户时间与操作组共同靠右渐显，时间排在复制按钮之前。 */
 .hc-msg__footer {
   position: relative;
   display: flex;
@@ -4123,6 +4446,9 @@ function startSidebarResize(event: MouseEvent) {
 
 .hc-msg__actions-float--right {
   margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 @media (max-width: 760px) {
@@ -4318,7 +4644,7 @@ function startSidebarResize(event: MouseEvent) {
   color: var(--hc-text-primary, #1d1d1f);
   font-size: 16px;
   line-height: 1.6;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: inherit;
   padding: 0;
   overflow-y: auto;
   min-height: 56px;
@@ -4391,7 +4717,7 @@ function startSidebarResize(event: MouseEvent) {
   white-space: nowrap;
   margin-top: 0;
   padding-left: 0;
-  opacity: 0.64;
+  opacity: 0.6;
 }
 
 .hc-msg__time--right {
@@ -4598,7 +4924,7 @@ function startSidebarResize(event: MouseEvent) {
   color: var(--hc-text-secondary);
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: inherit;
   cursor: pointer;
   border-radius: 9px;
   transition:
@@ -4621,6 +4947,136 @@ function startSidebarResize(event: MouseEvent) {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
   font-weight: 600;
+}
+
+.hc-chat__research-btn:disabled {
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+/* 思考菜单复用 composer 的轻量浮层，不叠加额外蓝色光晕。 */
+.hc-thinking-selector {
+  position: relative;
+}
+
+.hc-thinking-selector__caret {
+  width: 13px;
+  height: 13px;
+  opacity: 0.5;
+}
+
+.hc-thinking-selector__dropdown {
+  position: absolute;
+  z-index: 100;
+  right: 0;
+  bottom: 100%;
+  width: 236px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.12),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.hc-thinking-selector__mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 3px 10px;
+}
+
+.hc-thinking-selector__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+}
+
+.hc-thinking-selector__switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--hc-bg-active);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.hc-thinking-selector__switch[aria-checked='true'] {
+  background: var(--hc-accent);
+}
+
+.hc-thinking-selector__switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s;
+}
+
+.hc-thinking-selector__switch[aria-checked='true'] .hc-thinking-selector__switch-thumb {
+  transform: translateX(14px);
+}
+
+.hc-thinking-selector__divider {
+  height: 1px;
+  margin: 0 -4px 10px;
+  background: var(--hc-divider);
+}
+
+.hc-thinking-selector__section {
+  padding: 0 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+}
+
+.hc-thinking-selector__effort {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hc-thinking-selector__effort:hover,
+.hc-thinking-selector__effort[aria-checked='true'] {
+  background: var(--hc-bg-hover);
+}
+
+.hc-thinking-selector__effort[aria-checked='true'] {
+  font-weight: 600;
+}
+
+.hc-thinking-selector__check {
+  color: var(--hc-accent);
+  font-size: 17px;
+  line-height: 1;
 }
 
 /* 模型选择器：Claude 式轻量 ghost（纯文字 + 浅 caret，无常驻边框） */

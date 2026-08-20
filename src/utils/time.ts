@@ -17,7 +17,11 @@ function hhmm(d: Date): string {
 }
 
 function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
 }
 
 function isYesterday(d: Date, now: Date): boolean {
@@ -45,7 +49,20 @@ function monthDay(d: Date): string {
   if (isZh()) {
     return `${d.getMonth() + 1}月${d.getDate()}日`
   }
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ]
   return `${months[d.getMonth()] ?? 'Jan'} ${d.getDate()}`
 }
 
@@ -72,6 +89,26 @@ export function formatTime(ts: string | undefined, compact = false): string {
   if (isSameWeek(d, now)) return weekdayLabel(d) + time
   if (d.getFullYear() === now.getFullYear()) return monthDay(d) + time
   return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}` + time
+}
+
+/** 消息 Footer 时间：独立使用紧凑时钟格式，不复用相对日期格式。 */
+export function formatClockTime(ts: string | undefined): string {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ts
+  return hhmm(d)
+}
+
+/** 会话列表日期：今天显示 HH:mm，同年非今天显示月日，跨年增加年份且不带周几。 */
+export function formatSessionDate(ts: string | undefined): string {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ts
+  const now = new Date()
+  if (isSameDay(d, now)) return hhmm(d)
+  if (d.getFullYear() === now.getFullYear()) return monthDay(d)
+  if (isZh()) return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
 /** Millisecond-precision absolute time for log entries */

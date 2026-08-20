@@ -5,6 +5,7 @@ import type { RuntimeEvent } from '@/types/chat'
 import { resolveToolDisplayName } from '@/utils/tool-call'
 import ActivityTimeline from './ActivityTimeline.vue'
 import type { ActivityTimelineItem } from './activity-timeline'
+import { formatAssistantRunDuration } from './assistant-run-presentation'
 import ReasoningRenderer from './ReasoningRenderer.vue'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 
@@ -32,18 +33,7 @@ const props = withDefaults(
 
 const { t } = useI18n()
 
-const normalizedElapsedSeconds = computed(() => {
-  const seconds = Number(props.elapsedSeconds)
-  return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0
-})
-
-const elapsedLabel = computed(() => {
-  const seconds = normalizedElapsedSeconds.value
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
-})
+const elapsedLabel = computed(() => formatAssistantRunDuration(props.elapsedSeconds))
 
 const publicReasoning = computed(() =>
   props.visibility === 'visible' ? normalizeAssistantReasoning(props.reasoning) : '',
@@ -94,12 +84,16 @@ const activityItems = computed<ActivityTimelineItem[]>(() => {
   })
 })
 
-const hasPublicDetails = computed(
-  () => !!publicReasoning.value || activityItems.value.length > 0,
-)
+const hasPublicDetails = computed(() => !!publicReasoning.value || activityItems.value.length > 0)
 
 const terminalLabel = computed(() =>
-  props.state === 'completed' ? t('chat.thoughtFor') : t('chat.thoughtProcess'),
+  props.state === 'completed'
+    ? t('chat.assistantRun.thought', { duration: elapsedLabel.value })
+    : t('chat.thoughtProcess'),
+)
+
+const runningLabel = computed(() =>
+  t('chat.assistantRun.thinking', { duration: elapsedLabel.value }),
 )
 
 function bindContentElement(element: Element | ComponentPublicInstance | null) {
@@ -110,18 +104,20 @@ onBeforeUnmount(() => props.contentRef?.(null))
 </script>
 
 <template>
-  <div class="hc-thinking" :data-thinking-state="state">
+  <div
+    class="hc-thinking"
+    data-component="ThinkingProgress"
+    data-reasoning-execution="applied"
+    :data-thinking-state="state"
+  >
     <template v-if="state === 'running'">
       <div class="hc-thinking__header">
         <span class="hc-thinking__activity hc-thinking__spinner" aria-hidden="true" />
-        <span class="hc-thinking__label">{{ t('chat.thinking') }}</span>
-        <span class="hc-thinking__elapsed">{{ elapsedLabel }}</span>
+        <span class="hc-thinking__label" role="status" aria-live="polite" aria-atomic="true">
+          {{ runningLabel }}
+        </span>
       </div>
-      <div
-        v-if="hasPublicDetails"
-        :ref="bindContentElement"
-        class="hc-thinking__content"
-      >
+      <div v-if="hasPublicDetails" :ref="bindContentElement" class="hc-thinking__content">
         <ReasoningRenderer v-if="publicReasoning" :content="publicReasoning" />
         <ActivityTimeline :items="activityItems" />
       </div>
@@ -144,18 +140,25 @@ onBeforeUnmount(() => props.contentRef?.(null))
           <template v-else>●</template>
         </span>
         <span class="hc-thinking__label">{{ terminalLabel }}</span>
-        <span class="hc-thinking__elapsed">{{ elapsedLabel }}</span>
+        <span
+          v-if="state !== 'completed'"
+          class="hc-thinking__elapsed"
+          role="timer"
+          aria-live="off"
+          >{{ elapsedLabel }}</span
+        >
         <span class="cv" aria-hidden="true" />
       </summary>
-      <div
-        :ref="bindContentElement"
-        class="hc-thinking__content"
-      >
+      <div :ref="bindContentElement" class="hc-thinking__content">
         <ReasoningRenderer v-if="publicReasoning" :content="publicReasoning" />
         <ActivityTimeline :items="activityItems" />
       </div>
     </details>
-    <div v-else class="hc-thinking__summary hc-thinking__summary--static" role="status">
+    <div
+      v-else
+      class="hc-thinking__summary hc-thinking__summary--static"
+      :role="state === 'completed' ? undefined : 'status'"
+    >
       <span class="hc-thinking__activity hc-thinking__icon ti" aria-hidden="true">
         <svg v-if="state === 'completed'" viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="9" />
@@ -164,7 +167,13 @@ onBeforeUnmount(() => props.contentRef?.(null))
         <template v-else>●</template>
       </span>
       <span class="hc-thinking__label">{{ terminalLabel }}</span>
-      <span class="hc-thinking__elapsed">{{ elapsedLabel }}</span>
+      <span
+        v-if="state !== 'completed'"
+        class="hc-thinking__elapsed"
+        role="timer"
+        aria-live="off"
+        >{{ elapsedLabel }}</span
+      >
     </div>
   </div>
 </template>
@@ -225,7 +234,8 @@ onBeforeUnmount(() => props.contentRef?.(null))
   background: currentColor;
   opacity: 0.4;
   transition: transform 0.2s var(--hc-ease-out);
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")
+    center/contain no-repeat;
 }
 
 .hc-thinking__details[open] .cv {

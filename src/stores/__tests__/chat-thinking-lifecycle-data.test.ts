@@ -41,6 +41,14 @@ function streamState(overrides: Partial<SessionStreamState> = {}): SessionStream
     reasoning: 'public summary',
     reasoningStartTime: 1_000,
     reasoningEndTime: 4_000,
+    reasoningReceipt: {
+      version: 1,
+      reasoning_request: 'on',
+      reasoning_support: 'supported',
+      reasoning_execution: 'applied',
+    },
+    reasoningSupport: 'supported',
+    reasoningExecution: 'applied',
     thinkingEnabled: true,
     state: 'running',
     visibility: 'visible',
@@ -314,7 +322,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
     expect(merged.lastSequence).toBe(1)
   })
 
-  it('measures thinking from the request-owned start even when no reasoning is exposed', () => {
+  it('does not invent applied duration from request start without a receipt start timestamp', () => {
     const state = streamState({
       reasoning: '',
       reasoningStartTime: 0,
@@ -325,10 +333,10 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
       visibility: 'not_exposed',
     } as Partial<SessionStreamState>)
 
-    expect(getStreamThinkingDuration(state, 4_000)).toBe(3)
+    expect(getStreamThinkingDuration(state, 4_000)).toBeUndefined()
   })
 
-  it('drives the live elapsed timer from request start without waiting for reasoning', () => {
+  it('does not start the live elapsed timer from request intent alone', () => {
     const state = streamState({
       reasoning: '',
       reasoningStartTime: 0,
@@ -340,7 +348,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
     } as Partial<SessionStreamState>)
 
     const mirror = buildStreamingMirrorState({ s1: state }, 's1')
-    expect(mirror.streamingReasoningStartTime).toBe(1_000)
+    expect(mirror.streamingReasoningStartTime).toBe(0)
   })
 
   it('classifies a thinking request with zero deliverable output as failed without inventing reasoning', () => {

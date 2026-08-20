@@ -9,9 +9,15 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { useAppStore } from '@/stores/app'
 
 // 捕获 bridge 注册的 WS 回调，供测试手动触发
-const { wsHandlers, osSpy } = vi.hoisted(() => ({
+const { wsHandlers, osSpy, toastSpies } = vi.hoisted(() => ({
   wsHandlers: {} as Record<string, ((...a: unknown[]) => void) | undefined>,
   osSpy: vi.fn(),
+  toastSpies: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }))
 
 vi.mock('@/api/websocket', () => ({
@@ -37,6 +43,10 @@ vi.mock('@/api/websocket', () => ({
 
 vi.mock('@/utils/os-notification', () => ({
   sendOsNotification: (...args: unknown[]) => osSpy(...args),
+}))
+
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => toastSpies,
 }))
 
 vi.mock('@/api/client', () => ({ checkHealth: vi.fn().mockResolvedValue(true) }))
@@ -68,6 +78,7 @@ describe('useNotificationCenter (bridge)', () => {
     setActivePinia(pinia)
     for (const k of Object.keys(wsHandlers)) wsHandlers[k] = undefined
     osSpy.mockClear()
+    Object.values(toastSpies).forEach((spy) => spy.mockClear())
     setHidden(false)
   })
 
@@ -75,7 +86,7 @@ describe('useNotificationCenter (bridge)', () => {
     api?.stop()
   })
 
-  it('translates an approval request into a warning notification + OS push when app is hidden', () => {
+  it('translates an approval request into notification center + in-app toast when hidden', () => {
     setHidden(true)
     mountBridge()
     api.start()
@@ -89,14 +100,16 @@ describe('useNotificationCenter (bridge)', () => {
     expect(n.level).toBe('warning')
     expect(n.route).toBe('/chat')
     expect(n.body).toContain('shell')
-    expect(osSpy).toHaveBeenCalledTimes(1)
+    expect(toastSpies.warning).toHaveBeenCalledTimes(1)
+    expect(osSpy).not.toHaveBeenCalled()
   })
 
-  it('does NOT fire an OS push for approval when the app is focused', () => {
+  it('keeps approval delivery in-app when the app is focused', () => {
     setHidden(false)
     mountBridge()
     api.start()
     wsHandlers.approval?.({ requestId: 'r2', toolName: 'fs', risk: 'low', reason: '', sessionId: '' })
+    expect(toastSpies.warning).toHaveBeenCalledTimes(1)
     expect(osSpy).not.toHaveBeenCalled()
   })
 
@@ -166,6 +179,21 @@ describe('useNotificationCenter (bridge)', () => {
     expect(n.title).toBe('晚报生成 执行成功')
     // 后端已发系统通知，前端不再重复
     expect(osSpy).not.toHaveBeenCalled()
+  })
+
+  it('surfaces backend business notifications through the in-app toast', () => {
+    mountBridge()
+    api.start()
+
+    wsHandlers.desktop?.({
+      id: 'notif-failed',
+      title: 'K12 周练投递失败',
+      body: 'K12 endpoint returned 401',
+      level: 'error',
+      source: 'cron',
+    })
+
+    expect(toastSpies.error).toHaveBeenCalledWith('K12 周练投递失败：K12 endpoint returned 401')
   })
 
   it('maps an IM inbound desktop_notification to a channel notification routed to chat', () => {

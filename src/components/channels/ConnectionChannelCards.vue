@@ -42,8 +42,8 @@ const errorMsg = ref('')
 const busyId = ref<string | null>(null)
 const testResults = ref<Record<string, { success: boolean; message: string }>>({})
 
-// 真实数据源（降级态：拉不到则留空，不显示 chip / 不报错）。
-// health 按实例 name 索引（对齐后端 instances.Instance.Name 主键）。
+// 后台定时任务引用数据与健康态均优雅降级：拉取失败时留空且不阻塞卡片。
+// 定时任务引用数据不投影到卡片可见 UI；health 按实例 name 索引。
 const cronJobs = ref<CronJob[]>([])
 const healthByName = ref<Record<string, IMInstanceHealth>>({})
 
@@ -62,8 +62,8 @@ async function load() {
   } finally {
     loading.value = false
   }
-  // 引用计数 / 健康态用真实数据，但属辅助信息：任一拉取失败只优雅退化，
-  // 不写 errorMsg、不阻塞卡片渲染（无数据 → 不显示 chip / 状态回落基础推导）。
+  // 定时任务引用数据 / 健康态的任一拉取失败都只优雅退化，
+  // 不写 errorMsg、不阻塞卡片渲染。
   void loadReferences()
   void loadHealth()
 }
@@ -123,23 +123,6 @@ function hasCredentialError(inst: IMInstance): boolean {
   const h = healthByName.value[inst.name]
   if (!h) return false
   return h.status === 'error' || !!h.last_error
-}
-
-/**
- * 引用计数：统计「投递目标(deliver)指向该连接」的任务数。
- * 对齐后端 Manager.Send 解析顺序——deliver 项可能是实例 id / name / provider(type)，
- * 命中任一即算引用。"chat" 是桌面 chat 流、非连接，不计入。
- * 同一任务多次指向同一连接只算一次。
- */
-function refCount(inst: IMInstance): number {
-  let n = 0
-  for (const job of cronJobs.value) {
-    const targets = job.deliver
-    if (!targets || targets.length === 0) continue
-    const hit = targets.some((tgt) => tgt === inst.id || tgt === inst.name || tgt === inst.type)
-    if (hit) n += 1
-  }
-  return n
 }
 
 // 状态 pill：凭证失效(red) / 未配置(amber) / 已连接(green) / 已停用(grey)
@@ -246,7 +229,7 @@ async function testInstance(inst: IMInstance) {
   }
 }
 
-// 顶栏「添加」按钮（连接屏 channels tab）委托到这里（锚点 prototype addCurrentConn）
+// 顶栏「添加」按钮（连接屏 channels tab）委托到这里（锚点 prototype addCurrentConn）。
 defineExpose({ openCreate })
 </script>
 
@@ -301,10 +284,6 @@ defineExpose({ openCreate })
             :class="`hc-cxcap--${c}`"
           >
             {{ c === 'receive' ? t('connections.cap.receive') : t('connections.cap.send') }}
-          </span>
-          <!-- 引用计数 chip：N>0 才显示（无数据 / N=0 不渲染，锚点 prototype .refchip） -->
-          <span v-if="refCount(inst) > 0" class="hc-cxrefchip">
-            {{ t('connections.channels.refchip', { count: refCount(inst) }) }}
           </span>
         </div>
 
@@ -540,18 +519,6 @@ defineExpose({ openCreate })
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 6px;
-}
-
-/* 引用计数 chip：靠右，中性底（锚点 prototype .refchip） */
-.hc-cxrefchip {
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--hc-bg-active);
-  color: var(--hc-text-secondary);
-  white-space: nowrap;
 }
 
 .hc-cxcap--receive {

@@ -252,7 +252,7 @@ function formatTime(iso: string): string {
 <template>
   <div class="auto-perm">
     <p class="auto-perm__lede">
-      {{ t('autonomy.settings.lede', '决定自动化任务在无人值守时能自动做什么。一线审批发生在创建流和任务卡；这里只做全局级别、待处理兜底、审计回看和生效策略。') }}
+      {{ t('autonomy.settings.lede', '决定自动化任务在无人值守时能自动做什么。一线审批发生在创建流和任务卡；这里只做全局级别、待处理兜底、审计回看和生效策略。自愈权限只允许生成恢复候选，必须经过下一次真实执行验证；鉴权、数据源或外部服务故障不会因权限放行而自动消失。') }}
     </p>
 
     <div v-if="unavailable" class="auto-perm__unavailable">
@@ -467,7 +467,7 @@ function formatTime(iso: string): string {
         </div>
 
         <p v-show="matrixOpen" class="auto-perm__muted">
-          {{ t('autonomy.settings.matrixNote', '回答「为什么被拦 / 为什么放行」：沙箱执行与宿主执行是两级信任——外部来源只自动放行沙箱执行。连接器（MCP）工具无内置类别，无人值守下需任务级授权。') }}
+          {{ t('autonomy.settings.matrixNote', '回答「为什么被拦 / 为什么放行」：沙箱执行与宿主执行是两级信任——外部来源只自动放行沙箱执行。连接器（MCP）工具无内置类别，无人值守下需任务级授权。自愈权限不等于可以修复鉴权、数据源或外部服务故障。') }}
         </p>
         <div v-if="matrixOpen && matrixT" class="auto-perm__matrix-box">
           <table class="auto-perm__matrix" data-testid="policy-matrix">

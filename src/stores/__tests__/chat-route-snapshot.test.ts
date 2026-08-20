@@ -6,6 +6,24 @@ import {
 } from '../chat-route-snapshot'
 
 describe('chat edit route snapshot', () => {
+  it('freezes exact model reasoning support with the request route', () => {
+    const sourceSnapshot = freezeChatRouteSnapshot({
+      agentRole: '',
+      chatParams: { provider: 'ollama', model: 'qwen3.5:9b' },
+      thinkingEnabled: true,
+      reasoningSupport: 'supported',
+    })
+
+    const resolved = resolveChatRouteSnapshot(sourceSnapshot, {
+      agentRole: '',
+      chatParams: { provider: 'cloud', model: 'plain-model' },
+      thinkingEnabled: false,
+      reasoningSupport: 'unsupported',
+    })
+
+    expect(resolved.reasoningSupport).toBe('supported')
+  })
+
   it('keeps the explicit source-session route ahead of later mutable global state', () => {
     const mutableChatParams: {
       provider?: string
@@ -48,9 +66,56 @@ describe('chat edit route snapshot', () => {
         maxTokens: 2048,
       },
       thinkingEnabled: true,
+      reasoningSupport: 'unknown',
+      reasoningPolicy: { mode: 'on' },
     })
     expect(Object.isFrozen(sourceSnapshot)).toBe(true)
     expect(Object.isFrozen(sourceSnapshot.chatParams)).toBe(true)
+  })
+
+  it('freezes the selected thinking effort and exact model control with the request route', () => {
+    const input: {
+      agentRole: string
+      chatParams: { provider: string; model: string }
+      thinkingEnabled: boolean
+      reasoningSupport: string
+      reasoningPolicy: { mode: string; effort: string }
+      reasoningControl: {
+        dialect: string
+        on: string
+        off: string
+        allowed_efforts: string[]
+      }
+    } = {
+      agentRole: '',
+      chatParams: { provider: 'openai', model: 'gpt-5.6-sol' },
+      thinkingEnabled: true,
+      reasoningSupport: 'supported',
+      reasoningPolicy: { mode: 'effort', effort: 'high' },
+      reasoningControl: {
+        dialect: 'reasoning_effort',
+        on: 'high',
+        off: 'none',
+        allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    }
+    const snapshot = freezeChatRouteSnapshot(
+      input as unknown as Parameters<typeof freezeChatRouteSnapshot>[0],
+    ) as unknown as {
+      reasoningPolicy: { mode: string; effort?: string }
+      reasoningControl: { allowed_efforts: string[] }
+    }
+
+    input.reasoningPolicy.effort = 'low'
+    input.reasoningControl.allowed_efforts.pop()
+
+    expect(snapshot.reasoningPolicy).toEqual({ mode: 'effort', effort: 'high' })
+    expect(snapshot.reasoningControl).toEqual({
+      dialect: 'reasoning_effort',
+      on: 'high',
+      off: 'none',
+      allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
   })
 
   it.each([

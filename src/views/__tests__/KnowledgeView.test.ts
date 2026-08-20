@@ -7,12 +7,14 @@ import zhCN from '@/i18n/locales/zh-CN'
 
 const {
   getDocuments,
+  getDocument,
   getDocumentContent,
   addDocument,
   uploadDocument,
   searchKnowledge,
   reindexDocument,
   retryKnowledgeDocument,
+  listKnowledgeOperations,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
   parseDocument,
@@ -20,12 +22,14 @@ const {
   cancelKnowledgeJob,
 } = vi.hoisted(() => ({
   getDocuments: vi.fn(),
+  getDocument: vi.fn(),
   getDocumentContent: vi.fn(),
   addDocument: vi.fn(),
   uploadDocument: vi.fn(),
   searchKnowledge: vi.fn(),
   reindexDocument: vi.fn(),
   retryKnowledgeDocument: vi.fn(),
+  listKnowledgeOperations: vi.fn(),
   isKnowledgeUploadEndpointMissing: vi.fn(),
   isKnowledgeUploadUnsupportedFormat: vi.fn(),
   parseDocument: vi.fn(),
@@ -36,6 +40,7 @@ const {
 vi.mock('@/api/knowledge', () => ({
   MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments,
+  getDocument,
   getDocumentContent,
   addDocument,
   deleteDocument: vi.fn(),
@@ -43,6 +48,7 @@ vi.mock('@/api/knowledge', () => ({
   uploadDocument,
   reindexDocument,
   retryKnowledgeDocument,
+  listKnowledgeOperations,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
   getKnowledgeConfig: () =>
@@ -126,6 +132,7 @@ describe('KnowledgeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDocuments.mockResolvedValue({ documents: [], total: 0 })
+    getDocument.mockResolvedValue(null)
     getDocumentContent.mockResolvedValue('loaded content')
     addDocument.mockResolvedValue({
       id: 'doc-add',
@@ -141,6 +148,7 @@ describe('KnowledgeView', () => {
       text_index_state: 'pending',
       vector_index_state: 'disabled',
     })
+    listKnowledgeOperations.mockResolvedValue([])
     isKnowledgeUploadEndpointMissing.mockReturnValue(false)
     isKnowledgeUploadUnsupportedFormat.mockReturnValue(false)
     parseDocument.mockResolvedValue({
@@ -267,7 +275,7 @@ describe('KnowledgeView', () => {
     wrapper.unmount()
   })
 
-  it('[bug] cancels an in-flight byte upload through its AbortSignal without creating a fake job', async () => {
+  it('[bug] cancels an in-flight byte upload through its AbortSignal and removes the terminal temporary row', async () => {
     let uploadSignal: AbortSignal | undefined
     uploadDocument.mockImplementation(
       (
@@ -307,12 +315,12 @@ describe('KnowledgeView', () => {
 
     expect(uploadSignal?.aborted).toBe(true)
     expect(cancelKnowledgeJob).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="knowledge-upload-job"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="knowledge-upload-pending-response"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('keeps a 202 upload attached to its persistent job and lets the user cancel it', async () => {
+  it('keeps a 202 upload attached to its persistent job and removes it after cancellation', async () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
     const fileInput = wrapper.find('input[type="file"]')
@@ -330,7 +338,7 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(cancelKnowledgeJob).toHaveBeenCalledWith('job-1')
-    expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="knowledge-upload-job"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -716,7 +724,11 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const docBtn = wrapper.findAll('button').find((btn) => btn.text().includes('设计文档'))
+    const docBtn = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('设计文档'))
+      ?.findAll('button')
+      .find((btn) => btn.text().trim() === '详情')
     await docBtn!.trigger('click')
     await flushPromises()
 
@@ -743,7 +755,11 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const docButton = wrapper.findAll('button').find((btn) => btn.text().includes('待读取文档'))
+    const docButton = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('待读取文档'))
+      ?.findAll('button')
+      .find((btn) => btn.text().trim() === '详情')
     await docButton!.trigger('click')
     await flushPromises()
 
@@ -778,7 +794,11 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const docButton = wrapper.findAll('button').find((btn) => btn.text().includes('真正空文档'))
+    const docButton = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('真正空文档'))
+      ?.findAll('button')
+      .find((btn) => btn.text().trim() === '详情')
     await docButton!.trigger('click')
     await flushPromises()
 
@@ -813,12 +833,12 @@ describe('KnowledgeView', () => {
     )
   })
 
-  it('renders document cards with a compact action group instead of loose floating actions', async () => {
+  it('renders each document as the approved compact resource row', async () => {
     getDocuments.mockResolvedValueOnce({
       documents: [
         {
           id: 'doc-1',
-          title: '设计文档',
+          title: '设计文档.md',
           content: '正文',
           chunk_count: 2,
           created_at: '2026-01-01T00:00:00Z',
@@ -833,9 +853,13 @@ describe('KnowledgeView', () => {
     const card = wrapper.get('[data-testid="knowledge-doc-card"]')
     const actions = wrapper.get('[data-testid="knowledge-doc-actions"]')
 
-    expect(card.classes()).toContain('rounded-2xl')
+    expect(card.classes()).toContain('knowledge-page__resource-row')
+    expect(card.find('[data-testid="knowledge-document-extension"]').text()).toBe('MD')
+    expect(card.text()).toContain('已索引')
+    expect(actions.text()).toContain('详情')
+    expect(actions.text()).toContain('重建')
+    expect(actions.text()).toContain('删除')
     expect(actions.classes()).toContain('shrink-0')
-    expect(actions.classes()).toContain('gap-1')
     expect(card.element.contains(actions.element)).toBe(true)
   })
 
@@ -1040,8 +1064,16 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const firstDocButton = wrapper.findAll('button').find((btn) => btn.text().includes('文档一'))
-    const secondDocButton = wrapper.findAll('button').find((btn) => btn.text().includes('文档二'))
+    const firstDocButton = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('文档一'))
+      ?.findAll('button')
+      .find((btn) => btn.text().trim() === '详情')
+    const secondDocButton = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('文档二'))
+      ?.findAll('button')
+      .find((btn) => btn.text().trim() === '详情')
     expect(firstDocButton).toBeDefined()
     expect(secondDocButton).toBeDefined()
 
@@ -1152,6 +1184,180 @@ describe('KnowledgeView', () => {
 
     resolveReindex()
     await flushPromises()
+  })
+
+  it('shows the approved authority-reading state, then projects the same document Job to terminal', async () => {
+    vi.useFakeTimers()
+    let wrapper: ReturnType<typeof mountKnowledgeView> | undefined
+    try {
+      let acceptReindex!: (value: { status: string }) => void
+      getDocuments.mockResolvedValueOnce({
+        documents: [
+          {
+            id: 'doc-reindex',
+            title: '设计文档.md',
+            content: '正文',
+            chunk_count: 2,
+            created_at: '2026-01-01T00:00:00Z',
+            source_type: 'manual',
+            status: 'indexed',
+          },
+        ],
+        total: 1,
+      })
+      getDocument
+        .mockResolvedValueOnce({
+          id: 'doc-reindex',
+          title: '设计文档.md',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'manual',
+          status: 'indexed',
+          vector_index_state: 'pending',
+          vector_job_id: 'job-reindex',
+          vector_job_state: 'queued',
+        })
+        .mockResolvedValueOnce({
+          id: 'doc-reindex',
+          title: '设计文档.md',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'manual',
+          status: 'indexed',
+          vector_index_state: 'ready',
+          vector_job_id: 'job-reindex',
+          vector_job_state: 'succeeded',
+        })
+      reindexDocument.mockImplementationOnce(
+        () =>
+          new Promise<{ status: string }>((resolve) => {
+            acceptReindex = resolve
+          }),
+      )
+      getKnowledgeJob.mockResolvedValueOnce({
+        job_id: 'job-reindex',
+        state: 'succeeded',
+        stage: 'embedding',
+        pages_done: null,
+        pages_total: null,
+        chunks_done: 2,
+        chunks_total: 2,
+      })
+
+      wrapper = mountKnowledgeView()
+      await flushPromises()
+
+      const reindexButton = wrapper
+        .findAll('[data-testid="knowledge-doc-actions"] button')
+        .find((button) => button.text().includes('重建'))
+      expect(reindexButton).toBeDefined()
+
+      await reindexButton!.trigger('click')
+      await flushPromises()
+
+      expect(reindexDocument).toHaveBeenCalledTimes(1)
+      expect(reindexDocument).toHaveBeenCalledWith('doc-reindex')
+      expect(wrapper.get('[data-testid="knowledge-vector-status"]').text()).toContain(
+        '正在读取权威状态…',
+      )
+      expect(reindexButton!.attributes('aria-busy')).toBe('true')
+
+      acceptReindex({ status: 'indexed' })
+      await flushPromises()
+
+      expect(getDocuments).toHaveBeenCalledTimes(1)
+      expect(getDocument).toHaveBeenCalledWith('doc-reindex')
+      expect(wrapper.get('[data-testid="knowledge-vector-status"]').text()).toContain('语义增强等待中')
+      expect(wrapper.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(true)
+      expect(
+        (wrapper
+          .findAll('[data-testid="knowledge-doc-actions"] button')
+          .find((button) => button.text().includes('重建'))!
+          .element as HTMLButtonElement).disabled,
+      ).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(getKnowledgeJob).toHaveBeenCalledWith('job-reindex')
+      expect(getDocument).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a reindexed document beyond the first 50 loaded rows', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => ({
+      id: `doc-${index}`,
+      title: `第 ${index + 1} 条.md`,
+      content: '正文',
+      chunk_count: 1,
+      created_at: '2026-01-01T00:00:00Z',
+      source_type: 'manual' as const,
+      status: 'indexed' as const,
+    }))
+    const target = {
+      id: 'doc-55',
+      title: '第 56 条.md',
+      content: '正文',
+      chunk_count: 1,
+      created_at: '2026-01-01T00:00:00Z',
+      source_type: 'manual' as const,
+      status: 'indexed' as const,
+    }
+    getDocuments
+      .mockResolvedValueOnce({ documents: firstPage, total: 60, limit: 50, offset: 0 })
+      .mockResolvedValueOnce({
+        documents: [...Array.from({ length: 5 }, (_, index) => ({
+          id: `doc-${index + 50}`,
+          title: `第 ${index + 51} 条.md`,
+          content: '正文',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'manual' as const,
+          status: 'indexed' as const,
+        })), target, ...Array.from({ length: 4 }, (_, index) => ({
+          id: `doc-${index + 56}`,
+          title: `第 ${index + 57} 条.md`,
+          content: '正文',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'manual' as const,
+          status: 'indexed' as const,
+        }))],
+        total: 60,
+        limit: 50,
+        offset: 50,
+      })
+    reindexDocument.mockResolvedValueOnce({ status: 'indexed' })
+    getDocument.mockResolvedValueOnce({
+      ...target,
+      vector_index_state: 'pending',
+      vector_job_id: 'job-doc-55',
+      vector_job_state: 'queued',
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    await wrapper.get('[data-testid="knowledge-load-more"] button').trigger('click')
+    await flushPromises()
+
+    const targetCard = wrapper.findAll('[data-testid="knowledge-doc-card"]')[55]!
+    await targetCard
+      .get('[data-testid="knowledge-doc-actions"]')
+      .findAll('button')
+      .find((button) => button.text().includes('重建'))!
+      .trigger('click')
+    await flushPromises()
+
+    expect(getDocuments).toHaveBeenCalledTimes(2)
+    expect(getDocument).toHaveBeenCalledWith('doc-55')
+    expect(wrapper.findAll('[data-testid="knowledge-doc-card"]')).toHaveLength(60)
+    expect(wrapper.text()).toContain('第 56 条.md')
+    expect(wrapper.text()).toContain('语义增强等待中')
   })
 
   it('uses the durable retry command for a failed document and suppresses double-clicks', async () => {
@@ -1300,18 +1506,12 @@ describe('KnowledgeView', () => {
       vector_chunks_done: 1,
       vector_chunks_total: 3,
     }
-    getDocuments
-      .mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
-      .mockResolvedValueOnce({
-        documents: [
-          {
-            ...buildingDocument,
-            vector_index_state: 'cancelled',
-            vector_job_state: 'cancelled',
-          },
-        ],
-        total: 1,
-      })
+    getDocuments.mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
+    getDocument.mockResolvedValueOnce({
+      ...buildingDocument,
+      vector_index_state: 'cancelled',
+      vector_job_state: 'cancelled',
+    })
     cancelKnowledgeJob.mockResolvedValueOnce({
       job_id: 'job-vector-running',
       state: 'cancelled',
@@ -1328,8 +1528,9 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(cancelKnowledgeJob).toHaveBeenCalledWith('job-vector-running')
-    expect(getDocuments).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('语义增强已取消')
+    expect(getDocuments).toHaveBeenCalledTimes(1)
+    expect(getDocument).toHaveBeenCalledWith('doc-vector-running')
+    expect(wrapper.text()).not.toContain('语义增强已取消')
     expect(wrapper.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -1381,19 +1582,13 @@ describe('KnowledgeView', () => {
       vector_job_state: 'running' as const,
       vector_job_stage: 'embedding',
     }
-    getDocuments
-      .mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
-      .mockResolvedValueOnce({
-        documents: [
-          {
-            ...buildingDocument,
-            vector_index_state: 'failed',
-            vector_job_state: 'failed',
-            vector_error: 'embedding quota exhausted',
-          },
-        ],
-        total: 1,
-      })
+    getDocuments.mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
+    getDocument.mockResolvedValueOnce({
+      ...buildingDocument,
+      vector_index_state: 'failed',
+      vector_job_state: 'failed',
+      vector_error: 'embedding quota exhausted',
+    })
     getKnowledgeJob.mockResolvedValueOnce({
       job_id: 'job-vector-poll',
       state: 'failed',
@@ -1412,7 +1607,8 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(getKnowledgeJob).toHaveBeenCalledWith('job-vector-poll')
-    expect(getDocuments).toHaveBeenCalledTimes(2)
+    expect(getDocuments).toHaveBeenCalledTimes(1)
+    expect(getDocument).toHaveBeenCalledWith('doc-vector-poll')
     expect(wrapper.text()).toContain('embedding quota exhausted')
     wrapper.unmount()
   })

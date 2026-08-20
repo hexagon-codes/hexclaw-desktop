@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
-import { ShieldAlert, ShieldCheck, X, Check } from 'lucide-vue-next'
+import { ref, onUnmounted } from 'vue'
+import { Shield } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -46,176 +46,122 @@ const timer = setInterval(() => {
 
 onUnmounted(() => clearInterval(timer))
 
-const riskColor = computed(() => {
-  switch (props.risk) {
-    case 'dangerous': return 'var(--hc-error)'
-    case 'sensitive': return 'var(--hc-warning, #f59e0b)'
-    default: return 'var(--hc-success, #22c55e)'
-  }
-})
-
-const riskIcon = computed(() => props.risk === 'dangerous' ? ShieldAlert : ShieldCheck)
-
 function approve() {
-  if (responded.value) return
+  if (responded.value || projectRemainingSeconds() <= 0) return
   responded.value = true
   clearInterval(timer)
   emit('respond', props.requestId, true, remember.value)
 }
 
 function deny() {
-  if (responded.value) return
+  if (responded.value || projectRemainingSeconds() <= 0) return
   responded.value = true
   clearInterval(timer)
   emit('respond', props.requestId, false, false)
 }
 
-const argsPreview = computed(() => {
-  if (!props.arguments) return ''
-  try {
-    return JSON.stringify(props.arguments, null, 2)
-  } catch {
-    return String(props.arguments)
-  }
-})
 </script>
 
 <template>
-  <div class="hc-approval" :class="{ 'hc-approval--responded': responded }">
+  <div
+    class="hc-approval"
+    :class="{ 'hc-approval--responded': responded }"
+    :aria-busy="responded"
+  >
     <div class="hc-approval__header">
-      <component :is="riskIcon" :size="16" :style="{ color: riskColor }" />
-      <span class="hc-approval__title">{{ t('chat.toolApproval', 'Tool Approval Required') }}</span>
-      <span class="hc-approval__timer" :style="{ color: remaining <= 5 ? 'var(--hc-error)' : '' }">
-        {{ remaining }}s
-      </span>
+      <Shield :size="15" /> {{ t('chat.toolApproval', 'Tool Approval Required') }} ·
+      <code>{{ toolName }}</code>
+      <span class="hc-approval__timer">{{ remaining }}s</span>
     </div>
 
-    <div class="hc-approval__body">
-      <div class="hc-approval__tool">
-        <span class="hc-approval__label">Tool:</span>
-        <code>{{ toolName }}</code>
-        <span class="hc-approval__risk" :style="{ background: riskColor }">{{ risk }}</span>
-      </div>
-      <div v-if="reason" class="hc-approval__reason">{{ reason }}</div>
-      <details v-if="argsPreview" class="hc-approval__args">
-        <summary>{{ t('chat.toolParams', 'Parameters') }}</summary>
-        <pre>{{ argsPreview }}</pre>
-      </details>
-    </div>
+    <div v-if="reason" class="hc-approval__reason">{{ reason }}</div>
 
-    <div v-if="!responded" class="hc-approval__actions">
+    <div class="hc-approval__actions">
       <label class="hc-approval__remember">
-        <input v-model="remember" type="checkbox" />
+        <input v-model="remember" type="checkbox" :disabled="responded || remaining <= 0" />
         本会话内始终允许此工具
       </label>
       <div class="hc-approval__buttons">
-        <button class="hc-approval__btn hc-approval__btn--deny" @click="deny">
-          <X :size="14" /> {{ t('chat.deny', 'Deny') }}
+        <button
+          class="hc-approval__btn hc-approval__btn--deny"
+          :disabled="responded || remaining <= 0"
+          @click="deny"
+        >
+          {{ t('chat.deny', 'Deny') }}
         </button>
-        <button class="hc-approval__btn hc-approval__btn--approve" @click="approve">
-          <Check :size="14" /> {{ t('chat.approve', 'Allow') }}
+        <button
+          class="hc-approval__btn hc-approval__btn--approve"
+          :disabled="responded || remaining <= 0"
+          @click="approve"
+        >
+          {{ t('chat.approve', 'Allow') }}
         </button>
       </div>
-    </div>
-
-    <div v-else class="hc-approval__responded">
-      {{ responded ? t('chat.approvalResponded', 'Response sent') : '' }}
     </div>
   </div>
 </template>
 
 <style scoped>
 .hc-approval {
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   border-radius: 12px;
-  padding: 12px 16px;
+  padding: 11px 13px;
   margin: 8px 0;
-  background: var(--hc-bg-secondary, #f8f9fa);
-  transition: opacity 0.3s;
-}
-
-.hc-approval--responded {
-  opacity: 0.6;
+  background: var(--hc-bg-card);
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
 }
 
 .hc-approval__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
 }
 
-.hc-approval__title {
-  font-weight: 600;
-  font-size: 13px;
-  flex: 1;
+.hc-approval code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  background: var(--hc-bg-active);
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--hc-accent);
 }
 
 .hc-approval__timer {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.hc-approval__tool {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.hc-approval__label {
-  font-size: 12px;
-  color: var(--hc-text-secondary);
-}
-
-.hc-approval__risk {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: white;
+  margin-left: auto;
+  color: var(--hc-error);
 }
 
 .hc-approval__reason {
-  font-size: 13px;
-  color: var(--hc-text-secondary);
-  margin: 4px 0;
-}
-
-.hc-approval__args {
-  margin-top: 8px;
-}
-
-.hc-approval__args summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--hc-text-secondary);
-}
-
-.hc-approval__args pre {
-  font-size: 11px;
-  max-height: 120px;
-  overflow-y: auto;
-  background: var(--hc-bg-tertiary, #eee);
-  padding: 8px;
-  border-radius: 6px;
-  margin-top: 4px;
+  margin-top: 7px;
 }
 
 .hc-approval__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--hc-border);
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 0.5px solid var(--hc-border);
 }
 
 .hc-approval__remember {
   font-size: 12px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  cursor: pointer;
+  gap: 5px;
+  color: var(--hc-text-muted);
+}
+
+.hc-approval__remember input {
+  margin: 3px 3px 3px 4px;
+  color: revert;
+  font-family: Arial;
+  font-size: 13.3333px;
+  line-height: normal;
 }
 
 .hc-approval__buttons {
@@ -224,41 +170,51 @@ const argsPreview = computed(() => {
 }
 
 .hc-approval__btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
+  font-family: Arial;
+  line-height: normal;
   cursor: pointer;
-  border: none;
-  transition: background 0.15s;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  white-space: nowrap;
+  transition: background 0.15s, box-shadow 0.2s, border-color 0.15s;
 }
 
-.hc-approval__btn--deny {
-  background: var(--hc-bg-tertiary, #e5e7eb);
-  color: var(--hc-text);
-}
-
-.hc-approval__btn--deny:hover {
-  background: var(--hc-error);
-  color: white;
+.hc-approval__btn--deny:hover:not(:disabled) {
+  background: var(--hc-bg-hover);
 }
 
 .hc-approval__btn--approve {
-  background: var(--hc-primary, #3b82f6);
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
   color: white;
+  border-color: transparent;
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 
-.hc-approval__btn--approve:hover {
-  background: var(--hc-primary-hover, #2563eb);
+.hc-approval__btn--approve:hover:not(:disabled) {
+  background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
+  box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
 }
 
-.hc-approval__responded {
-  font-size: 12px;
-  color: var(--hc-text-secondary);
-  text-align: center;
-  padding: 4px 0;
+.hc-approval__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+}
+
+.hc-approval__btn:disabled:hover {
+  background: var(--hc-bg-input);
+}
+
+.hc-approval__btn--approve:disabled:hover {
+  background: var(--hc-accent);
 }
 </style>

@@ -934,11 +934,6 @@ async function openSource(page: Page, state: MatrixState): Promise<OpenEvidence>
         case 'actions-assistant':
         case 'actions-more':
           await page.locator('.hc-msg--assistant').hover()
-          if (state.action === 'actions-more') {
-            await page
-              .locator('.hc-msg-actions--assistant button[data-testid="message-more"]')
-              .click()
-          }
           break
         case 'actions-user':
           await page.locator('.hc-msg--user').hover()

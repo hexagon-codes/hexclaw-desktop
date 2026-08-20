@@ -112,6 +112,11 @@ async function expandAdvanced(wrapper: Awaited<ReturnType<typeof mountView>>) {
   await flushPromises()
 }
 
+async function expandSkills(wrapper: Awaited<ReturnType<typeof mountView>>) {
+  await wrapper.find('[data-testid="agent-edit-skills-toggle"]').trigger('click')
+  await flushPromises()
+}
+
 async function clickSave(wrapper: Awaited<ReturnType<typeof mountView>>) {
   const btn = wrapper.findAll('button').find((b) => b.text().trim() === '保存')
   expect(btn).toBeTruthy()
@@ -145,6 +150,7 @@ describe('BUG-20260703 P2-4 — Agent 高级参数录入口', () => {
     await flushPromises()
     await openEdit(w)
     await expandAdvanced(w)
+    await expandSkills(w)
 
     expect((w.find('[data-testid="agent-adv-temperature"]').element as HTMLInputElement).value).toBe('0.7')
     expect((w.find('[data-testid="agent-adv-maxtokens"]').element as HTMLInputElement).value).toBe('4096')
@@ -193,7 +199,7 @@ describe('BUG-20260703 P2-4 — Agent 高级参数录入口', () => {
     const w = await mountView()
     await flushPromises()
     await openEdit(w)
-    await expandAdvanced(w)
+    await expandSkills(w)
     await w.find('[data-testid="agent-adv-skill-summary"]').trigger('click')
     await w.find('[data-testid="agent-adv-skill-search"]').trigger('click')
     await clickSave(w)

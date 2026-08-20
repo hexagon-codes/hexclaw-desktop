@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  onToolApprovalTerminal,
   openWebSocketStream,
+  parseToolApprovalReconciliationAck,
 } from '../chatService'
 import { hexclawWS } from '@/api/websocket'
 
@@ -89,6 +91,7 @@ describe('backend/Desktop tool approval wire contract', () => {
       arguments: { path: '/workspace/report.md' },
       arguments_digest: 'a'.repeat(64),
       security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
       deadline_at: '2026-07-29T05:00:00.000Z',
       content: 'edit one approved file scope',
       metadata: {
@@ -107,6 +110,7 @@ describe('backend/Desktop tool approval wire contract', () => {
       arguments: { path: '/workspace/report.md' },
       argumentsDigest: 'a'.repeat(64),
       securityScopeDigest: 'b'.repeat(64),
+      scopeSchemaVersion: 1,
       deadlineAt: '2026-07-29T05:00:00.000Z',
     })
 
@@ -143,17 +147,147 @@ describe('backend/Desktop tool approval wire contract', () => {
     socket.receive({
       type: 'tool_approval_ack',
       request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
       decision_id: 'decision-contract-1',
+      decision: 'approved_remember',
+      idempotency_key: 'idempotency-contract-1',
       status: 'accepted',
     })
     await expect(acknowledgement).resolves.toMatchObject({
       request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
       decision_id: 'decision-contract-1',
+      decision: 'approved_remember',
+      idempotency_key: 'idempotency-contract-1',
       status: 'accepted',
     })
 
     handle.cancel()
     await expect(handle.done).resolves.toBeNull()
+  })
+
+  it('publishes only the complete decision-less backend terminal wire contract', async () => {
+    vi.stubGlobal('WebSocket', ContractWebSocket)
+    const terminals: Record<string, unknown>[] = []
+    const stop = onToolApprovalTerminal((terminal) => {
+      terminals.push(terminal as unknown as Record<string, unknown>)
+    })
+    const handle = openWebSocketStream(
+      'edit the file',
+      'session-contract-1',
+      {},
+      '',
+      undefined,
+      undefined,
+      undefined,
+      'chat-contract-terminal',
+    )
+    const socket = ContractWebSocket.instances[0]
+    if (!socket) throw new Error('request WebSocket was not created')
+    socket.open()
+
+    socket.receive({
+      type: 'tool_approval_terminal',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      terminal_result: 'expired',
+      deadline_at: '2026-07-29T05:00:00.000Z',
+    })
+    socket.receive({
+      type: 'tool_approval_terminal',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      terminal_result: 'expired',
+      deadline_at: '2026-07-29T05:00:00.000Z',
+      decision_id: 'must-not-exist',
+    })
+
+    expect(terminals).toEqual([{
+      type: 'tool_approval_terminal',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      terminal_result: 'expired',
+      deadline_at: '2026-07-29T05:00:00.000Z',
+    }])
+    expect(terminals[0]).not.toHaveProperty('decision_id')
+    expect(terminals[0]).not.toHaveProperty('idempotency_key')
+
+    stop()
+    handle.cancel()
+    await expect(handle.done).resolves.toBeNull()
+  })
+
+  it('parses only a complete durable reconciliation acknowledgement', () => {
+    const acknowledgement = parseToolApprovalReconciliationAck({
+      type: 'tool_approval_ack',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      metadata: {
+        decision_id: 'decision-contract-1',
+        decision: 'denied',
+        idempotency_key: 'idempotency-contract-1',
+        status: 'accepted',
+      },
+    })
+
+    expect(acknowledgement).toEqual({
+      type: 'tool_approval_ack',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      decision_id: 'decision-contract-1',
+      decision: 'denied',
+      idempotency_key: 'idempotency-contract-1',
+      status: 'accepted',
+    })
+    expect(parseToolApprovalReconciliationAck({
+      type: 'tool_approval_ack',
+      request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      decision_id: 'decision-contract-1',
+      decision: 'denied',
+      idempotency_key: 'idempotency-contract-1',
+      status: 'rejected',
+    })).toBeNull()
   })
 
   it('does not expose the legacy global approval sender', () => {

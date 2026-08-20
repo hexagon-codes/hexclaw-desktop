@@ -10,6 +10,7 @@ export function defaultConfig(): AppConfig {
       providers: [],
       defaultModel: '',
       defaultProviderId: '',
+      defaultReasoningPolicy: { mode: 'auto' },
       routing: {
         enabled: false,
         strategy: 'cost-aware',

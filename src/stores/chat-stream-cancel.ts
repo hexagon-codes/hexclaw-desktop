@@ -1,6 +1,10 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
-import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
+import {
+  normalizeReasoningReceipt,
+  normalizeRuntimeSnapshotMetadata,
+  normalizeThinkingMetadata,
+} from '@/types/chat'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
@@ -65,6 +69,12 @@ export function createChatStreamCancelController(params: {
       const normalizedReasoning = current.visibility === 'visible' && current.reasoning
         ? normalizeAssistantReasoning(current.reasoning) || undefined
         : undefined
+      const fallbackReasoningRequest = current.reasoningReceipt?.reasoning_request
+        ?? (current.thinkingEnabled ? 'on' : 'off')
+      const reasoningReceipt = normalizeReasoningReceipt(
+        current.reasoningReceipt,
+        fallbackReasoningRequest,
+      )
       const partialMessage: ChatMessage = {
         id: current.assistantMessageId || createId(),
         role: 'assistant',
@@ -75,7 +85,10 @@ export function createChatStreamCancelController(params: {
         reasoning: normalizedReasoning,
         metadata: normalizeThinkingMetadata(
           normalizeRuntimeSnapshotMetadata({
-            thinking_duration: getStreamThinkingDuration(current),
+            reasoning_receipt: reasoningReceipt,
+            thinking_duration: reasoningReceipt.reasoning_execution === 'applied'
+              ? getStreamThinkingDuration(current) ?? 0
+              : undefined,
             reasoning_visibility: current.thinkingEnabled
               ? current.visibility ?? 'not_exposed'
               : undefined,
@@ -88,7 +101,7 @@ export function createChatStreamCancelController(params: {
             runtime_events: current.runtimeEvents,
             last_sequence: current.lastSequence,
             recipient_display_name: current.recipientDisplayName,
-          }, current.assistantMessageId),
+          }, current.assistantMessageId, undefined, fallbackReasoningRequest),
           normalizedReasoning,
           'cancelled',
         ),
@@ -146,7 +159,8 @@ export function createChatStreamCancelController(params: {
         timestamp: new Date().toISOString(),
         reasoning,
         metadata: normalizeThinkingMetadata(
-          {
+          normalizeRuntimeSnapshotMetadata({
+            reasoning_receipt: normalizeReasoningReceipt(undefined, 'off'),
             thinking_duration: streamingReasoningStartTime.value
               ? Math.max(
                   0,
@@ -156,7 +170,7 @@ export function createChatStreamCancelController(params: {
                   ),
                 )
               : undefined,
-          },
+          }),
           reasoning,
           'cancelled',
         ),

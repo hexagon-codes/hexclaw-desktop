@@ -6,6 +6,7 @@ import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import HcSelect from '@/components/common/HcSelect.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import type { AgentConfig, ProviderConfig } from '@/types'
 
 const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
   getRoles: vi.fn(),
@@ -132,6 +133,38 @@ async function mountView() {
       },
     },
   })
+}
+
+async function seedReasoningEffortProvider() {
+  const { useSettingsStore } = await import('@/stores/settings')
+  const settingsStore = useSettingsStore()
+  const provider: ProviderConfig = {
+    id: 'reasoning-provider',
+    backendKey: 'reasoning-provider',
+    name: 'Reasoning Provider',
+    type: 'custom',
+    enabled: true,
+    apiKey: '****reasoning',
+    baseUrl: 'https://reasoning.example.test/v1',
+    models: [
+      {
+        id: 'reasoning-model',
+        name: 'Reasoning Model',
+        capabilities: ['text'],
+        reasoningSupport: 'supported',
+        reasoningControl: {
+          dialect: 'reasoning_effort',
+          on: 'high',
+          off: 'off',
+          allowed_efforts: ['low', 'high'],
+        },
+      },
+    ],
+  }
+  settingsStore.runtimeProviders = [provider]
+  settingsStore.config!.llm.providers = [provider]
+  settingsStore.config!.llm.defaultProviderId = provider.id
+  settingsStore.config!.llm.defaultModel = 'reasoning-model'
 }
 
 describe('AgentsView', () => {
@@ -382,6 +415,64 @@ describe('AgentsView', () => {
     expect(trigger.classes()).toContain('hc-input')
   })
 
+  it('新建表单将模型参数与 Skill 拆为两个独立折叠区', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
+    await registerButton!.trigger('click')
+    await flushPromises()
+    ;(wrapper.vm as unknown as { startFromBlank: () => void }).startFromBlank()
+    await flushPromises()
+
+    const modelFold = wrapper.find('[data-testid="agent-add-model-fold"]')
+    const skillFold = wrapper.find('[data-testid="agent-add-skill-fold"]')
+    expect(modelFold.exists()).toBe(true)
+    expect(skillFold.exists()).toBe(true)
+    expect(wrapper.get('[data-testid="agent-add-adv-toggle"]').text()).toContain('模型与参数')
+    expect(wrapper.get('[data-testid="agent-add-adv-toggle"]').text()).not.toContain('Skill')
+    expect(wrapper.get('[data-testid="agent-add-skills-toggle"]').text()).toContain('挂载 Skill')
+    expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="agent-add-adv-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="agent-add-model-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="agent-add-skills-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="agent-skill-count"]').exists()).toBe(true)
+  })
+
+  it('编辑表单将模型参数与 Skill 拆为两个独立折叠区', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+    const agent: AgentConfig = {
+      name: 'researcher',
+      display_name: '高级研究分析师',
+      provider: '',
+      model: '',
+      skills: [],
+    }
+    ;(wrapper.vm as unknown as { openEditAgent: (value: AgentConfig) => void }).openEditAgent(agent)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="agent-edit-model-fold"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="agent-edit-skill-fold"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="agent-adv-toggle"]').text()).toContain('模型与参数')
+    expect(wrapper.get('[data-testid="agent-adv-toggle"]').text()).not.toContain('Skill')
+    expect(wrapper.get('[data-testid="agent-edit-skills-toggle"]').text()).toContain('挂载 Skill')
+
+    await wrapper.get('[data-testid="agent-adv-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="agent-edit-model-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="agent-edit-skills-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="agent-skill-count"]').exists()).toBe(true)
+  })
+
   it('shows only runtime-backed providers in the register form', async () => {
     const wrapper = await mountView()
     await flushPromises()
@@ -472,6 +563,90 @@ describe('AgentsView', () => {
     const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
     expect(modelLabels).toContain('qwen3.5:9b')
     expect(modelLabels).toContain('qwen3:0.6b')
+  })
+
+  it('新建 Agent 默认继承全局思考策略，并以一等字段随注册请求持久化', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+    await seedReasoningEffortProvider()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      showAddAgent: boolean
+      addStep: number
+      showAddAdvanced: boolean
+      newAgent: {
+        name: string
+        display_name: string
+        provider: string
+        model: string
+        reasoning_policy: { mode: string; effort?: string }
+      }
+      handleRegisterAgent: () => Promise<void>
+    }
+    vm.showAddAgent = true
+    await flushPromises()
+    vm.addStep = 2
+    vm.showAddAdvanced = true
+    await flushPromises()
+
+    expect(vm.newAgent.reasoning_policy).toEqual({ mode: 'inherit' })
+    expect(wrapper.get('[data-testid="agent-add-reasoning-policy"]').text()).toContain(
+      '跟随全局',
+    )
+    expect(wrapper.get('[data-testid="agent-add-adv-summary"]').text()).toContain('思考 · 跟随全局')
+
+    vm.newAgent.name = 'reasoning-agent'
+    vm.newAgent.display_name = 'Reasoning Agent'
+    await vm.handleRegisterAgent()
+
+    expect(registerAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'reasoning-agent',
+        reasoning_policy: { mode: 'inherit' },
+      }),
+    )
+  })
+
+  it('编辑 Agent 回填并透传已保存的精确思考强度，不写入 metadata', async () => {
+    const agent: AgentConfig = {
+      name: 'researcher',
+      display_name: '研究员',
+      provider: '',
+      model: '',
+      reasoning_policy: { mode: 'effort', effort: 'high' },
+      metadata: { avatar: '📊' },
+    }
+    getAgents.mockResolvedValueOnce({ agents: [agent], total: 1, default: '' })
+
+    const wrapper = await mountView()
+    await flushPromises()
+    await seedReasoningEffortProvider()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      openEditAgent: (value: AgentConfig) => void
+      showEditAdvanced: boolean
+      editingAgent: AgentConfig
+      handleEditAgent: () => Promise<void>
+    }
+    vm.openEditAgent({ ...agent })
+    await flushPromises()
+    vm.showEditAdvanced = true
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="agent-edit-reasoning-policy"]').text()).toContain('高')
+    expect(wrapper.get('[data-testid="agent-adv-summary"]').text()).toContain('思考 · 高')
+    vm.editingAgent.reasoning_policy = { mode: 'off' }
+    await vm.handleEditAgent()
+
+    expect(updateAgent).toHaveBeenCalledWith(
+      'researcher',
+      expect.objectContaining({ reasoning_policy: { mode: 'off' } }),
+    )
+    const updateCalls = updateAgent.mock.calls
+    const payload = updateCalls[updateCalls.length - 1]?.[1]
+    expect(payload?.metadata).not.toHaveProperty('reasoning_policy')
   })
 
   it('does not start a second register request while the first one is still running', async () => {
@@ -583,6 +758,7 @@ describe('AgentsView', () => {
       display_name: '',
       provider: '',
       model: '',
+      reasoning_policy: { mode: 'inherit' },
     })
   })
 
@@ -740,10 +916,22 @@ describe('AgentsView', () => {
 
     // 打开「高级研究分析师」(researcher) 编辑：provider/model 为空（角色模板默认）
     const vm = wrapper.vm as unknown as {
-      editingAgent: { name: string; display_name: string; provider: string; model: string }
+      editingAgent: {
+        name: string
+        display_name: string
+        provider: string
+        model: string
+        reasoning_policy: { mode: 'inherit' }
+      }
       showEditAgent: boolean
     }
-    vm.editingAgent = { name: 'researcher', display_name: '高级研究分析师', provider: '', model: '' }
+    vm.editingAgent = {
+      name: 'researcher',
+      display_name: '高级研究分析师',
+      provider: '',
+      model: '',
+      reasoning_policy: { mode: 'inherit' },
+    }
     vm.showEditAgent = true
     await flushPromises()
     // 原型对齐后 provider/model 位于「模型与参数」折叠区 — 展开再断言下拉占位
@@ -751,7 +939,7 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
-    expect(selects.length).toBe(2) // 编辑弹层仅 provider + model 两个下拉
+    expect(selects.length).toBe(3) // provider + model + 已批准的思考策略下拉
     const providerOpts = selects[0]!.props('options') as Array<{ value: string; label: string }>
     const modelOpts = selects[1]!.props('options') as Array<{ value: string; label: string }>
 

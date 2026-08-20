@@ -23,10 +23,19 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
-  webServer: {
-    command: 'pnpm dev --host 127.0.0.1 --port 5187',
-    url: 'http://127.0.0.1:5187',
-    reuseExistingServer: false,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: 'pnpm dev --host 127.0.0.1 --port 5187',
+      url: 'http://127.0.0.1:5187',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command:
+        'python3 -m http.server 16070 --bind 127.0.0.1 --directory ../hexclaw-docs/prototype',
+      url: 'http://127.0.0.1:16070/app.html',
+      reuseExistingServer: true,
+      timeout: 120_000,
+    },
+  ],
 })

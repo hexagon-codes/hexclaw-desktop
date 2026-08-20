@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type Route, type TestInfo } from '@playwright/test'
+import { readFile, writeFile } from 'node:fs/promises'
 import type {
   EmbeddingSelection,
   KnowledgeEmbeddingPolicyProjection,
@@ -9,6 +10,8 @@ import type { BackendLLMConfig } from '../../src/types/settings'
 
 const initialOpenRouterProviderId = 'pvd_v1_11111111111111111111111111111111'
 const canonicalProviderIdPattern = /^pvd_v1_[0-9a-f]{32}$/
+const knowledgeReferenceURL =
+  process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 
 const cloudServing: KnowledgeEmbeddingProfile = {
   profile_id: 'cloud-sf',
@@ -160,6 +163,10 @@ function expectNoAxeViolations(audits: AxeAudit[]) {
 
 class SemanticIndexBackend {
   policy = readyPolicy()
+  documents: Array<Record<string, unknown>> = []
+  operations: Array<Record<string, unknown>> = []
+  readonly reindexRequests: string[] = []
+  documentReindexJobState: 'queued' | 'succeeded' = 'queued'
   llmConfig: BackendLLMConfig = {
     default: 'OpenRouter',
     providers: {
@@ -197,6 +204,7 @@ class SemanticIndexBackend {
   readonly capabilityProbeRequests: string[] = []
   readonly connectionProbeRequests: unknown[] = []
   private pull = deferred<PullResolution>()
+  private reindexAcceptance = deferred<void>()
   private nextProviderSequence = 2
   private hasUnreadLLMUpdate = false
 
@@ -225,6 +233,10 @@ class SemanticIndexBackend {
     this.pull.resolve({ ok: false, error })
   }
 
+  acceptDocumentReindex() {
+    this.reindexAcceptance.resolve()
+  }
+
   setRetryWaiting() {
     this.policy = {
       ...readyPolicy(),
@@ -245,6 +257,42 @@ class SemanticIndexBackend {
         chunks_total: 225,
       },
     }
+  }
+
+  setReindexableDocument() {
+    this.reindexAcceptance = deferred<void>()
+    this.documents = [
+      {
+        id: 'doc-reindex',
+        title: '产品 FAQ.md',
+        content: '产品知识库正文',
+        source: 'manual:fixture',
+        source_type: 'manual',
+        status: 'indexed',
+        chunk_count: 8,
+        created_at: '2026-08-20T09:00:00.000Z',
+        updated_at: '2026-08-20T09:00:00.000Z',
+        vector_index_state: 'ready',
+      },
+    ]
+    this.documentReindexJobState = 'queued'
+  }
+
+  setCancellableUpload() {
+    this.operations = [
+      {
+        operation_id: 'operation-upload-cancel',
+        job_id: 'job-upload-cancel',
+        document_id: 'doc-upload-cancel',
+        title: '白板流程图.png',
+        display_name: '白板流程图.png',
+        state: 'running',
+        stage: 'embedding',
+        terminal: false,
+        created_at: '2026-08-20T09:00:00.000Z',
+        updated_at: '2026-08-20T09:00:00.000Z',
+      },
+    ]
   }
 
   private json(route: Route, body: unknown, status = 200) {
@@ -295,10 +343,7 @@ class SemanticIndexBackend {
       providers[canonicalKey] = {
         ...structuredClone(incomingProvider),
         provider_instance_id: providerInstanceId,
-        api_key: this.maskApiKey(
-          incomingProvider.api_key,
-          previousProvider?.api_key ?? '',
-        ),
+        api_key: this.maskApiKey(incomingProvider.api_key, previousProvider?.api_key ?? ''),
         model_specs_mode: 'explicit',
       }
     }
@@ -349,7 +394,9 @@ class SemanticIndexBackend {
       return this.json(route, [])
     }
     if (path === '/api/v1/llm/capabilities/probe' && method === 'POST') {
-      this.capabilityProbeRequests.push(`${url.searchParams.get('provider')}:${url.searchParams.get('model')}`)
+      this.capabilityProbeRequests.push(
+        `${url.searchParams.get('provider')}:${url.searchParams.get('model')}`,
+      )
       return this.json(route, {
         provider_name: url.searchParams.get('provider') ?? '',
         model_name: url.searchParams.get('model') ?? '',
@@ -376,7 +423,40 @@ class SemanticIndexBackend {
     }
 
     if (path === '/api/v1/knowledge/documents' && method === 'GET') {
-      return this.json(route, { documents: [], total: 0, limit: 20, offset: 0, sources: [] })
+      return this.json(route, {
+        documents: structuredClone(this.documents),
+        total: this.documents.length,
+        limit: 20,
+        offset: 0,
+        sources: [],
+      })
+    }
+    if (path === '/api/v1/knowledge/operations' && method === 'GET') {
+      return this.json(route, { operations: structuredClone(this.operations) })
+    }
+    const documentMatch = path.match(/^\/api\/v1\/knowledge\/documents\/([^/]+)$/)
+    if (documentMatch && method === 'GET') {
+      const documentId = decodeURIComponent(documentMatch[1]!)
+      const document = this.documents.find((candidate) => candidate.id === documentId)
+      return this.json(route, document ?? { error: 'not found' }, document ? 200 : 404)
+    }
+    const reindexMatch = path.match(/^\/api\/v1\/knowledge\/documents\/([^/]+)\/reindex$/)
+    if (reindexMatch && method === 'POST') {
+      const documentId = decodeURIComponent(reindexMatch[1]!)
+      this.reindexRequests.push(documentId)
+      this.documents = this.documents.map((document) =>
+        document.id === documentId
+          ? {
+              ...document,
+              vector_index_state: 'pending',
+              vector_job_id: 'job-document-reindex',
+              vector_job_state: 'queued',
+            }
+          : document,
+      )
+      this.documentReindexJobState = 'queued'
+      await this.reindexAcceptance.promise
+      return this.json(route, { status: 'indexed' })
     }
     if (path === '/api/v1/knowledge/config' && method === 'GET') {
       return this.json(route, {
@@ -442,6 +522,16 @@ class SemanticIndexBackend {
     if (cancelMatch && method === 'POST') {
       const jobId = decodeURIComponent(cancelMatch[1]!)
       this.cancelledJobIds.push(jobId)
+      this.operations = this.operations.map((operation) =>
+        operation.job_id === jobId
+          ? {
+              ...operation,
+              state: 'cancelled',
+              terminal: true,
+              updated_at: '2026-08-20T09:00:01.000Z',
+            }
+          : operation,
+      )
       this.policy = {
         ...this.policy,
         policy_version: this.policy.policy_version + 1,
@@ -467,8 +557,30 @@ class SemanticIndexBackend {
 
     const jobMatch = path.match(/^\/api\/v1\/knowledge\/jobs\/([^/]+)$/)
     if (jobMatch && method === 'GET') {
+      const jobId = decodeURIComponent(jobMatch[1]!)
+      if (jobId === 'job-document-reindex') {
+        this.documentReindexJobState = 'succeeded'
+        this.documents = this.documents.map((document) =>
+          document.id === 'doc-reindex'
+            ? {
+                ...document,
+                vector_index_state: 'ready',
+                vector_job_state: 'succeeded',
+              }
+            : document,
+        )
+        return this.json(route, {
+          job_id: jobId,
+          state: this.documentReindexJobState,
+          stage: 'embedding',
+          pages_done: null,
+          pages_total: null,
+          chunks_done: 8,
+          chunks_total: 8,
+        })
+      }
       return this.json(route, {
-        job_id: decodeURIComponent(jobMatch[1]!),
+        job_id: jobId,
         state: 'running',
         stage: 'embedding',
         pages_done: null,
@@ -541,6 +653,557 @@ class SemanticIndexPage {
 }
 
 test.describe('知识库语义索引：云端与本地模型用户旅程', () => {
+  test('文档重建：先显示读取权威状态，再以同文档 Job 投影显示后台语义增强', async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    const backend = new SemanticIndexBackend()
+    backend.setReindexableDocument()
+    await backend.install(page)
+    await page.goto('/knowledge')
+    await expect(page.locator('#splash-screen')).toHaveCount(0, { timeout: 10_000 })
+
+    const documentRail = page.locator('.knowledge-page__scroll')
+    await expect(documentRail).toHaveCSS('padding-left', '26px')
+    await expect(documentRail).toHaveCSS('padding-right', '26px')
+
+    const documentCard = page.getByTestId('knowledge-doc-card')
+    const actions = documentCard.getByTestId('knowledge-doc-actions')
+    const reindexButton = actions.getByRole('button', { name: '重建', exact: true })
+    await expect(reindexButton).toBeEnabled()
+
+    await reindexButton.click()
+    await expect.poll(() => backend.reindexRequests).toEqual(['doc-reindex'])
+    await expect(documentCard.getByTestId('knowledge-vector-status')).toContainText(
+      '正在读取权威状态…',
+    )
+    await expect(documentCard.getByTestId('knowledge-document-badge')).toContainText('同步中')
+    await expect(reindexButton).toHaveAttribute('aria-busy', 'true')
+    await documentCard.screenshot({
+      path: testInfo.outputPath('implementation-reindex-reading.png'),
+    })
+    const readingGeometry = await documentCard.evaluate((element) => {
+      const button = Array.from(
+        element.querySelectorAll<HTMLButtonElement>('[data-testid="knowledge-doc-actions"] button'),
+      ).find((candidate) => candidate.textContent?.trim() === '重建')
+      const status = element.querySelector('[data-testid="knowledge-vector-status"]')
+      const badge = element.querySelector('[data-testid="knowledge-document-badge"]')
+      const box = element.getBoundingClientRect()
+      const styles = getComputedStyle(element)
+      const part = (selector: string) => {
+        const node = element.querySelector<HTMLElement>(selector)
+        if (!node) return null
+        const rect = node.getBoundingClientRect()
+        const computed = getComputedStyle(node)
+        return {
+          x: rect.x - box.x,
+          y: rect.y - box.y,
+          width: rect.width,
+          height: rect.height,
+          padding: computed.padding,
+          fontSize: computed.fontSize,
+          fontWeight: computed.fontWeight,
+        }
+      }
+      return {
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        status: status?.textContent?.trim() ?? '',
+        badge: badge?.textContent?.trim() ?? '',
+        buttonDisabled: button?.disabled ?? false,
+        ariaBusy: button?.getAttribute('aria-busy') ?? '',
+        display: styles.display,
+        background: styles.backgroundColor,
+        borderRadius: styles.borderRadius,
+        padding: styles.padding,
+        fontSize: styles.fontSize,
+        parts: {
+          file: part('.knowledge-page__resource-file'),
+          title: part('.knowledge-page__resource-title'),
+          status: part('[data-testid="knowledge-vector-status"]'),
+          badge: part('[data-testid="knowledge-document-badge"]'),
+          actions: part('[data-testid="knowledge-doc-actions"]'),
+          reindex: part('[data-testid="knowledge-doc-actions"] button:nth-of-type(2)'),
+        },
+      }
+    })
+    const readingGeometryJSON = JSON.stringify(readingGeometry, null, 2)
+    await writeFile(testInfo.outputPath('reindex-reading-geometry.json'), readingGeometryJSON)
+    await testInfo.attach('reindex-reading-geometry.json', {
+      body: readingGeometryJSON,
+      contentType: 'application/json',
+    })
+
+    const referencePage = await page.context().newPage()
+    await referencePage.setViewportSize({ width: 1440, height: 1000 })
+    await referencePage.goto(knowledgeReferenceURL)
+    await referencePage.locator('.sb-item[data-screen="knowledge"]').click()
+    const referenceButton = referencePage.locator('[data-kb-reindex-button]')
+    await expect(referenceButton).toBeVisible()
+    await referenceButton.click()
+    const referenceRow = referenceButton.locator(
+      'xpath=ancestor::*[contains(@class,"resource-row")]',
+    )
+    await expect(referenceRow.locator('[data-kb-reindex-status]')).toHaveText('正在读取权威状态…')
+    await expect(referenceRow.locator('[data-kb-reindex-badge]')).toHaveText('同步中')
+
+    const referencePath = testInfo.outputPath('reference-reindex-reading.png')
+    const implementationPath = testInfo.outputPath('implementation-reindex-reading.png')
+    const pixelDiffPath = testInfo.outputPath('pixel-diff-reindex-reading.png')
+    await referenceRow.screenshot({ path: referencePath, animations: 'disabled' })
+    const referenceGeometry = await referenceRow.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      const status = element.querySelector<HTMLElement>('[data-kb-reindex-status]')
+      const badge = element.querySelector<HTMLElement>('[data-kb-reindex-badge]')
+      const button = element.querySelector<HTMLButtonElement>('[data-kb-reindex-button]')
+      const badgeStyle = badge ? getComputedStyle(badge) : null
+      const buttonStyle = button ? getComputedStyle(button) : null
+      return {
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        status: status?.textContent?.trim() ?? '',
+        badge: badge?.textContent?.trim() ?? '',
+        badgeColor: badgeStyle?.color ?? '',
+        badgeBackground: badgeStyle?.backgroundColor ?? '',
+        buttonColor: buttonStyle?.color ?? '',
+        buttonOpacity: buttonStyle?.opacity ?? '',
+      }
+    })
+    const implementationStyle = await documentCard.evaluate((element) => {
+      const badge = element.querySelector<HTMLElement>('[data-testid="knowledge-document-badge"]')
+      const buttons = Array.from(
+        element.querySelectorAll<HTMLButtonElement>('[data-testid="knowledge-doc-actions"] button'),
+      )
+      const button = buttons.find((candidate) => candidate.textContent?.trim() === '重建')
+      const badgeStyle = badge ? getComputedStyle(badge) : null
+      const buttonStyle = button ? getComputedStyle(button) : null
+      return {
+        badgeColor: badgeStyle?.color ?? '',
+        badgeBackground: badgeStyle?.backgroundColor ?? '',
+        buttonColor: buttonStyle?.color ?? '',
+        buttonOpacity: buttonStyle?.opacity ?? '',
+      }
+    })
+    const referencePNG = await readFile(referencePath)
+    const implementationPNG = await readFile(implementationPath)
+    const pixelDiff = await referencePage.evaluate(
+      async ({ reference, implementation, threshold }) => {
+        const loadImage = (source: string) =>
+          new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image()
+            image.onload = () => resolve(image)
+            image.onerror = () => reject(new Error('Unable to decode screenshot'))
+            image.src = source
+          })
+        const [referenceImage, implementationImage] = await Promise.all([
+          loadImage(reference),
+          loadImage(implementation),
+        ])
+        if (
+          referenceImage.width !== implementationImage.width ||
+          referenceImage.height !== implementationImage.height
+        ) {
+          throw new Error(
+            `Screenshot size mismatch: reference=${referenceImage.width}x${referenceImage.height}, implementation=${implementationImage.width}x${implementationImage.height}`,
+          )
+        }
+        const width = referenceImage.width
+        const height = referenceImage.height
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) throw new Error('Canvas 2D context is unavailable')
+        context.drawImage(referenceImage, 0, 0)
+        const referencePixels = context.getImageData(0, 0, width, height)
+        context.clearRect(0, 0, width, height)
+        context.drawImage(implementationImage, 0, 0)
+        const implementationPixels = context.getImageData(0, 0, width, height)
+        const diff = context.createImageData(width, height)
+        let changedPixels = 0
+        let minX = width
+        let minY = height
+        let maxX = -1
+        let maxY = -1
+        for (let index = 0; index < referencePixels.data.length; index += 4) {
+          const changed =
+            Math.abs(referencePixels.data[index] - implementationPixels.data[index]) > threshold ||
+            Math.abs(referencePixels.data[index + 1] - implementationPixels.data[index + 1]) >
+              threshold ||
+            Math.abs(referencePixels.data[index + 2] - implementationPixels.data[index + 2]) >
+              threshold
+          const pixel = index / 4
+          const x = pixel % width
+          const y = Math.floor(pixel / width)
+          if (changed) {
+            changedPixels += 1
+            minX = Math.min(minX, x)
+            minY = Math.min(minY, y)
+            maxX = Math.max(maxX, x)
+            maxY = Math.max(maxY, y)
+            diff.data[index] = 255
+            diff.data[index + 1] = 35
+            diff.data[index + 2] = 35
+          } else {
+            const gray = Math.round(
+              referencePixels.data[index] * 0.299 +
+                referencePixels.data[index + 1] * 0.587 +
+                referencePixels.data[index + 2] * 0.114,
+            )
+            const dimmed = Math.round(gray * 0.45)
+            diff.data[index] = dimmed
+            diff.data[index + 1] = dimmed
+            diff.data[index + 2] = dimmed
+          }
+          diff.data[index + 3] = 255
+        }
+        context.putImageData(diff, 0, 0)
+        return {
+          width,
+          height,
+          threshold,
+          changed_pixels: changedPixels,
+          total_pixels: width * height,
+          changed_pixel_ratio: width * height ? changedPixels / (width * height) : 0,
+          changed_bbox: maxX >= 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+          diff_data_url: canvas.toDataURL('image/png'),
+        }
+      },
+      {
+        reference: `data:image/png;base64,${referencePNG.toString('base64')}`,
+        implementation: `data:image/png;base64,${implementationPNG.toString('base64')}`,
+        threshold: 8,
+      },
+    )
+    await writeFile(
+      pixelDiffPath,
+      Buffer.from(pixelDiff.diff_data_url.replace(/^data:image\/png;base64,/, ''), 'base64'),
+    )
+    const { diff_data_url: _diffDataURL, ...pixelDiffSummary } = pixelDiff
+    const comparisonJSON = JSON.stringify(
+      {
+        reference: referenceGeometry,
+        implementation: { ...readingGeometry, ...implementationStyle },
+        pixelDiff: pixelDiffSummary,
+      },
+      null,
+      2,
+    )
+    await writeFile(testInfo.outputPath('reference-reindex-reading-geometry.json'), comparisonJSON)
+    for (const [name, file] of [
+      ['reference-reindex-reading', referencePath],
+      ['implementation-reindex-reading', implementationPath],
+      ['pixel-diff-reindex-reading', pixelDiffPath],
+    ] as const) {
+      await testInfo.attach(name, { body: await readFile(file), contentType: 'image/png' })
+    }
+    await testInfo.attach('reference-reindex-reading-geometry', {
+      body: comparisonJSON,
+      contentType: 'application/json',
+    })
+    expect(referenceGeometry.box.width).toBe(readingGeometry.box.width)
+    expect(referenceGeometry.box.height).toBe(readingGeometry.box.height)
+    expect(implementationStyle).toEqual({
+      badgeColor: referenceGeometry.badgeColor,
+      badgeBackground: referenceGeometry.badgeBackground,
+      buttonColor: referenceGeometry.buttonColor,
+      buttonOpacity: referenceGeometry.buttonOpacity,
+    })
+    expect(pixelDiffSummary.changed_pixel_ratio).toBeLessThanOrEqual(0.001)
+    await referencePage.close()
+
+    backend.acceptDocumentReindex()
+    await expect(documentCard.getByTestId('knowledge-vector-status')).toContainText(
+      '语义增强等待中',
+    )
+    await expect(documentCard.getByTestId('knowledge-document-badge')).toContainText('增强中')
+    await expect(actions.getByTestId('knowledge-vector-cancel')).toBeVisible()
+    await expect(reindexButton).toBeDisabled()
+
+    await documentCard.screenshot({
+      path: testInfo.outputPath('implementation-reindex-pending.png'),
+    })
+    const geometry = await documentCard.evaluate((element) => {
+      const button = Array.from(
+        element.querySelectorAll<HTMLButtonElement>('[data-testid="knowledge-doc-actions"] button'),
+      ).find((candidate) => candidate.textContent?.trim() === '重建')
+      const status = element.querySelector('[data-testid="knowledge-vector-status"]')
+      const box = element.getBoundingClientRect()
+      return {
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        status: status?.textContent?.trim() ?? '',
+        buttonDisabled: button?.disabled ?? false,
+        display: getComputedStyle(element).display,
+      }
+    })
+    const geometryJSON = JSON.stringify(geometry, null, 2)
+    await writeFile(testInfo.outputPath('reindex-pending-geometry.json'), geometryJSON)
+    await testInfo.attach('reindex-pending-geometry.json', {
+      body: geometryJSON,
+      contentType: 'application/json',
+    })
+    expect(geometry.box.height).toBeLessThanOrEqual(54)
+
+    await page.waitForTimeout(4_100)
+    await expect.poll(() => backend.documentReindexJobState).toBe('succeeded')
+    await expect(reindexButton).toBeEnabled()
+  })
+
+  test('临时上传进行中可取消，取消后不会残留在队列', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    const backend = new SemanticIndexBackend()
+    backend.setCancellableUpload()
+    await backend.install(page)
+    await page.goto('/knowledge')
+    await expect(page.locator('#splash-screen')).toHaveCount(0, { timeout: 10_000 })
+
+    const uploadRow = page.getByTestId('knowledge-upload-job')
+    const uploadCancel = uploadRow.getByTestId('knowledge-upload-cancel')
+    await expect(uploadRow).toBeVisible()
+    await expect(uploadRow).toContainText('白板流程图.png')
+    await expect(uploadRow).toContainText('增强中')
+    await expect(uploadCancel).toHaveText('取消')
+
+    const implementationPath = testInfo.outputPath('implementation-upload-processing.png')
+    await uploadRow.screenshot({ path: implementationPath, animations: 'disabled' })
+    const implementation = await uploadRow.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      const badge = element.querySelector<HTMLElement>('.knowledge-page__resource-badge')
+      const action = element.querySelector<HTMLButtonElement>(
+        '[data-testid="knowledge-upload-cancel"]',
+      )
+      const snapshotStyle = (node: HTMLElement | null) => {
+        if (!node) return null
+        const rect = node.getBoundingClientRect()
+        const style = getComputedStyle(node)
+        return {
+          box: { x: rect.x - box.x, y: rect.y - box.y, width: rect.width, height: rect.height },
+          color: style.color,
+          background: style.backgroundColor,
+          borderColor: style.borderColor,
+          borderRadius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          opacity: style.opacity,
+        }
+      }
+      return {
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        text: element.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        badge: {
+          text: badge?.textContent?.trim() ?? '',
+          style: snapshotStyle(badge),
+        },
+        action: {
+          text: action?.textContent?.trim() ?? '',
+          style: snapshotStyle(action),
+        },
+      }
+    })
+
+    const referencePage = await page.context().newPage()
+    await referencePage.setViewportSize({ width: 1440, height: 1000 })
+    await referencePage.goto(knowledgeReferenceURL)
+    await referencePage.locator('.sb-item[data-screen="knowledge"]').click()
+    const referenceRow = referencePage.locator('[data-kb-upload-temporary]')
+    const referenceActions = referenceRow.locator('button')
+    await expect(referenceRow).toBeVisible()
+    await expect(referenceRow).toContainText('增强中')
+    expect(await referenceActions.allTextContents()).toEqual(['取消'])
+    const referencePath = testInfo.outputPath('reference-upload-processing.png')
+    await referenceRow.screenshot({ path: referencePath, animations: 'disabled' })
+    const reference = await referenceRow.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      const badge = element.querySelector<HTMLElement>('.pill')
+      const action = Array.from(element.querySelectorAll<HTMLButtonElement>('button')).find(
+        (candidate) => candidate.textContent?.trim() === '取消',
+      )
+      const snapshotStyle = (node: HTMLElement | null) => {
+        if (!node) return null
+        const rect = node.getBoundingClientRect()
+        const style = getComputedStyle(node)
+        return {
+          box: { x: rect.x - box.x, y: rect.y - box.y, width: rect.width, height: rect.height },
+          color: style.color,
+          background: style.backgroundColor,
+          borderColor: style.borderColor,
+          borderRadius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          opacity: style.opacity,
+        }
+      }
+      return {
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        text: element.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        badge: {
+          text: badge?.textContent?.trim() ?? '',
+          style: snapshotStyle(badge),
+        },
+        action: {
+          text: action?.textContent?.trim() ?? '',
+          style: snapshotStyle(action),
+        },
+      }
+    })
+    const pixelDiffPath = testInfo.outputPath('pixel-diff-upload-processing.png')
+    const referencePNG = await readFile(referencePath)
+    const implementationPNG = await readFile(implementationPath)
+    const pixelDiff = await referencePage.evaluate(
+      async ({ reference, implementation, threshold }) => {
+        const loadImage = (source: string) =>
+          new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image()
+            image.onload = () => resolve(image)
+            image.onerror = () => reject(new Error('Unable to decode screenshot'))
+            image.src = source
+          })
+        const [referenceImage, implementationImage] = await Promise.all([
+          loadImage(reference),
+          loadImage(implementation),
+        ])
+        if (
+          referenceImage.width !== implementationImage.width ||
+          referenceImage.height !== implementationImage.height
+        ) {
+          throw new Error(
+            `Screenshot size mismatch: reference=${referenceImage.width}x${referenceImage.height}, implementation=${implementationImage.width}x${implementationImage.height}`,
+          )
+        }
+        const width = referenceImage.width
+        const height = referenceImage.height
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) throw new Error('Canvas 2D context is unavailable')
+        context.drawImage(referenceImage, 0, 0)
+        const referencePixels = context.getImageData(0, 0, width, height)
+        context.clearRect(0, 0, width, height)
+        context.drawImage(implementationImage, 0, 0)
+        const implementationPixels = context.getImageData(0, 0, width, height)
+        const diff = context.createImageData(width, height)
+        let changedPixels = 0
+        let minX = width
+        let minY = height
+        let maxX = -1
+        let maxY = -1
+        for (let index = 0; index < referencePixels.data.length; index += 4) {
+          const changed =
+            Math.abs(referencePixels.data[index] - implementationPixels.data[index]) > threshold ||
+            Math.abs(referencePixels.data[index + 1] - implementationPixels.data[index + 1]) >
+              threshold ||
+            Math.abs(referencePixels.data[index + 2] - implementationPixels.data[index + 2]) >
+              threshold
+          const pixel = index / 4
+          const x = pixel % width
+          const y = Math.floor(pixel / width)
+          if (changed) {
+            changedPixels += 1
+            minX = Math.min(minX, x)
+            minY = Math.min(minY, y)
+            maxX = Math.max(maxX, x)
+            maxY = Math.max(maxY, y)
+            diff.data[index] = 255
+            diff.data[index + 1] = 35
+            diff.data[index + 2] = 35
+          } else {
+            const gray = Math.round(
+              referencePixels.data[index] * 0.299 +
+                referencePixels.data[index + 1] * 0.587 +
+                referencePixels.data[index + 2] * 0.114,
+            )
+            const dimmed = Math.round(gray * 0.45)
+            diff.data[index] = dimmed
+            diff.data[index + 1] = dimmed
+            diff.data[index + 2] = dimmed
+          }
+          diff.data[index + 3] = 255
+        }
+        context.putImageData(diff, 0, 0)
+        return {
+          width,
+          height,
+          threshold,
+          changed_pixels: changedPixels,
+          total_pixels: width * height,
+          changed_pixel_ratio: width * height ? changedPixels / (width * height) : 0,
+          changed_bbox: maxX >= 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+          diff_data_url: canvas.toDataURL('image/png'),
+        }
+      },
+      {
+        reference: `data:image/png;base64,${referencePNG.toString('base64')}`,
+        implementation: `data:image/png;base64,${implementationPNG.toString('base64')}`,
+        threshold: 8,
+      },
+    )
+    await writeFile(
+      pixelDiffPath,
+      Buffer.from(pixelDiff.diff_data_url.replace(/^data:image\/png;base64,/, ''), 'base64'),
+    )
+    const { diff_data_url: _diffDataURL, ...pixelDiffSummary } = pixelDiff
+
+    // 临时上传行只暴露可安全执行的取消操作；同态文本、badge、操作与像素均需一致。
+    const comparison = {
+      state: 'upload-processing-cancellable',
+      viewport: { width: 1440, height: 1000, dpr: 1, locale: 'zh-CN', theme: 'light' },
+      comparable: 'full',
+      reference,
+      implementation,
+      pixelDiff: pixelDiffSummary,
+    }
+    const comparisonJSON = JSON.stringify(comparison, null, 2)
+    await writeFile(testInfo.outputPath('comparison-upload-processing.json'), comparisonJSON)
+    for (const [name, file] of [
+      ['reference-upload-processing', referencePath],
+      ['implementation-upload-processing', implementationPath],
+      ['pixel-diff-upload-processing', pixelDiffPath],
+    ] as const) {
+      await testInfo.attach(name, { body: await readFile(file), contentType: 'image/png' })
+    }
+    await testInfo.attach('comparison-upload-processing', {
+      body: comparisonJSON,
+      contentType: 'application/json',
+    })
+    expect(implementation.box.width).toBe(reference.box.width)
+    expect(implementation.box.height).toBe(reference.box.height)
+    expect(implementation.text).toBe(reference.text)
+    expect(implementation.badge).toEqual(reference.badge)
+    expect(implementation.action).toEqual(reference.action)
+    expect(pixelDiffSummary.changed_pixel_ratio).toBeLessThanOrEqual(0.001)
+
+    await uploadCancel.click()
+    await expect.poll(() => backend.cancelledJobIds).toEqual(['job-upload-cancel'])
+    await expect(page.getByTestId('knowledge-upload-job')).toHaveCount(0)
+
+    await referencePage.evaluate(() => {
+      const projection = (
+        window as Window & {
+          applyKnowledgeUploadQueueProjection?: (entries: Array<Record<string, unknown>>) => void
+        }
+      ).applyKnowledgeUploadQueueProjection
+      if (!projection) throw new Error('Missing prototype upload queue projection')
+      projection([{ id: 'kb-upload-whiteboard-001', terminal: 'cancelled' }])
+    })
+    await expect(referencePage.locator('[data-kb-upload-temporary]')).toHaveCount(0)
+    const cancellationJSON = JSON.stringify(
+      {
+        state: 'upload-cancelled',
+        implementationTemporaryRows: await page.getByTestId('knowledge-upload-job').count(),
+        referenceTemporaryRows: await referencePage.locator('[data-kb-upload-temporary]').count(),
+      },
+      null,
+      2,
+    )
+    await writeFile(testInfo.outputPath('upload-cancelled-queue.json'), cancellationJSON)
+    await testInfo.attach('upload-cancelled-queue', {
+      body: cancellationJSON,
+      contentType: 'application/json',
+    })
+    await referencePage.close()
+  })
+
   test('云端模型：显式选择 → 重建锁定 → Escape 放弃取消 → 确认精确取消', async ({
     page,
   }, testInfo) => {
@@ -846,7 +1509,9 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
     await expect(addTrigger).toBeVisible()
 
     const activeChatChip = providerCard.locator('.hc-model-chip--active')
-    const defaultModel = page.locator('[data-testid="llm-default-model-select"] .hc-select__trigger')
+    const defaultModel = page.locator(
+      '[data-testid="llm-default-model-select"] .hc-select__trigger',
+    )
     await expect(activeChatChip).toContainText('Chat Model')
     await expect(defaultModel).toContainText('Chat Model')
 
@@ -898,7 +1563,9 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
     }
 
     for (const modelId of modelIds) {
-      const embeddingChip = providerCard.locator('.hc-model-chip--embedding').filter({ hasText: modelId })
+      const embeddingChip = providerCard
+        .locator('.hc-model-chip--embedding')
+        .filter({ hasText: modelId })
       await expect(embeddingChip).toBeVisible()
       expect(await embeddingChip.evaluate((element) => element.tagName)).toBe('DIV')
       await expect(embeddingChip).not.toHaveAttribute('role', /.+/)
@@ -924,28 +1591,30 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
     expect(openRouter.model).toBe('chat-model')
     expect(openRouter).not.toHaveProperty('model_specs_mode')
     expect(openRouter.provider_instance_id).toBe(initialOpenRouterProviderId)
-    expect(openRouter.model_specs).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: modelIds[0],
-        display_name: modelIds[0],
-        capabilities: ['embedding'],
-        embedding: {
-          protocol: 'openai_embeddings',
-          dimension: 2048,
-          normalization: 'l2',
-        },
-      }),
-      expect.objectContaining({
-        id: modelIds[1],
-        display_name: modelIds[1],
-        capabilities: ['embedding'],
-        embedding: {
-          protocol: 'openai_embeddings',
-          dimension: 2048,
-          normalization: 'l2',
-        },
-      }),
-    ]))
+    expect(openRouter.model_specs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: modelIds[0],
+          display_name: modelIds[0],
+          capabilities: ['embedding'],
+          embedding: {
+            protocol: 'openai_embeddings',
+            dimension: 2048,
+            normalization: 'l2',
+          },
+        }),
+        expect.objectContaining({
+          id: modelIds[1],
+          display_name: modelIds[1],
+          capabilities: ['embedding'],
+          embedding: {
+            protocol: 'openai_embeddings',
+            dimension: 2048,
+            normalization: 'l2',
+          },
+        }),
+      ]),
+    )
 
     // 保存后的 GET 回读只提供 canonical identity + masked key。重命名是纯展示字段，
     // 第二次 PUT 必须继续使用同一 backend map key / provider_instance_id。
@@ -1017,7 +1686,9 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
 
     const updatesAfterCanonicalReadback = backend.llmUpdates.length
     await providerCard.locator('[data-provider-field="api-key"]').fill('sk-e2e-provider-secret')
-    await expect.poll(() => backend.llmUpdates.length).toBeGreaterThan(updatesAfterCanonicalReadback)
+    await expect
+      .poll(() => backend.llmUpdates.length)
+      .toBeGreaterThan(updatesAfterCanonicalReadback)
     const keyUpdate = backend.llmUpdates.at(-1)!
     expect(keyUpdate.providers.DeepSeek!.provider_instance_id).toBe(assignedProviderId)
     expect(keyUpdate.providers.DeepSeek!.api_key).toBe('sk-e2e-provider-secret')

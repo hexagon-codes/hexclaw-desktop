@@ -1,7 +1,17 @@
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+import type { ModelReasoningSupport } from '@/types/settings'
 
 export type ThinkingState = 'running' | 'completed' | 'failed' | 'cancelled'
 export type ReasoningVisibility = 'visible' | 'not_exposed'
+export type ReasoningRequest = 'on' | 'off'
+export type ReasoningExecution = 'applied' | 'ignored' | 'rejected' | 'unknown'
+
+export interface ReasoningReceipt {
+  version: 1
+  reasoning_request: ReasoningRequest
+  reasoning_support: ModelReasoningSupport
+  reasoning_execution: ReasoningExecution
+}
 
 export interface ReasoningDisclosure {
   visibility: ReasoningVisibility
@@ -28,6 +38,7 @@ export interface RuntimeWireFrame {
   messageId?: string
   sequence: number
   reasoningDisclosure: ReasoningDisclosure | { visibility: 'not_exposed' }
+  reasoningReceipt: ReasoningReceipt
   runtimeEvent?: RuntimeEvent
 }
 
@@ -37,6 +48,7 @@ export interface RuntimeWireSnapshot {
   lastSequence: number
   runtimeEvents: RuntimeEvent[]
   reasoningDisclosure?: ReasoningDisclosure
+  reasoningReceipt: ReasoningReceipt
   acceptedFrames: Record<number, string>
 }
 
@@ -45,6 +57,7 @@ export interface ChatMessageMetadata extends Record<string, unknown> {
   thinking_duration?: number | string
   reasoning_visibility?: ReasoningVisibility
   reasoning_disclosure?: ReasoningDisclosure
+  reasoning_receipt?: ReasoningReceipt
   assistant_message_id?: string
   message_id?: string
   assistant_message_aliases?: string[]
@@ -54,6 +67,9 @@ export interface ChatMessageMetadata extends Record<string, unknown> {
 
 const THINKING_STATES = new Set<ThinkingState>(['running', 'completed', 'failed', 'cancelled'])
 const REASONING_VISIBILITIES = new Set<ReasoningVisibility>(['visible', 'not_exposed'])
+const REASONING_REQUESTS = new Set<ReasoningRequest>(['on', 'off'])
+const REASONING_SUPPORT = new Set<ModelReasoningSupport>(['supported', 'unsupported', 'unknown'])
+const REASONING_EXECUTIONS = new Set<ReasoningExecution>(['applied', 'ignored', 'rejected', 'unknown'])
 const RUNTIME_TOOL_KINDS = new Set<RuntimeEventKind>(['tool_started', 'tool_completed', 'tool_failed'])
 const RUNTIME_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled'])
 
@@ -69,6 +85,80 @@ function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function normalizeReasoningRequest(value: unknown): ReasoningRequest {
+  return REASONING_REQUESTS.has(value as ReasoningRequest)
+    ? value as ReasoningRequest
+    : 'off'
+}
+
+export function normalizeReasoningReceipt(
+  value: unknown,
+  fallbackRequest?: ReasoningRequest,
+): ReasoningReceipt {
+  const request = normalizeReasoningRequest(fallbackRequest)
+  const fallback: ReasoningReceipt = {
+    version: 1,
+    reasoning_request: request,
+    reasoning_support: 'unknown',
+    reasoning_execution: 'unknown',
+  }
+  const parsed = parseReasoningReceipt(value)
+  if (!parsed || (fallbackRequest !== undefined && parsed.reasoning_request !== request)) {
+    return fallback
+  }
+  return parsed
+}
+
+export function parseReasoningReceipt(value: unknown): ReasoningReceipt | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'version',
+    'reasoning_request',
+    'reasoning_support',
+    'reasoning_execution',
+  ])) {
+    return undefined
+  }
+  if (
+    value.version !== 1
+    || !REASONING_REQUESTS.has(value.reasoning_request as ReasoningRequest)
+    || !REASONING_SUPPORT.has(value.reasoning_support as ModelReasoningSupport)
+    || !REASONING_EXECUTIONS.has(value.reasoning_execution as ReasoningExecution)
+  ) {
+    return undefined
+  }
+  return {
+    version: 1,
+    reasoning_request: value.reasoning_request as ReasoningRequest,
+    reasoning_support: value.reasoning_support as ModelReasoningSupport,
+    reasoning_execution: value.reasoning_execution as ReasoningExecution,
+  }
+}
+
+function mergeReasoningReceipt(
+  current: ReasoningReceipt,
+  next: ReasoningReceipt,
+): ReasoningReceipt {
+  if (current.reasoning_request !== next.reasoning_request) return current
+  const reasoningSupport = current.reasoning_support === 'unknown'
+    ? next.reasoning_support
+    : current.reasoning_support
+  const reasoningExecution = current.reasoning_execution === 'unknown'
+    ? next.reasoning_execution
+    : current.reasoning_execution
+  if (
+    reasoningSupport === current.reasoning_support
+    && reasoningExecution === current.reasoning_execution
+  ) {
+    return current
+  }
+  return {
+    version: 1,
+    reasoning_request: current.reasoning_request,
+    reasoning_support: reasoningSupport,
+    reasoning_execution: reasoningExecution,
+  }
 }
 
 function stableFrameDigest(value: unknown): string {
@@ -145,11 +235,14 @@ export function normalizeRuntimeEvent(value: unknown, sequence: number): Runtime
   }
 }
 
-export function createRuntimeWireSnapshot(): RuntimeWireSnapshot {
+export function createRuntimeWireSnapshot(
+  reasoningRequest: ReasoningRequest = 'off',
+): RuntimeWireSnapshot {
   return {
     aliases: [],
     lastSequence: 0,
     runtimeEvents: [],
+    reasoningReceipt: normalizeReasoningReceipt(undefined, reasoningRequest),
     acceptedFrames: {},
   }
 }
@@ -171,16 +264,30 @@ export function mergeRuntimeWireFrame(
   const sequence = Number.isSafeInteger(raw.sequence) && Number(raw.sequence) > 0
     ? Number(raw.sequence)
     : 0
+  const candidateReasoningReceipt = raw.reasoning_receipt === undefined
+    ? current.reasoningReceipt
+    : normalizeReasoningReceipt(
+        raw.reasoning_receipt,
+        current.reasoningReceipt.reasoning_request,
+      )
+  const reasoningReceipt = mergeReasoningReceipt(
+    current.reasoningReceipt,
+    candidateReasoningReceipt,
+  )
   if (sequence === 0) {
     if (candidateId || raw.reasoning_disclosure != null || raw.runtime_event != null) {
       return { snapshot: current, accepted: false }
     }
+    const next = reasoningReceipt === current.reasoningReceipt
+      ? current
+      : { ...current, reasoningReceipt }
     return {
-      snapshot: current,
+      snapshot: next,
       accepted: true,
       frame: {
         sequence: 0,
         reasoningDisclosure: { visibility: 'not_exposed' },
+        reasoningReceipt,
       },
     }
   }
@@ -209,6 +316,7 @@ export function mergeRuntimeWireFrame(
     lastSequence: sequence,
     runtimeEvents,
     reasoningDisclosure: disclosure ?? current.reasoningDisclosure,
+    reasoningReceipt,
     acceptedFrames: { ...current.acceptedFrames, [sequence]: digest },
   }
   return {
@@ -219,6 +327,7 @@ export function mergeRuntimeWireFrame(
       messageId: alias,
       sequence,
       reasoningDisclosure: disclosure ?? { visibility: 'not_exposed' },
+      reasoningReceipt,
       runtimeEvent,
     },
   }
@@ -228,8 +337,13 @@ export function normalizeRuntimeSnapshotMetadata(
   source: Record<string, unknown> | undefined,
   fallbackAssistantMessageId?: string,
   route?: { provider?: string; model?: string },
+  fallbackReasoningRequest?: ReasoningRequest,
 ): ChatMessageMetadata {
   const metadata: ChatMessageMetadata = { ...source }
+  metadata.reasoning_receipt = normalizeReasoningReceipt(
+    metadata.reasoning_receipt,
+    fallbackReasoningRequest,
+  )
   const canonical = nonEmptyString(metadata.assistant_message_id)
     ? metadata.assistant_message_id
     : nonEmptyString(metadata.message_id)
@@ -315,7 +429,9 @@ export function normalizeThinkingMetadata(
   const explicitState = THINKING_STATES.has(metadata.thinking_state as ThinkingState)
     ? metadata.thinking_state as ThinkingState
     : undefined
-  const hasThinkingEvidence = hasReasoning || duration != null || disclosure != null || explicitState != null
+  const receipt = parseReasoningReceipt(metadata.reasoning_receipt)
+  const hasThinkingEvidence = hasReasoning || duration != null || disclosure != null ||
+    explicitState != null || receipt?.reasoning_request === 'on'
   const inferredState = hasThinkingEvidence
     ? terminalState ?? (metadata.is_error === true ? 'failed' : 'completed')
     : undefined

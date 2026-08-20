@@ -174,6 +174,7 @@ export function createChatSendController(params: {
         agentRole: agentRole.value,
         chatParams: { ...chatParams.value },
         thinkingEnabled: thinkingEnabled.value,
+        reasoningSupport: 'unknown',
       })
       const skillNames = options?.skillNames ?? []
       const userMeta: Record<string, unknown> = {}
@@ -220,6 +221,8 @@ export function createChatSendController(params: {
         sessionId,
         requestId,
         thinkingEnabled: samplingSnapshot.thinkingEnabled,
+        reasoningSupport: samplingSnapshot.reasoningSupport,
+        requestRoute: samplingSnapshot.chatParams,
         agentDisplayName: samplingSnapshot.agentDisplayName,
         recipientDisplayName: samplingSnapshot.recipientDisplayName,
       }))

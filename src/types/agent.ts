@@ -1,3 +1,5 @@
+import type { ReasoningPolicy } from './settings'
+
 /** Agent 角色（后端 /api/v1/roles 返回） */
 export interface AgentRole {
   name: string
@@ -21,6 +23,8 @@ export interface AgentConfig {
   skills?: string[]
   max_tokens?: number
   temperature?: number
+  /** Agent 的持久执行策略；缺失按 inherit 兼容旧数据。 */
+  reasoning_policy?: ReasoningPolicy
   // 与后端契约对齐：router/agent_router.go AgentConfig.Metadata 是 map[string]string，
   // 非字符串值透传即 JSON decode 400（BUG-20260703 B1）。
   metadata?: Record<string, string>

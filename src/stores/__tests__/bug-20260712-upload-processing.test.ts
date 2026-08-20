@@ -47,15 +47,28 @@ describe('knowledge upload runtime projection', () => {
     expect(processing.status).toBe('processing')
   })
 
-  it('tracks a durable job and reaches cancelled explicitly', () => {
+  it('REG-KNOWLEDGE-QUEUE-CANCELLED-001 keeps confirmed cancellations out of the visible queue without mutating the durable projection', () => {
     const store = useKnowledgeUploadsStore()
-    const entry = store.track({ name: 'book.pdf', progress: 100, status: 'processing' })
+    const cancelled = operation({ state: 'cancelled', terminal: true })
+    const durableSnapshot = { ...cancelled }
 
+    store.reconcileRecoverableOperations([cancelled])
+
+    expect(store.items).toEqual([])
+    expect(cancelled).toEqual(durableSnapshot)
+
+    store.reconcileRecoverableOperations([cancelled])
+
+    expect(store.items).toEqual([])
+    expect(cancelled).toEqual(durableSnapshot)
+
+    const entry = store.track({ name: 'book.pdf', progress: 100, status: 'processing' })
     store.attachJob(entry, 'doc-1', 'job-1')
     expect(store.hasAwaitingIndex()).toBe(true)
     store.markCancelled(entry)
 
     expect(entry).toMatchObject({ documentId: 'doc-1', jobId: 'job-1', status: 'cancelled' })
+    expect(store.items).toEqual([])
     expect(store.hasAwaitingIndex()).toBe(false)
   })
 
@@ -125,19 +138,19 @@ describe('knowledge upload runtime projection', () => {
     expect(original).toMatchObject({ status: 'uploading', progress: 0, error: undefined })
   })
 
-  it('projects the exact durable upload lifecycle, including states without a job', () => {
+  it('REG-KNOWLEDGE-QUEUE-CANCELLED-001 preserves non-cancelled durable queue states', () => {
     const cases = [
-      ['receiving', 'uploading', false],
-      ['pending_response', 'pending-response', false],
-      ['queued', 'processing', false],
-      ['running', 'processing', false],
-      ['retry_wait', 'processing', false],
-      ['succeeded', 'done', true],
-      ['failed', 'error', true],
-      ['cancelled', 'cancelled', true],
+      ['receiving', 'uploading', false, true],
+      ['pending_response', 'pending-response', false, true],
+      ['queued', 'processing', false, true],
+      ['running', 'processing', false, true],
+      ['retry_wait', 'processing', false, true],
+      ['succeeded', 'done', true, true],
+      ['failed', 'error', true, true],
+      ['cancelled', 'cancelled', true, false],
     ] as const
 
-    for (const [state, status, terminal] of cases) {
+    for (const [state, status, terminal, visible] of cases) {
       setActivePinia(createPinia())
       const store = useKnowledgeUploadsStore()
       const hasAcceptedBody = state !== 'receiving'
@@ -158,7 +171,9 @@ describe('knowledge upload runtime projection', () => {
         } as KnowledgeOperation,
       ])
 
-      expect(store.items).toHaveLength(1)
+      expect(store.items).toHaveLength(visible ? 1 : 0)
+      if (!visible) continue
+
       expect(store.items[0]).toMatchObject({
         operationId: `upload-${state}`,
         name: 'book.pdf',

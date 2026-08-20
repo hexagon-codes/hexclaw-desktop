@@ -1,7 +1,13 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
-import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
+import {
+  normalizeReasoningReceipt,
+  normalizeRuntimeSnapshotMetadata,
+  normalizeThinkingDuration,
+  normalizeThinkingMetadata,
+  type ReasoningReceipt,
+} from '@/types/chat'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
@@ -61,19 +67,46 @@ export function createChatStreamCompletionController(params: {
       ? (args.reasoning ? args.reasoning + '\n' + parsed.reasoning : parsed.reasoning)
       : (args.reasoning || undefined)
     const streamState = activeStreams.value[args.sessionId]
-    const incomingRuntimeMetadata = normalizeRuntimeSnapshotMetadata(args.metadata)
+    const fallbackReasoningRequest = streamState?.reasoningReceipt?.reasoning_request
+      ?? (streamState?.thinkingEnabled ? 'on' : 'off')
+    const incomingRuntimeMetadata = normalizeRuntimeSnapshotMetadata(
+      args.metadata,
+      undefined,
+      undefined,
+      fallbackReasoningRequest,
+    )
+    const streamReasoningReceipt = normalizeReasoningReceipt(
+      streamState?.reasoningReceipt,
+      fallbackReasoningRequest,
+    )
+    const incomingReasoningReceipt = normalizeReasoningReceipt(
+      incomingRuntimeMetadata.reasoning_receipt,
+      fallbackReasoningRequest,
+    )
+    let reasoningReceipt: ReasoningReceipt = incomingReasoningReceipt
+    if (streamState) {
+      if (streamReasoningReceipt.reasoning_execution !== 'unknown') {
+        reasoningReceipt = streamReasoningReceipt
+      } else if (incomingReasoningReceipt.reasoning_execution === 'unknown'
+        && streamReasoningReceipt.reasoning_support !== 'unknown') {
+        reasoningReceipt = streamReasoningReceipt
+      }
+    }
     const incomingDisclosure = incomingRuntimeMetadata.reasoning_disclosure
-    const explicitVisibility = streamState?.reasoningDisclosure?.visibility
-      ?? incomingDisclosure?.visibility
-      ?? streamState?.visibility
-      ?? incomingRuntimeMetadata.reasoning_visibility
+    const hasLiveRuntimeSnapshot = (streamState?.lastSequence ?? 0) > 0
+    const streamOwnsDisclosure = streamState?.reasoningDisclosure?.visibility === streamState?.visibility
+    const explicitVisibility = streamState && (hasLiveRuntimeSnapshot || streamOwnsDisclosure)
+      ? streamState.visibility ?? 'not_exposed'
+      : incomingDisclosure?.visibility
+        ?? streamState?.visibility
+        ?? incomingRuntimeMetadata.reasoning_visibility
     const finalReasoning = explicitVisibility === 'visible' && rawReasoning
       ? normalizeAssistantReasoning(rawReasoning) || undefined
       : undefined
     const thinkingDuration = getStreamThinkingDuration(streamState)
     const metadata = { ...incomingRuntimeMetadata } as Record<string, unknown>
+    metadata.reasoning_receipt = reasoningReceipt
     if (streamState) {
-      const hasLiveRuntimeSnapshot = streamState.lastSequence > 0
       const canonicalAssistantMessageId = streamState.canonicalAssistantMessageId
         ?? incomingRuntimeMetadata.assistant_message_id
       const runtimeAssistantMessageId = canonicalAssistantMessageId
@@ -102,14 +135,22 @@ export function createChatStreamCompletionController(params: {
       metadata.last_sequence = hasLiveRuntimeSnapshot
         ? streamState.lastSequence
         : incomingRuntimeMetadata.last_sequence
-      metadata.reasoning_disclosure = streamState.reasoningDisclosure?.visibility === streamState.visibility
+      metadata.reasoning_disclosure = streamOwnsDisclosure
         ? streamState.reasoningDisclosure
-        : incomingDisclosure
+        : hasLiveRuntimeSnapshot
+          ? undefined
+          : incomingDisclosure
     }
-    if (thinkingDuration != null) metadata.thinking_duration = thinkingDuration
-    if (streamState?.thinkingEnabled) {
-      metadata.reasoning_visibility = streamState.visibility ?? 'not_exposed'
-      if (streamState.recipientDisplayName) {
+    if (reasoningReceipt.reasoning_execution === 'applied') {
+      metadata.thinking_duration = thinkingDuration
+        ?? normalizeThinkingDuration(incomingRuntimeMetadata.thinking_duration)
+        ?? 0
+    } else {
+      delete metadata.thinking_duration
+    }
+    if (reasoningReceipt.reasoning_request === 'on') {
+      metadata.reasoning_visibility = streamState?.visibility ?? 'not_exposed'
+      if (streamState?.recipientDisplayName) {
         metadata.recipient_display_name = streamState.recipientDisplayName
       }
     }
@@ -119,12 +160,14 @@ export function createChatStreamCompletionController(params: {
       || args.toolCalls?.length
       || args.blocks?.length
     )
-    const terminalState = streamState?.thinkingEnabled && !hasDeliverableOutput
+    const terminalState = reasoningReceipt.reasoning_request === 'on' && !hasDeliverableOutput
       ? 'failed'
       : 'completed'
     const normalizedRuntimeMetadata = normalizeRuntimeSnapshotMetadata(
       metadata,
       streamState?.canonicalAssistantMessageId ?? streamState?.assistantMessageId,
+      undefined,
+      reasoningReceipt.reasoning_request,
     )
     const finalMetadata = normalizeThinkingMetadata(normalizedRuntimeMetadata, finalReasoning, terminalState)
 

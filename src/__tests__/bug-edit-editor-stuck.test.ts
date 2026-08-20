@@ -1,11 +1,15 @@
-// RED：编辑提交成功后编辑框必须关闭（BUG-20260816-002）。
-// 现状：confirmEdit 成功路径在 selectSession 竞态/切换失败时直接 return，
-// cancelEdit 不执行 → editingMsgId 残留 → 编辑框仍显示，且 fork 分支已创建。
+// 编辑确认后本会话替换重发：
+// 确认即删除目标消息与尾部、以冻结路由在本会话重发；提交成功编辑框必须关闭；
+// 发送失败则原样恢复尾部并保留编辑内容供重试。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/api/chat', () => ({
   forkSession: vi.fn().mockResolvedValue({ session: { id: 'edit-branch' } }),
   deleteSession: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/services/messageService', () => ({
+  removeMessage: vi.fn().mockResolvedValue({ message: 'ok' }),
 }))
 
 import { useChatActions } from '@/composables/useChatActions'
@@ -14,7 +18,6 @@ import * as chatApiMocks from '@/api/chat'
 function makeMockChatStore(overrides: {
   messages?: Array<{ id: string; role: string; content: string; timestamp: string }>
   model?: string
-  selectSessionImpl?: (sessionId: string) => Promise<void> | void
 }) {
   const messages = overrides.messages ?? []
   const store: any = {
@@ -29,12 +32,9 @@ function makeMockChatStore(overrides: {
     loadSessions: vi.fn().mockResolvedValue(undefined),
     selectSession: vi.fn<(sessionId: string) => Promise<void>>(),
   }
-  store.selectSession.mockImplementation(
-    overrides.selectSessionImpl ??
-      (async (sessionId: string) => {
-        store.currentSessionId = sessionId
-      }),
-  )
+  store.selectSession.mockImplementation(async (sessionId: string) => {
+    store.currentSessionId = sessionId
+  })
   return store
 }
 
@@ -48,14 +48,12 @@ function makeMockToast() {
   }
 }
 
-describe('confirmEdit closes the editor after a successful submission', () => {
+describe('confirmEdit 本会话替换重发', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(chatApiMocks.forkSession).mockResolvedValue({ session: { id: 'edit-branch' } as any })
-    vi.mocked(chatApiMocks.deleteSession).mockResolvedValue({ message: 'ok' } as any)
   })
 
-  it('正常提交后编辑框关闭（editingMsgId 置空）', async () => {
+  it('正常提交后编辑框关闭（editingMsgId 置空），不创建分支', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
@@ -73,26 +71,21 @@ describe('confirmEdit closes the editor after a successful submission', () => {
 
     await confirmEdit('u1')
 
-    expect(chatApiMocks.forkSession).toHaveBeenCalled()
+    expect(chatApiMocks.forkSession).not.toHaveBeenCalled()
+    expect(chatApiMocks.deleteSession).not.toHaveBeenCalled()
     expect(handleSend).toHaveBeenCalled()
     expect(editingMsgId.value).toBe(null)
     expect(editingText.value).toBe('')
   })
 
-  it('selectSession 竞态（切换被覆盖）时编辑已完成，编辑框仍必须关闭', async () => {
+  it('发送失败时恢复被删除的尾部并保留编辑内容供重试', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
+      { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
     ]
-    // 模拟 K12/场景 watcher 竞态：selectSession 设置 branch 后立即被另一处改回 source。
-    const store = makeMockChatStore({
-      messages,
-      selectSessionImpl: async (sessionId: string) => {
-        store.currentSessionId = sessionId
-        store.currentSessionId = 'source-session'
-      },
-    })
+    const store = makeMockChatStore({ messages })
     const toast = makeMockToast()
-    const handleSend = vi.fn().mockResolvedValue(true)
+    const handleSend = vi.fn().mockResolvedValue(false)
     const { confirmEdit, editingMsgId, editingText } = useChatActions(
       store,
       toast as any,
@@ -103,9 +96,38 @@ describe('confirmEdit closes the editor after a successful submission', () => {
 
     await confirmEdit('u1')
 
-    // 编辑已提交成功（fork + send 均完成），编辑框不得残留。
     expect(handleSend).toHaveBeenCalled()
-    expect(editingMsgId.value).toBe(null)
-    expect(editingText.value).toBe('')
+    expect(store.messages.map((m: { id: string }) => m.id)).toEqual(['u1', 'a1'])
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated text')
+    expect(toast.error).toHaveBeenCalled()
+  })
+
+  it('后端删除失败时回滚全部消息并保留草稿，不重发', async () => {
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
+    ]
+    const store = makeMockChatStore({ messages })
+    const toast = makeMockToast()
+    const handleSend = vi.fn().mockResolvedValue(true)
+    const { confirmEdit, editingMsgId, editingText } = useChatActions(
+      store,
+      toast as any,
+      handleSend as any,
+    )
+    editingMsgId.value = 'u1'
+    editingText.value = 'updated text'
+
+    vi.mocked(chatApiMocks.forkSession)
+    const messageService = await import('@/services/messageService')
+    vi.mocked(messageService.removeMessage).mockRejectedValueOnce(new Error('boom'))
+
+    await confirmEdit('u1')
+
+    expect(handleSend).not.toHaveBeenCalled()
+    expect(store.messages.map((m: { id: string }) => m.id)).toEqual(['u1'])
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated text')
+    expect(toast.error).toHaveBeenCalled()
   })
 })

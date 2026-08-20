@@ -35,7 +35,13 @@ import {
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 import { createSettingsProviderSync } from './settings-provider-sync'
 import { resolveOllamaCapabilities } from '@/config/providers'
-import { collectAvailableChatModels, isOllamaProvider } from '@/config/model-contract'
+import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
+import {
+  collectAvailableChatModels,
+  isOllamaProvider,
+  reasoningControlFromOllamaCapabilities,
+  reasoningSupportFromOllamaCapabilities,
+} from '@/config/model-contract'
 
 export const useSettingsStore = defineStore('settings', () => {
   const fallbackSandbox = (): SandboxConfig => ({
@@ -164,6 +170,9 @@ export const useSettingsStore = defineStore('settings', () => {
             providers: cloneProviders(savedConfig.llm.providers ?? []),
             defaultModel: savedConfig.llm.defaultModel ?? '',
             defaultProviderId: savedConfig.llm.defaultProviderId ?? '',
+            defaultReasoningPolicy: normalizeDefaultReasoningPolicy(
+              savedConfig.llm.defaultReasoningPolicy,
+            ),
             routing: {
               enabled: savedConfig.llm.routing?.enabled ?? defaultRouting.enabled,
               strategy: savedConfig.llm.routing?.strategy || defaultRouting.strategy,
@@ -173,6 +182,9 @@ export const useSettingsStore = defineStore('settings', () => {
             providers: cloneProviders(existingLlm.providers),
             defaultModel: existingLlm.defaultModel,
             defaultProviderId: existingLlm.defaultProviderId ?? '',
+            defaultReasoningPolicy: normalizeDefaultReasoningPolicy(
+              existingLlm.defaultReasoningPolicy,
+            ),
             routing: {
               enabled: existingLlm.routing?.enabled ?? defaultRouting.enabled,
               strategy: existingLlm.routing?.strategy || defaultRouting.strategy,
@@ -251,6 +263,15 @@ export const useSettingsStore = defineStore('settings', () => {
           enabled: backendConfig.routing.enabled,
           strategy: backendConfig.routing.strategy || 'cost-aware',
         }
+        if (backendConfig.default_reasoning_policy !== undefined) {
+          config.value!.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
+            backendConfig.default_reasoning_policy,
+          )
+        } else {
+          config.value!.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
+            config.value!.llm.defaultReasoningPolicy,
+          )
+        }
         const restoredDefault = resolveLoadedDefaultSelection(
           providers,
           backendConfig,
@@ -279,6 +300,9 @@ export const useSettingsStore = defineStore('settings', () => {
         enabled: config.value!.llm.routing?.enabled ?? false,
         strategy: config.value!.llm.routing?.strategy || 'cost-aware',
       }
+      config.value!.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
+        config.value!.llm.defaultReasoningPolicy,
+      )
     }
   }
 
@@ -301,6 +325,9 @@ export const useSettingsStore = defineStore('settings', () => {
       enabled: requestedConfig.llm.routing?.enabled ?? false,
       strategy: requestedConfig.llm.routing?.strategy || 'cost-aware',
     }
+    requestedConfig.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
+      requestedConfig.llm.defaultReasoningPolicy,
+    )
     reconcileDefaultSelection(requestedConfig.llm)
 
     // 首个 await 前同步切换到本次调用的快照；之后旧任务不再整体回写 config。
@@ -330,6 +357,7 @@ export const useSettingsStore = defineStore('settings', () => {
           plainConfig.llm.defaultModel,
           plainConfig.llm.defaultProviderId ?? '',
           plainConfig.llm.routing,
+          plainConfig.llm.defaultReasoningPolicy,
         )
         await updateLLMConfig(
           backendConfig,
@@ -347,6 +375,11 @@ export const useSettingsStore = defineStore('settings', () => {
           liveAfterSave,
           plainConfig.llm.providers,
         )
+        if (backendSnap.default_reasoning_policy !== undefined) {
+          plainConfig.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
+            backendSnap.default_reasoning_policy,
+          )
+        }
         plainConfig.llm.providers = mergeProviderRuntimeIdentities(
           plainConfig.llm.providers,
           mergedAfterSave,
@@ -410,6 +443,9 @@ export const useSettingsStore = defineStore('settings', () => {
           })),
           defaultModel: plainConfig.llm.defaultModel,
           defaultProviderId: plainConfig.llm.defaultProviderId ?? '',
+          defaultReasoningPolicy: normalizeDefaultReasoningPolicy(
+            plainConfig.llm.defaultReasoningPolicy,
+          ),
           routing: plainConfig.llm.routing,
         },
       }
@@ -504,6 +540,8 @@ export const useSettingsStore = defineStore('settings', () => {
         name: m.name,
         // 先查 Ollama preset 白名单（按 base ID 去 tag 匹配），未命中走名称正则推断 vision
         capabilities: resolveOllamaCapabilities(m.name),
+        reasoningSupport: reasoningSupportFromOllamaCapabilities(m.capabilities),
+        reasoningControl: reasoningControlFromOllamaCapabilities(m.capabilities),
       }))
     } catch { /* Ollama 可能未运行 */ }
   }

@@ -289,6 +289,7 @@ export const useChatStore = defineStore('chat', () => {
     setSessionExecution,
     clearSessionExecution,
     hasSessionPendingApproval: approvalController.hasSessionPendingApproval,
+    clearPendingApprovalsForSession: approvalController.clearPendingApprovalsForSession,
     recoverActiveStreams: boundStreamController.recoverActiveStreams,
     addArtifact: artifactController.addArtifact,
     selectArtifact: artifactController.selectArtifact,

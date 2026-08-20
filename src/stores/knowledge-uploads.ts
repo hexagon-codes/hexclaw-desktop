@@ -12,6 +12,7 @@
  *  - done：持久化 Job 已 succeeded——**直到文档真正出现在 getDocuments 结果里**才由
  *    settleAgainstDocs 移除（不用「N 秒后消失」这种与真实状态无关的定时器）。
  *  - error：保留给用户看，由下一轮上传开始时 clearErrors 清理。
+ *  - cancelled：后端终态账本保持权威，确认取消后不再占用临时可见队列，也不在恢复时重入。
  */
 import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
@@ -137,9 +138,15 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
   }
 
   function markCancelled(entry: KnowledgeUploadEntry): void {
-    if (entry.status !== 'done') entry.status = 'cancelled'
+    if (entry.status === 'done') {
+      entry.operationTerminal = true
+      entry.cancelling = false
+      return
+    }
+    entry.status = 'cancelled'
     entry.operationTerminal = true
     entry.cancelling = false
+    items.value = items.value.filter((candidate) => candidate !== entry)
   }
 
   /** A completed operation lands only when its stable document ID is listed. */
@@ -190,6 +197,10 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
       ) {
         continue
       }
+      if (operation.state === 'cancelled') {
+        if (existing) markCancelled(existing)
+        continue
+      }
       const status = OPERATION_STATUS[operation.state]
       const name =
         operation.display_name || operation.title || operation.document_id || operation.operation_id
@@ -236,7 +247,7 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     )
   }
 
-  /** 新一轮上传开始前清掉旧错误条目 */
+  /** 新一轮上传开始前清掉旧错误或兼容取消条目 */
   function clearErrors(): void {
     items.value = items.value.filter((e) => e.status !== 'error' && e.status !== 'cancelled')
   }

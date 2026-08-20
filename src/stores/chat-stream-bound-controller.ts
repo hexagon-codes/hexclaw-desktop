@@ -42,8 +42,13 @@ export function createBoundChatStreamController(params: {
     resetSessionStream(sessionId?: string | null) {
       streamController.resetSessionStream(sessionId, sending, draftSending)
     },
-    updateStreamChunk(sessionId: string, content?: string, reasoning?: string): boolean {
-      return streamController.updateStreamChunk(sessionId, content, reasoning)
+    updateStreamChunk(
+      sessionId: string,
+      content?: string,
+      reasoning?: string,
+      runtimeFrame?: import('@/types').RuntimeWireFrame,
+    ): boolean {
+      return streamController.updateStreamChunk(sessionId, content, reasoning, runtimeFrame)
     },
     stopSessionStream(sessionId: string, preservePartial = true) {
       return streamController.stopSessionStream(sessionId, preservePartial, sending, draftSending)

@@ -15,7 +15,15 @@ import { getSkills } from '@/api/skills'
 import { getAssistantSoul, updateAssistantSoul } from '@/api/assistant'
 import AgentSkillPicker from '@/components/agents/AgentSkillPicker.vue'
 import SoulStructuredEditor from '@/components/agents/SoulStructuredEditor.vue'
-import type { AgentConfig, AgentRule } from '@/types'
+import ReasoningPolicySelect from '@/components/settings/ReasoningPolicySelect.vue'
+import type {
+  AgentConfig,
+  AgentRule,
+  ModelReasoningControl,
+  ModelReasoningSupport,
+  ReasoningPolicy,
+} from '@/types'
+import { normalizeReasoningPolicy } from '@/utils/reasoning-policy'
 import { logger } from '@/utils/logger'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
@@ -130,12 +138,19 @@ const registering = ref(false)
 const editing = ref(false)
 const showAddAgent = ref(false)
 const showAddAdvanced = ref(false)
+const showAddSkills = ref(false)
 // 新建弹窗两步：1=选择起点（空白/模板），2=填表单
 const addStep = ref<1 | 2>(1)
 const selectedTemplateName = ref('')
 // 套用模板时记住其「专长」，在第二步只读展示——厚数据可见，不静默蒸发
 const selectedTemplateExpertise = ref<string[]>([])
-const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
+const newAgent = ref<AgentConfig>({
+  name: '',
+  display_name: '',
+  model: '',
+  provider: '',
+  reasoning_policy: { mode: 'inherit' },
+})
 // 新建 Agent 的人设(SOUL)：纯文本，写回 system_prompt。
 const newAgentSoul = computed({
   get: () => newAgent.value.system_prompt ?? '',
@@ -146,7 +161,13 @@ const newAgentSoul = computed({
 
 // Edit agent modal
 const showEditAgent = ref(false)
-const editingAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
+const editingAgent = ref<AgentConfig>({
+  name: '',
+  display_name: '',
+  model: '',
+  provider: '',
+  reasoning_policy: { mode: 'inherit' },
+})
 // BUG-20260703 D3：打开弹窗时的 LLM 配置快照——editFormValid「未真改就不校验」的基准。
 const editingOriginal = ref<{ provider: string; model: string }>({ provider: '', model: '' })
 // 打开弹窗给 editingAgent 赋值会触发 provider watch；挡掉这一次 sync，防止失效
@@ -253,10 +274,52 @@ const TEMP_PRESETS = [
 
 /** 全局默认模型真值（「跟随全局默认」的空态必须能回答"现在到底用什么模型"） */
 const resolvedGlobalDefaultModel = computed(() => {
-  const id = settingsStore.config?.llm?.defaultProviderId ?? ''
-  if (!id) return ''
-  const m = settingsStore.availableModels.find((mm) => mm.providerKey === id)
+  const providerId = settingsStore.config?.llm?.defaultProviderId ?? ''
+  const modelId = settingsStore.config?.llm?.defaultModel ?? ''
+  if (!providerId || !modelId) return ''
+  const m = settingsStore.availableModels.find(
+    (model) => model.providerId === providerId && model.modelId === modelId,
+  )
   return m?.modelId ?? ''
+})
+
+interface AgentReasoningCapability {
+  support: ModelReasoningSupport
+  control?: ModelReasoningControl
+}
+
+/** Agent 显式模型优先，否则按全局默认的 Provider 实例与模型精确解析能力。 */
+function reasoningCapabilityForAgent(agent: AgentConfig): AgentReasoningCapability {
+  const provider = agent.provider.trim()
+  const modelId = agent.model.trim()
+  let match
+  if (provider && modelId) {
+    match = settingsStore.availableModels.find(
+      (model) =>
+        model.providerKey === provider && model.modelId === modelId,
+    )
+  } else if (!provider && !modelId) {
+    const defaultProviderId = settingsStore.config?.llm?.defaultProviderId ?? ''
+    const defaultModelId = settingsStore.config?.llm?.defaultModel ?? ''
+    match = settingsStore.availableModels.find(
+      (model) =>
+        model.providerId === defaultProviderId && model.modelId === defaultModelId,
+    )
+  }
+  return match
+    ? { support: match.reasoningSupport, control: match.reasoningControl }
+    : { support: 'unknown' }
+}
+
+const newAgentReasoningCapability = computed(() => reasoningCapabilityForAgent(newAgent.value))
+const editAgentReasoningCapability = computed(() => reasoningCapabilityForAgent(editingAgent.value))
+const newAgentReasoningPolicy = computed<ReasoningPolicy>({
+  get: () => normalizeReasoningPolicy(newAgent.value.reasoning_policy),
+  set: (policy) => { newAgent.value.reasoning_policy = policy },
+})
+const editAgentReasoningPolicy = computed<ReasoningPolicy>({
+  get: () => normalizeReasoningPolicy(editingAgent.value.reasoning_policy),
+  set: (policy) => { editingAgent.value.reasoning_policy = policy },
 })
 
 // 创建弹窗高级区（与编辑弹窗同构；同一套三态/校验语义）
@@ -290,28 +353,74 @@ async function ensureSkillsLoaded() {
   }
 }
 
-async function toggleAddAdvanced() {
+function toggleAddAdvanced() {
   showAddAdvanced.value = !showAddAdvanced.value
-  if (showAddAdvanced.value) await ensureSkillsLoaded()
+}
+
+async function toggleAddSkills() {
+  showAddSkills.value = !showAddSkills.value
+  if (showAddSkills.value) await ensureSkillsLoaded()
+}
+
+function reasoningPolicySummary(
+  agent: AgentConfig,
+  capability: AgentReasoningCapability,
+): string {
+  if (capability.support === 'unsupported') return t('chat.reasoning.unsupported')
+  if (capability.support !== 'supported' || !capability.control) {
+    return t('chat.reasoning.pending')
+  }
+  const policy = normalizeReasoningPolicy(agent.reasoning_policy)
+  const value = policy.mode === 'effort'
+    ? t(`chat.reasoning.effortOption.${policy.effort}`)
+    : t(`chat.reasoning.${policy.mode}`)
+  return t('chat.reasoning.display', { value })
+}
+
+function followGlobalLabel(): string {
+  return t('agents.followGlobalWith', { model: '' }).split(' · ')[0]?.trim()
+    || t('agents.useGlobalDefault')
 }
 
 /** 高级区折叠摘要（收起时一眼看到关键配置，不必展开） */
-function advSummary(provider: string, model: string, temp: string | number, skills: string[]): string {
-  const modelPart = provider.trim()
-    ? `${provider}${model ? ' · ' + model : ''}`
-    : resolvedGlobalDefaultModel.value
-      ? t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel.value })
-      : t('agents.useGlobalDefault')
+function advSummary(
+  agent: AgentConfig,
+  temp: string | number,
+  capability: AgentReasoningCapability,
+): string {
+  const modelPart = agent.provider.trim()
+    ? `${agent.provider}${agent.model ? ' · ' + agent.model : ''}`
+    : followGlobalLabel()
   const tempRaw = advInputRaw(temp)
-  const parts = [modelPart]
+  const parts = [modelPart, reasoningPolicySummary(agent, capability)]
   if (tempRaw !== '') parts.push(`T ${tempRaw}`)
-  if (skills.length) parts.push(t('agents.skillsMounted', { n: skills.length }))
   return parts.join(' · ')
 }
 const addAdvSummary = computed(() =>
-  advSummary(newAgent.value.provider, newAgent.value.model, newAgentTemperature.value, newAgentSkills.value))
+  advSummary(
+    newAgent.value,
+    newAgentTemperature.value,
+    newAgentReasoningCapability.value,
+  ))
 const editAdvSummary = computed(() =>
-  advSummary(editingAgent.value.provider ?? '', editingAgent.value.model ?? '', editTemperature.value, editSkills.value))
+  advSummary(
+    editingAgent.value,
+    editTemperature.value,
+    editAgentReasoningCapability.value,
+  ))
+const modelParamsSectionLabel = computed(() =>
+  t('agents.advSection', '模型与参数 · Skill').replace(/\s*·\s*Skill\s*$/u, ''),
+)
+const addSkillsSummary = computed(() =>
+  newAgentSkills.value.length
+    ? t('agents.skillsMounted', { n: newAgentSkills.value.length })
+    : t('agents.skillsNone'),
+)
+const editSkillsSummary = computed(() =>
+  editSkills.value.length
+    ? t('agents.skillsMounted', { n: editSkills.value.length })
+    : t('agents.skillsNone'),
+)
 
 // SOUL 专注编辑（结构化编辑器）：从人设框 FLIP 放大，不关闭底层弹窗，完成回填
 const soulEditorOpen = ref(false)
@@ -355,7 +464,10 @@ function openEditAgent(agent: AgentConfig) {
   // 比较基准；赋值触发的 provider watch 用 suppress 挡掉这一次（用户真切 provider 时
   // 联动同步照常）。
   suppressEditProviderSync = true
-  editingAgent.value = { ...agent }
+  editingAgent.value = {
+    ...agent,
+    reasoning_policy: normalizeReasoningPolicy(agent.reasoning_policy),
+  }
   editingOriginal.value = { provider: (agent.provider ?? '').trim(), model: (agent.model ?? '').trim() }
   void nextTick(() => { suppressEditProviderSync = false })
   // BUG-20260703 P2-4：高级参数种子——空串 = 未设（跟随模型默认），显式 0 是合法温度
@@ -364,12 +476,14 @@ function openEditAgent(agent: AgentConfig) {
   editSkills.value = [...(agent.skills ?? [])]
   editAvatar.value = agent.metadata?.avatar ?? ''
   showEditAdvanced.value = false
+  showEditSkills.value = false
   showEditAgent.value = true
 }
 
 // ── 高级参数录入（BUG-20260703 P2-4：温度/max_tokens/skills 契约三方齐备但无 UI）──
 // type=number 的 v-model 会回写 number（runtime-dom looseToNumber），refs 按 string|number 收。
 const showEditAdvanced = ref(false)
+const showEditSkills = ref(false)
 const editTemperature = ref<string | number>('') // '' = 未设；0 = 显式确定性采样（与后端指针三态对齐）
 const editMaxTokens = ref<string | number>('')   // '' = 未设（后端 int 契约 0=未设）
 
@@ -381,9 +495,13 @@ const editSkills = ref<string[]>([])
 const availableSkills = ref<{ name: string; description?: string }[]>([])
 const skillsLoaded = ref(false)
 
-async function toggleEditAdvanced() {
+function toggleEditAdvanced() {
   showEditAdvanced.value = !showEditAdvanced.value
-  if (showEditAdvanced.value) await ensureSkillsLoaded()
+}
+
+async function toggleEditSkills() {
+  showEditSkills.value = !showEditSkills.value
+  if (showEditSkills.value) await ensureSkillsLoaded()
 }
 
 const editTemperatureValid = computed(() => {
@@ -401,7 +519,13 @@ const editMaxTokensValid = computed(() => {
 })
 
 function resetAddAgentDialog() {
-  newAgent.value = { name: '', display_name: '', model: '', provider: '' }
+  newAgent.value = {
+    name: '',
+    display_name: '',
+    model: '',
+    provider: '',
+    reasoning_policy: { mode: 'inherit' },
+  }
   addStep.value = 1
   selectedTemplateName.value = ''
   selectedTemplateExpertise.value = []
@@ -409,6 +533,8 @@ function resetAddAgentDialog() {
   newAgentTemperature.value = ''
   newAgentMaxTokens.value = ''
   newAgentSkills.value = []
+  showAddAdvanced.value = false
+  showAddSkills.value = false
 }
 
 function openAddAgentDialog() {
@@ -420,12 +546,15 @@ function openAddAgentDialog() {
 function closeAddAgentDialog() {
   showAddAgent.value = false
   showAddAdvanced.value = false
+  showAddSkills.value = false
   errorMsg.value = ''
   resetAddAgentDialog()
 }
 
 function closeEditAgentDialog() {
   showEditAgent.value = false
+  showEditAdvanced.value = false
+  showEditSkills.value = false
   errorMsg.value = ''
 }
 
@@ -439,6 +568,7 @@ async function handleEditAgent() {
       display_name: editingAgent.value.display_name,
       provider: editingAgent.value.provider,
       model: editingAgent.value.model,
+      reasoning_policy: normalizeReasoningPolicy(editingAgent.value.reasoning_policy),
       // 人设(SOUL)：编辑时一并透传，否则注册后无法二次修改（BUG-20260625 §3-1）。
       system_prompt: editingAgent.value.system_prompt ?? '',
       // 高级参数（BUG-20260703 P2-4）：温度三态——空输入=null 清除回「跟随模型默认」，
@@ -607,7 +737,7 @@ function syncAgentModelSelection(agent: AgentConfig) {
 
 // HcSelect 选项投影（替代原生 <select>，value 一律 string）
 const newAgentProviderOptions = computed(() => [
-  { value: '', label: t('agents.useGlobalDefault') },
+  { value: '', label: followGlobalLabel() },
   ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label, icon: p.icon })),
 ])
 const newAgentModelOptions = computed(() => [
@@ -618,7 +748,7 @@ const editAgentProviderOptions = computed(() => {
   // 始终带「使用全局默认」(value:'') 占位——否则走全局默认(provider='')的 agent 编辑时
   // HcSelect 的 v-model='' 无匹配项 → 下拉空白显示异常（bug 2026-06-22）。
   const opts: { value: string; label: string; icon?: string }[] = [
-    { value: '', label: t('agents.useGlobalDefault') },
+    { value: '', label: followGlobalLabel() },
     ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label, icon: p.icon })),
   ]
   const cur = editingAgent.value.provider
@@ -717,6 +847,7 @@ async function handleRegisterAgent(andChat = false) {
     const tokenRaw = advInputRaw(newAgentMaxTokens.value)
     const payload: AgentConfig = {
       ...newAgent.value,
+      reasoning_policy: normalizeReasoningPolicy(newAgent.value.reasoning_policy),
       ...(tempRaw !== '' ? { temperature: Number(tempRaw) } : {}),
       ...(tokenRaw !== '' ? { max_tokens: Math.trunc(Number(tokenRaw)) } : {}),
       ...(newAgentSkills.value.length ? { skills: [...newAgentSkills.value] } : {}),
@@ -1106,29 +1237,54 @@ async function handleUnregisterAgent() {
                     <span class="text-[11px] ml-auto" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulCharCount', { n: (newAgentSoul || '').length }) }}</span>
                   </div>
                 </div>
-                <!-- 模型与参数 + 挂载 Skill：进阶折叠（有合理默认，多数人不必展开） -->
-                <button
-                  type="button"
-                  class="flex items-center gap-1.5 text-xs font-medium mt-1"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                  data-testid="agent-add-adv-toggle"
-                  @click="toggleAddAdvanced"
+                <!-- 模型参数与 Skill 分别渐进披露，二者的持久语义互不混合。 -->
+                <div
+                  class="hc-agent-fold"
+                  :class="{ 'hc-agent-fold--open': showAddAdvanced }"
+                  data-testid="agent-add-model-fold"
                 >
-                  <ChevronDown v-if="!showAddAdvanced" :size="12" />
-                  <ChevronUp v-else :size="12" />
-                  {{ t('agents.advSection', '模型与参数 · Skill') }}
-                  <span class="font-normal" data-testid="agent-add-adv-summary">— {{ addAdvSummary }}</span>
-                </button>
-                <template v-if="showAddAdvanced">
+                  <button
+                    type="button"
+                    class="hc-agent-fold__summary"
+                    :aria-expanded="showAddAdvanced"
+                    data-testid="agent-add-adv-toggle"
+                    @click="toggleAddAdvanced"
+                  >
+                    <span class="hc-agent-fold__summary-label">{{ modelParamsSectionLabel }}</span>
+                    <span class="hc-agent-fold__summary-value" data-testid="agent-add-adv-summary">{{ addAdvSummary }}</span>
+                    <ChevronDown v-if="!showAddAdvanced" :size="14" />
+                    <ChevronUp v-else :size="14" />
+                  </button>
+                  <div v-if="showAddAdvanced" class="hc-agent-fold__body">
+                    <div class="hc-agent-model-grid" data-testid="agent-add-model-grid">
+                      <div class="flex flex-col gap-1.5">
+                        <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('welcome.summaryProvider') }}</label>
+                        <HcSelect v-model="newAgent.provider" :options="newAgentProviderOptions" />
+                      </div>
+                      <div class="flex flex-col gap-1.5">
+                        <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
+                        <HcSelect v-if="newAgent.provider" v-model="newAgent.model" :options="newAgentModelOptions" />
+                        <div v-else class="hc-agent-model-follow" data-testid="agent-add-model-follow">
+                          <span>{{ resolvedGlobalDefaultModel ? t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) : followGlobalLabel() }}</span>
+                          <span aria-hidden="true">🔒</span>
+                        </div>
+                      </div>
+                    </div>
                   <div class="flex flex-col gap-1.5">
-                    <label class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.modelPreferenceHint', '进入该智能体会话时自动切换到此模型；留空跟随全局默认。') }}</label>
-                    <HcSelect v-model="newAgent.provider" :options="newAgentProviderOptions" />
-                  </div>
-                  <div v-if="newAgent.provider" class="flex flex-col gap-1.5">
-                    <HcSelect v-model="newAgent.model" :options="newAgentModelOptions" />
-                  </div>
-                  <div v-else-if="resolvedGlobalDefaultModel" class="text-[12px]" data-testid="agent-add-model-follow" :style="{ color: 'var(--hc-text-muted)' }">
-                    {{ t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) }} 🔒
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">
+                      {{ t('chat.reasoning.strategy') }}
+                    </label>
+                    <ReasoningPolicySelect
+                      v-model="newAgentReasoningPolicy"
+                      data-testid="agent-add-reasoning-policy"
+                      scope="agent"
+                      :support="newAgentReasoningCapability.support"
+                      :control="newAgentReasoningCapability.control"
+                      :aria-label="t('chat.reasoning.selectStrategy')"
+                    />
+                    <span class="hc-agent-reasoning-note text-[11px]" :style="{ color: 'var(--hc-text-muted)' }">
+                      {{ t('chat.reasoning.agentPolicyNote') }}
+                    </span>
                   </div>
                   <div class="flex flex-col gap-1.5">
                     <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.temperature', '温度 (temperature)') }}</label>
@@ -1176,8 +1332,29 @@ async function handleUnregisterAgent() {
                     />
                     </HcClearableField>
                   </div>
-                  <AgentSkillPicker v-model="newAgentSkills" :available="availableSkills" />
-                </template>
+                  </div>
+                </div>
+                <div
+                  class="hc-agent-fold"
+                  :class="{ 'hc-agent-fold--open': showAddSkills }"
+                  data-testid="agent-add-skill-fold"
+                >
+                  <button
+                    type="button"
+                    class="hc-agent-fold__summary"
+                    :aria-expanded="showAddSkills"
+                    data-testid="agent-add-skills-toggle"
+                    @click="toggleAddSkills"
+                  >
+                    <span class="hc-agent-fold__summary-label">{{ t('agents.skillsLabel', '挂载 Skill') }}</span>
+                    <span class="hc-agent-fold__summary-value">{{ addSkillsSummary }}</span>
+                    <ChevronDown v-if="!showAddSkills" :size="14" />
+                    <ChevronUp v-else :size="14" />
+                  </button>
+                  <div v-if="showAddSkills" class="hc-agent-fold__body">
+                    <AgentSkillPicker v-model="newAgentSkills" :available="availableSkills" />
+                  </div>
+                </div>
               </div>
               <div class="flex items-center justify-between gap-2 px-5 py-3.5 border-t flex-shrink-0" :style="{ borderColor: 'var(--hc-border)' }">
                 <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="addStep = 1">
@@ -1291,38 +1468,60 @@ async function handleUnregisterAgent() {
                 </div>
               </div>
 
-              <!-- 模型与参数 + 挂载 Skill（P2-4 契约保留：agent-adv-* testid 不变） -->
-              <div class="flex flex-col gap-2">
+              <!-- 模型参数与 Skill 分别渐进披露，保留既有模型参数测试入口。 -->
+              <div
+                class="hc-agent-fold"
+                :class="{ 'hc-agent-fold--open': showEditAdvanced }"
+                data-testid="agent-edit-model-fold"
+              >
                 <button
                   type="button"
-                  class="flex items-center gap-1.5 text-[12px] font-medium self-start"
-                  :style="{ color: 'var(--hc-text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }"
+                  class="hc-agent-fold__summary"
                   :aria-expanded="showEditAdvanced"
                   data-testid="agent-adv-toggle"
                   @click="toggleEditAdvanced"
                 >
-                  <ChevronDown v-if="!showEditAdvanced" :size="12" />
-                  <ChevronUp v-else :size="12" />
-                  {{ t('agents.advSection', '模型与参数 · Skill') }}
-                  <span class="font-normal" data-testid="agent-adv-summary">— {{ editAdvSummary }}</span>
+                  <span class="hc-agent-fold__summary-label">{{ modelParamsSectionLabel }}</span>
+                  <span class="hc-agent-fold__summary-value" data-testid="agent-adv-summary">{{ editAdvSummary }}</span>
+                  <ChevronDown v-if="!showEditAdvanced" :size="14" />
+                  <ChevronUp v-else :size="14" />
                 </button>
-                <div v-if="showEditAdvanced" class="flex flex-col gap-3 rounded-lg p-3" :style="{ background: 'var(--hc-bg-card)' }">
-                  <div class="flex flex-col gap-1.5">
-                    <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
-                    <HcSelect
-                      v-model="editingAgent.provider"
-                      :options="editAgentProviderOptions"
-                    />
+                <div v-if="showEditAdvanced" class="hc-agent-fold__body">
+                  <div class="hc-agent-model-grid" data-testid="agent-edit-model-grid">
+                    <div class="flex flex-col gap-1.5">
+                      <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('welcome.summaryProvider') }}</label>
+                      <HcSelect
+                        v-model="editingAgent.provider"
+                        :options="editAgentProviderOptions"
+                      />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                      <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
+                      <HcSelect
+                        v-if="editingAgent.provider"
+                        v-model="editingAgent.model"
+                        :options="editAgentModelOptions"
+                      />
+                      <div v-else class="hc-agent-model-follow" data-testid="agent-edit-model-follow">
+                        <span>{{ resolvedGlobalDefaultModel ? t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) : followGlobalLabel() }}</span>
+                        <span aria-hidden="true">🔒</span>
+                      </div>
+                    </div>
                   </div>
                   <div class="flex flex-col gap-1.5">
-                    <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
-                    <HcSelect
-                      v-model="editingAgent.model"
-                      :options="editAgentModelOptions"
-                      :disabled="!editingAgent.provider"
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">
+                      {{ t('chat.reasoning.strategy') }}
+                    </label>
+                    <ReasoningPolicySelect
+                      v-model="editAgentReasoningPolicy"
+                      data-testid="agent-edit-reasoning-policy"
+                      scope="agent"
+                      :support="editAgentReasoningCapability.support"
+                      :control="editAgentReasoningCapability.control"
+                      :aria-label="t('chat.reasoning.selectStrategy')"
                     />
-                    <span v-if="!editingAgent.provider && resolvedGlobalDefaultModel" class="text-[11.5px]" data-testid="agent-edit-model-follow" :style="{ color: 'var(--hc-text-muted)' }">
-                      {{ t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) }} 🔒
+                    <span class="hc-agent-reasoning-note text-[11px]" :style="{ color: 'var(--hc-text-muted)' }">
+                      {{ t('chat.reasoning.agentPolicyNote') }}
                     </span>
                   </div>
                   <div class="flex flex-col gap-1.5">
@@ -1379,6 +1578,26 @@ async function handleUnregisterAgent() {
                     />
                     </HcClearableField>
                   </div>
+                </div>
+              </div>
+              <div
+                class="hc-agent-fold"
+                :class="{ 'hc-agent-fold--open': showEditSkills }"
+                data-testid="agent-edit-skill-fold"
+              >
+                <button
+                  type="button"
+                  class="hc-agent-fold__summary"
+                  :aria-expanded="showEditSkills"
+                  data-testid="agent-edit-skills-toggle"
+                  @click="toggleEditSkills"
+                >
+                  <span class="hc-agent-fold__summary-label">{{ t('agents.skillsLabel', '挂载 Skill') }}</span>
+                  <span class="hc-agent-fold__summary-value">{{ editSkillsSummary }}</span>
+                  <ChevronDown v-if="!showEditSkills" :size="14" />
+                  <ChevronUp v-else :size="14" />
+                </button>
+                <div v-if="showEditSkills" class="hc-agent-fold__body">
                   <AgentSkillPicker v-model="editSkills" :available="availableSkills" />
                 </div>
               </div>
@@ -1763,6 +1982,112 @@ button.hc-cxcard {
 }
 
 /* ── 新建弹窗第一步「选择起点」卡片网格 ── */
+.hc-agent-fold {
+  width: 100%;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+}
+
+.hc-agent-fold--open {
+  background: var(--hc-bg-card);
+}
+
+.hc-agent-fold__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.hc-agent-fold__summary-label {
+  flex: 0 0 auto;
+}
+
+.hc-agent-fold__summary-value {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-agent-fold__summary svg {
+  flex: 0 0 auto;
+  color: var(--hc-text-muted);
+}
+
+.hc-agent-fold__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px 14px 15px;
+}
+
+.hc-agent-fold__body label {
+  color: var(--hc-text-primary) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 1.5;
+}
+
+.hc-agent-fold__body :deep(.hc-select__trigger) {
+  height: 39px;
+  padding: 8px 12px;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.hc-agent-fold__body :deep(.hc-select__arrow) {
+  position: static;
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+}
+
+.hc-agent-reasoning-note {
+  line-height: 1.55;
+}
+
+.hc-agent-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hc-agent-model-follow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 39px;
+  padding: 8px 12px;
+  border: 1px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .hc-agent-model-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .hc-startgrid {
   display: grid;
   grid-template-columns: 1fr 1fr;

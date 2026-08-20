@@ -1,5 +1,15 @@
+import type { ModelReasoningControl, ReasoningPolicy } from '@/types'
+import {
+  allowedReasoningEfforts,
+  normalizeReasoningPolicy,
+} from '@/utils/reasoning-policy'
+
 export function buildChatRequestMetadata(params: {
   thinkingEnabled: boolean
+  /** 发送瞬间冻结的策略；只用于判断是否需要透传 thinking_effort。 */
+  reasoningPolicy?: ReasoningPolicy
+  /** 发送瞬间冻结的精确模型控制合同。 */
+  reasoningControl?: ModelReasoningControl
   memoryEnabled: boolean
   imageGeneration?: boolean
   videoGeneration?: boolean
@@ -23,7 +33,17 @@ export function buildChatRequestMetadata(params: {
     metadata.pinned_agent = params.pinnedAgent.trim() || 'default'
     metadata.producer_kind = 'chat'
   }
-  if (params.thinkingEnabled) metadata.thinking = 'on'
+  metadata.thinking = params.thinkingEnabled ? 'on' : 'off'
+  const reasoningPolicy = normalizeReasoningPolicy(params.reasoningPolicy)
+  const allowedEfforts = allowedReasoningEfforts(params.reasoningControl)
+  if (
+    params.thinkingEnabled &&
+    params.reasoningControl?.dialect === 'reasoning_effort' &&
+    reasoningPolicy.mode === 'effort' &&
+    allowedEfforts.includes(reasoningPolicy.effort)
+  ) {
+    metadata.thinking_effort = reasoningPolicy.effort
+  }
   if (!params.memoryEnabled) metadata.memory = 'off'
   if (params.imageGeneration) metadata.image_generation = 'true'
   if (params.videoGeneration) metadata.video_generation = 'true'

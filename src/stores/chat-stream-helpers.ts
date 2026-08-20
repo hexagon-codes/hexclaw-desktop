@@ -7,9 +7,14 @@ import type {
   RuntimeWireFrame,
   RuntimeWireSnapshot,
 } from '@/types'
+import type { ModelReasoningSupport } from '@/types/settings'
 import {
   mergeRuntimeWireFrame,
+  normalizeReasoningReceipt,
   normalizeRuntimeSnapshotMetadata,
+  type ReasoningExecution,
+  type ReasoningReceipt,
+  type ReasoningRequest,
 } from '@/types/chat'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
@@ -17,6 +22,8 @@ import { extractThinkTags } from '@/utils/think-tags'
 export type SessionStreamState = {
   sessionId: string
   requestId: string
+  /** 请求发出时的模型路由；只用于校验运行时 reasoning disclosure。 */
+  requestRoute?: Readonly<{ provider?: string; model?: string }>
   /** Stable frontend identity for the assistant message across live terminal transitions. */
   assistantMessageId?: string
   /** Canonical backend identity. Stored as metadata/alias, never used as the Vue key. */
@@ -25,6 +32,10 @@ export type SessionStreamState = {
   lastSequence: number
   runtimeEvents: RuntimeEvent[]
   reasoningDisclosure?: ReasoningDisclosure
+  /** 旧会话快照可能缺失；生产构建与归约路径始终写入 canonical 值。 */
+  reasoningReceipt?: ReasoningReceipt
+  reasoningSupport?: ModelReasoningSupport
+  reasoningExecution?: ReasoningExecution
   acceptedRuntimeFrames: Record<number, string>
   /** Request-owned lifecycle snapshot. These fields never follow the currently selected session. */
   thinkingEnabled?: boolean
@@ -58,17 +69,34 @@ export function buildSessionStreamState(args: {
   sessionId: string
   requestId: string
   thinkingEnabled: boolean
+  reasoningSupport?: ModelReasoningSupport
+  requestRoute?: { provider?: string; model?: string }
   startedAt?: number
   agentDisplayName?: string
   recipientDisplayName?: string
 }): SessionStreamState {
+  const reasoningRequest: ReasoningRequest = args.thinkingEnabled ? 'on' : 'off'
+  const reasoningReceipt: ReasoningReceipt = {
+    ...normalizeReasoningReceipt(undefined, reasoningRequest),
+    reasoning_support: args.reasoningSupport ?? 'unknown',
+  }
+  const requestRoute = args.requestRoute
+    ? Object.freeze({
+        provider: args.requestRoute.provider,
+        model: args.requestRoute.model,
+      })
+    : undefined
   return {
     sessionId: args.sessionId,
     requestId: args.requestId,
+    ...(requestRoute ? { requestRoute } : {}),
     assistantMessageId: buildLiveAssistantMessageId(args.requestId),
     assistantMessageAliases: [],
     lastSequence: 0,
     runtimeEvents: [],
+    reasoningReceipt,
+    reasoningSupport: reasoningReceipt.reasoning_support,
+    reasoningExecution: reasoningReceipt.reasoning_execution,
     acceptedRuntimeFrames: {},
     thinkingEnabled: args.thinkingEnabled,
     startedAt: args.startedAt ?? Date.now(),
@@ -89,9 +117,11 @@ export function getStreamThinkingDuration(
   state: SessionStreamState | null | undefined,
   now = Date.now(),
 ): number | undefined {
-  const startTime = state?.thinkingEnabled && state.startedAt
-    ? state.startedAt
-    : state?.reasoningStartTime
+  if (!state) return undefined
+  const usesCanonicalReceipt = state.reasoningExecution !== undefined
+  if (usesCanonicalReceipt && state.reasoningExecution !== 'applied') return undefined
+  const startTime = state.reasoningStartTime
+    || (!usesCanonicalReceipt && state.thinkingEnabled ? state.startedAt : 0)
   if (!startTime) return undefined
   const endTime = state?.reasoningEndTime && state.reasoningEndTime >= startTime
     ? state.reasoningEndTime
@@ -185,9 +215,11 @@ export function buildStreamingMirrorState(
     streamingSessionId: fallback.sessionId,
     streamingContent: fallback.content,
     streamingReasoning: fallback.reasoning,
-    streamingReasoningStartTime: fallback.thinkingEnabled
-      ? fallback.startedAt ?? fallback.reasoningStartTime
-      : fallback.reasoningStartTime,
+    streamingReasoningStartTime: fallback.reasoningExecution === undefined
+      ? (fallback.thinkingEnabled ? fallback.startedAt ?? fallback.reasoningStartTime : fallback.reasoningStartTime)
+      : fallback.reasoningExecution === 'applied'
+        ? fallback.reasoningStartTime
+        : 0,
     streamingReasoningEndTime: fallback.reasoningEndTime,
   }
 }
@@ -199,12 +231,17 @@ export function mergeStreamChunkState(
   runtimeFrame?: RuntimeWireFrame | Record<string, unknown>,
   route?: { provider?: string; model?: string },
 ): SessionStreamState {
+  const currentReasoningReceipt = normalizeReasoningReceipt(
+    current.reasoningReceipt,
+    current.thinkingEnabled ? 'on' : 'off',
+  )
   let runtimeSnapshot: RuntimeWireSnapshot = {
     assistantMessageId: current.canonicalAssistantMessageId,
     aliases: current.assistantMessageAliases,
     lastSequence: current.lastSequence,
     runtimeEvents: current.runtimeEvents,
     reasoningDisclosure: current.reasoningDisclosure,
+    reasoningReceipt: currentReasoningReceipt,
     acceptedFrames: current.acceptedRuntimeFrames,
   }
   let acceptedRuntimeFrame: RuntimeWireFrame | undefined
@@ -215,6 +252,7 @@ export function mergeStreamChunkState(
           message_id: runtimeFrame.messageId,
           sequence: runtimeFrame.sequence,
           reasoning_disclosure: runtimeFrame.reasoningDisclosure,
+          reasoning_receipt: runtimeFrame.reasoningReceipt,
           runtime_event: runtimeFrame.runtimeEvent
             ? (() => {
                 const event = { ...runtimeFrame.runtimeEvent } as Record<string, unknown>
@@ -232,11 +270,16 @@ export function mergeStreamChunkState(
   const publicReasoning = acceptedRuntimeFrame?.reasoningDisclosure.visibility === 'visible'
     ? reasoning
     : undefined
-  let explicitReasoning = current.explicitReasoning
+  const hasUntrustedReasoning = !!reasoning?.trim() && publicReasoning === undefined
+  const reasoningReceipt = runtimeSnapshot.reasoningReceipt
+  const receivedAt = Date.now()
+  let explicitReasoning = hasUntrustedReasoning ? '' : current.explicitReasoning
   let reasoningStartTime = current.reasoningStartTime
 
+  if (reasoningReceipt.reasoning_execution === 'applied' && !reasoningStartTime) {
+    reasoningStartTime = receivedAt
+  }
   if (publicReasoning) {
-    if (!reasoningStartTime) reasoningStartTime = Date.now()
     explicitReasoning = normalizeAssistantReasoning(explicitReasoning + publicReasoning, { trim: false })
   }
 
@@ -251,13 +294,26 @@ export function mergeStreamChunkState(
     extractedReasoning = ''
   }
 
-  const combinedReasoning = [explicitReasoning, extractedReasoning]
+  const combinedReasoning = hasUntrustedReasoning ? '' : [explicitReasoning, extractedReasoning]
     .filter((value) => value && value.trim())
     .join(explicitReasoning && extractedReasoning ? '\n' : '')
 
   let reasoningEndTime = current.reasoningEndTime
-  if (reasoningStartTime && !reasoningEndTime && content && !publicReasoning) {
-    reasoningEndTime = Date.now()
+  const hasVisibleContent = parsedContent.trim().length > 0
+  if (
+    reasoningReceipt.reasoning_execution === 'applied'
+    && reasoningStartTime
+    && !reasoningEndTime
+    && hasVisibleContent
+  ) {
+    reasoningEndTime = receivedAt
+  } else if (
+    current.reasoningExecution === 'applied'
+    && reasoningReceipt.reasoning_execution !== 'applied'
+    && reasoningStartTime
+    && !reasoningEndTime
+  ) {
+    reasoningEndTime = receivedAt
   }
 
   return {
@@ -275,15 +331,20 @@ export function mergeStreamChunkState(
     ])),
     lastSequence: runtimeSnapshot.lastSequence,
     runtimeEvents: runtimeSnapshot.runtimeEvents,
-    reasoningDisclosure: runtimeSnapshot.reasoningDisclosure,
+    reasoningDisclosure: hasUntrustedReasoning ? undefined : runtimeSnapshot.reasoningDisclosure,
+    reasoningReceipt,
+    reasoningSupport: reasoningReceipt.reasoning_support,
+    reasoningExecution: reasoningReceipt.reasoning_execution,
     acceptedRuntimeFrames: runtimeSnapshot.acceptedFrames,
     rawContent,
     content: parsedContent,
     explicitReasoning,
-    reasoning: normalizeAssistantReasoning(combinedReasoning, { trim: false }),
+    reasoning: hasUntrustedReasoning ? '' : normalizeAssistantReasoning(combinedReasoning, { trim: false }),
     reasoningStartTime,
     reasoningEndTime,
-    visibility: runtimeSnapshot.reasoningDisclosure?.visibility ?? current.visibility,
+    visibility: hasUntrustedReasoning
+      ? 'not_exposed'
+      : runtimeSnapshot.reasoningDisclosure?.visibility ?? current.visibility,
   }
 }
 
@@ -293,15 +354,26 @@ export function buildRecoveredStreamState(
 ): SessionStreamState {
   const snapshotContent = snapshot.content || ''
   const snapshotReasoning = normalizeAssistantReasoning(snapshot.reasoning || '', { trim: false })
+  const rawThinkingEnabled = snapshot.metadata?.thinking_enabled
+  const fallbackReasoningRequest: ReasoningRequest = rawThinkingEnabled === true
+    || rawThinkingEnabled === 'true'
+    || rawThinkingEnabled === '1'
+    ? 'on'
+    : 'off'
   const metadata = normalizeRuntimeSnapshotMetadata({
     ...snapshot.metadata,
     assistant_message_id: snapshot.assistant_message_id,
     message_id: snapshot.message_id,
     reasoning_disclosure: snapshot.reasoning_disclosure,
+    reasoning_receipt: snapshot.metadata?.reasoning_receipt,
     runtime_events: snapshot.runtime_events,
     last_sequence: snapshot.last_sequence ?? snapshot.sequence,
-  })
+  }, undefined, undefined, fallbackReasoningRequest)
   const disclosure = metadata.reasoning_disclosure
+  const reasoningReceipt = normalizeReasoningReceipt(
+    metadata.reasoning_receipt,
+    fallbackReasoningRequest,
+  )
   const publicReasoning = disclosure?.visibility === 'visible' ? snapshotReasoning : ''
   const frontendAssistantMessageId = buildLiveAssistantMessageId(snapshot.request_id)
   const canonicalAssistantMessageId = metadata.assistant_message_id
@@ -313,16 +385,16 @@ export function buildRecoveredStreamState(
   ])).filter((id) => id !== frontendAssistantMessageId)
   const parsedStartedAt = snapshot.started_at ? Date.parse(snapshot.started_at) : Number.NaN
   const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now()
-  const rawThinkingEnabled = metadata.thinking_enabled
-  const thinkingEnabled = rawThinkingEnabled === true
-    || rawThinkingEnabled === 'true'
-    || rawThinkingEnabled === '1'
+  const normalizedThinkingEnabled = metadata.thinking_enabled
+  const thinkingEnabled = normalizedThinkingEnabled === true
+    || normalizedThinkingEnabled === 'true'
+    || normalizedThinkingEnabled === '1'
       ? true
-      : rawThinkingEnabled === false
-        || rawThinkingEnabled === 'false'
-        || rawThinkingEnabled === '0'
+      : normalizedThinkingEnabled === false
+        || normalizedThinkingEnabled === 'false'
+        || normalizedThinkingEnabled === '0'
         ? false
-        : !!snapshotReasoning || !!disclosure || (metadata.runtime_events?.length ?? 0) > 0
+        : reasoningReceipt.reasoning_request === 'on'
   const rawState = metadata.thinking_state
   const state = rawState === 'running'
     || rawState === 'completed'
@@ -359,6 +431,9 @@ export function buildRecoveredStreamState(
     lastSequence: Number(metadata.last_sequence) || 0,
     runtimeEvents: metadata.runtime_events ?? [],
     reasoningDisclosure: disclosure,
+    reasoningReceipt,
+    reasoningSupport: reasoningReceipt.reasoning_support,
+    reasoningExecution: reasoningReceipt.reasoning_execution,
     acceptedRuntimeFrames: {},
     thinkingEnabled,
     startedAt,
@@ -370,7 +445,9 @@ export function buildRecoveredStreamState(
     content: snapshotContent,
     explicitReasoning: publicReasoning,
     reasoning: publicReasoning,
-    reasoningStartTime: publicReasoning ? startedAt : 0,
-    reasoningEndTime: 0,
+    reasoningStartTime: reasoningReceipt.reasoning_execution === 'applied' ? startedAt : 0,
+    reasoningEndTime: reasoningReceipt.reasoning_execution === 'applied' && snapshotContent.trim()
+      ? Date.now()
+      : 0,
   }
 }

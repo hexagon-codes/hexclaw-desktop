@@ -143,61 +143,39 @@ describe('MessageActions', () => {
     expect(mountUserMessageActions().classes()).toContain('hc-msg-actions--user')
   })
 
-  it('keeps assistant delete inside the More menu', async () => {
-    const wrapper = mountMessageActions(null)
-    expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="message-more"]').trigger('click')
-    const deleteBtn = wrapper.get('[data-testid="message-delete"]')
-    expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
-    expect(deleteBtn.text()).toBe('删除')
-    expect(deleteBtn.attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('[data-testid="message-fork"]').text()).toContain('创建分支')
-    await deleteBtn.trigger('click')
-    expect(wrapper.emitted('delete')).toHaveLength(1)
-    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
+  it('uses the prototype 10px radius for the floating user action toolbar', () => {
+    expect(messageActionsSource).toMatch(
+      /\.hc-msg-actions--user\s*\{[\s\S]*?border-radius:\s*10px;/,
+    )
   })
 
-  it('keeps user delete inside the More menu', async () => {
+  it('renders fork as a first-level assistant button and never exposes delete or More menu', async () => {
+    const wrapper = mountMessageActions(null)
+    const forkBtn = wrapper.get('[data-testid="message-fork"]')
+    expect(forkBtn.attributes('title')).toBe('创建分支')
+    expect(forkBtn.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false)
+    await forkBtn.trigger('click')
+    expect(wrapper.emitted('fork')).toHaveLength(1)
+  })
+
+  it('keeps the user actions at copy + edit only, without fork, delete or More menu', () => {
     const wrapper = mountUserMessageActions()
-    expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="message-more"]').trigger('click')
-    const deleteBtn = wrapper.get('[data-testid="message-delete"]')
-    expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
-    expect(deleteBtn.text()).toBe('删除')
-    expect(deleteBtn.attributes('disabled')).toBeUndefined()
-    await deleteBtn.trigger('click')
-    expect(wrapper.emitted('delete')).toHaveLength(1)
-    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
+    expect(wrapper.find('[data-testid="message-fork"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-delete"]').exists()).toBe(false)
+    expect(wrapper.findAll('button')).toHaveLength(2)
   })
 
-  it('closes the More menu with Escape and restores trigger focus', async () => {
-    const wrapper = mountMessageActions(null)
-    document.body.appendChild(wrapper.element)
-    const moreButton = wrapper.get<HTMLButtonElement>('[data-testid="message-more"]')
-
-    await moreButton.trigger('click')
-    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeUndefined()
-
-    moreButton.element.blur()
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
-    expect(document.activeElement).toBe(moreButton.element)
-
-    await moreButton.trigger('click')
-    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeUndefined()
-    wrapper.unmount()
-  })
-
-  it('keeps the destructive menu compact while retaining an explicit trash icon and label', () => {
+  it('drops the More menu machinery from the source', () => {
     expect(messageActionsSource).toContain('import {\n  Copy,')
-    expect(messageActionsSource).toContain('Trash2')
-    expect(messageActionsSource).toMatch(
-      /\.hc-msg-actions__more-menu\s*\{[^}]*min-width:\s*112px[^}]*max-width:\s*128px/s,
-    )
-    expect(messageActionsSource).toMatch(
-      /\.hc-msg-actions__more-menu button\s*\{[^}]*height:\s*40px[^}]*white-space:\s*nowrap/s,
-    )
+    expect(messageActionsSource).toContain('GitBranch')
+    expect(messageActionsSource).not.toContain('Trash2')
+    expect(messageActionsSource).not.toContain('MoreHorizontal')
+    expect(messageActionsSource).not.toContain('message-more')
+    expect(messageActionsSource).not.toContain('message-delete')
+    expect(messageActionsSource).not.toContain('hc-msg-actions__more-menu')
   })
 })

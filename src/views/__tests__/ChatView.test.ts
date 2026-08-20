@@ -7,6 +7,8 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12ZhCN from '@/features/k12/i18n/zh-CN'
 import { K12_VIEW_DESCRIPTOR } from '@/features/k12/descriptor'
 import { useSettingsStore } from '@/stores/settings'
+import { defaultConfig } from '@/stores/settings-defaults'
+import type { ModelOption, ModelReasoningControl } from '@/types'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import {
@@ -14,7 +16,10 @@ import {
   clearSessionAgent,
   getSessionAgent,
 } from '@/stores/session-agent-binding'
-import { clearSessionDeepThinking } from '@/stores/session-thinking-preference'
+import {
+  clearSessionDeepThinking,
+  getSessionThinkingPolicy,
+} from '@/stores/session-thinking-preference'
 import { clearSessionModel, setSessionModel } from '@/stores/session-model-binding'
 import { scenarioRegistry, type ScenarioComposerImagePayload } from '@/shell/scenario/registry'
 
@@ -35,6 +40,8 @@ const { mockGetConnections, mockGetConnectionsResult } = vi.hoisted(() => ({
   mockGetConnections: vi.fn(),
   mockGetConnectionsResult: vi.fn(),
 }))
+
+const mockGetAgents = vi.hoisted(() => vi.fn())
 
 const tauriEventMock = vi.hoisted(() => ({
   sidecarReady: undefined as undefined | (() => void | Promise<void>),
@@ -57,6 +64,10 @@ const { mockForkSession, mockDeleteSession } = vi.hoisted(() => ({
   mockDeleteSession: vi.fn().mockResolvedValue({ message: 'ok' }),
 }))
 
+const { mockRemoveMessage } = vi.hoisted(() => ({
+  mockRemoveMessage: vi.fn().mockResolvedValue({ message: 'ok' }),
+}))
+
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRoute: { query: {}, path: '/chat', params: {} as Record<string, string> },
   mockRouterPush: vi.fn(),
@@ -73,6 +84,14 @@ vi.mock('@/api/chat', () => ({
   forkSession: mockForkSession,
   deleteSession: mockDeleteSession,
 }))
+
+vi.mock('@/services/messageService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/messageService')>()
+  return {
+    ...actual,
+    removeMessage: mockRemoveMessage,
+  }
+})
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
@@ -96,6 +115,7 @@ vi.mock('@/api/websocket', () => ({
 
 vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
+  getAgents: mockGetAgents,
   createRole: vi.fn(),
   updateRole: vi.fn(),
   deleteRole: vi.fn(),
@@ -330,6 +350,62 @@ async function setChatDraft(wrapper: ReturnType<typeof mountChatView>, value: st
   await wrapper.vm.$nextTick()
 }
 
+type ReasoningStatusFixture = {
+  sessionId: string
+  thinkingEnabled: boolean
+  reasoningSupport: 'supported' | 'unknown'
+  reasoningExecution: 'unknown' | 'applied'
+  content?: string
+  reasoningStartTime?: number
+  reasoningEndTime?: number
+}
+
+function installReasoningStatusFixture(
+  store: ReturnType<typeof useChatStore>,
+  fixture: ReasoningStatusFixture,
+) {
+  const reasoningStartTime = fixture.reasoningStartTime ?? 0
+  store.currentSessionId = fixture.sessionId
+  store.sending = true
+  store.thinkingEnabled = fixture.thinkingEnabled
+  store.activeStreams[fixture.sessionId] = {
+    sessionId: fixture.sessionId,
+    requestId: `${fixture.sessionId}-request`,
+    assistantMessageId: `${fixture.sessionId}-assistant`,
+    rawContent: fixture.content ?? '',
+    content: fixture.content ?? '',
+    explicitReasoning: '',
+    reasoning: '',
+    reasoningStartTime,
+    reasoningEndTime: fixture.reasoningEndTime ?? 0,
+    assistantMessageAliases: [],
+    lastSequence: 0,
+    runtimeEvents: [],
+    acceptedRuntimeFrames: {},
+    thinkingEnabled: fixture.thinkingEnabled,
+    startedAt: reasoningStartTime || Date.now(),
+    state: 'running',
+    visibility: 'not_exposed',
+    phase: fixture.content
+      ? 'answering'
+      : fixture.reasoningExecution === 'applied'
+        ? 'reasoning'
+        : 'preparing',
+    reasoningSupport: fixture.reasoningSupport,
+    reasoningExecution: fixture.reasoningExecution,
+  } as unknown as (typeof store.activeStreams)[string]
+  store.messages.push({
+    id: `${fixture.sessionId}-user`,
+    role: 'user',
+    content: '问题',
+    timestamp: '',
+  })
+}
+
+function expectVisibleTextOnce(wrapper: ReturnType<typeof mountChatView>, text: string) {
+  expect(wrapper.text().split(text).length - 1).toBe(1)
+}
+
 // jsdom 不提供 scrollIntoView 和 matchMedia，需要手动补齐
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
@@ -365,9 +441,31 @@ describe('ChatView — E2E 关键路径', () => {
     })
     mockGetConnections.mockResolvedValue([])
     mockGetConnectionsResult.mockResolvedValue({ connections: [] })
+    // getAgents 缺失会让 loadAgents 连续重试（2×300ms 宏任务），阻塞 onMounted 链
+    // 后续的 loadSessions → loadConnectionDirectory；返回当前 registeredAgents 既让链
+    // 立即完成，又避免成功结果覆盖用例在 setup 里设置的 registeredAgents。
+    mockGetAgents.mockReset()
+    mockGetAgents.mockImplementation(async () => ({
+      agents: useAgentsStore().registeredAgents,
+      default: '',
+    }))
     tauriEventMock.sidecarReady = undefined
+    mockForkSession.mockReset()
     mockForkSession.mockResolvedValue({ session: { id: 'edited-image-branch' } })
+    mockDeleteSession.mockReset()
     mockDeleteSession.mockResolvedValue({ message: 'ok' })
+    mockAppendSessionMessage.mockReset()
+    mockAppendSessionMessage.mockResolvedValue({
+      id: 'scenario-image-message',
+      session_id: 'scenario-session',
+    })
+    mockAppendSessionMessagesBatch.mockReset()
+    mockAppendSessionMessagesBatch.mockResolvedValue({
+      ids: [],
+      session_id: 'scenario-session',
+    })
+    mockRemoveMessage.mockReset()
+    mockRemoveMessage.mockResolvedValue({ message: 'ok' })
   })
 
   afterEach(() => {
@@ -375,18 +473,17 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   // ────────────────────────────────────────────────────
-  // 1. 渲染：输入框和发送按钮
+  // 1. 渲染：输入框和空态语音主操作
   // ────────────────────────────────────────────────────
-  it('renders the canonical rich-text chat input and send button', async () => {
+  it('renders the canonical rich-text chat input and empty-state voice action', async () => {
     const wrapper = mountChatView()
     await flushPromises()
 
     const editor = chatEditor(wrapper)
     expect(editor.attributes('contenteditable')).toBe('true')
 
-    // 发送按钮存在（title="发送 (Enter)"）
-    const sendBtn = wrapper.find('button[title="发送 (Enter)"]')
-    expect(sendBtn.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-voice-start"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-send"]').exists()).toBe(false)
   })
 
   it('keeps regular chat on Xiaoxie default persona even if an old default role is stored', async () => {
@@ -642,39 +739,448 @@ describe('ChatView — E2E 关键路径', () => {
     expect(typingIndicator.exists() || stopBtn.exists()).toBe(true)
   })
 
-  it('BUG-20260629 sending 但首个 token 未到时立即显示 assistant pending 气泡', async () => {
+  it('REG-CHAT-REASONING-STATUS-001 thinking off 首正文前只显示正在生成回答且无三点气泡', async () => {
     const wrapper = mountChatView()
     await flushPromises()
 
-    const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
-
-    store.currentSessionId = 'pending-session'
-    store.sending = true
-    store.activeStreams['pending-session'] = {
-      sessionId: 'pending-session',
-      requestId: 'pending-request',
-      assistantMessageId: 'pending-assistant',
-      rawContent: '',
-      content: '',
-      explicitReasoning: '',
-      reasoning: '',
-      reasoningStartTime: 0,
-      reasoningEndTime: 0,
-      assistantMessageAliases: [],
-      lastSequence: 0,
-      runtimeEvents: [],
-      acceptedRuntimeFrames: {},
+    installReasoningStatusFixture(store, {
+      sessionId: 'reasoning-off-pending',
       thinkingEnabled: false,
-      startedAt: Date.now(),
-      state: 'running',
-      visibility: 'not_exposed',
-    }
-    store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
+      reasoningSupport: 'supported',
+      reasoningExecution: 'unknown',
+    })
     await flushPromises()
 
-    expect(wrapper.find('.hc-typing-dots').exists()).toBe(true)
+    expectVisibleTextOnce(wrapper, '正在生成回答…')
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-thinking')).toHaveLength(0)
+
+    wrapper.unmount()
   })
+
+  it('REG-CHAT-REASONING-STATUS-002 thinking on 且能力未知时只显示正在准备回答', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    installReasoningStatusFixture(useChatStore(), {
+      sessionId: 'reasoning-unknown-pending',
+      thinkingEnabled: true,
+      reasoningSupport: 'unknown',
+      reasoningExecution: 'unknown',
+    })
+    await flushPromises()
+
+    expectVisibleTextOnce(wrapper, '正在准备回答…')
+    expect(wrapper.text()).not.toContain('正在深度思考')
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-thinking')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-REASONING-STATUS-003 applied 首正文前只有一个运行中思考状态', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    installReasoningStatusFixture(useChatStore(), {
+      sessionId: 'reasoning-applied-pending',
+      thinkingEnabled: true,
+      reasoningSupport: 'supported',
+      reasoningExecution: 'applied',
+      reasoningStartTime: Date.now() - 3_000,
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('.hc-thinking[data-thinking-state="running"]')).toHaveLength(1)
+    expect(wrapper.findAll('.hc-thinking__spinner')).toHaveLength(1)
+    expectVisibleTextOnce(wrapper, '正在深度思考')
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-REASONING-STATUS-004 applied 首正文到达后停止动画并冻结思考耗时', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const reasoningStartTime = Date.now() - 5_000
+    installReasoningStatusFixture(useChatStore(), {
+      sessionId: 'reasoning-applied-answering',
+      thinkingEnabled: true,
+      reasoningSupport: 'supported',
+      reasoningExecution: 'applied',
+      content: '首个可渲染正文',
+      reasoningStartTime,
+      reasoningEndTime: reasoningStartTime + 5_000,
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('.hc-thinking__spinner')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-thinking[data-thinking-state="completed"]')).toHaveLength(1)
+    expect(wrapper.get('.hc-thinking__label').text()).toBe('思考了 5s')
+    expect(wrapper.find('.hc-thinking__elapsed').exists()).toBe(false)
+    expect(wrapper.text()).toContain('首个可渲染正文')
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-REASONING-STATUS-005 思考菜单的开关用 aria-pressed 表达状态', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'reasoning-status-model',
+          name: 'Reasoning status model',
+          capabilities: ['text' as const],
+          reasoningSupport: 'supported' as const,
+          reasoningControl: { dialect: 'think' as const, on: true, off: false },
+        }
+        config.llm.providers = [
+          {
+            id: 'reasoning-status-provider-id',
+            name: 'Reasoning status provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'reasoning-status-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'reasoning-status-provider-id'
+        config.llm.defaultModel = model.id
+        config.llm.defaultReasoningPolicy = { mode: 'off' }
+        useSettingsStore().config = config
+      },
+    })
+    await flushPromises()
+
+    let button = wrapper.get('.hc-chat__thinking-control')
+    expect.soft(button.attributes('aria-pressed')).toBe('false')
+    await button.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-thinking-mode"]').trigger('click')
+    await flushPromises()
+    button = wrapper.get('.hc-chat__thinking-control')
+    expect.soft(button.attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-REASONING-STATUS-006 明确不支持推理的模型禁用深度思考按钮', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const unsupportedModel = {
+          id: 'no-reasoning-model',
+          name: 'No Reasoning Model',
+          capabilities: ['text' as const],
+          reasoningSupport: 'unsupported' as const,
+        }
+        config.llm.providers = [
+          {
+            id: 'no-reasoning-provider-id',
+            name: 'No Reasoning Provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'no-reasoning-provider',
+            models: [unsupportedModel],
+            selectedModelId: unsupportedModel.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'no-reasoning-provider-id'
+        config.llm.defaultModel = unsupportedModel.id
+        useSettingsStore().config = config
+      },
+    })
+    await flushPromises()
+
+    const store = useChatStore()
+    const button = wrapper.get('.hc-chat__research-btn')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.attributes('aria-disabled')).toBe('true')
+    expect(button.attributes('aria-pressed')).toBe('false')
+    expect(button.attributes('title')).toBe('当前模型未声明支持思考')
+    await button.trigger('click')
+    expect(store.thinkingEnabled).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260801-006 普通会话的工具审批卡保留消息轨道宽度类，focus 会话不套用', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const store = useChatStore()
+        store.currentSessionId = 'approval-layout-session'
+        store.messages = [
+          {
+            id: 'approval-layout-message',
+            role: 'assistant',
+            content: '需要审批',
+            timestamp: '2026-08-20T00:00:00.000Z',
+          },
+        ]
+        store.pendingApprovals = {
+          'approval-layout-request': {
+            requestId: 'approval-layout-request',
+            sessionId: 'approval-layout-session',
+            ownerId: 'desktop-user',
+            invocationId: 'approval-layout-invocation',
+            toolName: 'filesystem.write',
+            argumentsDigest: 'a'.repeat(64),
+            securityScopeDigest: 'b'.repeat(64),
+            risk: 'sensitive',
+            reason: 'writes a file',
+            deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+            receivedAt: Date.now(),
+          },
+        } as typeof store.pendingApprovals
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.hc-chat__thread > .hc-approval')).toBeTruthy()
+    expect(wrapper.get('.hc-approval').classes()).toContain('hc-approval--message-track')
+
+    await wrapper.find('.hc-chat__toolbar-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.classes()).toContain('hc-chat--conversation-only')
+    expect(wrapper.get('.hc-approval').classes()).not.toContain('hc-approval--message-track')
+
+    wrapper.unmount()
+  })
+
+  it('TOOL-APPROVAL-REUSE-001 在恢复活跃流前注册审批终态监听', async () => {
+    const order: string[] = []
+    const wrapper = mountChatView({
+      setup: () => {
+        const store = useChatStore()
+        vi.spyOn(store, 'initApprovalListener').mockImplementation(() => {
+          order.push('approval-listener')
+        })
+        vi.spyOn(store, 'recoverActiveStreams').mockImplementation(async () => {
+          order.push('recover-streams')
+        })
+      },
+    })
+    await flushPromises()
+
+    expect(order).toEqual(expect.arrayContaining(['approval-listener', 'recover-streams']))
+    expect(order.indexOf('approval-listener')).toBeLessThan(order.indexOf('recover-streams'))
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-THINKING-INTENSITY-021 reasoning_effort 只显示模型精确声明的档位', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'reasoning-effort-model',
+          name: 'Reasoning effort model',
+          capabilities: ['text' as const],
+          reasoningSupport: 'supported' as const,
+          reasoningControl: {
+            dialect: 'reasoning_effort',
+            on: 'high',
+            off: 'none',
+            allowed_efforts: ['low', 'high'],
+          } satisfies ModelReasoningControl,
+        }
+        config.llm.providers = [
+          {
+            id: 'reasoning-effort-provider-id',
+            name: 'Reasoning effort provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'reasoning-effort-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'reasoning-effort-provider-id'
+        config.llm.defaultModel = model.id
+        config.llm.defaultReasoningPolicy = { mode: 'off' }
+        useSettingsStore().config = config
+      },
+    })
+    await flushPromises()
+
+    const control = wrapper.get<HTMLButtonElement>('.hc-chat__thinking-control')
+    expect(control.attributes('disabled')).toBeUndefined()
+    await control.trigger('click')
+    await flushPromises()
+
+    const menu = wrapper.get('[data-testid="chat-thinking-settings"]')
+    expect(menu.get('[data-testid="chat-thinking-mode"]').attributes('role')).toBe('switch')
+    expect(menu.findAll('[role="radio"]')).toHaveLength(0)
+
+    await menu.get('[data-testid="chat-thinking-mode"]').trigger('click')
+    await flushPromises()
+
+    let enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
+    expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('role')).toBe('radio')
+    expect(enabledMenu.get('[data-testid="chat-thinking-effort-high"]').attributes('role')).toBe('radio')
+    expect(enabledMenu.find('[data-testid="chat-thinking-effort-medium"]').exists()).toBe(false)
+    expect(enabledMenu.find('[data-testid="chat-thinking-effort-xhigh"]').exists()).toBe(false)
+    expect(enabledMenu.find('[data-testid="chat-thinking-effort-max"]').exists()).toBe(false)
+
+    await enabledMenu.get('[data-testid="chat-thinking-effort-low"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.hc-chat__thinking-control').attributes('aria-pressed')).toBe('true')
+    enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
+    expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('aria-checked')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-THINKING-INTENSITY-021 布尔 dialect 只显示思考模式开关', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'boolean-reasoning-model',
+          name: 'Boolean reasoning model',
+          capabilities: ['text' as const],
+          reasoningSupport: 'supported' as const,
+          reasoningControl: {
+            dialect: 'think',
+            on: true,
+            off: false,
+          } satisfies ModelReasoningControl,
+        }
+        config.llm.providers = [
+          {
+            id: 'boolean-reasoning-provider-id',
+            name: 'Boolean reasoning provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'boolean-reasoning-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'boolean-reasoning-provider-id'
+        config.llm.defaultModel = model.id
+        useSettingsStore().config = config
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('.hc-chat__thinking-control').trigger('click')
+    await flushPromises()
+
+    const menu = wrapper.get('[data-testid="chat-thinking-settings"]')
+    expect(menu.get('[data-testid="chat-thinking-mode"]').attributes('role')).toBe('switch')
+    expect(menu.findAll('[role="radio"]')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('REG-CHAT-THINKING-INTENSITY-022 将档位选择保留为当前会话的显式覆盖', async () => {
+    const sessionId = 'thinking-effort-session-override'
+    clearSessionDeepThinking(sessionId)
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'session-reasoning-effort-model',
+          name: 'Session reasoning effort model',
+          capabilities: ['text' as const],
+          reasoningSupport: 'supported' as const,
+          reasoningControl: {
+            dialect: 'reasoning_effort',
+            on: 'high',
+            off: 'none',
+            allowed_efforts: ['low', 'high'],
+          } satisfies ModelReasoningControl,
+        }
+        config.llm.providers = [
+          {
+            id: 'session-reasoning-effort-provider-id',
+            name: 'Session reasoning effort provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'session-reasoning-effort-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'session-reasoning-effort-provider-id'
+        config.llm.defaultModel = model.id
+        config.llm.defaultReasoningPolicy = { mode: 'off' }
+        useSettingsStore().config = config
+        useChatStore().currentSessionId = sessionId
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('.hc-chat__thinking-control').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-thinking-mode"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-thinking-effort-low"]').trigger('click')
+    await flushPromises()
+
+    expect(getSessionThinkingPolicy(sessionId)).toEqual({ mode: 'effort', effort: 'low' })
+    expect(wrapper.get('.hc-chat__thinking-control').attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+    clearSessionDeepThinking(sessionId)
+  })
+
+  it.each(['unsupported', 'unknown'] as const)(
+    'REG-CHAT-THINKING-INTENSITY-021 %s 模型禁用思考设置',
+    async (reasoningSupport) => {
+      const wrapper = mountChatView({
+        setup: () => {
+          const config = defaultConfig()
+          const model = {
+            id: `${reasoningSupport}-reasoning-model`,
+            name: `${reasoningSupport} reasoning model`,
+            capabilities: ['text' as const],
+            reasoningSupport,
+          }
+          config.llm.providers = [
+            {
+              id: `${reasoningSupport}-reasoning-provider-id`,
+              name: `${reasoningSupport} reasoning provider`,
+              type: 'openai',
+              enabled: true,
+              apiKey: '',
+              baseUrl: 'https://example.invalid/v1',
+              backendKey: `${reasoningSupport}-reasoning-provider`,
+              models: [model],
+              selectedModelId: model.id,
+            },
+          ]
+          config.llm.defaultProviderId = `${reasoningSupport}-reasoning-provider-id`
+          config.llm.defaultModel = model.id
+          useSettingsStore().config = config
+        },
+      })
+      await flushPromises()
+
+      const control = wrapper.get('.hc-chat__thinking-control')
+      expect(control.attributes('disabled')).toBeDefined()
+      expect(control.attributes('aria-disabled')).toBe('true')
+      await control.trigger('click')
+      expect(wrapper.find('[data-testid="chat-thinking-settings"]').exists()).toBe(false)
+
+      wrapper.unmount()
+    },
+  )
 
   // ────────────────────────────────────────────────────
   // 6. 流式输出有内容时显示 MarkdownRenderer
@@ -1095,7 +1601,7 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
-  it('BUG-20260724-010 编辑纯图片消息会以新消息身份重新进入既有场景图片管道', async () => {
+  it('BUG-20260724-010 编辑纯图片消息在本会话删除原消息与尾部后重新进入既有场景图片管道', async () => {
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1182,17 +1688,15 @@ describe('ChatView — E2E 关键路径', () => {
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
-      expect(mockForkSession).toHaveBeenCalledWith('edit-image-session', 'original-image-message', {
-        includeMessage: false,
-      })
-      expect(store.currentSessionId).toBe('edited-image-branch')
+      expect(mockForkSession).not.toHaveBeenCalled()
+      expect(store.currentSessionId).toBe('edit-image-session')
       expect(store.agentRole).toBe('edit-image-agent')
       expect(store.messages).toHaveLength(1)
       const revisedMessage = store.messages[0]!
       expect(revisedMessage.id).not.toBe('original-image-message')
       expect(revisedMessage.metadata?.attachments).toEqual([attachment])
       expect(mockAppendSessionMessage).toHaveBeenCalledWith(
-        'edited-image-branch',
+        'edit-image-session',
         expect.objectContaining({
           id: revisedMessage.id,
           content: '',
@@ -1204,7 +1708,7 @@ describe('ChatView — E2E 关键路径', () => {
         attachment,
         contextText: '',
         requestId: revisedMessage.id,
-        sourceSessionId: 'edited-image-branch',
+        sourceSessionId: 'edit-image-session',
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -1217,7 +1721,7 @@ describe('ChatView — E2E 关键路径', () => {
     }
   })
 
-  it('REG-CHAT-EDIT-ROUTE-005 场景单图编辑在 fork 等待期间仍使用源会话冻结路由', async () => {
+  it('REG-CHAT-EDIT-ROUTE-005 场景单图编辑在删除重发等待期间仍使用源会话冻结路由', async () => {
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1234,11 +1738,16 @@ describe('ChatView — E2E 关键路径', () => {
       template: '<div />',
     })
 
-    let resolveFork!: (value: { session: { id: string } }) => void
-    mockForkSession.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveFork = resolve
-      }),
+    let releasePersist!: () => void
+    mockAppendSessionMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releasePersist = () =>
+            resolve({
+              id: 'revised-route-image',
+              session_id: sourceSessionId,
+            })
+        }),
     )
     const sourceSessionId = 'edit-image-route-source'
     const agentId = 'edit-image-route-agent'
@@ -1300,20 +1809,21 @@ describe('ChatView — E2E 关键路径', () => {
       vm.editingMsgId = 'source-image'
       vm.editingText = '新说明'
       const pending = vm.confirmEdit('source-image')
-      await vi.waitFor(() => expect(mockForkSession).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1))
 
       const agent = useAgentsStore().registeredAgents[0]!
       agent.provider = 'unrelated-provider'
       agent.model = 'unrelated-model'
       store.chatParams.provider = 'another-provider'
       store.chatParams.model = 'another-model'
-      resolveFork({ session: { id: 'edited-image-branch' } })
+      releasePersist()
       await pending
 
+      expect(mockForkSession).not.toHaveBeenCalled()
       expect(vm.scenarioComposerImage).toMatchObject({
         attachment,
         contextText: '新说明',
-        sourceSessionId: 'edited-image-branch',
+        sourceSessionId,
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -1325,10 +1835,15 @@ describe('ChatView — E2E 关键路径', () => {
       clearSessionAgent(sourceSessionId)
       clearSessionModel(sourceSessionId)
       scenarioRegistry.reset()
+      mockAppendSessionMessage.mockReset()
+      mockAppendSessionMessage.mockResolvedValue({
+        id: 'scenario-image-message',
+        session_id: 'scenario-session',
+      })
     }
   })
 
-  it('BUG-20260724-010 编辑带说明的图片消息仍进入场景管道并原样保留说明与历史', async () => {
+  it('BUG-20260724-010 编辑带说明的图片消息在本会话删除原消息与尾部后保留说明并重入场景管道', async () => {
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1409,21 +1924,15 @@ describe('ChatView — E2E 关键路径', () => {
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
-      expect(mockForkSession).toHaveBeenCalledWith(
-        'edit-image-with-text-session',
-        'original-image-with-text',
-        {
-          includeMessage: false,
-        },
-      )
-      expect(store.currentSessionId).toBe('edited-image-branch')
+      expect(mockForkSession).not.toHaveBeenCalled()
+      expect(store.currentSessionId).toBe('edit-image-with-text-session')
       expect(store.agentRole).toBe('edit-image-with-text-agent')
       expect(store.messages).toHaveLength(1)
       const revisedMessage = store.messages[0]!
       expect(revisedMessage.content).toBe('请按五年级方法详细讲解')
       expect(revisedMessage.metadata?.attachments).toEqual([attachment])
       expect(mockAppendSessionMessage).toHaveBeenCalledWith(
-        'edited-image-branch',
+        'edit-image-with-text-session',
         expect.objectContaining({
           id: revisedMessage.id,
           content: '请按五年级方法详细讲解',
@@ -1435,6 +1944,7 @@ describe('ChatView — E2E 关键路径', () => {
         attachment,
         contextText: '请按五年级方法详细讲解',
         requestId: revisedMessage.id,
+        sourceSessionId: 'edit-image-with-text-session',
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -1447,7 +1957,7 @@ describe('ChatView — E2E 关键路径', () => {
     }
   })
 
-  it('BUG-20260724-010 图片编辑提交迟到时不会投影到用户已切换的同 Agent 会话', async () => {
+  it('BUG-20260724-010 编辑提交迟到时不会投影到用户已切换的同 Agent 会话', async () => {
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1464,17 +1974,10 @@ describe('ChatView — E2E 关键路径', () => {
       template: '<div />',
     })
 
-    let releasePersist!: () => void
-    mockAppendSessionMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releasePersist = () =>
-            resolve({
-              id: 'revised-image-message',
-              session_id: 'edited-image-branch',
-            })
-        }),
-    )
+    mockAppendSessionMessage.mockResolvedValueOnce({
+      id: 'revised-image-message',
+      session_id: 'edit-image-source-session',
+    })
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
@@ -1526,42 +2029,31 @@ describe('ChatView — E2E 关键路径', () => {
       vm.editingMsgId = 'original-race-image'
       vm.editingText = ''
       const pending = vm.confirmEdit('original-race-image')
-      await vi.waitFor(() => {
-        expect(mockForkSession).toHaveBeenCalledWith(
-          'edit-image-source-session',
-          'original-race-image',
-          { includeMessage: false },
-        )
-      })
-      await vi.waitFor(() => {
-        expect(mockAppendSessionMessage).toHaveBeenCalledWith(
-          'edited-image-branch',
-          expect.objectContaining({ metadata: { attachments: [attachment] } }),
-        )
-      })
-
+      // 确认编辑进入异步删除/重发窗口；此时用户切换到绑定同一 Agent 的另一个会话。
       await store.selectSession('other-same-agent-session')
-      releasePersist()
       await pending
 
-      // The accepted attempt belongs to the edit branch. Its late completion may
-      // update that branch's persisted state, but must not activate a scenario
-      // panel in another session merely because both sessions share one Agent.
+      // 替换语义：切换会话后迟到提交被中止（editSubmissionIsCurrent 保护），
+      // 既不写进当前会话，也不激活任何会话的场景面板；源会话尾部原样恢复。
       expect(store.currentSessionId).toBe('other-same-agent-session')
       expect(vm.scenarioComposerImage).toBe('')
-      expect(mockDeleteSession).not.toHaveBeenCalledWith('edited-image-branch')
+      expect(mockAppendSessionMessage).not.toHaveBeenCalled()
+      expect(mockDeleteSession).not.toHaveBeenCalled()
+      expect(mockForkSession).not.toHaveBeenCalled()
 
-      // The accepted attempt remains owned by/recoverable from its actual branch.
-      await store.selectSession('edited-image-branch')
+      // 被中止的改写既未写入当前会话，也未在切换后回滚污染；切回源会话时消息保持
+      // 已删除状态（恢复被跳过是设计：避免把源会话快照写进用户已切换的其他会话）。
+      await store.selectSession('edit-image-source-session')
       await flushPromises()
-      expect(vm.scenarioComposerImage).toMatchObject({
-        requestId: expect.any(String),
-        sourceSessionId: 'edited-image-branch',
-        attachment,
-      })
+      expect(store.messages.some((m) => m.id === 'original-race-image')).toBe(false)
     } finally {
       wrapper.unmount()
       scenarioRegistry.reset()
+      mockAppendSessionMessage.mockReset()
+      mockAppendSessionMessage.mockResolvedValue({
+        id: 'scenario-image-message',
+        session_id: 'scenario-session',
+      })
     }
   })
 
@@ -1943,12 +2435,19 @@ describe('ChatView — E2E 关键路径', () => {
                 enabled: true,
                 apiKey: '',
                 baseUrl: 'https://example.invalid/v1',
-                backendKey: 'global-provider',
+                backendKey: 'hexclaw-gpt',
                 models: [
                   {
                     id: 'global-default-model',
                     name: 'Global Default',
                     capabilities: ['text'],
+                  },
+                  {
+                    id: 'gpt-5.6-sol',
+                    name: 'GPT-5.6-Sol',
+                    capabilities: ['text'],
+                    reasoningSupport: 'supported',
+                    reasoningControl: { dialect: 'think', on: true, off: false },
                   },
                 ],
                 selectedModelId: 'global-default-model',
@@ -1956,6 +2455,7 @@ describe('ChatView — E2E 关键路径', () => {
             ],
             defaultModel: 'global-default-model',
             defaultProviderId: 'global-provider-id',
+            defaultReasoningPolicy: { mode: 'off' },
             routing: { enabled: false, strategy: 'cost-aware' },
           },
           security: {
@@ -2041,6 +2541,31 @@ describe('ChatView — E2E 关键路径', () => {
 
     const wrapper = mountChatView({
       setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'gpt-5.6-sol',
+          name: 'GPT-5.6-Sol',
+          capabilities: ['text' as const],
+          reasoningSupport: 'supported' as const,
+          reasoningControl: { dialect: 'think', on: true, off: false } satisfies ModelReasoningControl,
+        }
+        config.llm.providers = [
+          {
+            id: 'k12-reasoning-provider-id',
+            name: 'K12 reasoning provider',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'hexclaw-gpt',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'k12-reasoning-provider-id'
+        config.llm.defaultModel = model.id
+        config.llm.defaultReasoningPolicy = { mode: 'off' }
+        useSettingsStore().config = config
         useAgentsStore().registeredAgents = [
           {
             name: k12AgentId,
@@ -2096,6 +2621,8 @@ describe('ChatView — E2E 关键路径', () => {
       await expectK12Composer()
 
       await wrapper.get('.hc-chat__research-btn').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-thinking-mode"]').trigger('click')
       await flushPromises()
       expect(store.chatMode).toBe('research')
       expect(store.thinkingEnabled).toBe(true)

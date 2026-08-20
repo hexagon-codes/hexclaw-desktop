@@ -7,7 +7,7 @@ interface ModelEntry { name: string; ram: number }
 const OLLAMA_MODEL_CATALOG: ModelEntry[] = [
   // Qwen3.5（阿里最新，支持图文，全面取代 Qwen3/2.5）
   { name: 'qwen3.5:0.8b', ram: 1 }, { name: 'qwen3.5:2b', ram: 2 }, { name: 'qwen3.5:4b', ram: 3 }, { name: 'qwen3.5:9b', ram: 6 },
-  { name: 'qwen3.5:27b', ram: 17 }, { name: 'qwen3.5:35b', ram: 22 }, { name: 'qwen3.5:122b', ram: 75 },
+  { name: 'qwen3.8:27b', ram: 17 }, { name: 'qwen3.5:35b', ram: 22 }, { name: 'qwen3.5:122b', ram: 75 },
   // Qwen3 专项（Qwen3.5 暂无对应替代）
   { name: 'qwen3-coder:4b', ram: 3 }, { name: 'qwen3-coder:8b', ram: 5 }, { name: 'qwen3-coder:14b', ram: 9 }, { name: 'qwen3-coder:30b', ram: 19 },
   { name: 'qwen3-vl:4b', ram: 3 }, { name: 'qwen3-vl:8b', ram: 6 }, { name: 'qwen3-vl:30b', ram: 20 },
@@ -47,7 +47,7 @@ const OLLAMA_FEATURED = [
   'gemma4:26b',        // 10GB — Google MoE，3.8B 激活，速度快质量高
   'deepseek-r1:14b',   // 9GB — 推理/数学最强
   'phi4',               // 9GB — 微软，小模型之王
-  'qwen3.5:27b',       // 17GB — 质量天花板，32GB 舒适
+  'qwen3.8:27b',       // 17GB — 质量天花板，32GB 舒适
   'gemma4:31b',        // 12GB — Google Dense 旗舰
   'qwen3-embedding:8b', // 4.7GB — 多语言文本嵌入模型
   'glm4:9b',           // 6GB — 智谱 GLM-4 9B，大众电脑可跑

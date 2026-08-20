@@ -107,6 +107,74 @@ function createTestI18n() {
   })
 }
 
+async function mountReasoningStatusQuickChat() {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const store = useSettingsStore()
+  store.config = {
+    llm: {
+      providers: [
+        {
+          id: 'openai',
+          backendKey: 'openai',
+          name: 'OpenAI',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: 'https://api.openai.com/v1',
+          models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+        },
+      ],
+      defaultModel: 'gpt-4o',
+      defaultProviderId: 'openai',
+    },
+    security: {
+      gateway_enabled: true,
+      injection_detection: true,
+      pii_filter: false,
+      content_filter: true,
+      max_tokens_per_request: 8192,
+      rate_limit_rpm: 60,
+    },
+    general: {
+      language: 'zh-CN',
+      log_level: 'info',
+      data_dir: '',
+      auto_start: false,
+      defaultAgentRole: 'assistant',
+    },
+    notification: {
+      system_enabled: true,
+      sound_enabled: false,
+      agent_complete: true,
+    },
+    mcp: { default_protocol: 'stdio' },
+  }
+  store.runtimeProviders = store.config.llm.providers
+  wsMock.connect.mockResolvedValue(undefined)
+  wsMock.isConnected.mockReturnValue(true)
+
+  const wrapper = mount(QuickChatView, {
+    global: {
+      plugins: [pinia, createTestI18n()],
+      stubs: {
+        MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' },
+      },
+    },
+  })
+  await flushPromises()
+  return wrapper
+}
+
+async function sendReasoningStatusFixture(
+  wrapper: Awaited<ReturnType<typeof mountReasoningStatusQuickChat>>,
+) {
+  await wrapper.get('textarea').setValue('解释一下这个问题')
+  const buttons = wrapper.findAll('button')
+  await buttons[buttons.length - 1]!.trigger('click')
+  await flushPromises()
+}
+
 describe('QuickChatView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -815,5 +883,66 @@ describe('QuickChatView', () => {
     const arg = vi.mocked(sendChat).mock.calls[0]?.[0] as { metadata?: Record<string, unknown> }
     expect(arg?.metadata?.pinned_agent).toBe('default')
     wsMock.isConnected.mockReturnValue(true)
+  })
+
+  describe('reasoning status contract (RED)', () => {
+    it('uses one shared generating status before the first answer token and removes it afterwards', async () => {
+      const wrapper = await mountReasoningStatusQuickChat()
+      await sendReasoningStatusFixture(wrapper)
+
+      const pendingStatuses = wrapper.findAll(
+        '[data-component="AssistantRunStatus"][role="status"]',
+      )
+      expect.soft(wrapper.findAll('[role="status"]')).toHaveLength(1)
+      expect.soft(pendingStatuses).toHaveLength(1)
+      expect.soft(pendingStatuses[0]?.text()).toBe('正在生成回答…')
+      expect.soft(wrapper.findAll('.animate-bounce')).toHaveLength(0)
+
+      wsMock.emitChunk({ content: '这是首个正文 token' })
+      await flushPromises()
+
+      expect(wrapper.findAll('[role="status"]')).toHaveLength(0)
+      expect(wrapper.findAll('.animate-bounce')).toHaveLength(0)
+      expect(wrapper.text()).toContain('这是首个正文 token')
+    })
+
+    it('fails closed when a receipt tries to rewrite Quick Chat request=off to on', async () => {
+      const wrapper = await mountReasoningStatusQuickChat()
+      await sendReasoningStatusFixture(wrapper)
+
+      wsMock.emitChunk({
+        content: '',
+        metadata: {
+          reasoning_receipt: {
+            version: 1,
+            reasoning_request: 'on',
+            reasoning_support: 'supported',
+            reasoning_execution: 'applied',
+          },
+        },
+      })
+      await flushPromises()
+
+      const status = wrapper.get('[data-component="AssistantRunStatus"][role="status"]')
+      expect(status.attributes('data-reasoning-request')).toBe('off')
+      expect(status.attributes('data-reasoning-support')).toBe('unknown')
+      expect(status.attributes('data-reasoning-execution')).toBe('unknown')
+      expect(status.text()).toContain('正在生成回答…')
+      expect(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
+    })
+
+    it('does not add a deep-thinking entry to Quick Chat', async () => {
+      const wrapper = await mountReasoningStatusQuickChat()
+
+      const deepThinkingButtons = wrapper.findAll('button').filter((button) => {
+        const accessibleText = [
+          button.text(),
+          button.attributes('aria-label'),
+          button.attributes('title'),
+        ].join(' ')
+        return accessibleText.includes('深度思考')
+      })
+      expect(deepThinkingButtons).toHaveLength(0)
+    })
   })
 })

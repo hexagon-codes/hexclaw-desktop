@@ -1,10 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  freezeChatRouteSnapshot,
-  resolveChatRouteSnapshot,
-} from '@/stores/chat-route-snapshot'
+import { freezeChatRouteSnapshot, resolveChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 
 describe('Step 5.6 advanced regression matrix 2026-07-26', () => {
   it('BUG-011 keeps the explicit edit route immutable across mutation, replay, and JSON round trip', () => {
@@ -30,6 +27,8 @@ describe('Step 5.6 advanced regression matrix 2026-07-26', () => {
         model: 'model-before',
       },
       thinkingEnabled: true,
+      reasoningSupport: 'unknown',
+      reasoningPolicy: { mode: 'on' },
     })
     expect(Object.isFrozen(frozen)).toBe(true)
     expect(Object.isFrozen(frozen.chatParams)).toBe(true)
@@ -58,7 +57,7 @@ describe('Step 5.6 advanced regression matrix 2026-07-26', () => {
       )
 
     expect(hasMessageTimeTooltip(source)).toBe(false)
-    expect(source).toMatch(/\{\{\s*formatTime\s*\(\s*msg\.timestamp\s*\)\s*\}\}/)
+    expect(source).toMatch(/\{\{\s*formatClockTime\s*\(\s*msg\.timestamp\s*\)\s*\}\}/)
 
     const mutations = [
       '<time :title="formatFullTime(msg.timestamp)">{{ formatTime(msg.timestamp) }}</time>',

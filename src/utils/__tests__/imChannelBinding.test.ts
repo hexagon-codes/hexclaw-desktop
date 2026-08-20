@@ -3,6 +3,7 @@ import {
   isChannelDefaultAgent,
   channelDefaultAgentName,
   resolveEffectiveModel,
+  resolveExactChannelModel,
 } from '../imChannelBinding'
 
 describe('imChannelBinding — 频道默认模型纯逻辑', () => {
@@ -63,6 +64,73 @@ describe('imChannelBinding — 频道默认模型纯逻辑', () => {
     it('agentLabel 缺 display_name 时回退 name', () => {
       const r = resolveEffectiveModel({ name: 'raw-agent', model: 'm1' }, GLOBAL)
       expect(r).toEqual({ modelId: 'm1', source: 'agent', agentLabel: 'raw-agent' })
+    })
+
+    it('保留 Agent 的 provider key，避免同名模型跨 Provider 误配能力', () => {
+      expect(
+        resolveEffectiveModel(
+          { name: 'researcher', provider: 'openai-main', model: 'shared-model' },
+          { modelId: 'shared-model', providerId: 'provider-fallback' },
+        ),
+      ).toEqual({
+        modelId: 'shared-model',
+        providerKey: 'openai-main',
+        source: 'agent',
+        agentLabel: 'researcher',
+      })
+    })
+  })
+
+  describe('resolveExactChannelModel — 只消费精确 provider + model 能力', () => {
+    const models = [
+      {
+        providerId: 'provider-supported',
+        providerKey: 'openai-main',
+        providerName: 'OpenAI Main',
+        modelId: 'shared-model',
+        modelName: 'Shared supported',
+        capabilities: ['text'] as const,
+        reasoningSupport: 'supported' as const,
+        reasoningControl: {
+          dialect: 'reasoning_effort' as const,
+          on: 'high',
+          off: 'off',
+          allowed_efforts: ['high'],
+        },
+      },
+      {
+        providerId: 'provider-unsupported',
+        providerKey: 'other-provider',
+        providerName: 'Other',
+        modelId: 'shared-model',
+        modelName: 'Shared unsupported',
+        capabilities: ['text'] as const,
+        reasoningSupport: 'unsupported' as const,
+      },
+    ]
+
+    it('Agent provider key 精确命中对应模型，不按裸 modelId 取第一项', () => {
+      const hit = resolveExactChannelModel(
+        {
+          modelId: 'shared-model',
+          providerKey: 'other-provider',
+          source: 'agent',
+          agentLabel: '客服',
+        },
+        models,
+      )
+
+      expect(hit?.providerId).toBe('provider-unsupported')
+      expect(hit?.reasoningSupport).toBe('unsupported')
+    })
+
+    it('缺少精确 Provider 身份时不按裸 modelId 猜测', () => {
+      expect(
+        resolveExactChannelModel(
+          { modelId: 'shared-model', source: 'agent', agentLabel: '旧 Agent' },
+          models,
+        ),
+      ).toBeUndefined()
     })
   })
 })

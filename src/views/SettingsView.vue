@@ -61,12 +61,14 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ReasoningPolicySelect from '@/components/settings/ReasoningPolicySelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
 import AutomationPermissionsPanel from '@/components/settings/AutomationPermissionsPanel.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { scenarioRegistry } from '@/shell/scenario/registry'
+import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -604,6 +606,25 @@ const selectedDefaultModelValue = computed({
     const [providerId, modelId = ''] = value.split('::', 2)
     config.value.llm.defaultProviderId = providerId
     config.value.llm.defaultModel = modelId
+    autoSave()
+  },
+})
+
+const selectedDefaultReasoningModel = computed(() => {
+  const llmConfig = config.value?.llm
+  if (!llmConfig?.defaultProviderId || !llmConfig.defaultModel) return undefined
+  return settingsStore.availableModels.find(
+    (model) =>
+      model.providerId === llmConfig.defaultProviderId &&
+      model.modelId === llmConfig.defaultModel,
+  )
+})
+
+const defaultReasoningPolicyValue = computed({
+  get: () => normalizeDefaultReasoningPolicy(config.value?.llm.defaultReasoningPolicy),
+  set: (policy: import('@/types').ReasoningPolicy) => {
+    if (!config.value?.llm) return
+    config.value.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(policy)
     autoSave()
   },
 })
@@ -1613,6 +1634,28 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   class="hc-settings__select"
                   :options="defaultModelSelectOptions"
                   :disabled="defaultModelOptions.length === 0"
+                />
+              </div>
+            </div>
+
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('chat.reasoning.defaultStrategy') }}
+                <span
+                  class="hc-settings__info"
+                  :data-info="t('chat.reasoning.defaultStrategyHint')"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <ReasoningPolicySelect
+                  v-model="defaultReasoningPolicyValue"
+                  data-testid="llm-default-reasoning-policy"
+                  class="hc-settings__select"
+                  scope="global"
+                  :support="selectedDefaultReasoningModel?.reasoningSupport ?? 'unknown'"
+                  :control="selectedDefaultReasoningModel?.reasoningControl"
+                  :aria-label="t('chat.reasoning.defaultStrategy')"
                 />
               </div>
             </div>
@@ -2995,6 +3038,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__select {
   width: 240px;
   max-width: 100%;
+}
+
+.hc-settings__select :deep(.hc-select__trigger) {
+  height: 37px;
+  padding: 7px 11px;
+  font-size: 14px;
+  gap: 10px;
+}
+
+.hc-settings__select :deep(.hc-select__arrow) {
+  position: static;
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
 }
 
 /* ─── Dirty Indicator ───── */

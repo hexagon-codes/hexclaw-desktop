@@ -25,6 +25,9 @@ const {
   resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
+  onToolApprovalTerminal,
+  parseToolApprovalReconciliationAck,
+  parseToolApprovalTerminal,
   // api/chat
   updateMessageFeedback,
   listActiveStreams,
@@ -62,6 +65,9 @@ const {
   })),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
+  onToolApprovalTerminal: vi.fn().mockReturnValue(() => {}),
+  parseToolApprovalReconciliationAck: vi.fn().mockReturnValue(null),
+  parseToolApprovalTerminal: vi.fn().mockReturnValue(null),
 
   updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
   listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
@@ -70,7 +76,12 @@ const {
   approvalListeners: [] as Array<(req: {
     requestId: string
     sessionId: string
+    ownerId?: string
+    invocationId?: string
     toolName: string
+    argumentsDigest?: string
+    securityScopeDigest?: string
+    scopeSchemaVersion?: number
     risk: string
     reason: string
     respondApproval?: (decision: {
@@ -81,7 +92,15 @@ const {
     }) => Promise<{
       type: 'tool_approval_ack'
       request_id: string
+      session_id: string
+      owner_id: string
+      invocation_id: string
+      arguments_digest: string
+      security_scope_digest: string
+      scope_schema_version: number
       decision_id: string
+      decision: 'approved_once' | 'approved_remember' | 'denied'
+      idempotency_key: string
       status: 'accepted'
     }>
   }) => void>,
@@ -129,6 +148,9 @@ vi.mock('@/services/chatService', () => {
     resumeWebSocketStream,
     sendViaBackend,
     clearWebSocketCallbacks,
+    onToolApprovalTerminal,
+    parseToolApprovalReconciliationAck,
+    parseToolApprovalTerminal,
     ChatRequestError,
   }
 })
@@ -1002,7 +1024,9 @@ describe('useChatStore', () => {
       expect.objectContaining({
         onSnapshot: expect.any(Function),
         onChunk: expect.any(Function),
+        onApprovalRequest: expect.any(Function),
       }),
+      'off',
     )
     expect(store.isSessionStreaming('s1')).toBe(true)
     expect(store.streamingSessionId).toBe('s1')
@@ -1022,23 +1046,53 @@ describe('useChatStore', () => {
     const store = useChatStore()
     store.currentSessionId = 's1'
     store.initApprovalListener()
-    const createResponder = () => vi.fn(async (decision: {
+    const createResponder = (identity: {
+      sessionId: string
+      invocationId: string
+      argumentsDigest: string
+      securityScopeDigest: string
+    }) => vi.fn(async (decision: {
       request_id: string
       decision_id: string
+      decision: 'approved_once' | 'approved_remember' | 'denied'
+      idempotency_key: string
     }) => ({
       type: 'tool_approval_ack' as const,
       request_id: decision.request_id,
+      session_id: identity.sessionId,
+      owner_id: 'desktop-user',
+      invocation_id: identity.invocationId,
+      arguments_digest: identity.argumentsDigest,
+      security_scope_digest: identity.securityScopeDigest,
+      scope_schema_version: 1,
       decision_id: decision.decision_id,
+      decision: decision.decision,
+      idempotency_key: decision.idempotency_key,
       status: 'accepted' as const,
     }))
-    const respondS1 = createResponder()
-    const respondS2 = createResponder()
+    const respondS1 = createResponder({
+      sessionId: 's1',
+      invocationId: 'invocation-s1',
+      argumentsDigest: 'a'.repeat(64),
+      securityScopeDigest: 'b'.repeat(64),
+    })
+    const respondS2 = createResponder({
+      sessionId: 's2',
+      invocationId: 'invocation-s2',
+      argumentsDigest: 'c'.repeat(64),
+      securityScopeDigest: 'd'.repeat(64),
+    })
 
     for (const listener of approvalListeners) {
       listener({
         requestId: 'req-s1',
         sessionId: 's1',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-s1',
         toolName: 'tool-a',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'sensitive',
         reason: 'session 1 approval',
         respondApproval: respondS1,
@@ -1046,7 +1100,12 @@ describe('useChatStore', () => {
       listener({
         requestId: 'req-s2',
         sessionId: 's2',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-s2',
         toolName: 'tool-b',
+        argumentsDigest: 'c'.repeat(64),
+        securityScopeDigest: 'd'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'session 2 approval',
         respondApproval: respondS2,
@@ -1071,6 +1130,33 @@ describe('useChatStore', () => {
 
     store.currentSessionId = 's2'
     expect(store.pendingApproval?.requestId).toBe('req-s2')
+  })
+
+  it('exposes session-scoped approval projection cleanup through the canonical chat store facade', () => {
+    const store = useChatStore()
+    store.pendingApprovals = {
+      'req-s1': {
+        requestId: 'req-s1',
+        sessionId: 's1',
+        toolName: 'tool-a',
+        risk: 'sensitive',
+        reason: 'session 1 approval',
+        receivedAt: 1,
+      },
+      'req-s2': {
+        requestId: 'req-s2',
+        sessionId: 's2',
+        toolName: 'tool-b',
+        risk: 'dangerous',
+        reason: 'session 2 approval',
+        receivedAt: 2,
+      },
+    }
+
+    store.clearPendingApprovalsForSession('s1')
+
+    expect(store.pendingApprovals['req-s1']).toBeUndefined()
+    expect(store.pendingApprovals['req-s2']).toMatchObject({ sessionId: 's2' })
   })
 
   it('sends explicit provider and model to the WebSocket request', async () => {

@@ -46,6 +46,55 @@ function seedSettings() {
         models: [{ id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text'] }] }] },
   }
 }
+
+function seedReasoningSettings() {
+  const s = useSettingsStore()
+  ;(s as unknown as { config: unknown }).config = {
+    llm: {
+      defaultModel: 'shared-model',
+      defaultProviderId: 'provider-supported',
+      defaultReasoningPolicy: { mode: 'auto' },
+      providers: [
+        {
+          id: 'provider-unsupported',
+          name: 'Other',
+          backendKey: 'other-provider',
+          type: 'custom',
+          enabled: true,
+          models: [
+            {
+              id: 'shared-model',
+              name: 'Shared unsupported',
+              capabilities: ['text'],
+              reasoningSupport: 'unsupported',
+            },
+          ],
+        },
+        {
+          id: 'provider-supported',
+          name: 'OpenAI Main',
+          backendKey: 'openai-main',
+          type: 'openai',
+          enabled: true,
+          models: [
+            {
+              id: 'shared-model',
+              name: 'Shared supported',
+              capabilities: ['text'],
+              reasoningSupport: 'supported',
+              reasoningControl: {
+                dialect: 'reasoning_effort',
+                on: 'high',
+                off: 'off',
+                allowed_efforts: ['high'],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  }
+}
 function mountBinding(platform: IMChannelType = 'feishu') {
   return mount(ChannelAgentBinding, {
     attachTo: document.body,
@@ -101,6 +150,106 @@ describe('ChannelAgentBinding — 纯接待模型 行为', () => {
     expect(src).toContain('客服')
     expect(src).toContain('跟随全局默认')
   })
+
+  it('按 Agent 的精确 provider + model 展示派生模型和 supported 的「思考 · 高」', async () => {
+    seedReasoningSettings()
+    h.getAgents.mockResolvedValue({
+      agents: [
+        {
+          name: 'researcher',
+          display_name: '研究员',
+          provider: 'openai-main',
+          model: 'shared-model',
+          reasoning_policy: { mode: 'effort', effort: 'high' },
+        },
+      ],
+      total: 1,
+      default: '',
+    })
+    h.getRules.mockResolvedValue({
+      rules: [
+        {
+          id: 1,
+          platform: 'feishu',
+          instance_id: '',
+          user_id: '',
+          chat_id: '',
+          agent_name: 'researcher',
+          priority: 0,
+        },
+      ],
+      total: 1,
+    })
+
+    const w = mountBinding('feishu')
+    await flushPromises()
+
+    expect(w.get('.hc-cab__effmodel-badge').text()).toContain('Shared supported')
+    expect(w.get('.hc-cab__effmodel-reasoning').text()).toBe('思考 · 高')
+  })
+
+  it.each(['unsupported', 'unknown'] as const)(
+    '%s 模型不渲染通道思考标签',
+    async (reasoningSupport) => {
+      const s = useSettingsStore()
+      ;(s as unknown as { config: unknown }).config = {
+        llm: {
+          defaultModel: 'shared-model',
+          defaultProviderId: 'provider-current',
+          defaultReasoningPolicy: { mode: 'auto' },
+          providers: [
+            {
+              id: 'provider-current',
+              name: 'Current',
+              backendKey: 'current',
+              type: 'custom',
+              enabled: true,
+              models: [
+                {
+                  id: 'shared-model',
+                  name: 'Shared',
+                  capabilities: ['text'],
+                  reasoningSupport,
+                },
+              ],
+            },
+          ],
+        },
+      }
+      h.getAgents.mockResolvedValue({
+        agents: [
+          {
+            name: 'support',
+            display_name: '客服',
+            provider: 'current',
+            model: 'shared-model',
+            reasoning_policy: { mode: 'effort', effort: 'high' },
+          },
+        ],
+        total: 1,
+        default: '',
+      })
+      h.getRules.mockResolvedValue({
+        rules: [
+          {
+            id: 1,
+            platform: 'feishu',
+            instance_id: '',
+            user_id: '',
+            chat_id: '',
+            agent_name: 'support',
+            priority: 0,
+          },
+        ],
+        total: 1,
+      })
+
+      const w = mountBinding('feishu')
+      await flushPromises()
+
+      expect(w.findAll('.hc-cab__effmodel-reasoning')).toHaveLength(0)
+    },
+  )
 
   it('从下拉选命名 Agent → addRule 指向它', async () => {
     seedSettings()

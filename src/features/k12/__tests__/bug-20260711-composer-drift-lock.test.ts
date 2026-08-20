@@ -211,6 +211,7 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
   it('★麦克风常驻：语音通道不可用（voiceSupported=false）时按钮仍渲染（原型 composer 固定动作行）', async () => {
     const ChatInput = (await import('@/components/chat/ChatInput.vue')).default
     const w = mount(ChatInput, {
+      props: { scenarioPlaceholder: '输入题目或粘贴作业照片' },
       global: {
         plugins: [i18n()],
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },

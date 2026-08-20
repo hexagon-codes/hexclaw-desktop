@@ -6,12 +6,14 @@ import { fileFromNativeGrant } from '@/api/desktop'
 import type { NativeFileGrant } from '@/api/native-files'
 import {
   ArrowUp,
+  AudioLines,
   Square,
   Paperclip,
   Mic,
   Sparkles,
   Puzzle,
   Plus,
+  X,
   Upload,
   BookOpen,
   Plug,
@@ -76,18 +78,20 @@ const DEFAULT_VIDEO_WITH_AUDIO = true
 
 const { t } = useI18n()
 const voiceToast = useToast()
-// ③ STT 错误不再静默吞掉（麦克风拒权/转写失败）——浮出 toast，避免"点了没反应"。
-// isSupported 不再用于隐藏麦克风（BUG-20260711-E：按钮常驻对齐原型，不可用时点击走 error→toast）
-const { isListening, transcript, toggleListening, error: voiceError } = useVoice()
+// STT 错误继续交给公共 toast 承载，录音面板不再新建错误通道。
+const {
+  isListening,
+  transcript,
+  startListening,
+  finishListening,
+  cancelListening,
+  toggleListening,
+  error: voiceError,
+} = useVoice()
 watch(voiceError, (msg) => {
-  if (msg) voiceToast.error(msg)
-})
-
-// 语音识别结果 -> 输入框
-watch(transcript, (text) => {
-  if (text) {
-    inputText.value = text
-    nextTick(() => handleInput())
+  if (msg) {
+    voiceToast.error(msg)
+    if (voiceSessionActive.value && !voiceFinalizing.value) leaveVoiceSession()
   }
 })
 
@@ -257,6 +261,93 @@ function removeContextRef(type: string, id: string) {
 }
 
 const inputText = ref('')
+const voiceSessionActive = ref(false)
+const voiceFinalizing = ref(false)
+const voiceElapsedSeconds = ref(0)
+const voiceCancelRef = ref<HTMLButtonElement>()
+const VOICE_WAVE_LEVELS = [
+  0.34, 0.52, 0.7, 0.46, 0.82, 0.58, 0.96, 0.62, 0.76, 0.44, 0.9, 0.66, 0.5, 0.78,
+  0.38, 0.62, 0.86, 0.52, 0.72, 0.96, 0.6, 0.8, 0.46, 0.68, 0.88, 0.56, 0.74, 0.42,
+]
+let voiceTimer: ReturnType<typeof setInterval> | null = null
+
+const voiceElapsedLabel = computed(() => {
+  const minutes = Math.floor(voiceElapsedSeconds.value / 60)
+  const seconds = voiceElapsedSeconds.value % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+})
+
+function stopVoiceTimer() {
+  if (voiceTimer !== null) {
+    clearInterval(voiceTimer)
+    voiceTimer = null
+  }
+}
+
+function leaveVoiceSession() {
+  stopVoiceTimer()
+  voiceSessionActive.value = false
+  voiceElapsedSeconds.value = 0
+}
+
+function startVoiceSession() {
+  if (voiceSessionActive.value || props.disabled || submitting.value || isGenMode.value) return
+  closePopups()
+  voiceSessionActive.value = true
+  voiceFinalizing.value = false
+  voiceElapsedSeconds.value = 0
+  const startedAt = Date.now()
+  stopVoiceTimer()
+  voiceTimer = setInterval(() => {
+    voiceElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 250)
+  void Promise.resolve(startListening()).catch((cause) => {
+    voiceToast.error(cause instanceof Error ? cause.message : 'Failed to start speech recognition')
+    leaveVoiceSession()
+  })
+  nextTick(() => voiceCancelRef.value?.focus())
+}
+
+function discardVoiceSession() {
+  if (voiceFinalizing.value) return
+  cancelListening()
+  leaveVoiceSession()
+  nextTick(() => mathEditorRef.value?.focusEditor())
+}
+
+async function sendVoiceSession() {
+  if (voiceFinalizing.value) return
+  voiceFinalizing.value = true
+  stopVoiceTimer()
+  try {
+    const text = (await finishListening()).trim()
+    if (!text) {
+      leaveVoiceSession()
+      return
+    }
+    inputText.value = text
+    leaveVoiceSession()
+    await nextTick()
+    handleInput()
+    await handleSend()
+  } catch (cause) {
+    voiceToast.error(cause instanceof Error ? cause.message : 'Transcribe failed')
+    leaveVoiceSession()
+  } finally {
+    voiceFinalizing.value = false
+  }
+}
+
+function handleVoiceKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    discardVoiceSession()
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    void sendVoiceSession()
+  }
+}
+
 const composing = ref(false) // IME 合成态（compositionstart→true / end→false）
 let lastCompositionEnd = 0 // 上次合成结束时间戳，兜底 WKWebView compositionend 早于确认键 keydown
 type MathEditorHandle = {
@@ -274,6 +365,20 @@ const generating = ref(false)
 let videoAbort: AbortController | null = null
 
 const attachedFiles = ref<{ file: File; previewUrl?: string }[]>([])
+const isScenarioComposer = computed(
+  () =>
+    !!props.scenarioImageIntercept ||
+    !!props.scenarioPlaceholder ||
+    !!props.scenarioHint,
+)
+
+// 场景 Composer 继续使用原有听写语义：识别文本直接回填编辑区。
+watch(transcript, (text) => {
+  if (isScenarioComposer.value && text) {
+    inputText.value = text
+    nextTick(() => handleInput())
+  }
+})
 
 const showMention = ref(false)
 const mentionQuery = ref('')
@@ -312,6 +417,14 @@ const canSend = computed(() => {
   }
   return !!(inputText.value.trim() || attachedFiles.value.length > 0)
 })
+
+const showVoicePrimary = computed(
+  () =>
+    !isScenarioComposer.value &&
+    !isGenMode.value &&
+    !inputText.value.trim() &&
+    attachedFiles.value.length === 0,
+)
 
 const placeholder = computed(() => {
   if (composerMode.value === 'image_generate') {
@@ -736,6 +849,7 @@ onMounted(() => {
   }
 })
 onUnmounted(() => {
+  stopVoiceTimer()
   unlistenNativeDrop?.()
   unlistenNativeGrantDrop?.()
 })
@@ -816,12 +930,85 @@ defineExpose({ focus, setInput, triggerFileUpload })
   <div class="hc-composer">
     <div
       class="hc-composer__box"
-      :class="{ 'hc-composer__box--dragging': isDragging }"
+      :class="{
+        'hc-composer__box--primary': !isScenarioComposer,
+        'hc-composer__box--dragging': isDragging,
+        'hc-composer__box--voice': voiceSessionActive,
+      }"
       @dragenter.prevent="handleDragEnter"
       @dragover.prevent
       @dragleave.prevent="handleDragLeave"
       @drop.capture="handleDrop"
     >
+      <div
+        v-if="voiceSessionActive"
+        class="hc-composer__voice"
+        data-testid="chat-voice-panel"
+        aria-live="polite"
+        @keydown="handleVoiceKeydown"
+      >
+        <div class="hc-composer__voice-copy">
+          <span class="hc-composer__voice-status">
+            <i class="hc-composer__voice-dot" aria-hidden="true" />
+            {{
+              voiceFinalizing
+                ? t(
+                    'chat.composer.voiceTranscribingAndSending',
+                    'Recording stopped, transcribing and sending',
+                  )
+                : t('chat.composer.voiceRecording', 'Listening…')
+            }}
+          </span>
+          <time class="hc-composer__voice-time" :datetime="`PT${voiceElapsedSeconds}S`">
+            {{ voiceElapsedLabel }}
+          </time>
+          <span v-if="transcript" class="hc-composer__voice-separator" aria-hidden="true" />
+          <span
+            v-if="transcript"
+            class="hc-composer__voice-transcript"
+            data-testid="chat-voice-transcript"
+          >
+            {{ transcript }}
+          </span>
+        </div>
+        <div class="hc-composer__voice-controls">
+          <button
+            ref="voiceCancelRef"
+            type="button"
+            class="hc-composer__voice-button"
+            data-testid="chat-voice-cancel"
+            :title="t('chat.composer.voiceDiscard', 'Discard recording')"
+            :aria-label="t('chat.composer.voiceDiscard', 'Discard recording')"
+            :disabled="voiceFinalizing"
+            @click="discardVoiceSession"
+          >
+            <X :size="17" />
+          </button>
+          <div
+            class="hc-composer__voice-wave"
+            role="img"
+            :aria-label="t('chat.composer.voiceRecording', 'Listening…')"
+          >
+            <span
+              v-for="(level, index) in VOICE_WAVE_LEVELS"
+              :key="index"
+              :style="{ '--voice-level': level, '--voice-index': index }"
+            />
+          </div>
+          <button
+            type="button"
+            class="hc-composer__voice-button hc-composer__voice-button--send"
+            data-testid="chat-voice-send"
+            :title="t('chat.composer.voiceSendTranscript', 'Send voice transcript')"
+            :aria-label="t('chat.composer.voiceSendTranscript', 'Send voice transcript')"
+            :aria-busy="voiceFinalizing"
+            @click="sendVoiceSession"
+          >
+            <ArrowUp :size="17" stroke-width="2.5" />
+          </button>
+        </div>
+      </div>
+
       <!-- 拖放文件遮罩 -->
       <div v-if="isDragging" class="hc-composer__dropzone">
         <Upload :size="22" />
@@ -930,7 +1117,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
       </p>
 
       <div class="hc-composer__bar">
-        <!-- 左：输入动作（+ 添加 · 🧩 skill · ✨ prompt · 🎤 语音听写） -->
+        <!-- 左：输入动作（+ 添加 · 技能 · 提示词） -->
         <div class="hc-composer__tools">
           <button
             class="hc-composer__tool"
@@ -940,26 +1127,33 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Plus :size="20" />
           </button>
+          <span v-if="!isScenarioComposer" class="hc-composer__tool-divider" aria-hidden="true" />
           <button
             class="hc-composer__tool"
+            :class="{ 'hc-composer__tool--labeled': !isScenarioComposer }"
             :title="t('chat.skillLibrary', '🧩 调用 skill（或输入 /）')"
             :disabled="disabled || submitting || !(skills && skills.length)"
             @click="openSkillPicker"
           >
             <Puzzle :size="18" />
+            <span v-if="!isScenarioComposer" class="hc-composer__tool-label">
+              {{ t('chat.composer.skill', '技能') }}
+            </span>
           </button>
           <button
             class="hc-composer__tool"
+            :class="{ 'hc-composer__tool--labeled': !isScenarioComposer }"
             :title="t('chat.promptLibrary', '✨ prompt / 命令（或输入 /）')"
             :disabled="disabled || submitting"
             @click="openPromptPicker"
           >
             <Sparkles :size="18" />
+            <span v-if="!isScenarioComposer" class="hc-composer__tool-label">
+              {{ t('chat.composer.prompt', '提示词') }}
+            </span>
           </button>
-          <!-- 麦克风常驻（BUG-20260711-E 对齐原型 composer 固定动作行 app.html:1261-1264）：
-               通道不可用时不整颗消失——点击由 useVoice 置 error → toast 提示（不再 v-if 隐藏，
-               WKWebView 检测不到 STT 通道曾导致按钮凭空少一颗、与原型漂移）。 -->
           <button
+            v-if="isScenarioComposer"
             class="hc-composer__tool"
             :class="{ 'hc-composer__tool--recording': isListening }"
             :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
@@ -985,6 +1179,17 @@ defineExpose({ focus, setInput, triggerFileUpload })
             @click="emit('stop')"
           >
             <Square :size="14" />
+          </button>
+          <button
+            v-else-if="showVoicePrimary"
+            class="hc-composer__send hc-composer__voice-primary"
+            :disabled="disabled || submitting || generating"
+            :title="t('chat.voiceStart')"
+            :aria-label="t('chat.voiceStart')"
+            data-testid="chat-voice-start"
+            @click="startVoiceSession"
+          >
+            <AudioLines :size="19" stroke-width="2.2" />
           </button>
           <button
             v-else
@@ -1060,6 +1265,13 @@ defineExpose({ focus, setInput, triggerFileUpload })
     box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.hc-composer__box--primary {
+  box-sizing: border-box;
+  min-height: 116px;
+  border-radius: 18px;
+  padding: 14px 16px 12px;
+}
+
 .hc-composer__box:focus-within {
   border-color: var(--hc-accent);
   box-shadow:
@@ -1072,6 +1284,170 @@ defineExpose({ focus, setInput, triggerFileUpload })
   border-color: var(--hc-accent);
   border-style: dashed;
   box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.hc-composer__box--voice {
+  border-color: color-mix(in srgb, var(--hc-accent) 42%, var(--hc-border));
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--hc-accent) 9%, var(--hc-bg-card)) 0%,
+    var(--hc-bg-card) 62%
+  );
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--hc-accent) 9%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.hc-composer__box--voice > :not(.hc-composer__voice) {
+  display: none;
+}
+
+.hc-composer__voice {
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  color: var(--hc-text-primary);
+}
+
+.hc-composer__voice-copy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 44px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.hc-composer__voice-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--hc-accent);
+  font-weight: 600;
+}
+
+.hc-composer__voice-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hc-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--hc-accent) 11%, transparent);
+}
+
+.hc-composer__voice-time {
+  flex: none;
+  color: var(--hc-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-composer__voice-separator {
+  width: 1px;
+  height: 12px;
+  flex: none;
+  background: var(--hc-divider);
+}
+
+.hc-composer__voice-transcript {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--hc-text-primary);
+}
+
+.hc-composer__voice-controls {
+  display: grid;
+  grid-template-columns: 34px minmax(120px, 360px) 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.hc-composer__voice-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-elevated);
+  color: var(--hc-text-secondary);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transition:
+    transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.15s,
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.hc-composer__voice-button:hover:not(:disabled) {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.hc-composer__voice-button:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.hc-composer__voice-button:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+}
+
+.hc-composer__voice-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.hc-composer__voice-button--send {
+  border-color: transparent;
+  background: var(--hc-accent);
+  color: var(--hc-text-inverse);
+}
+
+.hc-composer__voice-button--send:hover:not(:disabled) {
+  background: var(--hc-accent-hover);
+  color: var(--hc-text-inverse);
+}
+
+.hc-composer__voice-wave {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  color: var(--hc-accent);
+}
+
+.hc-composer__voice-wave span {
+  width: 3px;
+  height: 22px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.82;
+  transform: scaleY(var(--voice-level, 0.45));
+  transform-origin: center;
+  animation: hc-composer-wave 1.05s ease-in-out infinite;
+  animation-delay: calc(var(--voice-index) * -43ms);
+}
+
+@keyframes hc-composer-wave {
+  0%,
+  100% {
+    transform: scaleY(0.26);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleY(var(--voice-level, 0.9));
+    opacity: 1;
+  }
 }
 
 /* 拖放文件遮罩：覆盖整个 composer，提示「松开以上传」 */
@@ -1108,6 +1484,11 @@ defineExpose({ focus, setInput, triggerFileUpload })
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   overflow-y: auto;
   letter-spacing: -0.01em;
+}
+
+.hc-composer__box--primary :deep(.hc-composer__field) {
+  max-height: 150px;
+  min-height: 46px;
 }
 
 .hc-composer :deep(.hc-composer__field[data-placeholder]:empty::before) {
@@ -1296,12 +1677,24 @@ defineExpose({ focus, setInput, triggerFileUpload })
   gap: 8px;
 }
 
+.hc-composer__box--primary .hc-composer__bar {
+  margin-top: 8px;
+}
+
 .hc-composer__tools {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: 1;
   min-width: 0;
+}
+
+.hc-composer__tool-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  flex-shrink: 0;
+  background: var(--hc-divider);
 }
 /* 场景输入行动作锚点：display:contents → Teleport 进来的按钮成为 tools 的行内 flex 项 */
 .hc-composer__scenario-actions {
@@ -1331,6 +1724,17 @@ defineExpose({ focus, setInput, triggerFileUpload })
     background-color 0.15s,
     color 0.15s,
     transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.hc-composer__tool--labeled {
+  width: auto;
+  min-width: 32px;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* P1：图标 hover 反馈——浮起底色 + 提色，提升可发现性（tooltip 已在 title） */
@@ -1366,7 +1770,6 @@ defineExpose({ focus, setInput, triggerFileUpload })
   background: rgba(175, 82, 222, 0.1);
 }
 
-/* 语音录音中 — 红色脉动 */
 .hc-composer__tool--recording {
   color: var(--hc-error, #ff3b30);
   animation: voicePulse 1.2s ease-in-out infinite;
@@ -1436,9 +1839,62 @@ defineExpose({ focus, setInput, triggerFileUpload })
   transform: scale(0.92);
 }
 
+.hc-composer__voice-primary {
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+}
+
 .hc-composer__send--stop {
   background: var(--hc-error, #ff3b30);
   color: var(--hc-text-inverse);
+}
+
+@media (max-width: 900px) {
+  .hc-composer__tool--labeled {
+    width: 32px;
+    padding: 0;
+  }
+
+  .hc-composer__tool-label {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .hc-composer__voice-copy {
+    justify-content: flex-start;
+    padding: 0 8px;
+  }
+
+  .hc-composer__voice-separator,
+  .hc-composer__voice-transcript {
+    display: none;
+  }
+
+  .hc-composer__voice-controls {
+    grid-template-columns: 34px minmax(80px, 1fr) 34px;
+    gap: 10px;
+  }
+}
+
+@media (max-height: 700px) {
+  .hc-composer__box--primary {
+    min-height: 96px;
+  }
+
+  .hc-composer__box--primary :deep(.hc-composer__field) {
+    min-height: 26px;
+  }
+
+  .hc-composer__voice {
+    min-height: 68px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-composer__voice-wave span {
+    animation: none;
+  }
 }
 
 /* ─── 入场动效 (Apple 弹簧曲线) ───── */

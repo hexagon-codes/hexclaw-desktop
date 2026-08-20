@@ -178,6 +178,43 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(store.config!.llm.defaultProviderId).toBe('testprovider')
   })
 
+  it('loads the backend global default reasoning policy and defaults legacy input to auto', async () => {
+    mockGetLLMConfig.mockResolvedValueOnce({
+      ...MOCK_BACKEND_CONFIG,
+      default_reasoning_policy: { mode: 'off' },
+    })
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    const llm = store.config!.llm as { defaultReasoningPolicy?: unknown }
+    expect(llm.defaultReasoningPolicy).toEqual({ mode: 'off' })
+
+    setActivePinia(createPinia())
+    mockGetLLMConfig.mockResolvedValueOnce(MOCK_BACKEND_CONFIG)
+    const legacyStore = useSettingsStore()
+    await legacyStore.loadConfig()
+    expect((legacyStore.config!.llm as { defaultReasoningPolicy?: unknown }).defaultReasoningPolicy)
+      .toEqual({ mode: 'auto' })
+  })
+
+  it('saves the global default reasoning policy through the LLM config API', async () => {
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    ;(store.config!.llm as { defaultReasoningPolicy?: unknown }).defaultReasoningPolicy = {
+      mode: 'effort',
+      effort: 'xhigh',
+    }
+
+    await store.saveConfig(store.config!)
+
+    expect(mockUpdateLLMConfig.mock.calls[0]?.[0]).toMatchObject({
+      default_reasoning_policy: { mode: 'effort', effort: 'xhigh' },
+    })
+  })
+
   it('availableModels 计算属性正确', async () => {
     ;(globalThis as unknown as Record<string, unknown>).isTauri = true
 

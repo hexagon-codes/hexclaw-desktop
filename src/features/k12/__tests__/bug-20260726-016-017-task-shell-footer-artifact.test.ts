@@ -27,6 +27,18 @@ describe('BUG-20260726-016/017 TaskShell frozen footer and canonical artifact co
     )
   })
 
+  it('TaskShell 共享 Footer 与普通助手消息一致：无更多菜单与删除按钮', () => {
+    const footerSlice = recognizeGuardPanelSource.slice(
+      recognizeGuardPanelSource.indexOf('data-testid="task-shell-footer"'),
+      recognizeGuardPanelSource.length,
+    )
+    expect(footerSlice).not.toContain('msg-more')
+    expect(footerSlice).not.toContain('message-more')
+    expect(footerSlice).not.toContain('更多')
+    expect(footerSlice).not.toContain('@delete')
+    expect(footerSlice).toContain('MessageActions')
+  })
+
   it('keeps partial output non-exportable and sends one final digest through every action', async () => {
     expect(recognizeGuardPanelSource).toContain(
       'v-if="finalArtifact && finalArtifactID && finalArtifactDigest"',

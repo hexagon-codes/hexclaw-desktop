@@ -55,8 +55,9 @@ describe('BUG-20260818-001: Provider 卡头恒一行 + 状态三态 + 眼睛一�
     // builtin：视觉顺序对调由 grid order 实现（Base URL order:-1 左窄列，API Key 右宽列）
     expect(view).toContain('.hc-provider__config-grid--builtin .hc-provider__config-url')
     expect(view).toContain('order: -1')
-    // custom 900px+：API Key 列比 Base URL 列宽（顺序不变）
-    expect(view).toContain('minmax(280px, 1.2fr)')
+    // custom 900px+：Provider 与 Base URL 两列同行（API Key 整行占满第二行），
+    // 断言两列宽度定义存在（首列收窄、次列放宽）
+    expect(view).toContain('minmax(150px, 0.56fr)')
     expect(view).toContain('minmax(220px, 0.82fr)')
   })
 })

@@ -145,8 +145,8 @@ describe('ConnectionChannelCards', () => {
     expect(wrapper.find('.modal-stub').exists()).toBe(true)
   })
 
-  it('shows a reference-count chip when cron jobs deliver to the connection', async () => {
-    // 三个任务的 deliver 分别命中 id / name / type；第四个仅 "chat"（桌面流，不计）
+  it('keeps cron reference data loading without rendering a reference chip or copy', async () => {
+    // 返回含多种投递目标的后台任务，确认数据仍会加载但不投影可见 UI。
     getCronJobs.mockResolvedValue({
       jobs: [
         { id: 'j1', deliver: ['feishu-1'] }, // 命中实例 id
@@ -159,12 +159,14 @@ describe('ConnectionChannelCards', () => {
     const wrapper = mountCards()
     await flushPromises()
 
-    const chip = wrapper.find('.hc-cxrefchip')
-    expect(chip.exists()).toBe(true)
-    expect(chip.text()).toContain('3')
+    expect(getCronJobs).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.hc-cxrefchip').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(
+      zhCN.connections.channels.refchip.replace('{count}', '3'),
+    )
   })
 
-  it('hides the reference-count chip when no cron job references the connection', async () => {
+  it('renders no reference chip when no cron job references the connection', async () => {
     getCronJobs.mockResolvedValue({ jobs: [{ id: 'j1', deliver: ['chat'] }], total: 1 })
     const wrapper = mountCards()
     await flushPromises()

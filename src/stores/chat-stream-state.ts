@@ -114,7 +114,13 @@ export function createChatStreamStateController(params: {
     if (!current) return false
     // 退化熔断：已判失控复读 → 冻结，丢弃后续复读 chunk，墙不再长（BUG-20260625 模型塌缩）。
     if (current.degenerated) return false
-    const merged = mergeStreamChunkState(current, content, reasoning, runtimeFrame)
+    const merged = mergeStreamChunkState(
+      current,
+      content,
+      reasoning,
+      runtimeFrame,
+      current.requestRoute,
+    )
     // 在原始流（含 reasoning）上检测；命中即裁掉复读尾、追加提示、置熔断位。
     const probe = merged.content || merged.rawContent
     if (isDegenerateTail(probe)) {

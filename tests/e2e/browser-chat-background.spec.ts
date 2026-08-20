@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises'
 import { test, expect, type Page, type Route } from '@playwright/test'
 
 test.use({
@@ -38,6 +39,13 @@ const moreSessions: SessionRow[] = [
     title: '更早的会话',
     created_at: '2026-04-06T10:00:00.000Z',
     updated_at: '2026-04-06T10:00:00.000Z',
+    message_count: 1,
+  },
+  {
+    id: 's-cross-year',
+    title: '跨年会话',
+    created_at: '2025-12-31T10:00:00.000Z',
+    updated_at: '2025-12-31T10:00:00.000Z',
     message_count: 1,
   },
 ]
@@ -577,7 +585,7 @@ test('browser restores background stream, keeps session state isolated, and supp
   await page.locator('[data-session-id="s-bg"]').click()
   await expect(page.locator('.hc-chat__thread')).toContainText('后台生成完成')
 
-  const sessionSearch = page.locator('.hc-sessions__search-input')
+  const sessionSearch = page.locator('.hc-search__input')
   await expect(sessionSearch).toHaveAttribute('placeholder', '搜索会话与内容')
   await sessionSearch.fill('命中')
   await expect(page.locator('.hc-sessions__snippet')).toContainText('跨会话搜索命中的片段')
@@ -610,6 +618,54 @@ test('browser restores background stream, keeps session state isolated, and supp
     path: 'test-results/chat-session-actions-and-search.png',
     fullPage: true,
   })
+})
+
+test('browser renders today sessions as time and older sessions as dates', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-04-08T12:00:00+08:00') })
+  await installMockBackend(page)
+  await page.goto('/chat')
+
+  await expect(page.locator('[data-session-id="s-active"] .hc-sessions__time')).toHaveText('18:00')
+
+  await page.locator('.hc-sessions__load-more').click()
+  await expect(page.locator('[data-session-id="s-more"] .hc-sessions__time')).toHaveText('4月6日')
+  await expect(page.locator('[data-session-id="s-cross-year"] .hc-sessions__time')).toHaveText(
+    '2025年12月31日',
+  )
+  const sessionTimes = await page.locator('.hc-sessions__time').allTextContents()
+  expect(sessionTimes.join(' ')).not.toMatch(/今天|昨天|周[一二三四五六日天]/)
+
+  const evidenceDir = process.env.HEX_SESSION_DATE_EVIDENCE_DIR?.trim()
+  if (evidenceDir) {
+    await mkdir(evidenceDir, { recursive: true })
+    await page.screenshot({ path: `${evidenceDir}/implementation-date-full.png`, fullPage: true })
+    await page.locator('.hc-sessions').screenshot({
+      path: `${evidenceDir}/implementation-date-session-list.png`,
+    })
+    const geometry = await page.evaluate(() => {
+      const read = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector)
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return {
+          text: element.textContent?.trim() ?? '',
+          box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          display: style.display,
+          visibility: style.visibility,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+        }
+      }
+      return {
+        list: read('.hc-sessions'),
+        todayActive: read('[data-session-id="s-active"]'),
+        sameYearOlder: read('[data-session-id="s-more"]'),
+        crossYearOlder: read('[data-session-id="s-cross-year"]'),
+      }
+    })
+    await writeFile(`${evidenceDir}/implementation-date-session-geometry.json`, JSON.stringify(geometry, null, 2))
+  }
 })
 
 test('browser keeps sessions, artifacts, context, and focus as one mutually exclusive workspace state', async ({
@@ -703,14 +759,29 @@ test('browser keeps assistant actions inline and user actions hover-revealed at 
   await page.goto('/chat')
   await page.locator('[data-session-id="s-active"]').click()
 
+  await expect(page.locator('[data-session-id="s-active"] .hc-sessions__time')).toHaveText(
+    '4月8日',
+  )
+
   const assistantRow = page
     .getByTestId('chat-message-assistant')
     .filter({ hasText: '当前会话回答' })
   const assistantMeta = assistantRow.locator('.hc-msg__meta')
   const assistantActions = assistantRow.locator('.hc-msg-actions')
-  await expect(assistantMeta.locator('span')).toHaveCount(3)
+  const assistantTime = assistantRow.locator('.hc-msg__time')
+  await expect(assistantMeta.locator('span')).toHaveCount(2)
   await expect(assistantActions).toHaveAttribute('role', 'toolbar')
   await expect(assistantActions).toBeVisible()
+  await expect(assistantTime).toHaveCount(1)
+  await expect(assistantTime).toHaveText(/^\d{2}:\d{2}$/)
+
+  const assistantTimeOrder = await assistantRow.evaluate((row) => {
+    const actions = row.querySelector<HTMLElement>('.hc-msg-actions')
+    const time = row.querySelector<HTMLElement>('.hc-msg__time')
+    if (!actions || !time) throw new Error('assistant message time is missing')
+    return actions.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING
+  })
+  expect(assistantTimeOrder).toBeTruthy()
 
   const assistantVisual = await assistantActions.evaluate((element) => {
     const style = getComputedStyle(element)
@@ -765,14 +836,9 @@ test('browser keeps assistant actions inline and user actions hover-revealed at 
   expect(assistantFooterGeometry.gap).toBeLessThanOrEqual(10)
   expect(assistantFooterGeometry.centerDelta).toBeLessThanOrEqual(1)
 
-  await assistantActions.getByTestId('message-more').click()
-  const assistantMenu = assistantActions.getByRole('menu')
-  await expect(assistantMenu.getByRole('menuitem', { name: '删除', exact: true })).toHaveCount(1)
-  await expect(assistantMenu.getByRole('menuitem', { name: '删除消息', exact: true })).toHaveCount(
-    0,
-  )
-  await page.keyboard.press('Escape')
-  await expect(assistantMenu).toBeHidden()
+  await expect(assistantActions.getByTestId('message-more')).toHaveCount(0)
+  await expect(assistantActions.getByTestId('message-fork')).toHaveCount(1)
+  await expect(assistantActions.getByTestId('message-delete')).toHaveCount(0)
 
   const userRow = page.getByTestId('chat-message-user').filter({ hasText: '当前会话问题' })
   const userActionsSlot = userRow.locator('.hc-msg__actions-float--right')
@@ -780,6 +846,9 @@ test('browser keeps assistant actions inline and user actions hover-revealed at 
   await expect(userActions).toHaveAttribute('role', 'toolbar')
   await expect(userActionsSlot).toHaveCSS('visibility', 'hidden')
   await expect(userActionsSlot).toHaveCSS('pointer-events', 'none')
+  await expect(userRow.locator('.hc-msg__time--right')).toHaveCount(1)
+  await expect(userRow.locator('.hc-msg__time--right')).toHaveText(/^\d{2}:\d{2}$/)
+  await expect(userRow.locator('.hc-msg__time--right')).toHaveCSS('visibility', 'hidden')
   await userRow.hover()
   await expect(userActionsSlot).toHaveCSS('visibility', 'visible')
   await expect(userActionsSlot).toHaveCSS('pointer-events', 'auto')
@@ -787,20 +856,13 @@ test('browser keeps assistant actions inline and user actions hover-revealed at 
 
   const userFooterGeometry = await userRow.evaluate((row) => {
     const actions = row.querySelector<HTMLElement>('.hc-msg-actions')
-    const time = row.querySelector<HTMLElement>('.hc-msg__time--right')
-    if (!actions || !time) throw new Error('user footer controls are missing')
-    const actionsRect = actions.getBoundingClientRect()
-    const timeRect = time.getBoundingClientRect()
+    if (!actions) throw new Error('user footer controls are missing')
     const firstButton = actions.querySelector<HTMLElement>('.hc-msg-actions__btn')
     const firstIcon = actions.querySelector<SVGElement>('.hc-msg-actions__btn svg')
     if (!firstButton || !firstIcon) throw new Error('user action geometry is missing')
     const buttonRect = firstButton.getBoundingClientRect()
     const iconRect = firstIcon.getBoundingClientRect()
     return {
-      gap: timeRect.left - actionsRect.right,
-      centerDelta: Math.abs(
-        actionsRect.top + actionsRect.height / 2 - (timeRect.top + timeRect.height / 2),
-      ),
       buttonWidth: buttonRect.width,
       buttonHeight: buttonRect.height,
       iconWidth: iconRect.width,
@@ -811,13 +873,102 @@ test('browser keeps assistant actions inline and user actions hover-revealed at 
   expect(userFooterGeometry.buttonHeight).toBe(24)
   expect(userFooterGeometry.iconWidth).toBe(14)
   expect(userFooterGeometry.iconHeight).toBe(14)
-  expect(userFooterGeometry.gap).toBeGreaterThanOrEqual(8)
-  expect(userFooterGeometry.gap).toBeLessThanOrEqual(10)
-  expect(Math.abs(userFooterGeometry.gap - assistantFooterGeometry.gap)).toBeLessThanOrEqual(1)
-  expect(userFooterGeometry.centerDelta).toBeLessThanOrEqual(1)
+  await expect(userRow.locator('.hc-msg__time--right')).toHaveCSS('visibility', 'visible')
 
-  await userActions.getByTestId('message-more').click()
-  const userMenu = userActions.getByRole('menu')
-  await expect(userMenu.getByRole('menuitem', { name: '删除', exact: true })).toHaveCount(1)
-  await expect(userMenu.getByRole('menuitem', { name: '删除消息', exact: true })).toHaveCount(0)
+  const userTimeOrder = await userRow.evaluate((row) => {
+    const actions = row.querySelector<HTMLElement>('.hc-msg-actions')
+    const time = row.querySelector<HTMLElement>('.hc-msg__time--right')
+    if (!actions || !time) throw new Error('user message time is missing')
+    return time.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING
+  })
+  expect(userTimeOrder).toBeTruthy()
+
+  await expect(userActions.getByTestId('message-more')).toHaveCount(0)
+  await expect(userActions.getByTestId('message-fork')).toHaveCount(0)
+  await expect(userActions.getByTestId('message-delete')).toHaveCount(0)
+
+  const evidenceDir = process.env.HEX_TIME_EVIDENCE_DIR?.trim()
+  if (evidenceDir) {
+    await mkdir(evidenceDir, { recursive: true })
+    const collectGeometry = () =>
+      page.evaluate(() => {
+        const read = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector)
+          if (!element) return null
+          const rect = element.getBoundingClientRect()
+          const style = getComputedStyle(element)
+          return {
+            box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            text: element.textContent?.trim() ?? '',
+            display: style.display,
+            opacity: style.opacity,
+            visibility: style.visibility,
+            pointerEvents: style.pointerEvents,
+            gap: style.gap,
+          }
+        }
+        const assistantActions = document.querySelector<HTMLElement>(
+          '[data-testid="chat-message-assistant"] .hc-msg-actions',
+        )
+        const assistantTime = document.querySelector<HTMLElement>(
+          '[data-testid="chat-message-assistant"] .hc-msg__time',
+        )
+        const userActions = document.querySelector<HTMLElement>(
+          '[data-testid="chat-message-user"] .hc-msg-actions',
+        )
+        const userTime = document.querySelector<HTMLElement>(
+          '[data-testid="chat-message-user"] .hc-msg__time--right',
+        )
+        return {
+          assistant: {
+            meta: read('[data-testid="chat-message-assistant"] .hc-msg__meta'),
+            actions: read('[data-testid="chat-message-assistant"] .hc-msg-actions'),
+            time: read('[data-testid="chat-message-assistant"] .hc-msg__time'),
+            timeAfterActions:
+              !!assistantActions &&
+              !!assistantTime &&
+              Boolean(
+                assistantActions.compareDocumentPosition(assistantTime) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+              ),
+          },
+          user: {
+            controls: read('[data-testid="chat-message-user"] .hc-msg__actions-float--right'),
+            actions: read('[data-testid="chat-message-user"] .hc-msg-actions'),
+            time: read('[data-testid="chat-message-user"] .hc-msg__time--right'),
+            timeBeforeActions:
+              !!userActions &&
+              !!userTime &&
+              Boolean(
+                userTime.compareDocumentPosition(userActions) & Node.DOCUMENT_POSITION_FOLLOWING,
+              ),
+          },
+          sessionDate: read('[data-session-id="s-active"] .hc-sessions__time'),
+        }
+      })
+
+    await page.screenshot({ path: `${evidenceDir}/implementation-user-hover.png`, fullPage: true })
+    await page.locator('.hc-sessions').screenshot({ path: `${evidenceDir}/implementation-session-list.png` })
+    await assistantRow.screenshot({ path: `${evidenceDir}/implementation-assistant-row.png` })
+    await userRow.screenshot({ path: `${evidenceDir}/implementation-user-hover-row.png` })
+    await assistantRow.locator('.hc-msg__footer').screenshot({
+      path: `${evidenceDir}/implementation-assistant-footer.png`,
+    })
+    await userRow.locator('.hc-msg__footer--right').screenshot({
+      path: `${evidenceDir}/implementation-user-hover-footer.png`,
+    })
+    const hoverGeometry = await collectGeometry()
+    await page.mouse.move(1, 1)
+    await page.waitForTimeout(350)
+    await page.screenshot({ path: `${evidenceDir}/implementation-user-hidden.png`, fullPage: true })
+    await userRow.screenshot({ path: `${evidenceDir}/implementation-user-hidden-row.png` })
+    await userRow.locator('.hc-msg__footer--right').screenshot({
+      path: `${evidenceDir}/implementation-user-hidden-footer.png`,
+    })
+    const hiddenGeometry = await collectGeometry()
+    await writeFile(
+      `${evidenceDir}/implementation-geometry.json`,
+      JSON.stringify({ hover: hoverGeometry, hidden: hiddenGeometry }, null, 2),
+    )
+  }
 })

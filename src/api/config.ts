@@ -11,11 +11,14 @@ import type {
   CatalogModel,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
+  ModelReasoningControl,
   PrivateNetworkAccess,
   ProviderLocality,
   ProviderCredentialReplacement,
   ProviderType,
 } from '@/types/settings'
+import type { ModelReasoningSupport } from '@/types/settings'
+import { normalizeModelReasoningSupport } from '@/config/model-contract'
 
 function safeJsonParse<T>(text: string, context: string): T {
   try {
@@ -175,6 +178,8 @@ interface BackendProviderModel {
   completion_price?: string
   input_modalities?: string[]
   supports_tools?: boolean
+  reasoning_support?: ModelReasoningSupport
+  reasoning_control?: ModelReasoningControl
 }
 
 /**
@@ -216,6 +221,8 @@ export async function fetchProviderModels(
     completionPrice: m.completion_price,
     inputModalities: m.input_modalities,
     supportsTools: m.supports_tools,
+    reasoningSupport: normalizeModelReasoningSupport(m.reasoning_support),
+    reasoningControl: m.reasoning_control,
   }))
   if (models.length === 0) {
     throw new Error('fetchProviderModels: empty model catalog')

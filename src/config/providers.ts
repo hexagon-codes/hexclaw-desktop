@@ -5,7 +5,12 @@
  * 用户添加 Provider 时自动填充这些预设值。
  */
 
-import type { ModelCapability, ProviderPreset, ProviderType } from '@/types'
+import type {
+  ModelCapability,
+  ModelReasoningControl,
+  ProviderPreset,
+  ProviderType,
+} from '@/types'
 import { OLLAMA_BASE } from '@/config/env'
 
 import openaiLogo from '@/assets/provider-logos/openai.svg'
@@ -40,6 +45,15 @@ export const PROVIDER_LOGOS: Record<ProviderType, string> = {
   custom: customLogo,
 }
 
+function gpt56ReasoningControl(): ModelReasoningControl {
+  return {
+    dialect: 'reasoning_effort',
+    on: 'high',
+    off: 'none',
+    allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  }
+}
+
 export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
   openai: {
     type: 'openai',
@@ -47,9 +61,27 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.openai.com/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', capabilities: ['text', 'vision'] },
-      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', capabilities: ['text', 'vision'] },
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', capabilities: ['text', 'vision'] },
+      {
+        id: 'gpt-5.6-sol',
+        name: 'GPT-5.6 Sol',
+        capabilities: ['text', 'vision'],
+        reasoningSupport: 'supported',
+        reasoningControl: gpt56ReasoningControl(),
+      },
+      {
+        id: 'gpt-5.6-terra',
+        name: 'GPT-5.6 Terra',
+        capabilities: ['text', 'vision'],
+        reasoningSupport: 'supported',
+        reasoningControl: gpt56ReasoningControl(),
+      },
+      {
+        id: 'gpt-5.6-luna',
+        name: 'GPT-5.6 Luna',
+        capabilities: ['text', 'vision'],
+        reasoningSupport: 'supported',
+        reasoningControl: gpt56ReasoningControl(),
+      },
     ],
   },
   deepseek: {

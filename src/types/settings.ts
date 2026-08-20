@@ -9,6 +9,37 @@ export type ModelCapability =
   | 'video_generation'
   | 'embedding'
 
+/** 模型推理能力只能来自 Provider 的显式证据，未知时不得按模型名推断。 */
+export type ModelReasoningSupport = 'supported' | 'unsupported' | 'unknown'
+
+export type ModelReasoningDialect =
+  | 'reasoning_effort'
+  | 'enable_thinking'
+  | 'think'
+  | 'thinking'
+
+/** 可由精确模型能力声明的思考强度。 */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** 思考策略在会话、Agent、全局默认与模型原生层之间共享。 */
+export type ReasoningPolicy =
+  | { mode: 'inherit' | 'auto' | 'on' | 'off' }
+  | { mode: 'effort'; effort: ReasoningEffort }
+
+/** 全局默认不允许 inherit；缺失的旧配置在运行时归一为 auto。 */
+export type DefaultReasoningPolicy =
+  | { mode: 'auto' | 'on' | 'off' }
+  | { mode: 'effort'; effort: ReasoningEffort }
+
+/** 精确模型的上游推理开关映射。 */
+export interface ModelReasoningControl {
+  dialect: ModelReasoningDialect
+  on: unknown
+  off: unknown
+  /** 仅 reasoning_effort dialect 可以声明的可选档位，顺序由 Provider 决定。 */
+  allowed_efforts?: ReasoningEffort[]
+}
+
 /** A7 模型 tool_call 可靠度等级（后端 llmrouter.ReliabilityLevel 映射） */
 export type ToolCallReliability = 'unknown' | 'good' | 'partial' | 'bad'
 
@@ -35,6 +66,10 @@ export interface ModelOption {
   isCustom?: boolean
   /** 模型支持的能力（静态声明），默认 ['text'] */
   capabilities?: ModelCapability[]
+  /** 模型是否支持推理；缺失或非法值在规范化后统一为 unknown。 */
+  reasoningSupport?: ModelReasoningSupport
+  /** 仅 supported 模型允许携带的精确上游控制映射。 */
+  reasoningControl?: ModelReasoningControl
   /** Vector-space contract used by the semantic-index backend; never inferred generically from an id. */
   embedding?: EmbeddingModelContract
   /** A7 tool_call 动态探测结果（运行时由后端 /api/v1/llm/capabilities 注入） */
@@ -61,6 +96,9 @@ export interface CatalogModel {
   inputModalities?: string[]
   /** 是否支持 tool calling */
   supportsTools?: boolean
+  /** Provider 目录显式返回的推理能力。 */
+  reasoningSupport?: ModelReasoningSupport
+  reasoningControl?: ModelReasoningControl
 }
 
 /** 判断目录条目是否免费（prompt 和 completion 价格都为 0） */
@@ -142,6 +180,8 @@ export interface BackendProviderModelSpec {
   display_name: string
   is_custom?: boolean
   capabilities?: ModelCapability[]
+  reasoning_support?: ModelReasoningSupport
+  reasoning_control?: ModelReasoningControl
   embedding?: EmbeddingModelContract
 }
 
@@ -209,6 +249,8 @@ export interface LLMConfig {
   providers: ProviderConfig[]
   defaultModel: string
   defaultProviderId?: string
+  /** 旧持久化快照可缺失；Store 运行时读取统一归一为 { mode: 'auto' }。 */
+  defaultReasoningPolicy?: DefaultReasoningPolicy
   routing?: LLMRoutingSettings
   tools?: ToolsInjectionSettings
   /** B1 Agent 模式；默认 'auto' */
@@ -334,6 +376,8 @@ export interface BackendLLMConfig {
   providers: Record<string, BackendLLMProvider>
   routing: { enabled: boolean; strategy: string }
   cache: { enabled: boolean; similarity: number; ttl: string; max_entries: number }
+  /** 旧 Sidecar 可能尚未返回该字段。 */
+  default_reasoning_policy?: DefaultReasoningPolicy
   /** K12 solve/grade 的强文本路由；设置页不改写，后端在 provider 重命名时按稳定身份迁移。 */
   reasoning_provider?: string
   reasoning_model?: string

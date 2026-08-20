@@ -5,10 +5,12 @@ import { Send, StopCircle, Trash2, RotateCcw, ChevronDown } from 'lucide-vue-nex
 import { sendChat } from '@/api/chat'
 import { hexclawWS } from '@/api/websocket'
 import { useSettingsStore } from '@/stores/settings'
+import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import { getAssistantDisplayContent, getAssistantReasoningFromMetadata, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
+import { normalizeReasoningReceipt, type ReasoningReceipt } from '@/types/chat'
 import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import { recordRenderManifest } from '@/contracts/render-evidence'
@@ -34,6 +36,9 @@ const textareaRef = ref<HTMLTextAreaElement>()
 const streaming = ref(false)
 const streamingContent = ref('')
 const streamingReasoning = ref('')
+const streamingReasoningReceipt = ref<ReasoningReceipt>(createQuickChatReasoningReceipt())
+const streamingReasoningElapsedSeconds = ref(0)
+const hasVisibleStreamingAnswer = computed(() => streamingContent.value.trim().length > 0)
 const messagesEnd = ref<HTMLDivElement>()
 const selectedModel = ref('')
 const selectedProviderId = ref('')
@@ -41,6 +46,83 @@ const selectedProviderKey = ref('')
 const showModelDropdown = ref(false)
 const useWebSocket = ref(false)
 const wsConnected = ref(false)
+
+let reasoningStartedAt: number | null = null
+let reasoningElapsedTimer: ReturnType<typeof setInterval> | undefined
+
+function createQuickChatReasoningReceipt(): ReasoningReceipt {
+  return {
+    version: 1,
+    reasoning_request: 'off',
+    reasoning_support: 'unknown',
+    reasoning_execution: 'unknown',
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readReasoningReceipt(payload: unknown): ReasoningReceipt | null {
+  if (!isRecord(payload)) return null
+  if (Object.prototype.hasOwnProperty.call(payload, 'reasoning_receipt')) {
+    return normalizeReasoningReceipt(payload.reasoning_receipt, 'off')
+  }
+  const metadata = isRecord(payload.metadata) ? payload.metadata : null
+  return metadata && Object.prototype.hasOwnProperty.call(metadata, 'reasoning_receipt')
+    ? normalizeReasoningReceipt(metadata.reasoning_receipt, 'off')
+    : null
+}
+
+function updateReasoningElapsedSeconds() {
+  if (reasoningStartedAt === null) return
+  streamingReasoningElapsedSeconds.value = Math.max(
+    0,
+    Math.floor((Date.now() - reasoningStartedAt) / 1000),
+  )
+}
+
+function stopReasoningTimer() {
+  updateReasoningElapsedSeconds()
+  if (reasoningElapsedTimer !== undefined) {
+    clearInterval(reasoningElapsedTimer)
+    reasoningElapsedTimer = undefined
+  }
+  reasoningStartedAt = null
+}
+
+function startReasoningTimer() {
+  if (reasoningStartedAt !== null || hasVisibleStreamingAnswer.value) return
+  reasoningStartedAt = Date.now()
+  streamingReasoningElapsedSeconds.value = 0
+  reasoningElapsedTimer = setInterval(updateReasoningElapsedSeconds, 1000)
+}
+
+function resetReasoningStatus() {
+  stopReasoningTimer()
+  streamingReasoningReceipt.value = createQuickChatReasoningReceipt()
+  streamingReasoningElapsedSeconds.value = 0
+}
+
+function applyReasoningReceipt(payload: unknown) {
+  const receipt = readReasoningReceipt(payload)
+  if (!receipt) return
+  streamingReasoningReceipt.value = receipt
+  if (receipt.reasoning_execution === 'applied') {
+    startReasoningTimer()
+  } else {
+    stopReasoningTimer()
+  }
+}
+
+function buildQuickChatMetadata(): Record<string, string> {
+  return withModelReasoningDefaults(selectedModel.value, {
+    pinned_agent: 'default',
+    producer_kind: 'quick_chat',
+    locale: locale.value,
+    thinking: 'off',
+  }) ?? { thinking: 'off' }
+}
 
 function captureRenderManifest(message: Message, manifest: RenderManifest) {
   recordRenderManifest(message, manifest)
@@ -140,6 +222,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopReasoningTimer()
   hexclawWS.clearStreamCallbacks()
 })
 
@@ -179,7 +262,11 @@ function setupWsCallbacks(requestGen: number) {
 
   hexclawWS.onChunk((chunk) => {
     if (requestGen !== responseRequestGen) return
+    applyReasoningReceipt(chunk)
     streamingContent.value += chunk.content
+    if (hasVisibleStreamingAnswer.value) {
+      stopReasoningTimer()
+    }
     if (chunk.reasoning) {
       streamingReasoning.value = normalizeAssistantReasoning(streamingReasoning.value + chunk.reasoning, { trim: false })
     }
@@ -198,6 +285,7 @@ function setupWsCallbacks(requestGen: number) {
       streamingContent.value = ''
       streamingReasoning.value = ''
       streaming.value = false
+      stopReasoningTimer()
     }
   })
 
@@ -205,6 +293,7 @@ function setupWsCallbacks(requestGen: number) {
     if (requestGen !== responseRequestGen) return
     if (replySettled) return
     replySettled = true
+    applyReasoningReceipt(reply)
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
@@ -219,6 +308,7 @@ function setupWsCallbacks(requestGen: number) {
     streaming.value = false
     streamingContent.value = ''
     streamingReasoning.value = ''
+    stopReasoningTimer()
   })
 
   hexclawWS.onError((error) => {
@@ -233,6 +323,7 @@ function setupWsCallbacks(requestGen: number) {
     streaming.value = false
     streamingContent.value = ''
     streamingReasoning.value = ''
+    stopReasoningTimer()
   })
 }
 
@@ -258,6 +349,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
   streaming.value = true
   streamingContent.value = ''
   streamingReasoning.value = ''
+  resetReasoningStatus()
   replySettled = false
   const requestGen = ++responseRequestGen
   const requestId = `quick-${Date.now()}-${requestGen}`
@@ -276,7 +368,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       undefined,
       // BUG-20260703 A1：QuickChat 无 Agent 选择 UI = 恒对默认助理，须发 pinned_agent
       // 锁定信号，否则 provider 解析为空时后端会按内容路由被专属 Agent 抢答。
-      withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default', producer_kind: 'quick_chat', locale: locale.value }),
+      buildQuickChatMetadata(),
       requestId,
     )
   } else {
@@ -288,9 +380,10 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
         model: selectedModel.value || undefined,
         request_id: requestId,
         // BUG-20260703 A1：同上，QuickChat 恒锁默认助理，防内容路由抢答。
-        metadata: withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default', producer_kind: 'quick_chat', locale: locale.value }),
+        metadata: buildQuickChatMetadata(),
       })
       if (requestGen !== responseRequestGen) return
+      applyReasoningReceipt(resp)
       messages.value.push({
         id: Date.now().toString(),
         role: 'assistant',
@@ -312,6 +405,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
     } finally {
       if (requestGen === responseRequestGen) {
         streaming.value = false
+        stopReasoningTimer()
       }
     }
   }
@@ -355,12 +449,14 @@ function clearChat() {
   messages.value = []
   streamingContent.value = ''
   streamingReasoning.value = ''
+  resetReasoningStatus()
   localStorage.removeItem(STORAGE_KEY)
 }
 
 function handleStop() {
   responseRequestGen++
   streaming.value = false
+  stopReasoningTimer()
   hexclawWS.clearStreamCallbacks()
   if (streamingContent.value || streamingReasoning.value) {
     const reasoning = streamingReasoning.value
@@ -511,34 +607,20 @@ const selectedModelName = computed(() => {
         </div>
       </div>
 
-      <div v-if="streaming && streamingContent" class="text-sm">
+      <div v-if="streaming" class="text-sm">
+        <AssistantRunStatus
+          :reasoning-request="streamingReasoningReceipt.reasoning_request"
+          :reasoning-support="streamingReasoningReceipt.reasoning_support"
+          :reasoning-execution="streamingReasoningReceipt.reasoning_execution"
+          :has-visible-answer="hasVisibleStreamingAnswer"
+          :elapsed-seconds="streamingReasoningElapsedSeconds"
+        />
         <div
+          v-if="hasVisibleStreamingAnswer"
           class="inline-block rounded-xl px-3 py-2 max-w-[85%]"
           :style="{ background: 'var(--hc-bg-card)', color: 'var(--hc-text-primary)' }"
         >
           <MarkdownRenderer :content="streamingContent" />
-        </div>
-      </div>
-
-      <div v-if="streaming && !streamingContent" class="text-sm">
-        <div
-          class="inline-block rounded-xl px-3 py-2"
-          :style="{ background: 'var(--hc-bg-card)', color: 'var(--hc-text-muted)' }"
-        >
-          <span class="inline-flex gap-1">
-            <span
-              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
-              style="animation-delay: 0ms"
-            />
-            <span
-              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
-              style="animation-delay: 150ms"
-            />
-            <span
-              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
-              style="animation-delay: 300ms"
-            />
-          </span>
         </div>
       </div>
 

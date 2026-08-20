@@ -10,11 +10,17 @@ import {
   mergeProviderModels,
   mergeRemoteModelsIntoProvider,
   normalizeModelCapabilities,
+  normalizeModelReasoningSupport,
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
 import { resolveEffectiveProviderLocality } from '@/utils/provider-endpoint'
+import {
+  DEFAULT_REASONING_POLICY,
+  normalizeDefaultReasoningPolicy,
+} from '@/utils/reasoning-policy'
 import type {
   AppConfig,
+  DefaultReasoningPolicy,
   ProviderConfig,
   BackendLLMConfig,
   BackendLLMProvider,
@@ -27,6 +33,7 @@ export {
   isChatModelOption,
   mergeRemoteModelsIntoProvider,
   normalizeModelCapabilities,
+  normalizeModelReasoningSupport,
   resolveProviderSelectedModelId,
 }
 export { cloneProviders } from './settings-provider-copy'
@@ -407,6 +414,7 @@ export function providersToBackend(
   defaultModel: string,
   defaultProviderId = '',
   routing = { enabled: false, strategy: 'cost-aware' },
+  defaultReasoningPolicy: DefaultReasoningPolicy | undefined = DEFAULT_REASONING_POLICY,
 ): BackendLLMConfig {
   const backendProviders: Record<string, BackendLLMProvider> = {}
   for (const p of providers) {
@@ -435,12 +443,19 @@ export function providersToBackend(
       model: selectedModelId,
       models: p.models.map((m) => m.id).filter(Boolean),
       model_specs: p.models.map((model) => {
-        const embedding = embeddingContractForModel(model)
+        const canonical = canonicalizeModelOption(model)
+        const embedding = embeddingContractForModel(canonical)
         return {
-          id: model.id,
-          display_name: model.name || model.id,
-          ...(model.isCustom === undefined ? {} : { is_custom: model.isCustom }),
-          capabilities: normalizeModelCapabilities(model),
+          id: canonical.id,
+          display_name: canonical.name || canonical.id,
+          ...(canonical.isCustom === undefined ? {} : { is_custom: canonical.isCustom }),
+          capabilities: normalizeModelCapabilities(canonical),
+          ...(canonical.reasoningSupport === undefined
+            ? {}
+            : { reasoning_support: normalizeModelReasoningSupport(canonical.reasoningSupport) }),
+          ...(canonical.reasoningControl
+            ? { reasoning_control: canonical.reasoningControl }
+            : {}),
           ...(embedding ? { embedding } : {}),
         }
       }),
@@ -490,5 +505,6 @@ export function providersToBackend(
       strategy: routing.strategy || 'cost-aware',
     },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    default_reasoning_policy: normalizeDefaultReasoningPolicy(defaultReasoningPolicy),
   }
 }

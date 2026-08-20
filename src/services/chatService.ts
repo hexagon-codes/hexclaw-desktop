@@ -17,7 +17,9 @@ import type { ChatMessage, ChatAttachment, RuntimeWireFrame, RuntimeWireSnapshot
 import {
   createRuntimeWireSnapshot,
   mergeRuntimeWireFrame,
+  normalizeReasoningReceipt,
   normalizeRuntimeSnapshotMetadata,
+  type ReasoningRequest,
 } from '@/types/chat'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
@@ -57,7 +59,7 @@ export interface StreamCallbacks {
 }
 
 interface StreamWsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'memory_saved' | 'stream_snapshot'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'tool_approval_terminal' | 'memory_saved' | 'stream_snapshot'
   content: string
   message_content?: MessageContent
   render_manifest?: RenderManifest
@@ -71,6 +73,8 @@ interface StreamWsServerMessage {
   arguments?: Record<string, unknown>
   arguments_digest?: string
   security_scope_digest?: string
+  scope_schema_version?: number
+  terminal_result?: string
   deadline_at?: string
   usage?: unknown
   tool_calls?: ChatMessage['tool_calls']
@@ -83,6 +87,7 @@ interface StreamWsServerMessage {
   message_id?: string
   sequence?: number
   reasoning_disclosure?: unknown
+  reasoning_receipt?: unknown
   runtime_event?: unknown
   runtime_events?: unknown
   last_sequence?: number
@@ -92,21 +97,10 @@ function runtimeMetadata(
   metadata: Record<string, unknown> | undefined,
   snapshot: RuntimeWireSnapshot,
 ): Record<string, unknown> | undefined {
-  if (
-    snapshot.lastSequence === 0
-    && !snapshot.assistantMessageId
-    && !snapshot.reasoningDisclosure
-    && snapshot.runtimeEvents.length === 0
-  ) {
-    if (!metadata) return undefined
-    const legacyMetadata = { ...metadata }
-    delete legacyMetadata.reasoning
-    delete legacyMetadata.reasoning_disclosure
-    return legacyMetadata
-  }
   const next = { ...metadata }
   delete next.reasoning
   delete next.reasoning_disclosure
+  delete next.reasoning_receipt
   delete next.runtime_events
   delete next.last_sequence
   delete next.assistant_message_id
@@ -114,12 +108,20 @@ function runtimeMetadata(
   next.reasoning_visibility = snapshot.reasoningDisclosure?.visibility ?? 'not_exposed'
   next.runtime_events = snapshot.runtimeEvents
   next.last_sequence = snapshot.lastSequence
+  next.reasoning_receipt = snapshot.reasoningReceipt
   if (snapshot.reasoningDisclosure) next.reasoning_disclosure = snapshot.reasoningDisclosure
   if (snapshot.assistantMessageId) {
     next.assistant_message_id = snapshot.assistantMessageId
     next.message_id = snapshot.assistantMessageId
   }
   return next
+}
+
+function reasoningRequestFromMetadata(
+  metadata: Record<string, string> | undefined,
+): ReasoningRequest {
+  const value = metadata?.thinking ?? metadata?.thinking_enabled
+  return value === 'on' || value === 'true' || value === '1' ? 'on' : 'off'
 }
 
 // U9 契约对齐：后端把 RAG/记忆命中作为 done chunk / reply 的**顶层**结构化数组回传
@@ -168,8 +170,155 @@ export interface ToolApprovalDecisionWire {
 export interface ToolApprovalAckWire {
   type: 'tool_approval_ack'
   request_id: string
+  session_id: string
+  owner_id: string
+  invocation_id: string
+  arguments_digest: string
+  security_scope_digest: string
+  scope_schema_version: number
   decision_id: string
-  status: 'accepted' | 'already_accepted' | 'expired' | 'rejected'
+  decision: 'approved_once' | 'approved_remember' | 'denied'
+  idempotency_key: string
+  status: 'accepted' | 'already_accepted'
+}
+
+export interface ToolApprovalTerminalWire {
+  type: 'tool_approval_terminal'
+  request_id: string
+  session_id: string
+  owner_id: string
+  invocation_id: string
+  arguments_digest: string
+  security_scope_digest: string
+  scope_schema_version: number
+  terminal_result: 'expired' | 'fenced'
+  deadline_at?: string
+}
+
+export type ToolApprovalReconciliationAckWire = ToolApprovalAckWire
+
+type ToolApprovalTerminalListener = (terminal: ToolApprovalTerminalWire) => void
+
+const toolApprovalTerminalListeners = new Set<ToolApprovalTerminalListener>()
+
+export function onToolApprovalTerminal(listener: ToolApprovalTerminalListener): () => void {
+  toolApprovalTerminalListeners.add(listener)
+  return () => toolApprovalTerminalListeners.delete(listener)
+}
+
+function nonEmptyWireString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function wireMetadata(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const metadata = data.metadata
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : undefined
+}
+
+function wireString(data: Record<string, unknown>, key: string): string | undefined {
+  if (nonEmptyWireString(data[key])) return data[key]
+  const metadata = wireMetadata(data)
+  return metadata && nonEmptyWireString(metadata[key]) ? metadata[key] : undefined
+}
+
+function wirePositiveInteger(data: Record<string, unknown>, key: string): number | undefined {
+  const direct = data[key]
+  if (Number.isSafeInteger(direct) && Number(direct) > 0) return Number(direct)
+  const metadata = wireMetadata(data)
+  const value = metadata?.[key]
+  return typeof value === 'string' && /^\d+$/.test(value) && Number(value) > 0
+    ? Number(value)
+    : undefined
+}
+
+export function parseToolApprovalTerminal(data: Record<string, unknown>): ToolApprovalTerminalWire | null {
+  if (
+    data.type !== 'tool_approval_terminal'
+    || !nonEmptyWireString(data.request_id)
+    || !nonEmptyWireString(data.session_id)
+    || !nonEmptyWireString(data.owner_id)
+    || !nonEmptyWireString(data.invocation_id)
+    || !nonEmptyWireString(data.arguments_digest)
+    || !nonEmptyWireString(data.security_scope_digest)
+    || !Number.isSafeInteger(data.scope_schema_version)
+    || Number(data.scope_schema_version) <= 0
+    || (data.terminal_result !== 'expired' && data.terminal_result !== 'fenced')
+    || 'decision_id' in data
+    || 'idempotency_key' in data
+  ) {
+    return null
+  }
+  return {
+    type: 'tool_approval_terminal',
+    request_id: data.request_id,
+    session_id: data.session_id,
+    owner_id: data.owner_id,
+    invocation_id: data.invocation_id,
+    arguments_digest: data.arguments_digest,
+    security_scope_digest: data.security_scope_digest,
+    scope_schema_version: Number(data.scope_schema_version),
+    terminal_result: data.terminal_result,
+    ...(nonEmptyWireString(data.deadline_at) ? { deadline_at: data.deadline_at } : {}),
+  }
+}
+
+export function parseToolApprovalReconciliationAck(
+  data: Record<string, unknown>,
+): ToolApprovalReconciliationAckWire | null {
+  if (data.type !== 'tool_approval_ack') return null
+  const requestID = wireString(data, 'request_id')
+  const sessionID = wireString(data, 'session_id')
+  const ownerID = wireString(data, 'owner_id')
+  const invocationID = wireString(data, 'invocation_id')
+  const argumentsDigest = wireString(data, 'arguments_digest')
+  const securityScopeDigest = wireString(data, 'security_scope_digest')
+  const scopeSchemaVersion = wirePositiveInteger(data, 'scope_schema_version')
+  const decisionID = wireString(data, 'decision_id')
+  const decision = wireString(data, 'decision')
+  const idempotencyKey = wireString(data, 'idempotency_key')
+  const status = wireString(data, 'status')
+  if (
+    !requestID || !sessionID || !ownerID || !invocationID ||
+    !argumentsDigest || !securityScopeDigest || !scopeSchemaVersion ||
+    !decisionID || !idempotencyKey ||
+    (decision !== 'approved_once' && decision !== 'approved_remember' && decision !== 'denied') ||
+    (status !== 'accepted' && status !== 'already_accepted')
+  ) {
+    return null
+  }
+  return {
+    type: 'tool_approval_ack',
+    request_id: requestID,
+    session_id: sessionID,
+    owner_id: ownerID,
+    invocation_id: invocationID,
+    arguments_digest: argumentsDigest,
+    security_scope_digest: securityScopeDigest,
+    scope_schema_version: scopeSchemaVersion,
+    decision_id: decisionID,
+    decision,
+    idempotency_key: idempotencyKey,
+    status,
+  }
+}
+
+function consumeToolApprovalTerminal(data: Record<string, unknown>): boolean {
+  if (data.type !== 'tool_approval_terminal') return false
+  const terminal = parseToolApprovalTerminal(data)
+  if (!terminal) {
+    logger.warn('Ignoring malformed tool approval terminal frame')
+    return true
+  }
+  for (const listener of toolApprovalTerminalListeners) {
+    try {
+      listener(terminal)
+    } catch (error) {
+      logger.warn('Tool approval terminal listener failed', error)
+    }
+  }
+  return true
 }
 
 interface ApprovalAckWaiter {
@@ -191,19 +340,15 @@ function releaseApprovalSocket(socket: NativeSidecarWebSocket, reason: string) {
 
 function consumeToolApprovalAck(data: Record<string, unknown>): boolean {
   if (data.type !== 'tool_approval_ack') return false
-  const decisionId = String(data.decision_id || '')
-  const requestId = String(data.request_id || '')
-  const status = String(data.status || '')
-  const waiter = approvalAckWaiters.get(decisionId)
-  if (!waiter || waiter.requestId !== requestId) return true
-  if (!['accepted', 'already_accepted', 'expired', 'rejected'].includes(status)) return true
-  approvalAckWaiters.delete(decisionId)
-  waiter.resolve({
-    type: 'tool_approval_ack',
-    request_id: requestId,
-    decision_id: decisionId,
-    status: status as ToolApprovalAckWire['status'],
-  })
+  const acknowledgement = parseToolApprovalReconciliationAck(data)
+  if (!acknowledgement) {
+    logger.warn('Ignoring malformed tool approval acknowledgement frame')
+    return true
+  }
+  const waiter = approvalAckWaiters.get(acknowledgement.decision_id)
+  if (!waiter || waiter.requestId !== acknowledgement.request_id) return true
+  approvalAckWaiters.delete(acknowledgement.decision_id)
+  waiter.resolve(acknowledgement)
   return true
 }
 
@@ -261,7 +406,8 @@ export function sendViaWebSocket(
 
     let settled = false
     let accumulatedContent = ''
-    let runtimeSnapshot = createRuntimeWireSnapshot()
+    const resolvedMetadata = withModelReasoningDefaults(chatParams.model, metadata)
+    let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequestFromMetadata(resolvedMetadata))
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fail(new ChatRequestError('Assistant reply timed out — no response received.', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
@@ -300,8 +446,7 @@ export function sendViaWebSocket(
       const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
         ? chunk.reasoning
         : undefined
-      if (merged.frame?.sequence) callbacks?.onChunk?.(chunk.content, publicReasoning, merged.frame)
-      else callbacks?.onChunk?.(chunk.content, publicReasoning)
+      callbacks?.onChunk?.(chunk.content, publicReasoning, merged.frame)
       if (chunk.done && !settled) {
         settled = true
         clearTimers()
@@ -361,7 +506,7 @@ export function sendViaWebSocket(
       chatParams.provider,
       chatParams.temperature,
       chatParams.maxTokens,
-      withModelReasoningDefaults(chatParams.model, metadata),
+      resolvedMetadata,
       requestId,
     )
   })
@@ -373,12 +518,13 @@ function openRequestSocket(
   callbacks: StreamCallbacks | undefined,
   buildPayload: () => Record<string, unknown>,
   route?: { provider?: string; model?: string },
+  reasoningRequest: ReasoningRequest = 'off',
 ): WebSocketStreamHandle {
   const ws = new NativeSidecarWebSocket('/ws')
 
   let settled = false
   let accumulatedContent = ''
-  let runtimeSnapshot = createRuntimeWireSnapshot()
+  let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequest)
   let firstReplyTimer: ReturnType<typeof setTimeout> | null = null
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
   let resolveDone!: (value: WebSocketStreamResult | null) => void
@@ -488,6 +634,10 @@ function openRequestSocket(
       markActivity()
       return
     }
+    if (consumeToolApprovalTerminal(msg as unknown as Record<string, unknown>)) {
+      markActivity()
+      return
+    }
 
     switch (msg.type) {
       case 'chunk':
@@ -500,8 +650,7 @@ function openRequestSocket(
         const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
           ? msg.reasoning
           : undefined
-        if (merged.frame?.sequence) callbacks?.onChunk?.(msg.content, publicReasoning, merged.frame)
-        else callbacks?.onChunk?.(msg.content, publicReasoning)
+        callbacks?.onChunk?.(msg.content, publicReasoning, merged.frame)
         if (msg.done) {
           settleResolve({
             content: accumulatedContent,
@@ -527,15 +676,20 @@ function openRequestSocket(
             assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
             message_id: msg.message_id ?? msg.metadata?.message_id,
             reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
+            reasoning_receipt: msg.reasoning_receipt ?? msg.metadata?.reasoning_receipt,
             runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
             last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
-          }, undefined, route)
+          }, undefined, route, runtimeSnapshot.reasoningReceipt.reasoning_request)
           runtimeSnapshot = {
             assistantMessageId: snapshotMetadata.assistant_message_id,
             aliases: snapshotMetadata.assistant_message_aliases ?? [],
             lastSequence: Number(snapshotMetadata.last_sequence) || 0,
             runtimeEvents: snapshotMetadata.runtime_events ?? [],
             reasoningDisclosure: snapshotMetadata.reasoning_disclosure,
+            reasoningReceipt: normalizeReasoningReceipt(
+              snapshotMetadata.reasoning_receipt,
+              runtimeSnapshot.reasoningReceipt.reasoning_request,
+            ),
             acceptedFrames: {},
           }
         } else {
@@ -596,6 +750,7 @@ function openRequestSocket(
         const approvalMessage = msg as unknown as {
           request_id?: unknown
           deadline_at?: unknown
+          scope_schema_version?: unknown
           metadata?: Record<string, unknown>
         }
         const approvalRequestId = typeof approvalMessage.request_id === 'string'
@@ -625,6 +780,12 @@ function openRequestSocket(
             : (typeof msg.metadata?.security_scope_digest === 'string'
                 ? msg.metadata.security_scope_digest
                 : undefined),
+          scopeSchemaVersion: Number.isSafeInteger(approvalMessage.scope_schema_version)
+            ? Number(approvalMessage.scope_schema_version)
+            : (typeof approvalMessage.metadata?.scope_schema_version === 'string'
+                && /^\d+$/.test(approvalMessage.metadata.scope_schema_version)
+              ? Number(approvalMessage.metadata.scope_schema_version)
+              : undefined),
           risk: typeof msg.metadata?.risk === 'string' ? msg.metadata.risk : 'sensitive',
           reason: msg.content || '',
           sessionId: msg.session_id || sessionId,
@@ -699,20 +860,21 @@ export function openWebSocketStream(
     temperature: chatParams.temperature,
     max_tokens: chatParams.maxTokens,
     metadata: resolvedMetadata,
-  }), chatParams)
+  }), chatParams, reasoningRequestFromMetadata(resolvedMetadata))
 }
 
 export function resumeWebSocketStream(
   sessionId: string,
   requestId: string,
   callbacks?: StreamCallbacks,
+  reasoningRequest: ReasoningRequest = 'off',
 ): WebSocketStreamHandle {
   return openRequestSocket(sessionId, requestId, callbacks, () => ({
     type: 'resume',
     session_id: sessionId,
     request_id: requestId,
     user_id: DESKTOP_USER_ID,
-  }))
+  }), undefined, reasoningRequest)
 }
 
 // ─── WebSocket 连接管理 ──────────────────────────────

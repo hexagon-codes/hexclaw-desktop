@@ -38,6 +38,10 @@ export type EffectiveModelSource = 'agent' | 'global'
 export interface EffectiveModel {
   /** 生效模型 ID（空 = 全局也未配默认）。 */
   modelId: string
+  /** 精确 Provider 实例身份；全局默认优先使用稳定 providerId。 */
+  providerId?: string
+  /** Agent 保存的是后端 Provider key，不能只凭裸 modelId 匹配能力。 */
+  providerKey?: string
   /** 来源：命名 Agent 偏好 / 频道默认模型 / 全局默认。 */
   source: EffectiveModelSource
   /** source==='agent' 时的 Agent 展示名。 */
@@ -55,14 +59,70 @@ export interface EffectiveModel {
  *   供 UI 显示「<Agent> · 跟随全局默认」，保留接待者关联）。
  */
 export function resolveEffectiveModel(
-  boundAgent: { name: string; model?: string; display_name?: string } | undefined,
-  globalDefaultModel: string,
+  boundAgent:
+    | { name: string; model?: string; provider?: string; display_name?: string }
+    | undefined,
+  globalDefault:
+    | string
+    | { modelId: string; providerId?: string; providerKey?: string },
 ): EffectiveModel {
+  const globalModel =
+    typeof globalDefault === 'string'
+      ? { modelId: globalDefault }
+      : globalDefault
   if (!boundAgent) {
-    return { modelId: globalDefaultModel, source: 'global' }
+    return {
+      modelId: globalModel.modelId,
+      ...(globalModel.providerId ? { providerId: globalModel.providerId } : {}),
+      ...(globalModel.providerKey ? { providerKey: globalModel.providerKey } : {}),
+      source: 'global',
+    }
   }
   const agentLabel = boundAgent.display_name || boundAgent.name
   return boundAgent.model
-    ? { modelId: boundAgent.model, source: 'agent', agentLabel }
-    : { modelId: globalDefaultModel, source: 'global', agentLabel }
+    ? {
+        modelId: boundAgent.model,
+        ...(boundAgent.provider ? { providerKey: boundAgent.provider } : {}),
+        source: 'agent',
+        agentLabel,
+      }
+    : {
+        modelId: globalModel.modelId,
+        ...(globalModel.providerId ? { providerId: globalModel.providerId } : {}),
+        ...(globalModel.providerKey ? { providerKey: globalModel.providerKey } : {}),
+        source: 'global',
+        agentLabel,
+      }
+}
+
+interface ExactChannelModelIdentity {
+  providerId: string
+  providerKey: string
+  modelId: string
+}
+
+/**
+ * 按 Agent/provider 实例的精确身份匹配通道只读投影。
+ *
+ * 同一 modelId 可以同时存在于多个 Provider，缺少 Provider 身份时宁可不展示能力，
+ * 也不能把另一 Provider 的推理支持误归到当前 Agent。
+ */
+export function resolveExactChannelModel<T extends ExactChannelModelIdentity>(
+  effective: EffectiveModel,
+  models: readonly T[],
+): T | undefined {
+  if (!effective.modelId) return undefined
+  if (effective.providerId) {
+    return models.find(
+      (model) =>
+        model.providerId === effective.providerId && model.modelId === effective.modelId,
+    )
+  }
+  if (effective.providerKey) {
+    return models.find(
+      (model) =>
+        model.providerKey === effective.providerKey && model.modelId === effective.modelId,
+    )
+  }
+  return undefined
 }

@@ -6,9 +6,16 @@
  * 客户端交互偏好，使用有界 localStorage map：切回/重启可恢复，删除会话即清理。
  */
 
+import {
+  cloneReasoningPolicy,
+  normalizeReasoningPolicy,
+  type ReasoningPolicy,
+} from '@/utils/reasoning-policy'
+
 export const SESSION_THINKING_STORAGE_KEY = 'hexclaw_sessionDeepThinking'
 
-type PreferenceMap = Record<string, true>
+type StoredPreference = true | ReasoningPolicy
+type PreferenceMap = Record<string, StoredPreference>
 
 function readAll(): PreferenceMap {
   try {
@@ -17,8 +24,15 @@ function readAll(): PreferenceMap {
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
     const result: PreferenceMap = {}
-    for (const [sessionId, enabled] of Object.entries(parsed)) {
-      if (sessionId && enabled === true) result[sessionId] = true
+    for (const [sessionId, value] of Object.entries(parsed)) {
+      if (!sessionId) continue
+      // v0.5.0-beta 之前只存 true；它等价于用户已显式打开思考。
+      if (value === true) {
+        result[sessionId] = true
+        continue
+      }
+      const policy = normalizeReasoningPolicy(value)
+      if (policy.mode !== 'inherit') result[sessionId] = policy
     }
     return result
   } catch {
@@ -35,19 +49,34 @@ function writeAll(map: PreferenceMap): void {
 }
 
 export function getSessionDeepThinking(sessionId: string): boolean {
-  return !!sessionId && readAll()[sessionId] === true
+  const policy = getSessionThinkingPolicy(sessionId)
+  return policy.mode === 'auto' || policy.mode === 'on' || policy.mode === 'effort'
 }
 
 export function setSessionDeepThinking(sessionId: string, enabled: boolean): void {
+  setSessionThinkingPolicy(sessionId, enabled ? { mode: 'on' } : { mode: 'off' })
+}
+
+/** 读取会话显式策略；没有持久值才是 inherit，不能与显式 off 混同。 */
+export function getSessionThinkingPolicy(sessionId: string): ReasoningPolicy {
+  if (!sessionId) return { mode: 'inherit' }
+  const value = readAll()[sessionId]
+  if (value === true) return { mode: 'on' }
+  return value ? cloneReasoningPolicy(value) : { mode: 'inherit' }
+}
+
+/** 仅会话策略为 inherit 时删除记录，显式 off 必须持久化。 */
+export function setSessionThinkingPolicy(sessionId: string, policyValue: unknown): void {
   if (!sessionId) return
   const map = readAll()
-  if (enabled) map[sessionId] = true
-  else delete map[sessionId]
+  const policy = normalizeReasoningPolicy(policyValue)
+  if (policy.mode === 'inherit') delete map[sessionId]
+  else map[sessionId] = cloneReasoningPolicy(policy)
   writeAll(map)
 }
 
 export function clearSessionDeepThinking(sessionId: string): void {
-  setSessionDeepThinking(sessionId, false)
+  setSessionThinkingPolicy(sessionId, { mode: 'inherit' })
 }
 
 export function pruneSessionDeepThinking(existingIds: string[]): void {

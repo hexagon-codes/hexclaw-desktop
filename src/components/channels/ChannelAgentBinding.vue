@@ -23,13 +23,24 @@ import {
   addRule,
   deleteRule,
 } from '@/api/agents'
-import type { AgentConfig, AgentRole, AgentRule } from '@/types'
+import type {
+  AgentConfig,
+  AgentRole,
+  AgentRule,
+} from '@/types'
 import type { IMInstance } from '@/api/im-channels'
 import {
   isChannelDefaultAgent,
+  resolveExactChannelModel,
   resolveEffectiveModel,
   userVisibleAgents,
 } from '@/utils/imChannelBinding'
+import {
+  nativeReasoningPolicyFromControl,
+  normalizeDefaultReasoningPolicy,
+  normalizeReasoningPolicy,
+  resolveReasoningPolicy,
+} from '@/utils/reasoning-policy'
 import { useSettingsStore } from '@/stores/settings'
 import SearchInput from '@/components/common/SearchInput.vue'
 
@@ -111,17 +122,43 @@ function getBoundAgent(): AgentConfig | undefined {
   return agentsList.value.find((a) => a.name === rule.agent_name)
 }
 
-const globalDefaultModel = computed(() => settingsStore?.config?.llm?.defaultModel ?? '')
-
-function modelDisplayName(modelId: string): string {
-  if (!modelId) return ''
-  const hit = availableModels.value.find((m) => m.modelId === modelId)
-  return hit?.modelName || modelId
-}
+const globalDefaultModel = computed(() => ({
+  modelId: settingsStore?.config?.llm?.defaultModel ?? '',
+  providerId: settingsStore?.config?.llm?.defaultProviderId || undefined,
+}))
 
 function effectiveModel() {
   return resolveEffectiveModel(getBoundAgent(), globalDefaultModel.value)
 }
+
+const exactEffectiveModel = computed(() =>
+  resolveExactChannelModel(effectiveModel(), availableModels.value),
+)
+
+function modelDisplayName(): string {
+  const effective = effectiveModel()
+  return exactEffectiveModel.value?.modelName || effective.modelId
+}
+
+/** 通道只读投影：仅精确 supported 模型展示最终生效策略，不提供通道级选择或写入。 */
+const channelReasoningValue = computed(() => {
+  const model = exactEffectiveModel.value
+  if (model?.reasoningSupport !== 'supported' || !model.reasoningControl) return ''
+  const resolved = resolveReasoningPolicy({
+    sessionPolicy: { mode: 'inherit' },
+    agentPolicy: normalizeReasoningPolicy(getBoundAgent()?.reasoning_policy),
+    globalPolicy: normalizeDefaultReasoningPolicy(
+      settingsStore?.config?.llm?.defaultReasoningPolicy,
+    ),
+    nativePolicy: nativeReasoningPolicyFromControl(
+      model.reasoningSupport,
+      model.reasoningControl,
+    ),
+  }).policy
+  return resolved.mode === 'effort'
+    ? t(`chat.reasoning.effortOption.${resolved.effort}`)
+    : t(`chat.reasoning.${resolved.mode}`)
+})
 
 function effectiveModelSourceLabel(): string {
   const eff = effectiveModel()
@@ -351,8 +388,11 @@ onBeforeUnmount(() => {
       <span class="hc-cab__effmodel-label">{{ t('imChannels.modelLabel', '模型') }}</span>
       <span class="hc-cab__effmodel-badge" :class="`hc-cab__effmodel-badge--${effectiveModel().source}`">
         <bdi>{{ effectiveModel().modelId
-          ? modelDisplayName(effectiveModel().modelId)
+          ? modelDisplayName()
           : t('imChannels.noDefaultModel', '未配置默认模型') }}</bdi>
+      </span>
+      <span v-if="channelReasoningValue" class="hc-cab__effmodel-reasoning">
+        {{ t('chat.reasoning.display', { value: channelReasoningValue }) }}
       </span>
       <span class="hc-cab__effmodel-source">{{ effectiveModelSourceLabel() }}</span>
     </div>
@@ -407,6 +447,10 @@ onBeforeUnmount(() => {
 .hc-cab__effmodel-badge > bdi { unicode-bidi: isolate; direction: ltr; }
 .hc-cab__effmodel-badge--agent { color: var(--hc-accent, #6366f1); }
 .hc-cab__effmodel-badge--global { color: var(--hc-text-muted); }
+.hc-cab__effmodel-reasoning {
+  padding: 2px 7px; border: 1px solid var(--hc-border); border-radius: 999px;
+  font-size: 11px; color: var(--hc-text-secondary); background: var(--hc-bg-input);
+}
 .hc-cab__effmodel-source { font-size: 11px; color: var(--hc-text-muted); }
 .hc-cab__error { font-size: 12px; color: var(--hc-error); margin-top: 2px; }
 </style>

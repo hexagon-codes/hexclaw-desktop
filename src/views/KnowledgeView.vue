@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   BookOpen,
   Upload,
-  Trash2,
   Search,
   X,
   FileUp,
@@ -359,13 +358,27 @@ let isMounted = false
 
 const POLLABLE_VECTOR_JOB_STATES = new Set(['queued', 'running', 'retry_wait'])
 
-function hasPollableVectorJobs(): boolean {
-  return docs.value.some(
-    (doc) =>
-      Boolean(doc.vector_job_id) &&
-      POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? '') &&
-      ['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? ''),
+function hasPollableVectorJob(doc: KnowledgeDoc): boolean {
+  return (
+    Boolean(doc.vector_job_id) &&
+    POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? '') &&
+    ['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? '')
   )
+}
+
+function hasPollableVectorJobs(): boolean {
+  return docs.value.some(hasPollableVectorJob)
+}
+
+// 只替换当前已加载的同一文档，避免重建第 51 条后的条目时用首页回读覆盖分页窗口。
+async function refreshDocumentProjection(docID: string) {
+  const { getDocument } = await import('@/api/knowledge')
+  const projection = await getDocument(docID)
+  if (!projection || projection.id !== docID) return
+  const index = docs.value.findIndex((doc) => doc.id === docID)
+  if (index < 0) return
+  docs.value = docs.value.map((doc) => (doc.id === docID ? projection : doc))
+  if (isMounted && hasPollableVectorJobs()) ensureIndexPolling()
 }
 
 function updateVectorJobProjection(job: Awaited<ReturnType<typeof getKnowledgeJob>>) {
@@ -397,7 +410,8 @@ async function pollKnowledgeUploadJobs() {
   if (!isMounted || indexPollInFlight) return
   indexPollInFlight = true
   try {
-    let projectionChanged = false
+    let uploadProjectionChanged = false
+    const terminalDocumentIDs = new Set<string>()
     const polledJobs = new Map<string, Awaited<ReturnType<typeof getKnowledgeJob>>>()
     const running = uploadsStore.items.filter(
       (entry) => entry.status === 'processing' && Boolean(entry.jobId),
@@ -411,10 +425,10 @@ async function pollKnowledgeUploadJobs() {
           uploadsStore.markSucceeded(entry)
         } else if (job.state === 'failed') {
           uploadsStore.markFailed(entry, job.last_error || t('knowledge.uploadFailed'))
-          projectionChanged = true
+          uploadProjectionChanged = true
         } else if (job.state === 'cancelled') {
           uploadsStore.markCancelled(entry)
-          projectionChanged = true
+          uploadProjectionChanged = true
         }
       } catch (error) {
         // A transient status read must not turn a durable server job into a local failure.
@@ -422,28 +436,39 @@ async function pollKnowledgeUploadJobs() {
       }
     }
 
+    const vectorDocuments = docs.value.filter(
+      (doc) =>
+        Boolean(doc.vector_job_id) &&
+        POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? ''),
+    )
     const vectorJobIDs = new Set(
-      docs.value
-        .filter(
-          (doc) =>
-            Boolean(doc.vector_job_id) &&
-            POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? ''),
-        )
-        .map((doc) => doc.vector_job_id!),
+      vectorDocuments.map((doc) => doc.vector_job_id!),
     )
     for (const jobID of vectorJobIDs) {
       try {
         const job = polledJobs.get(jobID) ?? (await getKnowledgeJob(jobID))
         updateVectorJobProjection(job)
-        if (['succeeded', 'failed', 'cancelled'].includes(job.state)) projectionChanged = true
+        if (['succeeded', 'failed', 'cancelled'].includes(job.state)) {
+          for (const doc of vectorDocuments) {
+            if (doc.vector_job_id === jobID) terminalDocumentIDs.add(doc.id)
+          }
+        }
       } catch (error) {
-        // The list projection remains authoritative when one status read is transiently unavailable.
+        // 单个 Job 的短暂读取失败不能把持久状态改成本地失败。
         logger.warn('[Knowledge] document embedding job status read failed', error)
       }
     }
-    if (
+    if (isMounted && terminalDocumentIDs.size > 0) {
+      for (const documentID of terminalDocumentIDs) {
+        try {
+          await refreshDocumentProjection(documentID)
+        } catch (error) {
+          logger.warn('[Knowledge] document terminal projection read failed', error)
+        }
+      }
+    } else if (
       isMounted &&
-      (projectionChanged || uploadsStore.items.some((entry) => entry.status === 'done'))
+      (uploadProjectionChanged || uploadsStore.items.some((entry) => entry.status === 'done'))
     ) {
       await revalidateFromApi(true)
     }
@@ -749,7 +774,7 @@ function getVectorStatusLabel(doc: KnowledgeDoc): string {
     case 'failed':
       return t('knowledge.vectorFailed', '语义增强失败')
     case 'cancelled':
-      return t('knowledge.vectorCancelled', '语义增强已取消')
+      return ''
     default:
       return ''
   }
@@ -758,6 +783,88 @@ function getVectorStatusLabel(doc: KnowledgeDoc): string {
 function getVectorProgress(doc: KnowledgeDoc): string {
   if (typeof doc.vector_chunks_total !== 'number' || doc.vector_chunks_total <= 0) return ''
   return `${doc.vector_chunks_done ?? 0}/${doc.vector_chunks_total}`
+}
+
+function documentExtension(name: string): string {
+  const extension = name.split('.').pop()?.trim().toUpperCase()
+  return extension && extension !== name.trim().toUpperCase() ? extension.slice(0, 6) : 'DOC'
+}
+
+function isReadingDocumentProjection(doc: KnowledgeDoc): boolean {
+  return reindexingDocIds.value.has(doc.id)
+}
+
+function getDocumentRowStatus(doc: KnowledgeDoc): string {
+  if (isReadingDocumentProjection(doc)) return t('knowledge.authorityReading')
+  if (doc.error_message) return doc.error_message
+  const vectorStatus = getVectorStatusLabel(doc)
+  if (vectorStatus) {
+    const progress = getVectorProgress(doc)
+    return [vectorStatus, progress, doc.vector_error].filter(Boolean).join(' · ')
+  }
+  const chunks = `${doc.chunk_count} chunk${doc.chunk_count === 1 ? '' : 's'}`
+  if (getDocStatus(doc) === 'indexed' && doc.vector_index_state === 'ready') {
+    return `文本 + 语义已就绪 · ${chunks}`
+  }
+  return `${getDocStatusLabel(doc)} · ${chunks}`
+}
+
+function getDocumentBadgeLabel(doc: KnowledgeDoc): string {
+  if (isReadingDocumentProjection(doc)) return t('knowledge.syncingStatus')
+  if (['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? '')) {
+    return t('knowledge.semanticIndex.enhancing')
+  }
+  if (doc.vector_index_state === 'ready') return '混合检索'
+  if (doc.vector_index_state === 'failed' || getDocStatus(doc) === 'failed') {
+    return getDocStatusLabel(doc)
+  }
+  if (getDocStatus(doc) === 'processing') return getDocStatusLabel(doc)
+  return ''
+}
+
+function getDocumentBadgeStyle(doc: KnowledgeDoc) {
+  if (isReadingDocumentProjection(doc)) {
+    return { background: 'rgba(240, 180, 41, 0.14)', color: 'var(--hc-warning)' }
+  }
+  if (['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? '')) {
+    return { background: 'rgba(240, 180, 41, 0.14)', color: 'var(--hc-warning)' }
+  }
+  if (doc.vector_index_state === 'ready') return { background: '#22c55e15', color: '#15803d' }
+  return getDocStatusStyle(doc)
+}
+
+function getUploadRowStatus(entry: KnowledgeUploadEntry): string {
+  switch (entry.status) {
+    case 'uploading':
+      return `${t('knowledge.uploading')} ${entry.progress}%`
+    case 'processing':
+      return t('knowledge.processing')
+    case 'pending-response':
+      return (
+        entry.error ||
+        t('knowledge.uploadAwaitingAcceptance', '等待服务器确认；可重新选择同一文件恢复')
+      )
+    case 'error':
+      return entry.error || t('knowledge.uploadFailed')
+    case 'done':
+      return entry.warning || t('knowledge.indexing')
+    case 'cancelled':
+      return ''
+  }
+}
+
+function getUploadBadgeLabel(entry: KnowledgeUploadEntry): string {
+  if (entry.status === 'processing') return t('knowledge.semanticIndex.enhancing')
+  if (entry.status === 'error') return t('knowledge.statusFailed')
+  return ''
+}
+
+function getUploadBadgeStyle(entry: KnowledgeUploadEntry) {
+  if (entry.status === 'processing') {
+    return { background: 'rgba(240, 180, 41, 0.14)', color: 'var(--hc-warning)' }
+  }
+  if (entry.status === 'error') return { background: '#ef444415', color: '#dc2626' }
+  return { background: 'var(--hc-bg-hover)', color: 'var(--hc-text-secondary)' }
 }
 
 const loadingDocContent = ref(false)
@@ -806,7 +913,7 @@ async function retryDocContent() {
 
 async function handleReindex(doc: KnowledgeDoc) {
   if (!ensureKnowledgeEnabled()) return
-  if (reindexingDocIds.value.has(doc.id)) return
+  if (reindexingDocIds.value.has(doc.id) || hasPollableVectorJob(doc)) return
   const next = new Set(reindexingDocIds.value)
   next.add(doc.id)
   reindexingDocIds.value = next
@@ -866,19 +973,8 @@ async function handleReindex(doc: KnowledgeDoc) {
       ensureIndexPolling()
       return
     }
-    const result = await reindexDocument(doc.id)
-    // 用后端返回的真实状态更新（reindex 是同步的，返回时已完成）
-    docs.value = docs.value.map((item) =>
-      item.id === doc.id
-        ? {
-            ...item,
-            status: (result.status as KnowledgeDoc['status']) || 'indexed',
-            chunk_count: result.chunk_count ?? item.chunk_count,
-            error_message: undefined,
-            updated_at: result.updated_at || new Date().toISOString(),
-          }
-        : item,
-    )
+    await reindexDocument(doc.id)
+    await refreshDocumentProjection(doc.id)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.reindexUnavailable')
   } finally {
@@ -898,19 +994,7 @@ async function cancelDocumentVectorJob(doc: KnowledgeDoc) {
   try {
     const job = await cancelKnowledgeJob(jobID)
     updateVectorJobProjection(job)
-    if (job.state === 'cancelled' || job.state === 'failed') {
-      docs.value = docs.value.map((item) =>
-        item.vector_job_id === jobID
-          ? {
-              ...item,
-              vector_index_state: 'cancelled',
-              vector_outcome_unknown: false,
-              vector_error: undefined,
-            }
-          : item,
-      )
-    }
-    await revalidateFromApi(true)
+    await refreshDocumentProjection(doc.id)
   } catch (error) {
     errorMsg.value =
       error instanceof Error ? error.message : t('knowledge.vectorCancelFailed', '取消语义增强失败')
@@ -1193,7 +1277,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     </div>
 
     <div
-      class="knowledge-page__scroll flex-1 overflow-y-auto p-6 relative"
+      class="knowledge-page__scroll flex-1 overflow-y-auto relative"
       @dragover="handleDragOver"
       @dragleave="handleDragLeave"
       @drop="handleDrop"
@@ -1230,124 +1314,61 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
 
             <!-- Upload progress list -->
-            <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
+            <div v-if="uploadingFiles.length > 0" class="knowledge-page__temporary-list mb-4 space-y-2">
               <div
                 v-for="(uf, idx) in uploadingFiles"
                 :key="idx"
                 data-testid="knowledge-upload-job"
-                class="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
-                :style="{
-                  background: 'var(--hc-bg-card)',
-                  borderColor:
-                    uf.status === 'error'
-                      ? '#ef4444'
-                      : uf.status === 'pending-response'
-                        ? '#f59e0b'
-                        : uf.status === 'done'
-                          ? '#10b981'
-                          : 'var(--hc-border)',
-                }"
+                class="knowledge-page__resource-row knowledge-page__temporary-row"
+                :class="{ 'knowledge-page__resource-row--error': uf.status === 'error' }"
               >
-                <Upload
-                  :size="14"
-                  :class="{
-                    'animate-pulse': uf.status === 'uploading' || uf.status === 'processing',
-                  }"
-                  :style="{
-                    color:
-                      uf.status === 'error'
-                        ? '#ef4444'
-                        : uf.status === 'done'
-                          ? '#10b981'
-                          : 'var(--hc-accent)',
-                  }"
-                />
-                <div class="flex-1 min-w-0">
-                  <div
-                    class="text-xs font-medium truncate"
+                <span class="knowledge-page__resource-file">
+                  <span
+                    data-testid="knowledge-document-extension"
+                    class="knowledge-page__resource-extension"
+                  >
+                    {{ documentExtension(uf.name) }}
+                  </span>
+                </span>
+                <span class="knowledge-page__document-main flex-1 min-w-0">
+                  <span
+                    class="knowledge-page__resource-title"
                     :style="{ color: 'var(--hc-text-primary)' }"
                   >
                     {{ uf.name }}
-                  </div>
-                  <div
-                    v-if="uf.status === 'uploading'"
-                    class="mt-1 h-1 rounded-full overflow-hidden"
-                    :style="{ background: 'var(--hc-bg-hover)' }"
+                  </span>
+                  <span
+                    v-if="getUploadRowStatus(uf)"
+                    class="knowledge-page__resource-status"
+                    :class="{ 'animate-pulse': uf.status === 'processing' }"
+                    :data-testid="
+                      uf.status === 'processing'
+                        ? 'upload-processing'
+                        : uf.status === 'pending-response'
+                          ? 'knowledge-upload-pending-response'
+                          : undefined
+                    "
                   >
-                    <div
-                      class="h-full rounded-full transition-[width]"
-                      :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
-                    />
-                  </div>
-                  <div
-                    v-else-if="uf.status === 'processing'"
-                    class="text-xs mt-0.5 animate-pulse"
-                    :style="{ color: 'var(--hc-accent)' }"
-                    data-testid="upload-processing"
-                  >
-                    {{ t('knowledge.processing') }}
-                  </div>
-                  <div
-                    v-else-if="uf.status === 'pending-response'"
-                    class="text-xs mt-0.5"
-                    style="color: #b45309"
-                    data-testid="knowledge-upload-pending-response"
-                  >
-                    {{
-                      uf.error ||
-                      t(
-                        'knowledge.uploadAwaitingAcceptance',
-                        '等待服务器确认；可重新选择同一文件恢复',
-                      )
-                    }}
-                  </div>
-                  <div
-                    v-else-if="uf.status === 'error'"
-                    class="text-xs mt-0.5"
-                    style="color: #ef4444"
-                  >
-                    {{ uf.error }}
-                  </div>
-                  <div
-                    v-else-if="uf.status === 'cancelled'"
-                    class="text-xs mt-0.5"
-                    :style="{ color: 'var(--hc-text-muted)' }"
-                    data-testid="knowledge-upload-cancelled"
-                  >
-                    {{ t('knowledge.semanticIndex.cancelled') }}
-                  </div>
-                  <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
-                    {{ uf.warning }}
-                  </div>
-                  <div
-                    v-else-if="uf.status === 'done'"
-                    class="text-xs mt-0.5"
-                    :style="{ color: 'var(--hc-text-muted)' }"
-                  >
-                    {{ t('knowledge.indexing') }}
-                  </div>
-                </div>
+                    {{ getUploadRowStatus(uf) }}
+                  </span>
+                </span>
+                <span
+                  v-if="getUploadBadgeLabel(uf)"
+                  class="knowledge-page__resource-badge"
+                  :style="getUploadBadgeStyle(uf)"
+                >
+                  {{ getUploadBadgeLabel(uf) }}
+                </span>
                 <button
                   v-if="canCancelUpload(uf)"
                   type="button"
-                  class="text-xs px-2 py-1 rounded border"
+                  class="knowledge-page__resource-action"
                   :disabled="uf.cancelling"
                   data-testid="knowledge-upload-cancel"
                   @click="cancelUploadJob(uf)"
                 >
                   {{ t('common.cancel') }}
                 </button>
-                <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-                  {{
-                    uf.status === 'uploading'
-                      ? uf.progress + '%'
-                      : uf.status === 'processing'
-                        ? '⋯'
-                        : uf.status === 'done'
-                          ? '✓'
-                          : '✗'
-                  }}
-                </span>
               </div>
             </div>
 
@@ -1443,131 +1464,99 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <!-- 文档列表 -->
                 <div
                   data-testid="knowledge-doc-list"
-                  class="knowledge-page__document-list space-y-3"
+                  class="knowledge-page__document-list space-y-2"
                 >
                   <template v-if="filteredDocs.length > 0">
                     <div
                       v-for="doc in windowedDocs"
                       :key="doc.id"
                       data-testid="knowledge-doc-card"
-                      class="knowledge-page__document-card hc-card-interactive group flex items-center gap-3 rounded-2xl border px-4 py-3.5"
-                      :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+                      class="knowledge-page__resource-row knowledge-page__document-card flex items-center"
                     >
-                      <button
-                        class="knowledge-page__document-main flex-1 min-w-0 text-left py-0.5"
-                        @click="openDocDetail(doc)"
-                      >
-                        <div class="flex items-center gap-2">
-                          <span
-                            class="text-sm font-medium truncate"
-                            :style="{ color: 'var(--hc-text-primary)' }"
-                          >
-                            {{ doc.title }}
-                          </span>
-                          <span
-                            class="text-[10px] px-2 py-0.5 rounded-full"
-                            :style="getDocStatusStyle(doc)"
-                          >
-                            {{ getDocStatusLabel(doc) }}
-                          </span>
-                        </div>
-                        <div
-                          class="knowledge-page__document-meta flex items-center gap-3 mt-1 text-xs"
-                          :style="{ color: 'var(--hc-text-muted)' }"
+                      <span class="knowledge-page__resource-file">
+                        <span
+                          data-testid="knowledge-document-extension"
+                          class="knowledge-page__resource-extension"
                         >
-                          <span
-                            >{{ doc.chunk_count }} chunk{{ doc.chunk_count === 1 ? '' : 's' }}</span
-                          >
-                          <span v-if="doc.source"
-                            >{{ t('knowledge.source') }}: {{ doc.source }}</span
-                          >
-                          <span>{{
-                            new Date(doc.updated_at || doc.created_at).toLocaleString(locale)
-                          }}</span>
-                        </div>
-                        <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
-                          {{ doc.error_message }}
-                        </p>
-                        <p
-                          v-if="getVectorStatusLabel(doc)"
+                          {{ documentExtension(doc.title) }}
+                        </span>
+                      </span>
+                      <span class="knowledge-page__document-main flex-1 min-w-0">
+                        <span
+                          class="knowledge-page__resource-title"
+                          :style="{ color: 'var(--hc-text-primary)' }"
+                        >
+                          {{ doc.title }}
+                        </span>
+                        <span
                           data-testid="knowledge-vector-status"
-                          class="text-[11px] mt-2"
-                          :style="{
-                            color:
-                              doc.vector_index_state === 'failed' || doc.vector_outcome_unknown
-                                ? '#b45309'
-                                : 'var(--hc-text-muted)',
-                          }"
+                          class="knowledge-page__resource-status"
+                          :title="getDocumentRowStatus(doc)"
                         >
-                          {{ getVectorStatusLabel(doc) }}
-                          <span v-if="getVectorProgress(doc)"> · {{ getVectorProgress(doc) }}</span>
-                          <span v-if="doc.vector_error"> · {{ doc.vector_error }}</span>
-                        </p>
-                      </button>
+                          {{ getDocumentRowStatus(doc) }}
+                        </span>
+                      </span>
+                      <span
+                        v-if="getDocumentBadgeLabel(doc)"
+                        data-testid="knowledge-document-badge"
+                        class="knowledge-page__resource-badge"
+                        :style="getDocumentBadgeStyle(doc)"
+                      >
+                        {{ getDocumentBadgeLabel(doc) }}
+                      </span>
                       <div
                         data-testid="knowledge-doc-actions"
                         class="knowledge-page__document-actions shrink-0 flex items-center gap-1"
                       >
                         <button
+                          type="button"
+                          class="knowledge-page__resource-action"
+                          @click="openDocDetail(doc)"
+                        >
+                          详情
+                        </button>
+                        <button
                           v-if="canReindexDocument(doc)"
                           :data-testid="
                             hasRetryableVectorFailure(doc) ? 'knowledge-vector-retry' : undefined
                           "
-                          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
-                          :style="{
-                            color: 'var(--hc-text-secondary)',
-                            background: 'var(--hc-bg-hover)',
-                          }"
+                          type="button"
+                          class="knowledge-page__resource-action"
                           :disabled="
                             !knowledgeEnabled ||
                             reindexingDocIds.has(doc.id) ||
+                            hasPollableVectorJob(doc) ||
                             getDocStatus(doc) === 'processing'
                           "
+                          :aria-busy="reindexingDocIds.has(doc.id) ? 'true' : undefined"
                           @click="handleReindex(doc)"
                         >
-                          <RefreshCw
-                            :size="12"
-                            :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }"
-                          />
                           {{
                             getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)
                               ? t('knowledge.retryIndex')
-                              : t('knowledge.reindex')
+                              : '重建'
                           }}
                         </button>
                         <button
                           v-if="canCancelVectorJob(doc)"
+                          type="button"
                           data-testid="knowledge-vector-cancel"
-                          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
-                          :style="{
-                            color: '#b45309',
-                            background: 'color-mix(in srgb, #f59e0b 10%, transparent)',
-                          }"
+                          class="knowledge-page__resource-action knowledge-page__resource-action--warning"
                           :title="t('knowledge.vectorCancel', '取消语义增强')"
                           :disabled="
                             !knowledgeEnabled || cancellingVectorJobIds.has(doc.vector_job_id || '')
                           "
                           @click="cancelDocumentVectorJob(doc)"
                         >
-                          <RefreshCw
-                            v-if="cancellingVectorJobIds.has(doc.vector_job_id || '')"
-                            :size="12"
-                            class="animate-spin"
-                          />
-                          <X v-else :size="12" />
                           {{ t('knowledge.vectorCancel', '取消语义增强') }}
                         </button>
                         <button
-                          class="p-1.5 rounded-lg transition-colors"
-                          :style="{
-                            color: 'var(--hc-error)',
-                            background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
-                          }"
-                          :title="t('common.delete')"
+                          type="button"
+                          class="knowledge-page__resource-action knowledge-page__resource-action--danger"
                           :disabled="!knowledgeEnabled"
                           @click="confirmDelete(doc)"
                         >
-                          <Trash2 :size="16" />
+                          {{ t('common.delete') }}
                         </button>
                       </div>
                     </div>
@@ -2219,8 +2208,163 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   gap: 18px;
 }
 
+.knowledge-page__scroll {
+  padding: 16px 26px 48px;
+}
+
 .knowledge-page__active-panel {
   min-width: 0;
+}
+
+.knowledge-page__resource-row {
+  display: flex;
+  min-width: 0;
+  min-height: 52px;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-page__resource-row--error {
+  border-color: #ef4444;
+}
+
+.knowledge-page__resource-file {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 9px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-page__resource-extension {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  border-radius: 5px;
+  background: var(--hc-accent);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.knowledge-page__document-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-page__resource-title,
+.knowledge-page__resource-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-page__resource-title {
+  flex: none;
+  max-width: min(34%, 300px);
+  font-weight: 700;
+}
+
+.knowledge-page__resource-status {
+  flex: 1;
+  color: var(--hc-text-secondary);
+}
+
+.knowledge-page__resource-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.knowledge-page__resource-badge::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.knowledge-page__document-actions {
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.knowledge-page__resource-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0.5px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.knowledge-page__resource-action:hover:not(:disabled) {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.knowledge-page__resource-action:disabled {
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--hc-accent) 1.6%, transparent);
+  color: var(--hc-text-primary);
+  opacity: 0.45;
+}
+
+.knowledge-page__resource-action--warning {
+  color: #b45309;
+}
+
+.knowledge-page__resource-action--danger {
+  color: var(--hc-error);
+}
+
+@media (max-width: 900px) {
+  .knowledge-page__resource-row {
+    flex-wrap: wrap;
+  }
+
+  .knowledge-page__document-main {
+    flex: 1 1 180px;
+  }
+
+  .knowledge-page__document-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 .knowledge-page__rag-body {

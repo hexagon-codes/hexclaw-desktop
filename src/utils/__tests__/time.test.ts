@@ -5,7 +5,15 @@ vi.mock('@/i18n', () => ({
   i18n: { global: { locale: { value: 'zh-CN' } } },
 }))
 
-import { formatTime, formatLogTime, formatRelative, formatElapsedSeconds, formatDurationMs } from '../time'
+import {
+  formatTime,
+  formatClockTime,
+  formatSessionDate,
+  formatLogTime,
+  formatRelative,
+  formatElapsedSeconds,
+  formatDurationMs,
+} from '../time'
 import { i18n } from '@/i18n'
 
 function setLocale(loc: string) {
@@ -176,6 +184,31 @@ describe('formatTime', () => {
       const ts = new Date('2025-12-25T20:00:00').toISOString()
       expect(formatTime(ts, true)).toBe('2025/12/25')
     })
+  })
+})
+
+describe('message and session date formats', () => {
+  beforeEach(() => {
+    setLocale('zh-CN')
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 20, 12, 0, 0))
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('formats message timestamps as HH:mm without weekday or date', () => {
+    expect(formatClockTime(new Date(2026, 7, 20, 9, 5, 0).toISOString())).toBe('09:05')
+    expect(formatClockTime(new Date(2026, 7, 18, 16, 45, 0).toISOString())).toBe('16:45')
+  })
+
+  it('formats today as HH:mm, same-year dates as month/day, and cross-year dates with the year', () => {
+    expect(formatSessionDate(new Date(2026, 7, 20, 9, 5, 0).toISOString())).toBe('09:05')
+    expect(formatSessionDate(new Date(2026, 7, 19, 9, 5, 0).toISOString())).toBe('8月19日')
+    expect(formatSessionDate(new Date(2026, 7, 1, 9, 5, 0).toISOString())).toBe('8月1日')
+    expect(formatSessionDate(new Date(2025, 11, 31, 9, 5, 0).toISOString())).toBe('2025年12月31日')
+    expect(formatSessionDate(new Date(2026, 7, 19, 9, 5, 0).toISOString())).not.toMatch(
+      /今天|昨天|周[一二三四五六日天]/,
+    )
   })
 })
 

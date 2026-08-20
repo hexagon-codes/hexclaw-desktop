@@ -1,20 +1,9 @@
-/**
- * 对话框（composer）重新设计 + 🎤 语音听写 的闭环回归测试。
- *
- * 证明本次落地的契约：
- *  - 左侧输入动作：+ 上传 / 🧩 Skill / ✨ Prompt（+ 语音）
- *  - 🧩 Skill 按钮 → 命令面板 scope=skills；✨ Prompt → scope=prompts
- *  - + 按钮 → 触发隐藏 <input type=file>
- *  - @ 提及弹层只含智能体（skills 传 []，技能改走 / 面板）
- *  - placeholder 内嵌灰色注释「/ Skill·Prompt、@ 智能体」
- *  - 发送键：空态 disabled、有草稿激活 --active
- *  - 🎤 语音：支持时显示、点击 toggleListening、识别 transcript 回填输入框
- *  - i18n 术语契约：composerHint 三语言齐全 / Skill·Prompt Title Case / token 不写「词元」
- */
+/** 主会话 Composer 的输入动作、主操作切换与语音转写回归。 */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref, nextTick } from 'vue'
+import chatInputSource from '../ChatInput.vue?raw'
 import zhCN from '@/i18n/locales/zh-CN'
 import enUS from '@/i18n/locales/en'
 import ugCN from '@/i18n/locales/ug-CN'
@@ -81,22 +70,37 @@ async function setDraft(w: VueWrapper, value: string) {
 }
 
 beforeEach(() => {
+  const isListening = ref(false)
+  const transcript = ref('')
+  const error = ref('')
   voiceRefs.api = {
-    isListening: ref(false),
-    transcript: ref(''),
-    error: ref(''),
+    isListening,
+    transcript,
+    error,
     isSupported: true,
+    startListening: vi.fn(() => {
+      isListening.value = true
+    }),
+    finishListening: vi.fn(async () => transcript.value),
+    cancelListening: vi.fn(() => {
+      isListening.value = false
+      transcript.value = ''
+    }),
     toggleListening: vi.fn(),
   }
 })
 
 describe('ChatInput · 对话框重新设计', () => {
-  it('左侧工具区呈现 + / Skill / Prompt 三个输入动作', async () => {
+  it('左侧工具区呈现 + / 技能 / 提示词三个输入动作', async () => {
     const w = await mountChatInput({ skills: [{ name: 's1' }] })
     const titles = tools(w).map((b) => b.attributes('title') || '')
     expect(titles.some((t) => t.includes('添加'))).toBe(true) // +
     expect(titles.some((t) => t.includes('Skill'))).toBe(true) // 🧩
     expect(titles.some((t) => t.includes('Prompt'))).toBe(true) // ✨
+    expect(w.findAll('.hc-composer__tool-label').map((label) => label.text())).toEqual([
+      '技能',
+      '提示词',
+    ])
   })
 
   it('🧩 Skill 按钮打开命令面板且 scope=skills', async () => {
@@ -136,43 +140,114 @@ describe('ChatInput · 对话框重新设计', () => {
     expect(ph).toContain('@ 智能体')
   })
 
-  it('发送键空态 disabled、有草稿激活 --active', async () => {
+  it('空输入时右侧是可用语音主按钮，有文本时原位切换为发送', async () => {
     const w = await mountChatInput()
-    const send = w.get('.hc-composer__send')
-    expect((send.element as HTMLButtonElement).disabled).toBe(true)
-    expect(send.classes()).not.toContain('hc-composer__send--active')
+    const voice = w.get('[data-testid="chat-voice-start"]')
+    expect((voice.element as HTMLButtonElement).disabled).toBe(false)
+    expect(w.find('[data-testid="chat-send"]').exists()).toBe(false)
 
     await setDraft(w, 'hello')
+    const send = w.get('[data-testid="chat-send"]')
     expect((send.element as HTMLButtonElement).disabled).toBe(false)
     expect(send.classes()).toContain('hc-composer__send--active')
+    expect(w.find('[data-testid="chat-voice-start"]').exists()).toBe(false)
+  })
+
+  it('有附件时右侧原位切换为发送', async () => {
+    const w = await mountChatInput()
+    const input = w.get('input[type="file"]')
+    const file = new File(['hello'], 'note.txt', { type: 'text/plain' })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+    expect(w.find('[data-testid="chat-voice-start"]').exists()).toBe(false)
+    expect((w.get('[data-testid="chat-send"]').element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('常规桌面空态与单行态共用 116px 外框，编辑区在 46px 至 150px 间增长', async () => {
+    const w = await mountChatInput()
+    expect(chatInputSource).toMatch(/\.hc-composer__box--primary\s*\{[^}]*min-height:\s*116px/s)
+    expect(chatInputSource).toMatch(
+      /\.hc-composer__box--primary\s+:deep\(\.hc-composer__field\)\s*\{[^}]*max-height:\s*150px[^}]*min-height:\s*46px/s,
+    )
+    await setDraft(w, 'hello')
+    expect(w.get('.hc-composer__box')).toBeTruthy()
+  })
+
+  it('窄屏仅收起技能与提示词文字，保留图标按钮', () => {
+    expect(chatInputSource).toMatch(
+      /@media\s*\(max-width:\s*900px\)[\s\S]*\.hc-composer__tool-label\s*\{[^}]*display:\s*none/s,
+    )
+  })
+
+  it('场景 Composer 保留原有图标工具、左侧听写与空态禁用发送', async () => {
+    const w = await mountChatInput({
+      skills: [{ name: 's1' }],
+      scenarioImageIntercept: true,
+    })
+    expect(w.findAll('.hc-composer__tool-label')).toHaveLength(0)
+    expect(toolByTitle(w, '语音')).toBeTruthy()
+    expect(w.find('[data-testid="chat-voice-start"]').exists()).toBe(false)
+    expect((w.get('[data-testid="chat-send"]').element as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
 describe('ChatInput · 🎤 语音听写闭环', () => {
-  it('支持语音识别时渲染麦克风按钮', async () => {
+  it('空态渲染语音波形主按钮', async () => {
     const w = await mountChatInput()
-    expect(toolByTitle(w, '语音')).toBeTruthy()
+    expect(w.get('[data-testid="chat-voice-start"]')).toBeTruthy()
   })
 
-  it('通道不可用时麦克风仍常驻（BUG-20260711-E 对齐原型固定动作行；点击由 useVoice error→toast 提示）', async () => {
+  it('通道不可用时语音主按钮仍常驻，点击后由既有 error 承载失败', async () => {
     voiceRefs.api.isSupported = false
     const w = await mountChatInput()
-    // 旧契约「不支持时不渲染」已废弃：WKWebView 检测不到 STT 通道曾致按钮凭空消失、与原型漂移。
-    expect(toolByTitle(w, '语音')).toBeTruthy()
+    expect(w.get('[data-testid="chat-voice-start"]')).toBeTruthy()
   })
 
-  it('点击麦克风触发 toggleListening', async () => {
+  it('点击语音主按钮进入录音态，右侧箭头在无临时转写时也可用', async () => {
     const w = await mountChatInput()
-    await toolByTitle(w, '语音')!.trigger('click')
-    expect(voiceRefs.api.toggleListening).toHaveBeenCalledTimes(1)
+    await w.get('[data-testid="chat-voice-start"]').trigger('click')
+    expect(voiceRefs.api.startListening).toHaveBeenCalledTimes(1)
+    expect(w.get('.hc-composer__box').classes()).toContain('hc-composer__box--voice')
+    expect(w.get('[data-testid="chat-voice-panel"]')).toBeTruthy()
+    expect((w.get('[data-testid="chat-voice-send"]').element as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('识别到的 transcript 自动回填输入框（端到端闭环）', async () => {
+  it('左侧 X 丢弃录音，不把临时转写回填输入框', async () => {
     const w = await mountChatInput()
     ;(voiceRefs.api.transcript as { value: string }).value = '帮我写一首关于月亮的诗'
+    await w.get('[data-testid="chat-voice-start"]').trigger('click')
     await nextTick()
+    expect(w.get('[data-testid="chat-voice-transcript"]').text()).toBe('帮我写一首关于月亮的诗')
+    await w.get('[data-testid="chat-voice-cancel"]').trigger('click')
+    expect(voiceRefs.api.cancelListening).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
+    expect(canonicalSource(w)).toBe('')
+  })
+
+  it('右侧箭头停止录音，整段转写成功后调用既有发送链路', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(true)
+    voiceRefs.api.finishListening = vi.fn().mockResolvedValue('整段语音转写')
+    const w = await mountChatInput({ sendHandler })
+    await w.get('[data-testid="chat-voice-start"]').trigger('click')
+    await w.get('[data-testid="chat-voice-send"]').trigger('click')
     await flushPromises()
-    expect(canonicalSource(w)).toBe('帮我写一首关于月亮的诗')
+    expect(voiceRefs.api.finishListening).toHaveBeenCalledTimes(1)
+    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], undefined)
+    expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
+  })
+
+  it('整段转写失败时退回既有 Composer，不调用发送链路', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(true)
+    voiceRefs.api.finishListening = vi.fn(async () => {
+      ;(voiceRefs.api.error as { value: string }).value = 'Transcribe failed'
+      return ''
+    })
+    const w = await mountChatInput({ sendHandler })
+    await w.get('[data-testid="chat-voice-start"]').trigger('click')
+    await w.get('[data-testid="chat-voice-send"]').trigger('click')
+    await flushPromises()
+    expect(sendHandler).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
   })
 })
 

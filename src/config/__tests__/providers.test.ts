@@ -177,6 +177,46 @@ describe('PROVIDER_PRESETS', () => {
     expect(openaiModels.every((m) => m.capabilities?.includes('vision'))).toBe(true)
   })
 
+  it('declares reasoning effort only for the three exact GPT-5.6 OpenAI presets', () => {
+    const gpt56Models = PROVIDER_PRESETS.openai.defaultModels
+    expect(gpt56Models.map((model) => ({
+      id: model.id,
+      reasoningSupport: model.reasoningSupport,
+      reasoningControl: model.reasoningControl,
+    }))).toEqual([
+      {
+        id: 'gpt-5.6-sol',
+        reasoningSupport: 'supported',
+        reasoningControl: {
+          dialect: 'reasoning_effort',
+          on: 'high',
+          off: 'none',
+          allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        },
+      },
+      {
+        id: 'gpt-5.6-terra',
+        reasoningSupport: 'supported',
+        reasoningControl: {
+          dialect: 'reasoning_effort',
+          on: 'high',
+          off: 'none',
+          allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        },
+      },
+      {
+        id: 'gpt-5.6-luna',
+        reasoningSupport: 'supported',
+        reasoningControl: {
+          dialect: 'reasoning_effort',
+          on: 'high',
+          off: 'none',
+          allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        },
+      },
+    ])
+  })
+
   it('all non-custom defaultBaseUrl values are valid URLs', () => {
     const nonCustomKeys = ALL_PROVIDER_KEYS.filter((k) => k !== 'custom')
     for (const key of nonCustomKeys) {

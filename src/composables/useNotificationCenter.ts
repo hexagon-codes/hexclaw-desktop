@@ -3,8 +3,8 @@ import { useI18n } from 'vue-i18n'
 import { hexclawWS } from '@/api/websocket'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useAppStore } from '@/stores/app'
-import { sendOsNotification } from '@/utils/os-notification'
-import type { NotificationKind, NotificationLevel } from '@/types/ui'
+import { useToast } from '@/composables/useToast'
+import type { NotificationInput, NotificationKind, NotificationLevel } from '@/types/ui'
 
 /** 后端 desktop.Service 的 source 标识 → 前端通知 kind（图标语义）。 */
 function desktopKind(source: string): NotificationKind {
@@ -29,6 +29,10 @@ function normalizeLevel(level: string): NotificationLevel {
   return level === 'success' || level === 'warning' || level === 'error' ? level : 'info'
 }
 
+function toastMessage(title: string, body?: string): string {
+  return body ? title + '：' + body : title
+}
+
 /**
  * 通知中心 source 适配层（bridge）。
  *
@@ -37,7 +41,7 @@ function normalizeLevel(level: string): NotificationLevel {
  * 避免退化成 Docker 那种「没人看的铃铛」。
  *
  * 接入源（均为全局可得、低噪音）：
- *   1. 工具审批请求 —— Agent 阻塞等待，跨会话必须告知，失焦时叠加系统弹窗
+ *   1. 工具审批请求 —— Agent 阻塞等待，跨会话必须告知，统一使用应用内 Toast
  *   2. 后端自动记忆保存
  *   3. WebSocket 重连成功
  *   4. 引擎状态降级 / 恢复（消抖 starting 抖动，且仅在真降级后才报恢复）
@@ -50,14 +54,16 @@ export function useNotificationCenter() {
   const { t } = useI18n()
   const notifications = useNotificationsStore()
   const appStore = useAppStore()
+  const toast = useToast()
 
   const cleanups: Array<() => void> = []
   let started = false
   /** 仅在曾经「降级」后才允许报「恢复」，避免开机首连产生假恢复通知 */
   let engineWasDown = false
 
-  function appHidden(): boolean {
-    return typeof document !== 'undefined' && document.hidden
+  function pushInApp(input: NotificationInput) {
+    notifications.push(input)
+    toast[input.level](toastMessage(input.title, input.body))
   }
 
   function start() {
@@ -69,7 +75,7 @@ export function useNotificationCenter() {
       hexclawWS.onApprovalRequest((req) => {
         const title = t('notifications.events.approvalTitle')
         const body = t('notifications.events.approvalBody', { tool: req.toolName || '?' })
-        notifications.push({
+        pushInApp({
           kind: 'approval',
           level: 'warning',
           title,
@@ -77,14 +83,13 @@ export function useNotificationCenter() {
           route: '/chat',
           dedupeKey: `approval:${req.requestId}`,
         })
-        if (appHidden()) void sendOsNotification(title, body)
       }),
     )
 
     // 2) 后端自动记忆保存
     cleanups.push(
       hexclawWS.onMemorySaved((content) => {
-        notifications.push({
+        pushInApp({
           kind: 'memory',
           level: 'info',
           title: t('notifications.events.memoryTitle'),
@@ -97,7 +102,7 @@ export function useNotificationCenter() {
     // 3) WebSocket 重连成功
     cleanups.push(
       hexclawWS.onReconnect(() => {
-        notifications.push({
+        pushInApp({
           kind: 'system',
           level: 'success',
           title: t('notifications.events.reconnectedTitle'),
@@ -108,10 +113,10 @@ export function useNotificationCenter() {
 
     // 3.5) 后端 desktop.Service 推送（cron 任务完成/失败、IM 入站回执、heal 结果…）。
     // 文案由后端组装（含用户数据如任务名），前端只按 source 映射图标与深链。
-    // 不在此再发 OS 通知 —— 后端 desktop.Service 自带 sendSystemNotification，避免重复。
+    // 业务通知同时进入持久通知中心和应用内 Toast，不调用系统通知。
     cleanups.push(
       hexclawWS.onDesktopNotification((n) => {
-        notifications.push({
+        pushInApp({
           kind: desktopKind(n.source),
           level: normalizeLevel(n.level),
           title: n.title || t('notifications.title'),
@@ -131,7 +136,7 @@ export function useNotificationCenter() {
           const title = t('notifications.events.engineStoppedTitle')
           const body = t('notifications.events.engineStoppedBody')
           engineWasDown = true
-          notifications.push({
+          pushInApp({
             kind: 'engine',
             level: 'warning',
             title,
@@ -139,10 +144,9 @@ export function useNotificationCenter() {
             route: '/settings',
             dedupeKey: 'engine:status',
           })
-          if (appHidden()) void sendOsNotification(title, body)
         } else if (next === 'running' && engineWasDown) {
           engineWasDown = false
-          notifications.push({
+          pushInApp({
             kind: 'engine',
             level: 'success',
             title: t('notifications.events.engineRecoveredTitle'),

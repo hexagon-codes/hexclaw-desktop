@@ -71,7 +71,7 @@ interface WsUsage {
 }
 
 interface WsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'memory_saved' | 'desktop_notification'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'tool_approval_ack' | 'tool_approval_terminal' | 'memory_saved' | 'desktop_notification'
   content: string
   message_content?: MessageContent
   render_manifest?: RenderManifest
@@ -82,10 +82,14 @@ interface WsServerMessage {
   request_id?: string
   owner_id?: string
   invocation_id?: string
+  decision_id?: string
+  status?: string
   tool_name?: string
   arguments?: Record<string, unknown>
   arguments_digest?: string
   security_scope_digest?: string
+  scope_schema_version?: number
+  terminal_result?: string
   deadline_at?: string
   usage?: WsUsage
   tool_calls?: ToolCall[]
@@ -101,6 +105,10 @@ interface WsServerMessage {
   runtime_event?: Omit<RuntimeEvent, 'sequence'>
 }
 
+export type ToolApprovalWireMessage = Omit<WsServerMessage, 'type'> & {
+  type: 'tool_approval_request' | 'tool_permission_request' | 'tool_approval_ack' | 'tool_approval_terminal'
+}
+
 export interface ToolApprovalRequest {
   requestId: string
   ownerId?: string
@@ -109,6 +117,7 @@ export interface ToolApprovalRequest {
   arguments?: Record<string, unknown>
   argumentsDigest?: string
   securityScopeDigest?: string
+  scopeSchemaVersion?: number
   risk: string
   reason: string
   sessionId: string
@@ -116,6 +125,14 @@ export interface ToolApprovalRequest {
 }
 
 type ApprovalCallback = (req: ToolApprovalRequest) => void
+type ApprovalWireCallback = (message: ToolApprovalWireMessage) => void
+
+function isToolApprovalWireMessage(message: WsServerMessage): message is ToolApprovalWireMessage {
+  return message.type === 'tool_approval_request'
+    || message.type === 'tool_permission_request'
+    || message.type === 'tool_approval_ack'
+    || message.type === 'tool_approval_terminal'
+}
 
 /** 后端 desktop.Service 推送的通知（cron 完成/失败、IM 入站、heal 等）。 */
 export interface DesktopNotificationEvent {
@@ -137,6 +154,7 @@ class HexClawWS {
   private replyCallbacks: ScopedCallback<ReplyCallback>[] = []
   private errorCallbacks: ScopedCallback<ErrorCallback>[] = []
   private approvalCallbacks: ApprovalCallback[] = []
+  private approvalWireCallbacks: ApprovalWireCallback[] = []
   private memorySavedCallbacks: ((content: string) => void)[] = []
   private desktopNotificationCallbacks: DesktopNotificationCallback[] = []
   private reconnectCallbacks: (() => void)[] = []
@@ -291,6 +309,12 @@ class HexClawWS {
     return () => { this.approvalCallbacks = this.approvalCallbacks.filter((cb) => cb !== callback) }
   }
 
+  /** 审批重连对账使用的原始审批协议帧监听器。 */
+  onApprovalWire(callback: ApprovalWireCallback): () => void {
+    this.approvalWireCallbacks.push(callback)
+    return () => { this.approvalWireCallbacks = this.approvalWireCallbacks.filter((cb) => cb !== callback) }
+  }
+
   /** Listen for backend auto-memory extraction notifications */
   onMemorySaved(callback: (content: string) => void): () => void {
     this.memorySavedCallbacks.push(callback)
@@ -335,6 +359,7 @@ class HexClawWS {
     this.replyCallbacks = []
     this.errorCallbacks = []
     this.approvalCallbacks = []
+    this.approvalWireCallbacks = []
     this.memorySavedCallbacks = []
   }
 
@@ -362,6 +387,9 @@ class HexClawWS {
         break
       case 'tool_approval_request':
       case 'tool_permission_request':
+        if (isToolApprovalWireMessage(msg)) {
+          this.approvalWireCallbacks.forEach((cb) => cb(msg))
+        }
         this.approvalCallbacks.forEach((cb) => cb({
           requestId: msg.request_id || (msg.metadata?.request_id as string) || '',
           ownerId: msg.owner_id || (msg.metadata?.owner_id as string) || undefined,
@@ -370,11 +398,24 @@ class HexClawWS {
           arguments: msg.arguments,
           argumentsDigest: msg.arguments_digest || (msg.metadata?.arguments_digest as string) || undefined,
           securityScopeDigest: msg.security_scope_digest || (msg.metadata?.security_scope_digest as string) || undefined,
+          scopeSchemaVersion: Number.isSafeInteger(msg.scope_schema_version) && Number(msg.scope_schema_version) > 0
+            ? Number(msg.scope_schema_version)
+            : (typeof msg.metadata?.scope_schema_version === 'string'
+                && /^\d+$/.test(msg.metadata.scope_schema_version)
+                && Number(msg.metadata.scope_schema_version) > 0
+              ? Number(msg.metadata.scope_schema_version)
+              : undefined),
           risk: (msg.metadata?.risk as string) || 'sensitive',
           reason: msg.content || '',
           sessionId: msg.session_id || '',
           deadlineAt: msg.deadline_at || (msg.metadata?.deadline_at as string) || undefined,
         }))
+        break
+      case 'tool_approval_ack':
+      case 'tool_approval_terminal':
+        if (isToolApprovalWireMessage(msg)) {
+          this.approvalWireCallbacks.forEach((cb) => cb(msg))
+        }
         break
       case 'memory_saved':
         this.memorySavedCallbacks.forEach((cb) => cb(msg.content))

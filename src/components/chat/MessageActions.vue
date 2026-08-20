@@ -8,10 +8,9 @@ import {
   ThumbsDown,
   Volume2,
   Square,
-  MoreHorizontal,
-  Trash2,
+  GitBranch,
 } from 'lucide-vue-next'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
 import { useVoice } from '@/composables/useVoice'
@@ -34,15 +33,12 @@ const emit = defineEmits<{
   copy: []
   retry: []
   edit: []
-  delete: []
   like: []
   dislike: []
   fork: []
 }>()
 
 const copied = ref(false)
-const menuOpen = ref(false)
-const rootRef = ref<HTMLElement | null>(null)
 const activeFeedback = computed(() => props.feedback ?? null)
 // F4：整条全是代码块/纯图片时 plainText 为空 → 朗读无意义。禁用喇叭而非"点了没反应"。
 const speakable = computed(() => plainText(props.content).length > 0)
@@ -88,48 +84,10 @@ async function toggleSpeak() {
     toast.error(t('chat.speakFailed', '语音播报失败，请检查语音合成服务是否已配置'))
   }
 }
-
-function toggleMore() {
-  if (menuOpen.value) {
-    closeMore()
-    return
-  }
-  menuOpen.value = true
-}
-
-function closeMore() {
-  menuOpen.value = false
-}
-
-function runMenuAction(action: 'fork' | 'delete') {
-  closeMore()
-  if (action === 'fork') emit('fork')
-  else emit('delete')
-}
-
-function onDocumentMouseDown(event: MouseEvent) {
-  if (!rootRef.value?.contains(event.target as Node)) closeMore()
-}
-
-function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !menuOpen.value) return
-  event.preventDefault()
-  closeMore()
-  rootRef.value?.querySelector<HTMLButtonElement>('[data-testid="message-more"]')?.focus()
-}
-
-onMounted(() => {
-  document.addEventListener('mousedown', onDocumentMouseDown, true)
-  document.addEventListener('keydown', onDocumentKeydown)
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('mousedown', onDocumentMouseDown, true)
-  document.removeEventListener('keydown', onDocumentKeydown)
-})
 </script>
 
 <template>
-  <div ref="rootRef" class="hc-msg-actions" :class="`hc-msg-actions--${role}`" role="toolbar">
+  <div class="hc-msg-actions" :class="`hc-msg-actions--${role}`" role="toolbar">
     <template v-if="role === 'assistant'">
       <button
         type="button"
@@ -188,6 +146,16 @@ onBeforeUnmount(() => {
       >
         <RotateCcw :size="14" />
       </button>
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        data-testid="message-fork"
+        :title="t('chat.createBranch', '创建分支')"
+        :aria-label="t('chat.createBranch', '创建分支')"
+        @click="emit('fork')"
+      >
+        <GitBranch :size="14" />
+      </button>
     </template>
 
     <template v-else>
@@ -212,42 +180,6 @@ onBeforeUnmount(() => {
         <Pencil :size="14" />
       </button>
     </template>
-    <div class="hc-msg-actions__more">
-      <button
-        type="button"
-        class="hc-msg-actions__btn"
-        data-testid="message-more"
-        :title="t('chat.composer.more', '更多')"
-        :aria-label="t('chat.composer.more', '更多')"
-        aria-haspopup="menu"
-        :aria-expanded="menuOpen"
-        @click="toggleMore"
-      >
-        <MoreHorizontal :size="14" />
-      </button>
-      <div v-show="menuOpen" class="hc-msg-actions__more-menu" role="menu">
-        <button
-          v-if="role === 'assistant'"
-          type="button"
-          role="menuitem"
-          data-testid="message-fork"
-          @click="runMenuAction('fork')"
-        >
-          {{ t('chat.createBranch', '创建分支') }}
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          class="hc-msg-actions__danger"
-          data-testid="message-delete"
-          :title="t('common.delete')"
-          @click="runMenuAction('delete')"
-        >
-          <Trash2 :size="14" aria-hidden="true" />
-          {{ t('common.delete') }}
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -283,7 +215,7 @@ onBeforeUnmount(() => {
   height: 30px;
   padding: 3px;
   border: 0.5px solid color-mix(in srgb, var(--hc-border) 82%, transparent);
-  border-radius: 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--hc-bg-elevated) 82%, transparent);
   backdrop-filter: blur(16px) saturate(150%);
   -webkit-backdrop-filter: blur(16px) saturate(150%);
@@ -331,8 +263,7 @@ onBeforeUnmount(() => {
   color: #34c759 !important;
 }
 
-.hc-msg-actions__btn:focus-visible,
-.hc-msg-actions__more-menu button:focus-visible {
+.hc-msg-actions__btn:focus-visible {
   outline: 2px solid var(--hc-accent);
   outline-offset: 1px;
 }
@@ -367,51 +298,6 @@ onBeforeUnmount(() => {
 .hc-msg-actions__btn--active-bad {
   color: var(--hc-error, #ff3b30);
   background: rgba(255, 59, 48, 0.08);
-}
-
-.hc-msg-actions__more {
-  position: relative;
-  display: flex;
-}
-
-.hc-msg-actions__more-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 7px);
-  min-width: 112px;
-  max-width: 128px;
-  padding: 5px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 11px;
-  background: var(--hc-bg-elevated);
-  box-shadow: var(--hc-shadow-float);
-  z-index: 8;
-}
-
-.hc-msg-actions__more-menu button {
-  width: 100%;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--hc-text-primary);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.hc-msg-actions__more-menu button:hover {
-  background: var(--hc-bg-hover);
-}
-
-.hc-msg-actions__more-menu .hc-msg-actions__danger {
-  color: var(--hc-error);
 }
 
 @media (prefers-reduced-motion: reduce) {

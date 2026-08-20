@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatTime } from '@/utils/time'
+import { formatSessionDate } from '@/utils/time'
 import { Trash2, MoreHorizontal, Pencil, Pin, PinOff, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
@@ -381,7 +381,7 @@ const showEmptyState = computed(() =>
 )
 
 function formatDate(ts: string): string {
-  return formatTime(ts, true)
+  return formatSessionDate(ts)
 }
 
 function isSessionGenerating(sessionId: string) {
@@ -460,6 +460,7 @@ async function performDeleteSession(sessionId: string) {
   }
   try {
     await chatStore.deleteSession(sessionId)
+    chatStore.clearPendingApprovalsForSession(sessionId)
     // 分页加载的旧会话只存在于 extraSessions；删除成功后必须同步清理本地分页缓存，
     // 否则 API 已成功但列表仍残留，刷新前会形成“删除无效”的假象。
     extraSessions.value = extraSessions.value.filter((session) => session.id !== sessionId)
@@ -738,7 +739,7 @@ onUnmounted(() => {
                   :title="t('chat.pendingApprovalInBackground')"
                 />
               </div>
-              <div v-if="renamingId !== item.session.id" class="hc-sessions__meta">
+              <div class="hc-sessions__meta">
                 <span v-if="item.snippet" class="hc-sessions__snippet">{{
                   formatSearchSnippet(item.snippet)
                 }}</span>
@@ -824,7 +825,7 @@ onUnmounted(() => {
                 :title="t('chat.pendingApprovalInBackground')"
               />
             </div>
-            <div v-if="renamingId !== session.id" class="hc-sessions__meta">
+            <div class="hc-sessions__meta">
               <span class="hc-sessions__time">{{ formatDate(session.updated_at) }}</span>
               <span v-if="session.message_count > 0" class="hc-sessions__count">{{
                 session.message_count
@@ -1173,6 +1174,7 @@ onUnmounted(() => {
 }
 
 .hc-sessions__count {
+  margin-left: auto;
   font-size: 11px;
   color: var(--hc-text-muted);
 }

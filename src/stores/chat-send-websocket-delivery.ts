@@ -64,6 +64,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
       thinkingEnabled?: boolean
+      reasoningSupport?: import('@/types').ModelReasoningSupport
       agentDisplayName?: string
       recipientDisplayName?: string
     }
@@ -86,7 +87,10 @@ export function createChatSendWebSocketDeliveryController(params: {
         sessionId,
         requestId,
         thinkingEnabled: samplingSnapshot?.thinkingEnabled
-          ?? requestMetadata?.thinking_enabled === 'true',
+          ?? (requestMetadata?.thinking === 'on'
+            || requestMetadata?.thinking_enabled === 'true'),
+        reasoningSupport: samplingSnapshot?.reasoningSupport,
+        requestRoute: samplingSnapshot?.chatParams ?? chatParams.value,
         agentDisplayName: samplingSnapshot?.agentDisplayName,
         recipientDisplayName: samplingSnapshot?.recipientDisplayName,
       }))

@@ -2,6 +2,56 @@ import { describe, expect, it } from 'vitest'
 import { buildChatRequestMetadata } from '../chat-request-metadata'
 
 describe('buildChatRequestMetadata', () => {
+  it('always sends the explicit reasoning request for every model', () => {
+    expect(
+      buildChatRequestMetadata({
+        thinkingEnabled: false,
+        memoryEnabled: true,
+      })?.thinking,
+    ).toBe('off')
+    expect(
+      buildChatRequestMetadata({
+        thinkingEnabled: true,
+        memoryEnabled: true,
+      })?.thinking,
+    ).toBe('on')
+  })
+
+  it('sends thinking_effort only for an enabled exact reasoning_effort model', () => {
+    const effortMetadata = buildChatRequestMetadata({
+      thinkingEnabled: true,
+      memoryEnabled: true,
+      reasoningPolicy: { mode: 'effort', effort: 'high' },
+      reasoningControl: {
+        dialect: 'reasoning_effort',
+        on: 'high',
+        off: 'none',
+        allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    } as never)
+    const booleanDialectMetadata = buildChatRequestMetadata({
+      thinkingEnabled: true,
+      memoryEnabled: true,
+      reasoningPolicy: { mode: 'effort', effort: 'high' },
+      reasoningControl: { dialect: 'think', on: true, off: false },
+    } as never)
+    const disabledMetadata = buildChatRequestMetadata({
+      thinkingEnabled: false,
+      memoryEnabled: true,
+      reasoningPolicy: { mode: 'effort', effort: 'high' },
+      reasoningControl: {
+        dialect: 'reasoning_effort',
+        on: 'high',
+        off: 'none',
+        allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    } as never)
+
+    expect(effortMetadata).toEqual({ thinking: 'on', thinking_effort: 'high' })
+    expect(booleanDialectMetadata).toEqual({ thinking: 'on' })
+    expect(disabledMetadata).toEqual({ thinking: 'off' })
+  })
+
   it('sends agent_mode for explicit non-auto modes', () => {
     for (const mode of [
       'react',
@@ -18,7 +68,7 @@ describe('buildChatRequestMetadata', () => {
           memoryEnabled: true,
           agentMode: mode,
         }),
-      ).toEqual({ agent_mode: mode })
+      ).toEqual({ thinking: 'off', agent_mode: mode })
     }
   })
 
@@ -29,7 +79,7 @@ describe('buildChatRequestMetadata', () => {
         memoryEnabled: true,
         agentMode: 'auto',
       }),
-    ).toBeUndefined()
+    ).toEqual({ thinking: 'off' })
   })
 
   it('ignores invalid agent_mode values', () => {
@@ -39,7 +89,7 @@ describe('buildChatRequestMetadata', () => {
         memoryEnabled: true,
         agentMode: 'invalid',
       }),
-    ).toBeUndefined()
+    ).toEqual({ thinking: 'off' })
   })
 
   // BUG-20260625 F-2：温度/MaxTokens 是死控件。前端把它们当顶层字段发，后端 ChatRequest
@@ -62,4 +112,3 @@ describe('buildChatRequestMetadata', () => {
     expect(md?.agent_max_tokens).toBeUndefined()
   })
 })
-

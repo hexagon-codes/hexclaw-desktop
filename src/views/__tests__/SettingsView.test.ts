@@ -1564,6 +1564,72 @@ describe('SettingsView — E2E 关键路径', () => {
     })
   })
 
+  it('默认思考策略紧邻默认模型，并把精确强度持久化到全局 typed 字段', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    const { updateLLMConfig } = await import('@/api/config')
+    const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
+    const wrapper = await mountSettingsView()
+    const store = await getSettingsStore()
+
+    for (let i = 0; i < 30; i++) {
+      await flushPromises()
+      await wrapper.vm.$nextTick()
+      if (!store.loading && store.config) break
+    }
+    expect(store.config).not.toBeNull()
+
+    const added = store.addProvider({
+      name: 'Reasoning Provider',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-reasoning',
+      baseUrl: 'https://reasoning.example.test/v1',
+      models: [
+        {
+          id: 'reasoning-model',
+          name: 'Reasoning Model',
+          capabilities: ['text'],
+          reasoningSupport: 'supported',
+          reasoningControl: {
+            dialect: 'reasoning_effort',
+            on: 'high',
+            off: 'off',
+            allowed_efforts: ['low', 'high'],
+          },
+        },
+      ],
+    })
+    expect(added).not.toBeNull()
+    store.config!.llm.defaultProviderId = added!.id
+    store.config!.llm.defaultModel = 'reasoning-model'
+    await wrapper.vm.$nextTick()
+
+    const modelRow = wrapper.get('[data-testid="llm-default-model-select"]').element.closest(
+      '.hc-settings__row',
+    )
+    const reasoning = wrapper.get('[data-testid="llm-default-reasoning-policy"]')
+    const reasoningRow = reasoning.element.closest('.hc-settings__row')
+    expect(modelRow?.nextElementSibling).toBe(reasoningRow)
+
+    await selectHcOption(wrapper, 'llm-default-reasoning-policy', '高')
+    expect(store.config!.llm.defaultReasoningPolicy).toEqual({
+      mode: 'effort',
+      effort: 'high',
+    })
+
+    mockedUpdateLLMConfig.mockClear()
+    const vm = wrapper.vm as unknown as { saveConfig: () => Promise<void> }
+    await vm.saveConfig()
+    await flushPromises()
+
+    expect(mockedUpdateLLMConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        default_reasoning_policy: { mode: 'effort', effort: 'high' },
+      }),
+      expect.anything(),
+    )
+  })
+
   it('flushes a newly added provider when the window closes before explicit save', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     const { updateLLMConfig } = await import('@/api/config')

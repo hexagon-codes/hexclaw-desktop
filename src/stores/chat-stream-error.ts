@@ -1,6 +1,10 @@
 import type { Ref } from 'vue'
 import type { ChatMessage, ApiError } from '@/types'
-import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
+import {
+  normalizeReasoningReceipt,
+  normalizeRuntimeSnapshotMetadata,
+  normalizeThinkingMetadata,
+} from '@/types/chat'
 import { fromNativeError } from '@/utils/errors'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
@@ -45,6 +49,12 @@ export function createChatStreamErrorController(params: {
     error.value = apiError
     const targetSessionId = sessionId ?? streamingSessionId.value ?? currentSessionId.value
     resetSessionStream(targetSessionId, sending, draftSending)
+    const fallbackReasoningRequest = streamState?.reasoningReceipt?.reasoning_request
+      ?? (streamState?.thinkingEnabled ? 'on' : 'off')
+    const reasoningReceipt = normalizeReasoningReceipt(
+      streamState?.reasoningReceipt,
+      fallbackReasoningRequest,
+    )
     const errorMessage: ChatMessage = {
       id: streamState?.assistantMessageId || createId(),
       role: 'assistant',
@@ -55,7 +65,10 @@ export function createChatStreamErrorController(params: {
         normalizeRuntimeSnapshotMetadata({
           is_error: true,
           request_id: streamState?.requestId,
-          thinking_duration: getStreamThinkingDuration(streamState),
+          reasoning_receipt: reasoningReceipt,
+          thinking_duration: reasoningReceipt.reasoning_execution === 'applied'
+            ? getStreamThinkingDuration(streamState) ?? 0
+            : undefined,
           reasoning_visibility: streamState?.thinkingEnabled
             ? streamState.visibility ?? 'not_exposed'
             : undefined,
@@ -68,7 +81,7 @@ export function createChatStreamErrorController(params: {
           runtime_events: streamState?.runtimeEvents,
           last_sequence: streamState?.lastSequence,
           recipient_display_name: streamState?.recipientDisplayName,
-        }, streamState?.assistantMessageId),
+        }, streamState?.assistantMessageId, undefined, fallbackReasoningRequest),
         streamState?.visibility === 'visible' ? streamState.reasoning : undefined,
         'failed',
       ),

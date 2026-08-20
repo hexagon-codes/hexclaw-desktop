@@ -1,5 +1,12 @@
 import type { Ref } from 'vue'
-import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import type {
+  ChatAttachment,
+  ChatDocumentRef,
+  ChatMessage,
+  ModelReasoningControl,
+  ModelReasoningSupport,
+  ReasoningPolicy,
+} from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import { buildChatRequestMetadata } from './chat-request-metadata'
 import { createChatTransportUnavailableController } from './chat-transport-unavailable'
@@ -64,6 +71,9 @@ export function createChatSendDeliveryController(params: {
     agentRole: string
     chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
     thinkingEnabled: boolean
+    reasoningSupport?: ModelReasoningSupport
+    reasoningPolicy?: ReasoningPolicy
+    reasoningControl?: ModelReasoningControl
   }): Record<string, string> | undefined {
     const settingsStore = getSettingsStore()
     const memoryEnabled = settingsStore.config?.memory?.enabled ?? true
@@ -82,6 +92,8 @@ export function createChatSendDeliveryController(params: {
       (typeof localStorage !== 'undefined' && localStorage.getItem('hc-locale')) || 'zh-CN'
     return buildChatRequestMetadata({
       thinkingEnabled: thinking,
+      reasoningPolicy: snapshot?.reasoningPolicy,
+      reasoningControl: snapshot?.reasoningControl,
       memoryEnabled,
       imageGeneration: modelCaps.includes('image_generation'),
       videoGeneration: modelCaps.includes('video_generation'),
@@ -131,6 +143,9 @@ export function createChatSendDeliveryController(params: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
       thinkingEnabled: boolean
+      reasoningSupport?: ModelReasoningSupport
+      reasoningPolicy?: ReasoningPolicy
+      reasoningControl?: ModelReasoningControl
       agentDisplayName?: string
       recipientDisplayName?: string
     }

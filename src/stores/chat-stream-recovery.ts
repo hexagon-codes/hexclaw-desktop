@@ -66,6 +66,8 @@ export function createChatStreamRecoveryController(params: {
         if (existing?.requestId === snapshot.request_id || streamHandles.has(snapshot.session_id)) continue
 
         seedRecoveredStream(snapshot.session_id, snapshot)
+        const recoveredReasoningRequest = activeStreams.value[snapshot.session_id]
+          ?.reasoningReceipt?.reasoning_request ?? 'off'
         const handle = chatSvc.resumeWebSocketStream(snapshot.session_id, snapshot.request_id, {
           onSnapshot: (current) => {
             seedRecoveredStream(snapshot.session_id, {
@@ -85,7 +87,7 @@ export function createChatStreamRecoveryController(params: {
           onApprovalRequest: (request) => {
             storePendingApproval(request)
           },
-        })
+        }, recoveredReasoningRequest)
         streamHandles.set(snapshot.session_id, handle)
 
         void handle.done
