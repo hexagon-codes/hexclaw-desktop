@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import K12WebhookPanel from '@/features/k12/views/K12WebhookPanel.vue'
 
 const hooks = vi.hoisted(() => ({
@@ -34,8 +35,10 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: hooks.success, error: hooks.error }),
 }))
 vi.mock('lucide-vue-next', () => ({
+  AlertTriangle: { template: '<span />' },
   ChevronDown: { template: '<span />' },
   Copy: { template: '<span />' },
+  Info: { template: '<span />' },
   RefreshCw: { template: '<span />' },
   Trash2: { template: '<span />' },
   X: { template: '<span />' },
@@ -119,6 +122,10 @@ describe('K12WebhookPanel', () => {
         attempt_count: 1,
       },
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('owns its empty state, so the generic Webhook empty state stays suppressed with zero bindings', async () => {
@@ -242,6 +249,7 @@ describe('K12WebhookPanel', () => {
   })
 
   it('edits event/workflow allowlists and deletes only within the selected Tutor scope', async () => {
+    vi.useFakeTimers()
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="k12-webhook-edit-homework-hook"]').trigger('click')
@@ -256,6 +264,20 @@ describe('K12WebhookPanel', () => {
 
     await wrapper.get('[data-testid="k12-webhook-delete-homework-hook"]').trigger('click')
     await flushPromises()
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    expect(confirmDialog.exists()).toBe(true)
+    expect(confirmDialog.props('confirmDelayMs')).toBe(1500)
+    expect(hooks.remove).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1499)
+    await flushPromises()
+    expect(confirmDialog.get('button.hc-dialog__btn--danger').attributes('disabled')).toBeDefined()
+
+    vi.advanceTimersByTime(1)
+    await flushPromises()
+    await confirmDialog.get('button.hc-dialog__btn--danger').trigger('click')
+    await flushPromises()
+
     expect(hooks.remove).toHaveBeenCalledWith('homework-hook', agentA.name)
   })
 

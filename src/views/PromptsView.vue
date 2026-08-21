@@ -387,7 +387,7 @@ onMounted(() => {
                 {{ t('common.cancel', '取消') }}
               </button>
               <button
-                class="hc-btn hc-btn--primary"
+                class="hc-btn hc-btn-primary"
                 :disabled="!editing.title?.trim()"
                 @click="savePrompt"
               >
@@ -570,49 +570,6 @@ onMounted(() => {
   gap: 6px;
   font-size: 12px;
   cursor: pointer;
-}
-.hc-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: var(--hc-radius-md);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-secondary);
-  cursor: pointer;
-  font-size: 13px;
-  font-family: inherit;
-}
-.hc-btn:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-.hc-btn--primary {
-  background: var(--hc-accent);
-  color: var(--hc-text-inverse);
-  border-color: transparent;
-}
-.hc-btn--primary:hover {
-  background: var(--hc-accent);
-  color: var(--hc-text-inverse);
-  opacity: 0.9;
-}
-.hc-btn--ghost {
-  background: transparent;
-  border-color: transparent;
-}
-.hc-btn--ghost:hover {
-  background: var(--hc-bg-hover);
-  border-color: var(--hc-border);
-}
-.hc-btn--sm {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.hc-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 /* 弹窗正文区：表单字段纵向排列（取代旧内联编辑器布局） */
 .hc-prompt-modal {

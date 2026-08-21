@@ -248,6 +248,15 @@ const canCancelDesired = computed(
     Boolean(desiredRevision.value?.job_id) &&
     ['pending', 'building', 'retry_wait', 'failed'].includes(desiredRevision.value?.state ?? ''),
 )
+const canRetryDesired = computed(() => {
+  const current = policy.value
+  const desired = desiredRevision.value
+  return (
+    current?.selection.kind === 'profile' &&
+    desired?.state === 'failed' &&
+    desired.profile.profile_id === current.selection.profile_id
+  )
+})
 const activity = computed(() => (policy.value ? activityOf(policy.value) : IDLE_ACTIVITY))
 const desiredProgress = computed(() =>
   progressText(desiredRevision.value?.chunks_done, desiredRevision.value?.chunks_total),
@@ -518,44 +527,67 @@ function downloadProfile(profile: EmbeddingProfile) {
   observeModelPull(canonical, task)
 }
 
-async function selectPolicy(selection: EmbeddingSelection) {
-  const current = policy.value
-  if (!current || applying.value || desiredRevision.value) return
+type PolicySelectionApplyResult =
+  | { status: 'applied' }
+  | { status: 'stale' }
+  | { status: 'conflict'; error: unknown }
+  | { status: 'failed'; error: unknown }
+
+async function applyPolicySelection(
+  current: KnowledgeEmbeddingPolicyProjection,
+  selection: EmbeddingSelection,
+): Promise<PolicySelectionApplyResult> {
   clearPollTimer(true)
   invalidatePolicyReads()
   applying.value = true
-  errorDetail.value = ''
   try {
     const result = await applyKnowledgeEmbeddingPolicy(CORPUS_ID, current.policy_version, selection)
     trackedJobId.value = result.job_id ?? null
     const refreshed = await readLatestPolicy()
-    if (disposed || !refreshed) return
+    if (disposed || !refreshed) return { status: 'stale' }
     acceptProjection(refreshed)
-    announcement.value = t('knowledge.semanticIndex.updated', '索引模型设置已更新')
+    return { status: 'applied' }
   } catch (error) {
-    // Refresh the canonical projection after optimistic-lock conflicts.
     if (errorStatus(error) === 409) {
       try {
         const refreshed = await readLatestPolicy()
-        if (!disposed && refreshed) {
-          acceptProjection(refreshed)
-        }
+        if (!disposed && refreshed) acceptProjection(refreshed)
       } catch {
-        // Keep the original conflict as the visible error.
+        // 保持上一次权威投影。
       }
-      errorDetail.value = t(
-        'knowledge.semanticIndex.conflict',
-        '设置已在其他位置更新，请重新选择。',
-      )
-    } else {
-      errorDetail.value = error instanceof Error ? error.message : String(error)
+      return { status: 'conflict', error }
     }
-    announcement.value = errorDetail.value
+    return { status: 'failed', error }
   } finally {
     applying.value = false
     if (policy.value) focusHeaderIfSelectionLocked(policy.value)
     schedulePoll()
   }
+}
+
+async function selectPolicy(selection: EmbeddingSelection) {
+  const current = policy.value
+  if (!current || applying.value || desiredRevision.value) return
+  errorDetail.value = ''
+  const result = await applyPolicySelection(current, selection)
+  if (result.status === 'applied') {
+    announcement.value = t('knowledge.semanticIndex.updated', '索引模型设置已更新')
+    return
+  }
+  if (result.status === 'stale') return
+  errorDetail.value =
+    result.status === 'conflict'
+      ? t('knowledge.semanticIndex.conflict', '设置已在其他位置更新，请重新选择。')
+      : result.error instanceof Error
+        ? result.error.message
+        : String(result.error)
+  announcement.value = errorDetail.value
+}
+
+async function retryDesiredRebuild() {
+  const current = policy.value
+  if (!current || !canRetryDesired.value || applying.value) return
+  await applyPolicySelection(current, current.selection)
 }
 
 async function cancelDesiredRebuild(jobId: string) {
@@ -822,6 +854,16 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
           />
           {{ semanticMessage('cancelRebuild') }}
         </button>
+        <button
+          v-if="canRetryDesired"
+          type="button"
+          class="kb-index-card__retry"
+          data-testid="kb-semantic-index-retry-rebuild"
+          :disabled="applying"
+          @click="retryDesiredRebuild"
+        >
+          {{ t('common.retry', '重试') }}
+        </button>
       </div>
 
       <p v-if="visibleError" class="kb-index-card__inline-error">
@@ -980,6 +1022,29 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 }
 
 .kb-index-card__cancel:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.kb-index-card__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--hc-accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.kb-index-card__retry:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.kb-index-card__retry:disabled {
   cursor: wait;
   opacity: 0.65;
 }

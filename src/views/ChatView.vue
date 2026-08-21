@@ -784,8 +784,7 @@ const selectedModelDisplay = computed(() => {
   if (usesBoundAgentModel.value) {
     const cfg = agentsStore.findAgent(chatStore.agentRole)
     if (cfg?.model) {
-      const agentLabel = projectedAgentDisplay(chatStore.agentRole)
-      return `${cfg.model} · ${agentLabel}`
+      return cfg.model
     }
   }
   if (selectedModel.value === 'auto') return t('chat.modelAuto')
@@ -1491,9 +1490,7 @@ const selectedReasoningEfforts = computed(() =>
   allowedReasoningEfforts(selectedModelReasoningControl.value),
 )
 const deepThinkingUnsupported = computed(
-  () =>
-    selectedModelReasoningSupport.value !== 'supported' ||
-    !selectedModelReasoningControl.value,
+  () => selectedModelReasoningSupport.value !== 'supported' || !selectedModelReasoningControl.value,
 )
 
 // 当前模型是否支持视觉/视频上传
@@ -2192,11 +2189,7 @@ function resolveRouteReasoning(
     globalPolicy: settingsStore.config?.llm.defaultReasoningPolicy,
     nativePolicy: nativeReasoningPolicyFromControl(reasoningSupport, reasoningControl),
   }).policy
-  const reasoningRequest = toReasoningRequest(
-    reasoningPolicy,
-    reasoningSupport,
-    reasoningControl,
-  )
+  const reasoningRequest = toReasoningRequest(reasoningPolicy, reasoningSupport, reasoningControl)
   return {
     thinkingEnabled: reasoningRequest.thinkingEnabled,
     reasoningSupport,
@@ -2232,7 +2225,9 @@ function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
   const display = routeDisplaySnapshot(sourceAgentRole)
   const routeModel = sourceSessionModel?.model ?? effectiveChatParams.model
   const routeProvider =
-    sourceSessionModel?.providerId || sourceSessionModel?.providerKey || effectiveChatParams.provider
+    sourceSessionModel?.providerId ||
+    sourceSessionModel?.providerKey ||
+    effectiveChatParams.provider
   const reasoning = resolveRouteReasoning(
     sourceSessionId,
     sourceAgentRole,
@@ -2743,6 +2738,16 @@ function messageProviderDisplay(message: ChatMessage): string {
     settingsStore.config?.llm.providers ?? [],
     metadataValue(message, 'provider_display_name'),
   )
+}
+
+function messageSourceDisplay(message: ChatMessage): string | null {
+  const provider = messageProviderDisplay(message)
+  const model = metadataValue(message, 'model')
+  const isBuiltinSkill =
+    message.message_content?.producer_kind === 'skill' ||
+    metadataValue(message, 'producer_kind') === 'skill'
+  if (!provider && !model && isBuiltinSkill) return t('chat.builtinSkillNoModel')
+  return [provider, model].filter(Boolean).join(' · ') || null
 }
 
 function messageFeedbackValue(message: import('@/types').ChatMessage) {
@@ -3393,23 +3398,7 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                   <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
                     <div class="hc-msg__meta">
-                      <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
-                        [messageProviderDisplay(msg), metadataValue(msg, 'model')]
-                          .filter(Boolean)
-                          .join(' · ')
-                      }}</span>
-                      <span
-                        v-if="
-                          msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent
-                        "
-                        >{{
-                          msgAgentDisplay(
-                            msg.agent_name ||
-                              (msg.metadata?.agent_name as string) ||
-                              (msg.metadata?.routed_agent as string),
-                          )
-                        }}</span
-                      >
+                      <span v-if="messageSourceDisplay(msg)">{{ messageSourceDisplay(msg) }}</span>
                     </div>
                     <div class="hc-msg__actions-inline">
                       <MessageActions
@@ -3703,7 +3692,7 @@ function startSidebarResize(event: MouseEvent) {
             role="status"
           >
             <span>{{ t('chat.connectionsUnavailable') }}</span>
-            <button type="button" @click="loadConnectionDirectory">
+            <button class="hc-chat__connection-retry" type="button" @click="loadConnectionDirectory">
               {{ t('common.retry', '重试') }}
             </button>
           </div>
@@ -3903,7 +3892,9 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                   <template v-if="isDeepThinking && selectedReasoningEfforts.length > 0">
                     <div class="hc-thinking-selector__divider" />
-                    <div class="hc-thinking-selector__section">{{ t('chat.reasoning.effort') }}</div>
+                    <div class="hc-thinking-selector__section">
+                      {{ t('chat.reasoning.effort') }}
+                    </div>
                     <div role="radiogroup" :aria-label="t('chat.reasoning.effortAriaLabel')">
                       <button
                         v-for="effort in selectedReasoningEfforts"

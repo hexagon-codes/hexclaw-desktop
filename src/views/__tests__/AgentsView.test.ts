@@ -8,7 +8,17 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import type { AgentConfig, ProviderConfig } from '@/types'
 
-const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
+const {
+  getRoles,
+  getAgents,
+  getRules,
+  addRule,
+  deleteRule,
+  setDefaultAgent,
+  registerAgent,
+  unregisterAgent,
+  updateAgent,
+} = vi.hoisted(() => ({
   getRoles: vi.fn(),
   getAgents: vi.fn(),
   getRules: vi.fn(),
@@ -63,7 +73,9 @@ vi.mock('@/utils/secure-store', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -125,7 +137,8 @@ async function mountView() {
         SearchInput: {
           props: ['modelValue', 'placeholder'],
           emits: ['update:modelValue'],
-          template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          template:
+            '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
         ConfirmDialog: { template: '<div />' },
         teleport: true,
@@ -173,12 +186,18 @@ describe('AgentsView', () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     getOllamaStatus.mockResolvedValue({ running: false, models: [] })
 
-    getAssistantSoul.mockResolvedValue({ system_prompt: '', is_custom: false, default_prompt: '你是小蟹，一个友好的助手。' })
-    updateAssistantSoul.mockImplementation((prompt: string) => Promise.resolve({
-      system_prompt: prompt.trim(),
-      is_custom: prompt.trim() !== '',
+    getAssistantSoul.mockResolvedValue({
+      system_prompt: '',
+      is_custom: false,
       default_prompt: '你是小蟹，一个友好的助手。',
-    }))
+    })
+    updateAssistantSoul.mockImplementation((prompt: string) =>
+      Promise.resolve({
+        system_prompt: prompt.trim(),
+        is_custom: prompt.trim() !== '',
+        default_prompt: '你是小蟹，一个友好的助手。',
+      }),
+    )
 
     getRoles.mockResolvedValue({
       roles: [
@@ -290,7 +309,11 @@ describe('AgentsView', () => {
     await fromLib.trigger('click')
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; addStep: number }
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddAgent: boolean
+      addStep: number
+    }
     expect(vm.activeTab).toBe('templates') // 交给唯一货架
     expect(vm.showAddAgent).toBe(false) // 弹窗让位，避免两处并列
   })
@@ -357,7 +380,9 @@ describe('AgentsView', () => {
     await flushPromises()
 
     // 工具栏「新建智能体」按钮打开两步弹窗
-    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
+    const registerButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('新建智能体'))
     expect(registerButton?.exists()).toBe(true)
     await registerButton!.trigger('click')
     await flushPromises()
@@ -386,7 +411,9 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const modelSelect = wrapper.findAllComponents(HcSelect)[1]
-    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map(
+      (o) => o.label,
+    )
     expect(modelLabels).toContain('glm-5')
   })
 
@@ -394,7 +421,9 @@ describe('AgentsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
+    const registerButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('新建智能体'))
     await registerButton!.trigger('click')
     await flushPromises()
 
@@ -419,7 +448,9 @@ describe('AgentsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
+    const registerButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('新建智能体'))
     await registerButton!.trigger('click')
     await flushPromises()
     ;(wrapper.vm as unknown as { startFromBlank: () => void }).startFromBlank()
@@ -436,12 +467,12 @@ describe('AgentsView', () => {
 
     await wrapper.get('[data-testid="agent-add-adv-toggle"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="agent-add-model-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-add-model-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="agent-add-skills-toggle"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="agent-skill-count"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(true)
   })
 
   it('编辑表单将模型参数与 Skill 拆为两个独立折叠区', async () => {
@@ -457,20 +488,20 @@ describe('AgentsView', () => {
     ;(wrapper.vm as unknown as { openEditAgent: (value: AgentConfig) => void }).openEditAgent(agent)
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="agent-edit-model-fold"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="agent-edit-skill-fold"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-edit-model-fold"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-edit-skill-fold"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="agent-adv-toggle"]').text()).toContain('模型与参数')
     expect(wrapper.get('[data-testid="agent-adv-toggle"]').text()).not.toContain('Skill')
     expect(wrapper.get('[data-testid="agent-edit-skills-toggle"]').text()).toContain('挂载 Skill')
 
     await wrapper.get('[data-testid="agent-adv-toggle"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="agent-edit-model-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-edit-model-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="agent-edit-skills-toggle"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="agent-skill-count"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agent-skill-count"]').exists()).toBe(true)
   })
 
   it('shows only runtime-backed providers in the register form', async () => {
@@ -506,7 +537,11 @@ describe('AgentsView', () => {
     ]
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { showAddAgent: boolean; showAddAdvanced: boolean; addStep: number }
+    const vm = wrapper.vm as unknown as {
+      showAddAgent: boolean
+      showAddAdvanced: boolean
+      addStep: number
+    }
     vm.showAddAgent = true
     await flushPromises()
     vm.addStep = 2
@@ -514,7 +549,9 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const providerSelect = wrapper.findAllComponents(HcSelect)[0]
-    const providerLabels = (providerSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    const providerLabels = (providerSelect!.props('options') as Array<{ label: string }>).map(
+      (o) => o.label,
+    )
     expect(providerLabels).toContain('智谱')
     expect(providerLabels).not.toContain('Ollama (本地)')
   })
@@ -546,7 +583,12 @@ describe('AgentsView', () => {
     await settingsStore.syncOllamaModels()
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { showAddAgent: boolean; showAddAdvanced: boolean; addStep: number; newAgent: { provider: string } }
+    const vm = wrapper.vm as unknown as {
+      showAddAgent: boolean
+      showAddAdvanced: boolean
+      addStep: number
+      newAgent: { provider: string }
+    }
     vm.showAddAgent = true
     await flushPromises()
     vm.addStep = 2
@@ -560,7 +602,9 @@ describe('AgentsView', () => {
 
     // Model select appears after provider is set (v-if), re-query
     const modelSelect = wrapper.findAllComponents(HcSelect)[1]
-    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map(
+      (o) => o.label,
+    )
     expect(modelLabels).toContain('qwen3.5:9b')
     expect(modelLabels).toContain('qwen3:0.6b')
   })
@@ -591,10 +635,8 @@ describe('AgentsView', () => {
     await flushPromises()
 
     expect(vm.newAgent.reasoning_policy).toEqual({ mode: 'inherit' })
-    expect(wrapper.get('[data-testid="agent-add-reasoning-policy"]').text()).toContain(
-      '跟随全局',
-    )
-    expect(wrapper.get('[data-testid="agent-add-adv-summary"]').text()).toContain('思考 · 跟随全局')
+    expect(wrapper.get('[data-testid="agent-add-reasoning-policy"]').text()).toContain('跟随全局')
+    expect(wrapper.get('[data-testid="agent-add-adv-summary"]').text()).toContain('思考跟随全局')
 
     vm.newAgent.name = 'reasoning-agent'
     vm.newAgent.display_name = 'Reasoning Agent'
@@ -636,7 +678,7 @@ describe('AgentsView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="agent-edit-reasoning-policy"]').text()).toContain('高')
-    expect(wrapper.get('[data-testid="agent-adv-summary"]').text()).toContain('思考 · 高')
+    expect(wrapper.get('[data-testid="agent-adv-summary"]').text()).toContain('思考高')
     vm.editingAgent.reasoning_policy = { mode: 'off' }
     await vm.handleEditAgent()
 
@@ -818,7 +860,11 @@ describe('AgentsView', () => {
   })
 
   it('SOUL editor: opens hero editor, loads current persona, saves trimmed SOUL via API', async () => {
-    getAssistantSoul.mockResolvedValueOnce({ system_prompt: '原始人设', is_custom: true, default_prompt: '内置默认人设' })
+    getAssistantSoul.mockResolvedValueOnce({
+      system_prompt: '原始人设',
+      is_custom: true,
+      default_prompt: '内置默认人设',
+    })
     const wrapper = await mountView()
     await flushPromises()
 
@@ -835,7 +881,11 @@ describe('AgentsView', () => {
     expect((textarea.element as HTMLTextAreaElement).value).toBe('原始人设')
 
     // 改写后保存：trim 后写入 PUT
-    updateAssistantSoul.mockResolvedValueOnce({ system_prompt: '新的人设内容', is_custom: true, default_prompt: '内置默认人设' })
+    updateAssistantSoul.mockResolvedValueOnce({
+      system_prompt: '新的人设内容',
+      is_custom: true,
+      default_prompt: '内置默认人设',
+    })
     await textarea.setValue('  新的人设内容  ')
     const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存')
     expect(saveBtn).toBeTruthy()
@@ -954,7 +1004,13 @@ describe('AgentsView', () => {
   // 导致注册后人设无法二次编辑（后端 UpdateAgentRequest.SystemPrompt 指针字段本支持改）。
   it('编辑 Agent 时 system_prompt(人设) 应可改并随 updateAgent 透传', async () => {
     // provider/model 留空＝跟随全局默认（editFormValid 直接放行），聚焦验证 system_prompt 透传。
-    const agent = { name: 'coder', display_name: '程序员', provider: '', model: '', system_prompt: '原始人设' }
+    const agent = {
+      name: 'coder',
+      display_name: '程序员',
+      provider: '',
+      model: '',
+      system_prompt: '原始人设',
+    }
     getAgents.mockResolvedValue({ agents: [agent], total: 1, default: '' })
 
     const wrapper = await mountView()

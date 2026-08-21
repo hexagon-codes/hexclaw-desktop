@@ -25,21 +25,29 @@ function selectedModelDisplay(params: {
   selectedProviderId: string
   availableModels: { modelId: string; modelName: string; providerId: string }[]
 }): string {
-  const { userOverrodeModel, chatMode, agentRole, findAgent, selectedModel, selectedProviderId, availableModels } = params
+  const {
+    userOverrodeModel,
+    chatMode,
+    agentRole,
+    findAgent,
+    selectedModel,
+    selectedProviderId,
+    availableModels,
+  } = params
 
   // 仅在显式 Agent 模式下，且用户未手动选模型时，显示 Agent 偏好模型
   if (!userOverrodeModel && chatMode === 'agent' && agentRole) {
     const cfg = findAgent(agentRole)
     if (cfg?.model) {
-      const agentLabel = cfg.display_name || cfg.name || agentRole
-      return `${cfg.model} · ${agentLabel}`
+      return cfg.model
     }
   }
   // 与真实组件一致：'auto' / 空选择走 i18n（zh-CN 默认值）
   if (selectedModel === 'auto') return '自动'
   if (!selectedModel) return '选择模型'
   const found = availableModels.find(
-    (m) => m.modelId === selectedModel && (!selectedProviderId || m.providerId === selectedProviderId),
+    (m) =>
+      m.modelId === selectedModel && (!selectedProviderId || m.providerId === selectedProviderId),
   )
   return found ? found.modelName : selectedModel
 }
@@ -55,12 +63,19 @@ function selectedModelDisplayBefore(params: {
   selectedProviderId: string
   availableModels: { modelId: string; modelName: string; providerId: string }[]
 }): string {
-  const { userOverrodeModel, chatMode, agentRole, defaultAgentName, findAgent, selectedModel, selectedProviderId, availableModels } = params
+  const {
+    userOverrodeModel,
+    chatMode,
+    agentRole,
+    defaultAgentName,
+    findAgent,
+    selectedModel,
+    selectedProviderId,
+    availableModels,
+  } = params
 
   if (!userOverrodeModel) {
-    const agentName = (chatMode === 'agent' && agentRole)
-      ? agentRole
-      : defaultAgentName
+    const agentName = chatMode === 'agent' && agentRole ? agentRole : defaultAgentName
     if (agentName) {
       const cfg = findAgent(agentName)
       if (cfg?.model) return `${cfg.model} ⟵ Agent`
@@ -69,7 +84,8 @@ function selectedModelDisplayBefore(params: {
   if (selectedModel === 'auto') return 'Auto'
   if (!selectedModel) return 'Select Model'
   const found = availableModels.find(
-    (m) => m.modelId === selectedModel && (!selectedProviderId || m.providerId === selectedProviderId),
+    (m) =>
+      m.modelId === selectedModel && (!selectedProviderId || m.providerId === selectedProviderId),
   )
   return found ? found.modelName : selectedModel
 }
@@ -92,17 +108,24 @@ function computeLetBackendDecideBefore(params: {
   defaultAgentHasModel: boolean
 }): boolean {
   const hasExplicitAgent = params.chatMode === 'agent' && !!params.agentRole
-  const defaultAgentHasModel = !hasExplicitAgent && !!params.defaultAgentName && params.defaultAgentHasModel
+  const defaultAgentHasModel =
+    !hasExplicitAgent && !!params.defaultAgentName && params.defaultAgentHasModel
   return (hasExplicitAgent || defaultAgentHasModel) && !params.userOverrodeModel
 }
 
 // ━━━ 测试数据 ━━━
 
 const agents: AgentConfig[] = [
-  { name: 'assistant', display_name: '小蟹', model: 'qwen3.5:9b', provider: 'ollama', description: '默认助手' },
+  {
+    name: 'assistant',
+    display_name: '小蟹',
+    model: 'qwen3.5:9b',
+    provider: 'ollama',
+    description: '默认助手',
+  },
 ]
 
-const findAgent = (name: string) => agents.find(a => a.name === name)
+const findAgent = (name: string) => agents.find((a) => a.name === name)
 
 const availableModels = [
   { modelId: 'gemma4:e4b', modelName: 'gemma4:e4b', providerId: 'ollama-1' },
@@ -114,10 +137,10 @@ const availableModels = [
 describe('Bug 复现：默认模型被 Agent 偏好覆盖', () => {
   const bugScenario = {
     userOverrodeModel: false,
-    chatMode: 'chat' as string,      // 普通聊天模式
-    agentRole: '',                     // 无显式 Agent
-    defaultAgentName: 'assistant',     // 有默认 Agent
-    selectedModel: 'gemma4:e4b',       // 用户设置的默认模型
+    chatMode: 'chat' as string, // 普通聊天模式
+    agentRole: '', // 无显式 Agent
+    defaultAgentName: 'assistant', // 有默认 Agent
+    selectedModel: 'gemma4:e4b', // 用户设置的默认模型
     selectedProviderId: 'ollama-1',
     availableModels,
   }
@@ -163,7 +186,7 @@ describe('Bug 复现：默认模型被 Agent 偏好覆盖', () => {
 })
 
 describe('Agent 模式行为不变', () => {
-  it('显式 Agent 模式：显示 Agent 模型 + Agent 名字', () => {
+  it('BUG-20260820-007：显式 Agent 模式的 Composer 只显示 Agent 模型', () => {
     const display = selectedModelDisplay({
       userOverrodeModel: false,
       chatMode: 'agent',
@@ -173,7 +196,7 @@ describe('Agent 模式行为不变', () => {
       selectedProviderId: 'ollama-1',
       availableModels,
     })
-    expect(display).toBe('qwen3.5:9b · 小蟹')
+    expect(display).toBe('qwen3.5:9b')
   })
 
   it('显式 Agent 模式：letBackendDecide = true', () => {
@@ -218,7 +241,7 @@ describe('Agent 无模型偏好时回退到用户默认', () => {
       userOverrodeModel: false,
       chatMode: 'agent',
       agentRole: 'helper',
-      findAgent: (n) => agentsNoModel.find(a => a.name === n),
+      findAgent: (n) => agentsNoModel.find((a) => a.name === n),
       selectedModel: 'gemma4:e4b',
       selectedProviderId: 'ollama-1',
       availableModels,

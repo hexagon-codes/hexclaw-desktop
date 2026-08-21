@@ -33,6 +33,7 @@ import {
 import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 import { scenarioRegistry } from '@/shell/scenario/registry'
@@ -65,6 +66,7 @@ const loading = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 const deletingIds = ref<Set<string>>(new Set())
+const deleteTarget = ref<Webhook | null>(null)
 const loadError = ref('')
 /** 后端 webhook.enabled=false 时 /api/v1/webhooks 路由不注册（404），按"功能未启用"处理 */
 const featureDisabled = ref(false)
@@ -315,7 +317,15 @@ async function onCreateWebhook() {
   }
 }
 
-async function onDeleteWebhook(webhook: Webhook) {
+function requestDeleteWebhook(webhook: Webhook) {
+  if (deletingIds.value.has(webhook.id)) return
+  deleteTarget.value = webhook
+}
+
+async function onDeleteWebhook() {
+  const webhook = deleteTarget.value
+  deleteTarget.value = null
+  if (!webhook) return
   if (deletingIds.value.has(webhook.id)) return
   deletingIds.value = new Set([...deletingIds.value, webhook.id])
   try {
@@ -639,7 +649,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
         <button
           class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete"
           :disabled="deletingIds.has(wh.id)"
-          @click="onDeleteWebhook(wh)"
+          @click="requestDeleteWebhook(wh)"
         >
           <Trash2 :size="14" />
         </button>
@@ -651,6 +661,16 @@ defineExpose({ loadWebhooks, openCreateForm, form })
     :task="blockedTask"
     @close="blockedOpen = false"
     @resolved="onBlockedResolved"
+  />
+  <ConfirmDialog
+    :open="deleteTarget !== null"
+    :confirmation-key="deleteTarget ? `webhook:${deleteTarget.id}` : null"
+    title="Delete this Webhook?"
+    message="This action cannot be undone."
+    :confirm-text="t('common.delete', 'Delete')"
+    :cancel-text="t('common.cancel', 'Cancel')"
+    @confirm="onDeleteWebhook"
+    @cancel="deleteTarget = null"
   />
 </template>
 

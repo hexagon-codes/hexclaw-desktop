@@ -332,6 +332,7 @@ body,
 }
 
 /* ─── Button Base ───────────────────────────────────────── */
+.btn,
 .hc-btn {
   display: inline-flex;
   align-items: center;
@@ -353,10 +354,12 @@ body,
   border-radius: var(--hc-radius-md);
 }
 
+.btn:active:not(:disabled),
 .hc-btn:active:not(:disabled) {
   transform: scale(0.97);
 }
 
+.btn:disabled,
 .hc-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -364,10 +367,12 @@ body,
   box-shadow: none;
 }
 
+.btn:disabled:hover,
 .hc-btn:disabled:hover {
   background: var(--hc-bg-input);
 }
 
+.btn-primary,
 .hc-btn-primary {
   /* 官网品牌蓝渐变 + 蓝调柔光（原型 app.html .btn-primary） */
   background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
@@ -376,28 +381,34 @@ body,
   box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 
+.btn-primary:hover,
 .hc-btn-primary:hover {
   background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
   box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
 }
 
+.btn-primary:active,
 .hc-btn-primary:active {
   transform: translateY(0) scale(0.98);
 }
 
+.btn-primary:disabled:hover,
 .hc-btn-primary:disabled:hover {
   background: var(--hc-accent);
 }
 
+.btn-secondary,
 .hc-btn-secondary {
   background: var(--hc-bg-input);
   color: var(--hc-text-primary);
 }
 
+.btn-secondary:hover,
 .hc-btn-secondary:hover {
   background: var(--hc-bg-hover);
 }
 
+.btn-ghost,
 .hc-btn-ghost {
   background: transparent;
   border-color: transparent;
@@ -406,11 +417,13 @@ body,
   box-shadow: none;
 }
 
+.btn-ghost:hover,
 .hc-btn-ghost:hover {
   background: var(--hc-bg-hover);
   color: var(--hc-text-primary);
 }
 
+.btn-danger-ghost,
 .hc-btn-danger-ghost {
   background: transparent;
   border-color: transparent;
@@ -418,10 +431,40 @@ body,
   box-shadow: none;
 }
 
+.btn-danger-ghost:hover:not(:disabled),
 .hc-btn-danger-ghost:hover:not(:disabled) {
   background: color-mix(in srgb, var(--hc-error) 9%, transparent);
   border-color: color-mix(in srgb, var(--hc-error) 20%, transparent);
   color: var(--hc-error);
+}
+
+.btn:focus-visible,
+.hc-btn:focus-visible {
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.btn-sm,
+.hc-btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .hc-btn,
+  .btn-primary,
+  .hc-btn-primary,
+  .btn-secondary,
+  .hc-btn-secondary,
+  .btn-ghost,
+  .hc-btn-ghost,
+  .btn-danger-ghost,
+  .hc-btn-danger-ghost {
+    transition: none;
+  }
 }
 
 /* ─── Input Base ────────────────────────────────────────── */

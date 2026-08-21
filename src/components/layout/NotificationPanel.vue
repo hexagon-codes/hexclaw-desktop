@@ -15,7 +15,7 @@ import {
   AlertTriangle,
   Info,
   CheckCheck,
-  Trash2,
+  Trash,
   ChevronRight,
   X,
 } from 'lucide-vue-next'
@@ -36,9 +36,11 @@ const groups = computed(() => {
   const now = new Date()
   const isToday = (ts: number) => {
     const d = new Date(ts)
-    return d.getFullYear() === now.getFullYear()
-      && d.getMonth() === now.getMonth()
-      && d.getDate() === now.getDate()
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    )
   }
   const today: HcNotification[] = []
   const earlier: HcNotification[] = []
@@ -67,11 +69,16 @@ const levelIcon: Record<NotificationLevel, typeof Bell> = {
 }
 
 function iconFor(n: HcNotification) {
-  return kindIcon[n.kind] ?? levelIcon[n.level] ?? Bell
+  return n.level === 'info' ? (kindIcon[n.kind] ?? Info) : levelIcon[n.level]
 }
 
 function relTime(ts: number): string {
   return formatRelative(new Date(ts).toISOString(), Date.now())
+    .replace(/^(\d+) 秒前$/, '$1s')
+    .replace(/^(\d+) 分钟前$/, '$1m')
+    .replace(/^(\d+) 小时前$/, '$1h')
+    .replace(/^(\d+) 天前$/, '$1d')
+    .replace(/^(\d+)([smhd]) ago$/, '$1$2')
 }
 
 function absTime(ts: number): string {
@@ -140,7 +147,7 @@ function cancelClear() {
             data-testid="notif-clear-all"
             @click="onClearClick"
           >
-            <Trash2 :size="15" />
+            <Trash :size="15" />
           </button>
           <button
             v-else
@@ -182,22 +189,54 @@ function cancelClear() {
               data-testid="notif-item"
               @click="onItemClick(n)"
             >
-              <span
-                class="hc-notifpanel__iconwrap"
-                :class="`hc-notifpanel__iconwrap--${n.level}`"
-              >
-                <component :is="iconFor(n)" :size="15" />
+              <span class="hc-notifpanel__iconwrap" :class="`hc-notifpanel__iconwrap--${n.level}`">
+                <svg
+                  v-if="n.level === 'warning'"
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                  />
+                  <path d="M12 9v4M12 17h.01" />
+                </svg>
+                <svg
+                  v-else-if="n.kind === 'system' && n.level === 'info'"
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M14.7 6.3a4 4 0 0 0 0 5.66l1.34 1.34-4.24 4.24-1.34-1.34a4 4 0 1 0-5.66 5.66"
+                  />
+                </svg>
+                <component v-else :is="iconFor(n)" :size="15" />
               </span>
               <div class="hc-notifpanel__body">
                 <div class="hc-notifpanel__row">
                   <span class="hc-notifpanel__itemtitle">{{ n.title }}</span>
-                  <span class="hc-notifpanel__time" :title="absTime(n.timestamp)">{{ relTime(n.timestamp) }}</span>
+                  <span class="hc-notifpanel__time" :title="absTime(n.timestamp)">{{
+                    relTime(n.timestamp)
+                  }}</span>
                 </div>
                 <p v-if="n.body" class="hc-notifpanel__text">{{ n.body }}</p>
               </div>
               <!-- 右侧动作槽：可深链项默认显示 ›（点击会跳转的暗示），hover 时换成 ✕ 删除 -->
               <span class="hc-notifpanel__slot">
-                <ChevronRight v-if="n.route" :size="14" class="hc-notifpanel__chevron" />
+                <ChevronRight v-if="n.route" :size="15" class="hc-notifpanel__chevron" />
                 <button
                   class="hc-notifpanel__dismiss"
                   :aria-label="t('common.delete')"
@@ -272,7 +311,9 @@ function cancelClear() {
   cursor: pointer;
   display: flex;
   align-items: center;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .hc-notifpanel__act:hover:not(:disabled) {
@@ -335,9 +376,10 @@ function cancelClear() {
 
 .hc-notifpanel__item {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 28px 1fr 18px;
   align-items: flex-start;
-  gap: var(--hc-space-3);
+  gap: 12px;
   padding: 10px;
   border-radius: var(--hc-radius-md);
   transition: background 0.15s;
@@ -356,31 +398,29 @@ function cancelClear() {
 }
 
 .hc-notifpanel__iconwrap {
-  flex-shrink: 0;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
   /* 默认 info：中性强调 */
   color: var(--hc-accent);
-  background: color-mix(in srgb, var(--hc-accent) 14%, transparent);
+  background: var(--hc-accent-subtle);
 }
 
 .hc-notifpanel__iconwrap--success {
   color: var(--hc-success);
-  background: color-mix(in srgb, var(--hc-success) 14%, transparent);
+  background: rgba(50, 213, 131, 0.12);
 }
 
 .hc-notifpanel__iconwrap--warning {
   color: var(--hc-warning);
-  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  background: rgba(240, 180, 41, 0.14);
 }
 
 .hc-notifpanel__iconwrap--error {
   color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 14%, transparent);
+  background: rgba(245, 101, 101, 0.12);
 }
 
 .hc-notifpanel__body {
@@ -396,8 +436,9 @@ function cancelClear() {
 }
 
 .hc-notifpanel__itemtitle {
+  flex: 1;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
   color: var(--hc-text-primary);
   white-space: nowrap;
   overflow: hidden;

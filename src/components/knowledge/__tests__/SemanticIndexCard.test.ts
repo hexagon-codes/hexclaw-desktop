@@ -106,6 +106,38 @@ const readyProjection = {
   desired_revision: null,
 }
 
+function failedExplicitDesiredProjection() {
+  return {
+    ...structuredClone(readyProjection),
+    policy_version: 8,
+    selection: { kind: 'profile' as const, profile_id: 'local-nomic' },
+    indexing_activity: {
+      state: 'failed' as const,
+      processing_documents: 0,
+      chunks_done: 135,
+      chunks_total: 225,
+    },
+    desired_revision: {
+      revision_id: 'rev-b',
+      job_id: 'job-b',
+      state: 'failed' as const,
+      profile: structuredClone(readyProjection.available_profiles[1]),
+      chunks_done: 135,
+      chunks_total: 225,
+    },
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function i18n(locale = 'zh-CN') {
   return createI18n({
     legacy: false,
@@ -124,6 +156,13 @@ function mountCard(locale = 'zh-CN') {
   })
   mountedWrappers.push(wrapper)
   return wrapper
+}
+
+function expectNativeRetryButton(wrapper: ReturnType<typeof mount>) {
+  const retry = wrapper.get<HTMLButtonElement>('[data-testid="kb-semantic-index-retry-rebuild"]')
+  expect(retry.element.tagName).toBe('BUTTON')
+  expect(retry.attributes('type')).toBe('button')
+  expect(retry.text()).toBe('重试')
 }
 
 describe('SemanticIndexCard', () => {
@@ -719,6 +758,157 @@ describe('SemanticIndexCard', () => {
     )
   })
 
+  it.each([
+    ['matching explicit failed desired', () => failedExplicitDesiredProjection(), 1],
+    [
+      'auto failed desired',
+      () => ({ ...failedExplicitDesiredProjection(), selection: { kind: 'auto' as const } }),
+      0,
+    ],
+    [
+      'mismatched explicit profile failed desired',
+      () => ({
+        ...failedExplicitDesiredProjection(),
+        selection: { kind: 'profile' as const, profile_id: 'cloud-sf' },
+      }),
+      0,
+    ],
+    [
+      'retry_wait desired',
+      () => {
+        const projection = failedExplicitDesiredProjection()
+        return {
+          ...projection,
+          indexing_activity: { ...projection.indexing_activity, state: 'retry_wait' as const },
+          desired_revision: { ...projection.desired_revision, state: 'retry_wait' as const },
+        }
+      },
+      0,
+    ],
+    [
+      'building desired',
+      () => {
+        const projection = failedExplicitDesiredProjection()
+        return {
+          ...projection,
+          indexing_activity: { ...projection.indexing_activity, state: 'building' as const },
+          desired_revision: { ...projection.desired_revision, state: 'building' as const },
+        }
+      },
+      0,
+    ],
+    [
+      'ready desired',
+      () => {
+        const projection = failedExplicitDesiredProjection()
+        return {
+          ...projection,
+          indexing_activity: { ...projection.indexing_activity, state: 'idle' as const },
+          desired_revision: { ...projection.desired_revision, state: 'ready' as const },
+        }
+      },
+      0,
+    ],
+    [
+      'disabled selection',
+      () => ({ ...failedExplicitDesiredProjection(), selection: { kind: 'disabled' as const } }),
+      0,
+    ],
+  ])('shows a desired rebuild retry only for %s', async (_state, projection, expectedCount) => {
+    mocks.getPolicy.mockResolvedValueOnce(projection())
+    const wrapper = mountCard()
+    await flushPromises()
+
+    const retries = wrapper.findAll('[data-testid="kb-semantic-index-retry-rebuild"]')
+    expect(retries).toHaveLength(expectedCount)
+    if (expectedCount === 1) {
+      expectNativeRetryButton(wrapper)
+    }
+  })
+
+  it('retries a matching failed explicit profile once and follows only the canonical new job projection', async () => {
+    vi.useFakeTimers()
+    const failed = failedExplicitDesiredProjection()
+    const rebuilding = {
+      ...structuredClone(failed),
+      policy_version: 9,
+      indexing_activity: {
+        state: 'building' as const,
+        processing_documents: 1,
+        chunks_done: 0,
+        chunks_total: 225,
+      },
+      desired_revision: {
+        ...structuredClone(failed.desired_revision),
+        revision_id: 'rev-c',
+        job_id: 'job-c',
+        state: 'building' as const,
+        chunks_done: 0,
+        chunks_total: 225,
+      },
+    }
+    const applying = deferred<{ job_id: string }>()
+    mocks.getPolicy
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(rebuilding)
+      .mockResolvedValue(rebuilding)
+    mocks.applyPolicy.mockReturnValueOnce(applying.promise)
+
+    const wrapper = mountCard()
+    await flushPromises()
+    const retry = wrapper.get<HTMLButtonElement>('[data-testid="kb-semantic-index-retry-rebuild"]')
+    retry.element.focus()
+    expect(document.activeElement).toBe(retry.element)
+
+    await retry.trigger('click')
+    await retry.trigger('click')
+    expect(mocks.applyPolicy).toHaveBeenCalledTimes(1)
+    expect(retry.element.disabled).toBe(true)
+    expect(mocks.cancelJob).not.toHaveBeenCalled()
+
+    applying.resolve({ job_id: 'job-c' })
+    await flushPromises()
+
+    expect(mocks.applyPolicy).toHaveBeenCalledWith('default', 8, {
+      kind: 'profile',
+      profile_id: 'local-nomic',
+    })
+    expect(mocks.getPolicy).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="kb-semantic-index-retry-rebuild"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="kb-semantic-index-actual"]').text()).toContain(
+      '当前索引可用 · 新索引 0/225',
+    )
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
+    expect(mocks.getJob).toHaveBeenCalledWith('job-c')
+  })
+
+  it('keeps the failed projection and restores retry without an error detail when retry apply fails', async () => {
+    const failed = failedExplicitDesiredProjection()
+    mocks.getPolicy.mockResolvedValueOnce(failed)
+    mocks.applyPolicy.mockRejectedValueOnce(new Error('retry failed'))
+    const wrapper = mountCard()
+    await flushPromises()
+
+    const retry = wrapper.get<HTMLButtonElement>('[data-testid="kb-semantic-index-retry-rebuild"]')
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(mocks.applyPolicy).toHaveBeenCalledWith('default', 8, {
+      kind: 'profile',
+      profile_id: 'local-nomic',
+    })
+    expect(mocks.cancelJob).not.toHaveBeenCalled()
+    expect(mocks.getPolicy).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="kb-semantic-index-status"]').text()).toBe('需要处理')
+    const restoredRetry = wrapper.get<HTMLButtonElement>(
+      '[data-testid="kb-semantic-index-retry-rebuild"]',
+    )
+    expect(restoredRetry.element.disabled).toBe(false)
+    expect(wrapper.find('.kb-index-card__inline-error').exists()).toBe(false)
+  })
+
   it('downloads a local profile once, keeps the menu open, and trusts the refreshed catalog', async () => {
     const pull = {
       reportProgress: null as
@@ -1057,9 +1247,9 @@ describe('SemanticIndexCard', () => {
     await flushPromises()
     await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
     await wrapper.get('[data-testid="kb-semantic-index-cancel"]').trigger('click')
-    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
-      (button) => button.textContent?.trim() === '取消重建',
-    )
+    const confirm = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.trim() === '取消重建')
     confirm?.click()
     await flushPromises()
     expect(wrapper.find('[data-testid="kb-semantic-index-cancel"]').exists()).toBe(false)
@@ -1175,9 +1365,9 @@ describe('SemanticIndexCard', () => {
     await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
     const header = wrapper.get<HTMLButtonElement>('[data-testid="kb-semantic-index-header"]')
     await wrapper.get('[data-testid="kb-semantic-index-cancel"]').trigger('click')
-    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
-      (button) => button.textContent?.trim() === '取消重建',
-    )
+    const confirm = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.trim() === '取消重建')
     confirm?.click()
     await flushPromises()
 
@@ -1237,60 +1427,66 @@ describe('SemanticIndexCard', () => {
   it.each([
     ['en', en.knowledge.semanticIndex],
     ['ug-CN', ugCN.knowledge.semanticIndex],
-  ] as const)('renders desired retry_wait as waiting, not active building progress, in %s', async (locale, messages) => {
-    mocks.getPolicy.mockResolvedValueOnce({
-      ...structuredClone(readyProjection),
-      indexing_activity: {
-        state: 'retry_wait' as const,
-        processing_documents: 0,
-        chunks_done: 42,
-        chunks_total: 225,
-      },
-      desired_revision: {
-        revision_id: 'rev-b',
-        job_id: 'job-b',
-        state: 'retry_wait' as const,
-        profile: readyProjection.available_profiles[1],
-        chunks_done: 42,
-        chunks_total: 225,
-      },
-    })
+  ] as const)(
+    'renders desired retry_wait as waiting, not active building progress, in %s',
+    async (locale, messages) => {
+      mocks.getPolicy.mockResolvedValueOnce({
+        ...structuredClone(readyProjection),
+        indexing_activity: {
+          state: 'retry_wait' as const,
+          processing_documents: 0,
+          chunks_done: 42,
+          chunks_total: 225,
+        },
+        desired_revision: {
+          revision_id: 'rev-b',
+          job_id: 'job-b',
+          state: 'retry_wait' as const,
+          profile: readyProjection.available_profiles[1],
+          chunks_done: 42,
+          chunks_total: 225,
+        },
+      })
 
-    const wrapper = mountCard(locale)
-    await flushPromises()
-    await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
+      const wrapper = mountCard(locale)
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
 
-    expect(wrapper.get('[data-testid="kb-semantic-index-status"]').text()).toBe(messages.retrying)
-    expect(wrapper.get('[data-testid="kb-semantic-index-actual"]').text()).toContain(
-      messages.semanticRetryWaiting,
-    )
-  })
+      expect(wrapper.get('[data-testid="kb-semantic-index-status"]').text()).toBe(messages.retrying)
+      expect(wrapper.get('[data-testid="kb-semantic-index-actual"]').text()).toContain(
+        messages.semanticRetryWaiting,
+      )
+    },
+  )
 
   it.each([
     ['en', en.knowledge.semanticIndex],
     ['ug-CN', ugCN.knowledge.semanticIndex],
-  ] as const)('does not claim hybrid readiness without an active semantic revision in %s', async (locale, messages) => {
-    mocks.getPolicy.mockResolvedValueOnce({
-      ...structuredClone(readyProjection),
-      active_revision: null,
-      recommendation: {
-        profile_id: null,
-        reason_code: 'embedding_unavailable',
-        reason_text: '后端中文理由绝不能泄漏',
-      },
-    })
+  ] as const)(
+    'does not claim hybrid readiness without an active semantic revision in %s',
+    async (locale, messages) => {
+      mocks.getPolicy.mockResolvedValueOnce({
+        ...structuredClone(readyProjection),
+        active_revision: null,
+        recommendation: {
+          profile_id: null,
+          reason_code: 'embedding_unavailable',
+          reason_text: '后端中文理由绝不能泄漏',
+        },
+      })
 
-    const wrapper = mountCard(locale)
-    await flushPromises()
-    await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
+      const wrapper = mountCard(locale)
+      await flushPromises()
+      await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
 
-    const actual = wrapper.get('[data-testid="kb-semantic-index-actual"]').text()
-    expect(actual).toContain(messages.textOnlyReady)
-    expect(actual).not.toContain(messages.hybridReady)
-    expect(wrapper.get('[data-testid="kb-semantic-index-hint"]').text()).not.toMatch(
-      /[\u3400-\u9fff]/u,
-    )
-  })
+      const actual = wrapper.get('[data-testid="kb-semantic-index-actual"]').text()
+      expect(actual).toContain(messages.textOnlyReady)
+      expect(actual).not.toContain(messages.hybridReady)
+      expect(wrapper.get('[data-testid="kb-semantic-index-hint"]').text()).not.toMatch(
+        /[\u3400-\u9fff]/u,
+      )
+    },
+  )
 
   it.each([
     [1, '1 item processing', 'Current index available · enhancing 1 document'],
@@ -1435,7 +1631,8 @@ describe('SemanticIndexCard', () => {
       embedding_unavailable: 'recommendationUnavailable',
       unexpected_reason: 'recommendationGeneric',
     } as const
-    const localeMessages = locale === 'en' ? en.knowledge.semanticIndex : ugCN.knowledge.semanticIndex
+    const localeMessages =
+      locale === 'en' ? en.knowledge.semanticIndex : ugCN.knowledge.semanticIndex
 
     for (const [reasonCode, messageKey] of Object.entries(reasonKeys)) {
       mocks.getPolicy.mockResolvedValueOnce({

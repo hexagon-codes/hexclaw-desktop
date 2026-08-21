@@ -311,6 +311,7 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
           :key="wf.id"
           type="button"
           class="wfp-chip"
+          data-governed-button="workflow-selector"
           :class="{ 'wfp-chip--on': wf.id === store.currentWorkflowId }"
           @click="selectWorkflow(wf.id)"
         >
@@ -381,11 +382,11 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
             <Plus :size="15" /> {{ t('workflow.addStep') }}
           </button>
           <div v-if="showAddMenu" class="wf-addmenu">
-            <button type="button" @click="addStep('input')"><Zap :size="14" /> {{ t('workflow.nodeTrigger', '触发 / 输入') }}</button>
-            <button type="button" @click="addStep('agent')"><Brain :size="14" /> {{ t('workflow.nodeAgent', '模型') }}</button>
-            <button type="button" @click="addStep('parallel')"><Layers :size="14" /> {{ t('workflow.nodeParallel', '并行扇出') }}</button>
-            <button type="button" @click="addStep('tool')"><Wrench :size="14" /> {{ t('workflow.nodeTool', '工具') }}</button>
-            <button type="button" @click="addStep('output')"><Send :size="14" /> {{ t('workflow.nodeOutput', '输出') }}</button>
+            <button type="button" data-governed-button="workflow-node" @click="addStep('input')"><Zap :size="14" /> {{ t('workflow.nodeTrigger', '触发 / 输入') }}</button>
+            <button type="button" data-governed-button="workflow-node" @click="addStep('agent')"><Brain :size="14" /> {{ t('workflow.nodeAgent', '模型') }}</button>
+            <button type="button" data-governed-button="workflow-node" @click="addStep('parallel')"><Layers :size="14" /> {{ t('workflow.nodeParallel', '并行扇出') }}</button>
+            <button type="button" data-governed-button="workflow-node" @click="addStep('tool')"><Wrench :size="14" /> {{ t('workflow.nodeTool', '工具') }}</button>
+            <button type="button" data-governed-button="workflow-node" @click="addStep('output')"><Send :size="14" /> {{ t('workflow.nodeOutput', '输出') }}</button>
           </div>
         </div>
       </div>

@@ -1754,9 +1754,19 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 </span>
                 <div class="hc-settings__row-right">
                   <div class="hc-settings__stepper">
-                    <button @click="stepMaxTools(-1)">−</button>
+                    <button
+                      class="hc-settings__step-button"
+                      @click="stepMaxTools(-1)"
+                    >
+                      −
+                    </button>
                     <input :value="maxToolsDisplay" readonly />
-                    <button @click="stepMaxTools(1)">+</button>
+                    <button
+                      class="hc-settings__step-button"
+                      @click="stepMaxTools(1)"
+                    >
+                      +
+                    </button>
                   </div>
                 </div>
               </div>
@@ -3694,14 +3704,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-provider__delete-btn:hover {
   background: rgba(255, 69, 58, 0.1);
-}
-
-.hc-btn-sm {
-  font-size: 12px;
-  padding: 5px 10px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 /* ─── Misc ───── */

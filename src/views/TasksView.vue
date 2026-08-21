@@ -1097,6 +1097,7 @@ defineExpose({ openCreateForm, loadJobs })
                   </HcClearableField>
                   <button
                     class="schedule-preset-btn"
+                    data-governed-button="tasks-schedule"
                     type="button"
                     @click="showPresets = !showPresets"
                   >
@@ -1109,6 +1110,7 @@ defineExpose({ openCreateForm, loadJobs })
                       v-for="preset in schedulePresets"
                       :key="preset.value"
                       class="schedule-preset-item"
+                      data-governed-button="tasks-schedule"
                       :class="{ 'schedule-preset-item--active': form.schedule === preset.value }"
                       @click="selectPreset(preset.value)"
                     >
@@ -1165,6 +1167,7 @@ defineExpose({ openCreateForm, loadJobs })
                     :key="ch"
                     type="button"
                     class="deliver-chip"
+                    data-governed-button="tasks-delivery"
                     :class="{ 'deliver-chip--on': isDeliverSelected(ch) }"
                     @click="toggleDeliver(ch)"
                   >
@@ -1186,6 +1189,7 @@ defineExpose({ openCreateForm, loadJobs })
                       :key="conn.id"
                       type="button"
                       class="deliver-chip deliver-chip--connection"
+                      data-governed-button="tasks-delivery"
                       :class="{ 'deliver-chip--on': isDeliverSelected(conn.id) }"
                       @click="toggleDeliver(conn.id)"
                     >

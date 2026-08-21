@@ -10,6 +10,8 @@ import profileSource from '../features/k12/views/K12ProfileForm.vue?raw'
 import knowledgeSource from '../views/KnowledgeView.vue?raw'
 import agentsSource from '../views/AgentsView.vue?raw'
 import channelsSource from '../components/channels/ConnectionChannelCards.vue?raw'
+import webhookSource from '../components/automation/WebhookPanel.vue?raw'
+import k12WebhookSource from '../features/k12/views/K12WebhookPanel.vue?raw'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '../config/destructive-actions'
 
 describe('global destructive-dialog governance (2026-07-25)', () => {
@@ -43,6 +45,8 @@ describe('global destructive-dialog governance (2026-07-25)', () => {
     ['KnowledgeView', knowledgeSource],
     ['AgentsView', agentsSource],
     ['ConnectionChannelCards', channelsSource],
+    ['WebhookPanel', webhookSource],
+    ['K12WebhookPanel', k12WebhookSource],
   ])('%s uses ConfirmDialog instead of the browser-native confirm', (_name, source) => {
     expect(source).toContain("import ConfirmDialog from '@/components/common/ConfirmDialog.vue'")
     expect(source).not.toMatch(/\b(?:window\.)?confirm\s*\(/)

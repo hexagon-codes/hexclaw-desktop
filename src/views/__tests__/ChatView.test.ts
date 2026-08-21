@@ -643,6 +643,110 @@ describe('ChatView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('你好！有什么可以帮你的？')
   })
 
+  it('BUG-20260820-007/008 only projects model facts in Composer/Footer and keeps Agent/tool facts in their own positions', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'gpt-5.6-sol',
+          name: 'GPT-5.6-Sol',
+          capabilities: ['text'],
+        }
+        config.llm.providers = [
+          {
+            id: 'fixture-provider-id',
+            name: 'OpenAI',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'fixture-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'fixture-provider-id'
+        config.llm.defaultModel = model.id
+        useSettingsStore().config = config
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'model-agent',
+            display_name: '模型智能体',
+            provider: 'fixture-provider',
+            model: 'gpt-5.6-sol',
+          },
+          {
+            name: 'skill-agent',
+            display_name: '内置技能智能体',
+            provider: '',
+            model: '',
+          },
+        ]
+      },
+    })
+    await flushPromises()
+
+    const store = useChatStore()
+    store.agentRole = 'model-agent'
+    store.chatMode = 'agent'
+    store.messages = [
+      {
+        id: 'model-source-message',
+        role: 'assistant',
+        content: '这是模型回答。',
+        timestamp: '2026-08-20T08:00:00.000Z',
+        agent_name: 'model-agent',
+        metadata: {
+          provider: 'fixture-provider',
+          model: 'gpt-5.6-sol',
+        },
+      },
+      {
+        id: 'builtin-skill-source-message',
+        role: 'assistant',
+        content: '杭州今天晴。',
+        timestamp: '2026-08-20T08:01:00.000Z',
+        agent_name: 'skill-agent',
+        message_content: {
+          content_id: `content:${'a'.repeat(64)}`,
+          content_version: '1.0',
+          producer_kind: 'skill',
+          markdown: '杭州今天晴。',
+          source_digest: `sha256:${'a'.repeat(64)}`,
+          locale: 'zh-CN',
+        },
+        tool_calls: [
+          {
+            id: 'weather-tool-call',
+            name: 'weather',
+            arguments: '{"city":"杭州"}',
+            result: '{"weather":"晴"}',
+          },
+        ],
+      },
+    ]
+    await flushPromises()
+
+    expect.soft(wrapper.get('.hc-model-selector__name').text()).toBe('gpt-5.6-sol')
+
+    const assistantMessages = wrapper.findAll('[data-testid="chat-message-assistant"]')
+    expect(assistantMessages).toHaveLength(2)
+    const modelMessage = assistantMessages[0]!
+    const builtinSkillMessage = assistantMessages[1]!
+    expect(modelMessage.get('.hc-msg__name').text()).toBe('模型智能体')
+    expect(modelMessage.get('.hc-msg__meta').text()).toContain('OpenAI · gpt-5.6-sol')
+    expect.soft(modelMessage.get('.hc-msg__meta').text()).not.toContain('模型智能体')
+
+    expect(builtinSkillMessage.get('.hc-msg__name').text()).toBe('内置技能智能体')
+    expect(builtinSkillMessage.get('.agent-badge__name').text()).toBe('内置技能智能体')
+    expect(builtinSkillMessage.find('.hc-msg__tools').exists()).toBe(true)
+    expect(builtinSkillMessage.get('.hc-msg__meta').text()).toBe('内置技能 · 未调用模型')
+    expect(builtinSkillMessage.get('.hc-msg__meta').text()).not.toContain('内置技能智能体')
+    expect(builtinSkillMessage.get('.hc-msg__meta').text()).not.toContain('OpenAI')
+
+    wrapper.unmount()
+  })
+
   // 2026-06-27 会话滚动行为：会话级=瞬时到底(auto)；会话内=平滑(smooth)+尊重滚动位置。
   it('opening a conversation jumps to bottom INSTANTLY (scrollIntoView behavior=auto)', async () => {
     mountChatView()
@@ -1026,8 +1130,12 @@ describe('ChatView — E2E 关键路径', () => {
     await flushPromises()
 
     let enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
-    expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('role')).toBe('radio')
-    expect(enabledMenu.get('[data-testid="chat-thinking-effort-high"]').attributes('role')).toBe('radio')
+    expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('role')).toBe(
+      'radio',
+    )
+    expect(enabledMenu.get('[data-testid="chat-thinking-effort-high"]').attributes('role')).toBe(
+      'radio',
+    )
     expect(enabledMenu.find('[data-testid="chat-thinking-effort-medium"]').exists()).toBe(false)
     expect(enabledMenu.find('[data-testid="chat-thinking-effort-xhigh"]').exists()).toBe(false)
     expect(enabledMenu.find('[data-testid="chat-thinking-effort-max"]').exists()).toBe(false)
@@ -1036,7 +1144,9 @@ describe('ChatView — E2E 关键路径', () => {
     await flushPromises()
     expect(wrapper.get('.hc-chat__thinking-control').attributes('aria-pressed')).toBe('true')
     enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
-    expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('aria-checked')).toBe('true')
+    expect(
+      enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('aria-checked'),
+    ).toBe('true')
 
     wrapper.unmount()
   })
@@ -2421,7 +2531,7 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
-  it('BUG-20260724-006 深度思考保留已绑定 Agent 的模型显示与后端模型决策', async () => {
+  it('BUG-20260820-007 深度思考保留已绑定 Agent 的模型决策，但 Composer 只显示模型', async () => {
     const wrapper = mountChatView({
       setup: () => {
         const settingsStore = useSettingsStore()
@@ -2502,7 +2612,7 @@ describe('ChatView — E2E 关键路径', () => {
       toggleDeepThinking: () => void
     }
     vm.syncChatParams()
-    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol · 小明的辅导助手')
+    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol')
     expect(store.chatParams.provider).toBeUndefined()
     expect(store.chatParams.model).toBeUndefined()
 
@@ -2511,7 +2621,7 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(store.chatMode).toBe('research')
     expect(store.agentRole).toBe('k12-tutor-mingming')
-    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol · 小明的辅导助手')
+    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol')
     expect(store.chatParams.provider).toBeUndefined()
     expect(store.chatParams.model).toBeUndefined()
 
@@ -2547,7 +2657,11 @@ describe('ChatView — E2E 关键路径', () => {
           name: 'GPT-5.6-Sol',
           capabilities: ['text' as const],
           reasoningSupport: 'supported' as const,
-          reasoningControl: { dialect: 'think', on: true, off: false } satisfies ModelReasoningControl,
+          reasoningControl: {
+            dialect: 'think',
+            on: true,
+            off: false,
+          } satisfies ModelReasoningControl,
         }
         config.llm.providers = [
           {

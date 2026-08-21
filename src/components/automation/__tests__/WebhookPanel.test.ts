@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import WebhookPanel from '../WebhookPanel.vue'
 
 function createTestI18n() {
@@ -40,25 +41,30 @@ vi.mock('@/api/webhook', () => ({
 // 自动化权限治理 API：组件挂载即静默预检/总览，测试里一律 mock 成全绿空态。
 vi.mock('@/api/autonomy', () => ({
   preflightAutonomy: vi.fn().mockResolvedValue({
-    source: 'webhook', profile: 'function_first',
-    capabilities: [], estimated: [], needs_decision: [], all_clear: true,
+    source: 'webhook',
+    profile: 'function_first',
+    capabilities: [],
+    estimated: [],
+    needs_decision: [],
+    all_clear: true,
   }),
   createAutonomyGrant: vi.fn().mockResolvedValue({ grant: { id: 'g-1' } }),
   getAutonomySummary: vi.fn().mockResolvedValue({
     profile: 'function_first',
     counts: { tasks: 0, ready: 0, pending: 0, grants: 0 },
-    pending: [], tasks: [],
+    pending: [],
+    tasks: [],
   }),
   listAutonomyDecisions: vi.fn().mockResolvedValue({ decisions: [], total: 0 }),
   listAutonomyGrants: vi.fn().mockResolvedValue({ grants: [], total: 0 }),
   revokeAutonomyGrant: vi.fn().mockResolvedValue({ message: 'ok' }),
   getAutonomyProfile: vi.fn().mockResolvedValue({
-    profile: 'function_first', profiles: [],
+    profile: 'function_first',
+    profiles: [],
     matrix: { profile: 'function_first', categories: [], rows: [] },
   }),
   updateAutonomyProfile: vi.fn(),
 }))
-
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => toast,
@@ -81,13 +87,32 @@ describe('WebhookPanel CRUD', () => {
     vi.clearAllMocks()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('loads, creates, and deletes webhooks', async () => {
-    const hooks: { id: string; name: string; type: string; prompt: string; enabled: boolean; event_count: number }[] = [
+    vi.useFakeTimers()
+    const hooks: {
+      id: string
+      name: string
+      type: string
+      prompt: string
+      enabled: boolean
+      event_count: number
+    }[] = [
       { id: 'a', name: 'hook-a', type: 'generic', prompt: 'p-a', enabled: true, event_count: 0 },
     ]
     getWebhooks.mockImplementation(async () => ({ webhooks: [...hooks] }))
     createWebhook.mockImplementation(async (payload) => {
-      hooks.push({ id: 'new', name: payload.name, type: payload.type, prompt: payload.prompt, enabled: true, event_count: 0 })
+      hooks.push({
+        id: 'new',
+        name: payload.name,
+        type: payload.type,
+        prompt: payload.prompt,
+        enabled: true,
+        event_count: 0,
+      })
       return {}
     })
     deleteWebhook.mockImplementation(async (name) => {
@@ -124,6 +149,20 @@ describe('WebhookPanel CRUD', () => {
     await targetItem!.find('.webhook-panel__delete').trigger('click')
     await flushPromises()
 
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    expect(confirmDialog.exists()).toBe(true)
+    expect(confirmDialog.props('confirmDelayMs')).toBe(1500)
+    expect(deleteWebhook).not.toHaveBeenCalledWith('hook-b')
+
+    vi.advanceTimersByTime(1499)
+    await flushPromises()
+    expect(confirmDialog.get('button.hc-dialog__btn--danger').attributes('disabled')).toBeDefined()
+
+    vi.advanceTimersByTime(1)
+    await flushPromises()
+    await confirmDialog.get('button.hc-dialog__btn--danger').trigger('click')
+    await flushPromises()
+
     expect(deleteWebhook).toHaveBeenCalledWith('hook-b')
     expect(wrapper.text()).not.toContain('hook-b')
   })
@@ -140,7 +179,6 @@ describe('WebhookPanel CRUD', () => {
 
     const wrapper = mountPanel()
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
@@ -165,7 +203,6 @@ describe('WebhookPanel CRUD', () => {
 
     const wrapper = mountPanel()
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
@@ -180,18 +217,22 @@ describe('WebhookPanel CRUD', () => {
 
     await formButtons[0]!.trigger('click')
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
-    expect((wrapper.find('input[placeholder="my-webhook"]').element as HTMLInputElement).value).toBe('')
+    expect(
+      (wrapper.find('input[placeholder="my-webhook"]').element as HTMLInputElement).value,
+    ).toBe('')
     expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
   })
 
   it('does not start a second delete request for the same webhook while the first one is still running', async () => {
+    vi.useFakeTimers()
     let resolveDelete!: () => void
     getWebhooks.mockResolvedValue({
-      webhooks: [{ id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
+      webhooks: [
+        { id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 },
+      ],
     })
     deleteWebhook.mockImplementationOnce(
       () =>
@@ -206,6 +247,15 @@ describe('WebhookPanel CRUD', () => {
     const deleteBtn = wrapper.find('.webhook-panel__delete')
     await deleteBtn.trigger('click')
     await flushPromises()
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    expect(confirmDialog.exists()).toBe(true)
+    expect(deleteWebhook).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1500)
+    await flushPromises()
+    await confirmDialog.get('button.hc-dialog__btn--danger').trigger('click')
+    await flushPromises()
+
     await deleteBtn.trigger('click')
     await flushPromises()
 
@@ -226,7 +276,14 @@ describe('WebhookPanel CRUD', () => {
   })
 
   it('keeps the latest webhook list when an earlier reload resolves later', async () => {
-    type Wh = { id: string; name: string; type: string; prompt: string; enabled: boolean; event_count: number }
+    type Wh = {
+      id: string
+      name: string
+      type: string
+      prompt: string
+      enabled: boolean
+      event_count: number
+    }
     let resolveFirst!: (value: { webhooks: Wh[] }) => void
     let resolveSecond!: (value: { webhooks: Wh[] }) => void
 
@@ -250,14 +307,32 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     resolveSecond({
-      webhooks: [{ id: 'new', name: 'hook-new', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
+      webhooks: [
+        {
+          id: 'new',
+          name: 'hook-new',
+          type: 'generic',
+          prompt: 'p',
+          enabled: true,
+          event_count: 0,
+        },
+      ],
     })
     await flushPromises()
 
     expect(wrapper.text()).toContain('hook-new')
 
     resolveFirst({
-      webhooks: [{ id: 'old', name: 'hook-old', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
+      webhooks: [
+        {
+          id: 'old',
+          name: 'hook-old',
+          type: 'generic',
+          prompt: 'p',
+          enabled: true,
+          event_count: 0,
+        },
+      ],
     })
     await flushPromises()
 
@@ -273,7 +348,9 @@ describe('WebhookPanel — 复制 Webhook URL 反馈（回归锁）', () => {
 
   async function mountWithOneHook() {
     getWebhooks.mockResolvedValue({
-      webhooks: [{ id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
+      webhooks: [
+        { id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 },
+      ],
     })
     const wrapper = mountPanel()
     await flushPromises()

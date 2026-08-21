@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -9,17 +9,13 @@ import { useNotificationsStore } from '@/stores/notifications'
 const { pushSpy } = vi.hoisted(() => ({ pushSpy: vi.fn(() => Promise.resolve()) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: pushSpy }) }))
 
-// lucide 图标在测试里 stub 成空 span，避免无关渲染噪音
-vi.mock('lucide-vue-next', async (importOriginal) => {
-  const original = await importOriginal<Record<string, unknown>>()
-  const stub = { template: '<span />' }
-  const mocked: Record<string, unknown> = {}
-  for (const key of Object.keys(original)) mocked[key] = stub
-  return mocked
-})
-
 function i18n() {
-  return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN } })
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': zhCN },
+  })
 }
 
 function mountPanel() {
@@ -28,10 +24,28 @@ function mountPanel() {
   })
 }
 
+function seedApprovedVisualFixture() {
+  const now = new Date('2026-08-21T00:20:00+08:00')
+  vi.useFakeTimers()
+  vi.setSystemTime(now)
+  const store = useNotificationsStore()
+  const skill = store.push({ kind: 'system', level: 'info', title: 'Skill 市场有更新' })
+  skill.timestamp = now.getTime() - 27 * 60_000
+  skill.read = true
+  const daily = store.push({ kind: 'automation', level: 'warning', title: '日报任务执行失败' })
+  daily.timestamp = now.getTime() - 8 * 60_000
+  const knowledge = store.push({ kind: 'system', level: 'warning', title: '知识库降级检索' })
+  knowledge.timestamp = now.getTime() - 1 * 60_000
+}
+
 describe('NotificationPanel', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     pushSpy.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('shows the empty state when there are no notifications', () => {
@@ -49,6 +63,36 @@ describe('NotificationPanel', () => {
     const items = w.findAll('[data-testid="notif-item"]')
     expect(items).toHaveLength(2)
     expect(items[0]!.text()).toContain('需要审批')
+  })
+
+  it('renders the approved compact relative time', () => {
+    seedApprovedVisualFixture()
+    const w = mountPanel()
+    expect(w.findAll('.hc-notifpanel__time').map((node) => node.text())).toEqual([
+      '1m',
+      '8m',
+      '27m',
+    ])
+  })
+
+  it('renders the approved notification icon mapping', () => {
+    seedApprovedVisualFixture()
+    const w = mountPanel()
+    expect(
+      w
+        .findAll('.hc-notifpanel__iconwrap')
+        .map((node) => node.findAll('path').map((path) => path.attributes('d'))),
+    ).toEqual([
+      [
+        'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z',
+        'M12 9v4M12 17h.01',
+      ],
+      [
+        'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z',
+        'M12 9v4M12 17h.01',
+      ],
+      ['M14.7 6.3a4 4 0 0 0 0 5.66l1.34 1.34-4.24 4.24-1.34-1.34a4 4 0 1 0-5.66 5.66'],
+    ])
   })
 
   it('clicking a notification with a route marks it read, navigates, and closes', async () => {

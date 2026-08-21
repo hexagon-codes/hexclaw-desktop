@@ -240,7 +240,12 @@ defineExpose({ openCreate })
       class="hc-cxstream__alert"
     >
       <span>{{ errorMsg }}</span>
-      <button @click="errorMsg = ''">{{ t('common.close') }}</button>
+      <button
+        class="hc-cxstream__alert-close"
+        @click="errorMsg = ''"
+      >
+        {{ t('common.close') }}
+      </button>
     </div>
 
     <!-- 空状态：还没添加任何通道 / 账号（邮箱占位卡已移除，统一走顶部「+添加」） -->

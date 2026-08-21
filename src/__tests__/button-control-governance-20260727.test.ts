@@ -4,8 +4,25 @@ import { resolve } from 'node:path'
 import { compileTemplate, parse } from 'vue/compiler-sfc'
 import { describe, expect, it } from 'vitest'
 
-const REPORT_PATH = '/tmp/BUG-20260725-019.button-audit.RED.json'
-const SHARED_BUTTON_CLASS = 'btn'
+const REPORT_PATH = '/tmp/BUG-20260725-019.button-audit.GREEN.json'
+const SHARED_BUTTON_CLASSES = new Set(['btn', 'hc-btn'])
+const APPROVED_SPECIALIZED_BUTTON_OWNERS = new Set([
+  'interactive-action',
+  'interactive-option',
+  'clearable-action',
+  'workflow-node',
+  'workflow-selector',
+  'connection-alert',
+  'chat-retry',
+  'settings-stepper',
+  'k12-action',
+  'k12-modal',
+  'k12-retry',
+  'k12-copy',
+  'k12-capability',
+  'tasks-schedule',
+  'tasks-delivery',
+])
 const REQUIRED_SHARED_SELECTORS = [
   '.btn',
   '.btn-primary',
@@ -20,6 +37,109 @@ const BUTTON_FILE_EXEMPTION_MARKERS = [
   'BUTTON_FILE_EXEMPTIONS',
   'button-governance-ignore-file',
   'button-governance-exempt-file',
+]
+const BUTTON_LAYOUT_PROPERTIES = new Set([
+  'font-size',
+  'height',
+  'line-height',
+  'min-height',
+  'padding',
+  'padding-block',
+  'padding-bottom',
+  'padding-inline',
+  'padding-left',
+  'padding-right',
+  'padding-top',
+  'border-radius',
+  'width',
+])
+const UTILITY_CLASS_PREFIXES = [
+  'absolute',
+  'active:',
+  'align-',
+  'appearance-',
+  'bg-',
+  'block',
+  'border',
+  'bottom-',
+  'capitalize',
+  'col-',
+  'content-',
+  'cursor-',
+  'dark:',
+  'decoration-',
+  'delay-',
+  'disabled:',
+  'divide-',
+  'duration-',
+  'ease-',
+  'flex',
+  'float-',
+  'focus',
+  'font-',
+  'from-',
+  'gap-',
+  'grid',
+  'grow',
+  'h-',
+  'hidden',
+  'hover:',
+  'inline',
+  'inset-',
+  'items-',
+  'justify-',
+  'leading-',
+  'left-',
+  'lowercase',
+  'max-',
+  'mb-',
+  'min-',
+  'ml-',
+  'mr-',
+  'mt-',
+  'mx-',
+  'my-',
+  'normal-case',
+  'opacity-',
+  'order-',
+  'outline-',
+  'overflow-',
+  'p-',
+  'pb-',
+  'pe-',
+  'pl-',
+  'place-',
+  'pr-',
+  'ps-',
+  'pt-',
+  'px-',
+  'py-',
+  'relative',
+  'right-',
+  'ring-',
+  'rounded',
+  'row-',
+  'scale-',
+  'rotate-',
+  'translate-',
+  'select-',
+  'self-',
+  'shadow',
+  'shrink',
+  'space-',
+  'sr-only',
+  'text-',
+  'to-',
+  'top-',
+  'tracking-',
+  'transition',
+  'truncate',
+  'underline',
+  'uppercase',
+  'via-',
+  'whitespace-',
+  'w-',
+  'z-',
 ]
 const BUTTON_VISUAL_PROPERTIES = new Set([
   'appearance',
@@ -76,6 +196,8 @@ interface ButtonNodeAudit {
   column: number
   classes: string[]
   dynamicClass: string
+  kind: 'action' | 'specialized' | 'unowned'
+  owner: string
   hasSharedClass: boolean
   hasInlineStyle: boolean
 }
@@ -97,7 +219,9 @@ interface CssRule {
 interface ButtonGovernanceReport {
   summary: {
     nativeButtonNodes: number
-    sharedButtonNodes: number
+    governedButtonNodes: number
+    sharedActionButtonNodes: number
+    specializedButtonNodes: number
     ungovernedNativeButtons: number
     inlineStyleButtons: number
     privateVisualRules: number
@@ -132,6 +256,68 @@ function directiveExpression(node: TemplateNode, name: string, argument: string)
   )
 }
 
+function dynamicClassTokens(expression: string): string[] {
+  return expression.match(/[a-zA-Z][a-zA-Z0-9_-]*(?:__[a-zA-Z0-9_-]+)?/g) ?? []
+}
+
+function isUtilityClass(token: string): boolean {
+  const parts = token.split(':')
+  const base = parts[parts.length - 1] ?? token
+  const normalized = base.startsWith('-') ? base.slice(1) : base
+  return UTILITY_CLASS_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(prefix),
+  )
+}
+
+function isNamespacedSpecializedClass(token: string): boolean {
+  return (
+    token.includes('__') ||
+    /^(?:hc|k12|rl|task|rec|cron|wf|tpl|mm|ollama|type-toggle|icbtn)(?:-|$)/.test(token)
+  )
+}
+
+function classifyButton(
+  node: TemplateNode,
+  classes: string[],
+  dynamicClass: string,
+): { kind: ButtonNodeAudit['kind']; owner: string; hasSharedClass: boolean } {
+  const hasSharedClass = classes.some((token) => SHARED_BUTTON_CLASSES.has(token))
+  if (hasSharedClass) {
+    return { kind: 'action', owner: 'shared-action', hasSharedClass }
+  }
+
+  const owner = staticAttribute(node, 'data-governed-button')
+  if (owner) {
+    return APPROVED_SPECIALIZED_BUTTON_OWNERS.has(owner)
+      ? { kind: 'specialized', owner, hasSharedClass }
+      : { kind: 'unowned', owner: `unknown:${owner}`, hasSharedClass }
+  }
+
+  const role = staticAttribute(node, 'role')
+  const hasSemanticAttribute =
+    Boolean(role && role !== 'button') ||
+    (node.props?.some(
+      (prop) =>
+        (prop.type === 6 && (prop.name ?? '').startsWith('aria-')) ||
+        (prop.type === 7 &&
+          prop.arg?.type === 4 &&
+          (prop.arg.content ?? '').startsWith('aria-')),
+    ) ?? false)
+  const allClasses = [...classes, ...dynamicClassTokens(dynamicClass)]
+  const hasSpecializedNamespace = allClasses.some(isNamespacedSpecializedClass)
+  const isTokenizedControl = allClasses.length > 0 && allClasses.every(isUtilityClass)
+
+  if (hasSemanticAttribute || hasSpecializedNamespace || isTokenizedControl) {
+    return {
+      kind: 'specialized',
+      owner: role && role !== 'button' ? `role:${role}` : 'specialized-control',
+      hasSharedClass,
+    }
+  }
+
+  return { kind: 'unowned', owner: 'missing-owner', hasSharedClass }
+}
+
 function auditButtonsInSfc(source: string, file: string): ButtonNodeAudit[] {
   const descriptor = parse(source, { filename: file }).descriptor
   const template = descriptor.template?.content
@@ -152,13 +338,16 @@ function auditButtonsInSfc(source: string, file: string): ButtonNodeAudit[] {
       const hasInlineStyle =
         staticAttribute(node, 'style') !== undefined ||
         directiveExpression(node, 'bind', 'style').trim().length > 0
+      const classification = classifyButton(node, classes, dynamicClass)
       buttons.push({
         file,
         line: node.loc?.start?.line ?? 0,
         column: node.loc?.start?.column ?? 0,
         classes,
         dynamicClass,
-        hasSharedClass: classes.includes(SHARED_BUTTON_CLASS),
+        kind: classification.kind,
+        owner: classification.owner,
+        hasSharedClass: classification.hasSharedClass,
         hasInlineStyle,
       })
     }
@@ -340,18 +529,36 @@ function selectorClassNames(selector: string): string[] {
   return names
 }
 
-function selectorTargetsButton(selector: string, buttonClasses: Set<string>): boolean {
+const SHARED_BUTTON_SELECTOR_CLASSES = new Set([
+  'btn',
+  'btn-primary',
+  'btn-secondary',
+  'btn-danger-ghost',
+  'btn-ghost',
+  'btn-sm',
+  'hc-btn',
+  'hc-btn-primary',
+  'hc-btn-secondary',
+  'hc-btn-danger-ghost',
+  'hc-btn-ghost',
+  'hc-btn-sm',
+])
+
+function selectorTargetsSharedButton(selector: string): boolean {
   const elementButton = /(^|[\s>+~,(])button(?=$|[\s>+~,.#:[(])/i.test(selector)
-  return elementButton || selectorClassNames(selector).some((name) => buttonClasses.has(name))
+  const selectorClasses = selectorClassNames(selector)
+  const targetsSharedClass = selectorClasses.some((name) =>
+    SHARED_BUTTON_SELECTOR_CLASSES.has(name),
+  )
+  const targetsBareButton = elementButton && selectorClasses.length === 0
+  return targetsSharedClass || targetsBareButton
 }
 
 function privateButtonVisualRules(
   source: string,
   file: string,
-  buttons: ButtonNodeAudit[],
 ): CssRuleAudit[] {
   const descriptor = parse(source, { filename: file }).descriptor
-  const buttonClasses = new Set(buttons.flatMap((button) => button.classes))
   const findings: CssRuleAudit[] = []
   for (const style of descriptor.styles) {
     const baseLine = style.loc.start.line
@@ -361,7 +568,23 @@ function privateButtonVisualRules(
         .sort()
       if (properties.length === 0) continue
       for (const selector of rule.selectors) {
-        if (!selectorTargetsButton(selector, buttonClasses)) continue
+        if (!selectorTargetsSharedButton(selector)) continue
+        const selectorClasses = selectorClassNames(selector)
+        const hasLayoutOwner = selectorClasses.some(
+          (name) => !SHARED_BUTTON_SELECTOR_CLASSES.has(name),
+        )
+        const hasCompositeOwner = selectorClasses.some((name) => name.includes('split'))
+        const allowedProperties = properties.every(
+          (property) =>
+            BUTTON_LAYOUT_PROPERTIES.has(property) ||
+            (hasCompositeOwner && ['box-shadow', 'transform'].includes(property)),
+        )
+        if (
+          hasLayoutOwner &&
+          allowedProperties
+        ) {
+          continue
+        }
         findings.push({ file, line: rule.line, selector, properties })
       }
     }
@@ -373,7 +596,7 @@ function auditSource(source: string, file: string) {
   const buttons = auditButtonsInSfc(source, file)
   return {
     buttons,
-    privateVisualRules: privateButtonVisualRules(source, file, buttons),
+    privateVisualRules: privateButtonVisualRules(source, file),
   }
 }
 
@@ -395,8 +618,10 @@ function buildReport(files: string[]): ButtonGovernanceReport {
     return auditSource(source, file)
   })
   const buttons = audits.flatMap((audit) => audit.buttons)
-  const ungovernedNativeButtons = buttons.filter((button) => !button.hasSharedClass)
-  const inlineStyleButtons = buttons.filter((button) => button.hasInlineStyle)
+  const ungovernedNativeButtons = buttons.filter((button) => button.kind === 'unowned')
+  const actionButtons = buttons.filter((button) => button.kind === 'action')
+  const specializedButtons = buttons.filter((button) => button.kind === 'specialized')
+  const inlineStyleButtons = actionButtons.filter((button) => button.hasInlineStyle)
   const privateVisualRules = audits
     .flatMap((audit) => audit.privateVisualRules)
     .sort((left, right) =>
@@ -426,7 +651,9 @@ function buildReport(files: string[]): ButtonGovernanceReport {
   return {
     summary: {
       nativeButtonNodes: buttons.length,
-      sharedButtonNodes: buttons.length - ungovernedNativeButtons.length,
+      governedButtonNodes: buttons.length - ungovernedNativeButtons.length,
+      sharedActionButtonNodes: actionButtons.length,
+      specializedButtonNodes: specializedButtons.length,
       ungovernedNativeButtons: ungovernedNativeButtons.length,
       inlineStyleButtons: inlineStyleButtons.length,
       privateVisualRules: privateVisualRules.length,
@@ -452,7 +679,9 @@ describe('BUG-20260725-019 · shared button exact-set governance', () => {
       `Exact report: ${REPORT_PATH}`,
     ).toEqual({
       nativeButtonNodes: report.summary.nativeButtonNodes,
-      sharedButtonNodes: report.summary.nativeButtonNodes,
+      governedButtonNodes: report.summary.nativeButtonNodes,
+      sharedActionButtonNodes: report.summary.sharedActionButtonNodes,
+      specializedButtonNodes: report.summary.specializedButtonNodes,
       ungovernedNativeButtons: 0,
       inlineStyleButtons: 0,
       privateVisualRules: 0,
@@ -470,11 +699,11 @@ describe('BUG-20260725-019 · shared button exact-set governance', () => {
   it('fails closed for a conditional private button, inline style and local base visual', () => {
     const mutation = `
       <template>
-        <button v-if="enabled" class="page-retry" :style="{ color: 'red' }">Retry</button>
+        <button v-if="enabled" class="btn page-retry" :style="{ color: 'red' }">Retry</button>
       </template>
       <style scoped>
       @media (min-width: 600px) {
-        .page-retry {
+        .btn.page-retry {
           border: 0;
           background: transparent;
           padding: 8px 12px;
@@ -487,15 +716,46 @@ describe('BUG-20260725-019 · shared button exact-set governance', () => {
       {
         file: 'mutation.vue',
         line: 2,
-        hasSharedClass: false,
+        kind: 'action',
+        hasSharedClass: true,
         hasInlineStyle: true,
       },
     ])
     expect(audit.privateVisualRules).toMatchObject([
       {
         file: 'mutation.vue',
-        selector: '.page-retry',
+        selector: '.btn.page-retry',
         properties: ['background', 'border', 'padding'],
+      },
+    ])
+
+    const unknownOwner = auditSource(
+      `
+        <template>
+          <button data-governed-button="page-private">Private</button>
+        </template>
+      `,
+      'unknown-owner.vue',
+    )
+    expect(unknownOwner.buttons).toMatchObject([
+      {
+        kind: 'unowned',
+        owner: 'unknown:page-private',
+      },
+    ])
+
+    const genericClass = auditSource(
+      `
+        <template>
+          <button class="page-button">Ordinary</button>
+        </template>
+      `,
+      'generic-class.vue',
+    )
+    expect(genericClass.buttons).toMatchObject([
+      {
+        kind: 'unowned',
+        owner: 'missing-owner',
       },
     ])
   })
