@@ -63,6 +63,11 @@ function verifiedWeeklyItem(
   sourceRef: string,
   prompt: string,
   evidence: string,
+  details: {
+    subject?: string
+    knowledge_point?: string
+    mastery_status?: string
+  } = {},
 ) {
   return {
     item_id: itemID,
@@ -76,6 +81,7 @@ function verifiedWeeklyItem(
       evidence_refs: [evidence],
     },
     prompt_markdown: prompt,
+    ...details,
   }
 }
 
@@ -103,43 +109,49 @@ const weeklyPlan = {
           'weekly-item-1',
           1,
           'mistake-apple',
-          '苹果每千克 4.2 元，买 3 千克共多少钱？',
+          '苹果和梨的价钱',
           '小数乘法错题 · 连续错 2 次',
+          { subject: '数学', knowledge_point: '小数乘法', mastery_status: 'new' },
         ),
         verifiedWeeklyItem(
           'weekly-item-2',
           2,
           'mistake-equation',
-          '解方程：2x + 15 = 43。',
+          '解方程 2x+15=43',
           '简易方程错题 · 移项符号错',
+          { subject: '数学', knowledge_point: '简易方程' },
         ),
         verifiedWeeklyItem(
           'weekly-item-3',
           3,
           'mistake-believe',
-          '默写单词：believe。',
+          'believe —— 拼成 belive（少 e）',
           'Unit 4 听写错题',
+          { subject: '英语', knowledge_point: '错词' },
         ),
         verifiedWeeklyItem(
           'weekly-item-4',
           4,
           'mistake-poem',
-          '补全诗句：梅＿＿逊雪三分白。',
+          '「梅须逊雪三分白」漏「须」字',
           '古诗默写错题',
+          { subject: '语文', knowledge_point: '默写' },
         ),
         verifiedWeeklyItem(
           'weekly-item-5',
           5,
           'mistake-fraction',
-          '8 的 1/4 的 4/5 是多少？',
-          '分数乘法错题',
+          '小灯泡没有形成闭合回路',
+          '科学作业 · 闭合回路错题',
+          { subject: '科学', knowledge_point: '简单电路', mastery_status: 'new' },
         ),
         verifiedWeeklyItem(
           'weekly-item-6',
           6,
           'mistake-decimal',
-          '口算：4 ÷ 0.5。',
-          '小数除法错题',
+          '重复执行积木少循环 1 次',
+          '信息科技作业 · 循环次数错题',
+          { subject: '信息科技', knowledge_point: '图形化编程', mastery_status: 'retried' },
         ),
       ],
     },
@@ -237,6 +249,63 @@ const creativeWorks = [
     },
   },
 ]
+
+const visualMistakes = [
+  ['mistake-apple', '苹果和梨的价钱', '小数乘法', '数学'],
+  ['mistake-equation', '解方程 2x+15=43', '简易方程', '数学'],
+  ['mistake-believe', 'believe —— 拼成 belive（少 e）', '错词', '英语'],
+  ['mistake-poem', '「梅须逊雪三分白」漏「须」字', '默写', '语文'],
+  ['mistake-fraction', '小灯泡没有形成闭合回路', '简单电路', '科学'],
+  ['mistake-decimal', '重复执行积木少循环 1 次', '图形化编程', '信息科技'],
+  ['mistake-extra-1', '分数的意义', '分数', '数学'],
+  ['mistake-extra-2', '古诗默写', '古诗默写', '语文'],
+  ['mistake-extra-3', 'Unit 4 单词', '词汇', '英语'],
+  ['mistake-extra-4', '实验图判断', '科学实验', '科学'],
+  ['mistake-extra-5', '循环次数', '编程基础', '信息科技'],
+].map(([record_id, question, knowledge_point, subject]) => ({
+  record_id,
+  question,
+  knowledge_point,
+  error_cause: '练习记录',
+  status: 'new',
+  review_state: 'scheduled',
+  subject,
+  version: 1,
+}))
+
+const visualAccumulations = Array.from({ length: 3 }, (_, index) => ({
+  record_id: `accum-${index + 1}`,
+  subject: index === 0 ? '语文' : index === 1 ? '英语' : '数学',
+  entry_type: 'quote',
+  content: '学习记录',
+  source: '家长记录',
+  created_at: '2026-07-20T00:00:00+08:00',
+  version: 1,
+}))
+
+function practiceGeneration(recordID: string) {
+  if (recordID === 'mistake-apple') {
+    return {
+      state: 'joined',
+      source_mistake_id: recordID,
+      practice_set_id: 'practice-set-visual',
+      practice_item_id: 'practice-item-apple',
+      item: {
+        question_markdown: '苹果和梨的价钱 · 变式题',
+        verification_evidence: '小数乘法进位 · 确定性答案已校验',
+        expected_answer_markdown: '已验证',
+      },
+    }
+  }
+  if (recordID === 'mistake-poem') {
+    return {
+      state: 'failed',
+      source_mistake_id: recordID,
+      failure_reason: '上次生成任务未完成',
+    }
+  }
+  return { state: 'available', source_mistake_id: recordID }
+}
 
 async function installImplementationMocks(page: Page) {
   await page.addInitScript(
@@ -405,6 +474,16 @@ async function installImplementationMocks(page: Page) {
     if (apiPath === '/api/k12/creative-works' && method === 'GET') {
       return json(route, { items: creativeWorks })
     }
+    if (apiPath === '/api/k12/practice-sets' && method === 'GET') {
+      return json(route, { items: [{ status: 'draft', items: [{}] }] })
+    }
+    if (apiPath === '/api/k12/accumulation' || apiPath === '/api/k12/accumulations') {
+      return json(route, { items: visualAccumulations })
+    }
+    const generationMatch = apiPath.match(/^\/api\/k12\/mistakes\/([^/]+)\/practice-generation$/)
+    if (generationMatch && method === 'GET') {
+      return json(route, practiceGeneration(decodeURIComponent(generationMatch[1])))
+    }
     if (
       apiPath === '/api/k12/mistakes' ||
       apiPath === '/api/k12/review-queue' ||
@@ -412,7 +491,9 @@ async function installImplementationMocks(page: Page) {
       apiPath === '/api/k12/accumulations' ||
       apiPath === '/api/k12/practice-sets'
     ) {
-      return json(route, { items: [] })
+      return json(route, {
+        items: apiPath === '/api/k12/mistakes' ? visualMistakes : visualMistakes.slice(0, 6),
+      })
     }
     if (apiPath === '/api/k12/insight-report') {
       return json(route, {

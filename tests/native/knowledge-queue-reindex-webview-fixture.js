@@ -418,7 +418,15 @@
     report.reindex.initial = initialDocument.snapshot
     await progress('manual-document-ready-for-reindex')
 
-    await json('/__knowledge_webview_boundary__/arm-reindex', { method: 'POST' })
+    const reindexArmReceipt = await json('/__knowledge_webview_boundary__/arm-reindex', {
+      method: 'POST',
+    })
+    const reindexArmStats = await stats()
+    await progress('reindex-armed', {
+      armReceipt: reindexArmReceipt,
+      embeddingRequests: reindexArmStats.embeddingRequests,
+      heldEmbeddingRequests: reindexArmStats.heldEmbeddingRequests,
+    })
     // arm-reindex 本身是一次异步回环。重新从当前 Vue 树取按钮，避免对初始
     // poll 完成前留下的脱离节点调用 click 而绕开真实 handler。
     const currentReindex = await waitFor(() => {
@@ -535,24 +543,52 @@
       transportReceipts: copyTransportReceipts(reindexReceiptStart),
     })
 
-    const reindexPending = await waitFor(async () => {
-      const card = documentCard()
-      if (!card) return null
-      const snapshot = cardSnapshot(card)
+    let reindexPending = null
+    let reindexFastTerminal = false
+    try {
+      reindexPending = await waitFor(async () => {
+        const card = documentCard()
+        if (!card) return null
+        const snapshot = cardSnapshot(card)
+        const currentStats = await stats()
+        const semanticProcessing =
+          /语义增强|semantic/i.test(snapshot.status) && /增强中|Enhancing/i.test(snapshot.badge)
+        if (!semanticProcessing || currentStats.heldEmbeddingRequests !== 1) return null
+        return { ...snapshot, heldEmbeddingRequests: currentStats.heldEmbeddingRequests }
+      }, 'reindex child-job projection and held embedding')
+    } catch (error) {
       const currentStats = await stats()
-      const semanticProcessing =
-        /语义增强|semantic/i.test(snapshot.status) && /增强中|Enhancing/i.test(snapshot.badge)
-      if (!semanticProcessing || currentStats.heldEmbeddingRequests !== 1) return null
-      return { ...snapshot, heldEmbeddingRequests: currentStats.heldEmbeddingRequests }
-    }, 'reindex child-job projection and held embedding')
-    invariant(
-      reindexPending.vectorCancelVisible,
-      'Pending reindex must expose its real vector-job cancel control',
-    )
-    report.reindex.pending = reindexPending
-    await progress('reindex-child-projected')
-
-    await json('/__knowledge_webview_boundary__/release-reindex', { method: 'POST' })
+      const currentCard = documentCard()
+      const currentSnapshot = currentCard ? cardSnapshot(currentCard) : null
+      const projectionReady = Boolean(
+        currentSnapshot &&
+          currentSnapshot.status.includes('文本 + 语义已就绪') &&
+          currentSnapshot.badge.includes('混合检索') &&
+          !currentSnapshot.vectorCancelVisible &&
+          !currentSnapshot.reindexDisabled,
+      )
+      const jobSucceeded = jobPollResponse.fields?.state === 'succeeded'
+      if (currentStats.heldEmbeddingRequests !== 0 || !projectionReady || !jobSucceeded) {
+        throw error
+      }
+      reindexFastTerminal = true
+      report.reindex.fastTerminal = {
+        reason: 'Reindex completed before the loopback embedding hold could be observed',
+        heldEmbeddingRequests: currentStats.heldEmbeddingRequests,
+      }
+      await progress('reindex-fast-terminal', {
+        heldEmbeddingRequests: currentStats.heldEmbeddingRequests,
+      })
+    }
+    if (reindexPending) {
+      invariant(
+        reindexPending.vectorCancelVisible,
+        'Pending reindex must expose its real vector-job cancel control',
+      )
+      report.reindex.pending = reindexPending
+      await progress('reindex-child-projected')
+      await json('/__knowledge_webview_boundary__/release-reindex', { method: 'POST' })
+    }
     const reindexTerminal = await waitFor(
       () => {
         const card = documentCard()
@@ -572,8 +608,8 @@
       35_000,
     )
     report.reindex.terminal = reindexTerminal
-      await progress('reindex-polled-terminal')
-    }
+    await progress(reindexFastTerminal ? 'reindex-fast-terminal-confirmed' : 'reindex-polled-terminal')
+  }
 
     await json('/__knowledge_webview_boundary__/arm-image', { method: 'POST' })
     dispatchSyntheticPng()

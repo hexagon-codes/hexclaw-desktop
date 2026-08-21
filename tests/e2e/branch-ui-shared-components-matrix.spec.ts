@@ -686,6 +686,11 @@ async function installSourceFixture(page: Page, action: Action) {
       localStorage.setItem('hexclaw_lastSessionId', session)
       localStorage.setItem('app_config', JSON.stringify(config))
       if (k12) {
+        // K12 视觉状态固定为已完成首次引导，避免产品一次性提示遮挡验收状态。
+        localStorage.setItem(
+          'hc-k12-appearance-v1',
+          JSON.stringify({ version: 1, preference: 'k12', introSeen: true }),
+        )
         localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
       }
 
@@ -888,6 +893,7 @@ async function openSourceWeekly(page: Page, action: Action) {
     `${SOURCE_URL}/chat?role=${K12_AGENT}&roleTitle=${encodeURIComponent('小明的辅导助手')}`,
     { waitUntil: 'domcontentloaded', timeout: 12_000 },
   )
+  await page.locator('#splash-screen').waitFor({ state: 'detached', timeout: 8_000 })
   await page.locator('.k12enh-seg').waitFor({ state: 'visible', timeout: 8_000 })
   await page.locator('.k12enh-seg').getByRole('tab', { name: '学习档案', exact: true }).click()
   await page.getByTestId('subtab-week').click()
@@ -908,6 +914,7 @@ async function openSource(page: Page, state: MatrixState): Promise<OpenEvidence>
         waitUntil: 'domcontentloaded',
         timeout: 12_000,
       })
+      await page.locator('#splash-screen').waitFor({ state: 'detached', timeout: 8_000 })
       await page.locator('.hc-chat').waitFor({ state: 'visible', timeout: 8_000 })
       if (state.action !== 'voice-composer') {
         await page.locator('.hc-msg').first().waitFor({ state: 'visible', timeout: 8_000 })
