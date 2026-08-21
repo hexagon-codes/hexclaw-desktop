@@ -3,13 +3,17 @@ import AxeBuilder from '@axe-core/playwright'
 import { execFile } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const REFERENCE_URL = process.env.HEX_K12_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 const SOURCE_URL = 'http://127.0.0.1:5173'
-const EVIDENCE_ROOT =
-  '/Users/guoyanjun/work/hexclaw-docs/test/evidence/k12-skin-desktop-v9-20260802'
+const EVIDENCE_ROOT = path.resolve(
+  desktopRoot,
+  '../hexclaw-docs/test/evidence/k12-skin-desktop-v9-20260802',
+)
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const VIEWPORT = { width: 2048, height: 924 }
 const K12_RECORD = JSON.stringify({ version: 1, preference: 'k12', introSeen: true })
@@ -1234,6 +1238,8 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
         display: style.display,
         backgroundColor: style.backgroundColor,
         backgroundImage: style.backgroundImage,
+        backdropFilter: style.getPropertyValue('backdrop-filter'),
+        webkitBackdropFilter: style.getPropertyValue('-webkit-backdrop-filter'),
         opacity: style.opacity,
         overflowX: style.overflowX,
         overflowY: style.overflowY,
@@ -1455,9 +1461,8 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
     const sessionListSignature = async () => {
       const itemSignature = async (node: HTMLElement) => {
         const title = normalizeText(
-          node.querySelector<HTMLElement>(
-            isImplementation ? '.hc-sessions__title' : '.cs-t',
-          )?.textContent,
+          node.querySelector<HTMLElement>(isImplementation ? '.hc-sessions__title' : '.cs-t')
+            ?.textContent,
         )
         const meta = normalizeText(
           node.querySelector<HTMLElement>(
@@ -1465,9 +1470,8 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           )?.textContent,
         )
         const count = normalizeText(
-          node.querySelector<HTMLElement>(
-            isImplementation ? '.hc-sessions__count' : '.cs-cnt',
-          )?.textContent,
+          node.querySelector<HTMLElement>(isImplementation ? '.hc-sessions__count' : '.cs-cnt')
+            ?.textContent,
         )
         return {
           titleHash: await digest(title),
@@ -1487,9 +1491,9 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
         for (const section of renderedNodes('.hc-sessions__section')) {
           rawSections.push({
             label: normalizeText(section.querySelector('.hc-sessions__section-label')?.textContent),
-            items: Array.from(section.querySelectorAll<HTMLElement>(':scope > .hc-sessions__item')).filter(
-              hasLayoutBox,
-            ),
+            items: Array.from(
+              section.querySelectorAll<HTMLElement>(':scope > .hc-sessions__item'),
+            ).filter(hasLayoutBox),
           })
         }
       } else {
@@ -1559,7 +1563,9 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
               key: isImplementation
                 ? (row.dataset.recordId ?? `record-${index}`)
                 : (row.dataset.mistakeKey ?? `record-${index}`),
-              status: isImplementation ? (row.dataset.recordStatus ?? '') : (row.dataset.status ?? ''),
+              status: isImplementation
+                ? (row.dataset.recordStatus ?? '')
+                : (row.dataset.status ?? ''),
               contentHash: await digest(
                 JSON.stringify(isImplementation ? implementationPayload : referencePayload),
               ),
@@ -1583,7 +1589,7 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           ).map(async (tile, index) => ({
             key: isImplementation
               ? (tile.dataset.testid?.replace('insight-tile-', '') ?? `tile-${index}`)
-              : ['semester', 'mastered', 'week', 'practice'][index] ?? `tile-${index}`,
+              : (['semester', 'mastered', 'week', 'practice'][index] ?? `tile-${index}`),
             contentHash: await digest(normalizeText(tile.textContent)),
           })),
         )
@@ -1605,7 +1611,7 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
           ).map(async (action, index) => ({
             key: isImplementation
               ? (action.dataset.testid?.replace('insight-', '') ?? `action-${index}`)
-              : ['setback-action', 'week-action'][index] ?? `action-${index}`,
+              : (['setback-action', 'week-action'][index] ?? `action-${index}`),
             contentHash: await digest(normalizeText(action.textContent)),
           })),
         )
@@ -1643,6 +1649,7 @@ async function k12SurfaceGeometry(page: Page, implementation: boolean) {
       insights: measure(selectors.insights),
       tiles: measure(selectors.tiles),
       priority: measure(selectors.priority),
+      k12CardToken: getComputedStyle(document.body).getPropertyValue('--hc-bg-card').trim(),
       butterflies: document.querySelectorAll('.k12-ambient-butterfly').length,
       fireflies: document.querySelectorAll('.k12-ambient-firefly').length,
       blackboardOverlayNodes: document.querySelectorAll(
@@ -2026,6 +2033,12 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
           expect(comparison.sourceFacts.sidebar?.rect.width).toBe(226)
           expect(comparison.referenceFacts.sidebar?.rect.width).toBe(226)
           expect(comparison.sourceFacts.chatSidebar?.rect.width).toBe(256)
+          expect(comparison.sourceFacts.chatSidebar?.backdropFilter).toBe('none')
+          expect(comparison.sourceFacts.chatSidebar?.webkitBackdropFilter).toBe('none')
+          const cardAlpha = Number(
+            comparison.sourceFacts.k12CardToken.match(/,\s*([0-9.]+)\s*\)$/)?.[1],
+          )
+          expect(cardAlpha).toBeGreaterThanOrEqual(0.94)
           expect(comparison.sourceFacts.scene?.backgroundImage).not.toBe('none')
           expect(comparison.sourceFacts.butterflies).toBe(2)
           expect(comparison.sourceFacts.fireflies).toBe(18)

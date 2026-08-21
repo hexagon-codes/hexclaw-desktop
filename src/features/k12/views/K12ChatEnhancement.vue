@@ -661,6 +661,7 @@ watch(
                   v-if="subject.demo"
                   type="button"
                   class="k12cap-btn k12cap-btn--ghost"
+                  data-governed-button="k12-capability"
                   data-testid="k12-subject-demo"
                   @click="openSubjectDemo(subject.demo)"
                 >
@@ -686,12 +687,18 @@ watch(
         </div>
 
         <div class="k12cap-modal__foot">
-          <button type="button" class="k12cap-btn" @click="closeCapabilityDialog()">
+          <button
+            type="button"
+            class="k12cap-btn"
+            data-governed-button="k12-capability"
+            @click="closeCapabilityDialog()"
+          >
             {{ t('k12.capabilities.close') }}
           </button>
           <button
             type="button"
             class="k12cap-btn k12cap-btn--primary"
+            data-governed-button="k12-capability"
             data-testid="k12-capability-primary"
             @click="runCapabilityPrimary"
           >

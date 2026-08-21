@@ -17,6 +17,7 @@ import {
   k12CancelPracticeSet,
   k12GetPracticePaper,
   k12GetPracticePrintJobPaper,
+  k12GetPrintArtifactContent,
   k12PreparePracticePrintJob,
   k12RetryPracticePrintJob,
   k12UploadAsset,
@@ -28,11 +29,7 @@ import {
 } from '@/api/k12'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
-import {
-  printPracticePaper,
-  renderPracticePaperPdf,
-  savePracticePaperPdf,
-} from '../export'
+import { printPracticePaper, savePracticePaperPdf } from '../export'
 import { executeNativePrintJob, type PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
@@ -287,7 +284,7 @@ async function finalize(via: 'print' | 'send') {
     }
 
     const rendered = await k12GetPracticePrintJobPaper(props.agentId, job.print_job_id, 'question')
-    const pdf = await renderPracticePaperPdf(rendered.markdown, rendered.title)
+    const pdf = await k12GetPrintArtifactContent(props.agentId, job.artifact_id)
     printPreview.value = {
       open: true,
       printing: false,

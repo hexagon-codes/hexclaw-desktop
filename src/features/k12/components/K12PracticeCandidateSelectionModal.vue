@@ -137,6 +137,7 @@ function commit() {
           <button
             v-if="!selection"
             type="button"
+            data-governed-button="k12-retry"
             :disabled="loading"
             @click="emit('retry')"
           >

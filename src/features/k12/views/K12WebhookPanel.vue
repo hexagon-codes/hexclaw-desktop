@@ -22,6 +22,7 @@ import { useToast } from '@/composables/useToast'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import HcClearableField from '@/components/common/HcClearableField.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { K12_SCENARIO_ID } from '../descriptor'
 
 const toast = useToast()
@@ -86,6 +87,7 @@ const formWorkflows = ref('')
 
 const secretResult = ref<{ title: string; name: string; secret: string } | null>(null)
 const rotateTarget = ref<K12WebhookBinding | null>(null)
+const deleteTarget = ref<K12WebhookBinding | null>(null)
 const historyName = ref('')
 const receipts = ref<K12WebhookReceipt[]>([])
 let historyTimer: ReturnType<typeof setTimeout> | undefined
@@ -147,6 +149,7 @@ function onAgentChanged() {
   // one-time secret or edit form visible in the newly selected scope.
   secretResult.value = null
   rotateTarget.value = null
+  deleteTarget.value = null
   editorOpen.value = false
   void loadBindings()
 }
@@ -276,7 +279,15 @@ async function confirmRotateSecret() {
   }
 }
 
-async function removeBinding(binding: K12WebhookBinding) {
+function requestRemoveBinding(binding: K12WebhookBinding) {
+  if (busy.value) return
+  deleteTarget.value = binding
+}
+
+async function removeBinding() {
+  const binding = deleteTarget.value
+  deleteTarget.value = null
+  if (!binding) return
   if (busy.value) return
   const agentID = selectedAgentId.value
   busy.value = `delete:${binding.name}`
@@ -392,7 +403,13 @@ onBeforeUnmount(() => {
     <p v-if="agents.length === 0 && !error" class="k12wh__empty">请先创建一个 K12 辅导实例。</p>
     <div v-if="error" class="k12wh__error" role="alert">
       <span>{{ error }}</span>
-      <button data-testid="k12-webhook-retry" @click="loadAgents">重试</button>
+      <button
+        class="k12wh__button k12wh__button--ghost"
+        data-testid="k12-webhook-retry"
+        @click="loadAgents"
+      >
+        重试
+      </button>
     </div>
     <p v-if="loading" class="k12wh__empty">读取绑定中…</p>
     <p v-else-if="selectedAgentId && bindings.length === 0" class="k12wh__empty">
@@ -476,7 +493,7 @@ onBeforeUnmount(() => {
           :disabled="Boolean(busy)"
           aria-label="删除"
           title="删除"
-          @click="removeBinding(binding)"
+          @click="requestRemoveBinding(binding)"
         >
           <Trash2 :size="14" />
         </button>
@@ -514,6 +531,7 @@ onBeforeUnmount(() => {
             }}</code>
             <button
               v-if="receipt.status === 'failed' && receipt.retryable"
+              class="k12wh__button k12wh__button--ghost"
               :data-testid="`k12-webhook-retry-receipt-${receipt.receipt_id}`"
               :disabled="busy === `retry:${receipt.receipt_id}`"
               @click="retryReceipt(historyBinding, receipt)"
@@ -630,23 +648,41 @@ onBeforeUnmount(() => {
       <div class="k12wh__dialog">
         <header>
           <strong>{{ secretResult.title }}</strong
-          ><button data-testid="k12-webhook-secret-close" @click="secretResult = null">
+          ><button
+            class="k12wh__modal-close"
+            data-testid="k12-webhook-secret-close"
+            @click="secretResult = null"
+          >
             <X :size="16" />
           </button>
         </header>
         <p>签名 Secret 仅本次显示，请立即保存；页面关闭后只能轮换，无法找回。</p>
         <div class="k12wh__secret">
           <code>{{ secretResult.secret }}</code
-          ><button @click="copy(secretResult.secret)"><Copy :size="14" />复制</button>
+          ><button class="k12wh__copy" @click="copy(secretResult.secret)">
+            <Copy :size="14" />复制
+          </button>
         </div>
         <div class="k12wh__secret">
           <code>{{ webhookUrlFor(secretResult.name) }}</code
-          ><button @click="copy(webhookUrlFor(secretResult.name))">
+          ><button class="k12wh__copy" @click="copy(webhookUrlFor(secretResult.name))">
             <Copy :size="14" />复制端点
           </button>
         </div>
       </div>
     </div>
+    <ConfirmDialog
+      :open="deleteTarget !== null"
+      :confirmation-key="
+        deleteTarget ? `k12-webhook:${selectedAgentId}:${deleteTarget.name}` : null
+      "
+      title="Delete K12 Webhook?"
+      message="This action cannot be undone."
+      confirm-text="Delete"
+      cancel-text="Cancel"
+      @confirm="removeBinding"
+      @cancel="deleteTarget = null"
+    />
   </section>
 </template>
 

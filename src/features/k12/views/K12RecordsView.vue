@@ -2232,6 +2232,7 @@ async function doExportMd() {
           <span>{{ t('k12.records.archivedToast') }}</span>
           <button
             type="button"
+            class="k12archive__undo-button"
             :disabled="archiveBusy.includes(archiveUndo.recordId)"
             :data-testid="`mistake-archive-undo-${archiveUndo.recordId}`"
             @click="undoArchive(archiveUndo)"
@@ -2897,36 +2898,6 @@ async function doExportMd() {
 .pill-green {
   background: rgba(50, 213, 131, 0.14);
   color: var(--hc-success);
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-  border: 0.5px solid var(--hc-border);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-}
-.btn:hover {
-  background: var(--hc-bg-hover);
-}
-.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--hc-text-secondary);
-}
-.btn-primary {
-  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
-  color: #fff;
-  border-color: transparent;
-}
-/* BUG-20260709：必须配对 hover——否则 .btn:hover(0,2,0) 压过 .btn-primary(0,1,0) 的渐变，
-   浅色主题下 hover = 近白底 + color:#fff 白字看不见。渐变对齐原型 app.html:158（更亮一档）。 */
-.btn-primary:hover {
-  background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
 }
 /* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
 .k12ic {

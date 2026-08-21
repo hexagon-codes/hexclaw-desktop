@@ -118,7 +118,13 @@ const weakBars = computed(() => {
     </div>
     <div v-else-if="errorMessage" class="k12ins__error" role="alert" data-testid="insight-error">
       <span>{{ errorMessage }}</span>
-      <button data-testid="insight-retry" @click="reload">{{ t('common.retry') }}</button>
+      <button
+        class="k12ins__button"
+        data-testid="insight-retry"
+        @click="reload"
+      >
+        {{ t('common.retry') }}
+      </button>
     </div>
     <template v-else-if="report && hasInsightData">
       <!-- 原型 app.html:2354：四块均是档案路由器，数字与单位分层。 -->

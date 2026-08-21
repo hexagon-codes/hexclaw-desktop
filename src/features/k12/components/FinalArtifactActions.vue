@@ -49,6 +49,7 @@ function actionDisabled(action: FinalArtifactAction) {
       v-for="action in visibleActions"
       :key="action"
       type="button"
+      data-governed-button="k12-action"
       :class="{ 'final-artifact-actions__primary': primaryAction === action }"
       :disabled="actionDisabled(action)"
       @click="dispatch(action)"

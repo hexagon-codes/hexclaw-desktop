@@ -8,7 +8,7 @@ import {
   type GenericPrintSourceKind,
 } from '@/api/k12'
 import { isTauri } from '@/utils/platform'
-import { renderPracticePaperPdf, type NativePrintReceipt } from './export'
+import type { NativePrintReceipt } from './export'
 
 export interface PersistentPrintRequest {
   agent: string
@@ -118,9 +118,7 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
   const genericArtifact = artifactId
     ? null
     : await k12GetGenericPrintArtifact(req.agent, job.print_job_id)
-  const pdf = artifactId
-    ? await k12GetPrintArtifactContent(req.agent, artifactId)
-    : await renderPracticePaperPdf(genericArtifact!.markdown, genericArtifact!.title)
+  const pdf = await k12GetPrintArtifactContent(req.agent, artifactId ?? job.artifact_id)
   let confirmation: Promise<boolean> | null = null
   const confirm = () => {
     confirmation ??= executeCoordinatedPrint(req, job.print_job_id).catch((error) => {

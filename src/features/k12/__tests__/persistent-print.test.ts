@@ -85,7 +85,7 @@ describe('persistent PrintJob orchestration', () => {
       source_digest: 'abc',
       markdown: '# 服务端冻结内容',
     })
-    h.artifactContent.mockReset()
+    h.artifactContent.mockReset().mockResolvedValue(exactPdf)
     h.retry.mockReset().mockResolvedValue({ print_job: job() })
     h.renderPdf.mockReset().mockResolvedValue(exactPdf)
     h.browserPrint.mockReset().mockResolvedValue(true)
@@ -116,6 +116,8 @@ describe('persistent PrintJob orchestration', () => {
       title: '辅导要点',
       canonical_markdown: '# 辅导要点\n\n小数点对齐',
     })
+    expect(h.artifactContent).toHaveBeenCalledExactlyOnceWith('tutor-a', 'part-a')
+    expect(h.renderPdf).not.toHaveBeenCalled()
     expect(h.invoke).not.toHaveBeenCalled()
 
     if (prepared.status !== 'preview') throw new Error('expected preview')
@@ -123,6 +125,16 @@ describe('persistent PrintJob orchestration', () => {
     expect(h.invoke).toHaveBeenCalledExactlyOnceWith('execute_print_job', {
       request: { agent: 'tutor-a', printJobId: 'gprint-a' },
     })
+  })
+
+  it('BUG-20260802-014 canonicalMarkdown path consumes immutable artifact bytes', async () => {
+    h.artifactContent.mockResolvedValueOnce(exactPdf)
+
+    const prepared = await preparePersistentPrint(request)
+
+    expect(prepared).toMatchObject({ status: 'preview', pdf: exactPdf })
+    expect(h.artifactContent).toHaveBeenCalledExactlyOnceWith('tutor-a', 'part-a')
+    expect(h.renderPdf).not.toHaveBeenCalled()
   })
 
   it('coalesces a double click into one preview preparation', async () => {

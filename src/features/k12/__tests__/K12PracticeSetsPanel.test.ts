@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   printSpy: vi.fn(),
   executePrintJobSpy: vi.fn(),
   renderPdfSpy: vi.fn(),
+  artifactContentSpy: vi.fn(),
   uploadSpy: vi.fn(),
   submitSpy: vi.fn(),
   gradeSpy: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock('@/api/k12', () => ({
   k12PreparePracticePrintJob: (...args: unknown[]) => h.preparePrintSpy(...args),
   k12GetPracticePrintJob: (...args: unknown[]) => h.getPrintJobSpy(...args),
   k12GetPracticePrintJobPaper: (...args: unknown[]) => h.printJobPaperSpy(...args),
+  k12GetPrintArtifactContent: (...args: unknown[]) => h.artifactContentSpy(...args),
   k12CommitPracticePrintReceipt: (...args: unknown[]) => h.commitPrintSpy(...args),
   k12RecordPracticePrintEvent: (...args: unknown[]) => h.printEventSpy(...args),
   k12RetryPracticePrintJob: (...args: unknown[]) => h.retryPrintSpy(...args),
@@ -197,6 +199,7 @@ beforeEach(() => {
       print_job_id: 'print-1',
       practice_set_id: 'basket1',
       status: 'preparing',
+      artifact_id: 'qsheet-1',
       paper_no: 'P-2629-02',
       source_digest: 'sha256:source',
       attempt_count: 1,
@@ -240,6 +243,9 @@ beforeEach(() => {
   })
   h.executePrintJobSpy.mockReset().mockResolvedValue(true)
   h.renderPdfSpy.mockReset().mockResolvedValue(new Blob(['%PDF-1.7'], { type: 'application/pdf' }))
+  h.artifactContentSpy
+    .mockReset()
+    .mockResolvedValue(new Blob(['%PDF-frozen-practice-artifact'], { type: 'application/pdf' }))
   h.uploadSpy
     .mockReset()
     .mockResolvedValue({ asset_id: 'asset://k12-xiaoming/return.png', size: 3 })
@@ -322,16 +328,24 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     })
     h.preparePrintSpy
       .mockResolvedValueOnce({
-        print_job: { print_job_id: 'print-1', status: 'preparing', attempt_count: 1 },
+        print_job: {
+          print_job_id: 'print-1',
+          status: 'preparing',
+          artifact_id: 'qsheet-1',
+          attempt_count: 1,
+        },
         replayed: false,
       })
       .mockResolvedValueOnce({
-        print_job: { print_job_id: 'print-1', status: 'cancelled', attempt_count: 1 },
+        print_job: {
+          print_job_id: 'print-1',
+          status: 'cancelled',
+          artifact_id: 'qsheet-1',
+          attempt_count: 1,
+        },
         replayed: true,
       })
-    h.executePrintJobSpy
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
+    h.executePrintJobSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     const exactPreviewPdf = new Blob(['%PDF-exact-preview'], { type: 'application/pdf' })
     h.renderPdfSpy.mockResolvedValue(exactPreviewPdf)
     const w = render()
@@ -347,7 +361,8 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       'question',
     )
     expect(h.printJobPaperSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', 'question')
-    expect(h.renderPdfSpy).toHaveBeenCalledWith('# 待打印篮\n\n1. 2.8×0.65=?', '待打印篮')
+    expect(h.artifactContentSpy).toHaveBeenCalledWith('k12-xiaoming', 'qsheet-1')
+    expect(h.renderPdfSpy).not.toHaveBeenCalled()
     expect(document.body.querySelector('[data-testid="k12-print-preview"]')).not.toBeNull()
     expect(h.executePrintJobSpy).not.toHaveBeenCalled()
     expect(h.printEventSpy).not.toHaveBeenCalled()
@@ -364,7 +379,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       agent: 'k12-xiaoming',
       printJobId: 'print-1',
     })
-    expect(h.renderPdfSpy).toHaveBeenCalledTimes(1)
+    expect(h.artifactContentSpy).toHaveBeenCalledTimes(1)
     expect(h.printEventSpy).not.toHaveBeenCalled()
     expect(h.commitPrintSpy).not.toHaveBeenCalled()
 
@@ -385,6 +400,23 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.executePrintJobSpy).toHaveBeenCalledTimes(2)
     expect(h.commitPrintSpy).not.toHaveBeenCalled()
     expect(h.finalizeSpy).not.toHaveBeenCalled()
+  })
+
+  it('BUG-20260802-014 练习集预览消费 PracticePrintJob immutable artifact', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    const frozenPdf = new Blob(['%PDF-frozen-practice-artifact'], { type: 'application/pdf' })
+    h.artifactContentSpy.mockResolvedValueOnce(frozenPdf)
+
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+
+    expect(h.artifactContentSpy).toHaveBeenCalledExactlyOnceWith('k12-xiaoming', 'qsheet-1')
+    expect(h.renderPdfSpy).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[data-testid="k12-print-preview"]')).not.toBeNull()
   })
 
   it('原生适配器中断必须记 outcome_unknown，禁止把结果未知当失败后盲目重试', async () => {
@@ -478,15 +510,18 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       items: [basket([item('m1', '题', '数学', 'verified')])],
     })
     let resolvePrint!: (value: boolean) => void
-    h.executePrintJobSpy.mockReturnValueOnce(new Promise<boolean>((resolve) => {
-      resolvePrint = resolve
-    }))
+    h.executePrintJobSpy.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolvePrint = resolve
+      }),
+    )
     const w = render()
     await flushPromises()
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    const printButton = document.body
-      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+    const printButton = document.body.querySelector<HTMLButtonElement>(
+      '[data-testid="k12-print-preview-print"]',
+    )!
     printButton.click()
     printButton.click()
     await flushPromises()
@@ -498,11 +533,11 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.commitPrintSpy).not.toHaveBeenCalled()
   })
 
-  it('PDF 渲染失败不进入系统打印，且释放页面操作锁', async () => {
+  it('immutable artifact 获取失败不进入系统打印，且释放页面操作锁', async () => {
     h.listSpy.mockResolvedValue({
       items: [basket([item('m1', '题', '数学', 'verified')])],
     })
-    h.renderPdfSpy.mockRejectedValueOnce(new Error('PDF 渲染失败'))
+    h.artifactContentSpy.mockRejectedValueOnce(new Error('immutable artifact unavailable'))
     const w = render()
     await flushPromises()
 
@@ -512,7 +547,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(document.body.querySelector('[data-testid="k12-print-preview"]')).toBeNull()
     expect(h.printSpy).not.toHaveBeenCalled()
     expect(h.printEventSpy).not.toHaveBeenCalled()
-    expect(h.toastError).toHaveBeenCalledWith('PDF 渲染失败')
+    expect(h.toastError).toHaveBeenCalledWith('immutable artifact unavailable')
     expect(w.find('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeUndefined()
   })
 
