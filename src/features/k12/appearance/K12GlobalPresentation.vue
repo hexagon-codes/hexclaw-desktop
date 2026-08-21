@@ -313,8 +313,7 @@ if (
   isolation: isolate;
 }
 
-:global(body[data-k12-skin-active='k12'] .hc-app__body::after),
-:global(body[data-k12-skin-active='k12'] .hc-app__glow) {
+:global(body[data-k12-skin-active='k12'] .hc-app__body::after) {
   opacity: 0;
 }
 

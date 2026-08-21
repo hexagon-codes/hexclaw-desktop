@@ -108,6 +108,32 @@ const plan = {
 }
 
 describe('K12WeeklyPracticePanel projection', () => {
+  it('[BUG-20260728-004][K12-UI-FIDELITY-056] keeps the weekly plan in one prototype hero', () => {
+    const wrapper = mount(K12WeeklyPracticePanel, {
+      props: {
+        progress: null,
+        settings,
+        plan: plan as any,
+        history: [],
+      },
+      global: {
+        stubs: {
+          MarkdownRenderer: {
+            props: ['content'],
+            template: '<div>{{ content }}</div>',
+          },
+        },
+      },
+    })
+
+    const hero = wrapper.get('.weekly-hero')
+    expect(wrapper.get('.weekly-view-tabs.k12-secondary-tabs').text()).toContain('周期')
+    expect(wrapper.findAll('.weekly-view-tabs .source-tag')).toHaveLength(2)
+    expect(hero.findAll('.weekly-track')).toHaveLength(3)
+    expect(hero.find('.weekly-lifecycle').exists()).toBe(true)
+    expect(hero.findAll('.weekly-item.resource-row')).toHaveLength(2)
+  })
+
   it('keeps due review while missing progress routes to the canonical form', async () => {
     const wrapper = mount(K12WeeklyPracticePanel, {
       props: {
@@ -193,9 +219,7 @@ describe('K12WeeklyPracticePanel projection', () => {
       },
     })
 
-    expect(wrapper.text()).toContain(
-      '人教版 · 五年级下册 · 第4单元「分数的意义和性质」 · P45–62',
-    )
+    expect(wrapper.text()).toContain('人教版 · 五年级下册 · 第4单元「分数的意义和性质」 · P45–62')
     expect(wrapper.text()).toContain('到期复习 · 原题')
     expect(wrapper.text()).not.toContain('来源：真实错题')
     expect(wrapper.text()).toContain('依据：小数乘法错题 · 连续错 2 次')
@@ -278,9 +302,7 @@ describe('K12WeeklyPracticePanel projection', () => {
     ])
 
     for (const button of historyActions.slice(0, 2)) await button.trigger('click')
-    expect(
-      wrapper.emitted('history-artifact-action')?.map(([intent]) => intent),
-    ).toEqual([
+    expect(wrapper.emitted('history-artifact-action')?.map(([intent]) => intent)).toEqual([
       { action: 'print', snapshot_id: 'snapshot-29', artifact_id: 'artifact-29' },
       { action: 'send_im', snapshot_id: 'snapshot-29', artifact_id: 'artifact-29' },
     ])

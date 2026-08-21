@@ -6,11 +6,15 @@ export interface K12BookTab {
   testId?: string
 }
 
-defineProps<{
-  modelValue: string
-  tabs: readonly K12BookTab[]
-  label: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    tabs: readonly K12BookTab[]
+    label: string
+    variant?: 'object' | 'secondary'
+  }>(),
+  { variant: 'object' },
+)
 
 const emit = defineEmits<{
   (event: 'select', key: string): void
@@ -18,26 +22,56 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="seg k12-book-tabs" role="tablist" :aria-label="label">
-    <button
-      v-for="tab in tabs"
-      :key="tab.key"
-      type="button"
-      role="tab"
-      :aria-selected="modelValue === tab.key"
-      :aria-label="tab.count === undefined ? tab.label : `${tab.label} ${tab.count}`"
-      :class="{ on: modelValue === tab.key }"
-      :data-testid="tab.testId"
-      @click="emit('select', tab.key)"
+  <div
+    :class="[
+      'k12-book-tabs',
+      props.variant === 'secondary' ? 'k12-secondary-tabs k12-week-view-tabs' : 'seg',
+    ]"
+    role="tablist"
+    :aria-label="props.label"
+  >
+    <div
+      v-if="props.variant === 'secondary'"
+      class="k12-secondary-tabs__row"
+      data-filter-kind="period"
     >
-      {{ tab.label }}
-      <span
-        v-if="tab.count !== undefined"
-        class="k12-tab-count"
-        aria-hidden="true"
-        :data-count="tab.count"
-      />
-    </button>
+      <span class="k12-secondary-tabs__label">周期</span>
+      <button
+        v-for="tab in props.tabs"
+        :key="tab.key"
+        type="button"
+        class="source-tag"
+        role="tab"
+        :aria-selected="props.modelValue === tab.key"
+        :aria-label="tab.label"
+        :class="{ on: props.modelValue === tab.key }"
+        :data-testid="tab.testId"
+        @click="emit('select', tab.key)"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+    <template v-else>
+      <button
+        v-for="tab in props.tabs"
+        :key="tab.key"
+        type="button"
+        role="tab"
+        :aria-selected="props.modelValue === tab.key"
+        :aria-label="tab.count === undefined ? tab.label : `${tab.label} ${tab.count}`"
+        :class="{ on: props.modelValue === tab.key }"
+        :data-testid="tab.testId"
+        @click="emit('select', tab.key)"
+      >
+        {{ tab.label }}
+        <span
+          v-if="tab.count !== undefined"
+          class="k12-tab-count"
+          aria-hidden="true"
+          :data-count="tab.count"
+        />
+      </button>
+    </template>
   </div>
 </template>
 
@@ -100,6 +134,53 @@ const emit = defineEmits<{
 }
 .k12-book-tabs button.on .k12-tab-count {
   background: color-mix(in srgb, var(--hc-accent) 15%, transparent);
+  color: var(--hc-accent);
+}
+
+.k12-secondary-tabs.k12-book-tabs {
+  display: grid;
+  flex: 1 1 280px;
+  box-sizing: border-box;
+  gap: 9px;
+  max-width: none;
+  overflow: visible;
+  height: 55px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+}
+.k12-secondary-tabs__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.k12-secondary-tabs__label {
+  width: 38px;
+  flex: none;
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.k12-secondary-tabs__row .source-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px 8px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 9px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.k12-secondary-tabs__row .source-tag.on {
+  border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
+  background: var(--hc-accent-subtle);
   color: var(--hc-accent);
 }
 </style>

@@ -13,8 +13,14 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
 
   it('places weekly artifact actions in the weekly period toolbar', () => {
     expect(recordsSource.includes('<template #toolbar-actions>')).toBe(true)
-    expect(weeklyPracticeSource.includes('class="weekly-toolbar"')).toBe(true)
+    expect(/class="[^"]*\bweekly-toolbar\b/.test(weeklyPracticeSource)).toBe(true)
     expect(weeklyPracticeSource.includes('<slot name="toolbar-actions"')).toBe(true)
+  })
+
+  it('keeps the object toolbar at the prototype 42px track height', () => {
+    expect(recordsSource).toMatch(
+      /\.k12rec__tabs\s*\{[^}]*padding:\s*2px\s+14px\s+3px/s,
+    )
   })
 
   it('keeps the approved compact weekly layout and lifecycle copy', () => {
@@ -33,6 +39,12 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
         'grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.9fr) auto',
       ),
     ).toBe(true)
+    expect(weeklyPracticeSource).toMatch(
+      /\.weekly-item\.resource-row \.weekly-item__prompt :deep\(\.markdown-body\)\s*\{[^}]*font-weight:\s*700/s,
+    )
+    expect(weeklyPracticeSource).toMatch(
+      /\.weekly-item\.resource-row \.weekly-item__prompt\s*\{[^}]*flex:\s*0 0 250px/s,
+    )
   })
 
   it('does not expand the approved compact creative-work collection cards', () => {

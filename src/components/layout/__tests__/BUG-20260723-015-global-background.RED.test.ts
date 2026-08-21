@@ -8,6 +8,10 @@ const prototype = readFileSync(
 )
 const globalCSS = readFileSync(resolve(__dirname, '../../../assets/styles/global.css'), 'utf8')
 const appLayout = readFileSync(resolve(__dirname, '../AppLayout.vue'), 'utf8')
+const k12Presentation = readFileSync(
+  resolve(__dirname, '../../../features/k12/appearance/K12GlobalPresentation.vue'),
+  'utf8',
+)
 
 function cssBlock(source: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -55,5 +59,11 @@ describe('BUG-20260723-015 — app shell background layers match the prototype e
 
     expect(prototypeGlowCount).toBe(1)
     expect(implementationGlowCount).toBe(prototypeGlowCount)
+  })
+
+  it('keeps the approved glow visible when K12 hides only the shell texture', () => {
+    expect(k12Presentation).not.toMatch(
+      /:global\(body\[data-k12-skin-active='k12'\] \.hc-app__body::after\),\s*:global\(body\[data-k12-skin-active='k12'\] \.hc-app__glow\)\s*\{[^}]*opacity:\s*0/s,
+    )
   })
 })

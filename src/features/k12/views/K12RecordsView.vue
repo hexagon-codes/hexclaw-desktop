@@ -2294,7 +2294,7 @@ async function doExportMd() {
   align-items: center;
   gap: 9px;
   flex-wrap: wrap;
-  padding: 10px 14px;
+  padding: 2px 14px 3px;
   border-bottom: 0.5px solid var(--hc-border);
 }
 .k12rec__sp {

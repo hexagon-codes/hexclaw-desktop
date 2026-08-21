@@ -50,10 +50,26 @@ function actionDisabled(action: FinalArtifactAction) {
       :key="action"
       type="button"
       data-governed-button="k12-action"
-      :class="{ 'final-artifact-actions__primary': primaryAction === action }"
+      :class="[
+        'btn',
+        {
+          'btn-primary': primaryAction === action,
+          'final-artifact-actions__primary': primaryAction === action,
+        },
+      ]"
       :disabled="actionDisabled(action)"
       @click="dispatch(action)"
     >
+      <svg
+        v-if="action === 'print'"
+        class="final-artifact-actions__icon"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        <path d="M6 9V2h12v7" />
+        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5h-2" />
+        <path d="M6 14h12v8H6z" />
+      </svg>
       {{ actionLabel(action) }}
     </button>
     <span v-if="disabledReason" class="final-artifact-actions__reason" role="status">
@@ -69,22 +85,20 @@ function actionDisabled(action: FinalArtifactAction) {
   gap: 8px;
 }
 .final-artifact-actions button {
-  border: 1px solid var(--hc-border);
-  border-radius: 8px;
-  background: var(--hc-bg-card);
-  color: var(--hc-text-primary);
-  padding: 6px 10px;
-  font: inherit;
-  cursor: pointer;
+  flex: none;
+}
+.final-artifact-actions__icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 .final-artifact-actions button:disabled {
   cursor: default;
   opacity: 0.55;
-}
-.final-artifact-actions button.final-artifact-actions__primary {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent);
-  color: var(--hc-text-on-accent, #fff);
 }
 .final-artifact-actions__reason {
   align-self: center;
