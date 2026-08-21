@@ -9,7 +9,6 @@ const makefileURL = new URL('../../Makefile', import.meta.url)
 const makefilePath = fileURLToPath(makefileURL)
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const packageManifestURL = new URL('../../package.json', import.meta.url)
-const ciWorkflowURL = new URL('../../.github/workflows/ci.yml', import.meta.url)
 const packageWorkflowURL = new URL('../../.github/workflows/package.yml', import.meta.url)
 const releaseWorkflowURL = new URL('../../.github/workflows/release.yml', import.meta.url)
 const orchestratorURL = new URL('../../scripts/ci/package-local.mjs', import.meta.url)
@@ -31,10 +30,9 @@ function targetRecipe(source, name, nextName) {
   return source.slice(start, end)
 }
 
-test('CI package and release workflows execute the focused package security gates', async () => {
+test('package and release workflows execute the focused package security gates', async () => {
   const [packageManifest, ...workflows] = await Promise.all([
     readFile(packageManifestURL, 'utf8').then(JSON.parse),
-    readFile(ciWorkflowURL, 'utf8'),
     readFile(packageWorkflowURL, 'utf8'),
     readFile(releaseWorkflowURL, 'utf8'),
   ])

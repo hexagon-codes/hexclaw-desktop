@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -186,8 +186,15 @@ async function mountWithRouter(component: object, initialPath: string) {
     },
   })
 
+  mountedWrappers.push(wrapper)
   return { wrapper, router }
 }
+
+const mountedWrappers: ReturnType<typeof mount>[] = []
+
+afterEach(() => {
+  for (const wrapper of mountedWrappers.splice(0)) wrapper.unmount()
+})
 
 describe('Workspace flows', () => {
   beforeEach(() => {

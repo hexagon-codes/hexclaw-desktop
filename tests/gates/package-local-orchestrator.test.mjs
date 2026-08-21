@@ -353,6 +353,8 @@ test('package command failures expose only allowlisted redacted categories', asy
 
 test('dependency provenance binds Go to GOROOT and pnpm to the frozen standalone CLI', async () => {
   const { createDependencyProvenanceOptions, createPackageLocalPlan } = await import(moduleURL)
+  const pnpmWorkerNativeName = `reflink.darwin-${process.arch}-fixture.node`
+  const pnpmWorkerNativePath = `/generation/toolchains/pnpm-package/dist/${pnpmWorkerNativeName}`
   const plan = createPackageLocalPlan({
     desktopRoot: '/workspace/hexclaw-desktop',
     generationId: '8'.repeat(32),
@@ -392,9 +394,9 @@ test('dependency provenance binds Go to GOROOT and pnpm to the frozen standalone
             path: 'dist/worker.js',
           },
           {
-            canonical: '/generation/toolchains/pnpm-package/dist/reflink.darwin-x64-fixture.node',
+            canonical: pnpmWorkerNativePath,
             executableSha256: '1'.repeat(64),
-            path: 'dist/reflink.darwin-x64-fixture.node',
+            path: `dist/${pnpmWorkerNativeName}`,
           },
           {
             canonical: '/generation/toolchains/pnpm-package/package.json',
@@ -415,10 +417,10 @@ test('dependency provenance binds Go to GOROOT and pnpm to the frozen standalone
   assert.equal(options.pnpm.workerSha256, 'f'.repeat(64))
   assert.equal(
     options.pnpm.workerNativeExecutable,
-    '/generation/toolchains/pnpm-package/dist/reflink.darwin-x64-fixture.node',
+    pnpmWorkerNativePath,
   )
   assert.equal(options.pnpm.workerNativeSha256, '1'.repeat(64))
-  assert.equal(options.pnpm.workerNativeName, 'reflink.darwin-x64-fixture.node')
+  assert.equal(options.pnpm.workerNativeName, pnpmWorkerNativeName)
   assert.equal(options.pnpm.packageExecutable, '/generation/toolchains/pnpm-package/package.json')
   assert.equal(options.pnpm.packageSha256, '2'.repeat(64))
 })
