@@ -281,7 +281,8 @@ export default {
       effortAriaLabel: 'Thinking effort',
       strategy: 'Thinking strategy',
       defaultStrategy: 'Default thinking strategy',
-      defaultStrategyHint: 'Used for new conversations, agents without an override, and automated runs',
+      defaultStrategyHint:
+        'Used for new conversations, agents without an override, and automated runs',
       selectStrategy: 'Choose the thinking strategy for this run',
       inherit: 'Follow global (default)',
       auto: 'Auto (recommended)',
@@ -326,6 +327,7 @@ export default {
     selectArtifact: 'Select an artifact to view details',
     clearChat: 'Clear Chat',
     receivedReply: 'Reply received',
+    builtinSkillNoModel: 'Built-in Skill · No model invoked',
     noModels: 'No models configured',
     typing: 'Typing...',
     botName: 'Little Crab',

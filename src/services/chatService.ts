@@ -39,12 +39,22 @@ export class ChatRequestError extends Error {
   }
 }
 
-export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
     promise
-      .then((v) => { clearTimeout(timer); resolve(v) })
-      .catch((e) => { clearTimeout(timer); reject(e) })
+      .then((v) => {
+        clearTimeout(timer)
+        resolve(v)
+      })
+      .catch((e) => {
+        clearTimeout(timer)
+        reject(e)
+      })
   })
 }
 
@@ -52,14 +62,36 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 
 export interface StreamCallbacks {
   onChunk?: (content: string, reasoning?: string, runtimeFrame?: RuntimeWireFrame) => void
-  onDone?: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string, messageContent?: MessageContent) => void
+  onDone?: (
+    content: string,
+    metadata?: Record<string, unknown>,
+    toolCalls?: ChatMessage['tool_calls'],
+    agentName?: string,
+    messageContent?: MessageContent,
+  ) => void
   onApprovalRequest?: (request: ToolApprovalRequest) => void
-  onSnapshot?: (snapshot: { content: string; reasoning?: string; metadata?: Record<string, unknown>; done?: boolean; messageContent?: MessageContent; runtimeFrame?: RuntimeWireFrame }) => void
+  onSnapshot?: (snapshot: {
+    content: string
+    reasoning?: string
+    metadata?: Record<string, unknown>
+    done?: boolean
+    messageContent?: MessageContent
+    runtimeFrame?: RuntimeWireFrame
+  }) => void
   onMemorySaved?: (content: string) => void
 }
 
 interface StreamWsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'tool_permission_request' | 'tool_approval_terminal' | 'memory_saved' | 'stream_snapshot'
+  type:
+    | 'chunk'
+    | 'reply'
+    | 'error'
+    | 'pong'
+    | 'tool_approval_request'
+    | 'tool_permission_request'
+    | 'tool_approval_terminal'
+    | 'memory_saved'
+    | 'stream_snapshot'
   content: string
   message_content?: MessageContent
   render_manifest?: RenderManifest
@@ -133,8 +165,14 @@ function foldRetrievalHits(
   metadata: Record<string, unknown> | undefined,
   source: { knowledge_hits?: unknown; memory_hits?: unknown },
 ): Record<string, unknown> | undefined {
-  const kh = Array.isArray(source.knowledge_hits) && source.knowledge_hits.length > 0 ? source.knowledge_hits : undefined
-  const mh = Array.isArray(source.memory_hits) && source.memory_hits.length > 0 ? source.memory_hits : undefined
+  const kh =
+    Array.isArray(source.knowledge_hits) && source.knowledge_hits.length > 0
+      ? source.knowledge_hits
+      : undefined
+  const mh =
+    Array.isArray(source.memory_hits) && source.memory_hits.length > 0
+      ? source.memory_hits
+      : undefined
   if (!kh && !mh) return metadata
   const merged: Record<string, unknown> = { ...metadata }
   if (kh) merged.knowledge_hits = kh
@@ -165,6 +203,49 @@ export interface ToolApprovalDecisionWire {
   decision: 'approved_once' | 'approved_remember' | 'denied'
   idempotency_key: string
   reason?: string
+}
+
+export interface ToolApprovalResponseIdentity {
+  requestId: string
+  sessionId: string
+  ownerId?: string
+  invocationId?: string
+  argumentsDigest?: string
+  securityScopeDigest?: string
+  scopeSchemaVersion?: number
+  deadlineAt?: string
+}
+
+export function createToolApprovalResponseWire(
+  decision: ToolApprovalDecisionWire,
+  identity: ToolApprovalResponseIdentity,
+): Record<string, unknown> {
+  return {
+    type: 'tool_approval_response',
+    content: decision.decision,
+    request_id: identity.requestId,
+    session_id: identity.sessionId,
+    owner_id: identity.ownerId,
+    decision_id: decision.decision_id,
+    invocation_id: identity.invocationId,
+    arguments_digest: identity.argumentsDigest,
+    security_scope_digest: identity.securityScopeDigest,
+    scope_schema_version: identity.scopeSchemaVersion,
+    deadline_at: identity.deadlineAt,
+    metadata: {
+      request_id: identity.requestId,
+      session_id: identity.sessionId,
+      owner_id: identity.ownerId,
+      decision_id: decision.decision_id,
+      invocation_id: identity.invocationId,
+      decision: decision.decision,
+      idempotency_key: decision.idempotency_key,
+      arguments_digest: identity.argumentsDigest,
+      security_scope_digest: identity.securityScopeDigest,
+      scope_schema_version: identity.scopeSchemaVersion?.toString(),
+      deadline_at: identity.deadlineAt,
+    },
+  }
 }
 
 export interface ToolApprovalAckWire {
@@ -213,7 +294,7 @@ function nonEmptyWireString(value: unknown): value is string {
 function wireMetadata(data: Record<string, unknown>): Record<string, unknown> | undefined {
   const metadata = data.metadata
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-    ? metadata as Record<string, unknown>
+    ? (metadata as Record<string, unknown>)
     : undefined
 }
 
@@ -233,20 +314,22 @@ function wirePositiveInteger(data: Record<string, unknown>, key: string): number
     : undefined
 }
 
-export function parseToolApprovalTerminal(data: Record<string, unknown>): ToolApprovalTerminalWire | null {
+export function parseToolApprovalTerminal(
+  data: Record<string, unknown>,
+): ToolApprovalTerminalWire | null {
   if (
-    data.type !== 'tool_approval_terminal'
-    || !nonEmptyWireString(data.request_id)
-    || !nonEmptyWireString(data.session_id)
-    || !nonEmptyWireString(data.owner_id)
-    || !nonEmptyWireString(data.invocation_id)
-    || !nonEmptyWireString(data.arguments_digest)
-    || !nonEmptyWireString(data.security_scope_digest)
-    || !Number.isSafeInteger(data.scope_schema_version)
-    || Number(data.scope_schema_version) <= 0
-    || (data.terminal_result !== 'expired' && data.terminal_result !== 'fenced')
-    || 'decision_id' in data
-    || 'idempotency_key' in data
+    data.type !== 'tool_approval_terminal' ||
+    !nonEmptyWireString(data.request_id) ||
+    !nonEmptyWireString(data.session_id) ||
+    !nonEmptyWireString(data.owner_id) ||
+    !nonEmptyWireString(data.invocation_id) ||
+    !nonEmptyWireString(data.arguments_digest) ||
+    !nonEmptyWireString(data.security_scope_digest) ||
+    !Number.isSafeInteger(data.scope_schema_version) ||
+    Number(data.scope_schema_version) <= 0 ||
+    (data.terminal_result !== 'expired' && data.terminal_result !== 'fenced') ||
+    'decision_id' in data ||
+    'idempotency_key' in data
   ) {
     return null
   }
@@ -280,9 +363,15 @@ export function parseToolApprovalReconciliationAck(
   const idempotencyKey = wireString(data, 'idempotency_key')
   const status = wireString(data, 'status')
   if (
-    !requestID || !sessionID || !ownerID || !invocationID ||
-    !argumentsDigest || !securityScopeDigest || !scopeSchemaVersion ||
-    !decisionID || !idempotencyKey ||
+    !requestID ||
+    !sessionID ||
+    !ownerID ||
+    !invocationID ||
+    !argumentsDigest ||
+    !securityScopeDigest ||
+    !scopeSchemaVersion ||
+    !decisionID ||
+    !idempotencyKey ||
     (decision !== 'approved_once' && decision !== 'approved_remember' && decision !== 'denied') ||
     (status !== 'accepted' && status !== 'already_accepted')
   ) {
@@ -355,6 +444,7 @@ function consumeToolApprovalAck(data: Record<string, unknown>): boolean {
 function sendToolApprovalResponse(
   socket: NativeSidecarWebSocket,
   decision: ToolApprovalDecisionWire,
+  identity: ToolApprovalResponseIdentity,
 ): Promise<ToolApprovalAckWire> {
   if (socket.readyState !== NativeSidecarWebSocket.OPEN) {
     return Promise.reject(new Error('Owning approval request socket is not connected'))
@@ -363,27 +453,12 @@ function sendToolApprovalResponse(
   return new Promise<ToolApprovalAckWire>((resolve, reject) => {
     approvalAckWaiters.set(decision.decision_id, {
       socket,
-      requestId: decision.request_id,
+      requestId: identity.requestId,
       resolve,
       reject,
     })
     try {
-      socket.send(JSON.stringify({
-        type: 'tool_approval_response',
-        content: decision.decision,
-        request_id: decision.request_id,
-        decision_id: decision.decision_id,
-        invocation_id: decision.invocation_id,
-        metadata: {
-          request_id: decision.request_id,
-          decision_id: decision.decision_id,
-          invocation_id: decision.invocation_id,
-          decision: decision.decision,
-          idempotency_key: decision.idempotency_key,
-          arguments_digest: decision.arguments_digest,
-          security_scope_digest: decision.security_scope_digest,
-        },
-      }))
+      socket.send(JSON.stringify(createToolApprovalResponseWire(decision, identity)))
     } catch (error) {
       approvalAckWaiters.delete(decision.decision_id)
       reject(error instanceof Error ? error : new Error(String(error)))
@@ -414,12 +489,21 @@ export function sendViaWebSocket(
     let inactivityTimer: ReturnType<typeof setTimeout> | null = null
 
     function clearTimers() {
-      if (firstReplyTimer) { clearTimeout(firstReplyTimer); firstReplyTimer = null }
-      if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null }
+      if (firstReplyTimer) {
+        clearTimeout(firstReplyTimer)
+        firstReplyTimer = null
+      }
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer)
+        inactivityTimer = null
+      }
     }
 
     function markActivity() {
-      if (firstReplyTimer) { clearTimeout(firstReplyTimer); firstReplyTimer = null }
+      if (firstReplyTimer) {
+        clearTimeout(firstReplyTimer)
+        firstReplyTimer = null
+      }
       if (inactivityTimer) clearTimeout(inactivityTimer)
       inactivityTimer = setTimeout(() => {
         fail(new ChatRequestError('Assistant reply stalled — no new content received.', false))
@@ -443,9 +527,8 @@ export function sendViaWebSocket(
       if (merged.frame) runtimeSnapshot = merged.snapshot
       markActivity()
       if (chunk.content) accumulatedContent += chunk.content
-      const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
-        ? chunk.reasoning
-        : undefined
+      const publicReasoning =
+        merged.frame?.reasoningDisclosure.visibility === 'visible' ? chunk.reasoning : undefined
       callbacks?.onChunk?.(chunk.content, publicReasoning, merged.frame)
       if (chunk.done && !settled) {
         settled = true
@@ -561,8 +644,8 @@ function openRequestSocket(
     cleanup()
     try {
       if (
-        ws.readyState === NativeSidecarWebSocket.OPEN
-        || ws.readyState === NativeSidecarWebSocket.CONNECTING
+        ws.readyState === NativeSidecarWebSocket.OPEN ||
+        ws.readyState === NativeSidecarWebSocket.CONNECTING
       ) {
         ws.close()
       }
@@ -578,8 +661,8 @@ function openRequestSocket(
     cleanup()
     try {
       if (
-        ws.readyState === NativeSidecarWebSocket.OPEN
-        || ws.readyState === NativeSidecarWebSocket.CONNECTING
+        ws.readyState === NativeSidecarWebSocket.OPEN ||
+        ws.readyState === NativeSidecarWebSocket.CONNECTING
       ) {
         ws.close()
       }
@@ -608,7 +691,9 @@ function openRequestSocket(
     }
     inactivityTimer = setTimeout(() => {
       sendRequestCancel()
-      settleReject(new ChatRequestError('Assistant reply stalled — no new content received.', false))
+      settleReject(
+        new ChatRequestError('Assistant reply stalled — no new content received.', false),
+      )
     }, WS_INACTIVITY_TIMEOUT_MS)
   }
 
@@ -640,16 +725,14 @@ function openRequestSocket(
     }
 
     switch (msg.type) {
-      case 'chunk':
-        {
+      case 'chunk': {
         const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
         if (!merged.accepted || (msg.sequence && !merged.frame)) break
         if (merged.frame) runtimeSnapshot = merged.snapshot
         markActivity()
         if (msg.content) accumulatedContent += msg.content
-        const publicReasoning = merged.frame?.reasoningDisclosure.visibility === 'visible'
-          ? msg.reasoning
-          : undefined
+        const publicReasoning =
+          merged.frame?.reasoningDisclosure.visibility === 'visible' ? msg.reasoning : undefined
         callbacks?.onChunk?.(msg.content, publicReasoning, merged.frame)
         if (msg.done) {
           settleResolve({
@@ -658,28 +741,34 @@ function openRequestSocket(
             metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,
-            agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
+            agentName:
+              typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
         }
         break
-        }
-      case 'stream_snapshot':
-        {
-        const hasAtomicRuntimeSnapshot = msg.last_sequence !== undefined
-          || msg.metadata?.last_sequence !== undefined
-          || Array.isArray(msg.runtime_events)
-          || Array.isArray(msg.metadata?.runtime_events)
+      }
+      case 'stream_snapshot': {
+        const hasAtomicRuntimeSnapshot =
+          msg.last_sequence !== undefined ||
+          msg.metadata?.last_sequence !== undefined ||
+          Array.isArray(msg.runtime_events) ||
+          Array.isArray(msg.metadata?.runtime_events)
         let runtimeFrame: RuntimeWireFrame | undefined
         if (hasAtomicRuntimeSnapshot) {
-          const snapshotMetadata = normalizeRuntimeSnapshotMetadata({
-            ...msg.metadata,
-            assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
-            message_id: msg.message_id ?? msg.metadata?.message_id,
-            reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
-            reasoning_receipt: msg.reasoning_receipt ?? msg.metadata?.reasoning_receipt,
-            runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
-            last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
-          }, undefined, route, runtimeSnapshot.reasoningReceipt.reasoning_request)
+          const snapshotMetadata = normalizeRuntimeSnapshotMetadata(
+            {
+              ...msg.metadata,
+              assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
+              message_id: msg.message_id ?? msg.metadata?.message_id,
+              reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
+              reasoning_receipt: msg.reasoning_receipt ?? msg.metadata?.reasoning_receipt,
+              runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
+              last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
+            },
+            undefined,
+            route,
+            runtimeSnapshot.reasoningReceipt.reasoning_request,
+          )
           runtimeSnapshot = {
             assistantMessageId: snapshotMetadata.assistant_message_id,
             aliases: snapshotMetadata.assistant_message_aliases ?? [],
@@ -699,9 +788,8 @@ function openRequestSocket(
           runtimeFrame = merged.frame
         }
         markActivity()
-        const publicReasoning = runtimeSnapshot.reasoningDisclosure?.visibility === 'visible'
-          ? msg.reasoning
-          : undefined
+        const publicReasoning =
+          runtimeSnapshot.reasoningDisclosure?.visibility === 'visible' ? msg.reasoning : undefined
         callbacks?.onSnapshot?.({
           content: msg.content,
           reasoning: publicReasoning,
@@ -716,13 +804,13 @@ function openRequestSocket(
             messageContent: msg.message_content,
             metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
-            agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
+            agentName:
+              typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
         }
         break
-        }
-      case 'reply':
-        {
+      }
+      case 'reply': {
         const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
         if (!merged.accepted || (msg.sequence && !merged.frame)) break
         if (merged.frame) runtimeSnapshot = merged.snapshot
@@ -732,10 +820,11 @@ function openRequestSocket(
           messageContent: msg.message_content,
           metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
           toolCalls: msg.tool_calls,
-          agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
+          agentName:
+            typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
         })
         break
-        }
+      }
       case 'error':
         if (msg.content === USER_CANCELLED_MESSAGE) {
           settleResolve(null)
@@ -744,8 +833,7 @@ function openRequestSocket(
         settleReject(new ChatRequestError(msg.content || 'WebSocket request failed', true))
         break
       case 'tool_approval_request':
-      case 'tool_permission_request':
-        {
+      case 'tool_permission_request': {
         clearTimers()
         const approvalMessage = msg as unknown as {
           request_id?: unknown
@@ -753,53 +841,85 @@ function openRequestSocket(
           scope_schema_version?: unknown
           metadata?: Record<string, unknown>
         }
-        const approvalRequestId = typeof approvalMessage.request_id === 'string'
-          ? approvalMessage.request_id
-          : (typeof approvalMessage.metadata?.request_id === 'string'
+        const approvalRequestId =
+          typeof approvalMessage.request_id === 'string'
+            ? approvalMessage.request_id
+            : typeof approvalMessage.metadata?.request_id === 'string'
               ? approvalMessage.metadata.request_id
-              : '')
+              : ''
+        const approvalOwnerId =
+          typeof msg.owner_id === 'string'
+            ? msg.owner_id
+            : typeof msg.metadata?.owner_id === 'string'
+              ? msg.metadata.owner_id
+              : undefined
+        const approvalInvocationId =
+          typeof msg.invocation_id === 'string'
+            ? msg.invocation_id
+            : typeof msg.metadata?.invocation_id === 'string'
+              ? msg.metadata.invocation_id
+              : undefined
+        const approvalArgumentsDigest =
+          typeof msg.arguments_digest === 'string'
+            ? msg.arguments_digest
+            : typeof msg.metadata?.arguments_digest === 'string'
+              ? msg.metadata.arguments_digest
+              : undefined
+        const approvalSecurityScopeDigest =
+          typeof msg.security_scope_digest === 'string'
+            ? msg.security_scope_digest
+            : typeof msg.metadata?.security_scope_digest === 'string'
+              ? msg.metadata.security_scope_digest
+              : undefined
+        const approvalScopeSchemaVersion = Number.isSafeInteger(
+          approvalMessage.scope_schema_version,
+        )
+          ? Number(approvalMessage.scope_schema_version)
+          : typeof approvalMessage.metadata?.scope_schema_version === 'string' &&
+              /^\d+$/.test(approvalMessage.metadata.scope_schema_version)
+            ? Number(approvalMessage.metadata.scope_schema_version)
+            : undefined
+        const approvalSessionId = msg.session_id || sessionId
+        const approvalDeadlineAt =
+          typeof approvalMessage.deadline_at === 'string'
+            ? approvalMessage.deadline_at
+            : typeof approvalMessage.metadata?.deadline_at === 'string'
+              ? approvalMessage.metadata.deadline_at
+              : undefined
+        const approvalResponseIdentity: ToolApprovalResponseIdentity = {
+          requestId: approvalRequestId,
+          sessionId: approvalSessionId,
+          ownerId: approvalOwnerId,
+          invocationId: approvalInvocationId,
+          argumentsDigest: approvalArgumentsDigest,
+          securityScopeDigest: approvalSecurityScopeDigest,
+          scopeSchemaVersion: approvalScopeSchemaVersion,
+          deadlineAt: approvalDeadlineAt,
+        }
         const approvalRequest = {
           requestId: approvalRequestId,
-          ownerId: typeof msg.owner_id === 'string'
-            ? msg.owner_id
-            : (typeof msg.metadata?.owner_id === 'string' ? msg.metadata.owner_id : undefined),
-          invocationId: typeof msg.invocation_id === 'string'
-            ? msg.invocation_id
-            : (typeof msg.metadata?.invocation_id === 'string' ? msg.metadata.invocation_id : undefined),
-          toolName: typeof msg.tool_name === 'string'
-            ? msg.tool_name
-            : (typeof msg.metadata?.tool_name === 'string' ? msg.metadata.tool_name : ''),
+          ownerId: approvalOwnerId,
+          invocationId: approvalInvocationId,
+          toolName:
+            typeof msg.tool_name === 'string'
+              ? msg.tool_name
+              : typeof msg.metadata?.tool_name === 'string'
+                ? msg.metadata.tool_name
+                : '',
           arguments: msg.arguments,
-          argumentsDigest: typeof msg.arguments_digest === 'string'
-            ? msg.arguments_digest
-            : (typeof msg.metadata?.arguments_digest === 'string'
-                ? msg.metadata.arguments_digest
-                : undefined),
-          securityScopeDigest: typeof msg.security_scope_digest === 'string'
-            ? msg.security_scope_digest
-            : (typeof msg.metadata?.security_scope_digest === 'string'
-                ? msg.metadata.security_scope_digest
-                : undefined),
-          scopeSchemaVersion: Number.isSafeInteger(approvalMessage.scope_schema_version)
-            ? Number(approvalMessage.scope_schema_version)
-            : (typeof approvalMessage.metadata?.scope_schema_version === 'string'
-                && /^\d+$/.test(approvalMessage.metadata.scope_schema_version)
-              ? Number(approvalMessage.metadata.scope_schema_version)
-              : undefined),
+          argumentsDigest: approvalArgumentsDigest,
+          securityScopeDigest: approvalSecurityScopeDigest,
+          scopeSchemaVersion: approvalScopeSchemaVersion,
           risk: typeof msg.metadata?.risk === 'string' ? msg.metadata.risk : 'sensitive',
           reason: msg.content || '',
-          sessionId: msg.session_id || sessionId,
-          deadlineAt: typeof approvalMessage.deadline_at === 'string'
-            ? approvalMessage.deadline_at
-            : (typeof approvalMessage.metadata?.deadline_at === 'string'
-                ? approvalMessage.metadata.deadline_at
-                : undefined),
+          sessionId: approvalSessionId,
+          deadlineAt: approvalDeadlineAt,
           respondApproval: (decision: ToolApprovalDecisionWire) =>
-            sendToolApprovalResponse(ws, decision),
+            sendToolApprovalResponse(ws, decision, approvalResponseIdentity),
         }
         callbacks?.onApprovalRequest?.(approvalRequest)
         break
-        }
+      }
       case 'memory_saved':
         callbacks?.onMemorySaved?.(msg.content)
         break
@@ -847,20 +967,27 @@ export function openWebSocketStream(
     return { attachment_id: attachment.attachmentId }
   })
   const resolvedMetadata = withModelReasoningDefaults(chatParams.model, metadata)
-  return openRequestSocket(sessionId, requestId, callbacks, () => ({
-    type: 'message',
-    content: text,
-    request_id: requestId,
-    session_id: sessionId,
-    user_id: DESKTOP_USER_ID,
-    provider: chatParams.provider,
-    model: chatParams.model,
-    role: agentRole || undefined,
-    attachments: wsAttachments,
-    temperature: chatParams.temperature,
-    max_tokens: chatParams.maxTokens,
-    metadata: resolvedMetadata,
-  }), chatParams, reasoningRequestFromMetadata(resolvedMetadata))
+  return openRequestSocket(
+    sessionId,
+    requestId,
+    callbacks,
+    () => ({
+      type: 'message',
+      content: text,
+      request_id: requestId,
+      session_id: sessionId,
+      user_id: DESKTOP_USER_ID,
+      provider: chatParams.provider,
+      model: chatParams.model,
+      role: agentRole || undefined,
+      attachments: wsAttachments,
+      temperature: chatParams.temperature,
+      max_tokens: chatParams.maxTokens,
+      metadata: resolvedMetadata,
+    }),
+    chatParams,
+    reasoningRequestFromMetadata(resolvedMetadata),
+  )
 }
 
 export function resumeWebSocketStream(
@@ -869,12 +996,19 @@ export function resumeWebSocketStream(
   callbacks?: StreamCallbacks,
   reasoningRequest: ReasoningRequest = 'off',
 ): WebSocketStreamHandle {
-  return openRequestSocket(sessionId, requestId, callbacks, () => ({
-    type: 'resume',
-    session_id: sessionId,
-    request_id: requestId,
-    user_id: DESKTOP_USER_ID,
-  }), undefined, reasoningRequest)
+  return openRequestSocket(
+    sessionId,
+    requestId,
+    callbacks,
+    () => ({
+      type: 'resume',
+      session_id: sessionId,
+      request_id: requestId,
+      user_id: DESKTOP_USER_ID,
+    }),
+    undefined,
+    reasoningRequest,
+  )
 }
 
 // ─── WebSocket 连接管理 ──────────────────────────────

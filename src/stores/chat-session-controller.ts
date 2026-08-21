@@ -4,10 +4,7 @@ import { createChatSessionLoadingController } from './chat-session-loading'
 import type { ChatSessionControllerParams } from './chat-session-types'
 import { bumpSession, setSessionTitle, upsertSession } from './chat-session-helpers'
 export function createChatSessionController(params: ChatSessionControllerParams) {
-  const {
-    sessions,
-    pendingSuggestedTitleExpectation,
-  } = params
+  const { sessions, pendingSuggestedTitleExpectation } = params
 
   function upsertLocalSession(session: ChatSession, prepend = false) {
     sessions.value = upsertSession(sessions.value, session, prepend)
@@ -34,10 +31,11 @@ export function createChatSessionController(params: ChatSessionControllerParams)
     upsertLocalSession,
   })
 
-  async function deleteSession(sessionId: string) {
+  async function deleteSession(sessionId: string): Promise<boolean> {
     const removed = await lifecycleController.deleteSession(sessionId)
-    if (!removed) return
+    if (!removed) return false
     sessions.value = sessions.value.filter((session) => session.id !== sessionId)
+    return true
   }
 
   return {

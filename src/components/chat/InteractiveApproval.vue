@@ -29,6 +29,7 @@
     <div class="hc-interactive-approval__row">
       <button
         type="button"
+        data-governed-button="interactive-action"
         :class="[
           'hc-interactive-approval__btn',
           'is-approve',
@@ -42,6 +43,7 @@
       </button>
       <button
         type="button"
+        data-governed-button="interactive-action"
         :class="[
           'hc-interactive-approval__btn',
           'is-reject',

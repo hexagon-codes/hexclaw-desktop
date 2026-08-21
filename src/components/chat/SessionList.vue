@@ -459,7 +459,15 @@ async function performDeleteSession(sessionId: string) {
     savePins()
   }
   try {
-    await chatStore.deleteSession(sessionId)
+    const removed = await chatStore.deleteSession(sessionId)
+    if (!removed) {
+      if (wasPinned) {
+        pinnedIds.value.add(sessionId)
+        pinnedIds.value = new Set(pinnedIds.value)
+        savePins()
+      }
+      return
+    }
     chatStore.clearPendingApprovalsForSession(sessionId)
     // 分页加载的旧会话只存在于 extraSessions；删除成功后必须同步清理本地分页缓存，
     // 否则 API 已成功但列表仍残留，刷新前会形成“删除无效”的假象。

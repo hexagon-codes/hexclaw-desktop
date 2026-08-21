@@ -36,6 +36,7 @@
         v-for="btn in card.buttons"
         :key="btn.action"
         type="button"
+        data-governed-button="interactive-action"
         :class="[
           'hc-interactive-card__btn',
           btn.variant === 'primary' ? 'is-primary' : btn.variant === 'danger' ? 'is-danger' : 'is-secondary',

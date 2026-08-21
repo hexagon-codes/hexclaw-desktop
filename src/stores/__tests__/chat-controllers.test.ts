@@ -8,6 +8,7 @@ import { createChatMessageController } from '../chat-message-controller'
 import { createChatSendAutoTitleController } from '../chat-send-auto-title'
 import { createChatSendController } from '../chat-send-controller'
 import { createChatSendDeliveryController } from '../chat-send-delivery-controller'
+import { createChatSessionController } from '../chat-session-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from '../chat-send-guards'
 import { createChatSessionLifecycleController } from '../chat-session-lifecycle'
 import { createChatSessionLoadingController } from '../chat-session-loading'
@@ -64,29 +65,29 @@ describe('chat controller modules', () => {
   })
 
   it('stores, resolves, and clears pending approvals by request id', async () => {
-    const nowSpy = vi.spyOn(Date, 'now')
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(2_000)
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValueOnce(2_000)
     const pendingApprovals = ref({})
     const ws = {
       onApprovalRequest: vi.fn().mockReturnValue(() => {}),
       sendApprovalResponse: vi.fn(),
     }
     const approvalTransport = {
-      sendApprovalResponse: vi.fn((decision: RedApprovalDecision) => Promise.resolve({
-        type: 'tool_approval_ack' as const,
-        request_id: decision.request_id,
-        session_id: 's-1',
-        owner_id: 'desktop-user',
-        invocation_id: 'invocation-2',
-        arguments_digest: 'c'.repeat(64),
-        security_scope_digest: 'd'.repeat(64),
-        scope_schema_version: 1,
-        decision_id: decision.decision_id,
-        decision: decision.decision,
-        idempotency_key: decision.idempotency_key,
-        status: 'accepted' as const,
-      })),
+      sendApprovalResponse: vi.fn((decision: RedApprovalDecision) =>
+        Promise.resolve({
+          type: 'tool_approval_ack' as const,
+          request_id: decision.request_id,
+          session_id: 's-1',
+          owner_id: 'desktop-user',
+          invocation_id: 'invocation-2',
+          arguments_digest: 'c'.repeat(64),
+          security_scope_digest: 'd'.repeat(64),
+          scope_schema_version: 1,
+          decision_id: decision.decision_id,
+          decision: decision.decision,
+          idempotency_key: decision.idempotency_key,
+          status: 'accepted' as const,
+        }),
+      ),
     }
     const controller = createChatApprovalController({
       pendingApprovals,
@@ -247,7 +248,13 @@ describe('chat controller modules', () => {
 
   it('loadSessions preserves local title when pendingSuggestedTitleExpectation is set', async () => {
     const sessions = ref<any[]>([
-      { id: 's1', title: '上海好玩的地方', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 1 },
+      {
+        id: 's1',
+        title: '上海好玩的地方',
+        created_at: '2026-01-01',
+        updated_at: '2026-01-01',
+        message_count: 1,
+      },
     ])
     const pendingSuggestedTitleExpectation = ref<Record<string, string>>({ s1: '上海好玩的地方' })
 
@@ -270,7 +277,13 @@ describe('chat controller modules', () => {
       msgSvc: {
         // Backend returns the OLD title "新对话" (PATCH hasn't landed yet)
         loadAllSessions: vi.fn().mockResolvedValue([
-          { id: 's1', title: '新对话', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 1 },
+          {
+            id: 's1',
+            title: '新对话',
+            created_at: '2026-01-01',
+            updated_at: '2026-01-01',
+            message_count: 1,
+          },
         ]),
         getLastSessionId: vi.fn().mockResolvedValue(null),
         setLastSessionId: vi.fn(),
@@ -293,9 +306,12 @@ describe('chat controller modules', () => {
     let releaseCreate!: () => void
     const upsertLocalSession = vi.fn()
     const pendingSessionTitle = ref('临时标题')
-    const createSession = vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
-      releaseCreate = resolve
-    }))
+    const createSession = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCreate = resolve
+        }),
+    )
     const setLastSessionId = vi.fn()
     const currentSessionId = ref<string | null>(null)
     const controller = createChatSessionLifecycleController({
@@ -396,6 +412,44 @@ describe('chat controller modules', () => {
     expect(error.value).toBeNull()
     expect(syncStreamingMirrors).toHaveBeenCalled()
     expect(cancelledSessions.size).toBe(0)
+  })
+
+  it('BUG-20260723-007 preserves a failed deletion result for the caller', async () => {
+    const sessions = ref([{ id: 's1', title: '待删除会话' }] as any)
+    const controller = createChatSessionController({
+      sessions,
+      currentSessionId: ref<string | null>('s1'),
+      messages: ref([]),
+      artifacts: ref([]),
+      selectedArtifactId: ref<string | null>(null),
+      showArtifacts: ref(false),
+      error: ref(null),
+      chatMode: ref('chat'),
+      agentRole: ref(''),
+      thinkingEnabled: ref(false),
+      hasCustomTitle: ref(false),
+      pendingSessionTitle: ref(null),
+      pendingSessionIds: ref({}),
+      pendingSuggestedTitleExpectation: ref({}),
+      sessionSelectionGen: ref(0),
+      ensureSessionPromise: ref<Promise<string> | null>(null),
+      cancelledSessions: new Set<string>(),
+      msgSvc: {
+        deleteSession: vi.fn().mockRejectedValue(new Error('delete failed')),
+      } as any,
+      logger: { warn: vi.fn(), error: vi.fn() } as any,
+      createId: () => 'unused',
+      syncStreamingMirrors: vi.fn(),
+      isSessionStreaming: vi.fn().mockReturnValue(false),
+      stopSessionStream: vi.fn().mockReturnValue(false),
+      resetSessionStream: vi.fn(),
+      clearSessionCancelled: vi.fn(),
+      markSessionCancelled: vi.fn(),
+      extractArtifacts: vi.fn(),
+    })
+
+    await expect(controller.deleteSession('s1')).resolves.toBe(false)
+    expect(sessions.value).toHaveLength(1)
   })
 
   it('finalizes a completed stream, refreshes the session list, and keeps title sync conditional', async () => {
@@ -551,7 +605,9 @@ describe('chat controller modules', () => {
       logger: { warn: vi.fn() } as any,
       storePendingApproval,
       listActiveStreams: vi.fn().mockResolvedValue({
-        streams: [{ session_id: 's1', request_id: 'req-1', content: '恢复中', reasoning: '', done: false }],
+        streams: [
+          { session_id: 's1', request_id: 'req-1', content: '恢复中', reasoning: '', done: false },
+        ],
         total: 1,
       }) as any,
       isSessionCancelled: vi.fn().mockReturnValue(false),
@@ -774,7 +830,8 @@ describe('chat controller modules', () => {
   it('updates messages, persists the patch, and syncs assistant feedback with rollback', async () => {
     const touchSession = vi.fn().mockResolvedValue(undefined)
     const persistMessage = vi.fn().mockResolvedValue(true)
-    const updateMessageFeedback = vi.fn()
+    const updateMessageFeedback = vi
+      .fn()
       .mockResolvedValueOnce({ message: 'ok' })
       .mockRejectedValueOnce(new Error('sync failed'))
     const logger = { warn: vi.fn() }
@@ -805,7 +862,9 @@ describe('chat controller modules', () => {
     expect(liked?.metadata?.user_feedback).toBe('like')
     expect(updateMessageFeedback).toHaveBeenCalledWith('backend-1', 'like')
 
-    await expect(controller.setMessageFeedback('assist-1', 'dislike')).rejects.toThrow('sync failed')
+    await expect(controller.setMessageFeedback('assist-1', 'dislike')).rejects.toThrow(
+      'sync failed',
+    )
     expect(messages.value[0]?.metadata?.user_feedback).toBe('like')
   })
 
@@ -819,12 +878,20 @@ describe('chat controller modules', () => {
     const updateMessageFeedback = vi.fn().mockResolvedValue({ message: 'ok' })
     const logger = { warn: vi.fn() }
     const messages = ref<ChatMessage[]>([
-      { id: 'fastpath-local-xyz', role: 'assistant' as const, content: 'hi', timestamp: '2026-01-01' }, // 无 backend_message_id（边缘消息）
+      {
+        id: 'fastpath-local-xyz',
+        role: 'assistant' as const,
+        content: 'hi',
+        timestamp: '2026-01-01',
+      }, // 无 backend_message_id（边缘消息）
     ])
     const controller = createChatMessageController({
       currentSessionId: ref('s1'),
       messages,
-      msgSvc: { persistMessage: vi.fn().mockResolvedValue(true), touchSession: vi.fn().mockResolvedValue(undefined) } as any,
+      msgSvc: {
+        persistMessage: vi.fn().mockResolvedValue(true),
+        touchSession: vi.fn().mockResolvedValue(undefined),
+      } as any,
       chatApi: { updateMessageFeedback } as any,
       logger: logger as any,
     })
@@ -844,7 +911,7 @@ describe('chat controller modules', () => {
       thinkingEnabled: ref(true),
       activeStreams: ref({}),
       chatSvc: {} as any,
-      getSettingsStore: ((() => ({ config: { memory: { enabled: false } } })) as any),
+      getSettingsStore: (() => ({ config: { memory: { enabled: false } } })) as any,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
@@ -877,7 +944,7 @@ describe('chat controller modules', () => {
       thinkingEnabled: ref(false),
       activeStreams: ref({}),
       chatSvc: {} as any,
-      getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
+      getSettingsStore: (() => ({ config: { memory: { enabled: true } } })) as any,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
@@ -890,65 +957,79 @@ describe('chat controller modules', () => {
       streamHandles: new Map(),
     })
 
-    expect(controller.buildRequestMetadata({
-      agentRole: '',
-      chatParams: { provider: 'openai', model: 'gpt-5.6-sol' },
-      thinkingEnabled: true,
-      reasoningSupport: 'supported',
-      reasoningPolicy: { mode: 'effort', effort: 'high' },
-      reasoningControl: {
-        dialect: 'reasoning_effort',
-        on: 'high',
-        off: 'none',
-        allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      },
-    } as never)).toMatchObject({
+    expect(
+      controller.buildRequestMetadata({
+        agentRole: '',
+        chatParams: { provider: 'openai', model: 'gpt-5.6-sol' },
+        thinkingEnabled: true,
+        reasoningSupport: 'supported',
+        reasoningPolicy: { mode: 'effort', effort: 'high' },
+        reasoningControl: {
+          dialect: 'reasoning_effort',
+          on: 'high',
+          off: 'none',
+          allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        },
+      } as never),
+    ).toMatchObject({
       thinking: 'on',
       thinking_effort: 'high',
     })
   })
 
   it('applies send guards for pending/streaming sessions and auto-title seeding rules', () => {
-    expect(shouldBlockChatSend({
-      initialSessionId: 's1',
-      pendingSessionIds: { s1: true },
-      draftSending: false,
-      isSessionStreaming: vi.fn().mockReturnValue(false),
-    })).toBe(true)
+    expect(
+      shouldBlockChatSend({
+        initialSessionId: 's1',
+        pendingSessionIds: { s1: true },
+        draftSending: false,
+        isSessionStreaming: vi.fn().mockReturnValue(false),
+      }),
+    ).toBe(true)
 
-    expect(shouldBlockChatSend({
-      initialSessionId: null,
-      pendingSessionIds: {},
-      draftSending: true,
-      isSessionStreaming: vi.fn().mockReturnValue(false),
-    })).toBe(true)
+    expect(
+      shouldBlockChatSend({
+        initialSessionId: null,
+        pendingSessionIds: {},
+        draftSending: true,
+        isSessionStreaming: vi.fn().mockReturnValue(false),
+      }),
+    ).toBe(true)
 
-    expect(shouldSeedChatAutoTitle({
-      hasCustomTitle: false,
-      initialSessionId: null,
-      messages: [],
-      sessions: [],
-    })).toBe(true)
+    expect(
+      shouldSeedChatAutoTitle({
+        hasCustomTitle: false,
+        initialSessionId: null,
+        messages: [],
+        sessions: [],
+      }),
+    ).toBe(true)
 
-    expect(shouldSeedChatAutoTitle({
-      hasCustomTitle: false,
-      initialSessionId: 's1',
-      messages: [],
-      sessions: [{
-        id: 's1',
-        title: 'New Chat',
-        created_at: '2026-01-01',
-        updated_at: '2026-01-01',
-        message_count: 0,
-      }],
-    })).toBe(true)
+    expect(
+      shouldSeedChatAutoTitle({
+        hasCustomTitle: false,
+        initialSessionId: 's1',
+        messages: [],
+        sessions: [
+          {
+            id: 's1',
+            title: 'New Chat',
+            created_at: '2026-01-01',
+            updated_at: '2026-01-01',
+            message_count: 0,
+          },
+        ],
+      }),
+    ).toBe(true)
 
-    expect(shouldSeedChatAutoTitle({
-      hasCustomTitle: true,
-      initialSessionId: null,
-      messages: [],
-      sessions: [],
-    })).toBe(false)
+    expect(
+      shouldSeedChatAutoTitle({
+        hasCustomTitle: true,
+        initialSessionId: null,
+        messages: [],
+        sessions: [],
+      }),
+    ).toBe(false)
   })
 
   it('seeds a temporary auto title and clears pending sync state after persistence', async () => {
@@ -988,7 +1069,7 @@ describe('chat controller modules', () => {
         ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
         sendViaBackend,
       } as any,
-      getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
+      getSettingsStore: (() => ({ config: { memory: { enabled: true } } })) as any,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
@@ -1011,7 +1092,9 @@ describe('chat controller modules', () => {
 
     expect(result).toBeNull()
     expect(handleSendError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('WebSocket transport unavailable') }),
+      expect.objectContaining({
+        message: expect.stringContaining('WebSocket transport unavailable'),
+      }),
       's1',
       undefined,
     )
@@ -1051,12 +1134,12 @@ describe('chat controller modules', () => {
         ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
         openWebSocketStream: vi.fn().mockReturnValue({
           cancel: vi.fn(),
-          done: Promise.reject(new TestChatRequestError(
-            'Assistant reply stalled — no new content received.',
-          )),
+          done: Promise.reject(
+            new TestChatRequestError('Assistant reply stalled — no new content received.'),
+          ),
         }),
       } as any,
-      getSettingsStore: ((() => ({ config: { memory: { enabled: true } } })) as any),
+      getSettingsStore: (() => ({ config: { memory: { enabled: true } } })) as any,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
@@ -1078,7 +1161,9 @@ describe('chat controller modules', () => {
     })
 
     expect(handleSendError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('WebSocket transport unavailable') }),
+      expect.objectContaining({
+        message: expect.stringContaining('WebSocket transport unavailable'),
+      }),
       'session-idle',
       expect.objectContaining({
         requestId: 'req-idle',
@@ -1108,7 +1193,10 @@ describe('chat controller modules', () => {
         ),
         openWebSocketStream,
       } as any,
-      getSettingsStore: ((() => ({ config: { memory: { enabled: true } }, availableModels: [] })) as any),
+      getSettingsStore: (() => ({
+        config: { memory: { enabled: true } },
+        availableModels: [],
+      })) as any,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
@@ -1152,12 +1240,14 @@ describe('chat controller modules', () => {
 
   it('directs an edited version to its explicit branch without mutating the visible source session', async () => {
     const currentSessionId = ref<string | null>('source-session')
-    const sourceMessages = [{
-      id: 'source-user',
-      role: 'user' as const,
-      content: '原问题',
-      timestamp: '2026-07-24T00:00:00Z',
-    }]
+    const sourceMessages = [
+      {
+        id: 'source-user',
+        role: 'user' as const,
+        content: '原问题',
+        timestamp: '2026-07-24T00:00:00Z',
+      },
+    ]
     const messages = ref<ChatMessage[]>(sourceMessages.map((message) => ({ ...message })))
     const ensureSession = vi.fn().mockResolvedValue('wrong-current-session')
     const persistMessage = vi.fn().mockResolvedValue(true)
@@ -1196,10 +1286,10 @@ describe('chat controller modules', () => {
         openWebSocketStream,
       } as any,
       createId: () => 'edited-user-version',
-      getSettingsStore: ((() => ({
+      getSettingsStore: (() => ({
         config: { memory: { enabled: true } },
         availableModels: [],
-      })) as any),
+      })) as any,
       ensureSession,
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
@@ -1294,6 +1384,9 @@ describe('chat controller modules', () => {
 type RedApprovalDecision = {
   request_id: string
   decision_id: string
+  invocation_id?: string
+  arguments_digest?: string
+  security_scope_digest?: string
   decision: 'approved_once' | 'approved_remember' | 'denied'
   idempotency_key: string
   reason?: string
@@ -1377,6 +1470,7 @@ function redDeferred<T>() {
 
 async function createRedApprovalHarness(
   responder?: (decision: RedApprovalDecision) => Promise<RedApprovalAck>,
+  options: { includeApprovalTransport?: boolean } = {},
 ) {
   const [{ ref }, approvalModule] = await Promise.all([
     import('vue'),
@@ -1390,8 +1484,7 @@ async function createRedApprovalHarness(
   const reconnectListeners = new Set<() => void>()
   const ownerSendApprovalResponse = vi.fn(
     responder ??
-      ((decision: RedApprovalDecision) =>
-        Promise.resolve(redApprovalAcknowledgement(decision))),
+      ((decision: RedApprovalDecision) => Promise.resolve(redApprovalAcknowledgement(decision))),
   )
   const globalWebSocket = {
     sendApprovalResponse: globalSendApprovalResponse,
@@ -1419,10 +1512,14 @@ async function createRedApprovalHarness(
     ws: globalWebSocket,
     websocket: globalWebSocket,
     approvalCleanup: ref(null),
-    approvalTransport: { sendApprovalResponse: ownerSendApprovalResponse },
+    approvalTransport:
+      options.includeApprovalTransport === false
+        ? undefined
+        : { sendApprovalResponse: ownerSendApprovalResponse },
   }
-  const factory = (approvalModule as Record<string, unknown>)
-    .createChatApprovalController as (...args: unknown[]) => Record<string, unknown>
+  const factory = (approvalModule as Record<string, unknown>).createChatApprovalController as (
+    ...args: unknown[]
+  ) => Record<string, unknown>
   const controller =
     factory.length >= 2
       ? factory(state, globalWebSocket, dependencies.approvalTransport)
@@ -1516,9 +1613,7 @@ describe('chat approval transport lifecycle RED contract', () => {
     const harness = await createRedApprovalHarness(() => acknowledgement.promise)
     harness.store(redApprovalRequest())
 
-    const response = Promise.resolve(
-      harness.respond('approval-request-1', true, false),
-    )
+    const response = Promise.resolve(harness.respond('approval-request-1', true, false))
     await Promise.resolve()
 
     expect(harness.ownerSendApprovalResponse).toHaveBeenCalledTimes(1)
@@ -1537,9 +1632,9 @@ describe('chat approval transport lifecycle RED contract', () => {
     )
     harness.store(redApprovalRequest())
 
-    await expect(Promise.resolve(
-      harness.respond('approval-request-1', false, false),
-    )).resolves.toBeUndefined()
+    await expect(
+      Promise.resolve(harness.respond('approval-request-1', false, false)),
+    ).resolves.toBeUndefined()
 
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
   })
@@ -1550,9 +1645,9 @@ describe('chat approval transport lifecycle RED contract', () => {
     )
     harness.store(redApprovalRequest())
 
-    await expect(Promise.resolve(
-      harness.respond('approval-request-1', false, false),
-    )).resolves.toBeUndefined()
+    await expect(
+      Promise.resolve(harness.respond('approval-request-1', false, false)),
+    ).resolves.toBeUndefined()
 
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
   })
@@ -1568,27 +1663,30 @@ describe('chat approval transport lifecycle RED contract', () => {
       acknowledgement: (decision: RedApprovalDecision) =>
         redApprovalAcknowledgement(decision, { status: 'unknown' as unknown as 'accepted' }),
     },
-  ])('contains $label, retains pending, and reuses the same decision', async ({ acknowledgement }) => {
-    const harness = await createRedApprovalHarness((decision) =>
-      Promise.resolve(acknowledgement(decision) as RedApprovalAck),
-    )
-    harness.store(redApprovalRequest())
+  ])(
+    'contains $label, retains pending, and reuses the same decision',
+    async ({ acknowledgement }) => {
+      const harness = await createRedApprovalHarness((decision) =>
+        Promise.resolve(acknowledgement(decision) as RedApprovalAck),
+      )
+      harness.store(redApprovalRequest())
 
-    await expect(Promise.resolve(
-      harness.respond('approval-request-1', true, false),
-    )).resolves.toBeUndefined()
+      await expect(
+        Promise.resolve(harness.respond('approval-request-1', true, false)),
+      ).resolves.toBeUndefined()
 
-    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
-    const first = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+      const first = harness.ownerSendApprovalResponse.mock.calls[0]?.[0] as RedApprovalDecision
 
-    await expect(Promise.resolve(
-      harness.respond('approval-request-1', true, false),
-    )).resolves.toBeUndefined()
+      await expect(
+        Promise.resolve(harness.respond('approval-request-1', true, false)),
+      ).resolves.toBeUndefined()
 
-    const second = harness.ownerSendApprovalResponse.mock.calls[1]?.[0] as RedApprovalDecision
-    expect(second.decision_id).toBe(first.decision_id)
-    expect(second.idempotency_key).toBe(first.idempotency_key)
-  })
+      const second = harness.ownerSendApprovalResponse.mock.calls[1]?.[0] as RedApprovalDecision
+      expect(second.decision_id).toBe(first.decision_id)
+      expect(second.idempotency_key).toBe(first.idempotency_key)
+    },
+  )
 
   it.each([
     ['session_id', { session_id: 'other-session' }],
@@ -1597,18 +1695,21 @@ describe('chat approval transport lifecycle RED contract', () => {
     ['arguments_digest', { arguments_digest: 'c'.repeat(64) }],
     ['security_scope_digest', { security_scope_digest: 'd'.repeat(64) }],
     ['scope_schema_version', { scope_schema_version: 2 }],
-  ] as const)('retains pending when the owner acknowledgement mismatches %s', async (_field, overrides) => {
-    const harness = await createRedApprovalHarness((decision) =>
-      Promise.resolve(redApprovalAcknowledgement(decision, overrides)),
-    )
-    harness.store(redApprovalRequest())
+  ] as const)(
+    'retains pending when the owner acknowledgement mismatches %s',
+    async (_field, overrides) => {
+      const harness = await createRedApprovalHarness((decision) =>
+        Promise.resolve(redApprovalAcknowledgement(decision, overrides)),
+      )
+      harness.store(redApprovalRequest())
 
-    await expect(Promise.resolve(
-      harness.respond('approval-request-1', true, false),
-    )).resolves.toBeUndefined()
+      await expect(
+        Promise.resolve(harness.respond('approval-request-1', true, false)),
+      ).resolves.toBeUndefined()
 
-    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
-  })
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+    },
+  )
 
   it.each(['expired', 'fenced'] as const)(
     'clears a pending card only for a complete matching backend %s terminal identity',
@@ -1616,11 +1717,13 @@ describe('chat approval transport lifecycle RED contract', () => {
       const harness = await createRedApprovalHarness()
       harness.store(redApprovalRequest())
 
-      harness.terminal(redApprovalTerminal({
-        terminal_result: terminalResult,
-        // deadline_at 是传输上下文，不属于七项身份字段。
-        deadline_at: '2026-07-29T04:01:05.000Z',
-      }))
+      harness.terminal(
+        redApprovalTerminal({
+          terminal_result: terminalResult,
+          // deadline_at 是传输上下文，不属于七项身份字段。
+          deadline_at: '2026-07-29T04:01:05.000Z',
+        }),
+      )
 
       expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
       expect(harness.ownerSendApprovalResponse).not.toHaveBeenCalled()
@@ -1651,19 +1754,27 @@ describe('chat approval transport lifecycle RED contract', () => {
     ['owner_id', { ownerId: undefined }, { owner_id: undefined }],
     ['invocation_id', { invocationId: undefined }, { invocation_id: undefined }],
     ['arguments_digest', { argumentsDigest: undefined }, { arguments_digest: undefined }],
-    ['security_scope_digest', { securityScopeDigest: undefined }, { security_scope_digest: undefined }],
+    [
+      'security_scope_digest',
+      { securityScopeDigest: undefined },
+      { security_scope_digest: undefined },
+    ],
     ['scope_schema_version', { scopeSchemaVersion: 0 }, { scope_schema_version: 0 }],
-  ] as const)('does not clear a pending card when terminal identity is incomplete at %s', async (_field, request, terminal) => {
-    const harness = await createRedApprovalHarness()
-    harness.store(redApprovalRequest(request))
+  ] as const)(
+    'does not clear a pending card when terminal identity is incomplete at %s',
+    async (_field, request, terminal) => {
+      const harness = await createRedApprovalHarness()
+      harness.store(redApprovalRequest(request))
 
-    const requestId = 'requestId' in request && typeof request.requestId === 'string'
-      ? request.requestId
-      : 'approval-request-1'
-    harness.terminal(redApprovalTerminal(terminal as Partial<RedApprovalTerminal>))
+      const requestId =
+        'requestId' in request && typeof request.requestId === 'string'
+          ? request.requestId
+          : 'approval-request-1'
+      harness.terminal(redApprovalTerminal(terminal as Partial<RedApprovalTerminal>))
 
-    expect(Boolean(harness.pendingApprovals.value[requestId])).toBe(true)
-  })
+      expect(Boolean(harness.pendingApprovals.value[requestId])).toBe(true)
+    },
+  )
 
   it('reuses one stable decision_id when retrying the same user decision', async () => {
     let attempt = 0
@@ -1676,9 +1787,7 @@ describe('chat approval transport lifecycle RED contract', () => {
     })
     harness.store(redApprovalRequest())
 
-    await Promise.resolve(
-      harness.respond('approval-request-1', true, false),
-    ).catch(() => undefined)
+    await Promise.resolve(harness.respond('approval-request-1', true, false)).catch(() => undefined)
     await Promise.resolve(harness.respond('approval-request-1', true, false))
 
     expect(harness.ownerSendApprovalResponse).toHaveBeenCalledTimes(2)
@@ -1752,13 +1861,15 @@ describe('chat approval transport lifecycle RED contract', () => {
   it('sends one exact reconciliation query for every complete visible pending approval after global reconnect', async () => {
     const harness = await createRedApprovalHarness()
     harness.store(redApprovalRequest())
-    harness.store(redApprovalRequest({
-      requestId: 'approval-request-2',
-      sessionId: 'session-2',
-      invocationId: 'invocation-2',
-      argumentsDigest: 'c'.repeat(64),
-      securityScopeDigest: 'd'.repeat(64),
-    }))
+    harness.store(
+      redApprovalRequest({
+        requestId: 'approval-request-2',
+        sessionId: 'session-2',
+        invocationId: 'invocation-2',
+        argumentsDigest: 'c'.repeat(64),
+        securityScopeDigest: 'd'.repeat(64),
+      }),
+    )
     harness.init()
     harness.sendRaw.mockClear()
 
@@ -1790,31 +1901,23 @@ describe('chat approval transport lifecycle RED contract', () => {
     ])
   })
 
-  it.each([
-    ['owner identity', { ownerId: undefined }],
-    ['deadline', { deadlineAt: undefined }],
-  ] as const)('does not reconcile an incomplete pending approval missing %s and does not clear it on silence', async (_field, overrides) => {
+  it('retains a disconnected request decision through reconnect until the exact expired terminal arrives', async () => {
+    const disconnectedResponder = vi.fn(() =>
+      Promise.reject(new Error('Owning approval request socket is not connected')),
+    )
     const harness = await createRedApprovalHarness()
-    harness.store(redApprovalRequest(overrides))
+    harness.store(redApprovalRequest({ respondApproval: disconnectedResponder }))
+
+    await expect(
+      Promise.resolve(harness.respond('approval-request-1', true, false)),
+    ).resolves.toBeUndefined()
     harness.init()
     harness.sendRaw.mockClear()
 
     harness.reconnect()
 
-    expect(harness.sendRaw).not.toHaveBeenCalled()
-    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
-  })
-
-  it.each([
-    ['approved_once', 'accepted'],
-    ['denied', 'accepted'],
-  ] as const)('clears only an exact durable %s reconciliation acknowledgement', async (decision, status) => {
-    const harness = await createRedApprovalHarness()
-    harness.store(redApprovalRequest())
-    harness.init()
-
-    harness.wire({
-      type: 'tool_approval_ack',
+    expect(harness.sendRaw).toHaveBeenCalledWith({
+      type: 'tool_approval_reconcile',
       request_id: 'approval-request-1',
       session_id: 'session-1',
       owner_id: 'desktop-user',
@@ -1822,14 +1925,161 @@ describe('chat approval transport lifecycle RED contract', () => {
       arguments_digest: 'a'.repeat(64),
       security_scope_digest: 'b'.repeat(64),
       scope_schema_version: 1,
-      decision_id: `decision-${decision}`,
-      decision,
-      idempotency_key: `idempotency-${decision}`,
-      status,
+      deadline_at: '2026-07-29T04:01:00.000Z',
+    })
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+
+    harness.wire(redApprovalTerminal({ terminal_result: 'expired' }))
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+  })
+
+  it('replays one saved decision to the recovered request socket with its stable identity and idempotency key', async () => {
+    const disconnectedResponder = vi.fn<(decision: RedApprovalDecision) => Promise<RedApprovalAck>>(
+      () => Promise.reject(new Error('Owning approval request socket is not connected')),
+    )
+    const recoveredAcknowledgement = redDeferred<RedApprovalAck>()
+    const recoveredResponder = vi.fn<(decision: RedApprovalDecision) => Promise<RedApprovalAck>>(
+      () => recoveredAcknowledgement.promise,
+    )
+    const harness = await createRedApprovalHarness()
+    harness.store(redApprovalRequest({ respondApproval: disconnectedResponder }))
+
+    await expect(
+      Promise.resolve(harness.respond('approval-request-1', true, true)),
+    ).resolves.toBeUndefined()
+    const savedDecision = disconnectedResponder.mock.calls[0]?.[0]
+    if (!savedDecision) throw new Error('Disconnected responder did not receive a saved decision')
+
+    harness.init()
+    harness.reconnect()
+    harness.request(redApprovalRequest({ respondApproval: recoveredResponder }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(recoveredResponder).toHaveBeenCalledTimes(1)
+    const replayedDecision = recoveredResponder.mock.calls[0]?.[0]
+    if (!replayedDecision) throw new Error('Recovered responder did not receive the saved decision')
+    expect(replayedDecision).toMatchObject({
+      request_id: savedDecision.request_id,
+      invocation_id: savedDecision.invocation_id,
+      arguments_digest: savedDecision.arguments_digest,
+      security_scope_digest: savedDecision.security_scope_digest,
+      decision_id: savedDecision.decision_id,
+      idempotency_key: savedDecision.idempotency_key,
+    })
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+
+    const replayCompletion = Promise.resolve(harness.respond('approval-request-1', true, true))
+    recoveredAcknowledgement.resolve(redApprovalAcknowledgement(replayedDecision))
+    await expect(replayCompletion).resolves.toMatchObject({
+      request_id: 'approval-request-1',
+      decision_id: savedDecision.decision_id,
+      idempotency_key: savedDecision.idempotency_key,
+      status: 'accepted',
     })
 
     expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
   })
+
+  it('replays a saved decision through the recovered global socket when its pending wire has no request-socket responder', async () => {
+    const disconnectedResponder = vi.fn<(decision: RedApprovalDecision) => Promise<RedApprovalAck>>(
+      () => Promise.reject(new Error('Owning approval request socket is not connected')),
+    )
+    const harness = await createRedApprovalHarness(undefined, { includeApprovalTransport: false })
+    harness.store(redApprovalRequest({ respondApproval: disconnectedResponder }))
+
+    await expect(
+      Promise.resolve(harness.respond('approval-request-1', true, true)),
+    ).resolves.toBeUndefined()
+    const savedDecision = disconnectedResponder.mock.calls[0]?.[0]
+    if (!savedDecision) throw new Error('Disconnected responder did not receive a saved decision')
+
+    harness.init()
+    harness.sendRaw.mockClear()
+    harness.reconnect()
+    harness.request(redApprovalRequest())
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(harness.sendRaw.mock.calls.map(([wire]) => wire)).toContainEqual({
+      type: 'tool_approval_response',
+      content: 'approved_remember',
+      request_id: 'approval-request-1',
+      session_id: 'session-1',
+      owner_id: 'desktop-user',
+      decision_id: savedDecision.decision_id,
+      invocation_id: 'invocation-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      deadline_at: '2026-07-29T04:01:00.000Z',
+      metadata: {
+        request_id: 'approval-request-1',
+        session_id: 'session-1',
+        owner_id: 'desktop-user',
+        decision_id: savedDecision.decision_id,
+        invocation_id: 'invocation-1',
+        decision: 'approved_remember',
+        idempotency_key: savedDecision.idempotency_key,
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: '1',
+        deadline_at: '2026-07-29T04:01:00.000Z',
+      },
+    })
+
+    harness.wire(redApprovalAcknowledgement(savedDecision))
+
+    expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+  })
+
+  it.each([
+    ['owner identity', { ownerId: undefined }],
+    ['deadline', { deadlineAt: undefined }],
+  ] as const)(
+    'does not reconcile an incomplete pending approval missing %s and does not clear it on silence',
+    async (_field, overrides) => {
+      const harness = await createRedApprovalHarness()
+      harness.store(redApprovalRequest(overrides))
+      harness.init()
+      harness.sendRaw.mockClear()
+
+      harness.reconnect()
+
+      expect(harness.sendRaw).not.toHaveBeenCalled()
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+    },
+  )
+
+  it.each([
+    ['approved_once', 'accepted'],
+    ['denied', 'accepted'],
+  ] as const)(
+    'clears only an exact durable %s reconciliation acknowledgement',
+    async (decision, status) => {
+      const harness = await createRedApprovalHarness()
+      harness.store(redApprovalRequest())
+      harness.init()
+
+      harness.wire({
+        type: 'tool_approval_ack',
+        request_id: 'approval-request-1',
+        session_id: 'session-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-1',
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: 1,
+        decision_id: `decision-${decision}`,
+        decision,
+        idempotency_key: `idempotency-${decision}`,
+        status,
+      })
+
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
+    },
+  )
 
   it('retains pending for a reconciliation acknowledgement with a nonterminal status or mismatched identity', async () => {
     const harness = await createRedApprovalHarness()
@@ -1882,13 +2132,15 @@ describe('chat approval transport lifecycle RED contract', () => {
   it('clears only the deleted session approval projection through the canonical controller exit', async () => {
     const harness = await createRedApprovalHarness()
     harness.store(redApprovalRequest())
-    harness.store(redApprovalRequest({
-      requestId: 'approval-request-2',
-      sessionId: 'session-2',
-      invocationId: 'invocation-2',
-      argumentsDigest: 'c'.repeat(64),
-      securityScopeDigest: 'd'.repeat(64),
-    }))
+    harness.store(
+      redApprovalRequest({
+        requestId: 'approval-request-2',
+        sessionId: 'session-2',
+        invocationId: 'invocation-2',
+        argumentsDigest: 'c'.repeat(64),
+        securityScopeDigest: 'd'.repeat(64),
+      }),
+    )
 
     harness.clearSession('session-1')
 

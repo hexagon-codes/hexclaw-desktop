@@ -61,6 +61,16 @@ describe('secure-store write-only renderer boundary', () => {
     expect(native.invoke).not.toHaveBeenCalled()
   })
 
+  it('forbids provider presence checks before browser or native vault access', async () => {
+    const { credentialPresent } = await import('../secure-store')
+
+    await expect(credentialPresent(providerKey)).rejects.toThrow('native config coordinator')
+
+    native.tauri = true
+    await expect(credentialPresent(providerKey)).rejects.toThrow('native config coordinator')
+    expect(native.invoke).not.toHaveBeenCalled()
+  })
+
   it('Tauri connection mutations use typed owner keys and return opaque refs', async () => {
     native.tauri = true
     native.invoke

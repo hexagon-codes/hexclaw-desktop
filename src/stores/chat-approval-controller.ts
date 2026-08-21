@@ -1,12 +1,14 @@
 import type { Ref } from 'vue'
 import type { ToolApprovalRequest, ToolApprovalWireMessage } from '@/api/websocket'
 import {
+  createToolApprovalResponseWire,
   onToolApprovalTerminal,
   parseToolApprovalReconciliationAck,
   parseToolApprovalTerminal,
   type ToolApprovalAckWire,
   type ToolApprovalDecisionWire,
   type ToolApprovalReconciliationAckWire,
+  type ToolApprovalResponseIdentity,
   type ToolApprovalTerminalWire,
 } from '@/services/chatService'
 
@@ -21,7 +23,9 @@ type CompletePendingApprovalIdentity = PendingApproval & {
   scopeSchemaVersion: number
 }
 type ReconcileablePendingApproval = CompletePendingApprovalIdentity & { deadlineAt: string }
-type ApprovalResponder = (decision: ToolApprovalDecisionWire) => Promise<ToolApprovalAckWire>
+type ApprovalResponder = (
+  decision: ToolApprovalDecisionWire,
+) => Promise<ToolApprovalAckWire | undefined>
 type ApprovalRequestWithResponder = ToolApprovalRequest & {
   respondApproval?: ApprovalResponder
 }
@@ -54,25 +58,29 @@ function isNonEmptyString(value: unknown): value is string {
 function hasCompletePendingApprovalIdentity(
   request: PendingApproval,
 ): request is CompletePendingApprovalIdentity {
-  return isNonEmptyString(request.requestId)
-    && isNonEmptyString(request.sessionId)
-    && isNonEmptyString(request.ownerId)
-    && isNonEmptyString(request.invocationId)
-    && isNonEmptyString(request.argumentsDigest)
-    && isNonEmptyString(request.securityScopeDigest)
-    && Number.isSafeInteger(request.scopeSchemaVersion)
-    && Number(request.scopeSchemaVersion) > 0
+  return (
+    isNonEmptyString(request.requestId) &&
+    isNonEmptyString(request.sessionId) &&
+    isNonEmptyString(request.ownerId) &&
+    isNonEmptyString(request.invocationId) &&
+    isNonEmptyString(request.argumentsDigest) &&
+    isNonEmptyString(request.securityScopeDigest) &&
+    Number.isSafeInteger(request.scopeSchemaVersion) &&
+    Number(request.scopeSchemaVersion) > 0
+  )
 }
 
 function hasCompleteApprovalTerminalIdentity(terminal: ToolApprovalTerminalWire): boolean {
-  return isNonEmptyString(terminal.request_id)
-    && isNonEmptyString(terminal.session_id)
-    && isNonEmptyString(terminal.owner_id)
-    && isNonEmptyString(terminal.invocation_id)
-    && isNonEmptyString(terminal.arguments_digest)
-    && isNonEmptyString(terminal.security_scope_digest)
-    && Number.isSafeInteger(terminal.scope_schema_version)
-    && Number(terminal.scope_schema_version) > 0
+  return (
+    isNonEmptyString(terminal.request_id) &&
+    isNonEmptyString(terminal.session_id) &&
+    isNonEmptyString(terminal.owner_id) &&
+    isNonEmptyString(terminal.invocation_id) &&
+    isNonEmptyString(terminal.arguments_digest) &&
+    isNonEmptyString(terminal.security_scope_digest) &&
+    Number.isSafeInteger(terminal.scope_schema_version) &&
+    Number(terminal.scope_schema_version) > 0
+  )
 }
 
 function hasCompleteReconciliationRequest(
@@ -81,31 +89,56 @@ function hasCompleteReconciliationRequest(
   return hasCompletePendingApprovalIdentity(request) && isNonEmptyString(request.deadlineAt)
 }
 
-function sameApprovalRequest(current: PendingApproval, incoming: ToolApprovalRequest): boolean {
-  return current.requestId === incoming.requestId
-    && current.sessionId === incoming.sessionId
-    && current.toolName === incoming.toolName
-    && current.ownerId === incoming.ownerId
-    && current.invocationId === incoming.invocationId
-    && current.argumentsDigest === incoming.argumentsDigest
-    && current.securityScopeDigest === incoming.securityScopeDigest
-    && current.scopeSchemaVersion === incoming.scopeSchemaVersion
-    && current.risk === incoming.risk
-    && current.reason === incoming.reason
-    && current.deadlineAt === incoming.deadlineAt
+function approvalResponseIdentity(
+  request: ReconcileablePendingApproval,
+): ToolApprovalResponseIdentity {
+  return {
+    requestId: request.requestId,
+    sessionId: request.sessionId,
+    ownerId: request.ownerId,
+    invocationId: request.invocationId,
+    argumentsDigest: request.argumentsDigest,
+    securityScopeDigest: request.securityScopeDigest,
+    scopeSchemaVersion: request.scopeSchemaVersion,
+    deadlineAt: request.deadlineAt,
+  }
 }
 
-function sameApprovalTerminal(current: PendingApproval, terminal: ToolApprovalTerminalWire): boolean {
-  if (!hasCompletePendingApprovalIdentity(current) || !hasCompleteApprovalTerminalIdentity(terminal)) {
+function sameApprovalRequest(current: PendingApproval, incoming: ToolApprovalRequest): boolean {
+  return (
+    current.requestId === incoming.requestId &&
+    current.sessionId === incoming.sessionId &&
+    current.toolName === incoming.toolName &&
+    current.ownerId === incoming.ownerId &&
+    current.invocationId === incoming.invocationId &&
+    current.argumentsDigest === incoming.argumentsDigest &&
+    current.securityScopeDigest === incoming.securityScopeDigest &&
+    current.scopeSchemaVersion === incoming.scopeSchemaVersion &&
+    current.risk === incoming.risk &&
+    current.reason === incoming.reason &&
+    current.deadlineAt === incoming.deadlineAt
+  )
+}
+
+function sameApprovalTerminal(
+  current: PendingApproval,
+  terminal: ToolApprovalTerminalWire,
+): boolean {
+  if (
+    !hasCompletePendingApprovalIdentity(current) ||
+    !hasCompleteApprovalTerminalIdentity(terminal)
+  ) {
     return false
   }
-  return current.requestId === terminal.request_id
-    && current.sessionId === terminal.session_id
-    && current.ownerId === terminal.owner_id
-    && current.invocationId === terminal.invocation_id
-    && current.argumentsDigest === terminal.arguments_digest
-    && current.securityScopeDigest === terminal.security_scope_digest
-    && current.scopeSchemaVersion === terminal.scope_schema_version
+  return (
+    current.requestId === terminal.request_id &&
+    current.sessionId === terminal.session_id &&
+    current.ownerId === terminal.owner_id &&
+    current.invocationId === terminal.invocation_id &&
+    current.argumentsDigest === terminal.arguments_digest &&
+    current.securityScopeDigest === terminal.security_scope_digest &&
+    current.scopeSchemaVersion === terminal.scope_schema_version
+  )
 }
 
 function sameApprovalReconciliationAck(
@@ -113,13 +146,15 @@ function sameApprovalReconciliationAck(
   acknowledgement: ToolApprovalReconciliationAckWire,
 ): boolean {
   if (!hasCompletePendingApprovalIdentity(current)) return false
-  return current.requestId === acknowledgement.request_id
-    && current.sessionId === acknowledgement.session_id
-    && current.ownerId === acknowledgement.owner_id
-    && current.invocationId === acknowledgement.invocation_id
-    && current.argumentsDigest === acknowledgement.arguments_digest
-    && current.securityScopeDigest === acknowledgement.security_scope_digest
-    && current.scopeSchemaVersion === acknowledgement.scope_schema_version
+  return (
+    current.requestId === acknowledgement.request_id &&
+    current.sessionId === acknowledgement.session_id &&
+    current.ownerId === acknowledgement.owner_id &&
+    current.invocationId === acknowledgement.invocation_id &&
+    current.argumentsDigest === acknowledgement.arguments_digest &&
+    current.securityScopeDigest === acknowledgement.security_scope_digest &&
+    current.scopeSchemaVersion === acknowledgement.scope_schema_version
+  )
 }
 
 export function createChatApprovalController(params: {
@@ -133,12 +168,7 @@ export function createChatApprovalController(params: {
   }
   approvalTransport?: ApprovalTransport
 }) {
-  const {
-    pendingApprovals,
-    approvalCleanup,
-    ws,
-    approvalTransport,
-  } = params
+  const { pendingApprovals, approvalCleanup, ws, approvalTransport } = params
   const decisions = new Map<string, ToolApprovalDecisionWire>()
   const inFlight = new Map<string, Promise<ToolApprovalAckWire | undefined>>()
   const responders = new Map<string, ApprovalResponder>()
@@ -157,12 +187,25 @@ export function createChatApprovalController(params: {
     responders.delete(requestId)
   }
 
+  function recoveredApprovalResponder(requestId: string): ApprovalResponder | undefined {
+    const current = pendingApprovals.value[requestId]
+    if (!current || !hasCompleteReconciliationRequest(current) || !ws.sendRaw) return undefined
+    const identity = approvalResponseIdentity(current)
+    return (decision) => {
+      ws.sendRaw!(createToolApprovalResponseWire(decision, identity))
+      return Promise.resolve(undefined)
+    }
+  }
+
   async function submitDecision(requestId: string): Promise<ToolApprovalAckWire | undefined> {
     const decision = decisions.get(requestId)
     if (!decision) throw new Error(`No approval decision exists for ${requestId}`)
     const active = inFlight.get(requestId)
     if (active) return active
-    const responder = responders.get(requestId) ?? approvalTransport?.sendApprovalResponse
+    const responder =
+      responders.get(requestId) ??
+      approvalTransport?.sendApprovalResponse ??
+      recoveredApprovalResponder(requestId)
     if (!responder) throw new Error(`No owning approval transport exists for ${requestId}`)
 
     const transport = Promise.resolve()
@@ -173,11 +216,11 @@ export function createChatApprovalController(params: {
         if (!ack) return undefined
         const current = pendingApprovals.value[requestId]
         if (
-          !current
-          || !sameApprovalReconciliationAck(current, ack)
-          || ack.decision_id !== decision.decision_id
-          || ack.decision !== decision.decision
-          || ack.idempotency_key !== decision.idempotency_key
+          !current ||
+          !sameApprovalReconciliationAck(current, ack) ||
+          ack.decision_id !== decision.decision_id ||
+          ack.decision !== decision.decision ||
+          ack.idempotency_key !== decision.idempotency_key
         ) {
           throw new Error('Tool approval acknowledgement correlation mismatch')
         }
@@ -207,11 +250,10 @@ export function createChatApprovalController(params: {
     if (!current || !sameApprovalReconciliationAck(current, acknowledgement)) return
     const submitted = decisions.get(acknowledgement.request_id)
     if (
-      submitted && (
-        submitted.decision_id !== acknowledgement.decision_id
-        || submitted.decision !== acknowledgement.decision
-        || submitted.idempotency_key !== acknowledgement.idempotency_key
-      )
+      submitted &&
+      (submitted.decision_id !== acknowledgement.decision_id ||
+        submitted.decision !== acknowledgement.decision ||
+        submitted.idempotency_key !== acknowledgement.idempotency_key)
     ) {
       return
     }
@@ -255,14 +297,15 @@ export function createChatApprovalController(params: {
   }
 
   function storePendingApproval(rawRequest: ToolApprovalRequest) {
-    const {
-      respondApproval,
-      ...request
-    } = rawRequest as ApprovalRequestWithResponder
+    const { respondApproval, ...request } = rawRequest as ApprovalRequestWithResponder
     const current = pendingApprovals.value[request.requestId]
     if (current) {
       if (!sameApprovalRequest(current, request)) return
-      if (respondApproval) responders.set(request.requestId, respondApproval)
+      if (respondApproval) {
+        responders.set(request.requestId, respondApproval)
+      } else if (decisions.has(request.requestId)) {
+        responders.delete(request.requestId)
+      }
       if (decisions.has(request.requestId) && !inFlight.has(request.requestId)) {
         void submitDecision(request.requestId).catch(() => undefined)
       }
@@ -281,9 +324,11 @@ export function createChatApprovalController(params: {
 
   function getPendingApprovalForSession(sessionId: string | null): PendingApproval | null {
     if (!sessionId) return null
-    return Object.values(pendingApprovals.value)
-      .filter((request) => request.sessionId === sessionId)
-      .sort((left, right) => right.receivedAt - left.receivedAt)[0] ?? null
+    return (
+      Object.values(pendingApprovals.value)
+        .filter((request) => request.sessionId === sessionId)
+        .sort((left, right) => right.receivedAt - left.receivedAt)[0] ?? null
+    )
   }
 
   function hasSessionPendingApproval(sessionId: string | null): boolean {
@@ -313,9 +358,7 @@ export function createChatApprovalController(params: {
         invocation_id: pending.invocationId,
         arguments_digest: pending.argumentsDigest,
         security_scope_digest: pending.securityScopeDigest,
-        decision: approved
-          ? (remember ? 'approved_remember' : 'approved_once')
-          : 'denied',
+        decision: approved ? (remember ? 'approved_remember' : 'approved_once') : 'denied',
         idempotency_key: decisionId,
         reason,
       })

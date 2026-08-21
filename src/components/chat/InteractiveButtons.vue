@@ -23,6 +23,7 @@
         v-for="btn in buttons"
         :key="btn.action"
         type="button"
+        data-governed-button="interactive-action"
         :class="[
           'hc-interactive-buttons__btn',
           btn.variant === 'primary' ? 'is-primary' : 'is-secondary',

@@ -71,6 +71,7 @@ export async function deleteCredential(key: CredentialKey): Promise<CredentialMu
 }
 
 export async function credentialPresent(key: CredentialKey): Promise<boolean> {
+  assertStandaloneMutationAllowed(key)
   const credentialRef = credentialRefFor(key)
   if (isTauri()) return await invoke<boolean>('credential_present', { key })
   return browserSessionVault.has(credentialRef)

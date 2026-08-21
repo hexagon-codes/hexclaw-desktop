@@ -12,13 +12,7 @@ import { scenarioRegistry } from '@/shell/scenario/registry'
 import type { ChatSession } from '@/types'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
-const {
-  updateSessionTitle,
-  listSessions,
-  searchMessages,
-  listActiveStreams,
-  getSessionBranches,
-} =
+const { updateSessionTitle, listSessions, searchMessages, listActiveStreams, getSessionBranches } =
   vi.hoisted(() => ({
     updateSessionTitle: vi.fn().mockResolvedValue({}),
     listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
@@ -74,7 +68,7 @@ function mountSessionList(customSessions?: ChatSession[]) {
   ]
   store.currentSessionId = 's-1'
   store.selectSession = vi.fn()
-  store.deleteSession = vi.fn().mockResolvedValue(undefined)
+  store.deleteSession = vi.fn().mockResolvedValue(true)
 
   const wrapper = mount(SessionList, {
     global: {
@@ -308,11 +302,13 @@ describe('SessionList', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-session-id="today-date"] .hc-sessions__time').text()).toBe('09:00')
-    expect(wrapper.get('[data-session-id="yesterday-date"] .hc-sessions__time').text()).toBe('8月19日')
+    expect(wrapper.get('[data-session-id="yesterday-date"] .hc-sessions__time').text()).toBe(
+      '8月19日',
+    )
     expect(wrapper.get('[data-session-id="older-date"] .hc-sessions__time').text()).toBe('8月1日')
-    expect(
-      wrapper.get('[data-session-id="previous-year-date"] .hc-sessions__time').text(),
-    ).toBe('2025年12月31日')
+    expect(wrapper.get('[data-session-id="previous-year-date"] .hc-sessions__time').text()).toBe(
+      '2025年12月31日',
+    )
     expect(
       wrapper
         .findAll('.hc-sessions__time')
@@ -441,12 +437,12 @@ describe('SessionList', () => {
   })
 
   it('clears a session approval projection only after the backend confirms deletion', async () => {
-    let resolveDelete!: () => void
+    let resolveDelete!: (removed: boolean) => void
     const { wrapper, store } = mountSessionList()
     const clearPendingApprovalsForSession = vi.spyOn(store, 'clearPendingApprovalsForSession')
     store.deleteSession = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<boolean>((resolve) => {
           resolveDelete = resolve
         }),
     )
@@ -457,7 +453,7 @@ describe('SessionList', () => {
     const deletion = vm.performDeleteSession('s-1')
     expect(clearPendingApprovalsForSession).not.toHaveBeenCalled()
 
-    resolveDelete()
+    resolveDelete(true)
     await deletion
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-1')
@@ -517,12 +513,12 @@ describe('SessionList', () => {
 
   it('does not send duplicate delete requests while a session deletion is still in flight', async () => {
     vi.useFakeTimers()
-    let resolveDelete!: () => void
+    let resolveDelete!: (removed: boolean) => void
 
     const { wrapper, store } = mountSessionList()
     store.deleteSession = vi.fn().mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<boolean>((resolve) => {
           resolveDelete = resolve
         }),
     )
@@ -546,7 +542,7 @@ describe('SessionList', () => {
 
     expect(store.deleteSession).toHaveBeenCalledTimes(1)
 
-    resolveDelete()
+    resolveDelete(true)
     await flushPromises()
   })
 
@@ -635,9 +631,7 @@ describe('SessionList', () => {
   })
 
   it('aligns the session count to the prototype right edge', () => {
-    expect(sessionListSource).toMatch(
-      /\.hc-sessions__count\s*\{[\s\S]*?margin-left:\s*auto;/,
-    )
+    expect(sessionListSource).toMatch(/\.hc-sessions__count\s*\{[\s\S]*?margin-left:\s*auto;/)
   })
 
   it('removes a successfully deleted paginated session from the extra-session cache', async () => {
@@ -670,6 +664,47 @@ describe('SessionList', () => {
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-extra')
     expect(wrapper.text()).not.toContain('分页旧会话')
+  })
+
+  it('keeps a paginated session and pending approval when deletion returns false', async () => {
+    listSessions.mockResolvedValueOnce({
+      sessions: [
+        {
+          id: 's-extra',
+          title: '删除失败的分页会话',
+          created_at: '2026-03-01T10:00:00Z',
+          updated_at: '2026-03-01T10:00:00Z',
+          message_count: 1,
+        },
+      ],
+      total: 3,
+    })
+    const { wrapper, store } = mountSessionList()
+    await wrapper.get('.hc-sessions__load-more').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('删除失败的分页会话')
+
+    store.pendingApprovals = {
+      'req-delete-failure': {
+        requestId: 'req-delete-failure',
+        sessionId: 's-extra',
+        toolName: 'write_file',
+        risk: 'dangerous',
+        reason: 'needs approval',
+        receivedAt: Date.now(),
+      },
+    } as typeof store.pendingApprovals
+    const clearPendingApprovalsForSession = vi.spyOn(store, 'clearPendingApprovalsForSession')
+    store.deleteSession = vi.fn().mockResolvedValue(false)
+
+    const vm = wrapper.vm as unknown as {
+      performDeleteSession: (sessionId: string) => Promise<void>
+    }
+    await vm.performDeleteSession('s-extra')
+
+    expect(store.deleteSession).toHaveBeenCalledWith('s-extra')
+    expect(clearPendingApprovalsForSession).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('删除失败的分页会话')
   })
 
   it('renders cross-session content search results with snippets', async () => {

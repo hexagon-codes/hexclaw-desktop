@@ -132,15 +132,26 @@ describe('backend/Desktop tool approval wire contract', () => {
       type: 'tool_approval_response',
       content: 'approved_remember',
       request_id: 'approval-contract-1',
+      session_id: 'session-contract-1',
+      owner_id: 'desktop-user',
       decision_id: 'decision-contract-1',
+      invocation_id: 'invocation-contract-1',
+      arguments_digest: 'a'.repeat(64),
+      security_scope_digest: 'b'.repeat(64),
+      scope_schema_version: 1,
+      deadline_at: '2026-07-29T05:00:00.000Z',
       metadata: {
         request_id: 'approval-contract-1',
+        session_id: 'session-contract-1',
+        owner_id: 'desktop-user',
         decision_id: 'decision-contract-1',
         invocation_id: 'invocation-contract-1',
         decision: 'approved_remember',
         idempotency_key: 'idempotency-contract-1',
         arguments_digest: 'a'.repeat(64),
         security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: '1',
+        deadline_at: '2026-07-29T05:00:00.000Z',
       },
     })
 
@@ -222,18 +233,20 @@ describe('backend/Desktop tool approval wire contract', () => {
       decision_id: 'must-not-exist',
     })
 
-    expect(terminals).toEqual([{
-      type: 'tool_approval_terminal',
-      request_id: 'approval-contract-1',
-      session_id: 'session-contract-1',
-      owner_id: 'desktop-user',
-      invocation_id: 'invocation-contract-1',
-      arguments_digest: 'a'.repeat(64),
-      security_scope_digest: 'b'.repeat(64),
-      scope_schema_version: 1,
-      terminal_result: 'expired',
-      deadline_at: '2026-07-29T05:00:00.000Z',
-    }])
+    expect(terminals).toEqual([
+      {
+        type: 'tool_approval_terminal',
+        request_id: 'approval-contract-1',
+        session_id: 'session-contract-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-contract-1',
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: 1,
+        terminal_result: 'expired',
+        deadline_at: '2026-07-29T05:00:00.000Z',
+      },
+    ])
     expect(terminals[0]).not.toHaveProperty('decision_id')
     expect(terminals[0]).not.toHaveProperty('idempotency_key')
 
@@ -274,20 +287,22 @@ describe('backend/Desktop tool approval wire contract', () => {
       idempotency_key: 'idempotency-contract-1',
       status: 'accepted',
     })
-    expect(parseToolApprovalReconciliationAck({
-      type: 'tool_approval_ack',
-      request_id: 'approval-contract-1',
-      session_id: 'session-contract-1',
-      owner_id: 'desktop-user',
-      invocation_id: 'invocation-contract-1',
-      arguments_digest: 'a'.repeat(64),
-      security_scope_digest: 'b'.repeat(64),
-      scope_schema_version: 1,
-      decision_id: 'decision-contract-1',
-      decision: 'denied',
-      idempotency_key: 'idempotency-contract-1',
-      status: 'rejected',
-    })).toBeNull()
+    expect(
+      parseToolApprovalReconciliationAck({
+        type: 'tool_approval_ack',
+        request_id: 'approval-contract-1',
+        session_id: 'session-contract-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-contract-1',
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: 1,
+        decision_id: 'decision-contract-1',
+        decision: 'denied',
+        idempotency_key: 'idempotency-contract-1',
+        status: 'rejected',
+      }),
+    ).toBeNull()
   })
 
   it('does not expose the legacy global approval sender', () => {

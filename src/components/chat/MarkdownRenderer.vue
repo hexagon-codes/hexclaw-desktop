@@ -42,8 +42,57 @@ const emit = defineEmits<{
 const rendererRoot = ref<HTMLElement | null>(null)
 useMathOverflowAccessibility(rendererRoot)
 
+const LEGACY_TOOL_PROTOCOL =
+  /^\s*(?:(<tool_call>)\s*)?<function=(code_exec|shell|bash)>\s*<parameter=(code|command)>([\s\S]*?)<\/parameter>\s*<\/function>\s*(?:(<\/tool_call>))?\s*$/
+const LEGACY_TOOL_PROTOCOL_PREFIX = /^\s*(?:<tool_call>\s*)?<function=(code_exec|shell|bash)>/
+
+function stripProtocolFormattingNewlines(value: string) {
+  let code = value
+  if (code.startsWith('\r\n')) code = code.slice(2)
+  else if (code.startsWith('\n')) code = code.slice(1)
+  if (code.endsWith('\r\n')) code = code.slice(0, -2)
+  else if (code.endsWith('\n')) code = code.slice(0, -1)
+  return code
+}
+
+function createCodeFence(language: 'python' | 'bash', code: string) {
+  const longestBacktickRun = (code.match(/`+/g) ?? []).reduce(
+    (longest, run) => Math.max(longest, run.length),
+    0,
+  )
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1))
+  return `${fence}${language}\n${code}${code.endsWith('\n') ? '' : '\n'}${fence}`
+}
+
+// 仅完整闭合的旧协议参与展示投影；canonical 内容及其摘要、manifest 始终保留原文。
+function projectLegacyToolProtocol(markdown: string) {
+  const match = LEGACY_TOOL_PROTOCOL.exec(markdown)
+  if (!match) return markdown
+
+  const [, toolCallOpen, toolName, parameterName, rawCode, toolCallClose] = match
+  if (toolCallOpen && !toolCallClose) return markdown
+  if (toolName === 'code_exec' && parameterName !== 'code') return markdown
+  if (
+    (toolName === 'shell' || toolName === 'bash') &&
+    parameterName !== 'command' &&
+    parameterName !== 'code'
+  ) {
+    return markdown
+  }
+
+  const language = toolName === 'code_exec' ? 'python' : 'bash'
+  return createCodeFence(language, stripProtocolFormattingNewlines(rawCode ?? ''))
+}
+
 const resolvedContent = computed(() => resolveMessageContent(props.content))
 const canonicalMarkdown = computed(() => resolvedContent.value.markdown)
+const displayMarkdown = computed(() => projectLegacyToolProtocol(canonicalMarkdown.value))
+const rawLegacyToolProtocol = computed(() => {
+  const markdown = canonicalMarkdown.value
+  return displayMarkdown.value === markdown && LEGACY_TOOL_PROTOCOL_PREFIX.test(markdown)
+    ? markdown
+    : undefined
+})
 const promptPreviewProjection = computed(() =>
   props.highlightPromptArgs ? projectPromptPreview(canonicalMarkdown.value) : undefined,
 )
@@ -227,7 +276,9 @@ function handleCopyClick(e: MouseEvent) {
     })
     .catch(() => {
       btn.textContent = '✗ ' + (originalText.includes('复制') ? '失败' : 'Failed')
-      setTimeout(() => { btn.textContent = originalText }, 1500)
+      setTimeout(() => {
+        btn.textContent = originalText
+      }, 1500)
     })
 }
 
@@ -249,21 +300,32 @@ const cachedCopyLabel = ref(t('common.copy'))
 const mdInstance = ref(createMarkdownRenderer(cachedCopyLabel.value))
 const renderVersion = ref(0)
 
-watch(() => t('common.copy'), (newLabel) => {
-  if (newLabel !== cachedCopyLabel.value) {
-    cachedCopyLabel.value = newLabel
-    mdInstance.value = createMarkdownRenderer(newLabel)
-  }
-})
+watch(
+  () => t('common.copy'),
+  (newLabel) => {
+    if (newLabel !== cachedCopyLabel.value) {
+      cachedCopyLabel.value = newLabel
+      mdInstance.value = createMarkdownRenderer(newLabel)
+    }
+  },
+)
 
-watch(canonicalMarkdown, (content) => {
-  if (content.includes('```')) highlightCodeBlocks(content)
-}, { immediate: true })
+watch(
+  canonicalMarkdown,
+  (content) => {
+    if (content.includes('```')) highlightCodeBlocks(content)
+  },
+  { immediate: true },
+)
 
 const rendered = computed(() => {
   void renderVersion.value
   const projection = promptPreviewProjection.value
-  const markdown = projection?.markdown ?? canonicalMarkdown.value
+  if (!projection && rawLegacyToolProtocol.value !== undefined) {
+    const rawHtml = `<p>${mdInstance.value.utils.escapeHtml(rawLegacyToolProtocol.value)}</p>`
+    return DOMPurify.sanitize(rawHtml, KATEX_DOMPURIFY_CONFIG)
+  }
+  const markdown = projection?.markdown ?? displayMarkdown.value
   const html = mdInstance.value.render(normalizeMathMarkdown(markdown))
   return DOMPurify.sanitize(
     projection ? decoratePromptPreviewHtml(html, projection) : html,
@@ -289,9 +351,13 @@ const renderManifest = computed<RenderManifest | undefined>(() => {
   })
 })
 
-watch(renderManifest, (manifest) => {
-  if (manifest) emit('rendered', manifest)
-}, { immediate: true })
+watch(
+  renderManifest,
+  (manifest) => {
+    if (manifest) emit('rendered', manifest)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -433,9 +499,15 @@ watch(renderManifest, (manifest) => {
   font-weight: 600;
 }
 
-.markdown-body :deep(h1) { font-size: 1.4em; }
-.markdown-body :deep(h2) { font-size: 1.2em; }
-.markdown-body :deep(h3) { font-size: 1.1em; }
+.markdown-body :deep(h1) {
+  font-size: 1.4em;
+}
+.markdown-body :deep(h2) {
+  font-size: 1.2em;
+}
+.markdown-body :deep(h3) {
+  font-size: 1.1em;
+}
 
 .markdown-body :deep(h1),
 .markdown-body :deep(h2) {
@@ -484,7 +556,10 @@ watch(renderManifest, (manifest) => {
   padding: var(--hc-space-1) var(--hc-space-2);
   border-radius: var(--hc-space-1);
   opacity: 0;
-  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    opacity 0.15s;
   font-weight: 500;
 }
 

@@ -10,7 +10,9 @@ import ugCN from '@/i18n/locales/ug-CN'
 
 // useVoice：可控 mock。useVoice() 在 ChatInput setup（mount 时）调用，
 // 届时 voiceRefs.api 已由 beforeEach 装好真实 ref，故 watch(transcript) 可被测试驱动。
-const { voiceRefs } = vi.hoisted(() => ({ voiceRefs: { api: null as unknown as Record<string, unknown> } }))
+const { voiceRefs } = vi.hoisted(() => ({
+  voiceRefs: { api: null as unknown as Record<string, unknown> },
+}))
 vi.mock('@/composables/useVoice', () => ({ useVoice: () => voiceRefs.api }))
 
 vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ thinkingEnabled: false }) }))
@@ -59,8 +61,7 @@ const tools = (w: VueWrapper) => w.findAll('.hc-composer__tool')
 const toolByTitle = (w: VueWrapper, sub: string) =>
   tools(w).find((b) => (b.attributes('title') || '').includes(sub))
 const editor = (w: VueWrapper) => w.get<HTMLElement>('[data-testid="chat-input"]')
-const canonicalSource = (w: VueWrapper) =>
-  editor(w).attributes('data-canonical-source') ?? ''
+const canonicalSource = (w: VueWrapper) => editor(w).attributes('data-canonical-source') ?? ''
 
 async function setDraft(w: VueWrapper, value: string) {
   const field = editor(w)
@@ -209,7 +210,9 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     expect(voiceRefs.api.startListening).toHaveBeenCalledTimes(1)
     expect(w.get('.hc-composer__box').classes()).toContain('hc-composer__box--voice')
     expect(w.get('[data-testid="chat-voice-panel"]')).toBeTruthy()
-    expect((w.get('[data-testid="chat-voice-send"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect((w.get('[data-testid="chat-voice-send"]').element as HTMLButtonElement).disabled).toBe(
+      false,
+    )
   })
 
   it('左侧 X 丢弃录音，不把临时转写回填输入框', async () => {
@@ -233,6 +236,29 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     await flushPromises()
     expect(voiceRefs.api.finishListening).toHaveBeenCalledTimes(1)
     expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], undefined)
+    expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['返回 false', false],
+    ['抛出异常', true],
+  ] as const)('转写后 sendHandler %s 时保留草稿并沿用父链路错误承载', async (_label, throws) => {
+    const existingErrorCarrier = vi.fn()
+    const sendHandler = vi.fn(async () => {
+      existingErrorCarrier('Send failed')
+      if (throws) throw new Error('Send failed')
+      return false
+    })
+    voiceRefs.api.finishListening = vi.fn().mockResolvedValue('整段语音转写')
+    const w = await mountChatInput({ sendHandler })
+
+    await w.get('[data-testid="chat-voice-start"]').trigger('click')
+    await w.get('[data-testid="chat-voice-send"]').trigger('click')
+    await flushPromises()
+
+    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], undefined)
+    expect(existingErrorCarrier).toHaveBeenCalledWith('Send failed')
+    expect(canonicalSource(w)).toBe('整段语音转写')
     expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
   })
 

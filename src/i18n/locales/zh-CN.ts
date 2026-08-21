@@ -327,6 +327,7 @@ export default {
     selectArtifact: '请选择一个产物查看详情',
     clearChat: '清空聊天',
     receivedReply: '收到回复',
+    builtinSkillNoModel: '内置技能 · 未调用模型',
     noModels: '未配置模型',
     typing: '正在输入...',
     botName: '小蟹',

@@ -51,9 +51,11 @@ const ASSISTANT_RUN_KEYS = [
   'rejected',
   'unsupported',
 ] as const
+const SOURCE_KEYS = ['builtinSkillNoModel'] as const
 
 const EXPECTED = {
   'zh-CN': {
+    source: { builtinSkillNoModel: '内置技能 · 未调用模型' },
     composer: {
       skillPrompt: '技能 / 提示词',
       skill: '技能',
@@ -105,6 +107,7 @@ const EXPECTED = {
     },
   },
   en: {
+    source: { builtinSkillNoModel: 'Built-in Skill · No model invoked' },
     composer: {
       skillPrompt: 'Skills / Prompts',
       skill: 'Skills',
@@ -127,7 +130,8 @@ const EXPECTED = {
       effortAriaLabel: 'Thinking effort',
       strategy: 'Thinking strategy',
       defaultStrategy: 'Default thinking strategy',
-      defaultStrategyHint: 'Used for new conversations, agents without an override, and automated runs',
+      defaultStrategyHint:
+        'Used for new conversations, agents without an override, and automated runs',
       selectStrategy: 'Choose the thinking strategy for this run',
       inherit: 'Follow global (default)',
       auto: 'Auto (recommended)',
@@ -157,6 +161,7 @@ const EXPECTED = {
     },
   },
   'ug-CN': {
+    source: { builtinSkillNoModel: 'ئىچكى Skill · مودېل چاقىرىلمىدى' },
     composer: {
       skillPrompt: 'Skill / Prompt',
       skill: 'Skill',
@@ -165,7 +170,8 @@ const EXPECTED = {
       voiceRecording: 'ئاڭلاۋاتىدۇ…',
       voiceDiscard: 'ئاۋاز خاتىرىسىنى تاشلىۋېتىش',
       voiceSendTranscript: 'ئاۋاز يېزىقچىلىقىنى ئەۋەتىش',
-      voiceTranscribingAndSending: 'ئاۋاز خاتىرىسى ئاخىرلاشتى، يېزىقچىلىققا ئايلاندۇرۇلۇپ ئەۋەتىلىۋاتىدۇ…',
+      voiceTranscribingAndSending:
+        'ئاۋاز خاتىرىسى ئاخىرلاشتى، يېزىقچىلىققا ئايلاندۇرۇلۇپ ئەۋەتىلىۋاتىدۇ…',
     },
     reasoning: {
       trigger: 'ئويلاش',
@@ -179,7 +185,8 @@ const EXPECTED = {
       effortAriaLabel: 'ئويلاش كۈچى',
       strategy: 'ئويلاش ئىستراتېگىيەسى',
       defaultStrategy: 'سۈكۈتتىكى ئويلاش ئىستراتېگىيەسى',
-      defaultStrategyHint: 'يېڭى سۆھبەتلەر، قاپلانمىغان Agentلار ۋە ئاپتوماتىك ئىجرا ئۈچۈن ئىشلىتىلىدۇ',
+      defaultStrategyHint:
+        'يېڭى سۆھبەتلەر، قاپلانمىغان Agentلار ۋە ئاپتوماتىك ئىجرا ئۈچۈن ئىشلىتىلىدۇ',
       selectStrategy: 'بۇ قېتىملىق ئىجرا ئۈچۈن ئويلاش ئىستراتېگىيەسىنى تاللاڭ',
       inherit: 'ئومۇمىي سۈكۈتتىكىگە ئەگىشىش',
       auto: 'ئاپتوماتىك (تەۋسىيە)',
@@ -211,13 +218,15 @@ const EXPECTED = {
 } as const
 
 function resolve(obj: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>(
-    (current, key) =>
-      current && typeof current === 'object'
-        ? (current as Record<string, unknown>)[key]
-        : undefined,
-    obj,
-  )
+  return path
+    .split('.')
+    .reduce<unknown>(
+      (current, key) =>
+        current && typeof current === 'object'
+          ? (current as Record<string, unknown>)[key]
+          : undefined,
+      obj,
+    )
 }
 
 function objectAt(obj: unknown, path: string): Record<string, unknown> {
@@ -233,6 +242,13 @@ describe('approved Composer, reasoning, and assistant-run copy has an exact thre
       const composer = objectAt(messages, 'chat.composer')
       expect(Object.fromEntries(COMPOSER_KEYS.map((key) => [key, composer[key]]))).toEqual(
         expected.composer,
+      )
+    })
+
+    it(`defines the approved Footer source copy in ${locale}`, () => {
+      const chat = objectAt(messages, 'chat')
+      expect(Object.fromEntries(SOURCE_KEYS.map((key) => [key, chat[key]]))).toEqual(
+        expected.source,
       )
     })
 
