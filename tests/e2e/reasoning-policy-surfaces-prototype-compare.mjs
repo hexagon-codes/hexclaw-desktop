@@ -201,13 +201,13 @@ const states = [
     id: 'agent-create-advanced',
     surface: 'agent-create',
     expectedPolicyText: '跟随全局',
-    frame: { width: 560, height: 610 },
+    frame: { width: 560, height: 250 },
   },
   {
     id: 'agent-edit-advanced',
     surface: 'agent-edit',
     expectedPolicyText: '高',
-    frame: { width: 560, height: 610 },
+    frame: { width: 560, height: 250 },
   },
   {
     id: 'channel-supported-high',
@@ -297,9 +297,7 @@ function runtimeFixture(apiPath, method, state) {
   if (apiPath === '/api/v1/skills') return { skills: [], total: 0, dir: '' }
   if (apiPath === '/api/v1/agents') {
     const agents =
-      state.surface === 'channel'
-        ? [channelFixture(state.capability).agent]
-        : [agentFixtures.edit]
+      state.surface === 'channel' ? [channelFixture(state.capability).agent] : [agentFixtures.edit]
     return { agents, total: agents.length, default: agents[0]?.name ?? '' }
   }
   if (apiPath === '/api/v1/agents/rules') {
@@ -458,13 +456,20 @@ async function prepareReference(page, state) {
     if (state.surface === 'agent-create') {
       await page.evaluate(() => window.agentForm('blank'))
     } else {
-      await page.evaluate(() => window.editAgentForm('日报分析师', 'Fixture Provider', 'gpt-5.6-terra'))
+      await page.evaluate(() =>
+        window.editAgentForm('日报分析师', 'Fixture Provider', 'gpt-5.6-terra'),
+      )
     }
     await page.evaluate(() => {
       const fold = document.querySelector('#overlayCard .agfold')
       if (!fold) throw new Error('prototype Agent advanced fold is missing')
       fold.open = true
       fold.querySelector('summary')?.setAttribute('data-visual-role', 'summary')
+      fold.querySelector('.agfold-label')?.setAttribute('data-visual-role', 'summaryLabel')
+      fold.querySelector('.agfold-sum')?.setAttribute('data-visual-role', 'summaryValue')
+      fold.querySelector('.inline-form')?.setAttribute('data-visual-role', 'model')
+      fold.querySelector('.ag-provider-select')?.setAttribute('data-visual-role', 'source')
+      fold.querySelector('#agModelBox')?.setAttribute('data-visual-role', 'reasoning')
       fold.querySelector('#agReasoningPolicy')?.setAttribute('data-visual-role', 'control')
       const reasoningField = fold.querySelector('#agReasoningPolicy')?.closest('.mfield')
       reasoningField?.querySelector('label')?.setAttribute('data-visual-role', 'label')
@@ -483,8 +488,14 @@ async function prepareReference(page, state) {
   await page.evaluate((capability) => {
     const stacks = [...document.querySelectorAll('[data-channel-derived]')]
     let stack
-    if (capability === 'supported') stack = stacks.find((item) => !item.querySelector('[data-channel-derived-reasoning]')?.hidden)
-    else stack = stacks.find((item) => item.querySelector('[data-channel-derived-reasoning]')?.dataset.reasoningSupport === 'unsupported')
+    if (capability === 'supported')
+      stack = stacks.find((item) => !item.querySelector('[data-channel-derived-reasoning]')?.hidden)
+    else
+      stack = stacks.find(
+        (item) =>
+          item.querySelector('[data-channel-derived-reasoning]')?.dataset.reasoningSupport ===
+          'unsupported',
+      )
     if (!stack) throw new Error(`prototype Channel derived stack is missing: ${capability}`)
     const model = stack.querySelector('[data-channel-derived-model-id]')
     const reasoning = stack.querySelector('[data-channel-derived-reasoning]')
@@ -524,12 +535,7 @@ async function prepareImplementation(page, state) {
       row?.querySelector('.hc-settings__row-label')?.setAttribute('data-visual-role', 'label')
       control?.querySelector('.hc-select__trigger')?.setAttribute('data-visual-role', 'control')
     })
-    await createFrame(
-      page,
-      state.frame,
-      '[data-visual-settings-row]',
-      'implementation',
-    )
+    await createFrame(page, state.frame, '[data-visual-settings-row]', 'implementation')
     return
   }
 
@@ -547,6 +553,21 @@ async function prepareImplementation(page, state) {
       shell.classList.add('visual-current-agent-shell')
       shell.setAttribute('data-visual-role', 'root')
       toggle.setAttribute('data-visual-role', 'summary')
+      toggle
+        .querySelector('.hc-agent-fold__summary-label')
+        ?.setAttribute('data-visual-role', 'summaryLabel')
+      toggle
+        .querySelector('.hc-agent-fold__summary-value')
+        ?.setAttribute('data-visual-role', 'summaryValue')
+      shell
+        .querySelector('[data-testid="agent-add-model-grid"]')
+        ?.setAttribute('data-visual-role', 'model')
+      shell
+        .querySelector('[data-testid="agent-add-model-grid"] .hc-select__trigger')
+        ?.setAttribute('data-visual-role', 'source')
+      shell
+        .querySelector('[data-testid="agent-add-model-follow"]')
+        ?.setAttribute('data-visual-role', 'reasoning')
       const control = shell.querySelector('[data-testid="agent-add-reasoning-policy"]')
       control?.querySelector('.hc-select__trigger')?.setAttribute('data-visual-role', 'control')
       const field = control?.parentElement
@@ -571,6 +592,21 @@ async function prepareImplementation(page, state) {
       shell.classList.add('visual-current-agent-shell')
       shell.setAttribute('data-visual-role', 'root')
       toggle.setAttribute('data-visual-role', 'summary')
+      toggle
+        .querySelector('.hc-agent-fold__summary-label')
+        ?.setAttribute('data-visual-role', 'summaryLabel')
+      toggle
+        .querySelector('.hc-agent-fold__summary-value')
+        ?.setAttribute('data-visual-role', 'summaryValue')
+      shell
+        .querySelector('[data-testid="agent-edit-model-grid"]')
+        ?.setAttribute('data-visual-role', 'model')
+      shell
+        .querySelector('[data-testid="agent-edit-model-grid"] .hc-select__trigger')
+        ?.setAttribute('data-visual-role', 'source')
+      shell
+        .querySelector('[data-testid="agent-edit-model-follow"]')
+        ?.setAttribute('data-visual-role', 'reasoning')
       const control = shell.querySelector('[data-testid="agent-edit-reasoning-policy"]')
       control?.querySelector('.hc-select__trigger')?.setAttribute('data-visual-role', 'control')
       const field = control?.parentElement
@@ -633,7 +669,18 @@ async function snapshot(page, source) {
       }
     }
     const nodes = {}
-    for (const role of ['root', 'summary', 'label', 'control', 'model', 'reasoning', 'source', 'note']) {
+    for (const role of [
+      'root',
+      'summary',
+      'summaryLabel',
+      'summaryValue',
+      'label',
+      'control',
+      'model',
+      'reasoning',
+      'source',
+      'note',
+    ]) {
       const elements = [...document.querySelectorAll(`[data-visual-role="${role}"]`)]
       nodes[role] = elements.map((element) => ({
         rect: rect(element),
@@ -681,13 +728,18 @@ function semanticDifferences(reference, implementation, state) {
     differences.push('label.text')
   }
   if (state.surface === 'settings') {
-    if (!one(reference, 'control')?.text.includes('自动（推荐）')) differences.push('reference.control.auto')
-    if (!one(implementation, 'control')?.text.includes('自动（推荐）')) differences.push('implementation.control.auto')
+    if (!one(reference, 'control')?.text.includes('自动（推荐）'))
+      differences.push('reference.control.auto')
+    if (!one(implementation, 'control')?.text.includes('自动（推荐）'))
+      differences.push('implementation.control.auto')
   }
   if (state.surface.startsWith('agent-')) {
-    if (!one(reference, 'control')?.text.includes(state.expectedPolicyText)) differences.push('reference.control.policy')
-    if (!one(implementation, 'control')?.text.includes(state.expectedPolicyText)) differences.push('implementation.control.policy')
-    if (one(reference, 'note')?.text !== one(implementation, 'note')?.text) differences.push('note.text')
+    if (!one(reference, 'control')?.text.includes(state.expectedPolicyText))
+      differences.push('reference.control.policy')
+    if (!one(implementation, 'control')?.text.includes(state.expectedPolicyText))
+      differences.push('implementation.control.policy')
+    if (one(reference, 'note')?.text !== one(implementation, 'note')?.text)
+      differences.push('note.text')
   }
   if (state.surface === 'channel') {
     const referenceReasoning = reference.nodes.reasoning.filter((item) => !item.hidden)
@@ -696,12 +748,16 @@ function semanticDifferences(reference, implementation, state) {
       if (referenceReasoning.length !== 1 || referenceReasoning[0]?.text !== '思考 · 高') {
         differences.push('reference.reasoning.supported')
       }
-      if (implementationReasoning.length !== 1 || implementationReasoning[0]?.text !== '思考 · 高') {
+      if (
+        implementationReasoning.length !== 1 ||
+        implementationReasoning[0]?.text !== '思考 · 高'
+      ) {
         differences.push('implementation.reasoning.supported')
       }
     } else {
       if (referenceReasoning.length !== 0) differences.push('reference.reasoning.mustHide')
-      if (implementationReasoning.length !== 0) differences.push('implementation.reasoning.mustHide')
+      if (implementationReasoning.length !== 0)
+        differences.push('implementation.reasoning.mustHide')
     }
     if (one(reference, 'source')?.text !== one(implementation, 'source')?.text) {
       differences.push('source.text')
@@ -795,8 +851,7 @@ async function createPixelDiff(page, referencePath, implementationPath, diffPath
         changedPixels,
         totalPixels: width * height,
         changedPixelRatio: changedPixels / (width * height),
-        changedBoundingBox:
-          changedPixels > 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+        changedBoundingBox: changedPixels > 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
       }
     },
     { referencePng: reference, implementationPng: implementation, threshold: PIXEL_THRESHOLD },
@@ -809,7 +864,10 @@ async function createPixelDiff(page, referencePath, implementationPath, diffPath
 async function main() {
   await mkdir(EVIDENCE_ROOT, { recursive: true })
   const browser = await chromium.launch({ headless: true })
-  const diffPage = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: DEVICE_SCALE_FACTOR })
+  const diffPage = await browser.newPage({
+    viewport: VIEWPORT,
+    deviceScaleFactor: DEVICE_SCALE_FACTOR,
+  })
   const reports = []
   try {
     for (const state of states) {
@@ -885,7 +943,7 @@ async function main() {
         report = {
           state,
           status: 'BLOCKED',
-          error: error instanceof Error ? error.stack ?? error.message : String(error),
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
           externalNetworkAttempts: externalAttempts,
         }
       } finally {
@@ -916,10 +974,7 @@ async function main() {
     status: reports.every((item) => item.status === 'PASS') ? 'PASS' : 'RED',
     reports,
   }
-  await writeFile(
-    path.join(EVIDENCE_ROOT, 'summary.json'),
-    `${JSON.stringify(summary, null, 2)}\n`,
-  )
+  await writeFile(path.join(EVIDENCE_ROOT, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
   if (summary.status !== 'PASS') process.exitCode = 1
 }

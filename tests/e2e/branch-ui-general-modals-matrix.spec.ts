@@ -12,10 +12,50 @@ const SOURCE_URL =
   process.env.HEX_UI_IMPLEMENTATION_URL?.trim() ||
   'http://127.0.0.1:16061'
 const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-general-modals/evidence')
+const NOTIFICATION_EVIDENCE_ROOT = path.resolve(
+  process.env.HEX_NOTIFICATION_EVIDENCE_ROOT?.trim() ||
+    '../hexclaw-docs/test/evidence/bug-20260820-notifications/same-state',
+)
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
 const NOW = '2026-07-29T06:20:00.000Z'
+const NOTIFICATION_NOW = new Date('2026-08-21T00:20:00+08:00')
+
+// 通知面板的原型是跨午夜夹具：27 分钟前属于“更早”，其余两条属于“今天”。
+// 实现侧恢复同一持久快照，避免测试数据顺序、相对时间和分组伪造视觉漂移。
+const notificationFixture = [
+  {
+    id: 'notif-knowledge-degraded',
+    kind: 'system',
+    level: 'warning',
+    title: '知识库降级检索',
+    body: 'Embedding 未配置，已回退到基础检索。点击查看日志详情。',
+    timestamp: new Date('2026-08-21T00:19:00+08:00').getTime(),
+    read: false,
+    route: '/logs',
+  },
+  {
+    id: 'notif-daily-report-failed',
+    kind: 'automation',
+    level: 'warning',
+    title: '日报任务执行失败',
+    body: '已记录失败原因，可进入自动化查看重试与恢复状态。',
+    timestamp: new Date('2026-08-21T00:12:00+08:00').getTime(),
+    read: false,
+    route: '/automation',
+  },
+  {
+    id: 'notif-skill-update',
+    kind: 'system',
+    level: 'info',
+    title: 'Skill 市场有更新',
+    body: '网页抓取 Skill 发布新版本，增加正文提取策略。',
+    timestamp: new Date('2026-08-20T23:53:00+08:00').getTime(),
+    read: true,
+    route: '/integration',
+  },
+] as const
 
 type Mapping = 'COMPARABLE' | 'BLOCKED'
 type ResultStatus = 'PASS' | 'RED' | 'BLOCKED/RED'
@@ -75,14 +115,80 @@ const surfaces: Surface[] = [
     referenceTargets: [
       { name: 'drawer', selector: '#notifPanel' },
       { name: 'backdrop', selector: '#notifBackdrop' },
+      { name: 'header', selector: '#notifPanel .notif-head' },
+      { name: 'header-mark-all-icon', selector: '#notifPanel .notif-actions > :nth-child(1) svg' },
+      { name: 'header-trash-icon', selector: '#notifPanel .notif-actions > :nth-child(2) svg' },
+      { name: 'header-close-icon', selector: '#notifPanel .notif-actions > :nth-child(3) svg' },
+      { name: 'today-group', selector: '#notifPanel .notif-list > :nth-child(1)' },
+      { name: 'knowledge-item', selector: '#notifPanel .notif-list > :nth-child(2)' },
+      { name: 'knowledge-icon', selector: '#notifPanel .notif-list > :nth-child(2) .notif-ic' },
+      { name: 'knowledge-title', selector: '#notifPanel .notif-list > :nth-child(2) b' },
+      { name: 'knowledge-time', selector: '#notifPanel .notif-list > :nth-child(2) time' },
+      {
+        name: 'knowledge-chevron',
+        selector: '#notifPanel .notif-list > :nth-child(2) .notif-chevron',
+      },
+      { name: 'daily-item', selector: '#notifPanel .notif-list > :nth-child(3)' },
+      { name: 'daily-icon', selector: '#notifPanel .notif-list > :nth-child(3) .notif-ic' },
+      { name: 'daily-time', selector: '#notifPanel .notif-list > :nth-child(3) time' },
+      { name: 'earlier-group', selector: '#notifPanel .notif-list > :nth-child(4)' },
+      { name: 'skill-item', selector: '#notifPanel .notif-list > :nth-child(5)' },
+      { name: 'skill-icon', selector: '#notifPanel .notif-list > :nth-child(5) .notif-ic' },
+      { name: 'skill-title', selector: '#notifPanel .notif-list > :nth-child(5) b' },
+      { name: 'skill-time', selector: '#notifPanel .notif-list > :nth-child(5) time' },
     ],
     sourceTargets: [
       { name: 'drawer', selector: '.hc-notifpanel' },
       { name: 'backdrop', selector: '.hc-notifpanel__backdrop' },
+      { name: 'header', selector: '.hc-notifpanel__head' },
+      { name: 'header-mark-all-icon', selector: '.hc-notifpanel__actions > :nth-child(1) svg' },
+      { name: 'header-trash-icon', selector: '.hc-notifpanel__actions > :nth-child(2) svg' },
+      { name: 'header-close-icon', selector: '.hc-notifpanel__actions > :nth-child(3) svg' },
+      { name: 'today-group', selector: '.hc-notifpanel__group:nth-of-type(1)' },
+      { name: 'knowledge-item', selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(1)' },
+      {
+        name: 'knowledge-icon',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(1) .hc-notifpanel__iconwrap',
+      },
+      {
+        name: 'knowledge-title',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(1) .hc-notifpanel__itemtitle',
+      },
+      {
+        name: 'knowledge-time',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(1) .hc-notifpanel__time',
+      },
+      {
+        name: 'knowledge-chevron',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(1) .hc-notifpanel__chevron',
+      },
+      { name: 'daily-item', selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(2)' },
+      {
+        name: 'daily-icon',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(2) .hc-notifpanel__iconwrap',
+      },
+      {
+        name: 'daily-time',
+        selector: '.hc-notifpanel__list:nth-of-type(1) > :nth-child(2) .hc-notifpanel__time',
+      },
+      { name: 'earlier-group', selector: '.hc-notifpanel__group:nth-of-type(2)' },
+      { name: 'skill-item', selector: '.hc-notifpanel__list:nth-of-type(2) > :nth-child(1)' },
+      {
+        name: 'skill-icon',
+        selector: '.hc-notifpanel__list:nth-of-type(2) > :nth-child(1) .hc-notifpanel__iconwrap',
+      },
+      {
+        name: 'skill-title',
+        selector: '.hc-notifpanel__list:nth-of-type(2) > :nth-child(1) .hc-notifpanel__itemtitle',
+      },
+      {
+        name: 'skill-time',
+        selector: '.hc-notifpanel__list:nth-of-type(2) > :nth-child(1) .hc-notifpanel__time',
+      },
     ],
-    mapping: 'BLOCKED',
+    mapping: 'COMPARABLE',
     mappingReason:
-      'The prototype owns a frozen populated notification roster, while the source notification store has no public serialized fixture boundary. Geometry is comparable; content pixels are not an equivalent-state oracle.',
+      'Both legs use the same frozen three-item notification snapshot, cross-midnight clock, order, groups, levels, kinds and read states.',
   },
   {
     id: 'shell-command-palette-default',
@@ -668,61 +774,69 @@ function runtimeFixture(apiPath: string, method: string): unknown {
 }
 
 async function installSourceFixture(page: Page) {
-  await page.addInitScript((config) => {
-    localStorage.clear()
-    sessionStorage.clear()
-    localStorage.setItem('hc-theme', 'light')
-    localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    localStorage.setItem('app_config', JSON.stringify(config))
+  await page.addInitScript(
+    ({ config, notifications }) => {
+      localStorage.clear()
+      sessionStorage.clear()
+      localStorage.setItem('hc-theme', 'light')
+      localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      localStorage.setItem('app_config', JSON.stringify(config))
+      localStorage.setItem(
+        'hc-store-notifications',
+        JSON.stringify({ v: 1, d: { items: notifications } }),
+      )
 
-    const callbacks = new Map<number, (payload: unknown) => unknown>()
-    let nextCallbackID = 1
-    const desktopWindow = window as typeof window & {
-      __TAURI_INTERNALS__?: Record<string, unknown>
-      __TAURI_EVENT_PLUGIN_INTERNALS__?: Record<string, unknown>
-    }
-    const unregisterCallback = (id: number) => callbacks.delete(id)
-    const transformCallback = (callback?: (payload: unknown) => unknown, once = false) => {
-      const id = nextCallbackID++
-      callbacks.set(id, (payload) => {
-        if (once) unregisterCallback(id)
-        return callback?.(payload)
-      })
-      return id
-    }
-    desktopWindow.__TAURI_INTERNALS__ = {
-      callbacks,
-      transformCallback,
-      unregisterCallback,
-      runCallback: (id: number, payload: unknown) => callbacks.get(id)?.(payload),
-      invoke: async (command: string, args: Record<string, unknown> = {}) => {
-        if (command === 'check_engine_health') return true
-        if (command === 'plugin:event|listen') return Number(args.handler ?? 0)
-        if (
-          command === 'plugin:event|unlisten' ||
-          command === 'plugin:event|emit' ||
-          command === 'plugin:clipboard-manager|write_text'
-        ) {
+      const callbacks = new Map<number, (payload: unknown) => unknown>()
+      let nextCallbackID = 1
+      const desktopWindow = window as typeof window & {
+        __TAURI_INTERNALS__?: Record<string, unknown>
+        __TAURI_EVENT_PLUGIN_INTERNALS__?: Record<string, unknown>
+      }
+      const unregisterCallback = (id: number) => callbacks.delete(id)
+      const transformCallback = (callback?: (payload: unknown) => unknown, once = false) => {
+        const id = nextCallbackID++
+        callbacks.set(id, (payload) => {
+          if (once) unregisterCallback(id)
+          return callback?.(payload)
+        })
+        return id
+      }
+      desktopWindow.__TAURI_INTERNALS__ = {
+        callbacks,
+        transformCallback,
+        unregisterCallback,
+        runCallback: (id: number, payload: unknown) => callbacks.get(id)?.(payload),
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          if (command === 'check_engine_health') return true
+          if (command === 'plugin:event|listen') return Number(args.handler ?? 0)
+          if (
+            command === 'plugin:event|unlisten' ||
+            command === 'plugin:event|emit' ||
+            command === 'plugin:clipboard-manager|write_text'
+          ) {
+            return null
+          }
+          if (command === 'proxy_api_request') {
+            const apiPath = String(args.path ?? '')
+            const response = await fetch(`/_hexclaw${apiPath}`, {
+              method: String(args.method ?? 'GET'),
+              body: typeof args.body === 'string' ? args.body : undefined,
+              headers: { 'content-type': 'application/json' },
+            })
+            if (!response.ok)
+              throw new Error(`fixture request failed: ${response.status} ${apiPath}`)
+            return response.text()
+          }
           return null
-        }
-        if (command === 'proxy_api_request') {
-          const apiPath = String(args.path ?? '')
-          const response = await fetch(`/_hexclaw${apiPath}`, {
-            method: String(args.method ?? 'GET'),
-            body: typeof args.body === 'string' ? args.body : undefined,
-            headers: { 'content-type': 'application/json' },
-          })
-          if (!response.ok) throw new Error(`fixture request failed: ${response.status} ${apiPath}`)
-          return response.text()
-        }
-        return null
-      },
-    }
-    desktopWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-      unregisterListener: (_event: string, id: number) => unregisterCallback(id),
-    }
-  }, sourceConfig)
+        },
+      }
+      desktopWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+        unregisterListener: (_event: string, id: number) => unregisterCallback(id),
+      }
+    },
+    { config: sourceConfig, notifications: notificationFixture },
+  )
 
   await page.route('http://localhost:11434/**', (route) =>
     json(route, { models: [], version: 'general-modals-matrix' }),
@@ -911,15 +1025,193 @@ async function captureGeometry(page: Page, targets: GeometryTarget[]) {
   }, targets)
 }
 
-async function runPixelDiff(reference: string, source: string, output: string) {
-  const { stdout } = await execFileAsync('python3', [
-    PIXEL_DIFF_TOOL,
-    reference,
-    source,
-    output,
-    String(PIXEL_THRESHOLD),
-  ])
-  return JSON.parse(stdout) as PixelDiff
+async function captureNotificationVisibleState(page: Page, implementation: boolean) {
+  return page.evaluate((isImplementation) => {
+    const groupSelector = isImplementation ? '.hc-notifpanel__group' : '#notifPanel .notif-group'
+    const itemSelector = isImplementation ? '.hc-notifpanel__item' : '#notifPanel .notif-item'
+    const titleSelector = isImplementation ? '.hc-notifpanel__itemtitle' : '.notif-row b'
+    const bodySelector = isImplementation ? '.hc-notifpanel__text' : '.notif-body'
+    const timeSelector = isImplementation ? '.hc-notifpanel__time' : '.notif-row time'
+    const unreadClass = isImplementation ? 'hc-notifpanel__item--unread' : 'unread'
+    return {
+      groups: [...document.querySelectorAll(groupSelector)].map((node) => node.textContent?.trim()),
+      items: [...document.querySelectorAll<HTMLElement>(itemSelector)].map((item) => ({
+        title: item.querySelector(titleSelector)?.textContent?.trim(),
+        body: item.querySelector(bodySelector)?.textContent?.trim(),
+        time: item.querySelector(timeSelector)?.textContent?.trim(),
+        read: !item.classList.contains(unreadClass),
+      })),
+    }
+  }, implementation)
+}
+
+async function captureNotificationPersistedState(page: Page) {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('hc-store-notifications')
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { v?: number; d?: { items?: unknown[] } }
+    return { version: parsed.v, items: parsed.d?.items ?? [] }
+  })
+}
+
+async function captureNotificationIconSignature(page: Page, implementation: boolean) {
+  return page.evaluate((isImplementation) => {
+    const itemSelector = isImplementation ? '.hc-notifpanel__item' : '#notifPanel .notif-item'
+    const iconSelector = isImplementation ? '.hc-notifpanel__iconwrap svg' : '.notif-ic svg'
+    const actionSelector = isImplementation
+      ? '.hc-notifpanel__actions svg'
+      : '#notifPanel .notif-actions svg'
+    const signature = (svg: SVGElement) => ({
+      viewBox: svg.getAttribute('viewBox'),
+      paths: [...svg.querySelectorAll('path')].map((path) => path.getAttribute('d')),
+      circles: [...svg.querySelectorAll('circle')].map((circle) => ({
+        cx: circle.getAttribute('cx'),
+        cy: circle.getAttribute('cy'),
+        r: circle.getAttribute('r'),
+      })),
+      rects: [...svg.querySelectorAll('rect')].map((rect) => ({
+        x: rect.getAttribute('x'),
+        y: rect.getAttribute('y'),
+        width: rect.getAttribute('width'),
+        height: rect.getAttribute('height'),
+        rx: rect.getAttribute('rx'),
+      })),
+    })
+    return {
+      items: [...document.querySelectorAll<HTMLElement>(itemSelector)].map((item) => {
+        const svg = item.querySelector<SVGElement>(iconSelector)
+        return svg ? signature(svg) : null
+      }),
+      actions: [...document.querySelectorAll<SVGElement>(actionSelector)].map(signature),
+    }
+  }, implementation)
+}
+
+async function commonPanelClip(referencePage: Page, sourcePage: Page) {
+  const reference = await referencePage.locator('#notifPanel').boundingBox()
+  const source = await sourcePage.locator('.hc-notifpanel').boundingBox()
+  if (!reference || !source) throw new Error('notification panel bounding box unavailable')
+  const x = Math.floor(Math.min(reference.x, source.x))
+  const y = Math.floor(Math.min(reference.y, source.y))
+  const right = Math.ceil(Math.max(reference.x + reference.width, source.x + source.width))
+  const bottom = Math.ceil(Math.max(reference.y + reference.height, source.y + source.height))
+  return { x, y, width: right - x, height: bottom - y }
+}
+
+async function runCanvasPixelDiff(
+  page: Page,
+  reference: string,
+  source: string,
+  output: string,
+): Promise<PixelDiff> {
+  const [referenceBytes, sourceBytes] = await Promise.all([readFile(reference), readFile(source)])
+  const result = await page.evaluate(
+    async ({ referenceData, sourceData, threshold }) => {
+      const load = (data: string) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image()
+          img.onload = () => resolve(img)
+          img.onerror = () => reject(new Error('pixel diff image decode failed'))
+          img.src = `data:image/png;base64,${data}`
+        })
+      const [referenceImage, sourceImage] = await Promise.all([
+        load(referenceData),
+        load(sourceData),
+      ])
+      if (
+        referenceImage.naturalWidth !== sourceImage.naturalWidth ||
+        referenceImage.naturalHeight !== sourceImage.naturalHeight
+      ) {
+        throw new Error(
+          `screenshot size mismatch: reference=${referenceImage.naturalWidth}x${referenceImage.naturalHeight}, implementation=${sourceImage.naturalWidth}x${sourceImage.naturalHeight}`,
+        )
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = referenceImage.naturalWidth
+      canvas.height = referenceImage.naturalHeight
+      const context = canvas.getContext('2d', { willReadFrequently: true })!
+      context.drawImage(referenceImage, 0, 0)
+      const referencePixels = context.getImageData(0, 0, canvas.width, canvas.height)
+      context.clearRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(sourceImage, 0, 0)
+      const sourcePixels = context.getImageData(0, 0, canvas.width, canvas.height)
+      const visible = context.createImageData(canvas.width, canvas.height)
+      let changedPixels = 0
+      let minX = canvas.width
+      let minY = canvas.height
+      let maxX = -1
+      let maxY = -1
+      for (let offset = 0; offset < referencePixels.data.length; offset += 4) {
+        const changed =
+          Math.abs(referencePixels.data[offset]! - sourcePixels.data[offset]!) > threshold ||
+          Math.abs(referencePixels.data[offset + 1]! - sourcePixels.data[offset + 1]!) >
+            threshold ||
+          Math.abs(referencePixels.data[offset + 2]! - sourcePixels.data[offset + 2]!) > threshold
+        const pixel = offset / 4
+        const x = pixel % canvas.width
+        const y = Math.floor(pixel / canvas.width)
+        if (changed) {
+          changedPixels++
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+          visible.data.set([255, 35, 35, 255], offset)
+        } else {
+          const gray = Math.round(
+            (referencePixels.data[offset]! * 0.299 +
+              referencePixels.data[offset + 1]! * 0.587 +
+              referencePixels.data[offset + 2]! * 0.114) *
+              0.45,
+          )
+          visible.data.set([gray, gray, gray, 255], offset)
+        }
+      }
+      context.putImageData(visible, 0, 0)
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        threshold,
+        changed_pixels: changedPixels,
+        total_pixels: canvas.width * canvas.height,
+        changed_pixel_ratio: changedPixels / (canvas.width * canvas.height),
+        changed_bbox: changedPixels > 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+        diffBase64: canvas.toDataURL('image/png').split(',')[1]!,
+      }
+    },
+    {
+      referenceData: referenceBytes.toString('base64'),
+      sourceData: sourceBytes.toString('base64'),
+      threshold: PIXEL_THRESHOLD,
+    },
+  )
+  await writeFile(output, Buffer.from(result.diffBase64, 'base64'))
+  return {
+    width: result.width,
+    height: result.height,
+    threshold: result.threshold,
+    changed_pixels: result.changed_pixels,
+    total_pixels: result.total_pixels,
+    changed_pixel_ratio: result.changed_pixel_ratio,
+    changed_bbox: result.changed_bbox,
+  }
+}
+
+async function runPixelDiff(reference: string, source: string, output: string, page: Page) {
+  try {
+    const { stdout } = await execFileAsync('python3', [
+      PIXEL_DIFF_TOOL,
+      reference,
+      source,
+      output,
+      String(PIXEL_THRESHOLD),
+    ])
+    return JSON.parse(stdout) as PixelDiff
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!message.includes("No module named 'PIL'")) throw error
+    return runCanvasPixelDiff(page, reference, source, output)
+  }
 }
 
 async function useEvidencePages(browser: Browser) {
@@ -939,7 +1231,10 @@ async function useEvidencePages(browser: Browser) {
 }
 
 async function exerciseSurface(browser: Browser, surface: Surface, testInfo: TestInfo) {
-  const evidenceDir = path.join(EVIDENCE_ROOT, testInfo.project.name, surface.id)
+  const evidenceDir =
+    surface.id === 'shell-notification-drawer'
+      ? path.join(NOTIFICATION_EVIDENCE_ROOT, testInfo.project.name)
+      : path.join(EVIDENCE_ROOT, testInfo.project.name, surface.id)
   await mkdir(evidenceDir, { recursive: true })
   const referencePath = path.join(evidenceDir, 'reference.png')
   const sourcePath = path.join(evidenceDir, 'current-source.png')
@@ -947,14 +1242,69 @@ async function exerciseSurface(browser: Browser, surface: Surface, testInfo: Tes
 
   const { context, referencePage, sourcePage } = await useEvidencePages(browser)
   try {
+    if (surface.id === 'shell-notification-drawer') {
+      await referencePage.clock.install({ time: NOTIFICATION_NOW })
+      await sourcePage.clock.install({ time: NOTIFICATION_NOW })
+    }
     const referenceOpen = await openReference(referencePage, surface)
     const sourceOpen = await openSource(sourcePage, surface)
 
-    await referencePage.screenshot({ path: referencePath, animations: 'disabled' })
-    await sourcePage.screenshot({ path: sourcePath, animations: 'disabled' })
-    const pixelDiff = await runPixelDiff(referencePath, sourcePath, diffPath)
+    const notificationClip =
+      surface.id === 'shell-notification-drawer'
+        ? await commonPanelClip(referencePage, sourcePage)
+        : undefined
+    await referencePage.screenshot({
+      path: referencePath,
+      animations: 'disabled',
+      clip: notificationClip,
+    })
+    await sourcePage.screenshot({
+      path: sourcePath,
+      animations: 'disabled',
+      clip: notificationClip,
+    })
+    const pixelDiff = await runPixelDiff(referencePath, sourcePath, diffPath, referencePage)
     const referenceGeometry = await captureGeometry(referencePage, surface.referenceTargets)
     const sourceGeometry = await captureGeometry(sourcePage, surface.sourceTargets)
+    const notificationState =
+      surface.id === 'shell-notification-drawer'
+        ? {
+            fixedNow: NOTIFICATION_NOW.toISOString(),
+            fixture: notificationFixture,
+            reference: await captureNotificationVisibleState(referencePage, false),
+            currentSource: await captureNotificationVisibleState(sourcePage, true),
+            currentSourcePersisted: await captureNotificationPersistedState(sourcePage),
+            icons: {
+              reference: await captureNotificationIconSignature(referencePage, false),
+              currentSource: await captureNotificationIconSignature(sourcePage, true),
+            },
+          }
+        : undefined
+    if (notificationState) {
+      const expectedTitles = notificationFixture.map((item) => item.title)
+      const expectedBodies = notificationFixture.map((item) => item.body)
+      const expectedRead = notificationFixture.map((item) => item.read)
+      expect(notificationState.reference.groups).toEqual(['今天', '更早'])
+      expect(notificationState.currentSource.groups).toEqual(['今天', '更早'])
+      expect(notificationState.reference.items.map((item) => item.title)).toEqual(expectedTitles)
+      expect(notificationState.currentSource.items.map((item) => item.title)).toEqual(
+        expectedTitles,
+      )
+      expect(notificationState.reference.items.map((item) => item.body)).toEqual(expectedBodies)
+      expect(notificationState.currentSource.items.map((item) => item.body)).toEqual(expectedBodies)
+      expect(notificationState.reference.items.map((item) => item.read)).toEqual(expectedRead)
+      expect(notificationState.currentSource.items.map((item) => item.read)).toEqual(expectedRead)
+      expect(notificationState.currentSource.items.map((item) => item.time)).toEqual(
+        notificationState.reference.items.map((item) => item.time),
+      )
+      expect(notificationState.icons.currentSource.items).toEqual(
+        notificationState.icons.reference.items,
+      )
+      expect(notificationState.currentSourcePersisted).toEqual({
+        version: 1,
+        items: notificationFixture,
+      })
+    }
     const effectiveMapping: Mapping =
       surface.mapping === 'COMPARABLE' && referenceOpen.ok && sourceOpen.ok
         ? 'COMPARABLE'
@@ -981,6 +1331,7 @@ async function exerciseSurface(browser: Browser, surface: Surface, testInfo: Tes
         sourceURL: SOURCE_URL,
       },
       open: { reference: referenceOpen, currentSource: sourceOpen },
+      state: notificationState,
       pixelDiff,
       acceptance: {
         threshold: PIXEL_THRESHOLD,

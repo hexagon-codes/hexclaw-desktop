@@ -6,6 +6,7 @@
  */
 import { chromium } from '@playwright/test'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,12 +17,29 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const outputDirectory = process.env.HEX_SESSION_MESSAGE_VISUAL_EVIDENCE_DIR?.trim()
   ? path.resolve(process.env.HEX_SESSION_MESSAGE_VISUAL_EVIDENCE_DIR)
   : path.join(root, 'test-results', 'session-message-visual-20260820')
-const prototypeUrl = process.env.HEX_VISUAL_PROTOTYPE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
-const implementationUrl = process.env.HEX_VISUAL_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:5173'
+const prototypeUrl =
+  process.env.HEX_VISUAL_PROTOTYPE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
+const implementationUrl =
+  process.env.HEX_VISUAL_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:5173'
 const viewport = { width: 1440, height: 1000 }
 const visualSessionId = 's-visual'
 const messageSessionId = 's-message-visual'
-const visualTimestamp = '2026-08-20T06:32:00.000Z'
+const maxChangedPixelRatio = Number(process.env.HEX_SESSION_MESSAGE_MAX_PIXEL_RATIO ?? '0.01')
+const prototypeArtifactPath = path.resolve(root, '../hexclaw-docs/prototype/app.html')
+
+function currentShanghaiDate() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+// 参考原型的会话元数据展示为当天 14:32。fixture 固定同一显示状态而非依赖执行日期。
+const visualTimestamp = `${currentShanghaiDate()}T06:32:00.000Z`
 
 function json(route, body, status = 200) {
   return route.fulfill({
@@ -29,6 +47,39 @@ function json(route, body, status = 200) {
     contentType: 'application/json',
     body: JSON.stringify(body),
   })
+}
+
+function isLoopbackOrEmbeddedUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl)
+    if (['about:', 'blob:', 'data:'].includes(url.protocol)) return true
+    return ['127.0.0.1', '::1', 'localhost'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+async function installLoopbackFailClosed(page) {
+  const blockedRequests = []
+  const block = (url, resourceType) => {
+    blockedRequests.push({ url, resourceType })
+  }
+  await page.route('**/*', async (route) => {
+    const request = route.request()
+    if (isLoopbackOrEmbeddedUrl(request.url())) return route.continue()
+    block(request.url(), request.resourceType())
+    return route.abort('blockedbyclient')
+  })
+  page.on('websocket', (socket) => {
+    if (!isLoopbackOrEmbeddedUrl(socket.url())) block(socket.url(), 'websocket')
+  })
+  return blockedRequests
+}
+
+async function sha256(file) {
+  return createHash('sha256')
+    .update(await readFile(file))
+    .digest('hex')
 }
 
 function rounded(value) {
@@ -57,13 +108,112 @@ async function screenshotFromBox(page, selector, filename, width, height) {
 
 async function inspect(page, selectors) {
   return await page.evaluate((requestedSelectors) => {
+    const styleFields = [
+      'display',
+      'visibility',
+      'opacity',
+      'width',
+      'height',
+      'minHeight',
+      'marginLeft',
+      'marginTop',
+      'marginRight',
+      'marginBottom',
+      'padding',
+      'gap',
+      'fontFamily',
+      'fontSize',
+      'fontWeight',
+      'fontVariantNumeric',
+      'letterSpacing',
+      'lineHeight',
+      'textAlign',
+      'color',
+      'backgroundColor',
+      'border',
+      'borderRadius',
+      'boxShadow',
+      'whiteSpace',
+      'overflow',
+      'pointerEvents',
+      'transform',
+      'scrollbarWidth',
+      'stroke',
+      'strokeWidth',
+      'strokeLinecap',
+      'strokeLinejoin',
+      'fill',
+    ]
+    const readStyle = (style, fields = styleFields) =>
+      Object.fromEntries(fields.map((field) => [field, style[field]]))
+    const svgSignature = (svg) => {
+      if (!svg) return null
+      const visualAttributeNames = new Set([
+        'd',
+        'x',
+        'y',
+        'x1',
+        'x2',
+        'y1',
+        'y2',
+        'width',
+        'height',
+        'rx',
+        'ry',
+        'cx',
+        'cy',
+        'r',
+        'points',
+        'fill',
+        'stroke',
+        'stroke-width',
+        'stroke-linecap',
+        'stroke-linejoin',
+      ])
+      return {
+        viewBox: svg.getAttribute('viewBox') ?? '',
+        geometry: Array.from(svg.children).map((child) => ({
+          tagName: child.tagName.toLowerCase(),
+          attributes: Object.fromEntries(
+            Array.from(child.attributes)
+              .filter((attribute) => visualAttributeNames.has(attribute.name))
+              .map((attribute) => [attribute.name, attribute.value]),
+          ),
+        })),
+        style: readStyle(getComputedStyle(svg), [
+          'width',
+          'height',
+          'stroke',
+          'strokeWidth',
+          'strokeLinecap',
+          'strokeLinejoin',
+          'fill',
+        ]),
+      }
+    }
     const read = (selector) => {
       const element = document.querySelector(selector)
       if (!element) return null
       const rect = element.getBoundingClientRect()
       const style = getComputedStyle(element)
+      const svg = element instanceof SVGElement ? element : element.querySelector('svg')
+      const directButtons = Array.from(element.children)
+        .filter((child) => child instanceof HTMLButtonElement)
+        .map((button) => ({
+          ariaLabel: button.getAttribute('aria-label') ?? '',
+          title: button.getAttribute('title') ?? '',
+          disabled: button.disabled,
+          icon: svgSignature(button.querySelector('svg')),
+        }))
       return {
-        text: element.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        text:
+          element.tagName === 'HTML'
+            ? ''
+            : (element.textContent?.replace(/\s+/g, ' ').trim() ?? ''),
+        value:
+          element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+            ? element.value
+            : null,
         hidden: element.hidden,
         ariaHidden: element.getAttribute('aria-hidden'),
         box: {
@@ -76,32 +226,69 @@ async function inspect(page, selectors) {
           bottom: Math.round(rect.bottom * 100) / 100,
           left: Math.round(rect.left * 100) / 100,
         },
-        style: {
-          display: style.display,
-          visibility: style.visibility,
-          opacity: style.opacity,
-          width: style.width,
-          height: style.height,
-          minHeight: style.minHeight,
-          marginLeft: style.marginLeft,
-          marginTop: style.marginTop,
-          padding: style.padding,
-          gap: style.gap,
-          fontSize: style.fontSize,
-          lineHeight: style.lineHeight,
-          color: style.color,
-          backgroundColor: style.backgroundColor,
-          border: style.border,
-          borderRadius: style.borderRadius,
-          boxShadow: style.boxShadow,
-          whiteSpace: style.whiteSpace,
-          pointerEvents: style.pointerEvents,
-          transform: style.transform,
+        style: readStyle(style),
+        pseudo: {
+          selection: readStyle(getComputedStyle(element, '::selection'), [
+            'backgroundColor',
+            'color',
+          ]),
+          webkitScrollbar: readStyle(getComputedStyle(element, '::-webkit-scrollbar'), [
+            'width',
+            'height',
+            'backgroundColor',
+          ]),
+          webkitScrollbarThumb: readStyle(getComputedStyle(element, '::-webkit-scrollbar-thumb'), [
+            'backgroundColor',
+          ]),
         },
+        structure:
+          element.tagName === 'HTML'
+            ? { childCount: 0, children: [], directButtons: [] }
+            : {
+                childCount: element.children.length,
+                children: Array.from(element.children).map((child) => ({
+                  tagName: child.tagName.toLowerCase(),
+                  className: child.getAttribute('class') ?? '',
+                  text: child.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+                })),
+                directButtons,
+              },
+        svg: svgSignature(svg),
       }
     }
     return Object.fromEntries(requestedSelectors.map((selector) => [selector, read(selector)]))
   }, selectors)
+}
+
+function comparePseudo(reference, implementation, pairs) {
+  const diffs = []
+  for (const pair of pairs) {
+    const referenceValue = reference[pair.reference]
+    const implementationValue = implementation[pair.implementation]
+    if (!referenceValue || !implementationValue) {
+      diffs.push({
+        target: pair.target,
+        reason: 'missing-target',
+        referencePresent: Boolean(referenceValue),
+        implementationPresent: Boolean(implementationValue),
+      })
+      continue
+    }
+    for (const field of pair.fields) {
+      const referenceField = referenceValue.pseudo[pair.pseudo][field]
+      const implementationField = implementationValue.pseudo[pair.pseudo][field]
+      if (referenceField !== implementationField) {
+        diffs.push({
+          target: pair.target,
+          pseudo: pair.pseudo,
+          field,
+          reference: referenceField,
+          implementation: implementationField,
+        })
+      }
+    }
+  }
+  return diffs
 }
 
 function compareStyles(reference, implementation, pairs) {
@@ -224,8 +411,10 @@ async function runPixelDiff(reference, implementation, diff) {
       const index = (y * referenceImage.width + x) * 4
       const changed =
         Math.abs(referenceImage.pixels[index] - implementationImage.pixels[index]) > threshold ||
-        Math.abs(referenceImage.pixels[index + 1] - implementationImage.pixels[index + 1]) > threshold ||
-        Math.abs(referenceImage.pixels[index + 2] - implementationImage.pixels[index + 2]) > threshold
+        Math.abs(referenceImage.pixels[index + 1] - implementationImage.pixels[index + 1]) >
+          threshold ||
+        Math.abs(referenceImage.pixels[index + 2] - implementationImage.pixels[index + 2]) >
+          threshold
       if (changed) {
         changedPixels += 1
         minX = Math.min(minX, x)
@@ -237,7 +426,10 @@ async function runPixelDiff(reference, implementation, diff) {
         visibleDiff[index + 2] = 35
       } else {
         const gray = Math.round(
-          ((referenceImage.pixels[index] + referenceImage.pixels[index + 1] + referenceImage.pixels[index + 2]) / 3) *
+          ((referenceImage.pixels[index] +
+            referenceImage.pixels[index + 1] +
+            referenceImage.pixels[index + 2]) /
+            3) *
             0.45,
         )
         visibleDiff[index] = gray
@@ -247,7 +439,10 @@ async function runPixelDiff(reference, implementation, diff) {
       visibleDiff[index + 3] = 255
     }
   }
-  await writeFile(diffBitmap, bitmapBuffer(referenceImage.width, referenceImage.height, visibleDiff))
+  await writeFile(
+    diffBitmap,
+    bitmapBuffer(referenceImage.width, referenceImage.height, visibleDiff),
+  )
   await execFileAsync('sips', ['-s', 'format', 'png', diffBitmap, '--out', diff], { cwd: root })
   return {
     width: referenceImage.width,
@@ -270,54 +465,58 @@ async function prepareImplementationPage(browser) {
     colorScheme: 'light',
   })
   const page = await context.newPage()
+  const blockedRequests = await installLoopbackFailClosed(page)
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' })
 
-  await page.addInitScript(({ sessionId }) => {
-    localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    localStorage.setItem('hexclaw_lastSessionId', sessionId)
-    localStorage.setItem('hc-theme', 'light')
+  await page.addInitScript(
+    ({ sessionId }) => {
+      localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      localStorage.setItem('hexclaw_lastSessionId', sessionId)
+      localStorage.setItem('hc-theme', 'light')
 
-    class BrowserMockWebSocket extends EventTarget {
-      static CONNECTING = 0
-      static OPEN = 1
-      static CLOSING = 2
-      static CLOSED = 3
+      class BrowserMockWebSocket extends EventTarget {
+        static CONNECTING = 0
+        static OPEN = 1
+        static CLOSING = 2
+        static CLOSED = 3
 
-      readyState = BrowserMockWebSocket.CONNECTING
-      onopen = null
-      onmessage = null
-      onerror = null
-      onclose = null
+        readyState = BrowserMockWebSocket.CONNECTING
+        onopen = null
+        onmessage = null
+        onerror = null
+        onclose = null
 
-      constructor(url) {
-        super()
-        this.url = url
-        setTimeout(() => {
-          this.readyState = BrowserMockWebSocket.OPEN
-          const event = new Event('open')
-          this.onopen?.(event)
+        constructor(url) {
+          super()
+          this.url = url
+          setTimeout(() => {
+            this.readyState = BrowserMockWebSocket.OPEN
+            const event = new Event('open')
+            this.onopen?.(event)
+            this.dispatchEvent(event)
+          }, 0)
+        }
+
+        send() {}
+
+        close() {
+          if (this.readyState === BrowserMockWebSocket.CLOSED) return
+          this.readyState = BrowserMockWebSocket.CLOSED
+          const event = new CloseEvent('close')
+          this.onclose?.(event)
           this.dispatchEvent(event)
-        }, 0)
+        }
       }
 
-      send() {}
-
-      close() {
-        if (this.readyState === BrowserMockWebSocket.CLOSED) return
-        this.readyState = BrowserMockWebSocket.CLOSED
-        const event = new CloseEvent('close')
-        this.onclose?.(event)
-        this.dispatchEvent(event)
-      }
-    }
-
-    Object.defineProperty(window, 'WebSocket', {
-      configurable: true,
-      writable: true,
-      value: BrowserMockWebSocket,
-    })
-  }, { sessionId: messageSessionId })
+      Object.defineProperty(window, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: BrowserMockWebSocket,
+      })
+    },
+    { sessionId: messageSessionId },
+  )
 
   const messages = [
     {
@@ -341,9 +540,7 @@ async function prepareImplementationPage(browser) {
     },
   ]
 
-  await page.route('http://localhost:11434/**', (route) =>
-    json(route, { models: [] }),
-  )
+  await page.route('http://localhost:11434/**', (route) => json(route, { models: [] }))
   await page.route('**/health', (route) => json(route, { status: 'healthy' }))
   await page.route('**/_hexclaw/**', async (route) => {
     const requestUrl = new URL(route.request().url())
@@ -368,7 +565,13 @@ async function prepareImplementationPage(browser) {
       })
     }
     if (apiPath === '/api/v1/ollama/status') {
-      return json(route, { running: true, version: 'mock', associated: true, model_count: 0, models: [] })
+      return json(route, {
+        running: true,
+        version: 'mock',
+        associated: true,
+        model_count: 0,
+        models: [],
+      })
     }
     if (apiPath === '/api/v1/sessions' && method === 'GET') {
       return json(route, {
@@ -406,10 +609,12 @@ async function prepareImplementationPage(browser) {
   })
 
   await page.goto(`${implementationUrl.replace(/\/$/, '')}/chat`, { waitUntil: 'domcontentloaded' })
-  await page.locator(`[data-session-id="${visualSessionId}"]`).waitFor({ state: 'visible', timeout: 15_000 })
+  await page
+    .locator(`[data-session-id="${visualSessionId}"]`)
+    .waitFor({ state: 'visible', timeout: 15_000 })
   await page.locator('#msg-m-visual-assistant').waitFor({ state: 'visible', timeout: 15_000 })
   await page.waitForTimeout(350)
-  return { context, page }
+  return { context, page, blockedRequests }
 }
 
 async function preparePrototypePage(browser) {
@@ -421,11 +626,14 @@ async function preparePrototypePage(browser) {
     colorScheme: 'light',
   })
   const page = await context.newPage()
+  const blockedRequests = await installLoopbackFailClosed(page)
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' })
   await page.goto(prototypeUrl, { waitUntil: 'domcontentloaded' })
-  await page.locator('.cs-item[data-session-id="decimal"]').waitFor({ state: 'visible', timeout: 15_000 })
+  await page
+    .locator('.cs-item[data-session-id="decimal"]')
+    .waitFor({ state: 'visible', timeout: 15_000 })
   await page.waitForTimeout(350)
-  return { context, page }
+  return { context, page, blockedRequests }
 }
 
 async function capturePrototypeStates(page) {
@@ -434,9 +642,14 @@ async function capturePrototypeStates(page) {
   await session.hover()
   await page.waitForTimeout(200)
   state.sessionHover = await inspect(page, [
+    'html',
     '.cs-item[data-session-id="decimal"]',
     '.cs-item[data-session-id="decimal"] .cs-pin',
+    '.cs-item[data-session-id="decimal"] .cs-pin svg',
     '.cs-item[data-session-id="decimal"] .cs-more',
+    '.cs-item[data-session-id="decimal"] .cs-more svg',
+    '.cs-item[data-session-id="decimal"] .cs-m',
+    '.cs-item[data-session-id="decimal"] .cs-m > span:first-child',
     '.cs-item[data-session-id="decimal"] .cs-cnt',
   ])
   await screenshotFromBox(
@@ -450,11 +663,15 @@ async function capturePrototypeStates(page) {
   const renameRowHeightBefore = state.sessionHover['.cs-item[data-session-id="decimal"]'].box.height
   await session.locator('.cs-more').click()
   await page.getByRole('menuitem', { name: '重命名' }).click()
-  await page.locator('.cs-item[data-session-id="decimal"] .cs-rename-input').waitFor({ state: 'visible' })
+  await page
+    .locator('.cs-item[data-session-id="decimal"] .cs-rename-input')
+    .waitFor({ state: 'visible' })
   await page.waitForTimeout(100)
   state.rename = await inspect(page, [
     '.cs-item[data-session-id="decimal"]',
     '.cs-item[data-session-id="decimal"] .cs-rename-input',
+    '.cs-item[data-session-id="decimal"] .cs-rename-clear',
+    '.cs-item[data-session-id="decimal"] .cs-rename-clear svg',
     '.cs-item[data-session-id="decimal"] .cs-m',
     '.cs-item[data-session-id="decimal"] .cs-t',
   ])
@@ -491,6 +708,7 @@ async function capturePrototypeStates(page) {
     '.chat-thread > .msg.bot .msg-footer',
     '.chat-thread > .msg.bot .msg-meta',
     '.chat-thread > .msg.bot .msg-actions--assistant',
+    '.chat-thread > .msg.bot .msg-action-sep',
     '.chat-thread > .msg.bot .msg-time',
   ])
   await screenshotFromBox(
@@ -510,12 +728,23 @@ async function captureImplementationStates(page) {
   await session.hover()
   await page.waitForTimeout(200)
   state.sessionHover = await inspect(page, [
+    'html',
     sessionSelector,
     `${sessionSelector} .hc-sessions__pin-action`,
+    `${sessionSelector} .hc-sessions__pin-action svg`,
     `${sessionSelector} .hc-sessions__actions`,
+    `${sessionSelector} .hc-sessions__actions svg`,
+    `${sessionSelector} .hc-sessions__meta`,
+    `${sessionSelector} .hc-sessions__time`,
     `${sessionSelector} .hc-sessions__count`,
   ])
-  await screenshotFromBox(page, sessionSelector, 'implementation-session-hover.png', 280, 58)
+  await screenshotFromBox(
+    page,
+    sessionSelector,
+    'implementation-session-hover.png',
+    280,
+    58,
+  )
 
   const renameRowHeightBefore = state.sessionHover[sessionSelector].box.height
   await session.locator('.hc-sessions__actions').click()
@@ -525,12 +754,22 @@ async function captureImplementationStates(page) {
   state.rename = await inspect(page, [
     sessionSelector,
     `${sessionSelector} .hc-sessions__rename-input`,
+    `${sessionSelector} .hc-clearable-field__button`,
+    `${sessionSelector} .hc-clearable-field__button svg`,
     `${sessionSelector} .hc-sessions__meta`,
     `${sessionSelector} .hc-sessions__title`,
   ])
   state.rename.rowHeightBefore = renameRowHeightBefore
-  state.rename.rowHeightDelta = rounded(state.rename[sessionSelector].box.height - renameRowHeightBefore)
-  await screenshotFromBox(page, sessionSelector, 'implementation-session-rename.png', 280, 58)
+  state.rename.rowHeightDelta = rounded(
+    state.rename[sessionSelector].box.height - renameRowHeightBefore,
+  )
+  await screenshotFromBox(
+    page,
+    sessionSelector,
+    'implementation-session-rename.png',
+    280,
+    58,
+  )
 
   const user = page.locator('#msg-m-visual-user')
   await user.hover()
@@ -553,6 +792,7 @@ async function captureImplementationStates(page) {
     '#msg-m-visual-assistant .hc-msg__footer',
     '#msg-m-visual-assistant .hc-msg__meta',
     '#msg-m-visual-assistant .hc-msg-actions--assistant',
+    '#msg-m-visual-assistant .hc-msg-actions__divider',
     '#msg-m-visual-assistant .hc-msg__time',
   ])
   await screenshotFromBox(
@@ -566,6 +806,25 @@ async function captureImplementationStates(page) {
 }
 
 function semanticChecks(reference, implementation) {
+  const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
+  const actionControls = (actions) =>
+    actions.map(({ ariaLabel, title, disabled }) => ({ ariaLabel, title, disabled }))
+  const actionIconGeometry = (actions) => actions.map((action) => action.icon?.geometry ?? null)
+  const referenceUserActions =
+    reference.userHover['.chat-thread > .msg.user .msg-actions--user'].structure.directButtons
+  const implementationUserActions =
+    implementation.userHover['#msg-m-visual-user .hc-msg-actions--user'].structure.directButtons
+  const referenceAssistantActions =
+    reference.assistantFooter['.chat-thread > .msg.bot .msg-actions--assistant'].structure
+      .directButtons
+  const implementationAssistantActions =
+    implementation.assistantFooter['#msg-m-visual-assistant .hc-msg-actions--assistant'].structure
+      .directButtons
+  const referenceAssistantMeta = reference.assistantFooter['.chat-thread > .msg.bot .msg-meta']
+  const implementationAssistantMeta =
+    implementation.assistantFooter['#msg-m-visual-assistant .hc-msg__meta']
+  const hasUnexpectedAction = (actions) =>
+    actions.some((action) => /更多|删除|more|delete/i.test(`${action.ariaLabel} ${action.title}`))
   const checks = {
     referenceRenameKeepsRowHeight: reference.rename.rowHeightDelta === 0,
     implementationRenameKeepsRowHeight: implementation.rename.rowHeightDelta === 0,
@@ -579,8 +838,8 @@ function semanticChecks(reference, implementation) {
       reference.assistantFooter['.chat-thread > .msg.bot .msg-actions--assistant'].box.right <=
       reference.assistantFooter['.chat-thread > .msg.bot .msg-time'].box.left,
     implementationAssistantActionsBeforeTime:
-      implementation.assistantFooter['#msg-m-visual-assistant .hc-msg-actions--assistant'].box.right <=
-      implementation.assistantFooter['#msg-m-visual-assistant .hc-msg__time'].box.left,
+      implementation.assistantFooter['#msg-m-visual-assistant .hc-msg-actions--assistant'].box
+        .right <= implementation.assistantFooter['#msg-m-visual-assistant .hc-msg__time'].box.left,
     referenceAssistantActionGapIsTwo:
       reference.assistantFooter['.chat-thread > .msg.bot .msg-actions--assistant'].style.gap ===
       '2px',
@@ -594,8 +853,8 @@ function semanticChecks(reference, implementation) {
     referenceSessionActionsVisible:
       reference.sessionHover['.cs-item[data-session-id="decimal"] .cs-more'].style.opacity === '1',
     implementationSessionActionsVisible:
-      implementation.sessionHover[`[data-session-id="${visualSessionId}"] .hc-sessions__actions`].style
-        .opacity === '1',
+      implementation.sessionHover[`[data-session-id="${visualSessionId}"] .hc-sessions__actions`]
+        .style.opacity === '1',
     referenceSessionCountTouchesPin:
       Math.abs(
         reference.sessionHover['.cs-item[data-session-id="decimal"] .cs-pin'].box.left -
@@ -603,11 +862,69 @@ function semanticChecks(reference, implementation) {
       ) <= 0.01,
     implementationSessionCountTouchesPin:
       Math.abs(
-        implementation.sessionHover[`[data-session-id="${visualSessionId}"] .hc-sessions__pin-action`]
-          .box.left -
+        implementation.sessionHover[
+          `[data-session-id="${visualSessionId}"] .hc-sessions__pin-action`
+        ].box.left -
           implementation.sessionHover[`[data-session-id="${visualSessionId}"] .hc-sessions__count`]
             .box.right,
       ) <= 0.01,
+    referenceRenameHasClearControl:
+      Boolean(reference.rename['.cs-item[data-session-id="decimal"] .cs-rename-clear']) &&
+      Boolean(reference.rename['.cs-item[data-session-id="decimal"] .cs-rename-clear svg']),
+    implementationRenameHasClearControl:
+      Boolean(
+        implementation.rename[`[data-session-id="${visualSessionId}"] .hc-clearable-field__button`],
+      ) &&
+      Boolean(
+        implementation.rename[
+          `[data-session-id="${visualSessionId}"] .hc-clearable-field__button svg`
+        ],
+      ),
+    referenceUserActionExactSet:
+      referenceUserActions.length === 2 && !hasUnexpectedAction(referenceUserActions),
+    implementationUserActionExactSet:
+      implementationUserActions.length === 2 &&
+      same(actionControls(referenceUserActions), actionControls(implementationUserActions)) &&
+      !hasUnexpectedAction(implementationUserActions),
+    referenceAssistantActionExactSet:
+      referenceAssistantActions.length === 6 && !hasUnexpectedAction(referenceAssistantActions),
+    implementationAssistantActionExactSet:
+      implementationAssistantActions.length === 6 &&
+      same(
+        actionControls(referenceAssistantActions),
+        actionControls(implementationAssistantActions),
+      ) &&
+      !hasUnexpectedAction(implementationAssistantActions),
+    userActionIconGeometryExact: same(
+      actionIconGeometry(referenceUserActions),
+      actionIconGeometry(implementationUserActions),
+    ),
+    assistantActionIconGeometryExact: same(
+      actionIconGeometry(referenceAssistantActions),
+      actionIconGeometry(implementationAssistantActions),
+    ),
+    referenceAssistantMetaSingleSource:
+      referenceAssistantMeta.structure.childCount === 1 &&
+      referenceAssistantMeta.structure.children[0]?.tagName === 'span',
+    implementationAssistantMetaSingleSource:
+      implementationAssistantMeta.structure.childCount === 1 &&
+      implementationAssistantMeta.structure.children[0]?.tagName === 'span',
+    assistantMetaExactStructure: same(
+      referenceAssistantMeta.structure.children,
+      implementationAssistantMeta.structure.children,
+    ),
+    sessionPinIconGeometryExact: same(
+      reference.sessionHover['.cs-item[data-session-id="decimal"] .cs-pin svg'].svg?.geometry,
+      implementation.sessionHover[
+        `[data-session-id="${visualSessionId}"] .hc-sessions__pin-action svg`
+      ].svg?.geometry,
+    ),
+    sessionMoreIconGeometryExact: same(
+      reference.sessionHover['.cs-item[data-session-id="decimal"] .cs-more svg'].svg?.geometry,
+      implementation.sessionHover[
+        `[data-session-id="${visualSessionId}"] .hc-sessions__actions svg`
+      ].svg?.geometry,
+    ),
   }
   return checks
 }
@@ -625,6 +942,7 @@ try {
 
   const reference = await capturePrototypeStates(prototype.page)
   const implementationState = await captureImplementationStates(implementation.page)
+  const blockedRequests = [...prototype.blockedRequests, ...implementation.blockedRequests]
   const checks = semanticChecks(reference, implementationState)
   const failedChecks = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -636,7 +954,15 @@ try {
         target: 'rename-input',
         reference: '.cs-item[data-session-id="decimal"] .cs-rename-input',
         implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__rename-input`,
-        fields: ['height', 'fontSize', 'lineHeight', 'color', 'border', 'borderRadius', 'boxShadow'],
+        fields: [
+          'height',
+          'fontSize',
+          'lineHeight',
+          'color',
+          'border',
+          'borderRadius',
+          'boxShadow',
+        ],
       },
       {
         target: 'rename-meta',
@@ -644,8 +970,62 @@ try {
         implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__meta`,
         fields: ['visibility', 'opacity', 'marginTop'],
       },
+      {
+        target: 'rename-clear-control',
+        reference: '.cs-item[data-session-id="decimal"] .cs-rename-clear',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-clearable-field__button`,
+        fields: ['width', 'height', 'borderRadius', 'color', 'backgroundColor', 'opacity'],
+      },
+      {
+        target: 'rename-clear-icon',
+        reference: '.cs-item[data-session-id="decimal"] .cs-rename-clear svg',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-clearable-field__button svg`,
+        fields: [
+          'width',
+          'height',
+          'stroke',
+          'strokeWidth',
+          'strokeLinecap',
+          'strokeLinejoin',
+          'fill',
+        ],
+      },
     ]),
     ...compareStyles(reference.sessionHover, implementationState.sessionHover, [
+      {
+        target: 'session-row',
+        reference: '.cs-item[data-session-id="decimal"]',
+        implementation: `[data-session-id="${visualSessionId}"]`,
+        fields: ['width', 'height', 'padding', 'borderRadius', 'backgroundColor'],
+      },
+      {
+        target: 'session-time',
+        reference: '.cs-item[data-session-id="decimal"] .cs-m > span:first-child',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__time`,
+        fields: [
+          'fontFamily',
+          'fontSize',
+          'fontWeight',
+          'fontVariantNumeric',
+          'letterSpacing',
+          'lineHeight',
+          'color',
+        ],
+      },
+      {
+        target: 'session-count',
+        reference: '.cs-item[data-session-id="decimal"] .cs-cnt',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__count`,
+        fields: [
+          'fontFamily',
+          'fontSize',
+          'fontWeight',
+          'fontVariantNumeric',
+          'letterSpacing',
+          'lineHeight',
+          'color',
+        ],
+      },
       {
         target: 'session-pin-hover',
         reference: '.cs-item[data-session-id="decimal"] .cs-pin',
@@ -653,10 +1033,38 @@ try {
         fields: ['width', 'height', 'opacity', 'color', 'backgroundColor', 'borderRadius'],
       },
       {
+        target: 'session-pin-icon',
+        reference: '.cs-item[data-session-id="decimal"] .cs-pin svg',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__pin-action svg`,
+        fields: [
+          'width',
+          'height',
+          'stroke',
+          'strokeWidth',
+          'strokeLinecap',
+          'strokeLinejoin',
+          'fill',
+        ],
+      },
+      {
         target: 'session-more-hover',
         reference: '.cs-item[data-session-id="decimal"] .cs-more',
         implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__actions`,
         fields: ['width', 'height', 'opacity', 'color', 'backgroundColor', 'borderRadius'],
+      },
+      {
+        target: 'session-more-icon',
+        reference: '.cs-item[data-session-id="decimal"] .cs-more svg',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__actions svg`,
+        fields: [
+          'width',
+          'height',
+          'stroke',
+          'strokeWidth',
+          'strokeLinecap',
+          'strokeLinejoin',
+          'fill',
+        ],
       },
     ]),
     ...compareStyles(reference.userHover, implementationState.userHover, [
@@ -692,15 +1100,55 @@ try {
         implementation: '#msg-m-visual-assistant .hc-msg__footer',
         fields: ['gap'],
       },
+      {
+        target: 'assistant-meta',
+        reference: '.chat-thread > .msg.bot .msg-meta',
+        implementation: '#msg-m-visual-assistant .hc-msg__meta',
+        fields: ['display', 'fontSize', 'lineHeight', 'color', 'opacity', 'whiteSpace', 'gap'],
+      },
+      {
+        target: 'assistant-divider',
+        reference: '.chat-thread > .msg.bot .msg-action-sep',
+        implementation: '#msg-m-visual-assistant .hc-msg-actions__divider',
+        fields: ['width', 'height', 'marginLeft', 'marginRight', 'backgroundColor'],
+      },
+    ]),
+    ...compareStyles(reference.sessionHover, implementationState.sessionHover, [
+      {
+        target: 'document-scrollbar-width',
+        reference: 'html',
+        implementation: 'html',
+        fields: ['scrollbarWidth'],
+      },
+    ]),
+    ...comparePseudo(reference.rename, implementationState.rename, [
+      {
+        target: 'rename-input-selection',
+        reference: '.cs-item[data-session-id="decimal"] .cs-rename-input',
+        implementation: `[data-session-id="${visualSessionId}"] .hc-sessions__rename-input`,
+        pseudo: 'selection',
+        fields: ['backgroundColor', 'color'],
+      },
+    ]),
+    ...comparePseudo(reference.sessionHover, implementationState.sessionHover, [
+      {
+        target: 'document-webkit-scrollbar',
+        reference: 'html',
+        implementation: 'html',
+        pseudo: 'webkitScrollbar',
+        fields: ['width', 'height', 'backgroundColor'],
+      },
+      {
+        target: 'document-webkit-scrollbar-thumb',
+        reference: 'html',
+        implementation: 'html',
+        pseudo: 'webkitScrollbarThumb',
+        fields: ['backgroundColor'],
+      },
     ]),
   ]
 
-  const screenshotPairs = [
-    'session-hover',
-    'session-rename',
-    'user-hover',
-    'assistant-footer',
-  ]
+  const screenshotPairs = ['session-hover', 'session-rename', 'user-hover', 'assistant-footer']
   const pixelDiffs = {}
   for (const name of screenshotPairs) {
     const referencePath = path.join(outputDirectory, `reference-${name}.png`)
@@ -708,12 +1156,16 @@ try {
     const diffPath = path.join(outputDirectory, `diff-${name}.png`)
     pixelDiffs[name] = await runPixelDiff(referencePath, implementationPath, diffPath)
   }
+  const pixelFailures = Object.entries(pixelDiffs)
+    .filter(([, diff]) => diff.changed_pixel_ratio > maxChangedPixelRatio)
+    .map(([name, diff]) => ({ name, changed_pixel_ratio: diff.changed_pixel_ratio }))
+  const prototypeSha256 = await sha256(prototypeArtifactPath)
 
   const report = {
     generatedAt: new Date().toISOString(),
     mode: 'browser-mock-only',
     viewport: { ...viewport, deviceScaleFactor: 1, locale: 'zh-CN', colorScheme: 'light' },
-    sources: { prototypeUrl, implementationUrl },
+    sources: { prototypeUrl, implementationUrl, prototypeSha256 },
     fixture: {
       session: { title: '小数乘法讲解', time: '14:32', count: '2' },
       userMessage: { time: '14:09', actions: ['copy', 'edit'] },
@@ -728,12 +1180,33 @@ try {
     failedChecks,
     styleDiffs,
     pixelDiffs,
+    network: {
+      policy: 'loopback-fail-closed',
+      blockedRequests,
+    },
+    acceptance: {
+      maxChangedPixelRatio,
+      pixelFailures,
+      passed:
+        failedChecks.length === 0 &&
+        styleDiffs.length === 0 &&
+        pixelFailures.length === 0 &&
+        blockedRequests.length === 0,
+    },
     geometry: { reference, implementation: implementationState },
   }
   await writeFile(path.join(outputDirectory, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
 
-  if (failedChecks.length) {
-    throw new Error(`视觉语义检查失败：${failedChecks.join(', ')}`)
+  if (failedChecks.length || styleDiffs.length || pixelFailures.length || blockedRequests.length) {
+    throw new Error(
+      `视觉验收失败：语义=${failedChecks.join(', ') || '无'}；样式=${
+        styleDiffs.map((diff) => `${diff.target}.${diff.field ?? diff.reason}`).join(', ') || '无'
+      }；像素=${
+        pixelFailures
+          .map((failure) => `${failure.name}:${(failure.changed_pixel_ratio * 100).toFixed(2)}%`)
+          .join(', ') || '无'
+      }；出站=${blockedRequests.length ? JSON.stringify(blockedRequests) : '无'}`,
+    )
   }
   console.log(JSON.stringify({ outputDirectory, pixelDiffs, styleDiffs }, null, 2))
 } finally {

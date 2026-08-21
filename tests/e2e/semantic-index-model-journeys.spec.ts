@@ -12,6 +12,34 @@ const initialOpenRouterProviderId = 'pvd_v1_11111111111111111111111111111111'
 const canonicalProviderIdPattern = /^pvd_v1_[0-9a-f]{32}$/
 const knowledgeReferenceURL =
   process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
+const loopbackHosts = new Set(['127.0.0.1', 'localhost'])
+
+function isLoopbackHTTPURL(url: URL) {
+  return (url.protocol === 'http:' || url.protocol === 'https:') && loopbackHosts.has(url.hostname)
+}
+
+function assertLoopbackHTTPURL(value: string, label: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error(`${label} must be a loopback HTTP(S) URL, received ${value}`)
+  }
+  if (!isLoopbackHTTPURL(url)) {
+    throw new Error(`${label} must be a loopback HTTP(S) URL, received ${value}`)
+  }
+}
+
+async function installLoopbackOnlyNetworkGuard(page: Page, externalAttempts: string[]) {
+  await page.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    if (isLoopbackHTTPURL(url)) return route.fallback()
+    externalAttempts.push(url.toString())
+    return route.abort('blockedbyclient')
+  })
+}
+
+assertLoopbackHTTPURL(knowledgeReferenceURL, 'HEX_UI_REFERENCE_URL')
 
 const cloudServing: KnowledgeEmbeddingProfile = {
   profile_id: 'cloud-sf',
@@ -161,6 +189,26 @@ function expectNoAxeViolations(audits: AxeAudit[]) {
   expect(violationCount, summary || 'axe WCAG A/AA violations').toBe(0)
 }
 
+test('语义索引视觉网络护栏只接受 loopback HTTP(S) 端点', async ({ page }) => {
+  expect(() =>
+    assertLoopbackHTTPURL('http://127.0.0.1:5187/knowledge', 'implementation'),
+  ).not.toThrow()
+  expect(() => assertLoopbackHTTPURL('https://localhost:16070/app.html', 'reference')).not.toThrow()
+  expect(() => assertLoopbackHTTPURL('https://example.invalid/app.html', 'reference')).toThrow(
+    /loopback HTTP\(S\)/,
+  )
+  expect(() => assertLoopbackHTTPURL('file:///tmp/app.html', 'reference')).toThrow(
+    /loopback HTTP\(S\)/,
+  )
+
+  const externalAttempts: string[] = []
+  await installLoopbackOnlyNetworkGuard(page, externalAttempts)
+  await expect(page.goto('https://example.invalid/semantic-index-visual-guard')).rejects.toThrow(
+    /ERR_/,
+  )
+  expect(externalAttempts).toEqual(['https://example.invalid/semantic-index-visual-guard'])
+})
+
 class SemanticIndexBackend {
   policy = readyPolicy()
   documents: Array<Record<string, unknown>> = []
@@ -203,12 +251,15 @@ class SemanticIndexBackend {
   canonicalLLMReadbacks = 0
   readonly capabilityProbeRequests: string[] = []
   readonly connectionProbeRequests: unknown[] = []
+  readonly externalAttempts: string[] = []
   private pull = deferred<PullResolution>()
   private reindexAcceptance = deferred<void>()
   private nextProviderSequence = 2
+  private retryJobSequence = 0
   private hasUnreadLLMUpdate = false
 
   async install(page: Page) {
+    await installLoopbackOnlyNetworkGuard(page, this.externalAttempts)
     await page.addInitScript(() => {
       localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
       sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
@@ -253,6 +304,28 @@ class SemanticIndexBackend {
       indexing_activity: {
         state: 'retry_wait',
         processing_documents: 1,
+        chunks_done: 41,
+        chunks_total: 225,
+      },
+    }
+  }
+
+  setFailedDesired(selection: EmbeddingSelection) {
+    this.policy = {
+      ...readyPolicy(),
+      policy_version: 8,
+      selection: structuredClone(selection),
+      desired_revision: {
+        revision_id: 'rev-cloud-failed',
+        job_id: 'job-cloud-failed',
+        state: 'failed',
+        profile: structuredClone(cloudOpenAI),
+        chunks_done: 41,
+        chunks_total: 225,
+      },
+      indexing_activity: {
+        state: 'failed',
+        processing_documents: 0,
         chunks_done: 41,
         chunks_total: 225,
       },
@@ -485,7 +558,9 @@ class SemanticIndexBackend {
               (profile) => profile.profile_id === body.selection.profile_id,
             )
           : null
-      const jobId = target ? `job-${target.profile_id}` : 'job-auto'
+      const retrySuffix =
+        this.policy.desired_revision?.state === 'failed' ? `-retry-${++this.retryJobSequence}` : ''
+      const jobId = target ? `job-${target.profile_id}${retrySuffix}` : 'job-auto'
       this.policy = {
         ...this.policy,
         policy_version: this.policy.policy_version + 1,
@@ -877,7 +952,8 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
       pixelDiffPath,
       Buffer.from(pixelDiff.diff_data_url.replace(/^data:image\/png;base64,/, ''), 'base64'),
     )
-    const { diff_data_url: _diffDataURL, ...pixelDiffSummary } = pixelDiff
+    const { diff_data_url: diffDataURL, ...pixelDiffSummary } = pixelDiff
+    void diffDataURL
     const comparisonJSON = JSON.stringify(
       {
         reference: referenceGeometry,
@@ -1142,7 +1218,8 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
       pixelDiffPath,
       Buffer.from(pixelDiff.diff_data_url.replace(/^data:image\/png;base64,/, ''), 'base64'),
     )
-    const { diff_data_url: _diffDataURL, ...pixelDiffSummary } = pixelDiff
+    const { diff_data_url: diffDataURL, ...pixelDiffSummary } = pixelDiff
+    void diffDataURL
 
     // 临时上传行只暴露可安全执行的取消操作；同态文本、badge、操作与像素均需一致。
     const comparison = {
@@ -1277,6 +1354,461 @@ test.describe('知识库语义索引：云端与本地模型用户旅程', () =>
 
     await expect.poll(() => backend.cancelledJobIds).toEqual(['job-cloud-waiting'])
     await expect(page.getByTestId('kb-semantic-index-status')).toHaveText('已就绪')
+  })
+
+  test('语义索引重试：三种权威状态的按钮 exact-set、键盘与成对视觉证据', async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.addInitScript(() => localStorage.setItem('hc-theme', 'light'))
+    const backend = new SemanticIndexBackend()
+    await backend.install(page)
+
+    const states = [
+      {
+        id: 'failed-profile-match',
+        setup: () => backend.setFailedDesired({ kind: 'profile', profile_id: 'cloud-openai' }),
+        prototype: {
+          selectionKind: 'profile',
+          selectedProfileId: 'cloud-fast',
+          vectorState: 'failed',
+        },
+        actions: ['取消重建', '重试'],
+        capturedAction: '重试',
+        retries: 1,
+      },
+      {
+        id: 'retry-wait',
+        setup: () => backend.setRetryWaiting(),
+        prototype: {
+          selectionKind: 'profile',
+          selectedProfileId: 'cloud-fast',
+          vectorState: 'retry_wait',
+        },
+        actions: ['取消重建'],
+        capturedAction: '取消重建',
+        retries: 0,
+      },
+      {
+        id: 'failed-auto',
+        setup: () => backend.setFailedDesired({ kind: 'auto' }),
+        prototype: { selectionKind: 'auto', selectedProfileId: null, vectorState: 'failed' },
+        actions: ['取消重建'],
+        capturedAction: '取消重建',
+        retries: 0,
+      },
+    ] as const
+    const visualResiduals: Array<Record<string, unknown>> = []
+
+    const captureContext = async (
+      targetPage: Page,
+      rowSelector: string,
+      stateSelector: string,
+      selectorSelector: string,
+    ) =>
+      targetPage.evaluate(
+        ({ rowSelector, stateSelector, selectorSelector }) => {
+          const row = document.querySelector<HTMLElement>(rowSelector)
+          const state = document.querySelector<HTMLElement>(stateSelector)
+          const selector = document.querySelector<HTMLElement>(selectorSelector)
+          if (!row || !state || !selector) throw new Error('Missing semantic visual target')
+          const rowBox = row.getBoundingClientRect()
+          const selectorBox = selector.getBoundingClientRect()
+          const stateBox = state.getBoundingClientRect()
+          const toBox = (rect: DOMRect) => ({
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          })
+          const actionStyle = (button: HTMLButtonElement) => {
+            const rect = button.getBoundingClientRect()
+            const style = getComputedStyle(button)
+            return {
+              text: button.textContent?.trim() ?? '',
+              tagName: button.tagName,
+              box: {
+                x: rect.x - rowBox.x,
+                y: rect.y - rowBox.y,
+                width: rect.width,
+                height: rect.height,
+              },
+              style: {
+                color: style.color,
+                background: style.backgroundColor,
+                borderColor: style.borderColor,
+                borderRadius: style.borderRadius,
+                padding: style.padding,
+                margin: style.margin,
+                fontSize: style.fontSize,
+                fontWeight: style.fontWeight,
+                lineHeight: style.lineHeight,
+                opacity: style.opacity,
+              },
+            }
+          }
+          return {
+            row: toBox(rowBox),
+            state: { text: state.textContent?.trim() ?? '', box: toBox(stateBox) },
+            selector: {
+              text: selector.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+              disabled:
+                selector.getAttribute('aria-disabled') === 'true' ||
+                (selector instanceof HTMLButtonElement && selector.disabled),
+              box: toBox(selectorBox),
+            },
+            actions: Array.from(row.querySelectorAll<HTMLButtonElement>('button'))
+              .filter((button) => !button.hidden && getComputedStyle(button).display !== 'none')
+              .map(actionStyle),
+          }
+        },
+        { rowSelector, stateSelector, selectorSelector },
+      )
+
+    const createPixelDiff = async (
+      referencePage: Page,
+      referencePath: string,
+      implementationPath: string,
+      pixelDiffPath: string,
+    ) => {
+      const [referencePNG, implementationPNG] = await Promise.all([
+        readFile(referencePath),
+        readFile(implementationPath),
+      ])
+      const pixelDiff = await referencePage.evaluate(
+        async ({ reference, implementation }) => {
+          const loadImage = (source: string) =>
+            new Promise<HTMLImageElement>((resolve, reject) => {
+              const image = new Image()
+              image.onload = () => resolve(image)
+              image.onerror = () => reject(new Error('Unable to decode screenshot'))
+              image.src = source
+            })
+          const [referenceImage, implementationImage] = await Promise.all([
+            loadImage(reference),
+            loadImage(implementation),
+          ])
+          const width = Math.max(referenceImage.width, implementationImage.width)
+          const height = Math.max(referenceImage.height, implementationImage.height)
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const context = canvas.getContext('2d', { willReadFrequently: true })
+          if (!context) throw new Error('Canvas 2D context is unavailable')
+          context.drawImage(referenceImage, 0, 0)
+          const referencePixels = context.getImageData(0, 0, width, height)
+          context.clearRect(0, 0, width, height)
+          context.drawImage(implementationImage, 0, 0)
+          const implementationPixels = context.getImageData(0, 0, width, height)
+          const diff = context.createImageData(width, height)
+          let changedPixels = 0
+          let minX = width
+          let minY = height
+          let maxX = -1
+          let maxY = -1
+          for (let index = 0; index < referencePixels.data.length; index += 4) {
+            const changed =
+              Math.abs(referencePixels.data[index] - implementationPixels.data[index]) > 8 ||
+              Math.abs(referencePixels.data[index + 1] - implementationPixels.data[index + 1]) >
+                8 ||
+              Math.abs(referencePixels.data[index + 2] - implementationPixels.data[index + 2]) > 8
+            const pixel = index / 4
+            const x = pixel % width
+            const y = Math.floor(pixel / width)
+            if (changed) {
+              changedPixels += 1
+              minX = Math.min(minX, x)
+              minY = Math.min(minY, y)
+              maxX = Math.max(maxX, x)
+              maxY = Math.max(maxY, y)
+              diff.data[index] = 255
+              diff.data[index + 1] = 35
+              diff.data[index + 2] = 35
+            } else {
+              const gray = Math.round(
+                referencePixels.data[index] * 0.299 +
+                  referencePixels.data[index + 1] * 0.587 +
+                  referencePixels.data[index + 2] * 0.114,
+              )
+              const dimmed = Math.round(gray * 0.45)
+              diff.data[index] = dimmed
+              diff.data[index + 1] = dimmed
+              diff.data[index + 2] = dimmed
+            }
+            diff.data[index + 3] = 255
+          }
+          context.putImageData(diff, 0, 0)
+          return {
+            reference_size: { width: referenceImage.width, height: referenceImage.height },
+            implementation_size: {
+              width: implementationImage.width,
+              height: implementationImage.height,
+            },
+            changed_pixels: changedPixels,
+            total_pixels: width * height,
+            changed_pixel_ratio: width * height ? changedPixels / (width * height) : 0,
+            changed_bbox: maxX >= 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+            diff_data_url: canvas.toDataURL('image/png'),
+          }
+        },
+        {
+          reference: `data:image/png;base64,${referencePNG.toString('base64')}`,
+          implementation: `data:image/png;base64,${implementationPNG.toString('base64')}`,
+        },
+      )
+      await writeFile(
+        pixelDiffPath,
+        Buffer.from(pixelDiff.diff_data_url.replace(/^data:image\/png;base64,/, ''), 'base64'),
+      )
+      const { diff_data_url: diffDataURL, ...summary } = pixelDiff
+      void diffDataURL
+      return summary
+    }
+
+    for (const state of states) {
+      state.setup()
+      const implementationNetworkStart = backend.externalAttempts.length
+      await page.goto('/knowledge')
+      const semantic = new SemanticIndexPage(page)
+      await expect(semantic.card).toBeVisible()
+      await semantic.expand()
+
+      const implementationRow = page.getByTestId('kb-semantic-index-actual')
+      const visibleActionTexts = async (locator: ReturnType<Page['locator']>) =>
+        locator.evaluateAll((buttons) =>
+          buttons
+            .filter(
+              (button) =>
+                !button.hidden &&
+                getComputedStyle(button).display !== 'none' &&
+                getComputedStyle(button).visibility !== 'hidden',
+            )
+            .map((button) => button.textContent?.trim() ?? ''),
+        )
+      const implementationActions = await visibleActionTexts(implementationRow.locator('button'))
+      await expect(page.getByTestId('kb-semantic-index-retry-rebuild')).toHaveCount(state.retries)
+      if (JSON.stringify(implementationActions) !== JSON.stringify(state.actions)) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'implementation-actions',
+          expected: state.actions,
+          actual: implementationActions,
+        })
+      }
+
+      const referencePage = await page.context().newPage()
+      const referenceExternalAttempts: string[] = []
+      await installLoopbackOnlyNetworkGuard(referencePage, referenceExternalAttempts)
+      await referencePage.setViewportSize({ width: 1440, height: 1000 })
+      await referencePage.goto(knowledgeReferenceURL)
+      await referencePage.locator('.sb-item[data-screen="knowledge"]').click()
+      const prototypeProjection = await referencePage.evaluate((prototype) => {
+        const state = globalThis.eval('KB_EMBEDDING_STATE') as {
+          selectionKind: string
+          selectedProfileId: string | null
+          pendingSelectionKind: string | null
+          pendingProfileId: string | null
+          vectorIndexState: string
+          activeProfileId: string | null
+          rebuild: { current: number; total: number }
+        }
+        state.selectionKind = prototype.selectionKind
+        state.selectedProfileId = prototype.selectedProfileId
+        state.pendingSelectionKind = prototype.selectionKind
+        state.pendingProfileId = 'cloud-fast'
+        state.vectorIndexState = prototype.vectorState
+        state.activeProfileId = 'cloud-bge'
+        state.rebuild.current = 41
+        state.rebuild.total = 225
+        const render = globalThis.eval('renderKbEmbeddingState') as () => void
+        const expand = globalThis.eval('toggleKbIndexPanel') as (force: boolean) => void
+        render()
+        expand(true)
+        return {
+          selectionKind: state.selectionKind,
+          selectedProfileId: state.selectedProfileId,
+          pendingSelectionKind: state.pendingSelectionKind,
+          pendingProfileId: state.pendingProfileId,
+          vectorIndexState: state.vectorIndexState,
+        }
+      }, state.prototype)
+
+      const referenceRow = referencePage.locator('.kb-active-line')
+      const referenceActions = await visibleActionTexts(referenceRow.locator('button'))
+      if (JSON.stringify(referenceActions) !== JSON.stringify(state.actions)) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'reference-actions',
+          expected: state.actions,
+          actual: referenceActions,
+          prototypeProjection,
+        })
+      }
+
+      const referenceAction = referencePage.getByRole('button', {
+        name: state.capturedAction,
+        exact: true,
+      })
+      const implementationAction = page.getByRole('button', {
+        name: state.capturedAction,
+        exact: true,
+      })
+      await expect(referenceAction).toBeVisible()
+      await expect(implementationAction).toBeVisible()
+
+      const referencePath = testInfo.outputPath(`reference-semantic-retry-${state.id}.png`)
+      const implementationPath = testInfo.outputPath(
+        `implementation-semantic-retry-${state.id}.png`,
+      )
+      const pixelDiffPath = testInfo.outputPath(`pixel-diff-semantic-retry-${state.id}.png`)
+      await referenceAction.screenshot({ path: referencePath, animations: 'disabled' })
+      await implementationAction.screenshot({ path: implementationPath, animations: 'disabled' })
+      const pixelDiff = await createPixelDiff(
+        referencePage,
+        referencePath,
+        implementationPath,
+        pixelDiffPath,
+      )
+      const [reference, implementation] = await Promise.all([
+        captureContext(
+          referencePage,
+          '.kb-active-line',
+          '#kbIndexStateLabel',
+          '#kbModelSelectorButton',
+        ),
+        captureContext(
+          page,
+          '[data-testid="kb-semantic-index-actual"]',
+          '.kb-index-card__actual-state',
+          '[data-testid="kb-index-model-trigger"]',
+        ),
+      ])
+      const implementationExternalAttempts = backend.externalAttempts.slice(
+        implementationNetworkStart,
+      )
+      const comparisonJSON = JSON.stringify(
+        {
+          state: state.id,
+          viewport: { width: 1440, height: 1000, dpr: 1, locale: 'zh-CN', theme: 'light' },
+          comparable: 'semantic-action-control',
+          prototypeProjection,
+          network: {
+            implementationExternalAttempts,
+            referenceExternalAttempts,
+          },
+          reference,
+          implementation,
+          pixelDiff,
+        },
+        null,
+        2,
+      )
+      await writeFile(
+        testInfo.outputPath(`comparison-semantic-retry-${state.id}.json`),
+        comparisonJSON,
+      )
+      for (const [name, file] of [
+        [`reference-semantic-retry-${state.id}`, referencePath],
+        [`implementation-semantic-retry-${state.id}`, implementationPath],
+        [`pixel-diff-semantic-retry-${state.id}`, pixelDiffPath],
+      ] as const) {
+        await testInfo.attach(name, { body: await readFile(file), contentType: 'image/png' })
+      }
+      await testInfo.attach(`comparison-semantic-retry-${state.id}`, {
+        body: comparisonJSON,
+        contentType: 'application/json',
+      })
+
+      const implementationActionNames = implementation.actions.map((action) => action.text)
+      const referenceActionNames = reference.actions.map((action) => action.text)
+      if (JSON.stringify(implementationActionNames) !== JSON.stringify(state.actions)) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'implementation-action-snapshot',
+          expected: state.actions,
+          actual: implementationActionNames,
+        })
+      }
+      if (JSON.stringify(referenceActionNames) !== JSON.stringify(state.actions)) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'reference-action-snapshot',
+          expected: state.actions,
+          actual: referenceActionNames,
+          prototypeProjection,
+        })
+      }
+      if (implementationExternalAttempts.length > 0 || referenceExternalAttempts.length > 0) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'network',
+          implementationExternalAttempts,
+          referenceExternalAttempts,
+        })
+      }
+      const implementationActionStyle = implementation.actions.find(
+        (action) => action.text === state.capturedAction,
+      )?.style
+      const referenceActionStyle = reference.actions.find(
+        (action) => action.text === state.capturedAction,
+      )?.style
+      if (JSON.stringify(implementationActionStyle) !== JSON.stringify(referenceActionStyle)) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'action-computed-style',
+          action: state.capturedAction,
+          reference: referenceActionStyle,
+          implementation: implementationActionStyle,
+        })
+      }
+      if (pixelDiff.changed_pixel_ratio > 0.001) {
+        visualResiduals.push({
+          state: state.id,
+          surface: 'pixel-diff',
+          referenceSize: pixelDiff.reference_size,
+          implementationSize: pixelDiff.implementation_size,
+          changedPixelRatio: pixelDiff.changed_pixel_ratio,
+          changedBBox: pixelDiff.changed_bbox,
+        })
+      }
+
+      if (state.retries === 1) {
+        await expect(implementationAction).toHaveAccessibleName('重试')
+        await implementationAction.focus()
+        await expect(implementationAction).toBeFocused()
+        await implementationAction.press('Enter')
+        await expect
+          .poll(() => backend.applyRequests)
+          .toEqual([
+            {
+              expected_policy_version: 8,
+              selection: { kind: 'profile', profile_id: 'cloud-openai' },
+            },
+          ])
+        expect(backend.cancelledJobIds).toEqual([])
+        await expect(page.getByTestId('kb-semantic-index-retry-rebuild')).toHaveCount(0)
+        await expect(page.getByTestId('kb-semantic-index-actual')).toContainText(
+          '当前索引可用 · 新索引 0/225',
+        )
+      }
+      await referencePage.close()
+    }
+
+    const visualSummary = JSON.stringify(
+      {
+        status: visualResiduals.length === 0 ? 'pass' : 'not-pass',
+        comparable: 'semantic-action-control',
+        residuals: visualResiduals,
+      },
+      null,
+      2,
+    )
+    await writeFile(testInfo.outputPath('semantic-retry-visual-summary.json'), visualSummary)
+    await testInfo.attach('semantic-retry-visual-summary', {
+      body: visualSummary,
+      contentType: 'application/json',
+    })
+    expect(visualResiduals, visualSummary).toEqual([])
   })
 
   test('本地模型：下载跨页面保持单任务，目录确认安装后仍需用户显式应用', async ({
