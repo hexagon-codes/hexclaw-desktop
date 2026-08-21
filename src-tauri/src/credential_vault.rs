@@ -14,6 +14,8 @@ const MAX_SECRET_BYTES: usize = 64 * 1024;
 const CREDENTIAL_REF_PREFIX: &str = "hexclaw-vault:v1";
 const PROVIDER_ID_PREFIX: &str = "pvd_v1_";
 const LEGACY_PROVIDER_ID_PREFIX: &str = "pvd_legacy_v1_";
+const PROVIDER_VAULT_ERROR: &str =
+    "provider credentials require the native config coordinator";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -172,6 +174,13 @@ impl CredentialKey {
     }
 }
 
+fn ensure_os_vault_access_allowed(key: &CredentialKey) -> Result<(), String> {
+    if key.owner_kind == CredentialOwnerKind::Provider {
+        return Err(PROVIDER_VAULT_ERROR.into());
+    }
+    Ok(())
+}
+
 fn validate_provider_instance_id(provider_instance_id: &str) -> Result<(), String> {
     let hex = provider_instance_id
         .strip_prefix(PROVIDER_ID_PREFIX)
@@ -192,6 +201,7 @@ fn validate_provider_instance_id(provider_instance_id: &str) -> Result<(), Strin
 }
 
 fn entry(key: &CredentialKey) -> Result<(String, Entry), String> {
+    ensure_os_vault_access_allowed(key)?;
     let credential_ref = key.credential_ref()?;
     let entry = Entry::new(SERVICE, &credential_ref)
         .map_err(|error| format!("open OS credential vault: {error}"))?;
@@ -232,9 +242,7 @@ pub async fn put_credential(
     key: CredentialKey,
     secret: String,
 ) -> Result<CredentialMutationReceipt, String> {
-    if key.owner_kind == CredentialOwnerKind::Provider {
-        return Err("provider credentials require the native config coordinator".into());
-    }
+    ensure_os_vault_access_allowed(&key)?;
     let secret = Zeroizing::new(secret);
     tauri::async_runtime::spawn_blocking(move || {
         let credential_ref = write_secret(&key, secret.as_str())?;
@@ -249,9 +257,7 @@ pub async fn put_credential(
 
 #[tauri::command]
 pub async fn delete_credential(key: CredentialKey) -> Result<CredentialMutationReceipt, String> {
-    if key.owner_kind == CredentialOwnerKind::Provider {
-        return Err("provider credentials require the native config coordinator".into());
-    }
+    ensure_os_vault_access_allowed(&key)?;
     tauri::async_runtime::spawn_blocking(move || {
         let credential_ref = key.credential_ref()?;
         let updated = remove_secret(&key)?;
@@ -289,6 +295,34 @@ mod tests {
             owner_id: owner_id.into(),
             secret_kind: CredentialSecretKind::ApiKey,
         }
+    }
+
+    fn assert_provider_vault_denied<T>(result: Result<T, String>) {
+        match result {
+            Ok(_) => panic!("provider credential unexpectedly reached the OS vault"),
+            Err(error) => assert_eq!(error, PROVIDER_VAULT_ERROR),
+        }
+    }
+
+    #[test]
+    fn provider_vault_read_fails_closed_before_keyring_access() {
+        assert_provider_vault_denied(read_secret(&key(
+            "pvd_v1_00112233445566778899aabbccddeeff",
+        )));
+    }
+
+    #[test]
+    fn provider_vault_delete_fails_closed_before_keyring_access() {
+        assert_provider_vault_denied(remove_secret(&key(
+            "pvd_v1_00112233445566778899aabbccddeeff",
+        )));
+    }
+
+    #[tokio::test]
+    async fn provider_vault_presence_fails_closed_before_keyring_access() {
+        assert_provider_vault_denied(
+            credential_present(key("pvd_v1_00112233445566778899aabbccddeeff")).await,
+        );
     }
 
     #[test]

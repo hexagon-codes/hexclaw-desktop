@@ -17,5 +17,11 @@
   "bundle": {
     "targets": ["app"],
     "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["http://127.0.0.1:16062/__hexclaw_test_updater__"],
+      "dangerousInsecureTransportProtocol": true
+    }
   }
 }

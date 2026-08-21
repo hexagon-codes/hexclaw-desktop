@@ -157,10 +157,30 @@ pub fn hide_app_for_system_quit_confirmation(app: &tauri::AppHandle) {
         .show();
 }
 
+/// 处理来自系统菜单的退出请求，并返回本次生命周期决策。
+pub fn handle_system_quit_request(app: &tauri::AppHandle) -> LifecycleDecision {
+    let decision = lifecycle_decision(app, LifecycleSource::SystemQuit);
+    match decision {
+        LifecycleDecision::HideAndPrompt => hide_app_for_system_quit_confirmation(app),
+        LifecycleDecision::HideKeepRunning => hide_app_to_background(app),
+        LifecycleDecision::Exit => {}
+    }
+    decision
+}
+
+/// 停止由桌面应用拥有的后台引擎；重复调用保持幂等。
+pub fn stop_background_engines() {
+    crate::ollama::stop_ollama();
+    if let Err(error) = crate::sidecar::stop_sidecar() {
+        log::error!("停止 sidecar 失败: {}", error);
+    }
+}
+
 /// 真正退出应用。
 pub fn request_app_exit(app: &tauri::AppHandle) {
     let decision = lifecycle_decision(app, LifecycleSource::ExplicitTrayQuit);
     debug_assert_eq!(decision, LifecycleDecision::Exit);
+    stop_background_engines();
     app.exit(0);
 }
 
@@ -255,8 +275,12 @@ pub fn setup_close_behavior(app: &tauri::App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{consume_app_exit_request, ALLOW_APP_EXIT};
+    use super::{
+        consume_app_exit_request, stop_background_engines, LifecycleController,
+        LifecycleDecision, LifecycleSource, ALLOW_APP_EXIT,
+    };
     use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn explicit_exit_request_is_consumed_once() {
@@ -264,5 +288,47 @@ mod tests {
 
         assert!(consume_app_exit_request());
         assert!(!consume_app_exit_request());
+    }
+
+    #[test]
+    fn first_system_quit_stays_running_and_second_inside_two_seconds_exits() {
+        let mut controller = LifecycleController::default();
+        let first = Instant::now();
+
+        assert_eq!(
+            controller.decide(LifecycleSource::SystemQuit, first),
+            LifecycleDecision::HideAndPrompt
+        );
+        assert_eq!(
+            controller.decide(
+                LifecycleSource::SystemQuit,
+                first + Duration::from_millis(1_999)
+            ),
+            LifecycleDecision::Exit
+        );
+    }
+
+    #[test]
+    fn system_quit_at_two_seconds_rearms_instead_of_exiting() {
+        let mut controller = LifecycleController::default();
+        let first = Instant::now();
+
+        assert_eq!(
+            controller.decide(LifecycleSource::SystemQuit, first),
+            LifecycleDecision::HideAndPrompt
+        );
+        assert_eq!(
+            controller.decide(
+                LifecycleSource::SystemQuit,
+                first + Duration::from_millis(2_000)
+            ),
+            LifecycleDecision::HideAndPrompt
+        );
+    }
+
+    #[test]
+    fn stopping_background_engines_twice_is_idempotent() {
+        stop_background_engines();
+        stop_background_engines();
     }
 }

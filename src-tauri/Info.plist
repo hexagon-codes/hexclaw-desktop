@@ -12,5 +12,7 @@
   </array>
   <key>CFBundleAllowMixedLocalizations</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>HexClaw 仅在你主动使用语音输入时访问麦克风，并将录音发送到你配置的语音转写服务以生成消息。</string>
 </dict>
 </plist>

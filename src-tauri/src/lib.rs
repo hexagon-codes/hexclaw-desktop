@@ -93,6 +93,8 @@ pub fn run() {
             }
 
             menu::setup(app)?;
+            test_runtime::setup_native_quit_test_harness(app)
+                .map_err(|error| format!("native quit test harness setup: {error}"))?;
 
             // 系统托盘
             tray::setup(app)?;
@@ -214,10 +216,7 @@ pub fn run() {
                 });
             }
             tauri::WindowEvent::Destroyed if window.label() == "main" => {
-                ollama::stop_ollama();
-                if let Err(error) = sidecar::stop_sidecar() {
-                    log::error!("停止 sidecar 失败: {}", error);
-                }
+                window::stop_background_engines();
             }
             _ => {}
         })
@@ -240,19 +239,10 @@ pub fn run() {
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 let _ = code;
-                match crate::window::lifecycle_decision(
-                    app_handle,
-                    crate::window::LifecycleSource::SystemQuit,
-                ) {
-                    crate::window::LifecycleDecision::Exit => {}
-                    crate::window::LifecycleDecision::HideAndPrompt => {
-                        api.prevent_exit();
-                        crate::window::hide_app_for_system_quit_confirmation(app_handle);
-                    }
-                    crate::window::LifecycleDecision::HideKeepRunning => {
-                        api.prevent_exit();
-                        crate::window::hide_app_to_background(app_handle);
-                    }
+                if crate::window::handle_system_quit_request(app_handle)
+                    != crate::window::LifecycleDecision::Exit
+                {
+                    api.prevent_exit();
                 }
             }
             _ => {}

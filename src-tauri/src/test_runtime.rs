@@ -8,6 +8,7 @@ pub const TEST_HOME_ENV: &str = "HEXCLAW_TEST_HOME";
 pub const TEST_SIDECAR_PORT_ENV: &str = "HEXCLAW_SIDECAR_PORT";
 pub const TEST_LLM_CONFIG_MODE_ENV: &str = "HEXCLAW_TEST_LLM_CONFIG_MODE";
 pub const TEST_PROFILE_CATCHUP_ENV: &str = "HEXCLAW_TEST_PROFILE_CATCHUP";
+pub const NATIVE_QUIT_TEST_HARNESS_ENV: &str = "HEXCLAW_NATIVE_QUIT_TEST_HARNESS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TestLLMConfigMode {
@@ -282,6 +283,62 @@ pub fn is_enabled() -> bool {
     std::env::var(TEST_MODE_ENV).ok().as_deref() == Some("1")
 }
 
+fn native_quit_test_harness_enabled(
+    test_mode: Option<&str>,
+    harness: Option<&str>,
+) -> Result<bool, String> {
+    match harness.unwrap_or("0") {
+        "0" => Ok(false),
+        "1" => Ok(test_mode == Some("1")),
+        invalid => Err(format!(
+            "{NATIVE_QUIT_TEST_HARNESS_ENV} must be 0 or 1, got {invalid:?}"
+        )),
+    }
+}
+
+/// 在隔离测试模式中通过文件握手触发原生菜单的同一退出分发器。
+pub fn setup_native_quit_test_harness(app: &tauri::App) -> Result<(), String> {
+    let test_mode = std::env::var(TEST_MODE_ENV).ok();
+    let harness = std::env::var(NATIVE_QUIT_TEST_HARNESS_ENV).ok();
+    if !native_quit_test_harness_enabled(test_mode.as_deref(), harness.as_deref())? {
+        return Ok(());
+    }
+
+    let ctx =
+        current()?.ok_or_else(|| "native quit test harness requires test mode".to_string())?;
+    let marker_dir = ctx.home.join(".hexclaw").join("native-quit-harness");
+    std::fs::create_dir_all(&marker_dir).map_err(|error| {
+        format!(
+            "failed to create native quit test harness directory {}: {error}",
+            marker_dir.display()
+        )
+    })?;
+
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        for sequence in 1..=2 {
+            let request = marker_dir.join(format!("request-{sequence}"));
+            while !request.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+
+            let acknowledgement = marker_dir.join(format!("ack-{sequence}"));
+            let action_handle = app_handle.clone();
+            if let Err(error) = app_handle.run_on_main_thread(move || {
+                crate::menu::dispatch_native_menu_action(&action_handle, "system_quit");
+                if let Err(error) = std::fs::write(&acknowledgement, b"ok\n") {
+                    log::error!("native quit test harness acknowledgement failed: {error}");
+                }
+            }) {
+                log::error!("native quit test harness dispatch failed: {error}");
+                return;
+            }
+        }
+    });
+
+    Ok(())
+}
+
 pub fn should_start_managed_ollama_for(test_mode: Option<&str>) -> bool {
     test_mode != Some("1")
 }
@@ -502,6 +559,10 @@ mod tests {
         assert!(should_start_managed_ollama_for(None));
         assert!(should_start_managed_ollama_for(Some("true")));
         assert!(!should_start_managed_ollama_for(Some("1")));
+        assert!(!native_quit_test_harness_enabled(None, Some("1")).unwrap());
+        assert!(!native_quit_test_harness_enabled(Some("true"), Some("1")).unwrap());
+        assert!(native_quit_test_harness_enabled(Some("1"), Some("1")).unwrap());
+        assert!(native_quit_test_harness_enabled(Some("1"), Some("invalid")).is_err());
     }
 
     #[test]

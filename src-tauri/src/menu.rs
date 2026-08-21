@@ -8,7 +8,16 @@ use tauri::{
     Emitter, Manager,
 };
 
-fn dispatch_native_menu_action(app: &tauri::AppHandle, id: &str) {
+fn system_quit_label() -> &'static str {
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en".to_string());
+    if locale.to_ascii_lowercase().starts_with("zh") {
+        "退出 HexClaw"
+    } else {
+        "Quit HexClaw"
+    }
+}
+
+pub(crate) fn dispatch_native_menu_action(app: &tauri::AppHandle, id: &str) {
     let window = app.get_webview_window("main");
     match id {
         "open" => {
@@ -53,6 +62,13 @@ fn dispatch_native_menu_action(app: &tauri::AppHandle, id: &str) {
         "quit" => {
             crate::window::request_app_exit(app);
         }
+        "system_quit" => {
+            if crate::window::handle_system_quit_request(app)
+                == crate::window::LifecycleDecision::Exit
+            {
+                crate::window::request_app_exit(app);
+            }
+        }
         _ => {}
     }
 }
@@ -79,7 +95,9 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &PredefinedMenuItem::hide_others(handle, None)?,
             &PredefinedMenuItem::show_all(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::quit(handle, None)?,
+            &MenuItemBuilder::with_id("system_quit", system_quit_label())
+                .accelerator("CmdOrCtrl+Q")
+                .build(handle)?,
         ],
     )?;
 
@@ -174,4 +192,17 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::system_quit_label;
+
+    #[test]
+    fn system_quit_copy_matches_the_approved_locales() {
+        assert!(matches!(
+            system_quit_label(),
+            "退出 HexClaw" | "Quit HexClaw"
+        ));
+    }
 }

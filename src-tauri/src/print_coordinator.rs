@@ -358,6 +358,17 @@ fn verify_existing_receipt(
     Ok(())
 }
 
+fn should_replay_dialog_open(record: &CoordinatorRecord, job: &PrintJobProjection) -> bool {
+    record.receipt.is_none()
+        && record.state == CoordinatorState::DialogOpen
+        && job.status == "preparing"
+}
+
+fn step_status_matches(actual_status: &str, expected_status: &str) -> bool {
+    actual_status == expected_status
+        || (expected_status == "dialog_open" && actual_status == "submitted")
+}
+
 // Keeping the expected receipt fields explicit makes every print-saga
 // transition auditable; grouping them would add an otherwise unused wrapper.
 #[allow(clippy::too_many_arguments)]
@@ -386,7 +397,7 @@ async fn post_step(
         }
         if let Some(receipt) = expected_receipt {
             verify_existing_receipt(&job, source_digest, receipt)?;
-        } else if job.status != expected_status && job.status != "submitted" {
+        } else if !step_status_matches(&job.status, expected_status) {
             return Err("Sidecar PrintJob state did not record the native boundary".into());
         }
         return Ok(job);
@@ -400,11 +411,8 @@ async fn post_step(
         }
         if let Some(receipt) = expected_receipt {
             verify_existing_receipt(&job, source_digest, receipt)?;
-        } else if !matches!(
-            job.status.as_str(),
-            "dialog_open" | "submitted" | "printed" | "cancelled" | "failed" | "outcome_unknown"
-        ) {
-            return Err("PrintJob conflict did not prove dialog_open".into());
+        } else if !step_status_matches(&job.status, expected_status) {
+            return Err("PrintJob conflict did not prove the expected state".into());
         }
         return Ok(job);
     }
@@ -492,7 +500,7 @@ pub async fn execute_print_job(
     let job = query_job(&client, &agent, &print_job_id).await?;
     let owner_digest = sha256_hex(agent.as_bytes());
 
-    if let Some(record) = load(&app, &print_job_id, job.attempt_count).await? {
+    let recovered = if let Some(record) = load(&app, &print_job_id, job.attempt_count).await? {
         if record.owner_digest != owner_digest || record.source_digest != job.source_digest {
             return Err("local print coordinator record conflicts with Sidecar PrintJob".into());
         }
@@ -511,7 +519,24 @@ pub async fn execute_print_job(
         if record.receipt.is_some() {
             return converge(&app, &client, &agent, record).await;
         }
-        if matches!(
+        if should_replay_dialog_open(&record, &job) {
+            post_step(
+                &client,
+                &agent,
+                &print_job_id,
+                "events",
+                &json!({ "agent": agent, "status": "dialog_open" }),
+                "dialog_open",
+                &record.source_digest,
+                None,
+            )
+            .await?;
+            let (pdf, pdf_digest) = fetch_print_pdf(&client, &agent, &job).await?;
+            if pdf_digest != record.pdf_digest {
+                return Err("recovered print artifact digest changed".into());
+            }
+            Some((record, pdf))
+        } else if matches!(
             record.state,
             CoordinatorState::DialogOpen | CoordinatorState::OutcomeUnknown
         ) {
@@ -526,43 +551,52 @@ pub async fn execute_print_job(
             };
             persist(&app, &record).await?;
             return converge(&app, &client, &agent, record).await;
+        } else {
+            None
         }
-    }
-
-    if job.status != "preparing" {
-        return Err(format!(
-            "PrintJob is not eligible for native execution: {}",
-            job.status
-        ));
-    }
-    let (pdf, pdf_digest) = fetch_print_pdf(&client, &agent, &job).await?;
-    let mut record = CoordinatorRecord {
-        operation_id: print_job_id.clone(),
-        attempt_count: job.attempt_count,
-        owner_digest,
-        source_digest: job.source_digest.clone(),
-        pdf_digest,
-        state: CoordinatorState::Prepared,
-        receipt: None,
+    } else {
+        None
     };
-    persist(&app, &record).await?;
 
-    // Persist the local fence before telling Sidecar/opening the OS dialog. A
-    // crash between these steps may become outcome_unknown, but never a second
-    // physical print.
-    record.state = CoordinatorState::DialogOpen;
-    persist(&app, &record).await?;
-    post_step(
-        &client,
-        &agent,
-        &print_job_id,
-        "events",
-        &json!({ "agent": agent, "status": "dialog_open" }),
-        "dialog_open",
-        &record.source_digest,
-        None,
-    )
-    .await?;
+    let (pdf, mut record) = if let Some((record, pdf)) = recovered {
+        (pdf, record)
+    } else {
+        if job.status != "preparing" {
+            return Err(format!(
+                "PrintJob is not eligible for native execution: {}",
+                job.status
+            ));
+        }
+        let (pdf, pdf_digest) = fetch_print_pdf(&client, &agent, &job).await?;
+        let record = CoordinatorRecord {
+            operation_id: print_job_id.clone(),
+            attempt_count: job.attempt_count,
+            owner_digest,
+            source_digest: job.source_digest.clone(),
+            pdf_digest,
+            state: CoordinatorState::Prepared,
+            receipt: None,
+        };
+        persist(&app, &record).await?;
+        (pdf, record)
+    };
+
+    if record.state != CoordinatorState::DialogOpen {
+        // 先持久化本地栅栏，再通知 Sidecar 或打开系统对话框，避免发生第二次物理打印。
+        record.state = CoordinatorState::DialogOpen;
+        persist(&app, &record).await?;
+        post_step(
+            &client,
+            &agent,
+            &print_job_id,
+            "events",
+            &json!({ "agent": agent, "status": "dialog_open" }),
+            "dialog_open",
+            &record.source_digest,
+            None,
+        )
+        .await?;
+    }
 
     let receipt = match print_pdf_bytes(app.clone(), pdf).await {
         Ok(receipt) => receipt,
@@ -581,6 +615,145 @@ pub async fn execute_print_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        env, fs,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        thread,
+        time::Duration,
+    };
+
+    struct TestSidecarEnv {
+        home: PathBuf,
+        previous: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl TestSidecarEnv {
+        fn new(port: u16) -> Self {
+            let home = env::temp_dir().join(format!("hexclaw-print-test-{}", Uuid::new_v4()));
+            fs::create_dir_all(home.join(".hexclaw")).expect("create test home");
+            let names = [
+                crate::test_runtime::TEST_MODE_ENV,
+                crate::test_runtime::TEST_HOME_ENV,
+                crate::test_runtime::TEST_SIDECAR_PORT_ENV,
+            ];
+            let previous = names
+                .into_iter()
+                .map(|name| (name, env::var(name).ok()))
+                .collect();
+            env::set_var(crate::test_runtime::TEST_MODE_ENV, "1");
+            env::set_var(crate::test_runtime::TEST_HOME_ENV, &home);
+            env::set_var(crate::test_runtime::TEST_SIDECAR_PORT_ENV, port.to_string());
+            crate::sidecar::initialize_capability_token().expect("initialize test capability");
+            Self { home, previous }
+        }
+    }
+
+    impl Drop for TestSidecarEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.previous {
+                if let Some(value) = value {
+                    env::set_var(name, value);
+                } else {
+                    env::remove_var(name);
+                }
+            }
+            let _ = fs::remove_dir_all(&self.home);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct CapturedRequest {
+        path: String,
+        body: Vec<u8>,
+    }
+
+    fn read_request(stream: &mut TcpStream) -> CapturedRequest {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set request timeout");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).expect("read request");
+            assert!(read > 0, "request ended before headers");
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let header = String::from_utf8_lossy(&bytes[..header_end]);
+        let request_line = header.lines().next().expect("request line");
+        let path = request_line
+            .split_whitespace()
+            .nth(1)
+            .expect("request path")
+            .to_string();
+        let content_length = header
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while bytes.len() - header_end < content_length {
+            let read = stream.read(&mut buffer).expect("read request body");
+            assert!(read > 0, "request ended before body");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        CapturedRequest {
+            path,
+            body: bytes[header_end..header_end + content_length].to_vec(),
+        }
+    }
+
+    fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write fixture response");
+    }
+
+    fn print_job_json(status: &str) -> String {
+        json!({
+            "print_job": {
+                "print_job_id": "job-1",
+                "status": status,
+                "artifact_id": "artifact-1",
+                "source_digest": "source-1",
+                "attempt_count": 0
+            }
+        })
+        .to_string()
+    }
+
+    fn spawn_one_response_server(
+        status: &'static str,
+        body: String,
+    ) -> (
+        u16,
+        Arc<Mutex<Option<CapturedRequest>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture server");
+        let port = listener.local_addr().expect("fixture address").port();
+        let captured = Arc::new(Mutex::new(None));
+        let captured_for_thread = Arc::clone(&captured);
+        let thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept fixture request");
+            let request = read_request(&mut stream);
+            *captured_for_thread.lock().expect("lock request") = Some(request);
+            write_response(&mut stream, status, &body);
+        });
+        (port, captured, thread)
+    }
 
     fn receipt() -> NativePrintReceipt {
         NativePrintReceipt {
@@ -662,5 +835,73 @@ mod tests {
             "eventUrl": "http://127.0.0.1:1/steal"
         }));
         assert!(injected.is_err());
+    }
+
+    #[tokio::test]
+    async fn post_step_does_not_accept_submitted_for_terminal_states() {
+        for expected_status in ["cancelled", "failed", "outcome_unknown"] {
+            let (port, captured, server) =
+                spawn_one_response_server("200 OK", print_job_json("submitted"));
+            let environment = TestSidecarEnv::new(port);
+            let client = SidecarClient::new(Duration::from_secs(2)).expect("client");
+
+            let result = post_step(
+                &client,
+                "agent-1",
+                "job-1",
+                "events",
+                &json!({ "agent": "agent-1", "status": expected_status }),
+                expected_status,
+                "source-1",
+                None,
+            )
+            .await;
+
+            server.join().expect("join fixture server");
+            assert!(
+                result.is_err(),
+                "submitted must not satisfy a {expected_status} post_step"
+            );
+            let request = captured
+                .lock()
+                .expect("lock request")
+                .take()
+                .expect("captured request");
+            assert_eq!(request.path, "/api/k12/print-jobs/job-1/events");
+            let body: Value = serde_json::from_slice(&request.body).expect("event body");
+            assert_eq!(
+                body.get("status").and_then(Value::as_str),
+                Some(expected_status)
+            );
+            drop(environment);
+        }
+    }
+
+    #[test]
+    fn dialog_open_record_replays_when_sidecar_is_still_preparing() {
+        let record = CoordinatorRecord {
+            operation_id: "job-1".into(),
+            attempt_count: 0,
+            owner_digest: sha256_hex(b"agent-1"),
+            source_digest: "source-1".into(),
+            pdf_digest: "pdf-1".into(),
+            state: CoordinatorState::DialogOpen,
+            receipt: None,
+        };
+        let preparing_job = PrintJobProjection {
+            print_job_id: "job-1".into(),
+            status: "preparing".into(),
+            artifact_id: "artifact-1".into(),
+            source_digest: "source-1".into(),
+            attempt_count: 0,
+            native_job_id: None,
+            native_receipt_id: None,
+            printer_snapshot: None,
+        };
+        assert!(should_replay_dialog_open(&record, &preparing_job));
+
+        let mut dialog_open_job = preparing_job.clone();
+        dialog_open_job.status = "dialog_open".into();
+        assert!(!should_replay_dialog_open(&record, &dialog_open_job));
     }
 }

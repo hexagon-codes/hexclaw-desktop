@@ -37,7 +37,8 @@ fn bug_20260726_033_red_x_hides_without_stopping_background_engines() {
 fn bug_20260726_033_first_cmd_q_arms_two_second_native_quit_hint() {
     let window = read_source("src/window.rs");
     let app = read_source("src/lib.rs");
-    let combined = format!("{window}\n{app}");
+    let menu = read_source("src/menu.rs");
+    let combined = format!("{window}\n{app}\n{menu}");
     let mut violations = Vec::new();
 
     let configured_window = if combined.contains("Duration::from_secs(2)") {
@@ -60,6 +61,24 @@ fn bug_20260726_033_first_cmd_q_arms_two_second_native_quit_hint() {
         && combined.contains("notification()");
     if !has_cmd_q_hint {
         violations.push("first Cmd+Q must emit a native hint that states the 2-second window");
+    }
+
+    if menu.contains("PredefinedMenuItem::quit") {
+        violations.push(
+            "Cmd+Q must not use the predefined Quit item that bypasses the lifecycle controller",
+        );
+    }
+    if !(menu.contains("MenuItemBuilder::with_id(\"system_quit\", system_quit_label())")
+        && menu.contains(".accelerator(\"CmdOrCtrl+Q\")"))
+    {
+        violations.push("Cmd+Q must use the system_quit menu item with the approved accelerator");
+    }
+    let dispatcher = extract_function_body(&menu, "fn dispatch_native_menu_action")
+        .expect("app and tray must share one native menu action dispatcher");
+    if !(dispatcher.contains("\"system_quit\"")
+        && dispatcher.contains("handle_system_quit_request(app)"))
+    {
+        violations.push("the system_quit menu event must enter the shared SystemQuit controller");
     }
 
     assert!(
@@ -104,5 +123,35 @@ fn bug_20260726_033_tray_quit_remains_explicit_single_press_exit() {
             && dispatcher.contains("\"quit\"")
             && dispatcher.contains("request_app_exit(app)"),
         "the explicit tray Quit action must bypass the Cmd+Q gate and exit immediately"
+    );
+}
+
+#[test]
+fn bug_20260726_033_orderly_exit_stops_background_engines_before_app_exit() {
+    let window = read_source("src/window.rs");
+    let app = read_source("src/lib.rs");
+    let shutdown = extract_function_body(&window, "pub fn stop_background_engines")
+        .expect("background engine shutdown must have one shared implementation");
+    let request_exit = extract_function_body(&window, "pub fn request_app_exit")
+        .expect("request_app_exit must remain the orderly exit adapter");
+
+    assert!(
+        shutdown.contains("ollama::stop_ollama()")
+            && shutdown.contains("sidecar::stop_sidecar()"),
+        "the shared shutdown must stop both managed engines"
+    );
+    assert_eq!(
+        request_exit.matches("stop_background_engines();").count(),
+        1,
+        "request_app_exit must call the shared shutdown exactly once"
+    );
+    assert!(
+        request_exit.find("stop_background_engines();") < request_exit.find("app.exit(0)"),
+        "background engines must stop before the Tauri exit request"
+    );
+    assert!(
+        app.contains("WindowEvent::Destroyed if window.label() == \"main\"")
+            && app.contains("window::stop_background_engines();"),
+        "main-window destruction and explicit exit must share the same shutdown"
     );
 }
