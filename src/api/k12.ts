@@ -201,10 +201,15 @@ export interface MistakeDTO {
   archive_restored_at?: number
   /** 服务端确认存在可恢复快照；legacy archived 不得由客户端猜测可恢复。 */
   restorable?: boolean
+  /** 记录创建时间与录入来源，供错题档案行按原型投影；旧记录可缺省。 */
+  created_at?: number
+  entry_source?: 'photo' | 'verified' | 'manual' | 'writing_confirmed' | string
 }
 
 export interface MistakesResp {
   items: MistakeDTO[]
+  /** 权限/筛选投影后的总数；旧服务端缺省时以前端 items 数量兼容。 */
+  total?: number
 }
 
 /** 错题本列表（agent 必填；status 可选过滤） */
@@ -762,18 +767,16 @@ export interface UpdateProfileBundleReq {
     grade_term: string
     subject_textbooks: SubjectTextbooksDTO
   }
-  curriculum_progress:
-    | {
-        subject: 'math'
-        textbook_manifest_id: string
-        volume: string
-        unit_id: string
-        lesson_id?: string
-        page_from?: number
-        page_to?: number
-        evidence_source: 'parent_confirmed'
-      }
-    | null
+  curriculum_progress: {
+    subject: 'math'
+    textbook_manifest_id: string
+    volume: string
+    unit_id: string
+    lesson_id?: string
+    page_from?: number
+    page_to?: number
+    evidence_source: 'parent_confirmed'
+  } | null
   weekly_practice_settings: {
     timezone: string
     textbook_consolidation_enabled: boolean
@@ -2928,6 +2931,12 @@ export interface CreativeWorkDTO {
   work_type: WorkType
   /** Neutral display label; it is not an inferred child-authored title. */
   display_name: string
+  /** Optional persisted subject label supplied by the work projection. */
+  display_kind?: string
+  /** Optional persisted preview treatment from the work projection. */
+  preview_variant?: 'default' | 'line' | 'fresh' | 'writing'
+  /** Optional persisted evidence chips shown on the collection card. */
+  display_evidence?: string[]
   /** Present only when a parent entered an artwork's real, existing title. */
   work_title?: string
   content_markdown?: string
@@ -3035,6 +3044,15 @@ function normalizeCreativeWork(raw: CreativeWorkWireDTO): CreativeWorkDTO {
     work_id: workID,
     work_type: workType,
     display_name: displayName,
+    display_kind: raw.display_kind?.trim() || undefined,
+    preview_variant:
+      raw.preview_variant === 'line' ||
+      raw.preview_variant === 'fresh' ||
+      raw.preview_variant === 'writing' ||
+      raw.preview_variant === 'default'
+        ? raw.preview_variant
+        : undefined,
+    display_evidence: raw.display_evidence?.filter((item): item is string => Boolean(item?.trim())),
     work_title: raw.work_title?.trim() || (workType === 'art' ? raw.title?.trim() : undefined),
     content_markdown: raw.content_markdown ?? legacyVersion?.content_markdown,
     source_asset_id: raw.source_asset_id ?? legacyVersion?.source_asset_id,

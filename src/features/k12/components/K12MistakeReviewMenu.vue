@@ -52,7 +52,7 @@ function confirmSuppress() {
   <button
     v-else-if="!suppressed && display === 'visible'"
     type="button"
-    class="rl-btn mistake-suppress-visible"
+    class="btn btn-ghost week-suppress-action mistake-suppress-visible"
     :disabled="busy"
     data-testid="mistake-suppress-review"
     @click="askSuppress"
@@ -110,6 +110,12 @@ function confirmSuppress() {
   position: relative;
 }
 .mistake-suppress-visible {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-family: Arial;
+  font-size: 12px;
+  line-height: normal;
   white-space: nowrap;
 }
 .mistake-more__trigger {

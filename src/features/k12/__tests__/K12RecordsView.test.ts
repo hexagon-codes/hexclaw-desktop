@@ -333,6 +333,56 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(h.retryPracticeGenerationSpy).toHaveBeenNthCalledWith(2, 'mingming', 'm-poem')
   })
 
+  it.each([
+    ['pending', '已加入 · 正在出题…'],
+    ['joined', '✓ 已加入练习集'],
+    ['re_add', '再次加入练习集'],
+  ] as const)(
+    '[BUG-20260728-001] projects %s with the same action state in weekly and all mistakes',
+    async (state, expectedLabel) => {
+      h.getPracticeGenerationSpy.mockImplementation((_agent: string, recordID: string) =>
+        Promise.resolve({
+          state: recordID === 'a' ? state : 'available',
+          source_mistake_id: recordID,
+        }),
+      )
+
+      const w = render()
+      await flushPromises()
+
+      expect(w.get('[data-testid="weekly-practice-a"]').text()).toBe(expectedLabel)
+      const weeklyViewAction = w.find('[data-testid="weekly-view-practice-a"]')
+      expect(weeklyViewAction.exists() ? weeklyViewAction.text() : '').toBe(
+        state === 'joined' ? '查看新题' : '',
+      )
+
+      await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+      expect(w.get('[data-testid="mistake-practice-a"]').text()).toBe(expectedLabel)
+      const mistakeViewAction = w.find('[data-testid="mistake-view-practice-a"]')
+      expect(mistakeViewAction.exists() ? mistakeViewAction.text() : '').toBe(
+        state === 'joined' ? '查看新题' : '',
+      )
+    },
+  )
+
+  it('[BUG-20260728-001] removes hidden mistakes from weekly and their all-mistakes action slot', async () => {
+    h.getPracticeGenerationSpy.mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({
+        state: recordID === 'a' ? 'hidden' : 'available',
+        source_mistake_id: recordID,
+      }),
+    )
+
+    const w = render()
+    await flushPromises()
+
+    expect(w.find('[data-testid="weekly-practice-a"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('苹果和梨的价钱')
+
+    await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+    expect(w.find('[data-testid="mistake-practice-a"]').exists()).toBe(false)
+  })
+
   it('reuses the plan command key across retry and rotates it only after success', async () => {
     const ensurePlan = vi.mocked(k12EnsureWeeklyPracticePlan)
     ensurePlan.mockRejectedValueOnce(new Error('temporary weekly-plan failure'))

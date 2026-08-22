@@ -148,7 +148,7 @@ export const useK12Store = defineStore('k12', () => {
     try {
       const [all, due] = await Promise.all([k12ListMistakes(agent, status), k12ReviewQueue(agent)])
       if (request !== mistakesRequest) return
-      mistakeView.value = mistakesToView(agent, all.items, due.items)
+      mistakeView.value = mistakesToView(agent, all.items, due.items, all.total)
     } catch (e) {
       if (request !== mistakesRequest) return
       mistakesError.value = e instanceof Error ? e.message : String(e)
@@ -427,9 +427,7 @@ export const useK12Store = defineStore('k12', () => {
   function homeworkProjection(
     dispatch: ImageTaskDispatchDTO,
   ): ImageTaskHomeworkProjectionDTO | undefined {
-    return dispatch.target_projection?.kind === 'homework'
-      ? dispatch.target_projection
-      : undefined
+    return dispatch.target_projection?.kind === 'homework' ? dispatch.target_projection : undefined
   }
 
   function creativeFeedbackState(
@@ -443,12 +441,7 @@ export const useK12Store = defineStore('k12', () => {
       return undefined
     }
     const state = dispatch.progress.state
-    return [
-      'feedback_pending',
-      'feedback_ready',
-      'feedback_failed',
-      'recovering',
-    ].includes(state)
+    return ['feedback_pending', 'feedback_ready', 'feedback_failed', 'recovering'].includes(state)
       ? (state as ImageTaskCreativeFeedbackState)
       : undefined
   }
@@ -500,7 +493,8 @@ export const useK12Store = defineStore('k12', () => {
     const projection = dispatch.target_projection
     if (projection?.kind === 'homework') {
       const hasFactConflict =
-        projection.recognition?.questions.some((question) => question.confirmation_required) ?? false
+        projection.recognition?.questions.some((question) => question.confirmation_required) ??
+        false
       return (
         projection.stage === 'completed' ||
         (projection.stage === 'awaiting_confirmation' &&
@@ -586,17 +580,13 @@ export const useK12Store = defineStore('k12', () => {
     error.value = null
     try {
       throwIfAborted(signal)
-      const sourceFile = input.file ??
+      const sourceFile =
+        input.file ??
         (input.dataUrl?.trim() ? legacyDataURLFile(input.dataUrl, sourceRef) : undefined)
       if (!sourceFile) {
         throw new Error('desktop image task source is required')
       }
-      const asset = await k12UploadAsset(
-        input.agent,
-        sourceFile,
-        undefined,
-        signal,
-      )
+      const asset = await k12UploadAsset(input.agent, sourceFile, undefined, signal)
       throwIfAborted(signal)
       if (input.onSourceStored) {
         const displayUrl = k12AssetURL(input.agent, asset.asset_id)
@@ -767,8 +757,7 @@ export const useK12Store = defineStore('k12', () => {
     if (
       (projection.task_intent === 'completed_homework' &&
         projection.result.kind === 'completed_homework') ||
-      (projection.task_intent === 'blank_worksheet' &&
-        projection.result.kind === 'blank_worksheet')
+      (projection.task_intent === 'blank_worksheet' && projection.result.kind === 'blank_worksheet')
     ) {
       return {
         stage: 'completed',
@@ -850,12 +839,7 @@ export const useK12Store = defineStore('k12', () => {
     } catch (error) {
       const code = httpStatus(error)
       if (code === 403 || code === 404) {
-        clearImageTaskBinding(
-          input.sourceSession,
-          agent,
-          input.sourceMessageId,
-          input.dispatchId,
-        )
+        clearImageTaskBinding(input.sourceSession, agent, input.sourceMessageId, input.dispatchId)
         return null
       }
       throw error

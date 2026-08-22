@@ -34,11 +34,20 @@ describe('K12 works prototype layout', () => {
       /\.k12cw__card\s*\{[^}]*grid-template-columns:\s*104px minmax\(0,\s*1fr\)[^}]*min-height:\s*138px[^}]*padding:\s*16px[^}]*gap:\s*14px/,
     )
     expect(worksSource).toMatch(
-      /\.k12cw__filter\s*\{[^}]*gap:\s*7px[^}]*padding:\s*12px 14px[^}]*border-radius:\s*14px/,
+      /\.k12cw__filter\s*\{[^}]*gap:\s*9px[^}]*padding:\s*12px 14px[^}]*border-radius:\s*14px/,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__filter-row\s*\{[^}]*display:\s*flex[^}]*gap:\s*7px/,
     )
     expect(worksSource).toMatch(
       /\.k12cw__filter button\s*\{[^}]*border:\s*0\.5px solid var\(--hc-border\)[^}]*background:\s*var\(--hc-bg-input\)[^}]*border-radius:\s*9px/,
     )
+  })
+
+  it('renders work preview variants and labels from the persisted work projection', () => {
+    expect(worksSource).toContain('work.preview_variant')
+    expect(worksSource).toContain('work.display_kind')
+    expect(worksSource).toContain('k12cw__preview--line')
   })
 
   it('uses the prototype subject and status pill colors', () => {

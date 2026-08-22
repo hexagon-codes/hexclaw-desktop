@@ -10,7 +10,7 @@
 export type RecordFieldType = 'string' | 'text' | 'number' | 'date' | 'enum' | 'tags'
 
 /** 字段在记录行中的呈现角色（驱动通用记录视图渲染，shell 不硬编码字段名） */
-export type RecordFieldRole = 'title' | 'chip' | 'meta' | 'status' | 'date'
+export type RecordFieldRole = 'title' | 'chip' | 'meta' | 'status' | 'date' | 'source'
 
 export interface RecordFieldSpec {
   key: string
@@ -87,4 +87,6 @@ export interface RecordCollectionView {
   reviewQueue?: string[]
   /** 状态计数（按 status id） */
   statusCounts?: Record<string, number>
+  /** 后端返回的全量记录数；筛选/权限投影后 items 可少于该值。 */
+  totalCount?: number
 }

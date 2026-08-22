@@ -219,7 +219,7 @@ describe('K12WeeklyPracticePanel projection', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('人教版 · 五年级下册 · 第4单元「分数的意义和性质」 · P45–62')
+    expect(wrapper.text()).toContain('人教版五年级下册 · 第4单元「分数的意义和性质」· P45–62')
     expect(wrapper.text()).toContain('到期复习 · 原题')
     expect(wrapper.text()).not.toContain('来源：真实错题')
     expect(wrapper.text()).toContain('依据：小数乘法错题 · 连续错 2 次')

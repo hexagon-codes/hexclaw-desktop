@@ -58,7 +58,7 @@ export default {
     trendUp: '趋势 ↑ 在进步',
     trendFlat: '趋势 → 待巩固',
     allMistakes: '全部错题',
-    archiveDesc: '题目档案只负责查找与管理；复习行动在“本周复习”，组好的题在“练习集”。',
+    archiveDesc: '题目档案只负责查找与管理；到期行动在“本周该练”，长期保存的题在“练习集”。',
     viewInsights: '查看学情',
     weeklyHook: '每周五 19:00 自动加入练习集 · 只有验证通过的题目会进入打印版本',
     genWorksheet: '生成复习卷',
@@ -72,7 +72,7 @@ export default {
     filterStatus: '状态',
     // 原型 2527 口径：未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」是错误宣称）
     stateMachineHint:
-      '未掌握题不会因久未练习被自动隐藏；“本周先不练”只跳过本周，“不再复习”可随时恢复。',
+      '本周先不练只延后当周；不再复习可在本列表恢复。只有真实作答与系统判定形成已掌握。',
     scheduledReview: '待复习',
     deferredThisWeek: '本周先不练',
     suppressedReview: '不再复习',

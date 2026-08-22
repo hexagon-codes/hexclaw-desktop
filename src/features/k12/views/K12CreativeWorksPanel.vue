@@ -111,7 +111,33 @@ function reviewCTA(work: CreativeWorkDTO): string {
   return t('k12.works.initialReviewPendingCTA')
 }
 
+function workKindLabel(work: CreativeWorkDTO): string {
+  return (
+    work.display_kind?.trim() ||
+    (work.work_type === 'writing' ? t('k12.works.writingKind') : t('k12.works.artKind'))
+  )
+}
+
+function workPreviewVariant(work: CreativeWorkDTO): string {
+  return work.preview_variant ?? (work.work_type === 'writing' ? 'writing' : 'default')
+}
+
+function previewTitle(work: CreativeWorkDTO): string {
+  return work.display_name.replace(/^《|》$/g, '')
+}
+
+function previewBody(work: CreativeWorkDTO): string {
+  const firstLine =
+    work.content_markdown
+      ?.split(/\r?\n/)
+      .map((line) => line.replace(/^\s*#+\s*/, '').replace(/[*_`]/g, '').trim())
+      .find(Boolean) ?? ''
+  return (firstLine.split(/[，。！？]/, 1)[0] || t('k12.works.contentSaved')).trim()
+}
+
 function cardEvidence(work: CreativeWorkDTO): string[] {
+  const projected = work.display_evidence?.filter(Boolean).slice(0, 3) ?? []
+  if (projected.length > 0) return projected
   const feedback = latestFeedback(work)
   const visible = feedback?.visible_evidence?.filter(Boolean).slice(0, 3) ?? []
   if (visible.length > 0) return visible
@@ -1086,31 +1112,33 @@ defineExpose({ load, openAdd })
     </div>
 
     <div class="k12cw__filter" :aria-label="t('k12.works.filterLabel')">
-      <span class="k12cw__filter-label">{{ t('k12.works.filterTypeLabel') }}</span>
-      <button
-        type="button"
-        :class="{ on: typeFilter === '' }"
-        :aria-pressed="typeFilter === ''"
-        @click="typeFilter = ''"
-      >
-        {{ t('k12.works.filterAll') }}
-      </button>
-      <button
-        type="button"
-        :class="{ on: typeFilter === 'writing' }"
-        :aria-pressed="typeFilter === 'writing'"
-        @click="typeFilter = 'writing'"
-      >
-        {{ t('k12.works.writing') }}
-      </button>
-      <button
-        type="button"
-        :class="{ on: typeFilter === 'art' }"
-        :aria-pressed="typeFilter === 'art'"
-        @click="typeFilter = 'art'"
-      >
-        {{ t('k12.works.art') }}
-      </button>
+      <div class="k12cw__filter-row">
+        <span class="k12cw__filter-label">{{ t('k12.works.filterTypeLabel') }}</span>
+        <button
+          type="button"
+          :class="{ on: typeFilter === '' }"
+          :aria-pressed="typeFilter === ''"
+          @click="typeFilter = ''"
+        >
+          {{ t('k12.works.filterAll') }}
+        </button>
+        <button
+          type="button"
+          :class="{ on: typeFilter === 'writing' }"
+          :aria-pressed="typeFilter === 'writing'"
+          @click="typeFilter = 'writing'"
+        >
+          {{ t('k12.works.writing') }}
+        </button>
+        <button
+          type="button"
+          :class="{ on: typeFilter === 'art' }"
+          :aria-pressed="typeFilter === 'art'"
+          @click="typeFilter = 'art'"
+        >
+          {{ t('k12.works.art') }}
+        </button>
+      </div>
     </div>
 
     <div class="k12cw__rules" data-testid="cw-rules">
@@ -1155,7 +1183,13 @@ defineExpose({ load, openAdd })
         :data-work-id="work.work_id"
         :data-review-state="reviewState(work)"
       >
-        <div class="k12cw__preview" :class="`k12cw__preview--${work.work_type}`">
+        <div
+          class="k12cw__preview"
+          :class="[
+            `k12cw__preview--${work.work_type}`,
+            `k12cw__preview--${workPreviewVariant(work)}`,
+          ]"
+        >
           <img
             v-if="workThumbURL(work)"
             :src="workThumbURL(work)"
@@ -1179,9 +1213,7 @@ defineExpose({ load, openAdd })
         <div class="k12cw__copy">
           <header class="k12cw__head">
             <span class="k12cw__kind" :class="`k12cw__kind--${work.work_type}`">
-              {{
-                work.work_type === 'writing' ? t('k12.works.writingKind') : t('k12.works.artKind')
-              }}
+              {{ workKindLabel(work) }}
             </span>
             <span class="k12cw__pill" :class="`k12cw__pill--${reviewState(work)}`">
               {{ reviewStatusLabel(work) }}
@@ -1690,7 +1722,7 @@ defineExpose({ load, openAdd })
 
 .k12cw__kpis {
   display: flex;
-  gap: 7px;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -1698,33 +1730,40 @@ defineExpose({ load, openAdd })
 .k12cw__kpi {
   display: inline-flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 6px;
   white-space: nowrap;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
   padding: 7px 12px;
   font-size: 11px;
   color: var(--hc-text-muted);
 }
 
 .k12cw__kpi b {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--hc-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .k12cw__filter {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
+  display: grid;
+  box-sizing: border-box;
+  height: 55px;
+  gap: 9px;
   margin-bottom: 12px;
   padding: 12px 14px;
   border: 0.5px solid var(--hc-border);
   border-radius: 14px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
+}
+
+.k12cw__filter-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
 }
 
 .k12cw__filter-label {
@@ -1737,7 +1776,12 @@ defineExpose({ load, openAdd })
 
 .k12cw__filter button {
   font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: Arial;
   font-size: 12px;
+  line-height: normal;
   border: 0.5px solid var(--hc-border);
   background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
@@ -1749,7 +1793,7 @@ defineExpose({ load, openAdd })
 .k12cw__filter button.on {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
-  font-weight: 600;
+  font-weight: 400;
   border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
 }
 
@@ -1759,7 +1803,7 @@ defineExpose({ load, openAdd })
   padding: 11px 13px 11px 17px;
   border: 0.5px solid var(--hc-border);
   border-radius: 12px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.96);
   color: var(--hc-text-secondary);
   font-size: 12.5px;
   line-height: 1.55;
@@ -1778,7 +1822,7 @@ defineExpose({ load, openAdd })
 
 .k12cw__rules b {
   display: block;
-  margin-bottom: 2px;
+  margin-bottom: 0;
   color: var(--hc-text-primary);
 }
 
@@ -1826,7 +1870,7 @@ defineExpose({ load, openAdd })
   align-items: stretch;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
   box-shadow: var(--hc-shadow-sm);
   transition:
     box-shadow 0.2s var(--hc-ease-out),
@@ -1862,7 +1906,7 @@ defineExpose({ load, openAdd })
 }
 
 .k12cw__preview--writing .k12cw__preview-placeholder::before {
-  content: '作文内容\A\A本次上传的文字……';
+  content: '春天的校园\A\A柳枝像绿色的丝带……';
   position: absolute;
   inset: 13px;
   color: #685b48;
@@ -1871,6 +1915,27 @@ defineExpose({ load, openAdd })
   line-height: 1.7;
   white-space: pre-wrap;
   background: repeating-linear-gradient(transparent 0 16px, rgba(104, 91, 72, 0.13) 16px 17px);
+}
+
+.k12cw__preview--line {
+  background: linear-gradient(150deg, #f5f1e8, #d6d0c4);
+}
+
+.k12cw__preview--line .k12cw__preview-placeholder::before {
+  content: '';
+  position: absolute;
+  inset: 18px 22px;
+  width: auto;
+  height: auto;
+  background: transparent;
+  border: 2px solid #59636f;
+  border-radius: 48% 52% 45% 55%;
+  transform: rotate(-11deg);
+  box-shadow: 16px 10px 0 -9px #59636f, -13px 19px 0 -11px #59636f;
+}
+
+.k12cw__preview--writing .k12cw__preview-placeholder::after {
+  content: none;
 }
 
 .k12cw__preview--art .k12cw__preview-placeholder::before {
@@ -1883,6 +1948,19 @@ defineExpose({ load, openAdd })
   border-radius: 50%;
   background: #f6e08b;
   box-shadow: 0 0 0 6px rgba(246, 224, 139, 0.35);
+}
+
+.k12cw__preview.k12cw__preview--line .k12cw__preview-placeholder::before {
+  content: '';
+  position: absolute;
+  inset: 18px 22px;
+  width: auto;
+  height: auto;
+  background: transparent;
+  border: 2px solid #59636f;
+  border-radius: 48% 52% 45% 55%;
+  transform: rotate(-11deg);
+  box-shadow: 16px 10px 0 -9px #59636f, -13px 19px 0 -11px #59636f;
 }
 
 .k12cw__thumb {
@@ -1957,6 +2035,7 @@ defineExpose({ load, openAdd })
   overflow: hidden;
   color: var(--hc-text-primary);
   font-size: 13.5px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2012,7 +2091,10 @@ defineExpose({ load, openAdd })
   min-height: 32px;
   margin-top: 0;
   padding: 6px 12px;
+  background: rgba(255, 254, 249, 0.9);
+  font-family: Arial;
   font-size: 12px;
+  line-height: normal;
   box-shadow: none;
 }
 

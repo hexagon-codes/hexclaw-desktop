@@ -116,6 +116,8 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
 
     expect(wrapper.get('[data-textbook-consolidation-state]').text()).toContain('同步巩固')
     expect(wrapper.get('[data-arithmetic-state]').text()).toContain('口算热身')
+    expect(wrapper.get('.weekly-hero__meta').text()).toContain('同步巩固 待准备')
+    expect(wrapper.get('.weekly-hero__meta').text()).toContain('口算热身 待开始')
   })
 
   it.each(availabilityValues)(
@@ -124,9 +126,7 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
       const wrapper = mountPanel(availability)
 
       expect(
-        wrapper.get(
-          `[data-textbook-consolidation-state][data-availability="${availability}"]`,
-        ),
+        wrapper.get(`[data-textbook-consolidation-state][data-availability="${availability}"]`),
       ).toBeTruthy()
       expect(
         wrapper.get(`[data-arithmetic-state][data-availability="${availability}"]`),
@@ -275,9 +275,7 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
     const wrapper = mountPanel()
 
     expect(wrapper.text()).toContain('本周暂时没有需要复习的错题')
-    expect(wrapper.text()).toContain(
-      '可以根据当前教材进度做几道同步巩固，或者进行一次口算热身',
-    )
+    expect(wrapper.text()).toContain('可以根据当前教材进度做几道同步巩固，或者进行一次口算热身')
   })
 
   it('uses the shared K12BookTabs contract and removes the private weekly tab styling', () => {

@@ -31,11 +31,13 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const fieldsByRole = (role: RecordFieldSpec['role']) => props.schema.fields.filter((f) => f.role === role)
+const fieldsByRole = (role: RecordFieldSpec['role']) =>
+  props.schema.fields.filter((f) => f.role === role)
 const titleField = computed(() => fieldsByRole('title')[0])
 const chipFields = computed(() => fieldsByRole('chip'))
 const metaFields = computed(() => fieldsByRole('meta'))
 const dateField = computed(() => fieldsByRole('date')[0])
+const sourceFields = computed(() => fieldsByRole('source'))
 
 function fieldValue(item: RecordItem, field?: RecordFieldSpec): string {
   if (!field) return ''
@@ -49,7 +51,9 @@ function fieldValue(item: RecordItem, field?: RecordFieldSpec): string {
 // 项-6a：芯片值末尾的分隔符「·」剥掉——知识点为空时场景层组合出的「数学·」会看着断了尾巴，
 // 只显「数学」。领域无关：任何芯片都不该以分隔符收尾。
 function chipText(item: RecordItem, field?: RecordFieldSpec): string {
-  return fieldValue(item, field).replace(/[·・]\s*$/, '').trimEnd()
+  return fieldValue(item, field)
+    .replace(/[·・]\s*$/, '')
+    .trimEnd()
 }
 
 function stateOf(item: RecordItem) {
@@ -93,7 +97,12 @@ const reviewItems = computed(() => {
       <header class="rl-review__head">
         <!-- 20260709 视觉评审：功能位 emoji → 单色描边图标（emoji 保留给身份/语义徽章位） -->
         <slot name="review-title" :items="reviewItems">
-          <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
+          <b class="rl-review__title"
+            ><svg class="rl-ic" viewBox="0 0 24 24">
+              <path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg
+            >{{ t('records.reviewQueueTitle') }} ·
+            {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b
+          >
         </slot>
         <!-- 标题旁注入缝（原型 c8a194e：跨科分布括号 + 趋势 pill 并入行动卡）——场景层经 slot 提供，shell 零领域词 -->
         <slot name="review-meta" :items="reviewItems" />
@@ -110,8 +119,44 @@ const reviewItems = computed(() => {
         >
           <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
           <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
-          <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
-          <span class="rl-meta rl-spacer" :title="metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ')">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
+          <span
+            v-for="f in chipFields"
+            :key="f.key"
+            class="rl-chip"
+            :data-chip="chipText(item, f)"
+            >{{ chipText(item, f) }}</span
+          >
+          <span
+            class="rl-meta rl-spacer"
+            :title="
+              metaFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            "
+            >{{
+              metaFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            }}</span
+          >
+          <span
+            v-if="sourceFields.length"
+            class="rl-source"
+            :data-source="
+              sourceFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            "
+            >{{
+              sourceFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            }}</span
+          >
           <slot name="review-practice-action" :item="item" />
           <button class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
             {{ t('records.markMastered') }}
@@ -124,7 +169,9 @@ const reviewItems = computed(() => {
     </section>
 
     <!-- 档案区标题注入缝（原型 c8a194e：「全部错题 (N)」——文案由场景层给，shell 零领域词） -->
-    <div v-if="!hideList && $slots['list-title']" class="rl-list-title"><slot name="list-title" :count="view.items.length" /></div>
+    <div v-if="!hideList && $slots['list-title']" class="rl-list-title">
+      <slot name="list-title" :count="view.items.length" />
+    </div>
 
     <!-- 状态筛选 -->
     <div v-if="!hideList && !hideFilters && schema.states?.length" class="rl-filters">
@@ -154,19 +201,50 @@ const reviewItems = computed(() => {
       >
         <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
         <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
-        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
-        <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
-        <span v-if="stateOf(item)" class="rl-status" :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`">
+        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{
+          chipText(item, f)
+        }}</span>
+        <span class="rl-meta rl-spacer">{{
+          metaFields
+            .map((f) => fieldValue(item, f))
+            .filter(Boolean)
+            .join(' · ')
+        }}</span>
+        <span
+          v-if="sourceFields.length"
+          class="rl-source"
+          :data-source="
+            sourceFields
+              .map((f) => fieldValue(item, f))
+              .filter(Boolean)
+              .join(' · ')
+          "
+          >{{
+            sourceFields
+              .map((f) => fieldValue(item, f))
+              .filter(Boolean)
+              .join(' · ')
+          }}</span
+        >
+        <span
+          v-if="stateOf(item)"
+          class="rl-status"
+          :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`"
+        >
           {{ t(stateOf(item)!.labelKey) }}
         </span>
+        <slot name="list-row-actions" :item="item" />
         <!-- 「再练」是复习动作：仅可复习集合（schema.reviewable）才渲染——积累本不复习/不再练，
              无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
         <slot v-if="canPractice(item)" name="list-practice-action" :item="item" />
         <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
-        <button v-if="!hideMasteryAction && canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
+        <button
+          v-if="!hideMasteryAction && canMarkMastered(item)"
+          class="rl-btn"
+          @click="emit('action', { id: 'markMastered', record: item })"
+        >
           {{ t('records.markMastered') }}
         </button>
-        <slot name="list-row-actions" :item="item" />
         <button class="rl-btn" @click="emit('action', { id: 'detail', record: item })">
           {{ t('records.detail') }}
         </button>
@@ -197,8 +275,21 @@ const reviewItems = computed(() => {
   flex-wrap: wrap;
   color: var(--hc-text-primary);
 }
-.rl-review__title { display: inline-flex; align-items: center; gap: 6px; }
-.rl-ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.rl-review__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rl-ic {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
 .rl-rows {
   display: flex;
   flex-direction: column;
@@ -235,6 +326,20 @@ const reviewItems = computed(() => {
   font-size: 12px;
   flex-shrink: 0;
 }
+.rl-source {
+  min-width: 92px;
+  flex: none;
+  color: var(--hc-accent);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--hc-accent) 13%, transparent);
+  border: 1px solid transparent;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 15px;
+}
 .rl-title {
   color: var(--hc-text-primary);
 }
@@ -267,10 +372,22 @@ const reviewItems = computed(() => {
   font-weight: 700;
   white-space: nowrap;
 }
-.rl-status--todo { color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
-.rl-status--done { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
-.rl-status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
-.rl-status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
+.rl-status--todo {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+.rl-status--done {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+}
+.rl-status--got {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.rl-status--na {
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-input);
+}
 .rl-filters {
   display: flex;
   gap: 6px;

@@ -17,6 +17,7 @@ import type {
 import K12BookTabs from './K12BookTabs.vue'
 import K12ManualQuestionCountField from './K12ManualQuestionCountField.vue'
 import K12MistakeReviewMenu from './K12MistakeReviewMenu.vue'
+import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 
 const props = defineProps<{
   progress: CurriculumProgressDTO | null
@@ -71,17 +72,10 @@ const historyDetail = ref<WeeklyPracticeHistorySummaryDTO | null>(null)
 const selectedTextbookItemCount = ref<number | null>(5)
 const selectedArithmeticItemCount = ref<number | null>(10)
 
-function failedMistakePractice(item: WeeklyPracticeItemDTO) {
-  return (
-    item.source_kind === 'mistake' &&
-    props.practiceGenerationByMistake?.[item.source_ref]?.state === 'failed'
-  )
-}
-
-// 图 10 一键加入练习集状态投影：undefined=可加入，generating=正在出题…，
-// joined=✓ 已加入练习集（+查看新题），failed=出题失败·重试（复用既有按钮）。
-// 掌握状态投影（架构 :509 词表 + 原型 .stpill 三态色）：
-// new/explained=待复习（todo 红）· retried=已重做（done 黄）· mastered=证据已掌握（got 绿）· archived=已归档（todo 红）。
+// 错题练习集六态由共享投影统一：available/re_add 可加入，pending 正在出题，
+// joined 可查看新题，failed 可重试，hidden 从本周列表移除。
+// 掌握状态投影（架构词表 + 原型 .stpill 三态色）：
+// new/explained=未掌握（todo 红）· retried=已重做（done 黄）· mastered=证据已掌握（got 绿）· archived=已归档（todo 红）。
 function masteryPill(masteryStatus: string | undefined): { label: string; cls: string } | null {
   switch (masteryStatus) {
     case 'mastered':
@@ -92,7 +86,7 @@ function masteryPill(masteryStatus: string | undefined): { label: string; cls: s
       return { label: '已归档', cls: 'todo' }
     case 'new':
     case 'explained':
-      return { label: '待复习', cls: 'todo' }
+      return { label: '未掌握', cls: 'todo' }
     default:
       return null
   }
@@ -113,11 +107,12 @@ function kpillSubjectClass(subject: string | undefined): string {
   }
 }
 
-function practiceJoinState(item: WeeklyPracticeItemDTO): 'available' | 'generating' | 'joined' {
-  const generation = props.practiceGenerationByMistake?.[item.source_ref]
-  if (generation?.state === 'pending') return 'generating'
-  if (generation?.state === 'joined') return 'joined'
-  return 'available'
+function practiceProjection(item: WeeklyPracticeItemDTO) {
+  return projectMistakePracticeGeneration(
+    item.source_kind === 'mistake'
+      ? props.practiceGenerationByMistake?.[item.source_ref]?.state
+      : undefined,
+  )
 }
 const weeklyViewTabs = [
   { key: 'current', label: '本周' },
@@ -144,8 +139,8 @@ const sectionLabels: Record<WeeklyPracticeSection, string> = {
 }
 const sectionDescriptions: Record<WeeklyPracticeSection, string> = {
   due_review: '真实错题按复习调度到期，优先安排',
-  textbook_consolidation: '只补充已确认教材进度内的内容',
-  arithmetic_warmup: '只练已经学过的运算，短时完成',
+  textbook_consolidation: '只补充已确认教材进度内的内容，默认不自动生成',
+  arithmetic_warmup: '只练已经学过的运算，按本次题量手动开始',
 }
 const generationLabels: Record<WeeklyPracticeItemDTO['generation_method'], string> = {
   original: '原题',
@@ -178,7 +173,9 @@ const visibleTracks = computed<WeeklyPracticeTrackDTO[]>(() => {
 
 const verifiedItems = (track: WeeklyPracticeTrackDTO) =>
   track.items
-    .filter((item) => item.verification.status === 'verified')
+    .filter(
+      (item) => item.verification.status === 'verified' && practiceProjection(item).kind !== 'hidden',
+    )
     .sort((left, right) => left.position - right.position)
 
 const totalCount = computed(() =>
@@ -191,10 +188,17 @@ const weeklyMistakeCount = computed(
     verifiedItems(visibleTracks.value.find((track) => track.plan_section === 'due_review')!).length,
 )
 function supplementLabel(
+  section: 'textbook_consolidation' | 'arithmetic_warmup',
   recommendation: { availability?: string } | undefined,
   count: number,
 ): string {
-  return recommendation?.availability === 'available' ? String(count) : '待准备'
+  const automaticEnabled =
+    section === 'textbook_consolidation'
+      ? props.settings?.textbook_consolidation_enabled
+      : props.settings?.arithmetic_warmup_enabled
+  if (automaticEnabled === false) return section === 'textbook_consolidation' ? '待准备' : '待开始'
+  if (recommendation?.availability === 'available') return String(count)
+  return section === 'textbook_consolidation' ? '待准备' : '待开始'
 }
 const dueReviewCount = computed(
   () =>
@@ -261,14 +265,40 @@ function evidenceLabel(item: WeeklyPracticeItemDTO): string {
   return [evidence, page].filter(Boolean).join(' · ')
 }
 
+function compactVolumeLabel(volume: string | undefined): string {
+  const match = /^(.*)年级(上|下)册$/.exec(volume ?? '')
+  return match ? `${match[1]}${match[2]}` : (volume ?? '')
+}
+
 const progressLabel = computed(() => {
   const progress = props.progress
   if (!progress) return ''
   const parts = [
-    progress.textbook_edition,
-    progress.volume,
+    [progress.textbook_edition, progress.volume].filter(Boolean).join(''),
     progress.unit_title,
     progress.lesson_title,
+  ].filter(Boolean)
+  let pageLabel = ''
+  if (
+    progress.page_verification_status === 'verified' &&
+    progress.verified_page_from !== undefined &&
+    progress.verified_page_to !== undefined
+  ) {
+    pageLabel =
+      progress.verified_page_from === progress.verified_page_to
+        ? `P${progress.verified_page_from}`
+        : `P${progress.verified_page_from}–${progress.verified_page_to}`
+  }
+  return pageLabel ? `${parts.join(' · ')}· ${pageLabel}` : parts.join(' · ')
+})
+
+const compactProgressLabel = computed(() => {
+  const progress = props.progress
+  const unitLabel = progress?.unit_title?.replace(/「[^」]*」/g, '').trim()
+  if (!progress) return ''
+  const parts = [
+    [progress.textbook_edition, compactVolumeLabel(progress.volume)].filter(Boolean).join(''),
+    unitLabel,
   ].filter(Boolean)
   if (
     progress.page_verification_status === 'verified' &&
@@ -440,6 +470,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 >同步巩固
                 {{
                   supplementLabel(
+                    'textbook_consolidation',
                     textbookRecommendation,
                     verifiedItems(
                       visibleTracks.find(
@@ -453,6 +484,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 >口算热身
                 {{
                   supplementLabel(
+                    'arithmetic_warmup',
                     arithmeticRecommendation,
                     verifiedItems(
                       visibleTracks.find((track) => track.plan_section === 'arithmetic_warmup')!,
@@ -498,7 +530,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 <b>{{ sectionLabels[track.plan_section] }}</b>
                 <span>{{ sectionDescriptions[track.plan_section] }}</span>
               </div>
-              <span>{{ verifiedItems(track).length }} 项</span>
             </div>
 
             <div
@@ -567,186 +598,232 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
               {{ arithmeticAction(track)?.label }}
             </button>
 
-            <div
-              v-if="
-                track.plan_section === 'textbook_consolidation' &&
-                textbookRecommendation &&
-                verifiedItems(track).length === 0
-              "
-              class="weekly-manual resource-row"
-            >
-              <b>{{ progressLabel || '请先确认当前教材进度' }}</b>
-              <K12ManualQuestionCountField
-                v-model="selectedTextbookItemCount"
-                track="textbook_consolidation"
-                label="同步巩固题数"
-                :min="textbookRecommendation.min_item_count"
-                :max="textbookRecommendation.max_item_count"
-                :disabled="busy || textbookRecommendation.availability !== 'available'"
-              />
-              <button
+            <div class="weekly-resource-list">
+              <div
                 v-if="
-                  textbookRecommendation.availability === 'available' ||
-                  textbookRecommendation.availability === 'processing'
+                  track.plan_section === 'textbook_consolidation' &&
+                  textbookRecommendation &&
+                  verifiedItems(track).length === 0
                 "
-                type="button"
-                class="btn weekly-track__action"
-                data-consolidation-action
-                :disabled="
-                  busy ||
-                  textbookRecommendation.availability !== 'available' ||
-                  selectedTextbookItemCount === null
-                "
-                @click="
-                  selectedTextbookItemCount !== null &&
-                  emit('prepare-textbook', { item_count: selectedTextbookItemCount })
-                "
+                class="weekly-manual resource-row"
               >
-                {{
-                  textbookRecommendation.availability === 'processing'
-                    ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
-                    : '生成同步巩固题'
-                }}
-              </button>
-            </div>
-            <div
-              v-if="
-                track.plan_section === 'arithmetic_warmup' &&
-                arithmeticRecommendation &&
-                !track.arithmetic_batch
-              "
-              class="weekly-manual resource-row"
-            >
-              <b>当前范围：已确认教材进度内的基础计算</b>
-              <K12ManualQuestionCountField
-                v-model="selectedArithmeticItemCount"
-                track="arithmetic_warmup"
-                label="口算热身题数"
-                :min="arithmeticRecommendation.min_item_count"
-                :max="arithmeticRecommendation.max_item_count"
-                :disabled="busy || arithmeticRecommendation.availability !== 'available'"
-              />
-              <button
-                v-if="arithmeticAction(track)"
-                type="button"
-                class="btn weekly-track__action"
-                data-arithmetic-action
-                :disabled="busy || arithmeticAction(track)?.disabled"
-                @click="dispatchArithmetic(track)"
-              >
-                {{ arithmeticAction(track)?.label }}
-              </button>
-            </div>
-            <div
-              v-if="
-                track.status === 'disabled' &&
-                track.plan_section === 'due_review' &&
-                dueReviewCount > 0
-              "
-              class="weekly-track__empty"
-            >
-              尚未开启
-            </div>
-            <div
-              v-else-if="
-                verifiedItems(track).length === 0 &&
-                track.plan_section === 'due_review' &&
-                dueReviewCount > 0 &&
-                track.status !== 'stale' &&
-                !arithmeticFailure(track)
-              "
-              class="weekly-track__empty"
-            >
-              这部分本周暂无需要练习的内容
-            </div>
-            <article
-              v-for="item in verifiedItems(track)"
-              :key="item.item_id"
-              class="weekly-item resource-row"
-            >
-              <MarkdownRenderer class="weekly-item__prompt" :content="item.prompt_markdown" />
-              <div class="weekly-item__origin rc-practice-origin">
-                <b>
-                  {{ sectionLabels[item.plan_section] }} ·
-                  {{ generationLabels[item.generation_method] || item.generation_method }}
-                </b>
-                <small>依据：{{ evidenceLabel(item) || '已通过服务端验证' }}</small>
+                <b>{{ compactProgressLabel || progressLabel || '请先确认当前教材进度' }}</b>
+                <span class="weekly-manual__origin rc-practice-origin">
+                  <b
+                    >建议
+                    {{
+                      textbookRecommendation.recommended_item_count ??
+                      selectedTextbookItemCount ??
+                      0
+                    }}
+                    道</b
+                  >
+                  <small>按本周学习负担推荐，可直接调整题数</small>
+                </span>
+                <K12ManualQuestionCountField
+                  v-model="selectedTextbookItemCount"
+                  track="textbook_consolidation"
+                  label="同步巩固题数"
+                  :min="textbookRecommendation.min_item_count"
+                  :max="textbookRecommendation.max_item_count"
+                  :disabled="busy || textbookRecommendation.availability !== 'available'"
+                />
+                <button
+                  v-if="
+                    textbookRecommendation.availability === 'available' ||
+                    textbookRecommendation.availability === 'processing'
+                  "
+                  type="button"
+                  class="btn weekly-track__action"
+                  data-consolidation-action
+                  :disabled="
+                    busy ||
+                    textbookRecommendation.availability !== 'available' ||
+                    selectedTextbookItemCount === null
+                  "
+                  @click="
+                    selectedTextbookItemCount !== null &&
+                    emit('prepare-textbook', { item_count: selectedTextbookItemCount })
+                  "
+                >
+                  {{
+                    textbookRecommendation.availability === 'processing'
+                      ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
+                      : '生成同步巩固题'
+                  }}
+                </button>
               </div>
               <div
-                v-if="item.subject || item.knowledge_point || item.mastery_status"
-                class="weekly-item__meta"
+                v-if="
+                  track.plan_section === 'arithmetic_warmup' &&
+                  arithmeticRecommendation &&
+                  !track.arithmetic_batch
+                "
+                class="weekly-manual resource-row"
               >
-                <span
-                  v-if="item.subject || item.knowledge_point"
-                  class="kpill"
-                  :class="kpillSubjectClass(item.subject)"
-                  >{{ item.subject || '' }}{{ item.subject && item.knowledge_point ? '·' : ''
-                  }}{{ item.knowledge_point || '' }}</span
-                >
-                <span
-                  v-if="masteryPill(item.mastery_status)"
-                  :class="['stpill', masteryPill(item.mastery_status)!.cls]"
-                  >{{ masteryPill(item.mastery_status)!.label }}</span
-                >
-              </div>
-              <div class="weekly-item__foot">
-                <button
-                  v-if="
-                    track.plan_section === 'due_review' && practiceJoinState(item) === 'available'
-                  "
-                  type="button"
-                  class="btn"
-                  :disabled="busy || practiceGenerationBusy?.includes(item.source_ref)"
-                  @click="emit('join-practice', item)"
-                >
-                  加入练习集
-                </button>
-                <button
-                  v-if="
-                    track.plan_section === 'due_review' && practiceJoinState(item) === 'generating'
-                  "
-                  type="button"
-                  class="btn"
-                  disabled
-                >
-                  已加入 · 正在出题…
-                </button>
-                <template
-                  v-if="track.plan_section === 'due_review' && practiceJoinState(item) === 'joined'"
-                >
-                  <span class="stpill got weekly-item__joined">✓ 已加入练习集</span>
-                  <button type="button" class="btn btn-ghost" @click="emit('view-practice', item)">
-                    查看新题
-                  </button>
-                </template>
-                <button
-                  v-if="track.plan_section === 'due_review' && failedMistakePractice(item)"
-                  type="button"
-                  class="btn"
-                  :data-testid="`weekly-practice-${item.source_ref}`"
-                  :disabled="busy || practiceGenerationBusy?.includes(item.source_ref)"
-                  @click="emit('retry-mistake-practice', item.source_ref)"
-                >
-                  出题失败 · 重试
-                </button>
-                <button
-                  v-if="track.plan_section === 'due_review'"
-                  type="button"
-                  class="btn btn-ghost weekly-item__defer"
-                  :disabled="busy"
-                  @click="emit('defer-item', item)"
-                >
-                  本周先不练
-                </button>
-                <K12MistakeReviewMenu
-                  v-if="track.plan_section === 'due_review'"
-                  :suppressed="false"
-                  :busy="busy"
-                  display="visible"
-                  @suppress="emit('suppress-item', item)"
+                <b>当前范围：分数、小数基础计算</b>
+                <span class="weekly-manual__origin rc-practice-origin">
+                  <b
+                    >建议
+                    {{
+                      arithmeticRecommendation.recommended_item_count ??
+                      selectedArithmeticItemCount ??
+                      0
+                    }}
+                    道</b
+                  >
+                  <small>短时完成，可直接调整题数</small>
+                </span>
+                <K12ManualQuestionCountField
+                  v-model="selectedArithmeticItemCount"
+                  track="arithmetic_warmup"
+                  label="口算热身题数"
+                  :min="arithmeticRecommendation.min_item_count"
+                  :max="arithmeticRecommendation.max_item_count"
+                  :disabled="busy || arithmeticRecommendation.availability !== 'available'"
                 />
+                <button
+                  v-if="arithmeticAction(track)"
+                  type="button"
+                  class="btn weekly-track__action"
+                  data-arithmetic-action
+                  :disabled="busy || arithmeticAction(track)?.disabled"
+                  @click="dispatchArithmetic(track)"
+                >
+                  {{ arithmeticAction(track)?.label }}
+                </button>
               </div>
-            </article>
+              <div
+                v-if="
+                  track.status === 'disabled' &&
+                  track.plan_section === 'due_review' &&
+                  dueReviewCount > 0
+                "
+                class="weekly-track__empty"
+              >
+                尚未开启
+              </div>
+              <div
+                v-else-if="
+                  verifiedItems(track).length === 0 &&
+                  track.plan_section === 'due_review' &&
+                  dueReviewCount > 0 &&
+                  track.status !== 'stale' &&
+                  !arithmeticFailure(track)
+                "
+                class="weekly-track__empty"
+              >
+                这部分本周暂无需要练习的内容
+              </div>
+              <article
+                v-for="item in verifiedItems(track)"
+                :key="item.item_id"
+                class="weekly-item resource-row"
+              >
+                <MarkdownRenderer class="weekly-item__prompt" :content="item.prompt_markdown" />
+                <div class="weekly-item__origin rc-practice-origin">
+                  <b>
+                    {{ sectionLabels[item.plan_section] }} ·
+                    {{ generationLabels[item.generation_method] || item.generation_method }}
+                  </b>
+                  <small>依据：{{ evidenceLabel(item) || '已通过服务端验证' }}</small>
+                </div>
+                <div
+                  v-if="item.subject || item.knowledge_point || item.mastery_status"
+                  class="weekly-item__meta"
+                >
+                  <span
+                    v-if="item.subject || item.knowledge_point"
+                    class="kpill"
+                    :class="kpillSubjectClass(item.subject)"
+                    >{{ item.subject || '' }}{{ item.subject && item.knowledge_point ? '·' : ''
+                    }}{{ item.knowledge_point || '' }}</span
+                  >
+                  <span
+                    v-if="masteryPill(item.mastery_status) && item.mastery_status !== 'retried'"
+                    :class="['stpill', masteryPill(item.mastery_status)!.cls]"
+                    >{{ masteryPill(item.mastery_status)!.label }}</span
+                  >
+                </div>
+                <div class="weekly-item__foot">
+                  <button
+                    v-if="
+                      track.plan_section === 'due_review' &&
+                      practiceProjection(item).kind === 'action' &&
+                      practiceProjection(item).action === 'join'
+                    "
+                    type="button"
+                    class="btn"
+                    :data-testid="`weekly-practice-${item.source_ref}`"
+                    :disabled="busy || practiceGenerationBusy?.includes(item.source_ref)"
+                    @click="emit('join-practice', item)"
+                  >
+                    {{ practiceProjection(item).label }}
+                  </button>
+                  <button
+                    v-if="
+                      track.plan_section === 'due_review' &&
+                      practiceProjection(item).kind === 'pending'
+                    "
+                    type="button"
+                    class="btn"
+                    :data-testid="`weekly-practice-${item.source_ref}`"
+                    disabled
+                  >
+                    {{ practiceProjection(item).label }}
+                  </button>
+                  <template
+                    v-if="
+                      track.plan_section === 'due_review' && practiceProjection(item).kind === 'joined'
+                    "
+                  >
+                    <span
+                      class="stpill got weekly-item__joined"
+                      :data-testid="`weekly-practice-${item.source_ref}`"
+                      >{{ practiceProjection(item).label }}</span
+                    >
+                    <button
+                      type="button"
+                      class="btn btn-ghost"
+                      :data-testid="`weekly-view-practice-${item.source_ref}`"
+                      @click="emit('view-practice', item)"
+                    >
+                      查看新题
+                    </button>
+                  </template>
+                  <button
+                    v-if="
+                      track.plan_section === 'due_review' &&
+                      practiceProjection(item).kind === 'action' &&
+                      practiceProjection(item).action === 'retry'
+                    "
+                    type="button"
+                    class="btn"
+                    :data-testid="`weekly-practice-${item.source_ref}`"
+                    :disabled="busy || practiceGenerationBusy?.includes(item.source_ref)"
+                    @click="emit('retry-mistake-practice', item.source_ref)"
+                  >
+                    {{ practiceProjection(item).label }}
+                  </button>
+                  <button
+                    v-if="track.plan_section === 'due_review'"
+                    type="button"
+                    class="btn btn-ghost weekly-item__defer"
+                    :disabled="busy"
+                    @click="emit('defer-item', item)"
+                  >
+                    本周先不练
+                  </button>
+                  <K12MistakeReviewMenu
+                    v-if="track.plan_section === 'due_review'"
+                    :suppressed="false"
+                    :busy="busy"
+                    display="visible"
+                    @suppress="emit('suppress-item', item)"
+                  />
+                </div>
+              </article>
+            </div>
           </section>
           <p v-if="activeTab === 'current'" class="weekly-lifecycle rc-week-hero__foot">
             <span class="note"
@@ -1293,8 +1370,12 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 9px 13px;
   border: 0.5px solid var(--hc-border);
   border-radius: 12px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
   box-shadow: none;
+}
+
+.weekly-toolbar .k12-secondary-tabs {
+  background: rgba(255, 254, 249, 0.9);
 }
 
 .weekly-progress.rc-week-progress > div {
@@ -1320,6 +1401,12 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   text-overflow: ellipsis;
 }
 
+.weekly-progress.rc-week-progress > button {
+  height: 32px;
+  font-family: Arial;
+  line-height: normal;
+}
+
 .weekly-progress.rc-week-progress--missing {
   background: var(--hc-bg-input);
 }
@@ -1331,7 +1418,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 18px 18px 13px;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: linear-gradient(160deg, var(--hc-accent-subtle), var(--hc-bg-card) 55%);
+  background: linear-gradient(160deg, var(--hc-accent-subtle), rgba(255, 254, 249, 0.9) 55%);
   box-shadow: var(--hc-shadow-sm);
 }
 
@@ -1339,7 +1426,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 0 0 6px;
+  margin: 0 0 14px;
   padding: 0;
 }
 
@@ -1369,8 +1456,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-hero.rc-week-hero .weekly-hero__meta > .kpill {
   padding: 2px 7px;
   border-radius: 4px;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
   font-size: 10.5px;
   font-weight: 650;
+  line-height: 1.5;
 }
 
 .weekly-hero.rc-week-hero .weekly-hero__meta {
@@ -1395,11 +1485,18 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
 .weekly-hero.rc-week-hero .weekly-track.rc-week-plan__section {
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.weekly-hero.rc-week-hero .weekly-resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
 
 .weekly-hero.rc-week-hero
@@ -1447,7 +1544,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 10px 12px;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
   box-shadow: none;
   color: var(--hc-text-secondary);
   font-size: 12px;
@@ -1471,6 +1568,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   white-space: nowrap;
 }
 
+.weekly-item.resource-row .kpill,
+.weekly-item.resource-row .stpill {
+  line-height: 1.5;
+}
+
 .weekly-item.resource-row .weekly-item__origin {
   display: grid;
   flex: 0 0 178px;
@@ -1482,7 +1584,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   min-width: 0;
   color: var(--hc-text-secondary);
   font-size: 11px;
-  line-height: 1.25;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1492,7 +1594,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   min-width: 0;
   color: var(--hc-text-muted);
   font-size: 10px;
-  line-height: 1.2;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1513,7 +1615,14 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   flex: none;
   padding: 0 11px;
   border-radius: 8px;
+  font-family: Arial;
   font-size: 12px;
+  line-height: normal;
+}
+
+.weekly-item.resource-row .btn.btn-ghost,
+.weekly-manual.resource-row .btn.btn-ghost {
+  padding: 0 9px;
 }
 
 .weekly-manual.resource-row {
@@ -1522,20 +1631,55 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 }
 
 .weekly-manual.resource-row > b {
-  flex: 1 1 250px;
+  flex: 0 0 250px;
   min-width: 0;
 }
 
+.weekly-manual.resource-row .weekly-manual__origin {
+  display: grid;
+  flex: 0 0 178px;
+  gap: 1px;
+  min-width: 178px;
+}
+
+.weekly-manual.resource-row .weekly-manual__origin b {
+  min-width: 0;
+  color: var(--hc-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weekly-manual.resource-row .weekly-manual__origin small {
+  min-width: 0;
+  color: var(--hc-text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .weekly-hero.rc-week-hero .weekly-lifecycle.rc-week-hero__foot {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 5px 20px;
+  flex-wrap: wrap;
   margin: 12px 0 0;
   padding: 11px 0 0;
+  padding-bottom: 0;
   border-top: 0.5px solid var(--hc-divider);
   border-right: 0;
   border-bottom: 0;
   border-left: 0;
   border-radius: 0;
   background: transparent;
+  color: var(--hc-text-primary);
+  font-size: 14px;
+  line-height: 21px;
 }
 
 @media (max-width: 1040px) {

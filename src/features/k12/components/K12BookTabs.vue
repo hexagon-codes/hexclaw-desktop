@@ -175,12 +175,16 @@ const emit = defineEmits<{
   background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
   font: inherit;
+  font-family: Arial;
   font-size: 12px;
+  font-weight: 400;
+  line-height: normal;
   cursor: pointer;
 }
 .k12-secondary-tabs__row .source-tag.on {
   border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
+  font-weight: 400;
 }
 </style>

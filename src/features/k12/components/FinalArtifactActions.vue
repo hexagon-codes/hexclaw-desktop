@@ -62,7 +62,7 @@ function actionDisabled(action: FinalArtifactAction) {
     >
       <svg
         v-if="action === 'print'"
-        class="final-artifact-actions__icon"
+        class="ic-sm final-artifact-actions__icon"
         viewBox="0 0 24 24"
         aria-hidden="true"
       >
@@ -82,19 +82,21 @@ function actionDisabled(action: FinalArtifactAction) {
 .final-artifact-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
 }
 .final-artifact-actions button {
   flex: none;
+  font-family: Arial;
+  line-height: normal;
 }
 .final-artifact-actions__icon {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 .final-artifact-actions button:disabled {
   cursor: default;

@@ -1,5 +1,4 @@
-// 原型对齐合同：A 回复无框无! / B 置顶 agentId 兜底 / C 周练标题不折行 / D 作品两列
-// 现状（未修复生产代码）不满足以下断言，全部 RED；修复后 GREEN（BUG-20260816-002~005）。
+// 原型对齐回归合同：回复无框、助手置顶、周练标题与作品列表列数。
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -13,12 +12,9 @@ async function source(relativePath: string): Promise<string> {
 describe('BUG-20260816-002: 回复消息无框无 ! 图标（对齐原型）', () => {
   it('ChatView 的 --empty 卡片绑定必须排除 live 流式消息', async () => {
     const view = await source('src/views/ChatView.vue')
-    const bindingLine = view
-      .split('\n')
-      .find((line) => line.includes("'hc-msg__bubble--empty'"))
-    expect(bindingLine).toBeDefined()
-    expect(bindingLine!).toContain('!isLiveAssistantMessage(msg)')
-    expect(bindingLine!).toContain('isEmptyReply(msg.content)')
+    expect(view).toMatch(
+      /'hc-msg__bubble--empty':\s*!isLiveAssistantMessage\(msg\)\s*&&\s*isEmptyReply\(msg\.content\)/u,
+    )
   })
 })
 
@@ -100,13 +96,19 @@ describe('BUG-20260816-006 待续项（原型对照：app.html:6833 openGenerate
     expect(panel).toMatch(/口算热身/u)
     expect(panel).toMatch(/待开始/u)
     // 旧实现（hero meta 轨道名循环）必须消失
-    const heroMeta = panel.slice(panel.indexOf('weekly-hero__meta'), panel.indexOf('</div>', panel.indexOf('weekly-hero__meta')) + 6)
+    const heroMeta = panel.slice(
+      panel.indexOf('weekly-hero__meta'),
+      panel.indexOf('</div>', panel.indexOf('weekly-hero__meta')) + 6,
+    )
     expect(heroMeta).not.toMatch(/v-for="track in visibleTracks"/u)
   })
 
   it('会话列表标题对齐原型 .cs-t：13px/400/nowrap/ellipsis', async () => {
     const list = await source('src/components/chat/SessionList.vue')
-    const titleCss = list.slice(list.indexOf('.hc-sessions__title {'), list.indexOf('.hc-sessions__branch-badge'))
+    const titleCss = list.slice(
+      list.indexOf('.hc-sessions__title {'),
+      list.indexOf('.hc-sessions__branch-badge'),
+    )
     expect(titleCss).toMatch(/font-size:\s*13px/u)
     expect(titleCss).toMatch(/font-weight:\s*400/u)
     expect(titleCss).toMatch(/white-space:\s*nowrap/u)
@@ -124,13 +126,13 @@ describe('BUG-20260816-006 待续项（原型对照：app.html:6833 openGenerate
     expect(records).toMatch(/store\.report\?\.trend/u)
   })
 
-  it('掌握状态 pill：DTO 带 mastery_status 且面板按架构 :509 词表投影', async () => {
+  it('掌握状态 pill：DTO 带 mastery_status 且到期复习面板按原型词表投影', async () => {
     const api = await source('src/api/k12.ts')
     expect(api).toMatch(/mastery_status/u)
     const panel = await source('src/features/k12/components/K12WeeklyPracticePanel.vue')
     expect(panel).toMatch(/masteryPill/u)
     expect(panel).toMatch(/证据已掌握/u)
-    expect(panel).toMatch(/待复习/u)
+    expect(panel).toMatch(/未掌握/u)
     expect(panel).toMatch(/已重做/u)
     expect(panel).toMatch(/已归档/u)
   })

@@ -12,6 +12,29 @@ function evidenceOf(t: EvidenceType): VerifyEvidence {
   return STRONG_EVIDENCE.includes(t) ? 'program_verified' : 'model_review'
 }
 
+function formatMistakeDate(createdAt?: number): string {
+  if (!createdAt || !Number.isFinite(createdAt)) return ''
+  const date = new Date(createdAt * 1000)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function mistakeSourceLabel(source?: string, subject?: string, status?: string): string {
+  switch (source) {
+    case 'photo':
+      return subject === '科学' ? '📷 活动单批改' : '📷 拍照批改'
+    case 'verified':
+      if (status === 'mastered') return '✓ 证据完整'
+      return subject === '信息科技' ? '✓ 沙箱运行' : '✓ 已验算'
+    case 'manual':
+      return '🖊 家长记入'
+    case 'writing_confirmed':
+      return '家长确认'
+    default:
+      return source ?? ''
+  }
+}
+
 /** mistakeDTO → 通用记录项（字段进 fields，与 MISTAKE_SCHEMA.fields 的 key 对齐）。
  *  subject 已知时 chip 显示「学科·知识点」（原型 20260709 学科定色：数学蓝/语文橙/英语紫，
  *  RecordList data-chip 前缀选择器上色）；/mistakes 列表暂不下发 subject（P2 缺口），队列行先亮。 */
@@ -21,9 +44,11 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: stri
     dto.review_state ??
     (dto.status === 'archived'
       ? 'suppressed'
-      : dto.status === 'mastered'
-        ? 'mastered'
-        : 'scheduled')
+      : dto.status === 'retried'
+        ? 'retried'
+        : dto.status === 'mastered'
+          ? 'mastered'
+          : 'scheduled')
   return {
     recordId: dto.record_id,
     agentId,
@@ -34,6 +59,8 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: stri
       question: dto.question,
       knowledge_point: subj ? `${subj}·${dto.knowledge_point}` : dto.knowledge_point,
       error_cause: dto.error_cause,
+      created_at: formatMistakeDate(dto.created_at),
+      entry_source: mistakeSourceLabel(dto.entry_source, subj, dto.status),
       // 独立保留学科（M1 学期汇总分科计数用；schema 未声明该字段，不参与行渲染）
       subject: subj,
       legacy_status: dto.status,
@@ -59,6 +86,7 @@ export function mistakesToView(
   agentId: string,
   all: MistakeDTO[],
   due: MistakeDTO[],
+  total?: number,
 ): RecordCollectionView {
   // review-queue 是跨 collection 的统一队列，可能含 /mistakes 不会返回的语英积累纠错项。
   // 先按 record_id 合并：同 ID 用 queue 补 subject/review_kind，queue 独有项追加到 items，
@@ -87,6 +115,7 @@ export function mistakesToView(
     items,
     reviewQueue: due.map((d) => d.record_id),
     statusCounts,
+    totalCount: total ?? items.length,
   }
 }
 

@@ -27,9 +27,7 @@ watch(
 const parsed = computed(() => {
   if (!/^\d+$/.test(draft.value.trim())) return null
   const value = Number(draft.value)
-  return Number.isInteger(value) && value >= props.min && value <= props.max
-    ? value
-    : null
+  return Number.isInteger(value) && value >= props.min && value <= props.max ? value : null
 })
 const invalid = computed(() => parsed.value === null)
 
@@ -49,44 +47,48 @@ function step(delta: number) {
 
 <template>
   <div
-    class="manual-count"
+    class="manual-count k12-manual-count-control"
     :class="{ 'manual-count--invalid': invalid }"
     role="group"
     :aria-label="label"
     :data-testid="`manual-count-${track}`"
   >
-    <span class="manual-count__label">题数</span>
-    <button
-      type="button"
-      class="manual-count__step"
-      :disabled="disabled || parsed === min"
-      :aria-label="`${label}减少 1 道`"
-      @click="step(-1)"
-    >
-      −
-    </button>
-    <input
-      :value="draft"
-      type="number"
-      inputmode="numeric"
-      :min="min"
-      :max="max"
-      step="1"
-      :disabled="disabled"
-      :aria-invalid="invalid"
-      @input="updateDraft(($event.target as HTMLInputElement).value)"
-    />
-    <span class="manual-count__unit">道</span>
-    <button
-      type="button"
-      class="manual-count__step"
-      :disabled="disabled || parsed === max"
-      :aria-label="`${label}增加 1 道`"
-      @click="step(1)"
-    >
-      +
-    </button>
-    <small v-if="invalid" role="alert">请输入 {{ min }}–{{ max }} 的整数</small>
+    <span class="manual-count__label k12-manual-count-control__label">题数</span>
+    <span class="manual-count__stepper k12-manual-count-stepper">
+      <button
+        type="button"
+        class="manual-count__step"
+        :disabled="disabled || parsed === min"
+        :aria-label="`${label}减少 1 道`"
+        @click="step(-1)"
+      >
+        −
+      </button>
+      <input
+        :value="draft"
+        type="number"
+        inputmode="numeric"
+        :min="min"
+        :max="max"
+        step="1"
+        :disabled="disabled"
+        :aria-invalid="invalid"
+        @input="updateDraft(($event.target as HTMLInputElement).value)"
+      />
+      <button
+        type="button"
+        class="manual-count__step"
+        :disabled="disabled || parsed === max"
+        :aria-label="`${label}增加 1 道`"
+        @click="step(1)"
+      >
+        +
+      </button>
+    </span>
+    <span class="manual-count__unit k12-manual-count-control__unit">道</span>
+    <small class="k12-manual-count-control__error" role="alert">
+      {{ invalid ? `请输入 ${min}–${max} 的整数` : '' }}
+    </small>
   </div>
 </template>
 
@@ -94,31 +96,48 @@ function step(delta: number) {
 .manual-count {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
 }
-.manual-count__label,
+.manual-count__label {
+  font-weight: 600;
+  white-space: nowrap;
+}
 .manual-count__unit {
   color: var(--hc-text-secondary);
   font-size: 12px;
   white-space: nowrap;
 }
-.manual-count input {
-  width: 50px;
-  height: 30px;
+.manual-count__stepper {
+  display: grid;
+  grid-template-columns: 28px 48px 28px;
+  width: 106px;
   box-sizing: border-box;
+  height: 30px;
+  overflow: hidden;
   border: 0.5px solid var(--hc-border);
-  border-radius: 8px;
+  border-radius: 9px;
   background: var(--hc-bg-input);
+}
+.manual-count input {
+  min-width: 0;
+  width: auto;
+  height: auto;
+  box-sizing: border-box;
+  border: 0;
+  border-inline: 0.5px solid var(--hc-divider);
+  border-radius: 0;
+  background: var(--hc-bg-card);
   color: var(--hc-text-primary);
-  font: inherit;
+  font: 600 12px/1 var(--hc-font);
   font-variant-numeric: tabular-nums;
   text-align: center;
   outline: none;
 }
 .manual-count input:focus {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hc-accent) 16%, transparent);
+  box-shadow: none;
 }
 .manual-count input::-webkit-inner-spin-button,
 .manual-count input::-webkit-outer-spin-button {
@@ -127,17 +146,21 @@ function step(delta: number) {
 }
 .manual-count__step {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: auto;
+  height: auto;
   place-items: center;
   margin: 0;
-  padding: 0;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 8px;
-  background: var(--hc-bg-card);
-  color: var(--hc-text-primary);
-  font: inherit;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font: 500 15px/1 var(--hc-font);
   cursor: pointer;
+}
+.manual-count__step:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
 }
 .manual-count__step:disabled,
 .manual-count input:disabled {
@@ -147,6 +170,7 @@ function step(delta: number) {
 .manual-count small {
   color: var(--hc-error);
   font-size: 11px;
+  line-height: 1.25;
   white-space: nowrap;
 }
 .manual-count--invalid input {

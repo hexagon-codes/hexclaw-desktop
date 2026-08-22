@@ -23,6 +23,7 @@ export const MISTAKE_SCHEMA: RecordSchema = {
   orderBy: 'due_at',
   dedupeKey: ['question'],
   fields: [
+    { key: 'created_at', labelKey: 'k12.mistakeFields.date', type: 'string', role: 'date' },
     { key: 'question', labelKey: 'k12.mistakeFields.title', type: 'string', role: 'title' },
     {
       key: 'knowledge_point',
@@ -31,6 +32,12 @@ export const MISTAKE_SCHEMA: RecordSchema = {
       role: 'chip',
     },
     { key: 'error_cause', labelKey: 'k12.mistakeFields.errorCause', type: 'string', role: 'meta' },
+    {
+      key: 'entry_source',
+      labelKey: 'k12.accumulationFields.source',
+      type: 'string',
+      role: 'source',
+    },
   ],
   states: [
     { id: 'scheduled', labelKey: 'k12.records.scheduledReview', tone: 'todo' },
@@ -39,6 +46,7 @@ export const MISTAKE_SCHEMA: RecordSchema = {
       labelKey: 'k12.records.deferredThisWeek',
       tone: 'done',
     },
+    { id: 'retried', labelKey: 'k12.mistakeStatus.retried', tone: 'done' },
     { id: 'suppressed', labelKey: 'k12.records.suppressedReview', tone: 'na' },
     { id: 'mastered', labelKey: 'k12.mistakeStatus.mastered', tone: 'got' },
   ],

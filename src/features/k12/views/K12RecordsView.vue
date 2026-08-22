@@ -25,6 +25,7 @@ import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import K12PracticeCandidateSelectionModal from '../components/K12PracticeCandidateSelectionModal.vue'
 import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
+import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import {
   k12ExportMd,
@@ -139,16 +140,12 @@ const weeklyVerifiedItemCount = computed(
   () =>
     weeklyPlan.value?.tracks.reduce(
       (total, track) =>
-        total +
-        track.items.filter((item) => item.verification.status === 'verified').length,
+        total + track.items.filter((item) => item.verification.status === 'verified').length,
       0,
     ) ?? 0,
 )
 const weeklyOutputDisabled = computed(
-  () =>
-    weeklyBusy.value ||
-    weeklyDeferBusy.value ||
-    weeklyVerifiedItemCount.value === 0,
+  () => weeklyBusy.value || weeklyDeferBusy.value || weeklyVerifiedItemCount.value === 0,
 )
 const weeklyOutputDisabledReason = computed(() => {
   if (weeklyBusy.value || weeklyDeferBusy.value) return '正在处理本周计划…'
@@ -167,8 +164,7 @@ function weeklyPlanCommandKey(): string {
   if (weeklyPlanIntent.value?.agent === props.agentId) {
     return weeklyPlanIntent.value.commandKey
   }
-  const identity =
-    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++weeklyPlanKeySequence}`
+  const identity = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++weeklyPlanKeySequence}`
   const commandKey = weeklyCommandKey('plan', identity)
   weeklyPlanIntent.value = { agent: props.agentId, commandKey }
   return commandKey
@@ -358,10 +354,7 @@ async function prepareWeeklyTextbookTrack(intent: { item_count: number }) {
       plan.plan_id,
       plan.revision,
       intent.item_count,
-      weeklyCommandKey(
-        'textbook-prepare',
-        `${plan.plan_id}:${plan.revision}:${intent.item_count}`,
-      ),
+      weeklyCommandKey('textbook-prepare', `${plan.plan_id}:${plan.revision}:${intent.item_count}`),
     )
     weeklyPlan.value = response.plan
   } catch (cause) {
@@ -693,15 +686,24 @@ function joinWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
 }
 
 // 查看新题（原型 openGeneratedPractice 弹层：新题/来源错题/同类依据/参考答案与验算）。
-const viewPracticeItem = ref<WeeklyPracticeItemDTO | null>(null)
+type PracticeProjectionSource = Pick<WeeklyPracticeItemDTO, 'source_ref' | 'prompt_markdown'>
+
+const viewPracticeItem = ref<PracticeProjectionSource | null>(null)
 function viewWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
   viewPracticeItem.value = item
+}
+
+function viewMistakePracticeItem(item: RecordItem) {
+  viewPracticeItem.value = {
+    source_ref: item.recordId,
+    prompt_markdown: String(item.fields.question ?? ''),
+  }
 }
 
 async function suppressWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
   const source = view.value?.items.find((record) => record.recordId === item.source_ref)
   if (!source) {
-    toast.error("未找到对应错题，请刷新后重试")
+    toast.error('未找到对应错题，请刷新后重试')
     return
   }
   await suppressMistake(source)
@@ -719,7 +721,10 @@ const weekCount = computed(() =>
   ),
 )
 const mistakeCount = computed(
-  () => view.value?.items.filter((item) => item.status !== 'suppressed').length ?? 0,
+  () =>
+    view.value?.totalCount ??
+    view.value?.items.filter((item) => item.status !== 'suppressed').length ??
+    0,
 )
 const suppressedMistakeCount = computed(
   () => view.value?.items.filter((item) => item.status === 'suppressed').length ?? 0,
@@ -770,6 +775,7 @@ const mistakeSubjectFilters = computed(() => [
 const mistakeStatusFilters = computed(() => [
   { value: 'all' as const, label: t('records.all') },
   { value: 'scheduled' as const, label: t('k12.records.scheduledReview') },
+  { value: 'retried' as const, label: t('k12.mistakeStatus.retried') },
   { value: 'mastered' as const, label: t('k12.mistakeStatus.mastered') },
   { value: 'suppressed' as const, label: t('k12.records.suppressedReview') },
 ])
@@ -787,7 +793,9 @@ function matchesMistakeStatus(item: RecordItem): boolean {
 }
 
 const mistakeResultTotal = computed(() =>
-  mistakeStatus.value === 'suppressed' ? suppressedMistakeCount.value : mistakeCount.value,
+  mistakeStatus.value === 'suppressed'
+    ? suppressedMistakeCount.value
+    : (view.value?.totalCount ?? mistakeCount.value),
 )
 
 const filteredMistakeItems = computed(() =>
@@ -802,17 +810,15 @@ const filteredMistakeView = computed<RecordCollectionView | null>(() => {
   return { ...view.value, items: filteredMistakeItems.value }
 })
 
-async function onAction(payload: {
-  id: 'markMastered' | 'detail'
-  record: RecordItem
-}) {
+async function onAction(payload: { id: 'markMastered' | 'detail'; record: RecordItem }) {
   const { id, record } = payload
   if (id === 'detail') openDetail(record)
 }
 
 async function suppressMistake(record: RecordItem) {
   const agent = props.agentId
-  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'suppressed') return
+  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'suppressed')
+    return
   const intent = ++archiveIntentSequence
   setArchiveBusy(record.recordId, true)
   try {
@@ -991,7 +997,7 @@ async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
 
 // ── 错题 → 练习集：服务端持久化的一键异步投影 ─────────────────────
 // 产品裁决（2026-07-25）：列表里一次点击完成“生成 → 验证 → 装篮”。桌面端不再保存临时
-// 题答、不再弹第二次加入按钮；切 Tab、切会话或重启后均从服务端恢复五态。
+// 题答、不再弹第二次加入按钮；切 Tab、切会话或重启后均从服务端恢复六态。
 const practiceGenerationByMistake = ref<Record<string, MistakePracticeGenerationDTO>>({})
 const practiceGenerationBusy = ref<string[]>([])
 const practiceCommandKeys = new Map<string, string>()
@@ -1011,8 +1017,8 @@ function setPracticeProjection(next: MistakePracticeGenerationDTO) {
   if (next.state !== 'pending') practiceCommandKeys.delete(next.source_mistake_id)
 }
 
-function practiceGenerationFailed(recordID: string) {
-  return practiceGenerationByMistake.value[recordID]?.state === 'failed'
+function practiceProjection(recordID: string) {
+  return projectMistakePracticeGeneration(practiceGenerationByMistake.value[recordID]?.state)
 }
 
 function practiceGenerationIsBusy(recordID: string) {
@@ -1640,35 +1646,66 @@ async function doExportMd() {
         >
           <template #toolbar-actions>
             <FinalArtifactActions
-                    v-if="sub === 'week' && weeklyView === 'current'"
-                    :actions="['print', 'send_im']"
-                    :artifact-digest="weeklyOutput?.snapshot.snapshot_digest ?? ''"
-                    :disabled="weeklyOutputDisabled"
-                    :disabled-reason="weeklyOutputDisabledReason"
-                    primary-action="print"
-                    :send-label="weeklyDelivery.label.value"
-                    :send-disabled="weeklyDelivery.disabled.value"
-                    @intent="runWeeklyArtifactAction"
-                  />
+              v-if="sub === 'week' && weeklyView === 'current'"
+              :actions="['print', 'send_im']"
+              :artifact-digest="weeklyOutput?.snapshot.snapshot_digest ?? ''"
+              :disabled="weeklyOutputDisabled"
+              :disabled-reason="weeklyOutputDisabledReason"
+              primary-action="print"
+              :send-label="weeklyDelivery.label.value"
+              :send-disabled="weeklyDelivery.disabled.value"
+              @intent="runWeeklyArtifactAction"
+            />
           </template>
         </K12WeeklyPracticePanel>
-        <div v-if="viewPracticeItem" class="hc-view-practice-overlay" @click.self="viewPracticeItem = null">
+        <div
+          v-if="viewPracticeItem"
+          class="hc-view-practice-overlay"
+          @click.self="viewPracticeItem = null"
+        >
           <div class="hc-view-practice-modal" role="dialog" aria-modal="true" aria-label="查看新题">
             <div class="hc-view-practice-modal__head">
               <b>查看新题</b>
               <button type="button" aria-label="关闭" @click="viewPracticeItem = null">×</button>
             </div>
             <div class="hc-view-practice-modal__body">
-              <template v-if="viewPracticeItem && practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item">
-                <div class="hc-view-practice-row"><b>新题</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.question_markdown }}</span></div>
-                <div class="hc-view-practice-row"><b>来源错题</b><span>{{ viewPracticeItem.prompt_markdown }}</span></div>
-                <div class="hc-view-practice-row"><b>同类依据</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.verification_evidence ?? '已通过服务端验证' }}</span></div>
-                <div class="hc-view-practice-row"><b>参考答案与验算</b><span>{{ practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item?.expected_answer_markdown ?? '—' }}</span></div>
+              <template
+                v-if="
+                  viewPracticeItem &&
+                  practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item
+                "
+              >
+                <div class="hc-view-practice-row">
+                  <b>新题</b
+                  ><span>{{
+                    practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item
+                      ?.question_markdown
+                  }}</span>
+                </div>
+                <div class="hc-view-practice-row">
+                  <b>来源错题</b><span>{{ viewPracticeItem.prompt_markdown }}</span>
+                </div>
+                <div class="hc-view-practice-row">
+                  <b>同类依据</b
+                  ><span>{{
+                    practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item
+                      ?.verification_evidence ?? '已通过服务端验证'
+                  }}</span>
+                </div>
+                <div class="hc-view-practice-row">
+                  <b>参考答案与验算</b
+                  ><span>{{
+                    practiceGenerationByMistake?.[viewPracticeItem.source_ref]?.item
+                      ?.expected_answer_markdown ?? '—'
+                  }}</span>
+                </div>
               </template>
               <p v-else class="hc-view-practice-empty">练习项尚未生成完成，稍后再查看。</p>
             </div>
             <div class="hc-view-practice-modal__foot">
-              <button type="button" class="btn btn-ghost" @click="viewPracticeItem = null">关闭</button>
+              <button type="button" class="btn btn-ghost" @click="viewPracticeItem = null">
+                关闭
+              </button>
             </div>
           </div>
         </div>
@@ -1776,20 +1813,38 @@ async function doExportMd() {
             >
               <template #list-practice-action="{ item }">
                 <button
+                  v-if="practiceProjection(item.recordId).kind === 'action'"
                   type="button"
                   class="rl-btn"
                   :data-testid="`mistake-practice-${item.recordId}`"
                   :disabled="practiceGenerationIsBusy(item.recordId)"
                   @click="
-                    practiceGenerationFailed(item.recordId)
+                    practiceProjection(item.recordId).action === 'retry'
                       ? retryMistakePracticeGeneration(item.recordId)
                       : openPracticeCandidateSelection(item)
                   "
                 >
-                  {{
-                    practiceGenerationFailed(item.recordId) ? '出题失败 · 重试' : '加入练习集'
-                  }}
+                  {{ practiceProjection(item.recordId).label }}
                 </button>
+                <span
+                  v-else-if="practiceProjection(item.recordId).kind === 'pending'"
+                  class="stpill todo"
+                  :data-testid="`mistake-practice-${item.recordId}`"
+                  >{{ practiceProjection(item.recordId).label }}</span
+                >
+                <template v-else-if="practiceProjection(item.recordId).kind === 'joined'">
+                  <span class="stpill got" :data-testid="`mistake-practice-${item.recordId}`">{{
+                    practiceProjection(item.recordId).label
+                  }}</span>
+                  <button
+                    type="button"
+                    class="rl-btn"
+                    :data-testid="`mistake-view-practice-${item.recordId}`"
+                    @click="viewMistakePracticeItem(item)"
+                  >
+                    查看新题
+                  </button>
+                </template>
               </template>
               <template #list-row-actions="{ item }">
                 <K12MistakeReviewMenu
@@ -2293,7 +2348,9 @@ async function doExportMd() {
   display: flex;
   align-items: center;
   gap: 9px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  height: 42px;
+  box-sizing: border-box;
   padding: 2px 14px 3px;
   border-bottom: 0.5px solid var(--hc-border);
 }
@@ -2303,7 +2360,10 @@ async function doExportMd() {
 .k12rec__body {
   flex: 1;
   overflow: auto;
-  padding: 16px 26px 48px;
+  padding: 15px 26px 48px;
+}
+.k12rec__body:has(> section[data-testid='works-section']) {
+  padding-top: 15px;
 }
 /* DD-019：档案工作区铺满，真实记录内容统一落在原型的 1024px 阅读列。 */
 .k12rec__body > section {
@@ -2483,7 +2543,7 @@ async function doExportMd() {
   margin: 0 0 12px;
   border: 0.5px solid var(--hc-border);
   border-radius: 14px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
 }
 .k12rec__filter-row {
   display: flex;
@@ -2502,13 +2562,17 @@ async function doExportMd() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 29px;
+  box-sizing: border-box;
   padding: 5px 8px;
   border: 0.5px solid var(--hc-border);
   border-radius: 9px;
   background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
-  font: inherit;
+  font-family: Arial;
   font-size: 12px;
+  font-weight: 400;
+  line-height: normal;
   cursor: pointer;
 }
 .k12rec__filter-row--subject .k12rec__filter {
@@ -2530,6 +2594,9 @@ async function doExportMd() {
   font-size: 11.5px;
   color: var(--hc-text-muted);
   margin-top: 12px;
+}
+.k12rec__archive-note {
+  margin-top: 0;
 }
 .k12rec__insightlink {
   color: var(--hc-accent);
@@ -2914,6 +2981,9 @@ async function doExportMd() {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
 }
 /* 全部错题=默认折叠的次级档案（原型 1598 <details>）：折叠态隐藏筛选 + 档案行（.record-list 直接子 .rl-rows），
    「本周复习」的 .rl-review .rl-rows 是嵌套子、不受 > 直接子选择器命中，故行动卡常驻。 */
@@ -2941,6 +3011,105 @@ async function doExportMd() {
 .k12mistakes--collapsed :deep(.rl-empty),
 .k12mistakes--collapsed :deep(.record-list > .rl-rows) {
   display: none;
+}
+/* 错题档案行与原型 resource-row 同一紧凑轨道；日期/来源字段由服务端数据可用时接入，
+   当前保留标题起始槽位，避免缺字段时 chip/meta/action 横向跳动。 */
+.k12mistakes :deep(.rl-row) {
+  min-width: 0;
+  height: 48px;
+  box-sizing: border-box;
+  flex-wrap: nowrap;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255, 254, 249, 0.9);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+.k12mistakes :deep(.rl-title) {
+  flex: 0 0 250px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+}
+.k12mistakes :deep(.rl-date) {
+  flex: 0 0 35.91px;
+  min-width: 35.91px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+.k12mistakes :deep(.rl-chip),
+.k12mistakes :deep(.rl-status) {
+  flex: none;
+  line-height: 15.75px;
+}
+.k12mistakes :deep(.rl-rows) {
+  gap: 8px;
+}
+.k12mistakes :deep(.rl-meta) {
+  min-width: 0;
+  line-height: 18px;
+}
+.k12mistakes :deep(.rl-source[data-source*='家长']) {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--hc-warning) 40%, transparent);
+}
+.k12mistakes :deep(.stpill) {
+  font-size: 10.5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 700;
+  line-height: 15.75px;
+  white-space: nowrap;
+}
+.k12mistakes :deep(.stpill.todo) {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+.k12mistakes :deep(.stpill.done) {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+}
+.k12mistakes :deep(.stpill.got) {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.k12mistakes :deep(.rl-btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font-family: Arial;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: normal;
+  white-space: nowrap;
+  gap: 6px;
+}
+.k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
+  padding-inline: 11px;
+  color: var(--hc-text-primary);
+  background: color-mix(in srgb, var(--hc-accent) 7.5%, transparent);
+}
+.k12mistakes :deep(.rl-row > button[data-testid^='mistake-view-practice-']) {
+  padding-inline: 9px;
+  border-color: transparent;
+  color: var(--hc-text-secondary);
+}
+.k12mistakes :deep(.rl-row > .rl-btn:last-child) {
+  border-color: transparent;
+  padding-inline: 9px;
 }
 /* 原型 1193-1212：本周复习用大数字 hero；列表、自动化脚注都收进同一张卡。 */
 :deep(.k12week__hero) {
@@ -3042,6 +3211,14 @@ async function doExportMd() {
 :deep(.rl-chip[data-chip^='英语']) {
   background: color-mix(in srgb, #7048e8 10%, transparent);
   color: #7048e8;
+}
+:deep(.rl-chip[data-chip^='科学']) {
+  background: color-mix(in srgb, #2b8a3e 11%, transparent);
+  color: #2b8a3e;
+}
+:deep(.rl-chip[data-chip^='信息科技']) {
+  background: color-mix(in srgb, #0b7285 11%, transparent);
+  color: #0b7285;
 }
 /* 查看新题弹层（原型 openGeneratedPractice：新题/来源/依据/答案，只读检查非审批门）。 */
 .hc-view-practice-overlay {

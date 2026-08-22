@@ -115,24 +115,9 @@ describe('BUG-20260726-009 · TaskShell source message anchor', () => {
     expect(document.querySelector('#hc-chat-scenario-inline [data-testid="task-shell-stub"]')).toBeNull()
   })
 
-  it('同一会话两个并发图片任务分别保留自己的 TaskShell', async () => {
-    const wrapper = mountEnhancement()
-    await flushPromises()
-    await wrapper.setProps({ composerImage: payload('image-message-2') })
-    await flushPromises()
-
-    expect(
-      document.querySelectorAll('[data-testid="task-shell-stub"]'),
-    ).toHaveLength(2)
-    expect(
-      document.querySelector(
-        '#hc-chat-scenario-inline-image-message-1 [data-testid="task-shell-stub"]',
-      ),
-    ).not.toBeNull()
-    expect(
-      document.querySelector(
-        '#hc-chat-scenario-inline-image-message-2 [data-testid="task-shell-stub"]',
-      ),
-    ).not.toBeNull()
+  it('同一会话存在非终态任务时，共享执行锁在创建第二个图片消息前拒绝提交', () => {
+    expect(chatViewSource).toMatch(
+      /if \(intendedSessionId && chatStore\.isSessionExecuting\(intendedSessionId\)\) \{\s*return false\s*\}/,
+    )
   })
 })
