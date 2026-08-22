@@ -116,7 +116,14 @@ describe('CHAT-INV-THINKING-007 Desktop runtime wire', () => {
     })
 
     await expect(handle.done).resolves.toMatchObject({ content: 'legacy answer' })
-    expect(onChunk).toHaveBeenCalledWith('legacy answer', undefined)
+    expect(onChunk).toHaveBeenCalledWith(
+      'legacy answer',
+      undefined,
+      expect.objectContaining({
+        reasoningDisclosure: { visibility: 'not_exposed' },
+        sequence: 0,
+      }),
+    )
   })
 
   it('adopts the trusted backend identity and merges contiguous v1 events idempotently', async () => {

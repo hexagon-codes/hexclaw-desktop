@@ -375,7 +375,7 @@ describe('chatService', () => {
       data: JSON.stringify({ type: 'reply', content: 'done', metadata: { request_id: 'req-1' } }),
     })
 
-    await expect(handle.done).resolves.toEqual({
+    await expect(handle.done).resolves.toMatchObject({
       content: 'done',
       metadata: { request_id: 'req-1' },
       toolCalls: undefined,
@@ -425,7 +425,7 @@ describe('chatService', () => {
       }),
     })
 
-    await expect(handle.done).resolves.toEqual({
+    await expect(handle.done).resolves.toMatchObject({
       content: '先查连接器。最终结论不会消失。',
       metadata: { request_id: 'req-tool' },
       toolCalls: undefined,
@@ -441,7 +441,14 @@ describe('chatService', () => {
       ],
       agentName: undefined,
     })
-    expect(onChunk).toHaveBeenCalledWith('', undefined)
+    expect(onChunk).toHaveBeenLastCalledWith(
+      '',
+      undefined,
+      expect.objectContaining({
+        reasoningDisclosure: { visibility: 'not_exposed' },
+        sequence: 0,
+      }),
+    )
   })
 
   it('keeps the request socket alive past 120s for slow real-model first responses', async () => {
@@ -576,7 +583,7 @@ describe('chatService', () => {
       }),
     })
 
-    await expect(handle.done).resolves.toEqual({
+    await expect(handle.done).resolves.toMatchObject({
       content: 'resumed content',
       metadata: { request_id: 'req-resume' },
       toolCalls: undefined,

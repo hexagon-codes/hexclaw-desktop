@@ -136,8 +136,21 @@ describe('sendViaWebSocket — extended', () => {
     onChunkHandlers[0]!({ content: 'final', done: true, metadata, tool_calls: toolCalls })
 
     await expect(p).resolves.toBeUndefined()
-    expect(cbs.onChunk).toHaveBeenCalledWith('final', undefined)
-    expect(cbs.onDone).toHaveBeenCalledWith('final', metadata, toolCalls, 'coder', undefined)
+    expect(cbs.onChunk).toHaveBeenCalledWith(
+      'final',
+      undefined,
+      expect.objectContaining({
+        reasoningDisclosure: { visibility: 'not_exposed' },
+        sequence: 0,
+      }),
+    )
+    expect(cbs.onDone).toHaveBeenCalledWith(
+      'final',
+      expect.objectContaining(metadata),
+      toolCalls,
+      'coder',
+      undefined,
+    )
   })
 
   // ─── user cancel ───────────────────────────────────────
