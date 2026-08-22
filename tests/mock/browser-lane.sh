@@ -130,6 +130,7 @@ llm:
 k12:
   grading_budget:
     policy_version: 1
+    recognition_plan_version: 1
     queued_seconds: 60
     normalizing_seconds: 60
     recognizing_seconds: 120

@@ -1404,6 +1404,122 @@ async function attach(testInfo: TestInfo, name: string, filePath: string, conten
   })
 }
 
+async function runCanvasPixelDiff(
+  page: Page,
+  reference: string,
+  source: string,
+  output: string,
+): Promise<PixelDiff> {
+  const [referenceBytes, sourceBytes] = await Promise.all([readFile(reference), readFile(source)])
+  const result = await page.evaluate(
+    async ({ referenceData, sourceData, threshold }) => {
+      const load = (data: string) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const image = new Image()
+          image.onload = () => resolve(image)
+          image.onerror = () => reject(new Error('pixel diff image decode failed'))
+          image.src = `data:image/png;base64,${data}`
+        })
+      const [referenceImage, sourceImage] = await Promise.all([
+        load(referenceData),
+        load(sourceData),
+      ])
+      if (
+        referenceImage.naturalWidth !== sourceImage.naturalWidth ||
+        referenceImage.naturalHeight !== sourceImage.naturalHeight
+      ) {
+        throw new Error(
+          `screenshot size mismatch: reference=${referenceImage.naturalWidth}x${referenceImage.naturalHeight}, implementation=${sourceImage.naturalWidth}x${sourceImage.naturalHeight}`,
+        )
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = referenceImage.naturalWidth
+      canvas.height = referenceImage.naturalHeight
+      const context = canvas.getContext('2d', { willReadFrequently: true })!
+      context.drawImage(referenceImage, 0, 0)
+      const referencePixels = context.getImageData(0, 0, canvas.width, canvas.height)
+      context.clearRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(sourceImage, 0, 0)
+      const sourcePixels = context.getImageData(0, 0, canvas.width, canvas.height)
+      const visible = context.createImageData(canvas.width, canvas.height)
+      let changedPixels = 0
+      let minX = canvas.width
+      let minY = canvas.height
+      let maxX = -1
+      let maxY = -1
+      for (let offset = 0; offset < referencePixels.data.length; offset += 4) {
+        const changed =
+          Math.abs(referencePixels.data[offset]! - sourcePixels.data[offset]!) > threshold ||
+          Math.abs(referencePixels.data[offset + 1]! - sourcePixels.data[offset + 1]!) >
+            threshold ||
+          Math.abs(referencePixels.data[offset + 2]! - sourcePixels.data[offset + 2]!) > threshold
+        const pixel = offset / 4
+        const x = pixel % canvas.width
+        const y = Math.floor(pixel / canvas.width)
+        if (changed) {
+          changedPixels++
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+          visible.data.set([255, 35, 35, 255], offset)
+        } else {
+          const gray = Math.round(
+            (referencePixels.data[offset]! * 0.299 +
+              referencePixels.data[offset + 1]! * 0.587 +
+              referencePixels.data[offset + 2]! * 0.114) *
+              0.45,
+          )
+          visible.data.set([gray, gray, gray, 255], offset)
+        }
+      }
+      context.putImageData(visible, 0, 0)
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        threshold,
+        changed_pixels: changedPixels,
+        total_pixels: canvas.width * canvas.height,
+        changed_pixel_ratio: changedPixels / (canvas.width * canvas.height),
+        changed_bbox: changedPixels > 0 ? [minX, minY, maxX + 1, maxY + 1] : null,
+        diffBase64: canvas.toDataURL('image/png').split(',')[1]!,
+      }
+    },
+    {
+      referenceData: referenceBytes.toString('base64'),
+      sourceData: sourceBytes.toString('base64'),
+      threshold: PIXEL_THRESHOLD,
+    },
+  )
+  await writeFile(output, Buffer.from(result.diffBase64, 'base64'))
+  return {
+    width: result.width,
+    height: result.height,
+    threshold: result.threshold,
+    changed_pixels: result.changed_pixels,
+    total_pixels: result.total_pixels,
+    changed_pixel_ratio: result.changed_pixel_ratio,
+    changed_bbox: result.changed_bbox,
+  }
+}
+
+async function runPixelDiff(reference: string, source: string, output: string, page: Page) {
+  try {
+    const { stdout } = await execFileAsync('python3', [
+      PIXEL_DIFF_TOOL,
+      reference,
+      source,
+      output,
+      String(PIXEL_THRESHOLD),
+    ])
+    return JSON.parse(stdout) as PixelDiff
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!message.includes("No module named 'PIL'")) throw error
+    return runCanvasPixelDiff(page, reference, source, output)
+  }
+}
+
 async function captureSurface(
   referencePage: Page,
   sourcePage: Page,
@@ -1437,14 +1553,7 @@ async function captureSurface(
     }),
   ])
 
-  const diffResult = await execFileAsync('python3', [
-    PIXEL_DIFF_TOOL,
-    referencePath,
-    sourcePath,
-    diffPath,
-    String(PIXEL_THRESHOLD),
-  ])
-  const diff = JSON.parse(diffResult.stdout.trim()) as PixelDiff
+  const diff = await runPixelDiff(referencePath, sourcePath, diffPath, referencePage)
   const [referenceGeometry, sourceGeometry, referenceText, sourceText] = await Promise.all([
     geometrySnapshot(referencePage, surface.referenceTargets),
     geometrySnapshot(sourcePage, surface.sourceTargets),

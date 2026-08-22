@@ -17,6 +17,7 @@ test('browser lane owns a real, isolated sidecar lifecycle', async () => {
   assert.match(script, /HEXCLAW_DISABLE_IM=all/)
   assert.match(script, /trap cleanup/)
   assert.match(script, /\/health/)
+  assert.match(script, /recognition_plan_version:\s*1/)
   assert.doesNotMatch(script, /OPENAI_API_KEY=\$\{/)
   assert.match(pkg.scripts['test:e2e:mock'], /browser-lane\.sh/)
 })

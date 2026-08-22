@@ -8,7 +8,7 @@ test.use({
 const now = '2026-07-23T12:00:00.000Z'
 const k12Agent = 'k12-tutor-current-source'
 const k12Session = 'session-current-source'
-const k12AssetFile = 'current-source-art.svg'
+const k12FixtureAssetFile = 'current-source-art.svg'
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -565,7 +565,7 @@ async function installCurrentSourceMocks(page: Page) {
             versions: [
               {
                 version_id: 'version-current-source',
-                source_asset_id: `asset://${k12Agent}/${k12AssetFile}`,
+                source_asset_id: `asset://${k12Agent}/${k12FixtureAssetFile}`,
                 feedback: '主体清晰，色彩关系完整。',
               },
             ],
@@ -573,7 +573,7 @@ async function installCurrentSourceMocks(page: Page) {
         ],
       })
     }
-    if (path === `/api/k12/assets/${k12AssetFile}` && method === 'GET') {
+    if (path === `/api/k12/assets/${k12FixtureAssetFile}` && method === 'GET') {
       return route.fulfill({
         status: 200,
         contentType: 'image/svg+xml',
@@ -933,7 +933,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     const previewImage = preview.locator('img')
     const previewClose = preview.getByRole('button', { name: '关闭预览' })
     await expect(previewClose).toBeVisible()
-    await expect(previewImage).toHaveAttribute('src', new RegExp(k12AssetFile))
+    await expect(previewImage).toHaveAttribute('src', /^blob:/)
     await expect
       .poll(() =>
         previewImage.evaluate((image: HTMLImageElement) => ({

@@ -603,7 +603,7 @@ function deriveJobEvidence(jobSnapshots) {
   )
   const reindexJob = reindexJobs[0]
   assert.ok(
-    ['queued', 'running', 'retry_wait'].includes(reindexJob.state),
+    ['queued', 'running', 'retry_wait', 'succeeded'].includes(reindexJob.state),
     `Reindex child is not pollable: ${reindexJob.state}`,
   )
   const terminalReindex = terminal.find((job) => job.job_id === reindexJob.job_id)
@@ -1352,7 +1352,11 @@ async function main() {
       ? { uploadCancelledJob: deriveQueueCancellationEvidence(loopback.state.jobSnapshots) }
       : deriveJobEvidence(loopback.state.jobSnapshots)
     if (!queueCancelOnly) {
-      assert.equal(loopback.state.heldEmbeddingRequests, 1)
+      if (webViewReport.reindex?.fastTerminal) {
+        assert.equal(loopback.state.heldEmbeddingRequests, 0)
+      } else {
+        assert.equal(loopback.state.heldEmbeddingRequests, 1)
+      }
       const reindexTransport = loopback.state.transportReceipts.find(
         (receipt) => receipt.kind === 'reindex' && receipt.phase === 'responded',
       )
@@ -1363,12 +1367,14 @@ async function main() {
         jobs.reindexJob.jobID,
         'Native reindex response job_id must match the projected child job',
       )
-      const detailTransport = loopback.state.transportReceipts.find(
-        (receipt) =>
-          receipt.kind === 'document-detail' &&
-          receipt.phase === 'responded' &&
-          receipt.path === `/api/v1/knowledge/documents/${reindexTransport.fields?.id}`,
-      )
+      const detailTransport = loopback.state.transportReceipts
+        .filter(
+          (receipt) =>
+            receipt.kind === 'document-detail' &&
+            receipt.phase === 'responded' &&
+            receipt.path === `/api/v1/knowledge/documents/${reindexTransport.fields?.id}`,
+        )
+        .at(-1)
       assert.ok(detailTransport, 'Native reindex must read its canonical document projection')
       assert.equal(
         detailTransport.status,

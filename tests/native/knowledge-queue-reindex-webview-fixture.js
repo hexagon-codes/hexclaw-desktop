@@ -588,6 +588,9 @@
       report.reindex.pending = reindexPending
       await progress('reindex-child-projected')
       await json('/__knowledge_webview_boundary__/release-reindex', { method: 'POST' })
+    } else {
+      // 后端可能在投影读取后立即完成；仍记录同一投影快照，供主进程核对 Job identity。
+      await progress('reindex-child-projected', { fastTerminal: true })
     }
     const reindexTerminal = await waitFor(
       () => {
@@ -608,7 +611,7 @@
       35_000,
     )
     report.reindex.terminal = reindexTerminal
-    await progress(reindexFastTerminal ? 'reindex-fast-terminal-confirmed' : 'reindex-polled-terminal')
+    await progress('reindex-polled-terminal', { fastTerminal: reindexFastTerminal })
   }
 
     await json('/__knowledge_webview_boundary__/arm-image', { method: 'POST' })

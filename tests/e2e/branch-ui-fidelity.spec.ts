@@ -8,14 +8,17 @@ const execFileAsync = promisify(execFile)
 
 const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 const IMPLEMENTATION_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
+const REQUESTED_SURFACE = process.env.HEX_UI_SURFACE?.trim()
 const AGENT = 'k12-fidelity-ming'
 const SESSION = 'k12-fidelity-session'
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
-const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-fidelity/evidence')
+const EVIDENCE_ROOT = path.resolve(
+  process.env.HEX_UI_EVIDENCE_ROOT?.trim() || 'test-results/branch-ui-fidelity/evidence',
+)
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 
-type SurfaceName = 'k12-weekly-current' | 'k12-works'
+type SurfaceName = 'k12-weekly-current' | 'k12-mistakes' | 'k12-works'
 
 interface GeometryTarget {
   name: string
@@ -29,6 +32,8 @@ interface Surface {
   openImplementation(page: Page): Promise<void>
   referenceGeometry: GeometryTarget[]
   implementationGeometry: GeometryTarget[]
+  screenshotClip?: { x: number; y: number; width: number; height: number }
+  normalizeContentBackground?: boolean
 }
 
 interface ShellLayerCandidate {
@@ -209,8 +214,13 @@ const creativeWorks = [
   {
     work_id: 'WRITING-20260715-001',
     work_type: 'writing',
+    display_kind: '语文·习作',
+    preview_variant: 'writing',
+    display_evidence: ['切题：校园春景', '结构：三段', '表达：有一处可提升'],
     display_name: '《春天的校园》',
     content_markdown: '柳枝像绿色的丝带，在春风里轻轻摆动。',
+    created_at: Date.parse('2026-07-15T19:35:43+08:00') / 1000,
+    latest_generation_at: Date.parse('2026-07-15T19:35:43+08:00') / 1000,
     row_version: 1,
     initial_feedback: {
       generation_id: 'REVIEW-WRITING-20260715-001',
@@ -225,7 +235,12 @@ const creativeWorks = [
   {
     work_id: 'ART-20260716-001',
     work_type: 'art',
+    display_kind: '美术·水彩',
+    preview_variant: 'default',
+    display_evidence: ['构图：主体偏右', '色彩：冷暖有层次', '线条：边缘清楚'],
     display_name: '《雨后的校园》',
+    created_at: Date.parse('2026-07-16T20:12:09+08:00') / 1000,
+    latest_generation_at: Date.parse('2026-07-16T20:12:09+08:00') / 1000,
     row_version: 1,
     initial_feedback: {
       generation_id: 'REVIEW-ART-20260716-001',
@@ -240,7 +255,12 @@ const creativeWorks = [
   {
     work_id: 'ART-20260717-002',
     work_type: 'art',
+    display_kind: '美术·线描',
+    preview_variant: 'line',
+    display_evidence: ['原图：已保存', '年级：五年级'],
     display_name: '《桌上的水杯》',
+    created_at: Date.parse('2026-07-17T08:42:18+08:00') / 1000,
+    latest_generation_at: null,
     row_version: 1,
     initial_feedback: {
       generation_id: 'REVIEW-ART-20260717-002',
@@ -251,32 +271,96 @@ const creativeWorks = [
 ]
 
 const visualMistakes = [
-  ['mistake-apple', '苹果和梨的价钱', '小数乘法', '数学'],
-  ['mistake-equation', '解方程 2x+15=43', '简易方程', '数学'],
-  ['mistake-believe', 'believe —— 拼成 belive（少 e）', '错词', '英语'],
-  ['mistake-poem', '「梅须逊雪三分白」漏「须」字', '默写', '语文'],
-  ['mistake-fraction', '小灯泡没有形成闭合回路', '简单电路', '科学'],
-  ['mistake-decimal', '重复执行积木少循环 1 次', '图形化编程', '信息科技'],
-  ['mistake-extra-1', '分数的意义', '分数', '数学'],
-  ['mistake-extra-2', '古诗默写', '古诗默写', '语文'],
-  ['mistake-extra-3', 'Unit 4 单词', '词汇', '英语'],
-  ['mistake-extra-4', '实验图判断', '科学实验', '科学'],
-  ['mistake-extra-5', '循环次数', '编程基础', '信息科技'],
-].map(([record_id, question, knowledge_point, subject]) => ({
-  record_id,
-  question,
-  knowledge_point,
-  error_cause: '练习记录',
-  status: 'new',
-  review_state: 'scheduled',
-  subject,
-  version: 1,
-}))
+  {
+    record_id: 'mistake-apple',
+    question: '苹果和梨的价钱（P52·3）',
+    knowledge_point: '小数乘法',
+    error_cause: '连续错 2 次 · 计算失误',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '数学',
+    created_at: Date.parse('2026-07-16T08:00:00+08:00') / 1000,
+    entry_source: 'photo',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-bulb',
+    question: '小灯泡没有形成闭合回路',
+    knowledge_point: '简单电路',
+    error_cause: '实验图判断错误',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '科学',
+    created_at: Date.parse('2026-07-15T08:00:00+08:00') / 1000,
+    entry_source: 'photo',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-decimal',
+    question: '重复执行积木少循环 1 次',
+    knowledge_point: '图形化编程',
+    error_cause: '运行结果已复核 · 到期可再练',
+    status: 'retried',
+    review_state: 'retried',
+    subject: '信息科技',
+    created_at: Date.parse('2026-07-13T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-equation',
+    question: '解方程 2x + 15 = 43',
+    knowledge_point: '简易方程',
+    error_cause: '复练 1 次 · 仍需巩固',
+    status: 'retried',
+    review_state: 'retried',
+    subject: '数学',
+    created_at: Date.parse('2026-07-12T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-believe',
+    question: 'believe —— 拼成 belive（少 e）',
+    knowledge_point: '错词',
+    error_cause: '本轮已跳过 · 系统证据不足',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '英语',
+    created_at: Date.parse('2026-07-09T08:00:00+08:00') / 1000,
+    entry_source: 'writing_confirmed',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-poem',
+    question: '「梅须逊雪三分白」漏「须」字',
+    knowledge_point: '默写',
+    error_cause: '上次生成任务未完成',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '语文',
+    created_at: Date.parse('2026-07-08T08:00:00+08:00') / 1000,
+    entry_source: 'manual',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-position',
+    question: '用数对表示位置',
+    knowledge_point: '位置',
+    error_cause: '两次独立复练正确',
+    status: 'mastered',
+    review_state: 'mastered',
+    subject: '数学',
+    created_at: Date.parse('2026-06-21T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
+  },
+]
 
 const visualAccumulations = Array.from({ length: 3 }, (_, index) => ({
   record_id: `accum-${index + 1}`,
   subject: index === 0 ? '语文' : index === 1 ? '英语' : '数学',
-  entry_type: 'quote',
+  entry_type: '好词好句',
   content: '学习记录',
   source: '家长记录',
   created_at: '2026-07-20T00:00:00+08:00',
@@ -302,6 +386,12 @@ function practiceGeneration(recordID: string) {
       state: 'failed',
       source_mistake_id: recordID,
       failure_reason: '上次生成任务未完成',
+    }
+  }
+  if (recordID === 'mistake-decimal') {
+    return {
+      state: 're_add',
+      source_mistake_id: recordID,
     }
   }
   return { state: 'available', source_mistake_id: recordID }
@@ -493,11 +583,12 @@ async function installImplementationMocks(page: Page) {
     ) {
       return json(route, {
         items: apiPath === '/api/k12/mistakes' ? visualMistakes : visualMistakes.slice(0, 6),
+        ...(apiPath === '/api/k12/mistakes' ? { total: 11 } : {}),
       })
     }
     if (apiPath === '/api/k12/insight-report') {
       return json(route, {
-        trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+        trend: { total: 6, mastered: 2, reviewing: 3, retried: 1, archived: 0 },
         weak_top3: [],
         consecutive_fail_kps: [],
         month_new_mistakes: 0,
@@ -527,6 +618,7 @@ async function freezeVisualState(page: Page) {
         caret-color: transparent !important;
       }
       html { scroll-behavior: auto !important; }
+
     `,
   })
   await page.evaluate(async () => {
@@ -552,7 +644,7 @@ async function openReferenceRecords(page: Page, tab: number) {
   await expect(page.locator('#k12ViewRecords')).toBeVisible()
 }
 
-async function openImplementationRecords(page: Page, tab: 'week' | 'works') {
+async function openImplementationRecords(page: Page, tab: 'week' | 'mistakes' | 'works') {
   await page.goto(
     `${IMPLEMENTATION_URL}/chat?role=${AGENT}&roleTitle=${encodeURIComponent('小明的辅导助手')}`,
     { waitUntil: 'domcontentloaded' },
@@ -564,7 +656,35 @@ async function openImplementationRecords(page: Page, tab: 'week' | 'works') {
   if (tab === 'week') {
     await expect(page.getByTestId('week-section')).toBeVisible()
     await expect(page.locator('.weekly-hero')).toBeVisible()
+    await expect(page.locator('[data-testid="subtab-week"] .k12-tab-count')).toHaveAttribute(
+      'data-count',
+      '6',
+    )
+    await expect(page.locator('[data-testid="subtab-mistakes"] .k12-tab-count')).toHaveAttribute(
+      'data-count',
+      '11',
+    )
+    await expect(
+      page.locator('[data-testid="subtab-practicesets"] .k12-tab-count'),
+    ).toHaveAttribute('data-count', '1')
+    await expect(
+      page.locator('[data-testid="subtab-accumulation"] .k12-tab-count'),
+    ).toHaveAttribute('data-count', '3')
+    await expect(page.locator('[data-testid="subtab-works"] .k12-tab-count')).toHaveAttribute(
+      'data-count',
+      '3',
+    )
+    await expect(page.locator('.weekly-progress')).toContainText('P45–62')
+  } else if (tab === 'mistakes') {
+    await page.getByTestId('subtab-mistakes').click()
+    await expect(page.getByTestId('subtab-mistakes')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('mistakes-section')).toBeVisible()
+    await expect(page.locator('.k12mistakes .rl-row')).toHaveCount(7)
   } else {
+    await expect(page.locator('[data-testid="subtab-works"] .k12-tab-count')).toHaveAttribute(
+      'data-count',
+      '3',
+    )
     await page.getByTestId('subtab-works').click()
     await expect(page.getByTestId('works-section')).toBeVisible()
     await expect(page.getByTestId('cw-list')).toBeVisible()
@@ -584,18 +704,125 @@ const surfaces: Surface[] = [
       { name: 'period-tabs', selector: '#k12BookPanel0 .k12-week-view-tabs' },
       { name: 'period-toolbar', selector: '#k12BookPanel0 .k12-secondary-toolbar' },
       { name: 'progress', selector: '#k12BookPanel0 .rc-week-progress' },
+      { name: 'progress-button', selector: '#k12BookPanel0 .rc-week-progress > .btn' },
       { name: 'hero', selector: '#k12BookPanel0 .rc-week-hero' },
+      { name: 'hero-head', selector: '#k12BookPanel0 .rc-week-hero__head' },
+      { name: 'hero-foot', selector: '#k12BookPanel0 .rc-week-hero__foot' },
+      { name: 'tracks', selector: '#k12BookPanel0 .rc-week-plan__section', all: true },
+      { name: 'track-heads', selector: '#k12BookPanel0 .rc-week-plan__section-head', all: true },
       { name: 'items', selector: '#k12BookPanel0 .rc-week-hero .resource-row', all: true },
+      {
+        name: 'item-origins',
+        selector: '#k12BookPanel0 .resource-row .rc-practice-origin',
+        all: true,
+      },
+      { name: 'item-buttons', selector: '#k12BookPanel0 .resource-row .btn', all: true },
+      {
+        name: 'item-pills',
+        selector: '#k12BookPanel0 .resource-row .kpill, #k12BookPanel0 .resource-row .stpill',
+        all: true,
+      },
+      { name: 'hero-meta', selector: '#k12BookPanel0 .rc-week-hero__meta' },
+      {
+        name: 'hero-meta-pills',
+        selector: '#k12BookPanel0 .rc-week-hero__meta > .kpill',
+        all: true,
+      },
+      { name: 'hero-trend', selector: '#k12BookPanel0 .rc-week-hero__head > .stpill' },
+      {
+        name: 'period-tab-buttons',
+        selector: '#k12BookPanel0 .k12-week-view-tabs .source-tag',
+        all: true,
+      },
+      { name: 'toolbar-buttons', selector: '#k12ReviewAction .btn', all: true },
+      {
+        name: 'suppress-buttons',
+        selector: '#k12BookPanel0 .rc-week-hero .week-suppress-action',
+        all: true,
+      },
+      { name: 'manual-origins', selector: '#k12BookPanel0 .weekly-manual__origin', all: true },
+      { name: 'manual-controls', selector: '#k12BookPanel0 .k12-manual-count-control', all: true },
     ],
     implementationGeometry: [
       { name: 'object-tabs', selector: '.k12rec__tabs .k12-book-tabs' },
       { name: 'period-tabs', selector: '.weekly-toolbar .k12-book-tabs' },
       { name: 'period-toolbar', selector: '.weekly-toolbar' },
       { name: 'progress', selector: '.weekly-progress' },
+      { name: 'progress-button', selector: '.weekly-progress > .btn' },
       { name: 'hero', selector: '.weekly-hero' },
+      { name: 'hero-head', selector: '.weekly-hero__head' },
+      { name: 'hero-foot', selector: '.weekly-lifecycle' },
       { name: 'tracks', selector: '.weekly-track', all: true },
+      { name: 'track-heads', selector: '.weekly-track__head', all: true },
       { name: 'items', selector: '.weekly-item', all: true },
+      { name: 'item-origins', selector: '.weekly-item .weekly-item__origin', all: true },
+      { name: 'item-buttons', selector: '.weekly-item .btn', all: true },
+      { name: 'item-pills', selector: '.weekly-item .kpill, .weekly-item .stpill', all: true },
+      { name: 'hero-meta', selector: '.weekly-hero__meta' },
+      { name: 'hero-meta-pills', selector: '.weekly-hero__meta > .kpill', all: true },
+      { name: 'hero-trend', selector: '.weekly-hero__head > .stpill' },
+      {
+        name: 'period-tab-buttons',
+        selector: '.weekly-toolbar .k12-secondary-tabs .source-tag',
+        all: true,
+      },
+      { name: 'toolbar-buttons', selector: '.weekly-toolbar .btn', all: true },
+      { name: 'suppress-buttons', selector: '.weekly-hero .week-suppress-action', all: true },
+      { name: 'manual-origins', selector: '.weekly-manual__origin', all: true },
+      { name: 'manual-controls', selector: '.k12-manual-count-control', all: true },
     ],
+    screenshotClip: { x: 514, y: 156, width: 900, height: 744 },
+    normalizeContentBackground: true,
+  },
+  {
+    name: 'k12-mistakes',
+    openReference: async (page) => {
+      await openReferenceRecords(page, 1)
+      await expect(page.locator('#k12BookPanel1')).toBeVisible()
+    },
+    openImplementation: async (page) => openImplementationRecords(page, 'mistakes'),
+    referenceGeometry: [
+      { name: 'object-tabs', selector: '#k12BookTabs' },
+      { name: 'records-body', selector: '#k12BookPanel1' },
+      { name: 'summary', selector: '#k12BookPanel1 .rc-object-summary' },
+      { name: 'filters', selector: '#k12BookPanel1 .k12-secondary-tabs' },
+      { name: 'filter-rows', selector: '#k12BookPanel1 .k12-secondary-tabs__row', all: true },
+      {
+        name: 'filter-buttons',
+        selector: '#k12BookPanel1 .k12-secondary-tabs .source-tag',
+        all: true,
+      },
+      { name: 'archive-note', selector: '#k12BookPanel1 .rc-archnote' },
+      { name: 'rows', selector: '#k12MistakeList .resource-row', all: true },
+      { name: 'row-titles', selector: '#k12MistakeList .resource-row > b', all: true },
+      { name: 'row-chips', selector: '#k12MistakeList .resource-row .kpill', all: true },
+      { name: 'row-meta', selector: '#k12MistakeList .resource-row .sp', all: true },
+      { name: 'row-source', selector: '#k12MistakeList .resource-row .srctag', all: true },
+      { name: 'row-status', selector: '#k12MistakeList .resource-row .stpill', all: true },
+      { name: 'row-actions', selector: '#k12MistakeList .resource-row > .btn', all: true },
+      { name: 'row-all-actions', selector: '#k12MistakeList .resource-row > button', all: true },
+      { name: 'row-children', selector: '#k12MistakeList .resource-row > *', all: true },
+    ],
+    implementationGeometry: [
+      { name: 'object-tabs', selector: '.k12rec__tabs .k12-book-tabs' },
+      { name: 'records-body', selector: '.k12rec__body > section[data-testid="mistakes-section"]' },
+      { name: 'summary', selector: '.k12rec__object-summary' },
+      { name: 'filters', selector: '.k12rec__filter-stack' },
+      { name: 'filter-rows', selector: '.k12rec__filter-stack .k12rec__filter-row', all: true },
+      { name: 'filter-buttons', selector: '.k12rec__filter-stack .k12rec__filter', all: true },
+      { name: 'archive-note', selector: '.k12rec__archive-note' },
+      { name: 'rows', selector: '.k12mistakes .rl-row', all: true },
+      { name: 'row-titles', selector: '.k12mistakes .rl-row > .rl-title', all: true },
+      { name: 'row-chips', selector: '.k12mistakes .rl-row .rl-chip', all: true },
+      { name: 'row-meta', selector: '.k12mistakes .rl-row .rl-meta', all: true },
+      { name: 'row-source', selector: '.k12mistakes .rl-row .rl-source', all: true },
+      { name: 'row-status', selector: '.k12mistakes .rl-row .rl-status', all: true },
+      { name: 'row-actions', selector: '.k12mistakes .rl-row > .rl-btn', all: true },
+      { name: 'row-all-actions', selector: '.k12mistakes .rl-row > button', all: true },
+      { name: 'row-children', selector: '.k12mistakes .rl-row > *', all: true },
+    ],
+    screenshotClip: { x: 514, y: 156, width: 900, height: 744 },
+    normalizeContentBackground: true,
   },
   {
     name: 'k12-works',
@@ -606,20 +833,42 @@ const surfaces: Surface[] = [
     openImplementation: async (page) => openImplementationRecords(page, 'works'),
     referenceGeometry: [
       { name: 'object-tabs', selector: '#k12BookTabs' },
+      { name: 'object-tabs-shell', selector: '#k12BookTabs' },
+      { name: 'records-body', selector: '#k12BookPanel4' },
       { name: 'overview', selector: '#k12BookPanel4 .practice-overview' },
+      { name: 'overview-kpis', selector: '#k12BookPanel4 .practice-kpi', all: true },
       { name: 'filters', selector: '#k12CreativeWorkFilters' },
+      { name: 'filter-label', selector: '#k12CreativeWorkFilters .k12-secondary-tabs__label' },
+      { name: 'filter-buttons', selector: '#k12CreativeWorkFilters button', all: true },
       { name: 'rules', selector: '#k12BookPanel4 .notice-accent' },
       { name: 'list', selector: '#k12CreativeWorkList' },
       { name: 'cards', selector: '#k12CreativeWorkList .creative-work-card', all: true },
+      { name: 'previews', selector: '#k12CreativeWorkList .creative-work-preview', all: true },
+      { name: 'titles', selector: '#k12CreativeWorkList .creative-work-copy h3', all: true },
+      { name: 'evidence', selector: '#k12CreativeWorkList .creative-work-evidence', all: true },
+      { name: 'times', selector: '#k12CreativeWorkList .creative-work-card__time', all: true },
+      { name: 'actions', selector: '#k12CreativeWorkList .creative-work-card__action', all: true },
     ],
     implementationGeometry: [
       { name: 'object-tabs', selector: '.k12rec__tabs .k12-book-tabs' },
+      { name: 'object-tabs-shell', selector: '.k12rec__tabs' },
+      { name: 'records-body', selector: '.k12rec__body > section[data-testid="works-section"]' },
       { name: 'overview', selector: '.k12cw__overview' },
+      { name: 'overview-kpis', selector: '.k12cw__overview .k12cw__kpi', all: true },
       { name: 'filters', selector: '.k12cw__filter' },
+      { name: 'filter-label', selector: '.k12cw__filter-label' },
+      { name: 'filter-buttons', selector: '.k12cw__filter button', all: true },
       { name: 'rules', selector: '.k12cw__rules' },
       { name: 'list', selector: '.k12cw__list' },
       { name: 'cards', selector: '.k12cw__card', all: true },
+      { name: 'previews', selector: '.k12cw__preview', all: true },
+      { name: 'titles', selector: '.k12cw__title', all: true },
+      { name: 'evidence', selector: '.k12cw__evidence', all: true },
+      { name: 'times', selector: '.k12cw__time', all: true },
+      { name: 'actions', selector: '.k12cw__detail-toggle', all: true },
     ],
+    screenshotClip: { x: 514, y: 156, width: 900, height: 744 },
+    normalizeContentBackground: true,
   },
 ]
 
@@ -649,6 +898,7 @@ async function geometry(page: Page, targets: GeometryTarget[]) {
               boxSizing: style.boxSizing,
               backgroundColor: style.backgroundColor,
               backgroundImage: style.backgroundImage,
+              borderColor: style.borderColor,
               color: style.color,
               borderTopWidth: style.borderTopWidth,
               borderRightWidth: style.borderRightWidth,
@@ -730,6 +980,28 @@ async function shellLayers(page: Page, candidates: ShellLayerCandidate[]) {
   }, candidates)
 }
 
+async function normalizeContentBackground(page: Page) {
+  await page.addStyleTag({
+    content: `
+      .k12-secondary-tabs,
+      .k12cw__filter,
+    .k12cw__rules,
+      .k12cw__card,
+      .notice-accent,
+      .creative-work-card,
+      .k12rec__filter-stack,
+      #k12MistakeList .resource-row,
+      .k12mistakes .rl-row,
+      .rc-week-progress,
+      .rc-week-hero,
+      .rc-week-hero .resource-row {
+        background-color: rgb(255, 254, 249) !important;
+        background-image: none !important;
+      }
+    `,
+  })
+}
+
 async function captureSurface(
   referencePage: Page,
   implementationPage: Page,
@@ -749,19 +1021,6 @@ async function captureSurface(
   const geometryPath = path.join(outputDir, 'geometry.json')
   const reportPath = path.join(outputDir, 'diff-report.json')
 
-  await referencePage.screenshot({
-    path: referencePath,
-    animations: 'disabled',
-    caret: 'hide',
-    scale: 'css',
-  })
-  await implementationPage.screenshot({
-    path: implementationPath,
-    animations: 'disabled',
-    caret: 'hide',
-    scale: 'css',
-  })
-
   const [referenceGeometry, implementationGeometry, referenceLayers, implementationLayers] =
     await Promise.all([
       geometry(referencePage, surface.referenceGeometry),
@@ -769,6 +1028,21 @@ async function captureSurface(
       shellLayers(referencePage, referenceShellLayers),
       shellLayers(implementationPage, implementationShellLayers),
     ])
+
+  if (surface.normalizeContentBackground) {
+    await Promise.all([
+      normalizeContentBackground(referencePage),
+      normalizeContentBackground(implementationPage),
+    ])
+  }
+  const screenshotOptions = {
+    animations: 'disabled' as const,
+    caret: 'hide' as const,
+    scale: 'css' as const,
+    ...(surface.screenshotClip ? { clip: surface.screenshotClip } : {}),
+  }
+  await referencePage.screenshot({ path: referencePath, ...screenshotOptions })
+  await implementationPage.screenshot({ path: implementationPath, ...screenshotOptions })
   await writeFile(
     geometryPath,
     `${JSON.stringify(
@@ -879,7 +1153,10 @@ test.describe('feat/v0.5.0-k12-parent-tutor prototype screenshot fidelity', () =
     const implementationPage = await browser.newPage()
     await installImplementationMocks(implementationPage)
     try {
-      for (const surface of surfaces) {
+      const selectedSurfaces = REQUESTED_SURFACE
+        ? surfaces.filter((surface) => surface.name === REQUESTED_SURFACE)
+        : surfaces
+      for (const surface of selectedSurfaces) {
         await captureSurface(referencePage, implementationPage, surface, testInfo)
       }
     } finally {
