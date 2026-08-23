@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import HcSelect from '@/components/common/HcSelect.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import K12WebhookPanel from '@/features/k12/views/K12WebhookPanel.vue'
 
 const hooks = vi.hoisted(() => ({
@@ -128,33 +126,37 @@ describe('K12WebhookPanel', () => {
     vi.useRealTimers()
   })
 
+  it('does not expose a page-level child selector, but keeps binding scope in the editor', async () => {
+    const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="k12-webhook-agent"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('孩子 / 辅导实例')
+
+    await wrapper.get('[data-testid="k12-webhook-create-open"]').trigger('click')
+    const dialog = wrapper.get('[data-testid="k12-webhook-editor-dialog"]')
+    expect(dialog.find('[data-testid="k12-webhook-editor-agent"]').exists()).toBe(true)
+  })
+
   it('owns its empty state, so the generic Webhook empty state stays suppressed with zero bindings', async () => {
     hooks.list.mockResolvedValueOnce({ k12_bindings: [], total: 0 })
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('这个孩子还没有 K12 Webhook')
+    expect(wrapper.text()).toContain('暂无 K12 Webhook 绑定')
     expect(wrapper.emitted('contentChange')).toEqual([[true]])
   })
 
-  it('uses the shared application select for the child scope and reloads the selected owner', async () => {
+  it('aggregates bindings across child scopes without a page-level owner selector', async () => {
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
 
-    const agentField = wrapper.get('[data-testid="k12-webhook-agent"]')
-    const agentSelect = agentField.findComponent(HcSelect)
-    expect(agentSelect.exists()).toBe(true)
-    expect(agentSelect.props('options')).toEqual([
-      { value: agentA.name, label: '小明' },
-      { value: agentB.name, label: '小红' },
-    ])
-    expect(agentField.find('select').exists()).toBe(false)
-
-    agentSelect.vm.$emit('update:modelValue', agentB.name)
-    await flushPromises()
-
-    expect(hooks.list).toHaveBeenLastCalledWith(agentB.name)
-    expect(wrapper.text()).not.toContain('homework-hook')
+    expect(wrapper.find('[data-testid="k12-webhook-agent"]').exists()).toBe(false)
+    expect(hooks.list).toHaveBeenCalledWith(agentA.name)
+    expect(hooks.list).toHaveBeenCalledWith(agentB.name)
+    expect(wrapper.get('[data-testid="k12-webhook-row-homework-hook"] .k12wh__meta').text()).toBe(
+      '绑定：小明的辅导助手',
+    )
   })
 
   it('projects a binding with the authoritative K12 webhook card hierarchy and truthful contract data', async () => {
@@ -165,15 +167,16 @@ describe('K12WebhookPanel', () => {
     expect(card.classes()).toContain('k12-webhook-card')
     expect(card.get('.k12wh__logo').text()).toBe('K12')
     expect(card.get('.k12wh__name').text()).toBe('K12 批改与回传事件')
-    expect(card.get('.k12wh__meta').text()).toContain('绑定：小明的辅导助手 · 五年级上')
+    expect(card.get('.k12wh__meta').text()).toBe('绑定：小明的辅导助手')
     expect(card.get('.k12wh__status').text()).toBe('未启用')
     expect(card.get('.k12wh__signature').text()).toContain(
       'HMAC-SHA256 · Secret 已配置 · 重放窗口 5 分钟',
     )
     expect(card.get('.k12wh__signature').text()).toContain('轮换密钥')
     expect(card.get('.k12wh__events').text()).toContain('k12.submission.requested.v1')
-    expect(card.get('.k12wh__facts').text()).toContain('Secret v1')
-    expect(card.get('.k12wh__facts').text()).toContain('仅接受 direct 事件')
+    expect(card.find('.k12wh__facts').exists()).toBe(false)
+    expect(card.find('[data-testid="k12-webhook-delete-homework-hook"]').exists()).toBe(false)
+    expect(card.get('.k12wh__receipt-facts').text()).toContain('最近回执')
 
     const actionText = card.get('.k12wh__actions').text()
     expect(actionText).toContain('事件与回执')
@@ -181,6 +184,48 @@ describe('K12WebhookPanel', () => {
     expect(actionText).toContain('启用')
     expect(actionText).not.toContain('Receipt')
     expect(actionText).not.toContain('Secret')
+  })
+
+  it('projects receipt facts from the real receipt API into the binding card', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-19T12:03:00Z'))
+    hooks.history.mockResolvedValueOnce({
+      receipts: [
+        {
+          receipt_id: 'rcpt-accepted',
+          binding_id: binding.binding_id,
+          status: 'accepted',
+          created_at: '2026-07-19T12:01:00Z',
+          updated_at: '2026-07-19T12:01:00Z',
+        },
+        {
+          receipt_id: 'rcpt-replay',
+          binding_id: binding.binding_id,
+          status: 'rejected',
+          failure_kind: 'nonce_replay',
+          created_at: '2026-07-19T12:00:00Z',
+          updated_at: '2026-07-19T12:00:00Z',
+        },
+        {
+          receipt_id: 'rcpt-retryable',
+          binding_id: binding.binding_id,
+          status: 'failed',
+          retryable: true,
+          created_at: '2026-07-19T11:59:00Z',
+          updated_at: '2026-07-19T11:59:00Z',
+        },
+      ],
+      total: 3,
+    })
+
+    const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+
+    expect(hooks.history).toHaveBeenCalledWith(binding.name, binding.agent_id)
+    const facts = wrapper.get('[data-testid="k12-webhook-receipt-facts-homework-hook"]')
+    expect(facts.text()).toContain('最近回执：2 分钟前 · 200 accepted')
+    expect(facts.text()).toContain('nonce 重放：1 次已拒绝')
+    expect(facts.text()).toContain('失败投递：1 条可重试')
   })
 
   it('scopes every operation to the selected child and shows secrets only in one-time result state', async () => {
@@ -191,8 +236,10 @@ describe('K12WebhookPanel', () => {
     await flushPromises()
 
     expect(hooks.list).toHaveBeenCalledWith(agentA.name)
-    expect(wrapper.text()).toContain('homework-hook')
-    expect(wrapper.text()).toContain('仅接受 direct 事件')
+    expect(wrapper.find('[data-testid="k12-webhook-row-homework-hook"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="k12-webhook-row-homework-hook"] .k12wh__events').text()).toContain(
+      'k12.submission.requested.v1',
+    )
 
     await wrapper.get('[data-testid="k12-webhook-create-open"]').trigger('click')
     await wrapper.get('[data-testid="k12-webhook-name"]').setValue('new-hook')
@@ -239,17 +286,9 @@ describe('K12WebhookPanel', () => {
     expect(wrapper.text()).toContain('succeeded')
     expect(wrapper.text()).toContain('grading_job:job-1')
 
-    wrapper
-      .get('[data-testid="k12-webhook-agent"]')
-      .findComponent(HcSelect)
-      .vm.$emit('update:modelValue', agentB.name)
-    await flushPromises()
-    expect(hooks.list).toHaveBeenLastCalledWith(agentB.name)
-    expect(wrapper.text()).not.toContain('homework-hook')
   })
 
-  it('edits event/workflow allowlists and deletes only within the selected Tutor scope', async () => {
-    vi.useFakeTimers()
+  it('edits event/workflow allowlists and keeps the K12 card action set aligned', async () => {
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
     await wrapper.get('[data-testid="k12-webhook-edit-homework-hook"]').trigger('click')
@@ -262,26 +301,10 @@ describe('K12WebhookPanel', () => {
       allowed_workflows: ['weekly@v1', 'review@v2'],
     })
 
-    await wrapper.get('[data-testid="k12-webhook-delete-homework-hook"]').trigger('click')
-    await flushPromises()
-    const confirmDialog = wrapper.findComponent(ConfirmDialog)
-    expect(confirmDialog.exists()).toBe(true)
-    expect(confirmDialog.props('confirmDelayMs')).toBe(1500)
-    expect(hooks.remove).not.toHaveBeenCalled()
-
-    vi.advanceTimersByTime(1499)
-    await flushPromises()
-    expect(confirmDialog.get('button.hc-dialog__btn--danger').attributes('disabled')).toBeDefined()
-
-    vi.advanceTimersByTime(1)
-    await flushPromises()
-    await confirmDialog.get('button.hc-dialog__btn--danger').trigger('click')
-    await flushPromises()
-
-    expect(hooks.remove).toHaveBeenCalledWith('homework-hook', agentA.name)
+    expect(wrapper.find('[data-testid="k12-webhook-delete-homework-hook"]').exists()).toBe(false)
   })
 
-  it('discards slow binding and receipt responses after the selected child changes', async () => {
+  it('waits for all child scopes before publishing the aggregated binding list', async () => {
     let resolveAgentAList!: (value: { k12_bindings: Array<typeof binding>; total: number }) => void
     hooks.list.mockImplementation((agent: string) => {
       if (agent === agentA.name) {
@@ -294,56 +317,10 @@ describe('K12WebhookPanel', () => {
 
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
-    wrapper
-      .get('[data-testid="k12-webhook-agent"]')
-      .findComponent(HcSelect)
-      .vm.$emit('update:modelValue', agentB.name)
-    await flushPromises()
     resolveAgentAList({ k12_bindings: [binding], total: 1 })
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('homework-hook')
-
-    hooks.list.mockImplementation(async (agent: string) => ({
-      k12_bindings: agent === agentA.name ? [binding] : [],
-      total: agent === agentA.name ? 1 : 0,
-    }))
-    wrapper
-      .get('[data-testid="k12-webhook-agent"]')
-      .findComponent(HcSelect)
-      .vm.$emit('update:modelValue', agentA.name)
-    await flushPromises()
-
-    let resolveHistory!: (value: { receipts: Array<Record<string, string>>; total: number }) => void
-    hooks.history.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveHistory = resolve
-      }),
-    )
-    await wrapper.get('[data-testid="k12-webhook-history-homework-hook"]').trigger('click')
-    wrapper
-      .get('[data-testid="k12-webhook-agent"]')
-      .findComponent(HcSelect)
-      .vm.$emit('update:modelValue', agentB.name)
-    await flushPromises()
-    resolveHistory({
-      receipts: [
-        {
-          receipt_id: 'old-child-receipt',
-          binding_id: binding.binding_id,
-          payload_digest: 'digest',
-          status: 'succeeded',
-          job_or_execution_ref: 'grading_job:old-child-job',
-          created_at: '2026-07-19T12:01:00Z',
-          updated_at: '2026-07-19T12:01:01Z',
-        },
-      ],
-      total: 1,
-    })
-    await flushPromises()
-
-    expect(wrapper.text()).not.toContain('old-child-receipt')
-    expect(wrapper.text()).not.toContain('old-child-job')
+    expect(wrapper.find('[data-testid="k12-webhook-row-homework-hook"]').exists()).toBe(true)
   })
 
   it('keeps a visible retry action when loading the child scope fails', async () => {
@@ -358,7 +335,7 @@ describe('K12WebhookPanel', () => {
 
     expect(hooks.getAgents).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('homework-hook')
+    expect(wrapper.find('[data-testid="k12-webhook-row-homework-hook"]').exists()).toBe(true)
   })
 
   it('offers redispatch only for failed Receipts with persisted retry evidence', async () => {
@@ -405,6 +382,6 @@ describe('K12WebhookPanel', () => {
 
     expect(hooks.retryReceipt).toHaveBeenCalledWith('homework-hook', agentA.name, 'rcpt-failed')
     expect(hooks.success).toHaveBeenCalledWith('Receipt 已重新派发')
-    expect(hooks.history).toHaveBeenCalledTimes(2)
+    expect(hooks.history).toHaveBeenCalledTimes(3)
   })
 })

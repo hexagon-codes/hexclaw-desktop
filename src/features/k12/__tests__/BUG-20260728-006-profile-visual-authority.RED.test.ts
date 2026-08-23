@@ -52,8 +52,8 @@ describe('BUG-20260728-006 child-profile prototype authority', () => {
     expect(positions.every((position) => position >= 0)).toBe(true)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)
     expect(
-      templateSource.includes(
-        'v-if="!isEdit">{{ t(\'k12.profile.textbookBySubject\') }}',
+      /<div\s+v-if="!isEdit"[^>]*class="k12pf__field"[\s\S]*?t\('k12\.profile\.textbookBySubject'\)/.test(
+        templateSource,
       ),
     ).toBe(true)
   })

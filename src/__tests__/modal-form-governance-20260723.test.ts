@@ -37,10 +37,10 @@ describe('2026-07-23 modal form governance', () => {
     expect(dialog).toContain('class="knowledge-add-document-modal__drop')
     expect(dialog).toContain('class="knowledge-add-document-modal__footer')
     expect(knowledgeSource).toMatch(
-      /\.knowledge-add-document-modal\s*\{[^}]*max-height:\s*min\(760px,\s*calc\(100vh - 24px\)\)[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s,
+      /\.knowledge-add-document-modal\s*\{[^}]*max-height:\s*min\(686px,\s*calc\(100vh - 24px\)\)[^}]*grid-template-rows:\s*61px minmax\(0,\s*1fr\) 65px/s,
     )
     expect(knowledgeSource).toMatch(
-      /\.knowledge-add-document-modal__body\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow-y:\s*auto/s,
+      /\.knowledge-add-document-modal__body\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow:\s*auto/s,
     )
   })
 
@@ -74,6 +74,12 @@ describe('2026-07-23 modal form governance', () => {
     )
     expect(worksSource).toMatch(
       /\.k12cw-modal__body\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box[^}]*overflow:\s*auto/s,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__seg\s*\{[^}]*min-width:\s*0/s,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__drop\s*\{[^}]*box-sizing:\s*border-box[^}]*width:\s*100%[^}]*min-width:\s*0/s,
     )
     expect(worksSource).toMatch(
       /\.k12cw-detail-modal__body\s*\{[^}]*max-height:\s*min\(68vh,\s*680px\)[^}]*overflow:\s*auto/s,

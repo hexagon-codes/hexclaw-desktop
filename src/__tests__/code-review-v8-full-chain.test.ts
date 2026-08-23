@@ -728,9 +728,9 @@ describe('安全审计', () => {
     expect(sidecarSocketSrc).toContain('AUTHORIZATION')
   })
 
-  it('secure store 使用 OS 凭据库，浏览器端仅保留会话内存', () => {
+  it('Connection secret mutations use the Sidecar coordinator and avoid browser persistence', () => {
     const secureStoreSrc = readSrc('utils/secure-store.ts')
-    expect(secureStoreSrc).toContain('browserSessionVault')
+    expect(secureStoreSrc).toContain('Sidecar secret coordinator')
     expect(secureStoreSrc).not.toContain('LazyStore')
     expect(secureStoreSrc).not.toContain('localStorage')
   })

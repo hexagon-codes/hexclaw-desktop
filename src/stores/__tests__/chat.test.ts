@@ -76,14 +76,15 @@ const {
   approvalListeners: [] as Array<(req: {
     requestId: string
     sessionId: string
-    ownerId?: string
-    invocationId?: string
+    ownerId: string
+    invocationId: string
     toolName: string
-    argumentsDigest?: string
-    securityScopeDigest?: string
-    scopeSchemaVersion?: number
+    argumentsDigest: string
+    securityScopeDigest: string
+    scopeSchemaVersion: number
     risk: string
     reason: string
+    deadlineAt: string
     respondApproval?: (decision: {
       request_id: string
       decision_id: string
@@ -1095,6 +1096,7 @@ describe('useChatStore', () => {
         scopeSchemaVersion: 1,
         risk: 'sensitive',
         reason: 'session 1 approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         respondApproval: respondS1,
       })
       listener({
@@ -1108,6 +1110,7 @@ describe('useChatStore', () => {
         scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'session 2 approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         respondApproval: respondS2,
       })
     }
@@ -1138,17 +1141,29 @@ describe('useChatStore', () => {
       'req-s1': {
         requestId: 'req-s1',
         sessionId: 's1',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-s1',
         toolName: 'tool-a',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'sensitive',
         reason: 'session 1 approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         receivedAt: 1,
       },
       'req-s2': {
         requestId: 'req-s2',
         sessionId: 's2',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-s2',
         toolName: 'tool-b',
+        argumentsDigest: 'c'.repeat(64),
+        securityScopeDigest: 'd'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'session 2 approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         receivedAt: 2,
       },
     }

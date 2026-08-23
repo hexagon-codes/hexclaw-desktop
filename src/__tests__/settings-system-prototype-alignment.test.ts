@@ -51,7 +51,7 @@ describe('系统设置与权威原型对齐', () => {
   it('Provider 卡头按钮与模型名称同行，连接状态只显示测试成功/失败', () => {
     // 按钮（测试/删除/启用/折叠）与模型名称必须位于同一行容器内
     expect(settings).toMatch(
-      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/s,
+      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*margin:\s*0 16px;/s,
     )
     expect(settings).toMatch(
       /\.hc-provider__card-info\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s,
@@ -76,7 +76,7 @@ describe('系统设置与权威原型对齐', () => {
       /activeSection === 'llm'[\s\S]{0,200}?class="hc-settings__section" style="max-width:\s*600px"/,
     )
     expect(settings).toMatch(
-      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/s,
+      /\.hc-provider__card-head\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*margin:\s*0 16px;/s,
     )
     expect(settings).toMatch(
       /\.hc-provider__card-info\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s,

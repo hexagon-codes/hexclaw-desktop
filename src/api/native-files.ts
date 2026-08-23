@@ -70,6 +70,14 @@ export function pickSaveFileGrant(
   })
 }
 
+export function discardFileGrant(grant: NativeFileGrant): Promise<void> {
+  return invoke<void>('discard_file_grant', {
+    grantId: grant.grantId,
+    operationId: grant.operationId,
+    purpose: grant.purpose,
+  })
+}
+
 export async function stageBlob(
   blob: Blob,
   name: string,
@@ -112,11 +120,7 @@ export async function stageBlob(
     })
   } catch (error) {
     try {
-      await invoke('discard_file_grant', {
-        grantId: grant.grantId,
-        operationId: grant.operationId,
-        purpose: grant.purpose,
-      })
+      await discardFileGrant(grant)
     } catch (cleanupError) {
       if (error && typeof error === 'object') {
         Object.defineProperty(error, 'cleanupError', { value: cleanupError })
@@ -133,6 +137,10 @@ function sidecarRelativePath(raw: string): string {
     throw new Error('Native transfer target must be the managed Sidecar origin')
   }
   return `${url.pathname}${url.search}`
+}
+
+export function validateManagedSidecarURL(raw: string): void {
+  sidecarRelativePath(raw)
 }
 
 export async function uploadGrantedFile<T>(options: {

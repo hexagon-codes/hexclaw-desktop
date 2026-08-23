@@ -4,6 +4,16 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import ChatExportMenu from '../ChatExportMenu.vue'
 
+const { nativeRuntime, saveBlobInAppMock } = vi.hoisted(() => ({
+  nativeRuntime: { enabled: false },
+  saveBlobInAppMock: vi.fn(),
+}))
+
+vi.mock('@/utils/platform', () => ({ isTauri: () => nativeRuntime.enabled }))
+vi.mock('@/utils/download', () => ({
+  saveBlobInApp: (...args: unknown[]) => saveBlobInAppMock(...args),
+}))
+
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }
@@ -59,6 +69,8 @@ const OriginalBlob = globalThis.Blob
 describe('ChatExportMenu', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    nativeRuntime.enabled = false
+    saveBlobInAppMock.mockResolvedValue('/tmp/saved-file')
     capturedBlobContent = ''
     mockClickFn = vi.fn()
     lastAnchor = { href: '', download: '' }
@@ -130,6 +142,40 @@ describe('ChatExportMenu', () => {
     expect(URL.createObjectURL).toHaveBeenCalled()
     expect(mockClickFn).toHaveBeenCalled()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+  })
+
+  it('Tauri Markdown export saves the Blob through the shared native boundary', async () => {
+    nativeRuntime.enabled = true
+    const wrapper = mountMenu(sampleMessages, 'My Chat Session')
+
+    await wrapper.findAll('.hc-export-menu__item')[0]!.trigger('click')
+
+    expect(saveBlobInAppMock).toHaveBeenCalledTimes(1)
+    const [blob, filename] = saveBlobInAppMock.mock.calls[0] as [Blob, string]
+    expect(blob).toBeInstanceOf(OriginalBlob)
+    expect(blob.type).toBe('text/markdown')
+    expect(filename).toBe('My Chat Session.md')
+    expect(capturedBlobContent).toContain('Hello agent')
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    expect(mockClickFn).not.toHaveBeenCalled()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('Tauri JSON export preserves the filename and JSON format at the native boundary', async () => {
+    nativeRuntime.enabled = true
+    const wrapper = mountMenu(sampleMessages, 'My Chat Session')
+
+    await wrapper.findAll('.hc-export-menu__item')[1]!.trigger('click')
+
+    expect(saveBlobInAppMock).toHaveBeenCalledTimes(1)
+    const [blob, filename] = saveBlobInAppMock.mock.calls[0] as [Blob, string]
+    expect(blob).toBeInstanceOf(OriginalBlob)
+    expect(blob.type).toBe('application/json')
+    expect(filename).toBe('My Chat Session.json')
+    expect(JSON.parse(capturedBlobContent).message_count).toBe(2)
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    expect(mockClickFn).not.toHaveBeenCalled()
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
   it('empty messages array produces valid output', async () => {

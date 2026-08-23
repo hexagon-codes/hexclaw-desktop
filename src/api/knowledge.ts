@@ -16,7 +16,7 @@ import {
   KNOWLEDGE_UNSUPPORTED_FORMAT_KEYWORDS,
   KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE,
 } from '@/config/knowledge-errors'
-import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
+import type { KnowledgeDoc, KnowledgeSearchResult, KnowledgeStructuredProjection } from '@/types'
 
 export type { KnowledgeDoc, KnowledgeSearchResult }
 
@@ -27,7 +27,7 @@ const KNOWLEDGE_UPLOAD_PATH = `/api/v1/knowledge/documents?user_id=${encodeURICo
 // explicit renderer-side memory/work budget.
 export const MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES = 512 * 1024 * 1024
 
-export type KnowledgeUploadResponse = {
+export type KnowledgeUploadResponse = KnowledgeStructuredProjection & {
   operation_id: string
   document_id: string
   job_id: string

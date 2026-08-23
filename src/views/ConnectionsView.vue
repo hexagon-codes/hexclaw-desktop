@@ -113,7 +113,7 @@ const channelCardsRef = ref<{ openCreate?: () => void }>()
 // 数据连接器：实例列表 store（模块级单例，localStorage 持久化）。
 const { list: connectorInstances, updateInstance, removeInstance } = useConnectorInstances()
 
-// 删除确认目标（非空 = 待删连接器实例）。removeInstance 会同时清理 secure-store 里的密钥残留。
+// 删除确认目标（非空 = 待删连接器实例）。Sidecar 负责随连接配置一并清理 secret 引用。
 const deleteTarget = ref<ConnectorInstance | null>(null)
 async function confirmDeleteConnector() {
   const target = deleteTarget.value

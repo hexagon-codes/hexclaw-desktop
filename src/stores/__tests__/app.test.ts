@@ -66,4 +66,49 @@ describe('useAppStore', () => {
     expect(store.sidecarStatus).toBe('running')
     expect(store.isRestarting).toBe(false)
   })
+
+  it('[BUG-20260725-008] marks the sidecar ready within one second when the native ready event is lost', async () => {
+    vi.useFakeTimers()
+    const store = useAppStore()
+    checkHealth.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+
+    store.startHealthCheck()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(store.sidecarReady).toBe(false)
+    expect(checkHealth).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(checkHealth).toHaveBeenCalledTimes(2)
+    expect(store.sidecarReady).toBe(true)
+
+    store.stopHealthCheck()
+    vi.useRealTimers()
+  })
+
+  it('[BUG-20260725-008] keeps startup recovery active until a delayed native health check succeeds', async () => {
+    vi.useFakeTimers()
+    const store = useAppStore()
+    checkHealth
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true)
+
+    try {
+      store.startHealthCheck()
+      await vi.advanceTimersByTimeAsync(7000)
+
+      expect(checkHealth).toHaveBeenCalledTimes(8)
+      expect(store.sidecarReady).toBe(true)
+    } finally {
+      store.stopHealthCheck()
+      vi.useRealTimers()
+    }
+  })
 })

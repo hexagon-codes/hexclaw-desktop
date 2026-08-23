@@ -5,6 +5,7 @@ import SearchInput from '@/components/common/SearchInput.vue'
 const props = defineProps<{
   searchPlaceholder?: string
   searchValue?: string
+  fixedSearch?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -33,7 +34,11 @@ function onSearchInput(value: string) {
   <div class="hc-toolbar hc-vibrancy">
     <div class="hc-toolbar__left">
       <slot name="tabs" />
-      <div v-if="searchPlaceholder" class="hc-toolbar__search">
+      <div
+        v-if="searchPlaceholder"
+        class="hc-toolbar__search"
+        :class="{ 'hc-toolbar__search--fixed': props.fixedSearch }"
+      >
         <SearchInput
           class="hc-toolbar__search-control"
           :model-value="internalSearch"
@@ -95,5 +100,12 @@ function onSearchInput(value: string) {
   min-width: 200px;
   max-width: 320px;
   flex: 1;
+}
+
+.hc-toolbar__search--fixed {
+  flex: 0 0 200px;
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
 }
 </style>

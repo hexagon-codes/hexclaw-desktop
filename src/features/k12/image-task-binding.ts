@@ -253,32 +253,37 @@ export function clearImageTaskBinding(
   writeState(state)
 }
 
-export async function listRecoverableImageTasks(agent: string) {
-  return k12ListRecoverableImageTasks(agent)
+export async function listRecoverableImageTasks(agent: string, session: string) {
+  return k12ListRecoverableImageTasks(agent, session)
 }
 
 /**
  * Replaces one owner's disposable renderer projection with the Sidecar's
  * durable recovery view. Missing/invalid identities fail closed.
  */
-export async function refreshRecoverableImageTaskBindings(agent: string): Promise<void> {
-  if (!validID(agent)) return
-  const recoverable = await k12ListRecoverableImageTasks(agent)
+export async function refreshRecoverableImageTaskBindings(
+  agent: string,
+  session: string | undefined,
+): Promise<void> {
+  if (!validID(agent) || !validID(session)) return
+  const recoverable = await k12ListRecoverableImageTasks(agent, session)
   const state = readState()
-  state.bindings = state.bindings.filter((binding) => binding.agent_id !== agent)
+  state.bindings = state.bindings.filter(
+    (binding) => binding.agent_id !== agent || binding.source_session_id !== session,
+  )
   for (const item of recoverable) {
     if (
-      !validID(item.source_session) ||
+      !validID(item.source_session_id) ||
       !validID(item.source_message_id) ||
-      !validID(item.dispatch?.dispatch_id)
+      !validID(item.dispatch_id)
     ) {
       continue
     }
     state.bindings.push({
-      source_session_id: item.source_session,
+      source_session_id: item.source_session_id,
       source_message_id: item.source_message_id,
       agent_id: agent,
-      dispatch_id: item.dispatch.dispatch_id,
+      dispatch_id: item.dispatch_id,
     })
   }
   writeState(state)

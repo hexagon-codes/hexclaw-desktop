@@ -4,7 +4,7 @@
  * 由 scenarioRegistry.registerAgentCardExtension 注册，AgentsView 只对场景实例渲染本组件、
  * 不认识 K12。展示 错题/待复习 计数（走 /api/k12/mistakes + /review-queue）+ 快捷入口（深链带 query）。
  */
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { k12ListMistakes, k12ReviewQueue } from '@/api/k12'
@@ -26,6 +26,13 @@ const router = useRouter()
 const mistakeCount = ref<number | null>(null)
 const dueCount = ref<number | null>(null)
 const editing = ref(false)
+
+// 进入动作变体只由稳定 metadata 投影决定；缺失或未知值保持原型的主按钮默认值。
+const enterButtonClass = computed(() => ({
+  'k12ac__btn': true,
+  'hc-btn': true,
+  'hc-btn-primary': props.agent.metadata?.card_enter_variant !== 'default',
+}))
 
 async function loadCounts() {
   try {
@@ -70,14 +77,14 @@ function enter(query?: Record<string, string>) {
       }}</span>
     </div>
     <div class="k12ac__actions hc-agent-card__footer">
-      <button class="k12ac__btn k12ac__btn--primary" @click="enter()">
+      <button :class="enterButtonClass" @click="enter()">
         {{ t('k12.agentCard.enterTutor') }}
       </button>
-      <button class="k12ac__btn" @click="enter({ scenarioTab: 'records' })">
+      <button class="k12ac__btn hc-btn" @click="enter({ scenarioTab: 'records' })">
         {{ t('k12.agentCard.records') }}
       </button>
       <!-- 20260709：辅导要点快捷入口移除——辅导要点已内联进识题流，不再有独立入口/深链。 -->
-      <button class="k12ac__btn k12ac__btn--ghost" @click="editing = true">
+      <button class="k12ac__btn hc-btn hc-btn-ghost" @click="editing = true">
         {{ t('k12.profile.edit') }}
       </button>
     </div>
@@ -109,6 +116,7 @@ function enter(query?: Record<string, string>) {
   gap: 7px;
   flex-wrap: wrap;
   align-items: center;
+  align-content: flex-start;
 }
 .k12ac__tag {
   font-size: 11px;
@@ -125,42 +133,6 @@ function enter(query?: Record<string, string>) {
   margin-top: auto;
   gap: 8px;
   flex-wrap: wrap;
-}
-.k12ac__btn {
-  display: inline-flex;
   align-items: center;
-  gap: var(--hc-space-2);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 8px 14px;
-  white-space: nowrap;
-  border-radius: var(--hc-radius-md);
-  cursor: pointer;
-  border: 0.5px solid var(--hc-border);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  transition: background 0.2s;
-}
-/* 通用 hover 排除 primary,否则浅色 hover 背景盖掉蓝色渐变、白字留在浅底上→隐形（BUG-20260708） */
-.k12ac__btn:not(.k12ac__btn--primary):hover {
-  background: var(--hc-bg-hover);
-}
-.k12ac__btn--primary {
-  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
-  color: #fff;
-  border-color: transparent;
-}
-/* primary 专属 hover：渐变微亮 + 保持白字（对齐其它主按钮的悬停手感） */
-.k12ac__btn--primary:hover {
-  background: linear-gradient(180deg, #6fbdf0 0%, #57a9e6 100%);
-}
-/* 原型 .btn-ghost(:160)：编辑档案弱化层级（透明底） */
-.k12ac__btn--ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--hc-text-secondary);
-}
-.k12ac__btn--ghost:hover {
-  background: var(--hc-bg-hover);
 }
 </style>

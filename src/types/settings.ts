@@ -12,11 +12,7 @@ export type ModelCapability =
 /** 模型推理能力只能来自 Provider 的显式证据，未知时不得按模型名推断。 */
 export type ModelReasoningSupport = 'supported' | 'unsupported' | 'unknown'
 
-export type ModelReasoningDialect =
-  | 'reasoning_effort'
-  | 'enable_thinking'
-  | 'think'
-  | 'thinking'
+export type ModelReasoningDialect = 'reasoning_effort' | 'enable_thinking' | 'think' | 'thinking'
 
 /** 可由精确模型能力声明的思考强度。 */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -108,7 +104,9 @@ export function isCatalogModelFree(m: CatalogModel): boolean {
 
 /** 目录条目是否带元数据（决定管理器里能否显示徽章/筛选） */
 export function catalogModelHasMetadata(m: CatalogModel): boolean {
-  return m.promptPrice !== undefined || m.contextLength !== undefined || m.inputModalities !== undefined
+  return (
+    m.promptPrice !== undefined || m.contextLength !== undefined || m.inputModalities !== undefined
+  )
 }
 
 /** Provider 配置 */
@@ -220,7 +218,7 @@ export interface LLMRoutingSettings {
 /** 工具注入全局设置 */
 export interface ToolsInjectionSettings {
   enabled: 'auto' | 'on' | 'off' // auto=按 provider 类型自动判断
-  maxTools: number                // 0=不限制
+  maxTools: number // 0=不限制
 }
 
 /** B1: Agent 策略模式（前端持久化，发消息时随 metadata.agent_mode 传后端）
@@ -349,19 +347,25 @@ export interface BackendLLMProvider {
   }
   base_url: string
   model: string
-  models?: string[]              // 已配置的模型列表（桌面端持久化用）
+  models?: string[] // 已配置的模型列表（桌面端持久化用）
   model_specs?: BackendProviderModelSpec[]
+  /** 服务端只读的模型能力投影；不得在 PUT 时作为配置回写。 */
+  effective_models?: Array<{
+    id: string
+    display_name?: string
+    capabilities: ModelCapability[]
+  }>
   model_specs_mode?: 'legacy' | 'explicit'
   compatible: string
-  locality?: ProviderLocality    // auto/local/cloud；localhost 云代理应为 cloud
+  locality?: ProviderLocality // auto/local/cloud；localhost 云代理应为 cloud
   locality_source?: ProviderLocalitySource
   confirmed_endpoint_host?: string
   private_network_access?: PrivateNetworkAccess
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
-  max_tools?: number             // 0=不限制
-  enabled?: boolean              // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
-  keep_alive?: string            // 本地模型驻留时长（仅 Ollama；空=后端默认 30m · BUG-20260710 P1）
-  num_ctx?: number               // 本地模型上下文上限；0=自动
+  max_tools?: number // 0=不限制
+  enabled?: boolean // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
+  keep_alive?: string // 本地模型驻留时长（仅 Ollama；空=后端默认 30m · BUG-20260710 P1）
+  num_ctx?: number // 本地模型上下文上限；0=自动
 }
 
 /** Plaintext exists only for the duration of one native coordinator invoke. */
@@ -376,11 +380,23 @@ export interface BackendLLMConfig {
   providers: Record<string, BackendLLMProvider>
   routing: { enabled: boolean; strategy: string }
   cache: { enabled: boolean; similarity: number; ttl: string; max_entries: number }
+  /** 服务端控制面的非敏感版本快照；旧 Sidecar 可缺失。 */
+  config_revision?: number
+  config_digest?: string
+  /** 同时携带时启用条件写入；不参与本地持久化。 */
+  expected_config_revision?: number
+  expected_config_digest?: string
   /** 旧 Sidecar 可能尚未返回该字段。 */
   default_reasoning_policy?: DefaultReasoningPolicy
   /** K12 solve/grade 的强文本路由；设置页不改写，后端在 provider 重命名时按稳定身份迁移。 */
   reasoning_provider?: string
   reasoning_model?: string
+}
+
+/** 成功提交后返回的非敏感配置版本回执。 */
+export interface LLMConfigMutationReceipt {
+  config_revision?: number
+  config_digest?: string
 }
 
 export interface BackendRuntimeConfig {

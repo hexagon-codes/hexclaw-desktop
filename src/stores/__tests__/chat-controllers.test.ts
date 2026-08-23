@@ -107,6 +107,7 @@ describe('chat controller modules', () => {
       scopeSchemaVersion: 1,
       risk: 'medium',
       reason: 'need network',
+      deadlineAt: new Date(Date.now() + 60_000).toISOString(),
     } as any)
     controller.storePendingApproval({
       requestId: 'req-2',
@@ -119,6 +120,7 @@ describe('chat controller modules', () => {
       scopeSchemaVersion: 1,
       risk: 'high',
       reason: 'modify file',
+      deadlineAt: new Date(Date.now() + 60_000).toISOString(),
     } as any)
 
     expect(controller.hasSessionPendingApproval('s-1')).toBe(true)
@@ -777,9 +779,15 @@ describe('chat controller modules', () => {
         'req-1': {
           requestId: 'req-1',
           sessionId: 's1',
+          ownerId: 'desktop-user',
+          invocationId: 'invocation-1',
           toolName: 'fetch',
+          argumentsDigest: 'a'.repeat(64),
+          securityScopeDigest: 'b'.repeat(64),
+          scopeSchemaVersion: 1,
           risk: 'medium',
           reason: 'need network',
+          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
           receivedAt: 123,
         },
       }),
@@ -787,9 +795,15 @@ describe('chat controller modules', () => {
       getPendingApprovalForSession: () => ({
         requestId: 'req-1',
         sessionId: 's1',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-1',
         toolName: 'fetch',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'medium',
         reason: 'need network',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         receivedAt: 123,
       }),
     })
@@ -1598,6 +1612,34 @@ function redApprovalTerminal(overrides: Partial<RedApprovalTerminal> = {}): RedA
 }
 
 describe('chat approval transport lifecycle RED contract', () => {
+  it.each([
+    ['owner_id', { ownerId: undefined }],
+    ['session_id', { sessionId: undefined }],
+    ['invocation_id', { invocationId: undefined }],
+    ['arguments_digest', { argumentsDigest: undefined }],
+    ['security_scope_digest', { securityScopeDigest: undefined }],
+    ['scope_schema_version', { scopeSchemaVersion: 0 }],
+    ['deadline_at', { deadlineAt: undefined }],
+  ] as const)(
+    'fails closed without a pending card, decision, or reconcile wire when %s is missing',
+    async (_field, overrides) => {
+      const harness = await createRedApprovalHarness()
+      harness.init()
+      harness.request(redApprovalRequest(overrides))
+
+      expect(harness.pendingApprovals.value).toEqual({})
+
+      harness.reconnect()
+      await expect(
+        Promise.resolve(harness.respond('approval-request-1', true, true)),
+      ).resolves.toBeUndefined()
+
+      expect(harness.sendRaw).not.toHaveBeenCalled()
+      expect(harness.ownerSendApprovalResponse).not.toHaveBeenCalled()
+      expect(harness.globalSendApprovalResponse).not.toHaveBeenCalled()
+    },
+  )
+
   it('sends the decision through the owning request transport, not the global websocket', async () => {
     const harness = await createRedApprovalHarness()
     harness.store(redApprovalRequest())
@@ -1762,17 +1804,12 @@ describe('chat approval transport lifecycle RED contract', () => {
     ['scope_schema_version', { scopeSchemaVersion: 0 }, { scope_schema_version: 0 }],
   ] as const)(
     'does not clear a pending card when terminal identity is incomplete at %s',
-    async (_field, request, terminal) => {
+    async (_field, _request, terminal) => {
       const harness = await createRedApprovalHarness()
-      harness.store(redApprovalRequest(request))
-
-      const requestId =
-        'requestId' in request && typeof request.requestId === 'string'
-          ? request.requestId
-          : 'approval-request-1'
+      harness.store(redApprovalRequest())
       harness.terminal(redApprovalTerminal(terminal as Partial<RedApprovalTerminal>))
 
-      expect(Boolean(harness.pendingApprovals.value[requestId])).toBe(true)
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
     },
   )
 
@@ -2038,7 +2075,7 @@ describe('chat approval transport lifecycle RED contract', () => {
     ['owner identity', { ownerId: undefined }],
     ['deadline', { deadlineAt: undefined }],
   ] as const)(
-    'does not reconcile an incomplete pending approval missing %s and does not clear it on silence',
+    'does not store or reconcile a malformed pending approval missing %s',
     async (_field, overrides) => {
       const harness = await createRedApprovalHarness()
       harness.store(redApprovalRequest(overrides))
@@ -2048,7 +2085,7 @@ describe('chat approval transport lifecycle RED contract', () => {
       harness.reconnect()
 
       expect(harness.sendRaw).not.toHaveBeenCalled()
-      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(true)
+      expect(Boolean(harness.pendingApprovals.value['approval-request-1'])).toBe(false)
     },
   )
 

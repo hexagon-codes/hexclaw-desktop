@@ -129,17 +129,24 @@ function mountPanel(plan: unknown = makeSetupRequiredPlan()) {
 
 describe('BUG-20260818-002 approved weekly missing-progress surface (supersedes BUG-20260815-001 stacked layout)', () => {
   it('keeps the missing-progress card on a single flex line like the set state', () => {
-    // 2026-08-18 用户决定（取代 BUG-20260815-001 的纵向堆叠）：
-    // 未设置进度卡与已设置卡一致单行——标题 + 「调整进度」按钮同一行，不换行不折字。
+    // 未设置进度卡与已设置卡一致保持单行，窄窗规则也不得改回纵向堆叠。
     const rules = panelSource.match(/\.weekly-progress > div \{[\s\S]*?\n}/g) ?? []
     const innerRule = rules.length > 0 ? rules[rules.length - 1] : ''
-    const missingRules =
-      panelSource.match(/\.weekly-progress--missing \{[\s\S]*?\n}/g) ?? []
+    const missingRules = panelSource.match(/\.weekly-progress--missing \{[\s\S]*?\n}/g) ?? []
+    const currentMissingRule =
+      panelSource.match(/\.weekly-progress\.rc-week-progress--missing \{[\s\S]*?\n}/)?.[0] ?? ''
     expect(innerRule).toContain('display: flex')
     expect(innerRule).not.toContain('display: grid')
     expect(missingRules.some((rule) => rule.includes('align-items: flex-start'))).toBe(false)
+    expect(currentMissingRule).toContain('flex-direction: row')
     expect(panelSource).not.toContain('max-width: 760px')
     expect(panelSource).not.toContain('.weekly-progress--missing > div > span')
+    expect(panelSource).not.toMatch(
+      /\.weekly-progress\.rc-week-progress\s*>\s*button\s*\{[^}]*font-family:/s,
+    )
+    expect(panelSource).not.toMatch(
+      /\.weekly-progress\.rc-week-progress\s*>\s*button\s*\{[^}]*height:/s,
+    )
   })
 
   it('projects the approved Chinese setup guidance instead of the raw English failure message', () => {

@@ -42,9 +42,7 @@ describe('API response shape alignment', () => {
     }
 
     it('backend BudgetStatus struct fields match frontend type', () => {
-      const frontendExpectedKeys = [
-        'tokens_used', 'tokens_max', 'cost_used', 'cost_max',
-      ]
+      const frontendExpectedKeys = ['tokens_used', 'tokens_max', 'cost_used', 'cost_max']
       const backendKeys = Object.keys(backendActualResponse)
 
       for (const key of frontendExpectedKeys) {
@@ -54,9 +52,15 @@ describe('API response shape alignment', () => {
 
     it('frontend BudgetStatus type includes all backend fields', () => {
       const backendFields = [
-        'tokens_used', 'tokens_max', 'tokens_remaining',
-        'cost_used', 'cost_max', 'cost_remaining',
-        'duration_used', 'duration_max', 'duration_remaining',
+        'tokens_used',
+        'tokens_max',
+        'tokens_remaining',
+        'cost_used',
+        'cost_max',
+        'cost_remaining',
+        'duration_used',
+        'duration_max',
+        'duration_remaining',
         'exhausted',
       ]
       // All these fields are declared in the frontend BudgetStatus type (tools-status.ts)
@@ -102,9 +106,27 @@ describe('API response shape alignment', () => {
   describe('GET /api/v1/config/llm', () => {
     it('BackendLLMConfig fields match LLMConfigResponse', () => {
       // Backend struct LLMConfigResponse JSON tags:
-      const backendFields = ['default', 'providers', 'routing', 'cache', 'reasoning_provider', 'reasoning_model']
+      const backendFields = [
+        'default',
+        'providers',
+        'routing',
+        'cache',
+        'reasoning_provider',
+        'reasoning_model',
+        'config_revision',
+        'config_digest',
+      ]
       // Frontend BackendLLMConfig declares:
-      const frontendFields = ['default', 'providers', 'routing', 'cache', 'reasoning_provider', 'reasoning_model']
+      const frontendFields = [
+        'default',
+        'providers',
+        'routing',
+        'cache',
+        'reasoning_provider',
+        'reasoning_model',
+        'config_revision',
+        'config_digest',
+      ]
       expect(frontendFields.sort()).toEqual(backendFields.sort())
     })
 
@@ -151,9 +173,23 @@ describe('API response shape alignment', () => {
 
     it('OllamaModel fields match between frontend and backend', () => {
       // Backend OllamaModel json tags:
-      const backendFields = ['name', 'size', 'modified', 'family', 'parameter_size', 'quantization_level']
+      const backendFields = [
+        'name',
+        'size',
+        'modified',
+        'family',
+        'parameter_size',
+        'quantization_level',
+      ]
       // Frontend OllamaModel interface:
-      const frontendFields = ['name', 'size', 'modified', 'family', 'parameter_size', 'quantization_level']
+      const frontendFields = [
+        'name',
+        'size',
+        'modified',
+        'family',
+        'parameter_size',
+        'quantization_level',
+      ]
       expect(frontendFields.sort()).toEqual(backendFields.sort())
     })
   })
@@ -183,8 +219,14 @@ describe('API response shape alignment', () => {
     it('frontend sends correct chat request shape to backend', () => {
       // Backend ChatRequest json tags:
       const backendRequestFields = [
-        'message', 'session_id', 'user_id', 'role',
-        'provider', 'model', 'platform', 'attachments',
+        'message',
+        'session_id',
+        'user_id',
+        'role',
+        'provider',
+        'model',
+        'platform',
+        'attachments',
       ]
 
       // Frontend sendChatViaBackend sends via Tauri invoke:

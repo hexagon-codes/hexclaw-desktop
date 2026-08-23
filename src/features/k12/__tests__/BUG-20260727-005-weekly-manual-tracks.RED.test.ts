@@ -256,12 +256,13 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
     const item = wrapper.get('.weekly-item')
     const actions = item.findAll('button').map((button) => button.text().trim())
 
-    // 架构图 10（2026-07-25 裁决）：到期复习行必须有一键加入练习集动作（用户 2026-08-16 对齐原型）
-    expect(actions).toEqual(['加入练习集', '本周先不练', '不再复习'])
-    expect(item.find('[aria-label*="更多"]').exists()).toBe(false)
+    // 到期复习行直接保留当周延后，长期停止复习统一从逐题更多菜单进入。
+    expect(actions).toEqual(['加入练习集', '本周先不练', '…'])
+    expect(item.find('[aria-label*="更多"]').exists()).toBe(true)
 
-    // 按钮顺序：加入练习集 / 本周先不练 / 不再复习（suppress 弹层在第三个）
+    // 按钮顺序：加入练习集 / 本周先不练 / 更多；菜单项进入同一 suppress 确认链。
     await item.findAll('button')[2]!.trigger('click')
+    await item.get('[role="menuitem"]').trigger('click')
     const confirm = document.body.querySelector<HTMLButtonElement>(
       '[data-testid="confirm-suppress-review"]',
     )

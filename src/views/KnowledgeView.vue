@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, getCurrentInstance, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useKnowledgeUploadsStore } from '@/stores/knowledge-uploads'
 import { useI18n } from 'vue-i18n'
 import {
@@ -22,16 +22,26 @@ import {
   reindexDocument,
   retryKnowledgeDocument,
   getKnowledgeConfig,
+  getKnowledgeEmbeddingStatus,
   putKnowledgeConfig,
   MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES,
   listKnowledgeOperations,
 } from '@/api/knowledge'
 import type { KnowledgeSourceCount } from '@/api/knowledge'
-import type { KnowledgeSearchFilter, KnowledgeConfig } from '@/api/knowledge'
+import type {
+  KnowledgeEmbeddingStatus,
+  KnowledgeSearchFilter,
+  KnowledgeConfig,
+} from '@/api/knowledge'
 import { cancelKnowledgeJob, getKnowledgeJob } from '@/api/knowledge-index'
 import type { KnowledgeUploadEntry } from '@/stores/knowledge-uploads'
 // DB cache layer removed — data fetched directly from backend API
-import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
+import type {
+  KnowledgeDoc,
+  KnowledgeJobProjection,
+  KnowledgeSearchResult,
+  KnowledgeStructuredProjection,
+} from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -43,6 +53,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
 import { logger } from '@/utils/logger'
+import { formatRelative } from '@/utils/time'
 
 // 图片格式走后端多模态入库（视觉模型转写 → 文本 RAG，source_type=image）。
 // 后端 /knowledge/documents multipart 显式支持这些扩展，桌面也须放行，
@@ -87,6 +98,9 @@ const props = withDefaults(
 const knowledgeEnabled = computed(() => props.knowledgeEnabled)
 
 const { t, locale } = useI18n()
+const appRouter = getCurrentInstance()?.appContext.config.globalProperties.$router as
+  | { push?: (location: string) => unknown }
+  | undefined
 
 const docs = ref<KnowledgeDoc[]>([])
 const totalDocs = ref(0)
@@ -99,7 +113,7 @@ const activeTab = ref<'documents' | 'search'>('documents')
 
 // 二级 tab（统一 UnderlineTabs）：全部 (N) / 检索测试
 const knowledgeTabs = computed(() => [
-  { key: 'documents', label: t('knowledge.allTab', '全部'), count: docs.value.length },
+  { key: 'documents', label: `${t('knowledge.allTab', '全部')} (${docs.value.length})` },
   { key: 'search', label: t('knowledge.searchTest', '检索测试') },
 ])
 
@@ -107,7 +121,9 @@ const showAddDialog = ref(false)
 const newTitle = ref('')
 const newContent = ref('')
 const newSource = ref('')
+const newTitleInput = ref<HTMLInputElement | null>(null)
 const adding = ref(false)
+const embeddingStatus = ref<KnowledgeEmbeddingStatus | null>(null)
 
 const showDeleteConfirm = ref(false)
 const deletingDoc = ref<KnowledgeDoc | null>(null)
@@ -196,6 +212,40 @@ async function loadRagConfig() {
     logger.warn('[Knowledge] 检索参数读取失败', e)
   }
 }
+
+async function loadEmbeddingStatus() {
+  if (!knowledgeEnabled.value) return
+  try {
+    embeddingStatus.value = await getKnowledgeEmbeddingStatus()
+  } catch (error) {
+    embeddingStatus.value = null
+    logger.warn('[Knowledge] embedding status read failed', error)
+  }
+}
+
+function embeddingProviderLabel(provider: string | undefined): string {
+  if (provider === 'openai_compatible' || provider === 'openai') return 'OpenAI 兼容'
+  return provider || '自动选择'
+}
+
+const addDocumentIndexNotice = computed(() => {
+  const status = embeddingStatus.value
+  if (!status) return null
+  if (!status.enabled || !status.configured) {
+    return {
+      title: t('knowledge.indexUnconfiguredTitle', '当前索引：未配置'),
+      detail: t(
+        'knowledge.indexBackgroundHint',
+        '文本索引仍可先就绪；配置语义索引后会在后台增强，索引模型可在知识库页统一修改。',
+      ),
+    }
+  }
+  const executor = [embeddingProviderLabel(status.provider), status.model].filter(Boolean).join(' · ')
+  return {
+    title: t('knowledge.indexAutoTitle', '当前索引：自动（推荐）'),
+    detail: `${t('knowledge.indexActualPrefix', '实际执行：')}${executor || '自动选择'}；${t('knowledge.indexBackgroundHint', '文本索引先就绪，语义索引在后台增强。索引模型可在知识库页统一修改。')}`,
+  }
+})
 
 // 全量保存（即时生效 + 落盘）。在写入前夹紧到合法区间，与后端校验对齐。
 async function saveRagConfig() {
@@ -357,6 +407,7 @@ let indexPollInFlight = false
 let isMounted = false
 
 const POLLABLE_VECTOR_JOB_STATES = new Set(['queued', 'running', 'retry_wait'])
+type KnowledgePolledJob = Awaited<ReturnType<typeof getKnowledgeJob>> & KnowledgeJobProjection
 
 function hasPollableVectorJob(doc: KnowledgeDoc): boolean {
   return (
@@ -368,6 +419,46 @@ function hasPollableVectorJob(doc: KnowledgeDoc): boolean {
 
 function hasPollableVectorJobs(): boolean {
   return docs.value.some(hasPollableVectorJob)
+}
+
+// Job 回读只覆盖实际返回的结构化字段，避免短投影把已有事实清空。
+function mergeKnowledgeProjection(
+  doc: KnowledgeDoc,
+  projection: Partial<KnowledgeStructuredProjection>,
+): KnowledgeDoc {
+  const next = { ...doc }
+  if (projection.text_index_state !== undefined) next.text_index_state = projection.text_index_state
+  if (projection.ingestion_state !== undefined) next.ingestion_state = projection.ingestion_state
+  if (projection.failure_code !== undefined) next.failure_code = projection.failure_code
+  if (projection.affected_pages !== undefined) next.affected_pages = projection.affected_pages
+  if (projection.frozen_vision_provider !== undefined) {
+    next.frozen_vision_provider = projection.frozen_vision_provider
+  }
+  if (projection.frozen_vision_model !== undefined) {
+    next.frozen_vision_model = projection.frozen_vision_model
+  }
+  if (projection.preflight_state !== undefined) next.preflight_state = projection.preflight_state
+  if (projection.model_calls !== undefined) next.model_calls = projection.model_calls
+  if (projection.available_actions !== undefined) {
+    next.available_actions = projection.available_actions
+  }
+  if (projection.ingestion !== undefined) {
+    if (projection.ingestion === null) {
+      next.ingestion = null
+    } else {
+      const currentIngestion = doc.ingestion ?? {}
+      const incomingIngestion = projection.ingestion
+      const mergedIngestion = { ...currentIngestion, ...incomingIngestion }
+      next.ingestion = mergedIngestion
+      if (incomingIngestion.frozen_vision === undefined && currentIngestion.frozen_vision !== undefined) {
+        mergedIngestion.frozen_vision = currentIngestion.frozen_vision
+      }
+      if (incomingIngestion.preflight === undefined && currentIngestion.preflight !== undefined) {
+        mergedIngestion.preflight = currentIngestion.preflight
+      }
+    }
+  }
+  return next
 }
 
 // 只替换当前已加载的同一文档，避免重建第 51 条后的条目时用首页回读覆盖分页窗口。
@@ -382,6 +473,7 @@ async function refreshDocumentProjection(docID: string) {
 }
 
 function updateVectorJobProjection(job: Awaited<ReturnType<typeof getKnowledgeJob>>) {
+  const projection = job as KnowledgePolledJob
   docs.value = docs.value.map((doc) => {
     if (doc.vector_job_id !== job.job_id) return doc
     const vectorState: KnowledgeDoc['vector_index_state'] =
@@ -394,15 +486,18 @@ function updateVectorJobProjection(job: Awaited<ReturnType<typeof getKnowledgeJo
             : job.state === 'succeeded'
               ? 'ready'
               : job.state
-    return {
-      ...doc,
+    return mergeKnowledgeProjection(
+      {
+        ...doc,
       vector_index_state: vectorState,
       vector_job_state: job.state,
       vector_job_stage: job.stage,
       vector_chunks_done: job.chunks_done ?? doc.vector_chunks_done,
       vector_chunks_total: job.chunks_total ?? doc.vector_chunks_total,
       vector_error: job.state === 'failed' ? job.last_error || doc.vector_error : undefined,
-    }
+      },
+      projection,
+    )
   })
 }
 
@@ -420,6 +515,13 @@ async function pollKnowledgeUploadJobs() {
       try {
         const job = await getKnowledgeJob(entry.jobId!)
         polledJobs.set(job.job_id, job)
+        if (entry.documentId) {
+          docs.value = docs.value.map((doc) =>
+            doc.id === entry.documentId
+              ? mergeKnowledgeProjection(doc, job as KnowledgePolledJob)
+              : doc,
+          )
+        }
         entry.stage = job.stage
         if (job.state === 'succeeded') {
           uploadsStore.markSucceeded(entry)
@@ -545,6 +647,7 @@ onMounted(async () => {
     logger.warn('[Knowledge] durable upload recovery failed', error)
   }
   await loadDocs()
+  void loadEmbeddingStatus()
   void loadRagConfig()
   // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
   if (uploadsStore.hasAwaitingIndex() || hasPollableVectorJobs()) ensureIndexPolling()
@@ -624,7 +727,10 @@ function ensureKnowledgeEnabled() {
 
 async function handleAdd() {
   if (!ensureKnowledgeEnabled()) return
-  if (!newTitle.value.trim() || !newContent.value.trim()) return
+  if (!newTitle.value.trim() || !newContent.value.trim()) {
+    openFilePicker()
+    return
+  }
   adding.value = true
   errorMsg.value = ''
   try {
@@ -699,8 +805,147 @@ function formatScore(score: number): string {
   return `${(clamped * 100).toFixed(1)}%`
 }
 
+function getTextIndexState(doc: KnowledgeDoc): string | undefined {
+  return typeof doc.text_index_state === 'string' && doc.text_index_state
+    ? doc.text_index_state
+    : undefined
+}
+
+function getIngestionState(doc: KnowledgeDoc): string | undefined {
+  const state =
+    doc.ingestion_state ??
+    doc.ingestion?.ingestion_state ??
+    doc.ingestion?.state ??
+    doc.ingestion?.failure_code ??
+    doc.failure_code
+  return typeof state === 'string' && state ? state : undefined
+}
+
+function getFailureCode(doc: KnowledgeDoc): string | undefined {
+  const code = doc.failure_code ?? doc.ingestion?.failure_code
+  return typeof code === 'string' && code ? code : undefined
+}
+
+function getAffectedPages(doc: KnowledgeDoc): number | number[] | undefined {
+  const pages = doc.affected_pages ?? doc.ingestion?.affected_pages
+  if (typeof pages === 'number' && Number.isFinite(pages)) return pages
+  if (!Array.isArray(pages) || pages.some((page) => typeof page !== 'number')) return undefined
+  return pages
+}
+
+function formatAffectedPages(pages: number | number[] | undefined): string | undefined {
+  if (typeof pages === 'number') return String(pages)
+  if (Array.isArray(pages)) return pages.length ? pages.join(',') : 'none'
+  return undefined
+}
+
+function getFrozenVisionProvider(doc: KnowledgeDoc): string | undefined {
+  const provider =
+    doc.frozen_vision_provider ??
+    doc.ingestion?.frozen_vision_provider ??
+    doc.ingestion?.frozen_vision?.provider
+  return typeof provider === 'string' && provider ? provider : undefined
+}
+
+function getFrozenVisionModel(doc: KnowledgeDoc): string | undefined {
+  const model =
+    doc.frozen_vision_model ?? doc.ingestion?.frozen_vision_model ?? doc.ingestion?.frozen_vision?.model
+  return typeof model === 'string' && model ? model : undefined
+}
+
+function getPreflightState(doc: KnowledgeDoc): string | undefined {
+  const state = doc.preflight_state ?? doc.ingestion?.preflight_state
+  if (typeof state === 'string' && state) return state
+  const preflight = doc.ingestion?.preflight
+  if (typeof preflight === 'string' && preflight) return preflight
+  if (preflight && typeof preflight === 'object') {
+    if (preflight.state) return preflight.state
+    if (preflight.blocked === true) return 'blocked'
+  }
+  return undefined
+}
+
+function getModelCalls(doc: KnowledgeDoc): number | undefined {
+  const calls = doc.model_calls ?? doc.ingestion?.model_calls
+  return typeof calls === 'number' ? calls : undefined
+}
+
+function getAvailableActions(doc: KnowledgeDoc): string[] | undefined {
+  const actions = doc.available_actions ?? doc.ingestion?.available_actions
+  if (!Array.isArray(actions)) return undefined
+  return actions.filter((action): action is string => typeof action === 'string')
+}
+
+function getStructuredDocumentFacts(doc: KnowledgeDoc): string[] {
+  if (getDocStatus(doc) !== 'failed') return []
+  const facts: string[] = []
+  const textIndexState = getTextIndexState(doc)
+  const ingestionState = getIngestionState(doc)
+  const failureCode = getFailureCode(doc)
+  const affectedPages = getAffectedPages(doc)
+  const provider = getFrozenVisionProvider(doc)
+  const model = getFrozenVisionModel(doc)
+  const preflightState = getPreflightState(doc)
+  const modelCalls = getModelCalls(doc)
+
+  if (textIndexState) {
+    const extracted = textIndexState === 'ready' ? ' · 文本页已提取 · 文档仍保留' : ''
+    facts.push(`text_index_state=${textIndexState}${extracted}`)
+  }
+  if (ingestionState || failureCode || affectedPages !== undefined) {
+    facts.push(
+      `ingestion=${ingestionState ?? 'unknown'} · failure_code=${failureCode ?? 'unknown'} · affected_pages=${formatAffectedPages(affectedPages) ?? 'unknown'}`,
+    )
+  }
+  if (preflightState || provider || model || modelCalls !== undefined) {
+    facts.push(
+      `preflight=${preflightState ?? 'unknown'} · frozen vision provider/model=${[provider, model].filter(Boolean).join(' / ') || 'unknown'} · model_calls=${modelCalls ?? 0}`,
+    )
+  }
+  return facts
+}
+
+function hasKnowledgeAvailableAction(doc: KnowledgeDoc, names: string[]): boolean | undefined {
+  const actions = getAvailableActions(doc)
+  if (!actions) return undefined
+  const expected = new Set(names)
+  return actions.some((action) =>
+    expected.has(action.trim().toLowerCase().replace(/[\s-]+/g, '_')),
+  )
+}
+
+function shouldShowKnowledgeSettingsAction(doc: KnowledgeDoc): boolean {
+  if (getDocStatus(doc) !== 'failed') return false
+  const available = hasKnowledgeAvailableAction(doc, [
+    'settings',
+    'open_settings',
+    'provider_settings',
+    'open_provider_settings',
+    'configure_provider',
+    'configure_vision',
+  ])
+  if (available !== undefined) return available
+  const failureCode = getFailureCode(doc)?.toLowerCase() ?? ''
+  return (
+    failureCode.includes('vision') ||
+    Boolean(getFrozenVisionProvider(doc) || getFrozenVisionModel(doc)) ||
+    getPreflightState(doc) === 'blocked'
+  )
+}
+
+function openKnowledgeSettings() {
+  if (appRouter?.push) {
+    void appRouter.push('/settings')
+    return
+  }
+  if (typeof window !== 'undefined') window.location.assign('/settings')
+}
+
 function getDocStatus(doc: KnowledgeDoc): 'processing' | 'indexed' | 'failed' {
   if (doc.status) return doc.status
+  if (doc.text_index_state === 'failed' || getIngestionState(doc) === 'failed' || getFailureCode(doc)) {
+    return 'failed'
+  }
   if (doc.error_message) return 'failed'
   return 'indexed'
 }
@@ -745,11 +990,10 @@ function hasRetryableVectorFailure(doc: KnowledgeDoc): boolean {
 }
 
 function canReindexDocument(doc: KnowledgeDoc): boolean {
-  return (
-    getDocStatus(doc) === 'failed' ||
-    hasRetryableVectorFailure(doc) ||
-    !isDurableUploadedDocument(doc)
-  )
+  if (getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)) return true
+  const sourceType = doc.source_type?.trim().toLowerCase()
+  if (sourceType) return ['manual', 'upload', 'image'].includes(sourceType)
+  return !isDurableUploadedDocument(doc)
 }
 
 function canCancelVectorJob(doc: KnowledgeDoc): boolean {
@@ -796,15 +1040,33 @@ function isReadingDocumentProjection(doc: KnowledgeDoc): boolean {
 
 function getDocumentRowStatus(doc: KnowledgeDoc): string {
   if (isReadingDocumentProjection(doc)) return t('knowledge.authorityReading')
+  const structuredFacts = getStructuredDocumentFacts(doc)
+  if (structuredFacts.length > 0) return structuredFacts.join('\n')
   if (doc.error_message) return doc.error_message
+  if (
+    getDocStatus(doc) === 'processing' &&
+    doc.source_type?.trim().toLowerCase() === 'connector' &&
+    doc.vector_index_state === 'building'
+  ) {
+    return t(
+      'knowledge.connectorIndexing',
+      '已上传 · 后端正在解析并建索引（扫描件/大文件较慢，请稍候）',
+    )
+  }
   const vectorStatus = getVectorStatusLabel(doc)
   if (vectorStatus) {
     const progress = getVectorProgress(doc)
     return [vectorStatus, progress, doc.vector_error].filter(Boolean).join(' · ')
   }
-  const chunks = `${doc.chunk_count} chunk${doc.chunk_count === 1 ? '' : 's'}`
+  const chunks = `${doc.chunk_count} ${t('knowledge.chunkUnit', '个 chunk')}`
   if (getDocStatus(doc) === 'indexed' && doc.vector_index_state === 'ready') {
-    return `文本 + 语义已就绪 · ${chunks}`
+    const details = [chunks]
+    if (doc.source_type?.trim().toLowerCase() === 'chat') {
+      details.push(formatRelative(doc.created_at, Date.now()))
+    } else if (doc.source_type?.trim().toLowerCase() === 'upload' && ragConfig.value?.contextual) {
+      details.push(t('knowledge.contextualReady', 'Contextual 已写入'))
+    }
+    return `文本 + 语义已就绪 · ${details.join(' · ')}`
   }
   return `${getDocStatusLabel(doc)} · ${chunks}`
 }
@@ -816,7 +1078,7 @@ function getDocumentBadgeLabel(doc: KnowledgeDoc): string {
   }
   if (doc.vector_index_state === 'ready') return '混合检索'
   if (doc.vector_index_state === 'failed' || getDocStatus(doc) === 'failed') {
-    return getDocStatusLabel(doc)
+    return t('knowledge.processingFailed')
   }
   if (getDocStatus(doc) === 'processing') return getDocStatusLabel(doc)
   return ''
@@ -1221,6 +1483,7 @@ function openUpload() {
   if (!ensureKnowledgeEnabled()) return
   closeAddDialog()
   showAddDialog.value = true
+  void nextTick(() => newTitleInput.value?.focus())
 }
 
 defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
@@ -1408,19 +1671,19 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <div
                   v-if="sourceFacet.length > 1"
                   data-testid="knowledge-source-filters"
-                  class="knowledge-page__source-filters flex flex-wrap items-center gap-2 mb-4"
+                  class="knowledge-page__source-filters flex flex-wrap items-center gap-[6px] mb-3"
                 >
                   <button
                     type="button"
                     data-testid="kb-source-chip-all"
                     :aria-pressed="selectedSource === null"
-                    class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+                    class="knowledge-page__source-chip text-xs rounded-[9px] border transition-colors"
                     :style="
                       selectedSource === null
                         ? {
-                            background: 'var(--hc-accent)',
-                            borderColor: 'var(--hc-accent)',
-                            color: '#fff',
+                            background: 'var(--hc-accent-subtle)',
+                            borderColor: 'var(--hc-border-hl)',
+                            color: 'var(--hc-accent)',
                           }
                         : {
                             background: 'var(--hc-bg-card)',
@@ -1430,9 +1693,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                     "
                     @click="selectSource(null)"
                   >
-                    {{ t('knowledge.allSources') }} ({{
-                      sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs
-                    }})
+                    {{ t('knowledge.allSources') }}
                   </button>
                   <button
                     v-for="f in sourceFacet"
@@ -1440,13 +1701,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                     type="button"
                     :data-testid="`kb-source-chip-${f.source}`"
                     :aria-pressed="selectedSource === f.source"
-                    class="text-xs px-2.5 py-1 rounded-full border transition-colors max-w-[14rem] truncate"
+                    class="knowledge-page__source-chip text-xs rounded-[9px] border transition-colors max-w-[14rem] truncate"
                     :style="
                       selectedSource === f.source
                         ? {
-                            background: 'var(--hc-accent)',
-                            borderColor: 'var(--hc-accent)',
-                            color: '#fff',
+                            background: 'var(--hc-accent-subtle)',
+                            borderColor: 'var(--hc-border-hl)',
+                            color: 'var(--hc-accent)',
                           }
                         : {
                             background: 'var(--hc-bg-card)',
@@ -1471,6 +1732,18 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                       v-for="doc in windowedDocs"
                       :key="doc.id"
                       data-testid="knowledge-doc-card"
+                      :data-text-index-state="getTextIndexState(doc)"
+                      :data-ingestion-failure-code="getFailureCode(doc)"
+                      :data-affected-pages="formatAffectedPages(getAffectedPages(doc))"
+                      :data-frozen-vision-provider="getFrozenVisionProvider(doc)"
+                      :data-frozen-vision-model="getFrozenVisionModel(doc)"
+                      :data-preflight-state="getPreflightState(doc)"
+                      :data-preflight="getPreflightState(doc)"
+                      :data-model-calls="getModelCalls(doc)"
+                      :class="{
+                        'knowledge-page__document-card--structured-failure':
+                          getStructuredDocumentFacts(doc).length > 0,
+                      }"
                       class="knowledge-page__resource-row knowledge-page__document-card flex items-center"
                     >
                       <span class="knowledge-page__resource-file">
@@ -1509,6 +1782,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         class="knowledge-page__document-actions shrink-0 flex items-center gap-1"
                       >
                         <button
+                          v-if="getStructuredDocumentFacts(doc).length === 0 && getDocStatus(doc) !== 'processing'"
                           type="button"
                           class="knowledge-page__resource-action"
                           @click="openDocDetail(doc)"
@@ -1533,9 +1807,18 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         >
                           {{
                             getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)
-                              ? t('knowledge.retryIndex')
+                              ? t('knowledge.retryDocument')
                               : '重建'
                           }}
+                        </button>
+                        <button
+                          v-if="shouldShowKnowledgeSettingsAction(doc)"
+                          type="button"
+                          data-testid="knowledge-settings-action"
+                          class="knowledge-page__resource-action"
+                          @click="openKnowledgeSettings"
+                        >
+                          {{ t('knowledge.settingsAction') }}
                         </button>
                         <button
                           v-if="canCancelVectorJob(doc)"
@@ -1548,9 +1831,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           "
                           @click="cancelDocumentVectorJob(doc)"
                         >
-                          {{ t('knowledge.vectorCancel', '取消语义增强') }}
+                          {{ t('knowledge.vectorCancelShort', '取消') }}
                         </button>
                         <button
+                          v-if="getStructuredDocumentFacts(doc).length === 0 && getDocStatus(doc) !== 'processing'"
                           type="button"
                           class="knowledge-page__resource-action knowledge-page__resource-action--danger"
                           :disabled="!knowledgeEnabled"
@@ -1558,6 +1842,14 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         >
                           {{ t('common.delete') }}
                         </button>
+                        <span
+                          v-if="getStructuredDocumentFacts(doc).length > 0"
+                          class="knowledge-page__structured-failure-mark"
+                          aria-label="需要处理"
+                          title="需要处理"
+                        >
+                          ✗
+                        </span>
                       </div>
                     </div>
                   </template>
@@ -1938,7 +2230,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div
-              class="flex items-center justify-between px-5 py-4 border-b"
+              class="knowledge-add-document-modal__header flex items-center justify-between px-5 py-4 border-b"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
               <h2
@@ -1950,32 +2242,45 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               <button
                 class="p-1 rounded-md hover:bg-white/5"
                 :style="{ color: 'var(--hc-text-muted)' }"
+                :aria-label="t('knowledge.closeDialog')"
                 @click="closeAddDialog"
               >
                 <X :size="17" />
               </button>
             </div>
-            <div class="knowledge-add-document-modal__body p-5 flex flex-col gap-3.5">
+            <div class="knowledge-add-document-modal__body">
               <!-- 文件上传区 -->
               <div
                 class="knowledge-add-document-modal__drop flex items-center gap-3 p-3 rounded-lg border border-dashed cursor-pointer hover:border-solid transition-colors"
-                :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }"
+                data-testid="knowledge-upload-drop"
+                :style="{ borderColor: 'var(--hc-border)' }"
                 @click="openFilePicker"
               >
-                <Upload :size="20" style="color: var(--hc-accent)" />
-                <div>
+                <div class="knowledge-add-document-modal__drop-icon" aria-hidden="true">📄</div>
+                <div class="knowledge-add-document-modal__drop-copy">
                   <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">
                     {{ t('knowledge.uploadFile', '上传文件') }}
                   </div>
                   <div class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
-                    PDF / Word / TXT / Markdown / CSV / Excel
+                    {{ t('knowledge.uploadFileHint') }}
                   </div>
                 </div>
               </div>
-              <div class="text-center text-xs" :style="{ color: 'var(--hc-text-tertiary)' }">
+              <div
+                v-if="addDocumentIndexNotice"
+                class="knowledge-page__index-notice"
+                data-testid="knowledge-index-notice"
+              >
+                <strong>{{ addDocumentIndexNotice.title }}</strong>
+                <span>{{ addDocumentIndexNotice.detail }}</span>
+              </div>
+              <div
+                class="knowledge-add-document-modal__manual-divider text-xs"
+                :style="{ color: 'var(--hc-text-muted)' }"
+              >
                 {{ t('knowledge.orManualInput', '— 或手动输入 —') }}
               </div>
-              <div class="flex flex-col gap-1.5">
+              <div class="knowledge-add-document-modal__field knowledge-add-document-modal__field--title flex flex-col gap-1.5">
                 <label
                   class="text-[13px] font-medium"
                   :style="{ color: 'var(--hc-text-secondary)' }"
@@ -1983,6 +2288,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 >
                 <HcClearableField>
                   <input
+                    ref="newTitleInput"
+                    autofocus
                     v-model="newTitle"
                     type="text"
                     class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none"
@@ -1995,7 +2302,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   />
                 </HcClearableField>
               </div>
-              <div class="flex flex-col gap-1.5">
+              <div class="knowledge-add-document-modal__field knowledge-add-document-modal__field--content flex flex-col gap-1.5">
                 <label
                   class="text-[13px] font-medium"
                   :style="{ color: 'var(--hc-text-secondary)' }"
@@ -2005,7 +2312,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   <textarea
                     v-model="newContent"
                     rows="6"
-                    class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+                    class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none"
                     :style="{
                       background: 'var(--hc-bg-input)',
                       borderColor: 'var(--hc-border)',
@@ -2015,7 +2322,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   />
                 </HcClearableField>
               </div>
-              <div class="flex flex-col gap-1.5">
+              <div class="knowledge-add-document-modal__field knowledge-add-document-modal__field--source flex flex-col gap-1.5">
                 <label
                   class="text-[13px] font-medium"
                   :style="{ color: 'var(--hc-text-secondary)' }"
@@ -2042,23 +2349,22 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             >
               <button
                 class="px-3 py-1.5 rounded-lg text-sm font-medium"
-                :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
+                :style="{ color: 'var(--hc-text-primary)', background: 'var(--hc-bg-input)' }"
                 @click="closeAddDialog"
               >
                 {{ t('common.cancel') }}
               </button>
               <button
+                data-testid="knowledge-upload-submit"
                 class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
                 :style="{
-                  background: 'var(--hc-accent)',
                   opacity:
-                    !knowledgeEnabled || !newTitle.trim() || !newContent.trim() || adding ? 0.4 : 1,
+                    !knowledgeEnabled || adding ? 0.4 : 1,
                 }"
-                :disabled="!knowledgeEnabled || !newTitle.trim() || !newContent.trim() || adding"
+                :disabled="!knowledgeEnabled || adding"
                 @click="handleAdd"
               >
-                <Upload :size="14" />
-                {{ adding ? t('knowledge.adding') : t('knowledge.add') }}
+                {{ adding ? t('knowledge.adding') : t('common.upload') }}
               </button>
             </div>
           </div>
@@ -2183,23 +2489,170 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 .knowledge-add-document-modal {
   display: grid;
   width: min(478px, calc(100vw - 32px));
+  height: min(686px, calc(100vh - 24px));
   min-width: 0;
-  max-height: min(760px, calc(100vh - 24px));
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(686px, calc(100vh - 24px));
+  grid-template-rows: 61px minmax(0, 1fr) 65px;
+  border-radius: 16px;
+  box-shadow:
+    0 8px 24px rgba(95, 179, 234, 0.14),
+    0 24px 56px rgba(95, 179, 234, 0.18),
+    0 0 0 0.5px rgba(63, 143, 212, 0.08);
+  transform: translateY(-8px);
+  font-feature-settings: normal;
+  text-rendering: auto;
+}
+
+.knowledge-add-document-modal__header {
+  box-sizing: border-box;
+  min-height: 61px;
+  padding: 18px;
 }
 
 .knowledge-add-document-modal__body {
+  display: block;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  overflow-y: auto;
+  padding: 18px;
+  overflow: auto;
 }
 
-.knowledge-add-document-modal__drop,
+.knowledge-add-document-modal__drop {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 170px;
+  min-height: 170px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  padding: 36px;
+  border-radius: 12px;
+  background: transparent !important;
+  color: var(--hc-text-muted);
+  text-align: center;
+}
+
+.knowledge-add-document-modal__drop-icon {
+  flex: 0 0 auto;
+  height: 30px;
+  margin-bottom: 8px;
+  color: var(--hc-text-tertiary);
+  font-size: 30px;
+  line-height: 30px;
+}
+
+.knowledge-add-document-modal__drop-copy > div:first-child {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 21px;
+}
+
+.knowledge-add-document-modal__drop-copy > div:last-child {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.knowledge-add-document-modal__manual-divider {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.knowledge-add-document-modal .knowledge-page__index-notice {
+  display: block;
+  margin-top: 12px;
+  gap: normal;
+  background: rgba(255, 254, 249, 0.9);
+}
+
+.knowledge-add-document-modal .knowledge-page__index-notice strong,
+.knowledge-add-document-modal .knowledge-page__index-notice span {
+  display: block;
+}
+
+.knowledge-add-document-modal__field {
+  min-width: 0;
+  margin: 0 0 15px;
+  gap: 0 !important;
+}
+
+.knowledge-add-document-modal__field--content {
+  margin-bottom: 15px;
+}
+
+.knowledge-add-document-modal__field:last-child {
+  margin-bottom: 0;
+}
+
+.knowledge-add-document-modal__field > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--hc-text-primary) !important;
+  font-size: 13px;
+  line-height: 19.5px;
+}
+
+.knowledge-add-document-modal__field :deep(input),
+.knowledge-add-document-modal__field :deep(textarea) {
+  display: inline-block;
+  width: 100%;
+  height: 39.5px;
+  min-height: 39.5px;
+  box-sizing: border-box;
+  padding: 9px 12px !important;
+  border-radius: 10px;
+  font-size: 13px !important;
+  line-height: 19.5px !important;
+}
+
+.knowledge-add-document-modal__field :deep(textarea) {
+  height: 84px;
+  min-height: 84px;
+  resize: vertical;
+}
+
+.knowledge-add-document-modal__field :deep(input:focus),
+.knowledge-add-document-modal__field :deep(textarea:focus) {
+  border-color: var(--hc-accent) !important;
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.knowledge-add-document-modal__field :deep(.hc-clearable-field:has(.hc-clearable-field__button) input),
+.knowledge-add-document-modal__field :deep(.hc-clearable-field:has(.hc-clearable-field__button) textarea) {
+  padding-inline-end: 38px !important;
+}
+
 .knowledge-add-document-modal__footer {
   width: 100%;
   min-width: 0;
+  min-height: 65px;
   box-sizing: border-box;
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+.knowledge-add-document-modal__footer > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 8px 14px;
+  font-size: 13px;
+  line-height: 18px;
+  border: 1px solid var(--hc-border);
+  border-radius: 10px;
+}
+
+.knowledge-add-document-modal__footer > button:last-child {
+  border-color: transparent;
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 
 .knowledge-page__tab-stack {
@@ -2214,6 +2667,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
 .knowledge-page__active-panel {
   min-width: 0;
+}
+
+.knowledge-page__document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-page__document-list.space-y-2 > :not([hidden]) {
+  margin-bottom: 0;
 }
 
 .knowledge-page__resource-row {
@@ -2233,6 +2696,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
 .knowledge-page__resource-row--error {
   border-color: #ef4444;
+}
+
+.knowledge-page__document-card--structured-failure {
+  height: 73px;
+}
+
+.knowledge-page__source-chip {
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 5px 11px;
+  line-height: 18px;
 }
 
 .knowledge-page__resource-file {
@@ -2286,6 +2760,12 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 .knowledge-page__resource-status {
   flex: 1;
   color: var(--hc-text-secondary);
+}
+
+.knowledge-page__document-card--structured-failure .knowledge-page__resource-status {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-line;
 }
 
 .knowledge-page__resource-badge {
@@ -2352,6 +2832,18 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   color: var(--hc-error);
 }
 
+.knowledge-page__structured-failure-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--hc-error);
+  font-size: 16px;
+  line-height: 18px;
+}
+
 @media (max-width: 900px) {
   .knowledge-page__resource-row {
     flex-wrap: wrap;
@@ -2401,5 +2893,35 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 .modal-enter-from,
 .modal-leave-to {
   opacity: 0;
+}
+/* 添加文档时把真实索引执行策略放在上传入口之后，避免用户误以为上传只写文本索引。 */
+.knowledge-page__index-notice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 13px 11px 17px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.knowledge-page__index-notice::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--hc-accent);
+}
+.knowledge-page__index-notice strong {
+  color: var(--hc-text-primary);
+}
+.knowledge-page__index-notice span {
+  color: var(--hc-text-secondary);
 }
 </style>

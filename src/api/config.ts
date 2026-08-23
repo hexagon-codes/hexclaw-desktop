@@ -9,6 +9,7 @@ import {
 import type {
   BackendLLMConfig,
   CatalogModel,
+  LLMConfigMutationReceipt,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
   ModelReasoningControl,
@@ -28,7 +29,11 @@ function safeJsonParse<T>(text: string, context: string): T {
   }
 }
 
-async function proxyApiRequestText(method: string, path: string, body: string | null): Promise<string> {
+async function proxyApiRequestText(
+  method: string,
+  path: string,
+  body: string | null,
+): Promise<string> {
   try {
     if (!isTauri()) {
       const response = await fetch(`${env.apiBase}${path}`, {
@@ -127,16 +132,26 @@ export async function getLLMConfig(): Promise<BackendLLMConfig> {
 export async function updateLLMConfig(
   config: BackendLLMConfig,
   replacements: ProviderCredentialReplacement[] = [],
-): Promise<void> {
+): Promise<LLMConfigMutationReceipt> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('apply_llm_config_with_credentials', { config, replacements })
+    const result = await invoke<
+      | {
+          configRevision?: number
+          configDigest?: string
+        }
+      | undefined
+    >('apply_llm_config_with_credentials', { config, replacements })
     logger.debug('LLM config updated by native credential coordinator')
-    return
+    return {
+      config_revision: result?.configRevision,
+      config_digest: result?.configDigest,
+    }
   }
   const text = await proxyApiRequestText('PUT', '/api/v1/config/llm', JSON.stringify(config))
-  const result = safeJsonParse(text, 'updateLLMConfig')
+  const result = safeJsonParse<LLMConfigMutationReceipt>(text, 'updateLLMConfig')
   logger.debug('LLM config updated:', result)
+  return result
 }
 
 /**

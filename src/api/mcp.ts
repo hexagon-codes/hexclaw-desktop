@@ -1,7 +1,7 @@
 import { apiGet, apiPost, apiDelete } from './client'
-import type { McpTool } from '@/types'
+import type { McpServer, McpServerListItem, McpTool } from '@/types/mcp'
 
-export type { McpServer, McpTool } from '@/types'
+export type { McpServer, McpServerListItem, McpTool } from '@/types/mcp'
 
 /** 获取 MCP 工具列表 */
 export function getMcpTools() {
@@ -10,7 +10,7 @@ export function getMcpTools() {
 
 /** 获取 MCP 服务器列表 */
 export function getMcpServers() {
-  return apiGet<{ servers: string[]; total: number }>('/api/v1/mcp/servers')
+  return apiGet<{ servers: Array<string | McpServerListItem>; total: number }>('/api/v1/mcp/servers')
 }
 
 /** 调用 MCP 工具（测试） */
@@ -41,7 +41,7 @@ export async function callMcpTool(toolName: string, args: Record<string, unknown
 /** 获取 MCP 服务器状态 */
 export function getMcpServerStatus() {
   return apiGet<{
-    statuses?: Record<string, 'connected' | 'disconnected' | 'error'>
+    statuses?: Record<string, McpServer['status']>
     servers?: Array<{ name: string; connected: boolean; tool_count: number }>
     total?: number
   }>('/api/v1/mcp/status')
@@ -58,7 +58,13 @@ export function addMcpServer(
   name: string,
   command: string,
   args?: string[],
-  opts?: { transport?: string; endpoint?: string; env?: Record<string, string> },
+  opts?: {
+    transport?: string
+    endpoint?: string
+    env?: Record<string, string>
+    secretArgs?: Array<{ index: number; mode: 'preserve' | 'replace' | 'clear'; credentialRef: string }>
+    secretEnv?: Array<{ key: string; mode: 'preserve' | 'replace' | 'clear'; credentialRef: string }>
+  },
 ) {
   const body: Record<string, unknown> = { name, command, args }
   if (opts?.transport) body.transport = opts.transport
@@ -66,6 +72,8 @@ export function addMcpServer(
   // 数据连接器走 MCP 的凭证注入：MySQL/Redis 等 stdio server 靠 env 配连接信息。
   // 仅在有 env 时附带，保持市场一键安装等调用方的请求体不变（向后兼容）。
   if (opts?.env && Object.keys(opts.env).length > 0) body.env = opts.env
+  if (opts?.secretArgs && opts.secretArgs.length > 0) body.secret_args = opts.secretArgs
+  if (opts?.secretEnv && opts.secretEnv.length > 0) body.secret_env = opts.secretEnv
   // connected：后端 best-effort 注册——暖装秒连=true；冷装首次下载组件时转后台重连=false。
   return apiPost<{ message: string; connected?: boolean }>('/api/v1/mcp/servers', body)
 }

@@ -71,7 +71,7 @@ describe('K12 manual creative image API contract', () => {
             status: 'promoted',
             commit_state: 'committed',
             promoted_work_id: 'work-1',
-            promoted_version_id: 'version-1',
+            promoted_generation_id: 'generation-1',
             work: { work_id: 'work-1', display_name: '我的好爸爸' },
           },
           progress: { operation: 'promotion', state: 'promoted' },

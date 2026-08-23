@@ -3004,10 +3004,7 @@ async function coldStart() {
 .rec-panel--conversation.rec-panel--homework-running {
   padding: 0;
 }
-/* BUG-20260724-014: the terminal blank-worksheet guide is itself the approved
-   780px message body. Do not spend another 14px on each side after the shared
-   TaskShell has already placed it on that rail. Keep the vertical breathing
-   room and all guide-internal spacing unchanged. */
+/* 空白卷终态指南直接占用共享消息正文轨道，宿主不得再次消耗左右宽度。 */
 .rec-panel--conversation.rec-panel--blank-guide {
   padding: 10px 0 12px;
 }
@@ -3050,9 +3047,7 @@ async function coldStart() {
 .rec-panel--conversation .rec-panel__x:focus-visible {
   opacity: 1;
 }
-/* K12-INV-060: a blank worksheet has its own approved parent-teaching result
-   surface. These are the same guide/grade-card primitives as the prototype;
-   they deliberately do not inherit completed-homework assessment styling. */
+/* 空白卷使用独立的家长讲题结果面，不继承已作答作业的批改状态样式。 */
 .guide {
   margin-top: 6px;
   overflow: hidden;
@@ -3164,6 +3159,35 @@ async function coldStart() {
   gap: 3px;
   margin: 0;
   padding-left: 18px;
+}
+/* 家长指南沿用权威原型的排版尺度，只覆盖这一种结果面。 */
+.blank-worksheet-guide {
+  line-height: 1.6;
+}
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .blank-worksheet-guide) {
+  --hc-bg-card: rgba(255, 254, 249, 0.9);
+}
+.blank-worksheet-guide .grade-card {
+  margin: 0 0 8px;
+}
+.blank-worksheet-guide .grade-card__status {
+  background: var(--hc-error);
+}
+.blank-worksheet-guide .grade-card__row {
+  color: var(--hc-text-primary);
+}
+.blank-worksheet-guide .grade-card__list {
+  padding-left: 0;
+  list-style: none;
+}
+.blank-worksheet-guide .grade-card__question :deep(.markdown-body),
+.blank-worksheet-guide .grade-card__md :deep(.markdown-body) {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+.blank-worksheet-guide .grade-card__row:first-child .grade-card__md {
+  font-weight: 650;
 }
 .rec-panel__head {
   display: flex;

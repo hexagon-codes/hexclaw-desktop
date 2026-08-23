@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -85,6 +86,7 @@ async function mountView() {
         transition: false,
       },
     },
+    attachTo: document.body,
   })
 }
 
@@ -117,9 +119,17 @@ describe('K12 专属建档表单的宿主返回链路', () => {
 
     await wrapper.find('[data-testid="k12pf-back"]').trigger('click')
     await flushPromises()
+    await nextTick()
+    await nextTick()
 
     expect(wrapper.find('.k12pf').exists()).toBe(false)
     expect(wrapper.find('[data-testid="start-blank"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="start-from-library"]').exists()).toBe(true)
+    const dialog = document.body.querySelector<HTMLElement>('[data-testid="add-agent-dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.getAttribute('role')).toBe('dialog')
+    expect(dialog?.getAttribute('aria-modal')).toBe('true')
+    expect(document.activeElement).toBe(dialog)
+    expect(document.activeElement).not.toBe(document.body)
   })
 })

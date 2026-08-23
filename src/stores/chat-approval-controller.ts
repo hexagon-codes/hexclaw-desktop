@@ -86,7 +86,11 @@ function hasCompleteApprovalTerminalIdentity(terminal: ToolApprovalTerminalWire)
 function hasCompleteReconciliationRequest(
   request: PendingApproval,
 ): request is ReconcileablePendingApproval {
-  return hasCompletePendingApprovalIdentity(request) && isNonEmptyString(request.deadlineAt)
+  return (
+    hasCompletePendingApprovalIdentity(request) &&
+    isNonEmptyString(request.deadlineAt) &&
+    Number.isFinite(Date.parse(request.deadlineAt))
+  )
 }
 
 function approvalResponseIdentity(
@@ -298,6 +302,8 @@ export function createChatApprovalController(params: {
 
   function storePendingApproval(rawRequest: ToolApprovalRequest) {
     const { respondApproval, ...request } = rawRequest as ApprovalRequestWithResponder
+    const pendingRequest = { ...request, receivedAt: Date.now() }
+    if (!hasCompleteReconciliationRequest(pendingRequest)) return
     const current = pendingApprovals.value[request.requestId]
     if (current) {
       if (!sameApprovalRequest(current, request)) return
@@ -316,8 +322,7 @@ export function createChatApprovalController(params: {
     pendingApprovals.value = {
       ...pendingApprovals.value,
       [request.requestId]: {
-        ...request,
-        receivedAt: Date.now(),
+        ...pendingRequest,
       },
     }
   }

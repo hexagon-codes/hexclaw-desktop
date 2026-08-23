@@ -178,9 +178,9 @@ describe('Security: v-html is sanitized', () => {
 // ─── Security: secure-store hardcoded passphrase ──────────
 
 describe('Security: secure-store browser fallback', () => {
-  it('fails closed in browser mode instead of persisting secrets to localStorage', () => {
+  it('fails closed in browser mode instead of persisting Connection secrets', () => {
     const code = readSrc('utils/secure-store.ts')
-    expect(code).toContain('browserSessionVault')
+    expect(code).toContain('Sidecar secret coordinator')
     expect(code).not.toContain('localStorage')
     expect(code).not.toContain('LazyStore')
     expect(code).not.toContain("enc.encode('hexclaw-desktop')")

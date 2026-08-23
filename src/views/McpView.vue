@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import {
   Server,
   Wrench,
@@ -9,10 +10,8 @@ import {
   CircleCheck,
   CircleX,
   Plus,
-  Trash2,
   X,
   Download,
-  RefreshCw,
 } from 'lucide-vue-next'
 import {
   getMcpServers,
@@ -29,13 +28,14 @@ import { useToast } from '@/composables/useToast'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { installFromHub } from '@/api/skills'
 import { resolveUserHome } from '@/utils/platform'
-import type { McpTool } from '@/types'
+import type { McpServer, McpServerListItem, McpTool } from '@/types/mcp'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const props = withDefaults(
   defineProps<{
@@ -49,8 +49,12 @@ const emit = defineEmits<{
   'search-context-change': [context: 'mcp-servers' | 'mcp-tools' | 'mcp-marketplace']
 }>()
 
+// 服务器名称仍作为列表事实源，描述等内容由同一次 API 返回的结构化项旁路保存；
+// 这样既兼容旧版 string[] 响应，也不会让页面为旧响应臆造描述。
 const servers = ref<string[]>([])
-const serverStatuses = ref<Record<string, 'connected' | 'disconnected' | 'error'>>({})
+const serverDetails = ref<Record<string, McpServerListItem>>({})
+type McpServerStatus = McpServer['status']
+const serverStatuses = ref<Record<string, McpServerStatus>>({})
 const tools = ref<McpTool[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
@@ -196,7 +200,6 @@ async function installFromMarketplace(entry: McpMarketplaceEntry) {
     installingServers.value = nextInstalling
   }
 }
-const expandedTool = ref<string | null>(null)
 const toolSearchQuery = ref('')
 
 // ─── Tool testing state ──────────────────────────────
@@ -217,9 +220,27 @@ watch(activeTab, () => {
 })
 
 function setOptimisticStatuses(nextServers: string[]) {
-  const statuses: Record<string, 'connected'> = {}
-  for (const server of nextServers) statuses[server] = 'connected'
+  const statuses: Record<string, McpServerStatus> = {}
+  for (const server of nextServers) {
+    const detail = serverDetails.value[server]
+    statuses[server] = detail?.status ?? (detail?.connected === false ? 'disconnected' : 'connected')
+  }
   serverStatuses.value = statuses
+}
+
+function normalizeServerList(items: Array<string | McpServerListItem>): {
+  names: string[]
+  details: Record<string, McpServerListItem>
+} {
+  const names: string[] = []
+  const details: Record<string, McpServerListItem> = {}
+  for (const item of items) {
+    const name = typeof item === 'string' ? item : item.name
+    if (!name || names.includes(name)) continue
+    names.push(name)
+    if (typeof item !== 'string') details[name] = item
+  }
+  return { names, details }
 }
 
 async function refreshServerStatuses(nextServers: string[], requestGen: number) {
@@ -254,7 +275,9 @@ async function loadAll() {
   try {
     const [srvRes, toolRes] = await Promise.all([getMcpServers(), getMcpTools()])
     if (requestGen !== loadAllRequestGen) return
-    servers.value = srvRes.servers || []
+    const normalized = normalizeServerList(srvRes.servers || [])
+    servers.value = normalized.names
+    serverDetails.value = normalized.details
     tools.value = toolRes.tools || []
     setOptimisticStatuses(servers.value)
     void refreshServerStatuses(servers.value, requestGen)
@@ -269,10 +292,21 @@ async function loadAll() {
   }
 }
 
+const expandedTools = ref<Set<string>>(new Set())
+// 保留旧的单值暴露，兼容既有测试/调用方；实际展开状态由 Set 维护。
+const expandedTool = computed(() => expandedTools.value.values().next().value ?? null)
+
+function isToolExpanded(name: string): boolean {
+  return expandedTools.value.has(name)
+}
+
 function toggleTool(name: string) {
-  expandedTool.value = expandedTool.value === name ? null : name
+  const next = new Set(expandedTools.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  expandedTools.value = next
   // Close test form when collapsing
-  if (expandedTool.value !== name && testingTool.value === name) {
+  if (!next.has(name) && testingTool.value === name) {
     testingTool.value = null
     testResult.value = null
   }
@@ -372,8 +406,56 @@ function getSchemaProperties(
   }))
 }
 
-function getServerStatus(name: string): 'connected' | 'disconnected' | 'error' {
+function getServerStatus(name: string): McpServerStatus {
   return serverStatuses.value[name] || 'disconnected'
+}
+
+function getServerStatusLabel(name: string): string {
+  const status = getServerStatus(name)
+  if (status === 'connected') return t('mcp.serverConnected')
+  if (status === 'pending_authorization') return t('mcp.serverPendingAuthorization')
+  return t('mcp.serverDisconnected')
+}
+
+function getServerDescription(name: string): string | undefined {
+  const description = serverDetails.value[name]?.description
+  return typeof description === 'string' && description.trim() ? description : undefined
+}
+
+function getStaticInputEntries(tool: McpTool): Array<{ key: string; value: string }> {
+  const schema = tool.input_schema as Record<string, unknown> | undefined
+  const properties = schema?.properties as Record<string, Record<string, unknown>> | undefined
+  if (!properties) return []
+
+  const entries: Array<{ key: string; value: string }> = []
+  for (const [key, property] of Object.entries(properties)) {
+    if (!property || typeof property !== 'object') continue
+    // `default` 属于 schema 事实；只有显式 `example` 才是原型中的静态示例输入。
+    // 不把默认值误投影成可填写的测试输入，测试表单仍由“测试”动作独立打开。
+    const example = property.example
+    if (example === undefined) continue
+    entries.push({
+      key,
+      value: typeof example === 'string' ? example : JSON.stringify(example),
+    })
+  }
+  return entries
+}
+
+function getStaticSchema(tool: McpTool): Record<string, unknown> {
+  const schema = tool.input_schema as Record<string, unknown> | undefined
+  const properties = schema?.properties
+  if (!properties || typeof properties !== 'object') return {}
+
+  // 示例值只属于原型中的静态输入，不属于 schema 事实；展示 schema 时剥离它。
+  return Object.fromEntries(
+    Object.entries(properties as Record<string, unknown>).map(([key, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value]
+      const schemaProperty = { ...(value as Record<string, unknown>) }
+      delete schemaProperty.example
+      return [key, schemaProperty]
+    }),
+  )
 }
 
 // ─── Server management ──────────────────────────────
@@ -493,7 +575,7 @@ function switchToMarketplace() {
   loadMarketplace()
 }
 
-defineExpose({ openAddServer, switchToMarketplace })
+defineExpose({ openAddServer, switchToMarketplace, expandedTool })
 </script>
 
 <template>
@@ -517,7 +599,7 @@ defineExpose({ openAddServer, switchToMarketplace })
       />
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="flex-1 overflow-y-auto hc-capability-content-pad">
       <LoadingState v-if="loading" />
 
       <!-- 服务器列表 -->
@@ -529,67 +611,78 @@ defineExpose({ openAddServer, switchToMarketplace })
           :description="t('mcp.emptyDesc')"
         />
 
-        <div v-else class="hc-capability-installed-track space-y-3">
+        <div v-else class="hc-capability-installed-track hc-capability-installed-track--mcp">
           <div
             v-for="name in filteredServers"
             :key="name"
-            class="flex items-center gap-3 rounded-xl border p-4"
-            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+            class="hc-capability-installed-row hc-capability-installed-row--mcp"
           >
-            <!-- Status dot -->
             <div
-              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-              :style="{
-                background:
-                  getServerStatus(name) === 'connected'
-                    ? '#10b981'
-                    : getServerStatus(name) === 'error'
-                      ? '#ef4444'
-                      : '#6b7280',
-              }"
-              :title="
-                getServerStatus(name) === 'connected'
-                  ? t('mcp.serverConnected')
-                  : t('mcp.serverDisconnected')
-              "
-            />
-            <Server :size="16" :style="{ color: 'var(--hc-accent)' }" />
-            <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{
-              name
-            }}</span>
-            <button
-              class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
-              data-testid="mcp-server-restart"
-              :disabled="restartingServers.has(name)"
-              :style="{ color: 'var(--hc-text-muted)' }"
-              :title="t('mcpManage.restartServer', '重启')"
-              @click="handleRestartServer(name)"
+              class="hc-capability-installed-main hc-capability-installed-main--row hc-capability-installed-main--mcp-server"
             >
-              <Loader2 v-if="restartingServers.has(name)" :size="14" class="animate-spin" />
-              <RefreshCw v-else :size="14" />
-            </button>
-            <button
-              class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
-              :disabled="removingServers.has(name)"
-              :style="{ color: 'var(--hc-text-muted)' }"
-              :title="t('mcpManage.removeServer')"
-              @click="pendingRemoveServer = name"
-            >
-              <Trash2 :size="14" />
-            </button>
-            <span
-              class="text-xs px-2 py-0.5 rounded-full"
-              :style="{
-                background: getServerStatus(name) === 'connected' ? '#10b98120' : '#6b728020',
-                color: getServerStatus(name) === 'connected' ? '#10b981' : '#6b7280',
-              }"
-            >
-              {{
-                getServerStatus(name) === 'connected'
-                  ? t('mcp.serverConnected')
-                  : t('mcp.serverDisconnected')
-              }}
-            </span>
+              <div class="hc-capability-installed-icon hc-capability-installed-icon--mcp-server" aria-hidden="true">
+                <Server :size="18" :style="{ color: 'var(--hc-accent)' }" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="hc-capability-installed-server-name">
+                  {{ name }}
+                </div>
+                <div
+                  v-if="getServerDescription(name)"
+                  data-mcp-description
+                  class="hc-capability-installed-server-description"
+                >
+                  {{ getServerDescription(name) }}
+                </div>
+              </div>
+            </div>
+            <div class="hc-capability-installed-actions hc-capability-installed-actions--mcp-server">
+              <span
+                class="hc-capability-installed-mcp-status"
+                :class="{
+                  'hc-capability-installed-mcp-status--connected': getServerStatus(name) === 'connected',
+                  'hc-capability-installed-mcp-status--pending': getServerStatus(name) === 'pending_authorization',
+                  'hc-capability-installed-mcp-status--error': getServerStatus(name) === 'error',
+                  'hc-capability-installed-mcp-status--disconnected':
+                    getServerStatus(name) === 'disconnected',
+                }"
+                :data-testid="`mcp-server-status-${name}`"
+                :title="getServerStatusLabel(name)"
+              >
+                {{ getServerStatusLabel(name) }}
+              </span>
+              <button
+                v-if="getServerStatus(name) === 'pending_authorization'"
+                class="btn flex-shrink-0"
+                :data-testid="`mcp-server-authorize-${name}`"
+                :style="{ color: 'var(--hc-accent)' }"
+                :title="t('mcpManage.authorizeServer', '去设置授权')"
+                @click="router.push('/settings')"
+              >
+                <span>{{ t('mcpManage.authorizeServer', '去设置授权') }}</span>
+              </button>
+              <button
+                v-if="getServerStatus(name) === 'connected'"
+                class="btn flex-shrink-0"
+                data-testid="mcp-server-restart"
+                :disabled="restartingServers.has(name)"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                :title="t('mcpManage.restartServer', '重启')"
+                @click="handleRestartServer(name)"
+              >
+                <Loader2 v-if="restartingServers.has(name)" :size="14" class="animate-spin" />
+                <span>{{ t('mcpManage.restartServer', '重启') }}</span>
+              </button>
+              <button
+                class="btn btn-ghost flex-shrink-0"
+                :disabled="removingServers.has(name)"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                :title="t('mcpManage.removeServer', '删除')"
+                @click="pendingRemoveServer = name"
+              >
+                <span>{{ t('mcpManage.removeServer', '删除') }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </template>
@@ -603,65 +696,57 @@ defineExpose({ openAddServer, switchToMarketplace })
           :description="t('mcp.noTools')"
         />
 
-        <div v-else class="hc-capability-installed-track space-y-3">
+        <div v-else class="hc-capability-installed-track hc-capability-installed-track--mcp">
           <div
             v-for="tool in filteredTools"
             :key="tool.name"
-            class="rounded-xl border overflow-hidden"
-            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+            class="hc-capability-installed-row hc-capability-installed-row--tool overflow-hidden"
           >
             <div
-              class="flex items-center gap-3 p-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+              class="hc-capability-installed-main hc-capability-installed-main--mcp-tool"
               @click="toggleTool(tool.name)"
             >
-              <Wrench :size="14" :style="{ color: 'var(--hc-accent)' }" />
-              <div class="flex-1 min-w-0">
-                <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{
-                  tool.name
-                }}</span>
-                <p
-                  v-if="tool.description"
-                  class="text-xs mt-0.5 truncate"
-                  :style="{ color: 'var(--hc-text-muted)' }"
+              <div class="hc-capability-installed-tool-name">{{ tool.name }}</div>
+              <p v-if="tool.description" class="hc-capability-installed-tool-description">
+                {{ tool.description }}
+              </p>
+
+              <!-- 静态 schema/input 属于工具主内容；测试表单仍由下方独立展开面板承载。 -->
+              <template v-if="tool.input_schema">
+                <pre
+                  class="hc-capability-installed-schema"
+                  @click.stop
+                  >{{ JSON.stringify(getStaticSchema(tool)) }}</pre
                 >
-                  {{ tool.description }}
-                </p>
-              </div>
+                <div
+                  v-for="entry in getStaticInputEntries(tool)"
+                  :key="entry.key"
+                  data-mcp-static-input
+                  class="hc-capability-installed-static-input-wrapper"
+                  @click.stop
+                >
+                  <input
+                    :value="entry.value"
+                    :aria-label="`${tool.name} ${entry.key}`"
+                    class="hc-capability-installed-static-input"
+                  />
+                </div>
+              </template>
+            </div>
+            <div class="hc-capability-installed-actions">
               <!-- Test button -->
               <button
-                class="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors hover:bg-white/10"
-                :style="{
-                  color:
-                    testingTool === tool.name ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
-                  background: testingTool === tool.name ? 'var(--hc-accent-subtle)' : 'transparent',
-                }"
+                class="btn flex-shrink-0"
                 @click.stop="openTestForm(tool.name)"
               >
-                <Play :size="11" />
                 {{ t('mcp.testTool') }}
               </button>
-              <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-                {{ expandedTool === tool.name ? '▲' : '▼' }}
-              </span>
-            </div>
-
-            <!-- Expanded schema view -->
-            <div
-              v-if="expandedTool === tool.name && tool.input_schema"
-              class="px-4 pb-4 border-t"
-              :style="{ borderColor: 'var(--hc-border)' }"
-            >
-              <pre
-                class="text-xs mt-3 p-3 rounded-lg overflow-x-auto"
-                :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }"
-                >{{ JSON.stringify(tool.input_schema, null, 2) }}</pre
-              >
             </div>
 
             <!-- Test form -->
             <div
               v-if="testingTool === tool.name"
-              class="px-4 pb-4 border-t"
+              class="hc-capability-installed-expanded px-4 pb-4 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
               <div class="mt-3 space-y-2">
@@ -989,7 +1074,7 @@ defineExpose({ openAddServer, switchToMarketplace })
     </Teleport>
     <ConfirmDialog
       :open="!!pendingRemoveServer"
-      :title="t('mcpManage.removeConfirmTitle', '移除 MCP 服务器？')"
+      :title="t('mcpManage.removeConfirmTitle', '删除 MCP 服务器？')"
       :message="t('mcpManage.removeConfirm')"
       :confirm-text="t('common.delete')"
       :cancel-text="t('common.cancel')"

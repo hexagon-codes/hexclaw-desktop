@@ -23,14 +23,14 @@
 
 /** 表单字段（纯数据，标签走 i18n key + 中文兜底，由 modal 用 t() 解析）。 */
 export interface McpConnectorField {
-  /** 表单/配置键（与 ConnectorInstance.config 对齐；password 命中 secure-store 机密约定） */
+  /** 表单/配置键（与 ConnectorInstance.config 对齐；secret 字段由 Sidecar 接管） */
   key: string
   /** i18n 键（connections.connectors.form.*） */
   labelKey: string
   /** 中文兜底标签（i18n 缺失时直接用） */
   labelFallback: string
   placeholder: string
-  /** 机密字段：绝不明文落 localStorage，由 useConnectorInstances 改走 secure-store */
+  /** 机密字段：绝不明文落 localStorage，由 Sidecar secret mutation 接管 */
   secret?: boolean
   /** 选填字段（空值合法，构建连接信息时省略） */
   optional?: boolean
@@ -47,6 +47,14 @@ export interface McpConnectorSpec {
   fields: McpConnectorField[]
   /** 由填好的 config 产出 addMcpServer 所需的 args/env（command 取自 spec.command） */
   build: (config: Record<string, string>) => { args: string[]; env: Record<string, string> }
+}
+
+/** MCP 连接器在运行时把机密放在 args/env，Sidecar 只持久化这些位置的引用元数据。 */
+export interface McpSecretLayout {
+  /** 参数下标 → 表单字段名。 */
+  args?: Record<number, string>
+  /** 环境变量名 → 表单字段名。 */
+  env?: Record<string, string>
 }
 
 /**
@@ -245,7 +253,7 @@ export const MCP_CONNECTOR_SPECS: Record<string, McpConnectorSpec> = {
   },
 
   // 飞书文档：官方 @larksuiteoapi/lark-mcp，`mcp -a <app_id> -s <app_secret>`（args；app 级凭证）。
-  // app_secret 为机密走 secure-store（不 trim）；注：凭证作 args 不入 vault env 加密（同 pg/redis URL）。
+  // app_secret 为机密走 Sidecar secret mutation（不 trim）；凭证作 args 由 metadata 标记并加密。
   feishuDoc: {
     type: 'feishuDoc',
     command: 'npx',
@@ -293,9 +301,29 @@ export function isMcpConnectorType(type: string): boolean {
 export function buildMcpServerConfig(
   type: string,
   config: Record<string, string>,
-): { command: string; args: string[]; env: Record<string, string> } | null {
+): { command: string; args: string[]; env: Record<string, string>; secretLayout?: McpSecretLayout } | null {
   const spec = MCP_CONNECTOR_SPECS[type]
   if (!spec) return null
   const { args, env } = spec.build(config ?? {})
-  return { command: spec.command, args, env }
+  const secretLayout: McpSecretLayout | undefined = {
+    env: Object.fromEntries(
+      Object.entries({
+        ...(type === 'mysql' ? { MYSQL_PASS: 'password' } : {}),
+        ...(type === 'mongodb' ? { MDB_MCP_CONNECTION_STRING: 'password' } : {}),
+        ...(type === 'yuque' ? { YUQUE_TOKEN: 'token' } : {}),
+      }),
+    ),
+    args:
+      type === 'postgres'
+        ? { 2: 'password' }
+        : type === 'redis'
+          ? { 2: 'password' }
+          : type === 'feishuDoc'
+            ? { 6: 'app_secret' }
+            : {},
+  }
+  if (Object.keys(secretLayout.env ?? {}).length === 0) delete secretLayout.env
+  if (Object.keys(secretLayout.args ?? {}).length === 0) delete secretLayout.args
+  const hasSecretLayout = Object.keys(secretLayout).length > 0
+  return { command: spec.command, args, env, secretLayout: hasSecretLayout ? secretLayout : undefined }
 }

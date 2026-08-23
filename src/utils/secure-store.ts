@@ -34,16 +34,14 @@ export function credentialRefFor(key: CredentialKey): string {
     }
     return `llm_provider/${key.ownerId}/api_key`
   }
-  return `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`
+  return `sidecar-connection:v1:${key.ownerId}:${key.secretKind}`
 }
-
-// Browser development is process-memory only and deliberately has no read API.
-const browserSessionVault = new Map<string, string>()
 
 function assertStandaloneMutationAllowed(key: CredentialKey): void {
   if (key.ownerKind === 'provider') {
     throw new Error('provider credentials require the native config coordinator')
   }
+  throw new Error('Connection credentials require the Sidecar secret coordinator')
 }
 
 export async function putCredential(
@@ -56,8 +54,7 @@ export async function putCredential(
   if (isTauri()) {
     return await invoke<CredentialMutationReceipt>('put_credential', { key, secret })
   }
-  browserSessionVault.set(credentialRef, secret)
-  return { credentialRef, updated: true }
+  return { credentialRef, updated: false }
 }
 
 export async function deleteCredential(key: CredentialKey): Promise<CredentialMutationReceipt> {
@@ -66,13 +63,12 @@ export async function deleteCredential(key: CredentialKey): Promise<CredentialMu
   if (isTauri()) {
     return await invoke<CredentialMutationReceipt>('delete_credential', { key })
   }
-  const updated = browserSessionVault.delete(credentialRef)
-  return { credentialRef, updated }
+  return { credentialRef, updated: false }
 }
 
 export async function credentialPresent(key: CredentialKey): Promise<boolean> {
   assertStandaloneMutationAllowed(key)
   const credentialRef = credentialRefFor(key)
   if (isTauri()) return await invoke<boolean>('credential_present', { key })
-  return browserSessionVault.has(credentialRef)
+  return false
 }

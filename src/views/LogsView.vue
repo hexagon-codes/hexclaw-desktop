@@ -9,6 +9,8 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { saveBlobInApp } from '@/utils/download'
+import { isTauri } from '@/utils/platform'
 import type { LogEntry } from '@/types'
 
 const { t } = useI18n()
@@ -212,10 +214,15 @@ function exportLogs() {
   const entries = displayed.value
   if (entries.length === 0) return
   const blob = new Blob([entries.map(logLine).join('\n')], { type: 'text/plain;charset=utf-8' })
+  const filename = `hexclaw-logs-${new Date().toISOString().slice(0, 10)}.log`
+  if (isTauri()) {
+    void saveBlobInApp(blob, filename)
+    return
+  }
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `hexclaw-logs-${new Date().toISOString().slice(0, 10)}.log`
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
 }

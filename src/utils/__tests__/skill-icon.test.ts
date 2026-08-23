@@ -10,6 +10,11 @@ describe('resolveSkillIcon', () => {
     expect(d.emoji).toBe('📊')
   })
 
+  it('原型使用的短中文 monogram icon 作为文本图标透传', () => {
+    const d = resolveSkillIcon({ icon: '译', name: 'translate-polish' })
+    expect(d.emoji).toBe('译')
+  })
+
   it('白名单 lucide 名 icon 直接用', () => {
     const d = resolveSkillIcon({ icon: 'Code', name: 'x' })
     expect(d.emoji).toBeNull()

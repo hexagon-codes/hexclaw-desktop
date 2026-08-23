@@ -79,14 +79,12 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('listSessionMessages sends GET /api/v1/sessions/{id}/messages', () => {
-    expect(chatSource).toContain(
-      'apiGet<{ messages: ChatMessage[]; total: number }>',
-    )
+    expect(chatSource).toContain('apiGet<{ messages: ChatMessage[]; total: number }>')
   })
 
   it('searchMessages sends GET /api/v1/messages/search', () => {
     expect(chatSource).toContain(
-      "apiGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>",
+      'apiGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>',
     )
   })
 })
@@ -129,9 +127,7 @@ describe('ChatSession projection alignment with storage.Session', () => {
 describe('Fork Session API alignment', () => {
   it('ALIGNED: forkSession response expects session object matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain(
-      'apiPost<{ session: ChatSession; message?: string }>',
-    )
+    expect(chatSource).toContain('apiPost<{ session: ChatSession; message?: string }>')
   })
 })
 
@@ -492,7 +488,7 @@ describe('Config API alignment: settings.ts vs handler_extended.go', () => {
 
 describe('LLM Config API alignment: config.ts vs handler_config.go', () => {
   it('BackendLLMConfig aligns with LLMConfigResponse struct', () => {
-    // Backend LLMConfigResponse: Default, Providers, Routing, Cache, ReasoningProvider, ReasoningModel
+    // Backend LLMConfigResponse: Default, Providers, Routing, Cache, ReasoningProvider, ReasoningModel, Revision, Digest
     // Frontend BackendLLMConfig mirrors all fields; reasoning selection is optional for legacy servers.
     // ALIGNED
     const settingsTypes = readFrontendType('settings.ts')
@@ -502,6 +498,8 @@ describe('LLM Config API alignment: config.ts vs handler_config.go', () => {
     expect(settingsTypes).toContain('cache:')
     expect(settingsTypes).toContain('reasoning_provider?: string')
     expect(settingsTypes).toContain('reasoning_model?: string')
+    expect(settingsTypes).toContain('config_revision?: number')
+    expect(settingsTypes).toContain('config_digest?: string')
   })
 
   it('LLMConnectionTestRequest aligns with LLMConnectionTestRequest struct', () => {

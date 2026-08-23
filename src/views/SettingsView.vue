@@ -5,14 +5,12 @@ import {
   Key,
   Palette,
   Eye,
-  EyeOff,
   Plus,
   ChevronDown,
   ChevronUp,
   Loader2,
   CheckCircle,
   XCircle,
-  Power,
   RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
@@ -45,7 +43,7 @@ import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useAboutWindow } from '@/composables/useAboutWindow'
 import { useToast } from '@/composables'
 import { setLocale } from '@/i18n'
-import { PROVIDER_PRESETS, PROVIDER_LOGOS, inferCapabilitiesFromId } from '@/config/providers'
+import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
 import { MODEL_CAPABILITY_DISPLAY } from '@/config/model-capability-display'
 import { OLLAMA_BASE } from '@/config/env'
 import { isCatalogModelFree } from '@/types'
@@ -1142,6 +1140,19 @@ const testProviderResult = ref<
 /** 眼睛显示后的明文 API Key（仅独立展示层、内存短驻，关闭眼睛即清除，不写入表单保存值） */
 const revealedApiKeys = ref<Record<string, string>>({})
 
+function restoreProviderApiKeyFocus(provider: ProviderConfig) {
+  const input = document.getElementById(`provider-${provider.id}-api-key`)
+  if (input instanceof HTMLInputElement) {
+    input.focus()
+    if (
+      /AppleWebKit/i.test(navigator.userAgent) &&
+      !/(Chrome|Chromium|CriOS)/i.test(navigator.userAgent)
+    ) {
+      input.select()
+    }
+  }
+}
+
 function clearProviderProbeState(provider: ProviderConfig) {
   provider.probeReceipt = undefined
   delete testProviderResult.value[provider.id]
@@ -1217,6 +1228,8 @@ async function toggleApiKeyVisibility(provider: ProviderConfig) {
     if (!isMaskedApiKey(current)) {
       // 新输入明文（含空）：直接切换展示，不调用回读接口
       shownApiKeys.value[provider.id] = true
+      await nextTick()
+      restoreProviderApiKeyFocus(provider)
       return
     }
     try {
@@ -1227,6 +1240,8 @@ async function toggleApiKeyVisibility(provider: ProviderConfig) {
       }
       revealedApiKeys.value[provider.id] = plain
       shownApiKeys.value[provider.id] = true
+      await nextTick()
+      restoreProviderApiKeyFocus(provider)
     } catch {
       toast.error(t('settings.llm.apiKeyRevealFailed', '暂时无法读取已保存的 API Key'))
     }
@@ -1234,6 +1249,8 @@ async function toggleApiKeyVisibility(provider: ProviderConfig) {
   }
   shownApiKeys.value[provider.id] = false
   delete revealedApiKeys.value[provider.id]
+  await nextTick()
+  restoreProviderApiKeyFocus(provider)
 }
 
 /** 输入框展示值：眼睛显示中且有展示明文 → 明文；掩码态 → 空（等长圆点走 placeholder，GitHub 同款，
@@ -1552,20 +1569,9 @@ async function saveConfig() {
   }
 }
 
-/**
- * 渲染时计算模型可用 capability badge。
- * 兼容历史：升级前保存的模型 capabilities=['text']，渲染时按 ID 重新推断
- * （glm-4v / qwen-vl-max / cogview-4 等会自动补回 vision/image_generation）。
- * 若已有非 text 标记则尊重保存值，避免覆盖用户自定义。
- *
- * 参照 HuggingFace pipeline-tag 风格：所有能力都显式标出（包含 text），
- * 避免"什么都没有 = 不知道支持什么"的误解。
- */
+/** 渲染层只消费已合并的模型能力声明，缺失的历史记录按文本能力展示。 */
 function displayCapabilities(model: ModelOption): ModelCapability[] {
-  const stored = normalizeModelCapabilities(model)
-  if (stored.length === 0 || stored.includes('embedding')) return stored
-  const isTextOnly = stored.length === 1 && stored[0] === 'text'
-  return (isTextOnly ? inferCapabilitiesFromId(model.id) : stored) as ModelCapability[]
+  return model.capabilities ?? ['text']
 }
 </script>
 
@@ -1817,17 +1823,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <!-- Provider 头部 -->
                 <div class="hc-provider__card-head" @click="toggleEditingProvider(provider.id)">
                   <div class="hc-provider__card-info">
-                    <img
-                      :src="PROVIDER_LOGOS[provider.type] || PROVIDER_LOGOS.custom"
-                      :alt="provider.type"
-                      class="hc-provider__logo"
-                    />
-                    <span class="hc-provider__card-name">{{ provider.name }}</span>
-                    <span class="hc-provider__tag">{{ provider.type }}</span>
-                    <span class="hc-provider__model-count"
-                      >{{ provider.models.length }}
-                      {{ t('settings.llm.models').toLowerCase() }}</span
-                    >
+                    <div class="hc-provider__logo">
+                      <img
+                        :src="PROVIDER_LOGOS[provider.type] || PROVIDER_LOGOS.custom"
+                        :alt="provider.type"
+                      />
+                    </div>
+                    <div class="hc-provider__card-identity">
+                      <div class="hc-provider__card-name">{{ provider.name }}</div>
+                      <div class="hc-provider__card-meta">
+                        {{ providerBaseUrl(provider) }} ·
+                        <span class="hc-provider__model-count">{{ provider.models.length }}</span>
+                        {{ t('settings.llm.enabledUnit', '个模型') }}
+                      </div>
+                    </div>
                   </div>
                   <div class="hc-provider__card-actions">
                     <span
@@ -1855,11 +1864,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         :size="12"
                         class="animate-spin"
                       />
-                      <CheckCircle
-                        v-else-if="providerConnectionResult(provider)?.ok"
-                        :size="12"
-                      />
-                      <XCircle v-else-if="providerConnectionResult(provider)" :size="12" />
                       <span v-else class="hc-provider__connection-dot" aria-hidden="true" />
                       {{
                         testingProviderIds.has(provider.id)
@@ -1872,6 +1876,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       }}
                     </span>
                     <button
+                      type="button"
                       class="hc-btn hc-btn-sm hc-provider__test-btn"
                       :title="t('settings.llm.testConnection', '测试连接')"
                       :disabled="
@@ -1883,13 +1888,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       {{ t('settings.llm.testAction', '测试') }}
                     </button>
                     <button
+                      type="button"
                       class="hc-provider__delete-btn"
                       @click.stop="openDeleteProviderConfirm(provider.id)"
                     >
                       {{ t('settings.llm.deleteAction', '删除') }}
                     </button>
                     <button
-                      class="hc-provider__icon-btn"
+                      type="button"
+                      class="hc-provider__toggle"
+                      :class="{ 'hc-provider__toggle--on': provider.enabled }"
                       :title="
                         provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')
                       "
@@ -1898,16 +1906,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       "
                       @click.stop="toggleProvider(provider)"
                     >
-                      <Power
-                        :size="14"
-                        :class="
-                          provider.enabled ? 'hc-provider__power--on' : 'hc-provider__power--off'
-                        "
-                      />
+                      <span class="hc-provider__toggle-knob" aria-hidden="true" />
                     </button>
                     <component
                       :is="editingProviderId === provider.id ? ChevronUp : ChevronDown"
-                      :size="14"
+                      :size="16"
                       class="hc-provider__chevron"
                     />
                   </div>
@@ -1940,42 +1943,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </HcClearableField>
                     </div>
 
-                    <div class="hc-settings__field hc-provider__config-key">
-                      <label class="hc-settings__label" :for="`provider-${provider.id}-api-key`"
-                        >{{ t('settings.llm.apiKey') }}
-                        <span class="hc-settings__required">*</span></label
-                      >
-                      <div class="hc-settings__input-group">
-                        <HcClearableField :trailing="38">
-                          <input
-                            :id="`provider-${provider.id}-api-key`"
-                            :value="apiKeyDisplayValue(provider)"
-                            data-provider-field="api-key"
-                            :type="shownApiKeys[provider.id] ? 'text' : 'password'"
-                            class="hc-input"
-                            :placeholder="apiKeyInputPlaceholder(provider)"
-                            @input="onProviderApiKeyTyped(provider, $event)"
-                          />
-                        </HcClearableField>
-                        <button
-                          type="button"
-                          class="hc-settings__eye-btn"
-                          :aria-label="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
-                          :title="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
-                          @click="toggleApiKeyVisibility(provider)"
-                        >
-                          <Eye v-if="!shownApiKeys[provider.id]" :size="15" />
-                          <EyeOff v-else :size="15" />
-                        </button>
-                      </div>
-                    </div>
-
                     <div class="hc-settings__field hc-provider__config-url">
                       <label class="hc-settings__label" :for="`provider-${provider.id}-base-url`"
                         >{{ t('settings.llm.baseUrl') }}
                         <span class="hc-settings__required">*</span></label
                       >
-                      <HcClearableField>
+                      <HcClearableField :trailing="10">
                         <input
                           :id="`provider-${provider.id}-base-url`"
                           v-model="provider.baseUrl"
@@ -1993,7 +1966,43 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         {{ t('settings.llm.unsafeEndpoint') }}
                       </p>
                     </div>
+
+                    <div class="hc-settings__field hc-provider__config-key">
+                      <label class="hc-settings__label" :for="`provider-${provider.id}-api-key`"
+                        >{{ t('settings.llm.apiKey') }}
+                        <span class="hc-settings__required">*</span></label
+                      >
+                      <div class="hc-settings__input-group">
+                        <HcClearableField :trailing="40">
+                          <input
+                            :id="`provider-${provider.id}-api-key`"
+                            :value="apiKeyDisplayValue(provider)"
+                            data-provider-field="api-key"
+                            :type="shownApiKeys[provider.id] ? 'text' : 'password'"
+                            class="hc-input"
+                            :placeholder="apiKeyInputPlaceholder(provider)"
+                            @input="onProviderApiKeyTyped(provider, $event)"
+                          />
+                        </HcClearableField>
+                        <button
+                          type="button"
+                          class="hc-settings__eye-btn"
+                          :aria-label="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                          :title="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                          @click="toggleApiKeyVisibility(provider)"
+                        >
+                          <Eye :size="15" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
+
+                  <p
+                    v-if="providerConnectionResult(provider) && !providerConnectionResult(provider)!.ok"
+                    class="hc-provider__connection-detail"
+                  >
+                    {{ providerConnectionResult(provider)!.msg }}
+                  </p>
 
                   <div
                     v-if="providerNeedsDestinationConfirmation(provider)"
@@ -2138,6 +2147,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           >
                             <span class="hc-model-chip__name" :title="model.name || model.id">
                               {{ model.name || model.id }}
+                            </span>
+                            <span
+                              v-if="isModelFree(provider.id, model.id)"
+                              class="hc-model-chip__free-label"
+                            >
+                              {{ t('settings.llm.modelFreeLabel', '免费') }}
                             </span>
                             <span
                               v-if="isStaleModel(provider, model)"
@@ -2763,18 +2778,18 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   width: 24px;
   height: 24px;
   padding: 0;
-  border-radius: 4px;
+  border-radius: 999px;
   border: none;
   background: transparent;
   color: var(--hc-text-muted);
   cursor: pointer;
-  display: flex;
+  display: grid;
   align-items: center;
-  justify-content: center;
   transition: color 0.15s;
 }
 
 .hc-settings__eye-btn:hover {
+  background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
   color: var(--hc-text-secondary);
 }
 
@@ -3266,9 +3281,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  margin-top: 8px;
 }
 
 .hc-provider__service-notice {
@@ -3296,16 +3312,21 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 14px 16px;
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-card);
-  border: 1px solid var(--hc-border);
-  overflow: hidden;
+  border: 0.5px solid var(--hc-border);
+  overflow: visible;
   container-type: inline-size;
   transition: border-color 0.15s;
 }
 
 .hc-provider__card:hover {
-  border-color: var(--hc-accent-subtle);
+  border-color: var(--hc-border-hl);
 }
 
 .hc-provider__card--disabled {
@@ -3315,10 +3336,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-provider__card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px 14px;
+  min-height: 39px;
+  margin: 0;
   cursor: pointer;
   user-select: none;
 }
@@ -3326,15 +3347,44 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-provider__card-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.hc-provider__card-info::after {
+  content: '';
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 .hc-provider__logo {
-  width: 22px;
-  height: 22px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  overflow: hidden;
+  flex: 0 0 34px;
+  color: #3f5f7b;
+}
+
+.hc-provider__card[data-provider-type='custom'] .hc-provider__logo {
+  background: var(--hc-bg-input);
+}
+
+.hc-provider__logo img {
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
-  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.hc-provider__card-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
 .hc-provider__led {
@@ -3355,51 +3405,49 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-name {
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 21px;
   font-weight: 600;
   color: var(--hc-text-primary);
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.hc-provider__tag {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: 3px;
-  color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-  flex: 0 0 auto;
+.hc-provider__card-meta {
+  overflow: hidden;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  min-height: 0;
   white-space: nowrap;
-}
-
-.hc-provider__model-count {
-  font-size: 11px;
-  color: var(--hc-text-muted);
-  flex: 0 0 auto;
-  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .hc-provider__card-actions {
   display: flex;
+  margin-left: auto;
+  margin-right: 0;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   min-width: 0;
   flex: 0 0 auto;
-  justify-content: flex-end;
 }
 
 .hc-provider__connection-status {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 999px;
+  gap: 5px;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border-radius: 8px;
   color: var(--hc-text-muted);
   background: var(--hc-bg-hover);
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
   white-space: nowrap;
   transition:
     color 0.18s,
@@ -3428,7 +3476,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.55;
+  opacity: 1;
 }
 
 @keyframes hc-provider-status-pop {
@@ -3444,55 +3492,125 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-provider__test-btn {
   flex: 0 0 auto;
+  justify-content: normal;
+  gap: 6px;
+  padding: 8px 14px;
+  border-color: rgba(95, 179, 234, 0.5);
+  background: transparent;
+  color: #3f8fd4;
+  font-size: 13px;
   white-space: nowrap;
 }
 
 .hc-provider__connection-detail {
   margin: 0;
-  padding: 7px 14px;
-  border-top: 1px solid color-mix(in srgb, var(--hc-error) 18%, var(--hc-divider));
+  padding: 8px 10px;
+  border-radius: 8px;
   color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 5%, transparent);
-  font-size: 11px;
-  line-height: 1.5;
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  font-size: 11.5px;
+  line-height: 1.45;
   word-break: break-word;
 }
 
-.hc-provider__icon-btn {
-  padding: 4px;
+.hc-provider__connection-status {
+  min-width: 0;
+  background: rgba(63, 143, 212, 0.1);
+}
+
+.hc-provider__connection-status--testing {
+  background: rgba(95, 179, 234, 0.14);
+}
+
+.hc-provider__connection-status--ok {
+  background: color-mix(in srgb, var(--hc-success) 13%, transparent);
+}
+
+.hc-provider__connection-status--error {
+  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
+}
+
+.hc-provider__config-grid--builtin {
+  margin: 0;
+  padding: 3px 0 5px;
+}
+
+.hc-provider__config-grid--builtin .hc-input {
+  display: inline-block;
+}
+
+.hc-provider__config-grid .hc-settings__field {
+  gap: 5px;
+}
+
+.hc-provider__config-grid .hc-settings__label {
+  color: var(--hc-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.hc-provider__config-grid--builtin .hc-provider__config-url .hc-input {
+  padding-right: 40px;
+}
+
+.hc-provider__config-grid--builtin .hc-provider__config-key .hc-input {
+  padding-right: 70px;
+}
+
+.hc-provider__toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 34px;
+  padding: 2px;
+  /* 与原型原生 checkbox 的 WebKit 有效外边距保持同一控制器栅格。 */
+  margin: 3px 3px 3px 4px;
   border: none;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--hc-text-muted);
   cursor: pointer;
-  border-radius: var(--hc-radius-sm);
   display: flex;
-  flex: 0 0 auto;
-  transition: background 0.15s;
+  align-items: center;
+  transition: background 0.15s ease;
 }
 
-.hc-provider__icon-btn:hover {
-  background: var(--hc-bg-hover);
+/* WebKit 的原生 checkbox 使用左右 2px 外边距；自绘开关保留同一操作组栅格。 */
+@supports (font: -apple-system-body) {
+  .hc-provider__toggle {
+    margin: 3px 2px;
+  }
 }
 
-.hc-provider__power--on {
-  color: var(--hc-success);
+.hc-provider__toggle--on {
+  background: var(--hc-accent);
 }
 
-.hc-provider__power--off {
-  color: var(--hc-text-muted);
+.hc-provider__toggle-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s ease;
+}
+
+.hc-provider__toggle--on .hc-provider__toggle-knob {
+  transform: translateX(14px);
 }
 
 .hc-provider__chevron {
+  width: 15px;
+  height: 15px;
   color: var(--hc-text-muted);
   flex: 0 0 auto;
 }
 
 .hc-provider__edit {
-  padding: 0 14px 14px;
-  border-top: 1px solid var(--hc-divider);
+  padding: 0;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-top: 12px;
+  gap: 8px;
   container-type: inline-size;
 }
 
@@ -3687,16 +3805,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__delete-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: block;
   flex: 0 0 auto;
-  padding: 5px 10px;
+  height: 30px;
+  padding: 0 7px;
   border: none;
-  border-radius: var(--hc-radius-sm);
+  border-radius: 8px;
   background: transparent;
   color: var(--hc-error);
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 17.25px;
   cursor: pointer;
   transition: background 0.15s;
   white-space: nowrap;
@@ -3963,7 +4081,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-model-chips {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 172px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(172px, 100%), 1fr));
   gap: 6px;
 }
 

@@ -266,6 +266,22 @@ afterEach(() => {
 })
 
 describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
+  it('服务端 generation pending 在练习集面板保留正在生成占位，不伪造可加入按钮', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = mount(K12PracticeSetsPanel, {
+      props: {
+        agentId: 'k12-xiaoming',
+        practiceGenerationByMistake: {
+          'mistake-1': { state: 'pending', source_mistake_id: 'mistake-1' },
+        },
+      },
+      global: { plugins: [i18n()] },
+    })
+    await flushPromises()
+    expect(w.find('[data-testid="practice-generation-placeholder"]').text()).toBe('正在生成练习题…')
+    expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(true)
+  })
+
   it('空篮 + 空历史 → 双空态', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
     const w = render()
@@ -315,6 +331,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-remove-item"]').trigger('click')
     await flushPromises()
     expect(h.removeSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'm1')
+    expect(w.emitted('generation-invalidated')).toHaveLength(1)
   })
 
   it('先预览再确认系统打印；取消不固化，成功由同一持久 PrintJob receipt 原子固化', async () => {

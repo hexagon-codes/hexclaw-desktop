@@ -11,6 +11,10 @@ import { checkHealth } from '@/api/client'
 
 type SidecarStatus = 'running' | 'stopped' | 'starting'
 
+const STARTUP_HEALTH_RETRY_DELAY_MS = 1000
+const STARTUP_HEALTH_RETRY_COUNT = 15
+const STEADY_HEALTH_CHECK_INTERVAL_MS = 5000
+
 const setup = () => {
   const sidecarReady = ref(false)
   const sidecarStatus = ref<SidecarStatus>('stopped')
@@ -20,21 +24,46 @@ const setup = () => {
   const isRestarting = computed(() => sidecarStatus.value === 'starting')
 
   let healthTimer: ReturnType<typeof setInterval> | null = null
+  let startupHealthRetryTimer: ReturnType<typeof setTimeout> | null = null
   let restartPromise: Promise<boolean> | null = null
+
+  /** Sidecar 健康观察已确认就绪时同步运行状态。 */
+  function markSidecarReady() {
+    sidecarReady.value = true
+    if (!isRestarting.value) sidecarStatus.value = 'running'
+  }
 
   /** 检查 hexclaw 后端连接状态 */
   async function checkConnection() {
     const ok = await checkHealth()
-    sidecarReady.value = ok
-    if (!isRestarting.value) {
-      sidecarStatus.value = ok ? 'running' : 'stopped'
+    if (ok) {
+      markSidecarReady()
+    } else {
+      sidecarReady.value = false
+      if (!isRestarting.value) sidecarStatus.value = 'stopped'
+    }
+  }
+
+  /** 启动期快速恢复健康检查，确认就绪后转为稳定轮询。 */
+  async function recoverInitialHealth(remainingRetries: number) {
+    try {
+      await checkConnection()
+    } finally {
+      if (sidecarReady.value || remainingRetries === 0) {
+        healthTimer = setInterval(checkConnection, STEADY_HEALTH_CHECK_INTERVAL_MS)
+        return
+      }
+
+      startupHealthRetryTimer = setTimeout(() => {
+        void recoverInitialHealth(remainingRetries - 1)
+      }, STARTUP_HEALTH_RETRY_DELAY_MS)
     }
   }
 
   /** 启动健康检查轮询 */
   function startHealthCheck() {
-    checkConnection()
-    healthTimer = setInterval(checkConnection, 5000)
+    stopHealthCheck()
+    void recoverInitialHealth(STARTUP_HEALTH_RETRY_COUNT)
   }
 
   /** 停止健康检查轮询 */
@@ -42,6 +71,10 @@ const setup = () => {
     if (healthTimer) {
       clearInterval(healthTimer)
       healthTimer = null
+    }
+    if (startupHealthRetryTimer) {
+      clearTimeout(startupHealthRetryTimer)
+      startupHealthRetryTimer = null
     }
   }
 
@@ -101,6 +134,7 @@ const setup = () => {
     isRestarting,
     sidebarCollapsed,
     detailPanelOpen,
+    markSidecarReady,
     checkConnection,
     startHealthCheck,
     stopHealthCheck,

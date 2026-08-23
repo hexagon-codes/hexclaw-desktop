@@ -122,19 +122,6 @@ function workPreviewVariant(work: CreativeWorkDTO): string {
   return work.preview_variant ?? (work.work_type === 'writing' ? 'writing' : 'default')
 }
 
-function previewTitle(work: CreativeWorkDTO): string {
-  return work.display_name.replace(/^《|》$/g, '')
-}
-
-function previewBody(work: CreativeWorkDTO): string {
-  const firstLine =
-    work.content_markdown
-      ?.split(/\r?\n/)
-      .map((line) => line.replace(/^\s*#+\s*/, '').replace(/[*_`]/g, '').trim())
-      .find(Boolean) ?? ''
-  return (firstLine.split(/[，。！？]/, 1)[0] || t('k12.works.contentSaved')).trim()
-}
-
 function cardEvidence(work: CreativeWorkDTO): string[] {
   const projected = work.display_evidence?.filter(Boolean).slice(0, 3) ?? []
   if (projected.length > 0) return projected
@@ -356,29 +343,8 @@ function trapDetailFocus(event: KeyboardEvent) {
   }
 }
 
-function feedbackEvidence(feedback: WorkFeedbackDTO): string {
-  if (feedback.visible_evidence.length > 0) return feedback.visible_evidence.join('\n\n')
-  return feedback.projection_markdown?.trim() ?? ''
-}
-
 function feedbackMarkdown(work: CreativeWorkDTO): string {
-  const feedback = latestFeedback(work)
-  if (!feedback) return ''
-  if (feedback.projection_markdown?.trim()) return feedback.projection_markdown.trim()
-  const lines = [
-    `## ${t('k12.works.feedbackVisibleEvidence')}`,
-    feedbackEvidence(feedback),
-    `## ${t('k12.works.feedbackAffirmation')}`,
-    feedback.affirmation,
-    `## ${t('k12.works.feedbackParentGuidance')}`,
-    feedback.parent_guidance,
-    `## ${t('k12.works.feedbackNextStep')}`,
-    feedback.next_step,
-  ]
-  if (feedback.limitations?.trim()) {
-    lines.push(`## ${t('k12.works.feedbackLimitationsHeading')}`, feedback.limitations.trim())
-  }
-  return lines.filter((line, index) => line || index % 2 === 0).join('\n\n')
+  return latestFeedback(work)?.projection_markdown?.trim() ?? ''
 }
 
 function workDocumentMarkdown(work: CreativeWorkDTO): string {
@@ -1715,6 +1681,14 @@ defineExpose({ load, openAdd })
   margin-bottom: 12px;
 }
 
+/* WebKit 的作品概览需下移 3px，抵消实现与原型基线的 3px 几何差；不改变集合列与后续内容流。 */
+@supports (font: -apple-system-body) {
+  .k12cw__overview {
+    position: relative;
+    top: 1px;
+  }
+}
+
 .k12cw__overview > .hc-btn {
   order: 3;
   flex-shrink: 0;
@@ -1852,8 +1826,8 @@ defineExpose({ load, openAdd })
 
 .k12cw__list {
   display: grid;
-  /* 用户批准两列：作品卡片一行两个自然排列（对齐原型显示效果，BUG-20260816-005） */
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* 作品集合按可用宽度形成 1/2/3 列；auto-fill 保留空轨，避免单件作品拉满整行。 */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
   gap: 14px;
   align-items: stretch;
   margin: 0;
@@ -2092,9 +2066,10 @@ defineExpose({ load, openAdd })
   margin-top: 0;
   padding: 6px 12px;
   background: rgba(255, 254, 249, 0.9);
-  font-family: Arial;
+  /* 共享按钮继承全局字体并固定行高，避免 WebKit 原生字体回退造成卡片纵向漂移。 */
+  font-family: inherit;
   font-size: 12px;
-  line-height: normal;
+  line-height: 18px;
   box-shadow: none;
 }
 
@@ -2361,6 +2336,7 @@ defineExpose({ load, openAdd })
 
 .k12cw__seg {
   display: flex;
+  min-width: 0;
   gap: 4px;
 }
 
@@ -2390,6 +2366,7 @@ defineExpose({ load, openAdd })
   gap: 5px;
   box-sizing: border-box;
   width: 100%;
+  min-width: 0;
   padding: 16px 12px;
   border: 1px dashed var(--hc-border);
   border-radius: 12px;

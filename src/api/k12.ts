@@ -399,6 +399,7 @@ export type MistakePracticeGenerationState =
   | 'failed'
   | 're_add'
   | 'hidden'
+  | 'unknown'
 
 export interface MistakePracticeGenerationDTO {
   state: MistakePracticeGenerationState
@@ -1259,6 +1260,7 @@ export type AccumulationDictationStatus =
   | 'generating'
   | 'validating'
   | 'committed'
+  | 're_add'
   | 'failed'
 
 export interface AccumulationDictationGenerationDTO {
@@ -1482,10 +1484,105 @@ export function k12RollbackRestoreAs(
 export interface ExportMdResp {
   format: string
   content: string
+  schema_version: 'v1'
+  scope: {
+    agent: string
+    grade_term: string
+  }
+  as_of: number
+  source_digest: string
+  object_counts: {
+    weekly_review: number
+    mistakes: number
+    practice_sets: number
+    accumulation: number
+    creative_works: number
+  }
+  artifact_id: string
   render_error?: string
 }
 export function k12ExportMd(agent: string) {
   return apiGet<ExportMdResp>(`${BASE}/export`, { agent, format: 'md' })
+}
+
+export interface K12ExportBinaryResp {
+  blob: Blob
+  filename: string
+  contentType: string
+  artifactId: string
+  sourceDigest: string
+  objectCounts: Record<string, number>
+}
+
+export type K12ExportArchiveResp = ExportMdResp | K12ExportBinaryResp
+
+function exportFilenameFromDisposition(value: string | null): string {
+  if (!value) return ''
+  const encoded = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1]
+  const plain = value.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i)
+  const raw = encoded ?? plain?.[1] ?? plain?.[2] ?? ''
+  if (!raw) return ''
+  try {
+    return decodeURIComponent(raw.trim().replace(/^"|"$/g, ''))
+  } catch {
+    return raw.trim().replace(/^"|"$/g, '')
+  }
+}
+
+function assertSafeExportFilename(filename: string): string {
+  const trimmed = filename.trim()
+  // 下载文件名来自服务端响应，不允许把路径、控制字符或跨平台非法字符带入原生保存边界。
+  if (
+    !trimmed ||
+    trimmed === '.' ||
+    trimmed === '..' ||
+    /[\\/:*?"<>|\u0000-\u001f\u007f]/u.test(trimmed) ||
+    /[. ]$/u.test(trimmed)
+  ) {
+    throw new Error('Archive export response contains an unsafe filename')
+  }
+  return trimmed
+}
+
+/** 直接消费 LearningArchive Artifact；PDF/Word 不再经过页面 Markdown 重组。 */
+export async function k12ExportArchive(
+  agent: string,
+  format: 'md' | 'pdf' | 'docx',
+): Promise<K12ExportArchiveResp> {
+  if (format === 'md') return k12ExportMd(agent)
+
+  const response = await api.raw<Blob, 'blob'>(`${BASE}/export`, {
+    method: 'GET',
+    query: { agent, format },
+    responseType: 'blob',
+  })
+  const blob = response._data
+  const artifactId = response.headers.get('x-hexclaw-artifact-id') ?? ''
+  const sourceDigest = response.headers.get('x-hexclaw-source-digest') ?? ''
+  const filename = assertSafeExportFilename(
+    exportFilenameFromDisposition(response.headers.get('content-disposition')),
+  )
+  const objectCountsHeader = response.headers.get('x-hexclaw-object-counts')
+  let objectCounts: Record<string, number>
+  try {
+    objectCounts = objectCountsHeader ? JSON.parse(objectCountsHeader) : {}
+  } catch {
+    throw new Error('Archive export returned invalid object counts')
+  }
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new Error('Archive export returned an empty file')
+  }
+  if (!filename || !artifactId || !sourceDigest || !objectCountsHeader) {
+    throw new Error('Archive export response is missing artifact metadata')
+  }
+  return {
+    blob,
+    filename,
+    contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+    artifactId,
+    sourceDigest,
+    objectCounts,
+  }
 }
 // ── render（平台 pandoc + typst 出真二进制文档：POST /api/v1/render）──────────
 // 项-7：桌面端 WKWebView 里 iframe 打印失效 → 之前 PDF 兜底存成 .html。改走后端 render 端点
@@ -1854,6 +1951,7 @@ export interface ImageTaskCreativeProjectionDTO {
   commit_required?: boolean
   commit_state?: 'pending' | 'committed'
   promoted_work_id?: string
+  promoted_generation_id?: string
   /**
    * Confirmable OCR snapshot for writing photos. This state is needed to
    * submit the smallest conflict correction, but is not itself a display
@@ -3336,16 +3434,22 @@ export function k12UploadAsset(
 }
 
 export interface RecoverableImageTask {
-  source_session: string
+  dispatch_id: string
+  source_session_id: string
   source_message_id: string
-  dispatch: ImageTaskDispatchDTO
+  attempt_generation: number
+  version: number
+  stage: string
+  status: ImageTaskDispatchDTO['status']
+  projection_ready: boolean
+  terminal: boolean
 }
 
 /** Sidecar-owned restart projection; renderer storage is never consulted. */
-export async function k12ListRecoverableImageTasks(agent: string) {
+export async function k12ListRecoverableImageTasks(agent: string, session: string) {
   const response = await apiGet<{ items: RecoverableImageTask[] }>(
     '/api/k12/image-tasks/recoverable',
-    { agent },
+    { agent, session },
   )
   return response.items
 }

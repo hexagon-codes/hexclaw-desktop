@@ -252,12 +252,17 @@ async function saveBlobWithGrant(blob: Blob, filename: string): Promise<boolean>
   return true
 }
 
-export async function download(filename: string, content: string, mime: string): Promise<boolean> {
+export async function download(
+  filename: string,
+  content: string | Blob,
+  mime: string,
+): Promise<boolean> {
   // Tauri keeps file bytes out of data URLs and writes through an opaque grant.
   if (isTauri()) {
-    return saveBlobWithGrant(new Blob([content], { type: mime }), filename)
+    const blob = content instanceof Blob ? content : new Blob([content], { type: mime })
+    return saveBlobWithGrant(blob, filename)
   }
-  const blob = new Blob([content], { type: mime })
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

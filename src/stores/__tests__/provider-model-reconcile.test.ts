@@ -106,6 +106,59 @@ describe('provider catalog reconciliation', () => {
       'custom',
     ])
   })
+
+  it('大目录只回填已启用同 ID 的远端名称，不以目录 input modalities 提升静态能力', () => {
+    const target = provider([
+      { id: 'catalog-long', name: 'Stale long model name', capabilities: ['text'] },
+      { id: 'selected-only', name: 'Selected only', capabilities: ['text'] },
+    ])
+    const catalog: CatalogModel[] = [
+      {
+        id: 'catalog-long',
+        name: 'NVIDIA: Nemotron Ultra Long Free Vision Model for Layout Regression',
+        promptPrice: '0',
+        completionPrice: '0',
+        inputModalities: ['text', 'image'],
+        supportsTools: true,
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `remote-only-${index}`,
+        name: `Remote only ${index}`,
+      })),
+    ]
+
+    const result = reconcileProviderCatalog(target, catalog, [])
+
+    expect(result).toEqual({ changed: true, managed: true })
+    expect(target.models.map((model) => model.id)).toEqual(['catalog-long', 'selected-only'])
+    expect(target.models[0]).toMatchObject({
+      id: 'catalog-long',
+      name: 'NVIDIA: Nemotron Ultra Long Free Vision Model for Layout Regression',
+      capabilities: ['text'],
+    })
+    expect(target.models.find((model) => model.id === 'remote-only-0')).toBeUndefined()
+  })
+
+  it('小目录中的裸模型保持未分类，不以模型 ID 或目录输入模态合成 text/vision', () => {
+    const target = provider([])
+
+    reconcileProviderCatalog(
+      target,
+      [{
+        id: 'vendor/vision-image-model',
+        name: 'Vision image model',
+        inputModalities: ['text', 'image'],
+      }],
+      [],
+    )
+
+    expect(target.models).toEqual([
+      expect.objectContaining({
+        id: 'vendor/vision-image-model',
+        capabilities: [],
+      }),
+    ])
+  })
 })
 
 describe('provider catalog sync generation', () => {

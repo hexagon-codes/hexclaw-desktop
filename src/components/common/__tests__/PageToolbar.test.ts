@@ -4,9 +4,9 @@ import { createI18n } from 'vue-i18n'
 import PageToolbar from '../PageToolbar.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
-function mountPageToolbar() {
+function mountPageToolbar(props: { fixedSearch?: boolean } = {}) {
   return mount(PageToolbar, {
-    props: { searchPlaceholder: '搜索...' },
+    props: { searchPlaceholder: '搜索...', ...props },
     global: {
       plugins: [
         createI18n({
@@ -42,5 +42,12 @@ describe('PageToolbar', () => {
     await wrapper.get('input').trigger('keydown.enter')
 
     expect(wrapper.emitted('search-submit')).toHaveLength(1)
+  })
+
+  it('keeps the approved capability search shell at a fixed width when requested', () => {
+    const wrapper = mountPageToolbar({ fixedSearch: true })
+
+    expect(wrapper.find('.hc-toolbar__search--fixed').exists()).toBe(true)
+    expect(wrapper.find('.hc-toolbar__search').classes()).toContain('hc-toolbar__search--fixed')
   })
 })

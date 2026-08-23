@@ -13,7 +13,7 @@ type DocumentWithExternalLinkController = Document & {
   [CONTROLLER_KEY]?: ExternalLinkControllerRegistration
 }
 
-function findAnchor(event: MouseEvent): HTMLAnchorElement | null {
+function findAnchor(event: Event): HTMLAnchorElement | null {
   for (const target of event.composedPath()) {
     if (target instanceof HTMLAnchorElement && target.hasAttribute('href')) return target
   }
@@ -27,6 +27,23 @@ function isManagedExternalLink(anchor: HTMLAnchorElement): boolean {
   if (anchor.hasAttribute('download')) return false
   const href = anchor.getAttribute('href')
   return Boolean(href && !href.startsWith('#') && !href.startsWith('/'))
+}
+
+function openExternalLink(href: string) {
+  if (isTauri()) {
+    void shellOpen(href).catch((error: unknown) => {
+      logger.error('打开外部链接失败:', error)
+    })
+    return
+  }
+
+  window.open(href, '_blank')
+}
+
+function consumeExternalLinkEvent(event: Event, href: string) {
+  event.preventDefault()
+  event.stopPropagation()
+  openExternalLink(href)
 }
 
 /**
@@ -58,16 +75,19 @@ export function installExternalLinkController(
     if (!href) return
 
     consumedEvents.add(event)
-    event.preventDefault()
+    consumeExternalLinkEvent(event, href)
+  }
 
-    if (isTauri()) {
-      void shellOpen(href).catch((error: unknown) => {
-        logger.error('打开外部链接失败:', error)
-      })
-      return
-    }
+  const handleKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
 
-    window.open(href, '_blank')
+    const anchor = findAnchor(event)
+    if (!anchor || !isManagedExternalLink(anchor)) return
+
+    const href = anchor.getAttribute('href')
+    if (!href) return
+
+    consumeExternalLinkEvent(event, href)
   }
 
   let active = true
@@ -75,6 +95,7 @@ export function installExternalLinkController(
     if (!active) return
     active = false
     targetDocument.removeEventListener('click', handleClick, true)
+    targetDocument.removeEventListener('keydown', handleKeydown, true)
     if (controlledDocument[CONTROLLER_KEY]?.uninstall === uninstall) {
       delete controlledDocument[CONTROLLER_KEY]
     }
@@ -82,5 +103,6 @@ export function installExternalLinkController(
 
   controlledDocument[CONTROLLER_KEY] = { uninstall }
   targetDocument.addEventListener('click', handleClick, true)
+  targetDocument.addEventListener('keydown', handleKeydown, true)
   return uninstall
 }

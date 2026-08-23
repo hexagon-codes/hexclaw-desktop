@@ -6,55 +6,61 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
-const h = vi.hoisted(() => ({
-  printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true),
-  exportPdfSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
-  exportArchiveDocumentSpy: vi
-    .fn<(...args: unknown[]) => Promise<boolean>>()
-    .mockResolvedValue(true),
-  addToBasketSpy: vi
-    .fn<(...args: unknown[]) => Promise<{ record_id: string; added: boolean }>>()
-    .mockResolvedValue({ record_id: 'ps-1', added: true }),
-  customPaperSpy: vi.fn(),
-  fillBasketSpy: vi.fn(),
-  startPracticeSpy: vi.fn(),
-  listPracticeSetsSpy: vi.fn().mockResolvedValue({ items: [] }),
-  mistakes: [
-    {
-      record_id: 'a',
-      question: '苹果和梨的价钱',
-      knowledge_point: '小数乘法',
-      error_cause: '进位',
-      status: 'new',
-      version: 0,
-      due_at: 1,
-    },
-    {
-      record_id: 'b',
-      question: '解方程 2x+15=43',
-      knowledge_point: '简易方程',
-      error_cause: '移项',
-      status: 'new',
-      version: 0,
-      due_at: 1,
-    },
-    {
-      record_id: 'c',
-      question: '梯形面积',
-      knowledge_point: '面积',
-      error_cause: '公式',
-      status: 'mastered',
-      version: 1,
-    },
-  ],
-}))
+const h = vi.hoisted(() => {
+  const archiveBlob = new Blob(['archive-pdf'], { type: 'application/pdf' })
+  return {
+    archiveBlob,
+    printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true),
+    exportPdfSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
+    exportArchiveSpy: vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({
+      filename: 'mingming-learning-archive.pdf',
+      blob: archiveBlob,
+      contentType: 'application/pdf',
+    }),
+    downloadSpy: vi.fn(),
+    addToBasketSpy: vi
+      .fn<(...args: unknown[]) => Promise<{ record_id: string; added: boolean }>>()
+      .mockResolvedValue({ record_id: 'ps-1', added: true }),
+    customPaperSpy: vi.fn(),
+    fillBasketSpy: vi.fn(),
+    startPracticeSpy: vi.fn(),
+    listPracticeSetsSpy: vi.fn().mockResolvedValue({ items: [] }),
+    mistakes: [
+      {
+        record_id: 'a',
+        question: '苹果和梨的价钱',
+        knowledge_point: '小数乘法',
+        error_cause: '进位',
+        status: 'new',
+        version: 0,
+        due_at: 1,
+      },
+      {
+        record_id: 'b',
+        question: '解方程 2x+15=43',
+        knowledge_point: '简易方程',
+        error_cause: '移项',
+        status: 'new',
+        version: 0,
+        due_at: 1,
+      },
+      {
+        record_id: 'c',
+        question: '梯形面积',
+        knowledge_point: '面积',
+        error_cause: '公式',
+        status: 'mastered',
+        version: 1,
+      },
+    ],
+  }
+})
 vi.mock('../export', () => ({
   printWorksheet: (...a: unknown[]) => h.printSpy(...a),
   exportPdf: (...a: unknown[]) => h.exportPdfSpy(...a),
   exportWord: vi.fn(),
   worksheetFilename: vi.fn(() => 'f.doc'),
-  exportArchiveDocument: (...a: unknown[]) => h.exportArchiveDocumentSpy(...a),
-  download: vi.fn(),
+  download: (...a: unknown[]) => h.downloadSpy(...a),
 }))
 vi.mock('@/api/k12', async () => ({
   ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
@@ -68,8 +74,11 @@ vi.mock('@/api/k12', async () => ({
     }),
   ),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
-    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
+  k12GetMistakePracticeGeneration: vi
+    .fn()
+    .mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+    ),
   k12StartMistakePracticeGeneration: (...a: unknown[]) => h.startPracticeSpy(...a),
   k12GenerateCustomPaper: (...a: unknown[]) => h.customPaperSpy(...a),
   k12FillPracticeBasket: (...a: unknown[]) => h.fillBasketSpy(...a),
@@ -91,7 +100,7 @@ vi.mock('@/api/k12', async () => ({
     .fn()
     .mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
-  k12ExportMd: vi.fn().mockResolvedValue({ format: 'markdown', content: '# 完整学习档案' }),
+  k12ExportArchive: (...a: unknown[]) => h.exportArchiveSpy(...a),
 }))
 
 function i18n() {
@@ -123,7 +132,8 @@ describe('本周该练输出 exact-set 与档案导出', () => {
     setActivePinia(createPinia())
     h.printSpy.mockClear()
     h.exportPdfSpy.mockClear()
-    h.exportArchiveDocumentSpy.mockClear()
+    h.exportArchiveSpy.mockClear()
+    h.downloadSpy.mockClear()
     h.addToBasketSpy.mockClear().mockResolvedValue({ record_id: 'ps-1', added: true })
     h.mistakes.splice(3)
     h.fillBasketSpy.mockReset().mockResolvedValue({ added: 2, skipped: 0 })
@@ -175,7 +185,7 @@ describe('本周该练输出 exact-set 与档案导出', () => {
     expect(h.fillBasketSpy).not.toHaveBeenCalled()
   })
 
-  it('溢出菜单的档案导出保留，并消费服务端完整学习档案 Markdown', async () => {
+  it('溢出菜单的档案导出保留，并消费服务端档案二进制响应', async () => {
     const w = render()
     await flushPromises()
     await w
@@ -187,11 +197,11 @@ describe('本周该练输出 exact-set 与档案导出', () => {
     expect(pdfBtn, '档案导出 PDF 菜单项应保留').toBeTruthy()
     await pdfBtn!.trigger('click')
     await flushPromises()
-    expect(h.exportArchiveDocumentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: '# 完整学习档案',
-        format: 'pdf',
-      }),
+    expect(h.exportArchiveSpy).toHaveBeenCalledWith('mingming', 'pdf')
+    expect(h.downloadSpy).toHaveBeenCalledWith(
+      'mingming-learning-archive.pdf',
+      h.archiveBlob,
+      'application/pdf',
     )
   })
 })

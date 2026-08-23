@@ -834,7 +834,6 @@ function openRequestSocket(
         break
       case 'tool_approval_request':
       case 'tool_permission_request': {
-        clearTimers()
         const approvalMessage = msg as unknown as {
           request_id?: unknown
           deadline_at?: unknown
@@ -886,6 +885,21 @@ function openRequestSocket(
             : typeof approvalMessage.metadata?.deadline_at === 'string'
               ? approvalMessage.metadata.deadline_at
               : undefined
+        if (
+          !approvalRequestId ||
+          !approvalOwnerId ||
+          !approvalInvocationId ||
+          !approvalArgumentsDigest ||
+          !approvalSecurityScopeDigest ||
+          !approvalScopeSchemaVersion ||
+          !approvalSessionId ||
+          !approvalDeadlineAt ||
+          !Number.isFinite(Date.parse(approvalDeadlineAt))
+        ) {
+          logger.warn('Ignoring malformed tool approval request frame')
+          break
+        }
+        clearTimers()
         const approvalResponseIdentity: ToolApprovalResponseIdentity = {
           requestId: approvalRequestId,
           sessionId: approvalSessionId,

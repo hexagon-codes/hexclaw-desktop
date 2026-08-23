@@ -7,6 +7,7 @@
  * 回归锁：不按学段×学科拆分老师卡——一张模板一份实例，多孩靠多实例结构隔离。
  */
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
 import { registerAgent, unregisterAgent } from '@/api/agents'
@@ -75,6 +76,7 @@ const learnerID = props.agent?.metadata?.['k12.learner_id'] || `learner-${nanoid
 
 // 档案存在 agent metadata 的 k12.* 键（后端契约）
 const childName = ref(props.agent?.metadata?.['k12.child_name'] ?? '')
+const childNameInput = ref<HTMLInputElement | null>(null)
 const initialGradeTerm = splitGradeTerm(props.agent?.metadata?.['k12.grade_term'] ?? '五年级上')
 const gradeLevel = ref<PrimaryGrade>(initialGradeTerm.grade)
 const semester = ref<Semester>(initialGradeTerm.semester)
@@ -138,9 +140,14 @@ function initialMountedSkills(): Set<string> {
   return skills
 }
 const mountedSkills = ref(initialMountedSkills())
-const mountedSkillCount = computed(
-  () => K12_TEMPLATE_SKILLS.filter((skill) => mountedSkills.value.has(skill.name)).length,
-)
+const mountedSkillCount = computed(() => {
+  // 兼容旧档案中的 builtin 能力名：编辑面展示模板默认挂载集，避免把旧命名误算成仅 P0。
+  const hasTemplateSkill = props.agent?.skills?.some((name) =>
+    K12_TEMPLATE_SKILLS.some((skill) => skill.name === name),
+  )
+  if (props.agent?.skills?.length && !hasTemplateSkill) return defaultBoundSkills().length
+  return K12_TEMPLATE_SKILLS.filter((skill) => mountedSkills.value.has(skill.name)).length
+})
 function toggleMountedSkill(name: string) {
   const skill = K12_TEMPLATE_SKILLS.find((candidate) => candidate.name === name)
   if (!skill || skill.tier === 'P0') return
@@ -167,6 +174,9 @@ const textbook = computed(() => textbookEditions.math)
 const submitting = ref(false)
 const error = ref('')
 const mathProgressSection = ref<HTMLElement | null>(null)
+function setMathProgressSection(element: Element | ComponentPublicInstance | null) {
+  mathProgressSection.value = element instanceof HTMLElement ? element : null
+}
 const curriculumCatalog = ref<TextbookManifestCatalogDTO | null>(null)
 const curriculumProgress = ref<CurriculumProgressDTO | null>(null)
 const curriculumProgressRevision = ref(0)
@@ -223,9 +233,23 @@ const textbookManifestOptions = computed(() => {
   }
   return textbookBindingOptions.value.map((option) => ({
     value: option.manifest_id,
+    // 选择器直接投影文件与摄取状态，避免家长只能看到无法选择的文件名。
     label: `${option.document_title} · ${manifestStateLabels[option.state]}`,
     disabled: option.state !== 'ready_for_confirmation',
   }))
+})
+const textbookBindingStatus = computed(() => {
+  const selected = textbookBindingOptions.value.find(
+    (option) => option.manifest_id === effectiveTextbookManifestID.value,
+  )
+  if (!selected) return { state: 'none', label: '未关联教材文件' }
+  return {
+    state: selected.state,
+    label:
+      selected.state === 'ready_for_confirmation'
+        ? '已识别，可关联'
+        : manifestStateLabels[selected.state],
+  }
 })
 const lessonOptions = computed(() => {
   const lessons =
@@ -297,7 +321,20 @@ async function loadCurriculumProjection() {
     curriculumReady.value = true
     if (props.focusMathProgress) {
       await nextTick()
-      mathProgressSection.value?.focus()
+      const section = mathProgressSection.value
+      const body = section?.closest<HTMLElement>('.k12pf__body')
+      if (body && section) {
+        const bodyRect = body.getBoundingClientRect()
+        const sectionRect = section.getBoundingClientRect()
+        const bodyPaddingTop = Number.parseFloat(getComputedStyle(body).paddingTop) || 0
+        const sectionBorderTop = Number.parseFloat(getComputedStyle(section).borderTopWidth) || 0
+        const targetTop = bodyRect.top + bodyPaddingTop + sectionBorderTop
+        body.scrollTop = Math.max(
+          0,
+          Math.round(body.scrollTop + sectionRect.top - targetTop),
+        )
+      }
+      section?.focus({ preventScroll: true })
     }
   } catch (cause) {
     curriculumError.value = cause instanceof Error ? cause.message : String(cause)
@@ -343,7 +380,11 @@ watch(
   },
 )
 onMounted(() => {
-  if (isEdit.value) void loadCurriculumProjection()
+  if (!isEdit.value) return
+  if (!props.focusMathProgress) {
+    void nextTick(() => childNameInput.value?.focus({ preventScroll: true }))
+  }
+  void loadCurriculumProjection()
 })
 
 // BUG-20260710 ①：删除档案下沉到编辑弹层（原型 K12 卡动作行无删除，卡面孤行删除是漂移）。
@@ -648,45 +689,47 @@ async function submit() {
         </div>
 
         <div class="k12pf__body">
-          <p v-if="!isEdit" class="k12pf__intro">
-            {{ t('k12.profile.intro', { name: displayName }) }}
-          </p>
+          <div class="k12pf__profile-general">
+            <p v-if="!isEdit" class="k12pf__intro">
+              {{ t('k12.profile.intro', { name: displayName }) }}
+            </p>
 
-          <label class="k12pf__field">
-            <span>{{ t('k12.profile.childName') }}</span>
-            <HcClearableField>
+            <label class="k12pf__field">
+              <span>{{ t('k12.profile.childName') }}</span>
               <input
                 v-model="childName"
+                ref="childNameInput"
                 class="k12pf__input"
+                autofocus
                 :placeholder="t('k12.profile.childNamePlaceholder')"
               />
-            </HcClearableField>
-          </label>
+            </label>
 
-          <div class="k12pf__row k12pf__row--grade-term">
-            <div class="k12pf__field">
-              <span>{{ t('k12.profile.grade') }}</span>
-              <HcSelect
-                v-model="gradeLevel"
-                :options="gradeOptions"
-                :aria-label="t('k12.profile.grade')"
-                data-testid="k12pf-grade"
-              />
+            <div class="k12pf__row k12pf__row--grade-term">
+              <div class="k12pf__field">
+                <span>{{ t('k12.profile.grade') }}</span>
+                <HcSelect
+                  v-model="gradeLevel"
+                  :options="gradeOptions"
+                  :aria-label="t('k12.profile.grade')"
+                  data-testid="k12pf-grade"
+                />
+              </div>
+              <div class="k12pf__field">
+                <span>{{ t('k12.profile.semester') }}</span>
+                <HcSelect
+                  v-model="semester"
+                  :options="semesterOptions"
+                  :aria-label="t('k12.profile.semester')"
+                  data-testid="k12pf-semester"
+                />
+              </div>
             </div>
-            <div class="k12pf__field">
-              <span>{{ t('k12.profile.semester') }}</span>
-              <HcSelect
-                v-model="semester"
-                :options="semesterOptions"
-                :aria-label="t('k12.profile.semester')"
-                data-testid="k12pf-semester"
-              />
-            </div>
+            <p class="k12pf__hint">{{ t('k12.profile.gradeSupportNote') }}</p>
           </div>
-          <p class="k12pf__hint">{{ t('k12.profile.gradeSupportNote') }}</p>
 
-          <div class="k12pf__field">
-            <span v-if="!isEdit">{{ t('k12.profile.textbookBySubject') }}</span>
+          <div v-if="!isEdit" class="k12pf__field">
+            <span>{{ t('k12.profile.textbookBySubject') }}</span>
             <div class="k12pf__textbook-grid">
               <div
                 v-for="subject in VISIBLE_TEXTBOOK_SUBJECTS"
@@ -696,165 +739,177 @@ async function submit() {
                 data-testid="k12-textbook-row"
                 :data-subject="subject.key"
               >
-                <template v-if="!isEdit">
-                  <span>{{ t(subject.labelKey) }}</span>
-                  <div :data-testid="`k12-textbook-${subject.key}`">
-                    <HcSelect
-                      v-model="textbookEditions[subject.key]"
-                      class="k12pf__textbook-select"
-                      :options="textbookOptions(subject)"
-                    />
-                  </div>
-                </template>
-                <section
-                  v-if="subject.key === 'math' && isEdit"
-                  ref="mathProgressSection"
-                  class="k12pf__curriculum"
-                  tabindex="-1"
-                  aria-labelledby="k12pf-math-progress-title"
-                  data-testid="k12-math-progress"
-                >
-                  <div class="k12pf__curriculum-head">
-                    <b id="k12pf-math-progress-title">数学教材与当前进度</b>
-                    <span>关联数学教材和当前进度；只有已确认的教材依据会参与推荐。</span>
-                  </div>
-                  <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
-                    正在读取教材进度…
-                  </div>
-                  <template v-else>
-                    <div class="k12pf__curriculum-grid">
-                      <div class="k12pf__field">
-                        <span>教材版本</span>
-                        <HcSelect
-                          v-model="textbookEditions[subject.key]"
-                          class="k12pf__textbook-select"
-                          :options="textbookOptions(subject)"
-                          :aria-label="`${t(subject.labelKey)}教材版本`"
-                          :data-testid="`k12-textbook-${subject.key}`"
-                        />
-                      </div>
-                      <div class="k12pf__field">
-                        <span>册</span>
-                        <HcSelect
-                          v-model="volume"
-                          :options="volumeOptions"
-                          data-testid="k12-progress-volume"
-                        />
-                      </div>
-                      <div class="k12pf__field k12pf__field--wide">
-                        <span>关联教材文件</span>
-                        <HcSelect
-                          v-model="textbookManifestID"
-                          :options="textbookManifestOptions"
-                          placeholder="未上传"
-                          aria-label="关联教材文件"
-                          data-testid="k12-textbook-manifest"
-                        />
-                        <small v-if="!textbookBindingOptions.length">
-                          关联教材后可生成教材同步练习
-                        </small>
-                      </div>
-                      <div class="k12pf__field k12pf__field--wide">
-                        <span>当前单元 *</span>
-                        <HcSelect
-                          v-model="unitID"
-                          :options="unitOptions"
-                          class="k12pf__current-unit-value"
-                          :aria-label="`当前单元：${
-                            unitOptions.find((option) => option.value === unitID)?.label ?? '未选择'
-                          }`"
-                          data-testid="k12-current-unit-value"
-                        />
-                      </div>
-                      <div class="k12pf__curriculum-detail-row">
-                        <div class="k12pf__field">
-                          <span>课时（选填）</span>
-                          <HcSelect
-                            v-model="lessonID"
-                            :options="lessonOptions"
-                            data-testid="k12-progress-lesson"
-                          />
-                        </div>
-                        <div class="k12pf__field">
-                          <span>页码范围（选填）</span>
-                          <div class="k12pf__pages">
-                            <HcClearableField>
-                              <input
-                                v-model.number="pageFrom"
-                                class="k12pf__input"
-                                type="number"
-                                min="1"
-                                inputmode="numeric"
-                                placeholder="起始页"
-                              />
-                            </HcClearableField>
-                            <span>至</span>
-                            <HcClearableField>
-                              <input
-                                v-model.number="pageTo"
-                                class="k12pf__input"
-                                type="number"
-                                min="1"
-                                inputmode="numeric"
-                                placeholder="结束页"
-                              />
-                            </HcClearableField>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <p class="k12pf__curriculum-hint">
-                      保存后，同步巩固将使用该进度；口算热身仍由你按需开始。
-                    </p>
-                  </template>
-                  <p v-if="curriculumError" class="k12pf__err">{{ curriculumError }}</p>
-                </section>
+                <span>{{ t(subject.labelKey) }}</span>
+                <div :data-testid="`k12-textbook-${subject.key}`">
+                  <HcSelect
+                    v-model="textbookEditions[subject.key]"
+                    class="k12pf__textbook-select"
+                    :options="textbookOptions(subject)"
+                  />
+                </div>
               </div>
             </div>
-          </div>
-          <p v-if="!isEdit" class="k12pf__hint">
-            {{ t('k12.profile.textbookCreateNote') }}
-          </p>
-          <p v-if="isEdit" class="k12pf__intro">{{ t('k12.profile.editNote') }}</p>
-
-          <!-- 顶层：能力（人话·只读·安心感），不是让家长勾选的技能清单 -->
-          <div class="k12pf__field" data-testid="k12-profile-capabilities">
-            <span>{{ t('k12.profile.skillsLabel') }}</span>
-            <div class="k12pf__skillchips">
-              <span v-for="key in BUILTIN_SKILL_KEYS" :key="key" class="k12pf__skillchip">{{
-                t(key)
-              }}</span>
-            </div>
+            <p class="k12pf__hint">{{ t('k12.profile.textbookCreateNote') }}</p>
           </div>
 
-          <details class="k12pf__adv" data-testid="k12-profile-mounted-skills">
-            <summary>挂载 Skill · 已挂载 {{ mountedSkillCount }} 个</summary>
-            <div class="k12pf__skillchips k12pf__skillchips--editable">
-              <label
-                v-for="skill in K12_TEMPLATE_SKILLS"
-                :key="skill.name"
-                class="k12pf__skillchip k12pf__skillchip--editable"
-                :class="{ 'k12pf__skillchip--required': skill.tier === 'P0' }"
-              >
-                <input
-                  type="checkbox"
-                  :checked="mountedSkills.has(skill.name)"
-                  :disabled="skill.tier === 'P0'"
-                  @change="toggleMountedSkill(skill.name)"
-                />
-                <span>{{ skill.icon }} {{ t(skill.labelKey) }}</span>
-                <small v-if="skill.tier === 'P0'">必需</small>
-              </label>
+          <div
+            v-if="isEdit"
+            class="k12pf__textbook-row k12pf__textbook-row--math"
+            data-testid="k12-textbook-row"
+            data-subject="math"
+          >
+            <section
+              :ref="setMathProgressSection"
+              class="k12pf__curriculum"
+              tabindex="-1"
+              aria-labelledby="k12pf-math-progress-title"
+              data-testid="k12-math-progress"
+            >
+            <div class="k12pf__curriculum-head">
+              <b id="k12pf-math-progress-title">数学教材与当前进度</b>
+              <span>关联数学教材和当前进度；只有已确认的教材依据会参与推荐。</span>
             </div>
-            <p class="k12pf__hint">必需 Skill 随 K12 模板锁定；可选 Skill 保存到当前辅导助手。</p>
-          </details>
+            <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
+              正在读取教材进度…
+            </div>
+            <template v-else>
+              <div class="k12pf__curriculum-grid">
+                <div class="k12pf__field">
+                  <span>教材版本</span>
+                  <HcSelect
+                    v-model="textbookEditions.math"
+                    class="k12pf__textbook-select"
+                    :options="textbookOptions(COMPAT_TEXTBOOK_SUBJECTS[0])"
+                    :aria-label="`${t(COMPAT_TEXTBOOK_SUBJECTS[0].labelKey)}教材版本`"
+                    data-testid="k12-textbook-math"
+                  />
+                </div>
+                <div class="k12pf__field">
+                  <span>册</span>
+                  <HcSelect
+                    v-model="volume"
+                    :options="volumeOptions"
+                    data-testid="k12-progress-volume"
+                  />
+                </div>
+                <div class="k12pf__field k12pf__field--wide k12pf__textbook-field">
+                  <span>关联教材文件</span>
+                  <HcSelect
+                    v-model="textbookManifestID"
+                    :options="textbookManifestOptions"
+                    placeholder="未上传"
+                    aria-label="关联教材文件"
+                    data-testid="k12-textbook-manifest"
+                  />
+                  <span
+                    class="k12pf__textbook-binding-status"
+                    :data-state="textbookBindingStatus.state"
+                    data-testid="k12-textbook-binding-status"
+                  >
+                    <small>{{ textbookBindingStatus.label }}</small>
+                  </span>
+                  <p
+                    v-if="!textbookBindingOptions.length"
+                    class="k12pf__curriculum-hint"
+                    data-testid="k12-textbook-empty-hint"
+                  >
+                    关联教材后可生成教材同步练习
+                  </p>
+                </div>
+                <div class="k12pf__field k12pf__field--wide">
+                  <span>当前单元 必填</span>
+                  <HcSelect
+                    v-model="unitID"
+                    :options="unitOptions"
+                    class="k12pf__current-unit-value"
+                    :aria-label="`当前单元：${
+                      unitOptions.find((option) => option.value === unitID)?.label ?? '未选择'
+                    }`"
+                    data-testid="k12-current-unit-value"
+                  />
+                </div>
+                <div class="k12pf__curriculum-detail-row">
+                  <div class="k12pf__field">
+                    <span>课时（选填）</span>
+                    <HcSelect
+                      v-model="lessonID"
+                      :options="lessonOptions"
+                      data-testid="k12-progress-lesson"
+                    />
+                  </div>
+                  <div class="k12pf__field">
+                    <span>页码范围（选填）</span>
+                    <div class="k12pf__pages">
+                      <input
+                        v-model.number="pageFrom"
+                        class="k12pf__input"
+                        type="number"
+                        min="1"
+                        inputmode="numeric"
+                        placeholder="起始页"
+                      />
+                      <span>至</span>
+                      <input
+                        v-model.number="pageTo"
+                        class="k12pf__input"
+                        type="number"
+                        min="1"
+                        inputmode="numeric"
+                        placeholder="结束页"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p class="k12pf__curriculum-hint">
+                保存后，同步巩固将使用该进度；口算热身仍由你按需开始。
+              </p>
+            </template>
+              <p v-if="curriculumError" class="k12pf__err">{{ curriculumError }}</p>
+            </section>
+          </div>
 
-          <!-- 辅导语气(人设)：预填据档案派生的人设，家长可微调（D3·原型建档有此编辑框，app 曾漏→tutor 回落小蟹）。
-             未改则随年级/教材跟随；改了则保留自定义。回写 agent.system_prompt。 -->
-          <details class="k12pf__adv">
-            <summary>{{ t('k12.profile.toneAdvanced') }}</summary>
-            <div class="k12pf__soul">
-              <HcClearableField>
+          <div class="k12pf__profile-authority" data-testid="k12-profile-authority">
+            <!-- 顶层：能力（人话·只读·安心感），不是让家长勾选的技能清单 -->
+            <div class="k12pf__field" data-testid="k12-profile-capabilities">
+              <span>{{ t('k12.profile.skillsLabel') }}</span>
+              <div class="k12pf__skillchips">
+                <span v-for="key in BUILTIN_SKILL_KEYS" :key="key" class="k12pf__skillchip">{{
+                  t(key)
+                }}</span>
+              </div>
+            </div>
+            <p class="k12pf__capability-note" data-testid="k12-profile-capability-note">
+              {{ t('k12.profile.capabilityNote') }}
+            </p>
+
+            <details class="k12pf__adv" data-testid="k12-profile-mounted-skills">
+              <summary>挂载 Skill · 已挂载 {{ mountedSkillCount }} 个</summary>
+              <div class="k12pf__skillchips k12pf__skillchips--editable">
+                <label
+                  v-for="skill in K12_TEMPLATE_SKILLS"
+                  :key="skill.name"
+                  class="k12pf__skillchip k12pf__skillchip--editable"
+                  :class="{ 'k12pf__skillchip--required': skill.tier === 'P0' }"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="mountedSkills.has(skill.name)"
+                    :disabled="skill.tier === 'P0'"
+                    @change="toggleMountedSkill(skill.name)"
+                  />
+                  <span>{{ skill.icon }} {{ t(skill.labelKey) }}</span>
+                  <small v-if="skill.tier === 'P0'">必需</small>
+                </label>
+              </div>
+              <p class="k12pf__hint">必需 Skill 随 K12 模板锁定；可选 Skill 保存到当前辅导助手。</p>
+            </details>
+
+            <!-- 辅导语气(人设)：预填据档案派生的人设，家长可微调（D3·原型建档有此编辑框，app 曾漏→tutor 回落小蟹）。
+               未改则随年级/教材跟随；改了则保留自定义。回写 agent.system_prompt。 -->
+            <details class="k12pf__adv">
+              <summary>{{ t('k12.profile.toneAdvanced') }}</summary>
+              <div class="k12pf__soul">
                 <textarea
                   v-model="soulText"
                   class="k12pf__soultext"
@@ -862,40 +917,41 @@ async function submit() {
                   rows="4"
                   @input="soulDirty = true"
                 />
-              </HcClearableField>
-              <button v-if="soulDirty" type="button" class="k12pf__soulreset" @click="resetSoul">
-                {{ t('k12.profile.toneReset') }}
-              </button>
-            </div>
-          </details>
+                <button v-if="soulDirty" type="button" class="k12pf__soulreset" @click="resetSoul">
+                  {{ t('k12.profile.toneReset') }}
+                </button>
+              </div>
+            </details>
 
-          <!-- 模型（高级折叠·BUG-20260711-H，对齐原型 tutorForm）：默认跟随全局强推理模型，可不管；
-             极客/多 Provider 家庭可为辅导实例单独指定（服务商→模型级联，与通用智能体编辑同通道）。 -->
-          <details class="k12pf__adv" data-testid="k12pf-model">
-            <summary>
-              模型 · {{ providerDisplayName }} · {{ modelDisplayName }}
-            </summary>
-            <div class="k12pf__row">
-              <div class="k12pf__field">
-                <span>{{ t('k12.profile.providerLabel', '服务商') }}</span>
-                <HcSelect
-                  v-model="provider"
-                  :options="providerOptions"
-                  data-testid="k12pf-provider"
-                />
+            <!-- 模型（高级折叠·BUG-20260711-H，对齐原型 tutorForm）：默认跟随全局强推理模型，可不管；
+               极客/多 Provider 家庭可为辅导实例单独指定（服务商→模型级联，与通用智能体编辑同通道）。 -->
+            <details class="k12pf__adv" data-testid="k12pf-model">
+              <summary>
+                模型 · {{ providerDisplayName }} · {{ modelDisplayName }}
+              </summary>
+              <div class="k12pf__row k12pf__model-row">
+                <div class="k12pf__field">
+                  <span>{{ t('k12.profile.providerLabel', '服务商') }}</span>
+                  <HcSelect
+                    v-model="provider"
+                    :options="providerOptions"
+                    data-testid="k12pf-provider"
+                  />
+                </div>
+                <div class="k12pf__field">
+                  <span>{{ t('k12.profile.modelLabel', '模型') }}</span>
+                  <HcSelect
+                    v-model="model"
+                    :options="modelOptions"
+                    data-testid="k12pf-model-select"
+                  />
+                </div>
               </div>
-              <div class="k12pf__field">
-                <span>{{ t('k12.profile.modelLabel', '模型') }}</span>
-                <HcSelect
-                  v-model="model"
-                  :options="modelOptions"
-                  data-testid="k12pf-model-select"
-                />
-              </div>
-            </div>
-          </details>
+            </details>
+          </div>
 
           <div v-if="!isEdit" class="k12pf__note">{{ t('k12.profile.twoChildHint') }}</div>
+          <p v-if="isEdit" class="k12pf__intro">{{ t('k12.profile.editNote') }}</p>
           <p v-if="error" class="k12pf__err">{{ error }}</p>
         </div>
 
@@ -986,9 +1042,16 @@ async function submit() {
 .k12pf__head {
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 16px 18px;
   border-bottom: 0.5px solid var(--hc-border);
+  font-size: 14px;
+  line-height: 21px;
+}
+.k12pf__head b {
   font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 .k12pf__x {
   margin-left: auto;
@@ -1010,9 +1073,34 @@ async function submit() {
   max-height: 70vh;
   scroll-padding-top: 20px;
   overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: block;
+}
+.k12pf__profile-general > .k12pf__intro {
+  margin: 0 0 12px;
+}
+.k12pf__profile-general > .k12pf__field {
+  margin-bottom: 15px;
+}
+.k12pf__profile-general > .k12pf__hint {
+  margin: -2px 0 10px;
+  font-size: 14px;
+  line-height: 21px;
+  color: var(--hc-text-primary);
+}
+.k12pf__body > .k12pf__field,
+.k12pf__body > .k12pf__adv,
+.k12pf__body > .k12pf__note,
+.k12pf__body > .k12pf__intro {
+  margin-bottom: 15px;
+}
+.k12pf__body > .k12pf__err:last-child {
+  margin-bottom: 0;
+}
+.k12pf__body > .k12pf__intro {
+  margin-bottom: 0;
+}
+.k12pf__body > .k12pf__textbook-row--math {
+  display: contents;
 }
 .k12pf__intro {
   margin: 0;
@@ -1039,8 +1127,34 @@ async function submit() {
   display: flex;
   gap: 12px;
 }
+.k12pf__row--grade-term {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
 .k12pf__row--grade-term > .k12pf__field {
   min-width: 0;
+  margin-bottom: 15px;
+}
+.k12pf__profile-general :deep(.hc-select__trigger) {
+  min-height: 36px;
+  height: 36px;
+  padding: 8px 12px;
+  gap: 10px;
+  line-height: normal;
+}
+.k12pf :deep(.hc-select__trigger .hc-select__arrow) {
+  display: none;
+}
+.k12pf :deep(.hc-select__trigger)::after {
+  content: '▾';
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  color: var(--hc-text-primary);
+  font-size: 13px;
+  line-height: 16px;
+  transform: translateY(-50%);
 }
 .k12pf__input {
   padding: 9px 12px;
@@ -1076,9 +1190,7 @@ async function submit() {
   grid-column: 1 / -1;
 }
 .k12pf__curriculum {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 12px;
+  display: block;
   margin: 14px 0 0;
   padding: 14px 0 0;
   border: 0;
@@ -1088,12 +1200,9 @@ async function submit() {
   outline: none;
   scroll-margin-top: 20px;
 }
-.k12pf__curriculum:focus {
-  border-top-color: var(--hc-accent);
-}
 .k12pf__curriculum-head {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 16px;
 }
 .k12pf__curriculum-head b {
   display: block;
@@ -1129,13 +1238,75 @@ async function submit() {
   align-items: center;
   gap: 7px;
 }
+.k12pf__curriculum-grid :deep(.hc-select__trigger),
+.k12pf__curriculum-grid .k12pf__input {
+  min-height: 40px;
+  height: 40px;
+  padding: 8px 12px;
+  gap: 10px;
+  line-height: normal;
+}
+.k12pf__pages .k12pf__input {
+  padding: 9px 12px;
+  line-height: 19.5px;
+}
+.k12pf__model-row {
+  gap: 10px;
+  margin-inline: -5px;
+  width: calc(100% + 10px);
+}
+.k12pf__model-row :deep(.hc-select__trigger) {
+  min-height: 34px;
+  height: 34px;
+  padding: 8px 12px;
+  gap: 10px;
+  line-height: normal;
+}
+.k12pf__textbook-field {
+  gap: 0;
+}
+.k12pf__textbook-field > span:first-child {
+  margin-bottom: 6px;
+}
+.k12pf__pages > span {
+  color: var(--hc-text-muted);
+  font-size: 12px;
+}
 .k12pf__curriculum-hint {
-  margin: 4px 0 0;
+  margin: 16px 0 0;
   padding-top: 12px;
   border-top: 0.5px solid var(--hc-divider);
   color: var(--hc-text-muted);
   font-size: 11.5px;
   line-height: 1.55;
+}
+.k12pf__textbook-binding-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--hc-text-muted);
+  line-height: inherit;
+}
+.k12pf__textbook-binding-status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--hc-text-muted);
+}
+.k12pf__textbook-binding-status[data-state='ready_for_confirmation']::before {
+  background: var(--hc-success);
+}
+.k12pf__textbook-binding-status[data-state='failed_retryable']::before,
+.k12pf__textbook-binding-status[data-state='failed_terminal']::before,
+.k12pf__textbook-binding-status[data-state='stale']::before {
+  background: var(--hc-error);
+}
+.k12pf__textbook-binding-status small {
+  font-size: 11px;
+  color: inherit;
 }
 .k12pf__skillchips {
   display: flex;
@@ -1169,6 +1340,33 @@ async function submit() {
 }
 .k12pf__skillchip--required {
   cursor: default;
+}
+.k12pf__profile-authority > .k12pf__field {
+  margin-bottom: 15px;
+  gap: 8px;
+}
+.k12pf__profile-authority > .k12pf__field .k12pf__skillchips {
+  margin: 0;
+}
+.k12pf__capability-note {
+  margin: -7px 0 10px;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--hc-text-secondary);
+}
+.k12pf__profile-authority > .k12pf__adv {
+  margin-top: 4px;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.k12pf__profile-authority > .k12pf__adv > summary {
+  padding: 0;
+  list-style: revert;
+}
+.k12pf__profile-authority > .k12pf__adv > summary::-webkit-details-marker {
+  display: list-item;
 }
 .k12pf__adv {
   border: 0.5px solid var(--hc-border);
@@ -1246,7 +1444,7 @@ async function submit() {
 }
 .k12pf__foot {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 10px;
   padding: 14px 18px;
   border-top: 0.5px solid var(--hc-border);
@@ -1262,24 +1460,41 @@ async function submit() {
 }
 .k12pf__btn--danger {
   color: var(--hc-error);
-  border-color: color-mix(in srgb, var(--hc-error) 35%, var(--hc-border));
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  padding: 6px 8px;
 }
 .k12pf__btn--danger:hover {
   background: color-mix(in srgb, var(--hc-error) 10%, transparent);
 }
 .k12pf__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 14px;
   border-radius: 10px;
+  font-family: inherit;
+  line-height: 18px;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   border: 0.5px solid var(--hc-border);
   background: var(--hc-bg-input);
   color: var(--hc-text-primary);
 }
+.k12pf__btn.k12pf__btn--danger {
+  color: var(--hc-error);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  padding: 6px 8px;
+}
 .k12pf__btn--primary {
   background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
   color: #fff;
   border-color: transparent;
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 .k12pf__btn:disabled {
   opacity: 0.6;

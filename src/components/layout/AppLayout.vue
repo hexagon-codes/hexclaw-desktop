@@ -8,10 +8,28 @@ import EngineBanner from './EngineBanner.vue'
 import InspectorContext from '@/components/inspector/InspectorContext.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import { useAppStore } from '@/stores/app'
+import { useSettingsStore } from '@/stores/settings'
+import router from '@/router'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const appStore = useAppStore()
+const settingsStore = useSettingsStore()
 const globalPresentationExtensions = scenarioRegistry.globalPresentationExtensions
+let stopSidecarReadyListener: (() => void) | null = null
+let sidecarReadyListenerDisposed = false
+
+async function installSidecarReadyListener() {
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('sidecar-ready', () => {
+      appStore.markSidecarReady()
+    })
+    if (sidecarReadyListenerDisposed) unlisten()
+    else stopSidecarReadyListener = unlisten
+  } catch {
+    // 非 Tauri 环境由既有健康轮询维持状态。
+  }
+}
 
 async function probeIMChannelsBackendWhenReady() {
   try {
@@ -32,6 +50,28 @@ async function refreshChatSessionsWhenReady() {
     await useChatStore().loadSessions()
   } catch (e) {
     console.warn('[AppLayout] sidecar 就绪后补载会话列表失败:', e)
+  }
+}
+
+/** sidecar 晚到时重读启动阶段未能加载的配置，并恢复默认会话入口。 */
+async function reloadDelayedSidecarConfig() {
+  const hasConfiguredSetup =
+    (settingsStore.config?.llm.providers.length ?? 0) > 0 ||
+    settingsStore.config?.general?.welcomeCompleted === true
+  const needsWelcomeRecovery = router.currentRoute.value.path === '/welcome'
+  if (hasConfiguredSetup && !needsWelcomeRecovery) return
+
+  try {
+    if (!hasConfiguredSetup) await settingsStore.loadConfig({ force: true })
+    if (
+      needsWelcomeRecovery &&
+      ((settingsStore.config?.llm.providers.length ?? 0) > 0 ||
+        settingsStore.config?.general?.welcomeCompleted === true)
+    ) {
+      await router.replace('/chat')
+    }
+  } catch (e) {
+    console.warn('[AppLayout] sidecar 就绪后重载配置失败:', e)
   }
 }
 
@@ -75,7 +115,8 @@ function dismissSplash() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await installSidecarReadyListener()
   appStore.startHealthCheck()
   // 如果 sidecar 30 秒内未就绪，也移除 splash 避免永远卡住
   const splashTimeout = setTimeout(dismissSplash, 30000)
@@ -85,6 +126,7 @@ onMounted(() => {
       if (ready && !wasReady) {
         clearTimeout(splashTimeout)
         dismissSplash()
+        void reloadDelayedSidecarConfig()
         void refreshChatSessionsWhenReady() // 冷启动补载会话列表（首屏会话页不再空）
         void probeIMChannelsBackendWhenReady()
         void warmupOllamaModel()
@@ -95,6 +137,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  sidecarReadyListenerDisposed = true
+  stopSidecarReadyListener?.()
+  stopSidecarReadyListener = null
   appStore.stopHealthCheck()
 })
 </script>

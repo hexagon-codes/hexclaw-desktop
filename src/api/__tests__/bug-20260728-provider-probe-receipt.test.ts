@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/config/env', () => ({
   env: { apiBase: 'http://localhost:16060' },
+  OLLAMA_BASE: 'http://localhost:11434',
 }))
 
 vi.mock('@/utils/platform', () => ({

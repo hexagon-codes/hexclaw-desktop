@@ -818,7 +818,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     v-if="track.plan_section === 'due_review'"
                     :suppressed="false"
                     :busy="busy"
-                    display="visible"
                     @suppress="emit('suppress-item', item)"
                   />
                 </div>
@@ -923,8 +922,8 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   color: var(--hc-error);
 }
 .weekly-view-tabs {
-  width: fit-content;
-  flex: none;
+  width: auto;
+  flex: 1 1 auto;
 }
 .weekly-progress {
   display: flex;
@@ -1284,6 +1283,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   white-space: nowrap;
 }
 
+.weekly-progress > button {
+  font-family: inherit;
+  line-height: 18px;
+}
+
 .weekly-progress--missing {
   border-style: dashed;
   background: var(--hc-bg-card);
@@ -1374,10 +1378,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   box-shadow: none;
 }
 
-.weekly-toolbar .k12-secondary-tabs {
-  background: rgba(255, 254, 249, 0.9);
-}
-
 .weekly-progress.rc-week-progress > div {
   display: flex;
   align-items: center;
@@ -1402,12 +1402,13 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 }
 
 .weekly-progress.rc-week-progress > button {
-  height: 32px;
-  font-family: Arial;
-  line-height: normal;
+  /* 进度条动作复用全局 .btn.btn-ghost 的字体/高度，避免 WebKit 与原型漂移。 */
+  flex: none;
+  white-space: nowrap;
 }
 
 .weekly-progress.rc-week-progress--missing {
+  flex-direction: row;
   background: var(--hc-bg-input);
 }
 
@@ -1611,18 +1612,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
 .weekly-item.resource-row .btn,
 .weekly-manual.resource-row .btn {
-  height: 28px;
   flex: none;
-  padding: 0 11px;
-  border-radius: 8px;
-  font-family: Arial;
-  font-size: 12px;
-  line-height: normal;
-}
-
-.weekly-item.resource-row .btn.btn-ghost,
-.weekly-manual.resource-row .btn.btn-ghost {
-  padding: 0 9px;
 }
 
 .weekly-manual.resource-row {

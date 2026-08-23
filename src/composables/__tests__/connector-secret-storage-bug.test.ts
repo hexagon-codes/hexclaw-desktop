@@ -25,12 +25,16 @@ describe('BUG: connector DB credentials are persisted as plaintext in localStora
     const { addInstance } = useConnectorInstances()
     const SECRET = 'sup3r-s3cret-db-pw'
 
-    await addInstance({
+    const created = await addInstance({
+      id: 'connection-owner-1',
       type: 'postgres',
       name: '生产库',
       config: { host: 'db.internal', port: '5432', user: 'admin', password: SECRET },
       enabled: true,
     })
+
+    expect(created.id).toBe('connection-owner-1')
+    expect(created.credentialRefs?.password).toBe('sidecar-connection:v1:connection-owner-1:password')
 
     // 触发 deep watch 落盘。
     await nextTick()

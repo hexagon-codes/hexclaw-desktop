@@ -186,6 +186,14 @@ function toggleSecret(key: string) {
   showSecrets.value[key] = !showSecrets.value[key]
 }
 
+function isMaskedSecret(value: string | undefined): boolean {
+  return !!value && /^\*{4,}$/.test(value)
+}
+
+function connectionSecretRef(owner: string, field: string): string {
+  return `sidecar-connection:v1:${owner}:${field}`
+}
+
 async function handleSave() {
   if (saving.value) return
   const name = formName.value.trim() || currentName.value
@@ -231,10 +239,16 @@ async function handleSave() {
 
   // MCP 数据连接器(数据库)：保存即向后端注册/更新 stdio MCP server。
   // 凭证经 env(MySQL/Mongo) 或连接串 arg(Postgres/Redis) 注入；密码字段同时由
-  // useConnectorInstances 改走 secure-store（绝不明文落 localStorage）。
+  // MCP secret 通过 Sidecar mutation 写入单一加密配置（绝不明文落 localStorage）。
   if (currentMethod.value === 'mcp') {
     const spec = MCP_CONNECTOR_SPECS[formType.value]
-    const built = spec ? buildMcpServerConfig(formType.value, formConfig.value) : null
+    // 编辑态收到的是脱敏 projection。把 masked secret 从 runtime args/env 中拿掉，
+    // 由 Sidecar 的 preserve mutation 复用已加密值；只有用户显式清空才发送 clear。
+    const runtimeConfig = { ...formConfig.value }
+    for (const field of spec?.fields ?? []) {
+      if (field.secret && isMaskedSecret(runtimeConfig[field.key])) runtimeConfig[field.key] = ''
+    }
+    const built = spec ? buildMcpServerConfig(formType.value, runtimeConfig) : null
     if (!spec || !built) {
       toast.error(t('connections.connectors.mcpUnsupported', '该数据源暂不支持'))
       return
@@ -249,10 +263,28 @@ async function handleSave() {
     }
     saving.value = true
     try {
+      // 新建时先固定连接 owner id，再把同一 id 交给本地实例投影，保证 Sidecar
+      // metadata 与 Connection credentialRefs 指向同一 owner。
+      const owner = props.instance?.id ?? `connection-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
+      const secretArgs = Object.entries(built.secretLayout?.args ?? {}).map(([rawIndex, field]) => {
+        const index = Number(rawIndex)
+        const raw = formConfig.value[field] ?? ''
+        const mode = isMaskedSecret(raw) ? 'preserve' : raw === '' ? 'clear' : 'replace'
+        return { index, mode: mode as 'preserve' | 'replace' | 'clear', credentialRef: connectionSecretRef(owner, field) }
+      })
+      const secretEnv = Object.entries(built.secretLayout?.env ?? {}).map(([key, field]) => {
+        const raw = formConfig.value[field] ?? ''
+        const mode = isMaskedSecret(raw) ? 'preserve' : raw === '' ? 'clear' : 'replace'
+        return { key, mode: mode as 'preserve' | 'replace' | 'clear', credentialRef: connectionSecretRef(owner, field) }
+      })
       // ★add 先行：先以新名注册成功，再（编辑改名时）摘除旧 server。
       // 若 add 失败 → 直接进 catch，旧 server 与实例都保持不变（一致），不会出现
       // “旧的删了、新的没建起来”的死状态（先删后加的半失败窗口）。
-      const res = await addMcpServer(name, built.command, built.args, { env: built.env })
+      const res = await addMcpServer(name, built.command, built.args, {
+        env: built.env,
+        secretArgs,
+        secretEnv,
+      })
       if (mode.value === 'edit' && props.instance) {
         const oldName = props.instance.config?.mcp_server
         if (oldName && oldName !== name) {
@@ -261,7 +293,7 @@ async function handleSave() {
       }
       const nextConfig = { ...formConfig.value, mcp_server: name }
       if (mode.value === 'create') {
-        await addInstance({ type: formType.value, name, config: nextConfig, enabled: true })
+        await addInstance({ id: owner, type: formType.value, name, config: nextConfig, enabled: true })
       } else if (props.instance) {
         await updateInstance(props.instance.id, { name, config: nextConfig, enabled: true })
       }

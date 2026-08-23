@@ -9,10 +9,39 @@ const ollama = vi.hoisted(() => ({
   loadOllamaModel: vi.fn(),
 }))
 
+const runtime = vi.hoisted(() => ({
+  checkHealth: vi.fn(),
+  listen: vi.fn(),
+}))
+
+const delayedReadyRecovery = vi.hoisted(() => ({
+  config: {
+    llm: { providers: [] as Array<{ id: string }> },
+    general: { welcomeCompleted: false },
+  },
+  loadConfig: vi.fn(),
+  replace: vi.fn(),
+}))
+
 vi.mock('@/api/ollama', () => ollama)
 
 vi.mock('@/api/client', () => ({
-  checkHealth: vi.fn().mockResolvedValue(false),
+  checkHealth: runtime.checkHealth,
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: runtime.listen,
+}))
+
+vi.mock('@/stores/settings', () => ({
+  useSettingsStore: () => delayedReadyRecovery,
+}))
+
+vi.mock('@/router', () => ({
+  default: {
+    currentRoute: { value: { path: '/welcome' } },
+    replace: delayedReadyRecovery.replace,
+  },
 }))
 
 describe('AppLayout IM runtime sync', () => {
@@ -42,6 +71,14 @@ describe('AppLayout — 冷启动 sidecar 就绪补载会话列表', () => {
     ollama.getOllamaRunning.mockResolvedValue([])
     ollama.getOllamaRunningResult.mockResolvedValue({ models: [], reachable: true })
     ollama.loadOllamaModel.mockResolvedValue(undefined)
+    runtime.checkHealth.mockResolvedValue(false)
+    runtime.listen.mockResolvedValue(vi.fn())
+    delayedReadyRecovery.config = {
+      llm: { providers: [] },
+      general: { welcomeCompleted: false },
+    }
+    delayedReadyRecovery.loadConfig.mockResolvedValue(undefined)
+    delayedReadyRecovery.replace.mockResolvedValue(undefined)
   })
 
   it('sidecar 由未就绪 → 就绪时调用 chatStore.loadSessions', async () => {
@@ -66,18 +103,157 @@ describe('AppLayout — 冷启动 sidecar 就绪补载会话列表', () => {
       },
     })
     await flushPromises()
+    await vi.waitFor(() => expect(runtime.checkHealth).toHaveBeenCalled())
+    await runtime.checkHealth.mock.results[0]!.value
+    await flushPromises()
 
     // 初始未就绪（checkHealth mock=false）：不补载。
     expect(loadSessionsSpy).not.toHaveBeenCalled()
 
     // sidecar 就绪 → 触发 watcher → 补载会话列表。
     appStore.sidecarReady = true
-    await flushPromises()
-    await flushPromises() // 等动态 import('@/stores/chat') + loadSessions 落定
-
-    expect(loadSessionsSpy).toHaveBeenCalled()
+    await vi.waitFor(() => expect(loadSessionsSpy).toHaveBeenCalled())
 
     appStore.stopHealthCheck() // 清理 5s 轮询定时器
+  })
+
+  it('[BUG-20260725-008] native event 丢失时先完成订阅，再由 health store fallback 撤除 splash', async () => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div id="splash-screen" data-shown-at="0"></div>',
+    )
+    const { useAppStore } = await import('@/stores/app')
+    const AppLayout = (await import('../AppLayout.vue')).default
+    const appStore = useAppStore()
+    const wrapper = mount(AppLayout, {
+      global: {
+        stubs: {
+          TitleBar: stub,
+          Sidebar: stub,
+          DetailPanel: stub,
+          EngineBanner: stub,
+          InspectorContext: stub,
+          CommandPalette: stub,
+        },
+      },
+    })
+    await flushPromises()
+
+    await vi.waitFor(() =>
+      expect(runtime.listen).toHaveBeenCalledWith('sidecar-ready', expect.any(Function)),
+    )
+    expect(runtime.checkHealth).toHaveBeenCalled()
+    expect(runtime.listen.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.checkHealth.mock.invocationCallOrder[0]!,
+    )
+
+    // 不派发 native event，模拟其在 renderer 注册前已经丢失；health fallback 仍必须解锁首屏。
+    appStore.sidecarReady = true
+    await vi.waitFor(() =>
+      expect(document.getElementById('splash-screen')?.classList.contains('fade-out')).toBe(true),
+      { timeout: 1500 },
+    )
+
+    wrapper.unmount()
+    appStore.stopHealthCheck()
+    document.getElementById('splash-screen')?.remove()
+  })
+
+  it('[BUG-20260725-008] reloads the delayed sidecar configuration and returns the temporary welcome route to chat', async () => {
+    delayedReadyRecovery.loadConfig.mockImplementation(async () => {
+      delayedReadyRecovery.config = { llm: { providers: [{ id: 'fixture' }] } }
+    })
+    const { useAppStore } = await import('@/stores/app')
+    const AppLayout = (await import('../AppLayout.vue')).default
+    const appStore = useAppStore()
+    const wrapper = mount(AppLayout, {
+      global: {
+        stubs: {
+          TitleBar: stub,
+          Sidebar: stub,
+          DetailPanel: stub,
+          EngineBanner: stub,
+          InspectorContext: stub,
+          CommandPalette: stub,
+        },
+      },
+    })
+    await flushPromises()
+
+    appStore.sidecarReady = true
+
+    await vi.waitFor(() =>
+      expect(delayedReadyRecovery.loadConfig).toHaveBeenCalledWith({ force: true }),
+    )
+    await vi.waitFor(() => expect(delayedReadyRecovery.replace).toHaveBeenCalledWith('/chat'))
+
+    wrapper.unmount()
+    appStore.stopHealthCheck()
+  })
+
+  it('[BUG-20260725-008] returns to chat when delayed config only carries welcomeCompleted', async () => {
+    delayedReadyRecovery.loadConfig.mockImplementation(async () => {
+      delayedReadyRecovery.config = {
+        llm: { providers: [] },
+        general: { welcomeCompleted: true },
+      }
+    })
+    const { useAppStore } = await import('@/stores/app')
+    const AppLayout = (await import('../AppLayout.vue')).default
+    const appStore = useAppStore()
+    const wrapper = mount(AppLayout, {
+      global: {
+        stubs: {
+          TitleBar: stub,
+          Sidebar: stub,
+          DetailPanel: stub,
+          EngineBanner: stub,
+          InspectorContext: stub,
+          CommandPalette: stub,
+        },
+      },
+    })
+    await flushPromises()
+
+    appStore.sidecarReady = true
+
+    await vi.waitFor(() =>
+      expect(delayedReadyRecovery.loadConfig).toHaveBeenCalledWith({ force: true }),
+    )
+    await vi.waitFor(() => expect(delayedReadyRecovery.replace).toHaveBeenCalledWith('/chat'))
+
+    wrapper.unmount()
+    appStore.stopHealthCheck()
+  })
+
+  it('[BUG-20260725-008] leaves welcome even when the persisted config was already complete', async () => {
+    delayedReadyRecovery.config = {
+      llm: { providers: [] },
+      general: { welcomeCompleted: true },
+    }
+    const { useAppStore } = await import('@/stores/app')
+    const AppLayout = (await import('../AppLayout.vue')).default
+    const appStore = useAppStore()
+    const wrapper = mount(AppLayout, {
+      global: {
+        stubs: {
+          TitleBar: stub,
+          Sidebar: stub,
+          DetailPanel: stub,
+          EngineBanner: stub,
+          InspectorContext: stub,
+          CommandPalette: stub,
+        },
+      },
+    })
+    await flushPromises()
+
+    appStore.sidecarReady = true
+
+    await vi.waitFor(() => expect(delayedReadyRecovery.replace).toHaveBeenCalledWith('/chat'))
+
+    wrapper.unmount()
+    appStore.stopHealthCheck()
   })
 
   it('[bug] does not auto-warm when the running-model probe is unreachable', async () => {

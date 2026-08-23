@@ -1,11 +1,4 @@
 import { ref, watch, type Ref } from 'vue'
-import {
-  credentialRefFor,
-  deleteCredential,
-  putCredential,
-  type CredentialKey,
-  type CredentialSecretKind,
-} from '@/utils/secure-store'
 
 export interface ConnectorInstance {
   id: string
@@ -13,33 +6,27 @@ export interface ConnectorInstance {
   name: string
   config: Record<string, string>
   enabled: boolean
-  /** Non-secret references only; connector code never resolves plaintext. */
+  /** Non-secret references only; Sidecar resolves the encrypted value. */
   credentialRefs?: Record<string, string>
 }
 
 const STORAGE_KEY = 'hexclaw:connectorInstances'
-const SECRET_KIND: Record<string, CredentialSecretKind> = {
-  password: 'password',
-  token: 'token',
-  secret: 'secret',
-  app_secret: 'app_secret',
-  aes_key: 'aes_key',
-  apiKey: 'api_key',
-  api_key: 'api_key',
-  accessKey: 'access_key',
-  access_key: 'access_key',
-  secretKey: 'secret_key',
-  secret_key: 'secret_key',
-}
+const SECRET_FIELDS = new Set([
+  'password',
+  'token',
+  'secret',
+  'app_secret',
+  'aes_key',
+  'apiKey',
+  'api_key',
+  'accessKey',
+  'access_key',
+  'secretKey',
+  'secret_key',
+])
 
 function isSecretKey(key: string): boolean {
-  return key in SECRET_KIND
-}
-
-function credentialKeyFor(instanceId: string, field: string): CredentialKey {
-  const secretKind = SECRET_KIND[field]
-  if (!secretKind) throw new Error('connector credential kind is invalid')
-  return { ownerKind: 'connection', ownerId: instanceId, secretKind }
+  return SECRET_FIELDS.has(key)
 }
 
 function loadFromStorage(): ConnectorInstance[] {
@@ -100,20 +87,21 @@ async function persistSecrets(
   const credentialRefs = { ...previous?.credentialRefs, ...instance.credentialRefs }
   for (const [field, value] of Object.entries(instance.config)) {
     if (!isSecretKey(field)) continue
-    const key = credentialKeyFor(instance.id, field)
     if (value && !value.includes('*')) {
-      const receipt = await putCredential(key, value)
-      credentialRefs[field] = receipt.credentialRef
+      // Secret bytes go directly to the Sidecar MCP/Connection mutation. The
+      // renderer keeps only a stable reference and a masked projection.
+      credentialRefs[field] = `sidecar-connection:v1:${instance.id}:${field}`
     } else if (!value && credentialRefs[field]) {
-      await deleteCredential(key)
       delete credentialRefs[field]
     }
   }
   return redactedInstance({ ...instance, credentialRefs })
 }
 
-async function addInstance(x: Omit<ConnectorInstance, 'id'>): Promise<ConnectorInstance> {
-  const candidate: ConnectorInstance = { ...x, id: genId() }
+type NewConnectorInstance = Omit<ConnectorInstance, 'id'> & { id?: string }
+
+async function addInstance(x: NewConnectorInstance): Promise<ConnectorInstance> {
+  const candidate: ConnectorInstance = { ...x, id: x.id ?? genId() }
   const instance = await persistSecrets(candidate)
   list.value.push(instance)
   return instance
@@ -134,10 +122,6 @@ async function updateInstance(
 async function removeInstance(id: string): Promise<void> {
   const index = list.value.findIndex((instance) => instance.id === id)
   if (index === -1) return
-  const instance = list.value[index]!
-  for (const field of Object.keys(instance.credentialRefs ?? {})) {
-    await deleteCredential(credentialKeyFor(instance.id, field))
-  }
   list.value.splice(index, 1)
 }
 
@@ -149,5 +133,3 @@ export function useConnectorInstances(): {
 } {
   return { list, addInstance, updateInstance, removeInstance }
 }
-
-export { credentialRefFor }

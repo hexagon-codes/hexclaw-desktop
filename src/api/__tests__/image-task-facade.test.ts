@@ -27,6 +27,8 @@ function dispatch(overrides: Record<string, unknown> = {}) {
       intake_id: 'intake-1',
       work_type: 'art',
       status: 'promoted',
+      promoted_work_id: 'work-1',
+      promoted_generation_id: 'generation-1',
       work: { work_id: 'work-1', display_name: '美术作品' },
     },
     progress: { operation: 'promotion', state: 'promoted' },
@@ -580,6 +582,17 @@ describe('K12 ImageTaskDispatch public facade', () => {
       { agent: 'tutor/小明' },
       { signal: controller.signal },
     )
+  })
+
+  it('BUG-20260728-018 scopes recoverable image tasks to the current source session', async () => {
+    client.apiGet.mockResolvedValueOnce({ items: [] })
+
+    await k12Api.k12ListRecoverableImageTasks('tutor/小明', 'session / 1')
+
+    expect(client.apiGet).toHaveBeenCalledWith('/api/k12/image-tasks/recoverable', {
+      agent: 'tutor/小明',
+      session: 'session / 1',
+    })
   })
 
   it.each([

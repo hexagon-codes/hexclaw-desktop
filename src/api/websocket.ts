@@ -111,17 +111,17 @@ export type ToolApprovalWireMessage = Omit<WsServerMessage, 'type'> & {
 
 export interface ToolApprovalRequest {
   requestId: string
-  ownerId?: string
-  invocationId?: string
+  ownerId: string
+  invocationId: string
   toolName: string
   arguments?: Record<string, unknown>
-  argumentsDigest?: string
-  securityScopeDigest?: string
-  scopeSchemaVersion?: number
+  argumentsDigest: string
+  securityScopeDigest: string
+  scopeSchemaVersion: number
   risk: string
   reason: string
   sessionId: string
-  deadlineAt?: string
+  deadlineAt: string
 }
 
 type ApprovalCallback = (req: ToolApprovalRequest) => void
@@ -132,6 +132,74 @@ function isToolApprovalWireMessage(message: WsServerMessage): message is ToolApp
     || message.type === 'tool_permission_request'
     || message.type === 'tool_approval_ack'
     || message.type === 'tool_approval_terminal'
+}
+
+function approvalWireString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value
+  }
+  return undefined
+}
+
+function approvalScopeSchemaVersion(message: WsServerMessage): number | undefined {
+  if (Number.isSafeInteger(message.scope_schema_version) && Number(message.scope_schema_version) > 0) {
+    return Number(message.scope_schema_version)
+  }
+  const metadataVersion = message.metadata?.scope_schema_version
+  if (
+    typeof metadataVersion === 'string' &&
+    /^\d+$/.test(metadataVersion) &&
+    Number(metadataVersion) > 0
+  ) {
+    return Number(metadataVersion)
+  }
+  return undefined
+}
+
+function parseToolApprovalRequest(message: WsServerMessage): ToolApprovalRequest | null {
+  const requestId = approvalWireString(message.request_id, message.metadata?.request_id)
+  const ownerId = approvalWireString(message.owner_id, message.metadata?.owner_id)
+  const invocationId = approvalWireString(message.invocation_id, message.metadata?.invocation_id)
+  const toolName = approvalWireString(message.tool_name, message.metadata?.tool_name)
+  const argumentsDigest = approvalWireString(
+    message.arguments_digest,
+    message.metadata?.arguments_digest,
+  )
+  const securityScopeDigest = approvalWireString(
+    message.security_scope_digest,
+    message.metadata?.security_scope_digest,
+  )
+  const scopeSchemaVersion = approvalScopeSchemaVersion(message)
+  const sessionId = approvalWireString(message.session_id, message.metadata?.session_id)
+  const deadlineAt = approvalWireString(message.deadline_at, message.metadata?.deadline_at)
+  if (
+    !requestId ||
+    !ownerId ||
+    !invocationId ||
+    !toolName ||
+    !argumentsDigest ||
+    !securityScopeDigest ||
+    !scopeSchemaVersion ||
+    !sessionId ||
+    !deadlineAt ||
+    !Number.isFinite(Date.parse(deadlineAt))
+  ) {
+    return null
+  }
+  return {
+    requestId,
+    ownerId,
+    invocationId,
+    toolName,
+    arguments: message.arguments,
+    argumentsDigest,
+    securityScopeDigest,
+    scopeSchemaVersion,
+    risk: approvalWireString(message.metadata?.risk) ?? 'sensitive',
+    reason: message.content || '',
+    sessionId,
+    deadlineAt,
+  }
 }
 
 /** 后端 desktop.Service 推送的通知（cron 完成/失败、IM 入站、heal 等）。 */
@@ -390,26 +458,8 @@ class HexClawWS {
         if (isToolApprovalWireMessage(msg)) {
           this.approvalWireCallbacks.forEach((cb) => cb(msg))
         }
-        this.approvalCallbacks.forEach((cb) => cb({
-          requestId: msg.request_id || (msg.metadata?.request_id as string) || '',
-          ownerId: msg.owner_id || (msg.metadata?.owner_id as string) || undefined,
-          invocationId: msg.invocation_id || (msg.metadata?.invocation_id as string) || undefined,
-          toolName: msg.tool_name || (msg.metadata?.tool_name as string) || '',
-          arguments: msg.arguments,
-          argumentsDigest: msg.arguments_digest || (msg.metadata?.arguments_digest as string) || undefined,
-          securityScopeDigest: msg.security_scope_digest || (msg.metadata?.security_scope_digest as string) || undefined,
-          scopeSchemaVersion: Number.isSafeInteger(msg.scope_schema_version) && Number(msg.scope_schema_version) > 0
-            ? Number(msg.scope_schema_version)
-            : (typeof msg.metadata?.scope_schema_version === 'string'
-                && /^\d+$/.test(msg.metadata.scope_schema_version)
-                && Number(msg.metadata.scope_schema_version) > 0
-              ? Number(msg.metadata.scope_schema_version)
-              : undefined),
-          risk: (msg.metadata?.risk as string) || 'sensitive',
-          reason: msg.content || '',
-          sessionId: msg.session_id || '',
-          deadlineAt: msg.deadline_at || (msg.metadata?.deadline_at as string) || undefined,
-        }))
+        const approvalRequest = parseToolApprovalRequest(msg)
+        if (approvalRequest) this.approvalCallbacks.forEach((cb) => cb(approvalRequest))
         break
       case 'tool_approval_ack':
       case 'tool_approval_terminal':

@@ -122,7 +122,7 @@ vi.mock('@/utils/secure-store', () => ({
   credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
     key.ownerKind === 'provider'
       ? `llm_provider/${key.ownerId}/api_key`
-      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
+      : `sidecar-connection:v1:${key.ownerId}:${key.secretKind}`,
 }))
 
 // Mock Tauri Store（isTauri=true 时 settings store 会 import 它）
@@ -283,7 +283,7 @@ describe('SettingsView — E2E 关键路径', () => {
       cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
     })
     vi.mocked(updateLLMConfig).mockReset()
-    vi.mocked(updateLLMConfig).mockImplementation(() => Promise.resolve())
+    vi.mocked(updateLLMConfig).mockImplementation(() => Promise.resolve({}))
     ollamaApi.getOllamaStatus.mockResolvedValue({
       running: false,
       associated: false,
@@ -549,7 +549,7 @@ describe('SettingsView — E2E 关键路径', () => {
     )
   })
 
-  it('keeps masked connection-failure details inside the expanded edit panel only', async () => {
+  it('keeps connection-failure details across edit-panel collapse without a new probe', async () => {
     const errorMessage = 'openai api error: 401 Unauthorized, body: {"error":"Missing Authentication header"}'
     mockTestLLMConnection.mockResolvedValue({
       ok: false,
@@ -575,6 +575,19 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(card.find('.hc-provider__connection-detail').exists()).toBe(false)
     expect(card.find('.hc-provider__connection-status').text()).toContain('失败')
+
+    await card.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+    expect(card.get('.hc-provider__connection-detail').text()).toContain(errorMessage)
+
+    await card.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+    expect(card.find('.hc-provider__connection-detail').exists()).toBe(false)
+
+    await card.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+    expect(card.get('.hc-provider__connection-detail').text()).toContain(errorMessage)
+    expect(mockTestLLMConnection).toHaveBeenCalledTimes(1)
   })
 
   it('reveals the saved plaintext API key through readProviderApiKey in the display layer only (form value stays masked, no save triggered)', async () => {
@@ -584,7 +597,7 @@ describe('SettingsView — E2E 关键路径', () => {
     readMock.mockClear()
     updateMock.mockClear()
 
-    const wrapper = await mountSettingsView()
+    const wrapper = await mountSettingsView(document.body)
     await flushPromises()
 
     const store = await getSettingsStore()
@@ -608,23 +621,29 @@ describe('SettingsView — E2E 关键路径', () => {
     expect((apiKeyInput.element as HTMLInputElement).placeholder).toBe('•'.repeat(24))
     expect(provider.apiKey).toBe('********')
 
-    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    ;(apiKeyInput.element as HTMLInputElement).focus()
+    const eyeButton = wrapper.get<HTMLButtonElement>('.hc-settings__eye-btn')
+    ;(eyeButton.element as HTMLButtonElement).focus()
+    await eyeButton.trigger('click')
     await flushPromises()
 
     expect(readMock).toHaveBeenCalledWith('openai')
     expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('text')
     expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-test-plain-readback')
+    expect(document.activeElement).toBe(apiKeyInput.element)
     // 方案 B：表单保存值保持脱敏，眼睛不触发保存
     expect(provider.apiKey).toBe('********')
     expect(updateMock).not.toHaveBeenCalled()
 
     // 关闭眼睛：恢复掩码（value 空 + placeholder 等长圆点）、展示明文清除、保存值仍不变
-    await wrapper.get('.hc-settings__eye-btn').trigger('click')
+    eyeButton.element.focus()
+    await eyeButton.trigger('click')
     await flushPromises()
     expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('password')
     expect((apiKeyInput.element as HTMLInputElement).value).toBe('')
     expect((apiKeyInput.element as HTMLInputElement).placeholder).toBe('•'.repeat(24))
     expect(provider.apiKey).toBe('********')
+    expect(document.activeElement).toBe(apiKeyInput.element)
     expect(updateMock).not.toHaveBeenCalled()
   })
 
@@ -950,6 +969,29 @@ describe('SettingsView — E2E 关键路径', () => {
     ).toEqual([])
   })
 
+  it('uses the explicit capability declaration instead of inferring vision from a model ID', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      displayCapabilities: (model: unknown) => string[]
+    }
+
+    expect(
+      vm.displayCapabilities({
+        id: 'qwen-vl-max',
+        name: 'Qwen VL Max',
+        capabilities: ['text'],
+      }),
+    ).toEqual(['text'])
+    expect(
+      vm.displayCapabilities({
+        id: 'qwen-vl-max',
+        name: 'Qwen VL Max',
+        capabilities: ['text', 'vision'],
+      }),
+    ).toEqual(['text', 'vision'])
+  })
+
   it('adds Embedding as an explicit core capability without changing chat selection', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
@@ -1241,8 +1283,8 @@ describe('SettingsView — E2E 关键路径', () => {
     )
 
     let releaseFirstSave!: () => void
-    const firstSaveGate = new Promise<void>((resolve) => {
-      releaseFirstSave = resolve
+    const firstSaveGate = new Promise<{ config_revision?: number; config_digest?: string }>((resolve) => {
+      releaseFirstSave = () => resolve({})
     })
     const savedSnapshots: string[][] = []
     const saveConfig = vi.spyOn(store, 'saveConfig')
@@ -1466,6 +1508,23 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(customCard.get('.hc-provider__connection-status').text()).toContain('成功')
   })
 
+  it('keeps Base URL on a half row and API Key on a full row in both provider grids', async () => {
+    const { default: settingsViewSource } = await import('../SettingsView.vue?raw')
+
+    expect(settingsViewSource).toMatch(
+      /\.hc-provider__config-grid--builtin\s+\.hc-provider__config-key\s*\{\s*grid-column:\s*1\s*\/\s*-1;/,
+    )
+    expect(settingsViewSource).toMatch(
+      /\.hc-provider__config-grid--builtin\s+\.hc-provider__config-url\s*\{\s*order:\s*-1;/,
+    )
+    expect(settingsViewSource).toMatch(
+      /\.hc-provider__config-grid--custom\s+\.hc-provider__config-key\s*\{\s*grid-column:\s*1\s*\/\s*-1;/,
+    )
+    expect(settingsViewSource).toMatch(
+      /\.hc-provider__config-grid--custom\s+\.hc-provider__config-url\s*\{\s*grid-row:\s*1;\s*grid-column:\s*2;/,
+    )
+  })
+
   it('shows the connection-test lifecycle in the header and disables duplicate clicks', async () => {
     let resolveTest!: (value: {
       ok: boolean
@@ -1507,6 +1566,64 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     expect(card.get('.hc-provider__connection-status').text()).toContain('成功')
     expect(testButton.element.disabled).toBe(false)
+  })
+
+  it('keeps another provider test button enabled while the first provider probe is pending', async () => {
+    const resolvers: Array<
+      (value: {
+        ok: boolean
+        message: string
+        persisted: boolean
+        tested_at: string
+        latency_ms: number
+      }) => void
+    > = []
+    mockTestLLMConnection.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve as (value: (typeof resolvers)[number] extends (value: infer T) => void ? T : never) => void)
+        }),
+    )
+
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const first = store.config!.llm.providers[0]!
+    const second = store.addProvider({
+      name: 'DeepSeek',
+      type: 'deepseek',
+      enabled: true,
+      apiKey: 'sk-deepseek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', capabilities: ['text'] }],
+    })!
+    first.providerInstanceId = 'pvd_v1_11112222333344445555666677778888'
+    second.providerInstanceId = 'pvd_v1_99990000111122223333444455556666'
+    await flushPromises()
+
+    const cards = wrapper.findAll('.hc-provider__card')
+    const firstButton = cards[0]!.get<HTMLButtonElement>('.hc-provider__test-btn')
+    const secondButton = cards[1]!.get<HTMLButtonElement>('.hc-provider__test-btn')
+    await firstButton.trigger('click')
+    await vi.waitFor(() => expect(mockTestLLMConnection).toHaveBeenCalledTimes(1))
+
+    expect(firstButton.element.disabled).toBe(true)
+    expect(secondButton.element.disabled).toBe(false)
+
+    await secondButton.trigger('click')
+    await vi.waitFor(() => expect(mockTestLLMConnection).toHaveBeenCalledTimes(2))
+    expect(secondButton.element.disabled).toBe(true)
+
+    const failure = {
+      ok: false,
+      message: 'connection failed',
+      persisted: false,
+      tested_at: '2026-08-17T00:00:00Z',
+      latency_ms: 12,
+    }
+    resolvers[0]!(failure)
+    resolvers[1]!(failure)
+    await flushPromises()
   })
 
   it('edits default model and routing strategy from the LLM section', async () => {
@@ -1714,12 +1831,12 @@ describe('SettingsView — E2E 关键路径', () => {
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
 
     let releaseFirstSave!: () => void
-    const firstSaveGate = new Promise<void>((resolve) => {
-      releaseFirstSave = resolve
+    const firstSaveGate = new Promise<{ config_revision?: number; config_digest?: string }>((resolve) => {
+      releaseFirstSave = () => resolve({})
     })
     mockedUpdateLLMConfig
       .mockImplementationOnce(() => firstSaveGate)
-      .mockImplementationOnce(() => Promise.resolve())
+      .mockImplementationOnce(() => Promise.resolve({}))
 
     const wrapper = await mountSettingsView()
     for (let i = 0; i < 20; i++) {
@@ -2306,10 +2423,12 @@ describe('SettingsView — E2E 关键路径', () => {
     const { updateLLMConfig } = await import('@/api/config')
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
 
-    let resolveSave!: (value: void | PromiseLike<void>) => void
+    let resolveSave!: (
+      value: { config_revision?: number; config_digest?: string } | PromiseLike<{ config_revision?: number; config_digest?: string }>,
+    ) => void
     mockedUpdateLLMConfig.mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<{ config_revision?: number; config_digest?: string }>((resolve) => {
           resolveSave = resolve
         }),
     )
@@ -2334,7 +2453,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(1)
 
-    resolveSave()
+    resolveSave({})
     await flushPromises()
   })
 

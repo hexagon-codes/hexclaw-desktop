@@ -53,6 +53,7 @@ describe('bug: 辅导头部显示名而非 ID', () => {
     expect(w.find('.k12enh-av').text()).toBe('🎓')
     const header = w.find('.k12enh-name').text()
     expect(header).toContain('小明的辅导助手')
+    expect(header).toContain('· 五年级')
     expect(header).not.toContain('k12-x7f3a9')
   })
 

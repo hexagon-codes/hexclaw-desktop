@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -8,7 +10,7 @@ import K12RecordsView from '../views/K12RecordsView.vue'
 
 // #4/#5（hex-test 闭环）：积累本手动记录入口 + 语/英分科过滤。
 // 后端 POST /accumulation（k12AddAccumulation）真 + GET /accumulation?subject=（store BUG-3 已通），
-// 但原 UI 无「记到积累本」入口、loadAccumulation 不传 subject、无学科筛选切换器。
+// 但原 UI 无「添加积累」入口、loadAccumulation 不传 subject、无学科筛选切换器。
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   addSpy: vi.fn(),
@@ -44,8 +46,11 @@ vi.mock('@/api/k12', () => ({
   k12GetDeliveryBatch: vi.fn(),
   k12QueryDeliveryBatch: (...args: unknown[]) => h.querySpy(...args),
   k12RetryDeliveryBatch: (...args: unknown[]) => h.retrySpy(...args),
-  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
-    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
+  k12GetMistakePracticeGeneration: vi
+    .fn()
+    .mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+    ),
   k12ExportMd: vi.fn(),
 }))
 vi.mock('@/api/desktop', () => ({
@@ -102,6 +107,17 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
   afterEach(() => {
     vi.useRealTimers()
     document.body.innerHTML = ''
+  })
+
+  it('积累默写 wire 与页面投影都识别持久 re_add 状态', () => {
+    const apiSource = readFileSync(resolve(process.cwd(), 'src/api/k12.ts'), 'utf8')
+    const recordsSource = readFileSync(
+      resolve(process.cwd(), 'src/features/k12/views/K12RecordsView.vue'),
+      'utf8',
+    )
+
+    expect(apiSource).toMatch(/AccumulationDictationStatus[\s\S]*\| 're_add'/)
+    expect(recordsSource).toMatch(/ACCUMULATION_DICTATION_STATUSES[\s\S]*'re_add'/)
   })
 
   it('#5 分科过滤：点「语文」chip → 以 subject=语文 重新拉取积累本', async () => {
@@ -173,7 +189,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await gotoAccum(w)
 
     const button = w.get('[data-testid="accum-add-open"]')
-    expect(button.text().trim()).toBe('记到积累本')
+    expect(button.text().trim()).toBe('添加积累')
     expect(button.findAll('svg')).toHaveLength(1)
     expect(button.text()).not.toMatch(/[+＋]/)
   })
@@ -310,7 +326,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(modal.text()).not.toMatch(/已掌握|待复习|更正分类/)
   })
 
-  it('列表从服务端 generation 摘要恢复 initial/pending/committed/failed 四种动作状态', async () => {
+  it('列表从服务端 generation 摘要恢复 initial/pending/committed/re_add/failed 五种动作状态', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         {
@@ -341,11 +357,19 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
           },
         },
         {
+          record_id: 'readd',
+          subject: '语文',
+          entry_type: '古诗积累',
+          content: '空山新雨后',
+          version: 4,
+          dictation_generation: { generation_id: 'g-r', status: 're_add' },
+        },
+        {
           record_id: 'failed',
           subject: '语文',
           entry_type: '写作素材',
           content: '雨后的树叶',
-          version: 4,
+          version: 5,
           dictation_generation: { generation_id: 'g-f', status: 'failed' },
         },
       ],
@@ -368,6 +392,10 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(joined.text()).toBe('已加入练习集')
     expect(joined.attributes('disabled')).toBeDefined()
 
+    const readd = w.get('[data-testid="accum-list-dictation-readd"]')
+    expect(readd.text()).toBe('生成默写题，加入练习集')
+    expect(readd.attributes('disabled')).toBeUndefined()
+
     const failed = w.get('[data-testid="accum-list-dictation-failed"]')
     expect(failed.text()).toBe('生成默写题，加入练习集')
     expect(failed.attributes('disabled')).toBeUndefined()
@@ -379,8 +407,10 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
       expect(row.findAll('button')[1]!.text()).toBe('查看详情')
     }
 
+    await readd.trigger('click')
     await failed.trigger('click')
     await flushPromises()
+    expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'readd')
     expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'failed')
   })
 

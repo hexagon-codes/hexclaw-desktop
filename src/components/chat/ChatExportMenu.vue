@@ -2,6 +2,8 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { FileText, FileJson, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
+import { saveBlobInApp } from '@/utils/download'
+import { isTauri } from '@/utils/platform'
 
 const { t } = useI18n()
 
@@ -60,6 +62,10 @@ function exportJSON() {
 
 function download(content: string, filename: string, type: string) {
   const blob = new Blob([content], { type })
+  if (isTauri()) {
+    void saveBlobInApp(blob, filename)
+    return
+  }
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

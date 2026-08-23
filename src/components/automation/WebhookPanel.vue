@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 
 import {
   Trash2,
-  Globe,
   Webhook as WebhookIcon,
   PowerOff,
   Power,
@@ -138,6 +137,27 @@ const createdNeeds = computed(() => createdPreflight.value?.needs_decision ?? []
 
 function categoryLabel(key: string): string {
   return translateOpenIdentifier(t, te, 'autonomy.category', key)
+}
+
+function webhookLogo(type: WebhookType): string {
+  if (type === 'github') return 'GH'
+  if (type === 'gitlab') return 'GL'
+  return 'JS'
+}
+
+function webhookCardTitle(webhook: Webhook): string {
+  const name = webhook.name.trim()
+  return name.endsWith('触发器') ? name : `${name} 触发器`
+}
+
+function webhookBindingLabel(webhook: Webhook): string {
+  if (!webhook.job_id) return '绑定：Prompt'
+  const job = cronJobs.value.find((item) => item.id === webhook.job_id)
+  return `绑定：${job?.name ?? 'Cron Job'}`
+}
+
+function webhookLastEventLabel(webhook: Webhook): string {
+  return webhook.last_event_at ? `最近：${webhook.last_event_at}` : '最近：暂无'
 }
 
 /** 授权并启用：需授权条目写任务级授权（仅本 Webhook）→ PATCH enabled=true。 */
@@ -288,7 +308,7 @@ async function onCreateWebhook() {
   }
   creating.value = true
   try {
-    const res = await createWebhook(form.value)
+    const res = await createWebhook({ ...form.value, enabled: false })
     toast.success(t('webhooks.created', { name: form.value.name }))
     // 创建即得端点、默认未启用：进入结果态（URL/Secret/预检/启用），不直接关窗。
     createdResult.value = {
@@ -363,10 +383,17 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 <template>
   <div class="webhook-panel">
     <!-- Header：Webhook 计数（仅 count>0 显示；为 0 时下方空状态已足够，不重复提示） -->
-    <div v-if="!featureDisabled && webhooks.length > 0" class="webhook-panel__header">
+    <div
+      v-if="!featureDisabled && webhooks.length > 0 && !hasManagementContent"
+      class="webhook-panel__header"
+    >
       <span class="webhook-panel__count">{{
         t('webhooks.count', { count: webhooks.length })
       }}</span>
+    </div>
+
+    <div v-if="hasManagementContent" class="webhook-panel__intro">
+      通用 Webhook 可绑定 Cron Job 或 Prompt；K12 Webhook 在创建时绑定 agent、learner 与显式事件集合。所有入口都验签、校验时间窗与 nonce；重复事件返回原回执，不重复执行领域副作用。
     </div>
 
     <!-- 新建 Webhook 弹窗（居中模态，与 Agent / Prompt 等弹窗一致） -->
@@ -558,21 +585,22 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       </Transition>
     </Teleport>
 
-    <section
-      v-for="extension in managementExtensions"
-      :key="extension.key"
-      class="webhook-panel__extension-entry"
-      :data-testid="`scenario-webhook-manager-${extension.key}`"
-    >
-      <component
-        :is="extension.component"
-        class="webhook-panel__extension-manager"
-        @content-change="onManagementContentChange(extension.key, $event)"
-      />
-    </section>
+    <div class="webhook-panel__grid">
+      <section
+        v-for="extension in managementExtensions"
+        :key="extension.key"
+        class="webhook-panel__extension-entry"
+        :data-testid="`scenario-webhook-manager-${extension.key}`"
+      >
+        <component
+          :is="extension.component"
+          class="webhook-panel__extension-manager"
+          @content-change="onManagementContentChange(extension.key, $event)"
+        />
+      </section>
 
-    <!-- List -->
-    <div v-if="loading" class="webhook-panel__loading">{{ t('webhooks.loading') }}</div>
+      <!-- List -->
+      <div v-if="loading" class="webhook-panel__loading">{{ t('webhooks.loading') }}</div>
     <div v-else-if="featureDisabled" class="webhook-panel__disabled">
       <PowerOff :size="32" />
       <p class="webhook-panel__disabled-title">{{ t('webhooks.disabledTitle') }}</p>
@@ -591,68 +619,83 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       <h3 class="webhook-panel__empty-title">{{ t('webhooks.emptyTitle') }}</h3>
       <p class="webhook-panel__empty-desc">{{ t('webhooks.emptyDesc') }}</p>
     </div>
-    <div v-else class="webhook-panel__list">
-      <div v-for="wh in filteredWebhooks" :key="wh.id" class="webhook-panel__item">
-        <div class="webhook-panel__item-info">
-          <Globe :size="14" />
-          <span class="webhook-panel__item-name">{{ wh.name }}</span>
-          <span class="webhook-panel__item-type">{{ wh.type }}</span>
-          <span v-if="!wh.enabled" class="webhook-panel__item-disabled">{{
-            t('autonomy.webhook.itemPending', '未启用')
-          }}</span>
-          <button
-            v-if="permissionPending(wh)"
-            class="webhook-panel__perm-badge"
-            data-testid="perm-badge"
-            @click.stop="openBlockedModal(wh)"
-          >
-            <ShieldAlert :size="11" />
-            {{ t('autonomy.badge.pending', '待授权') }} · {{ t('autonomy.badge.open', '去开启') }}
-          </button>
-          <button
-            class="webhook-panel__toggle"
-            data-testid="toggle-enabled"
-            :disabled="togglingIds.has(wh.id)"
-            :title="
-              wh.enabled
-                ? t('autonomy.webhook.disable', '停用')
-                : t('autonomy.webhook.enable', '启用')
-            "
-            @click.stop="toggleWebhookEnabled(wh)"
-          >
-            <Power v-if="!wh.enabled" :size="13" />
-            <PowerOff v-else :size="13" />
-            {{
-              wh.enabled
-                ? t('autonomy.webhook.disable', '停用')
-                : t('autonomy.webhook.enable', '启用')
-            }}
-          </button>
-        </div>
-        <!-- 真实接收 URL（后端按 name 生成）+ 复制 -->
-        <div class="webhook-panel__item-url">
-          <code>{{ webhookUrlFor(wh.name) }}</code>
-          <button
-            class="webhook-panel__copy"
-            :title="t('webhooks.copyUrl', '复制 URL')"
-            @click="copyWebhookUrl(wh.name)"
-          >
-            <Copy :size="13" />
-          </button>
-        </div>
-        <div class="webhook-panel__item-meta">
-          <span class="webhook-panel__item-prompt">{{ wh.prompt }}</span>
-          <span class="webhook-panel__item-count">{{
-            t('webhooks.eventCount', { count: wh.event_count ?? 0 })
-          }}</span>
-        </div>
-        <button
-          class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete"
-          :disabled="deletingIds.has(wh.id)"
-          @click="requestDeleteWebhook(wh)"
+      <div v-else class="webhook-panel__list">
+        <article
+          v-for="wh in filteredWebhooks"
+          :key="wh.id"
+          class="webhook-panel__item hc-webhook-card"
+          :class="`webhook-panel__item--${wh.type}`"
         >
-          <Trash2 :size="14" />
-        </button>
+          <div class="webhook-panel__item-info">
+            <div class="webhook-panel__item-logo" aria-hidden="true">
+              {{ webhookLogo(wh.type) }}
+            </div>
+            <div class="webhook-panel__item-heading">
+              <div class="webhook-panel__item-name">{{ webhookCardTitle(wh) }}</div>
+              <div class="webhook-panel__item-type">POST {{ webhookUrlFor(wh.name) }}</div>
+            </div>
+            <button
+              v-if="permissionPending(wh)"
+              class="webhook-panel__perm-badge"
+              data-testid="perm-badge"
+              @click.stop="openBlockedModal(wh)"
+            >
+              <ShieldAlert :size="11" />
+              {{ t('autonomy.badge.pending', '待授权') }} · {{ t('autonomy.badge.open', '去开启') }}
+            </button>
+            <button
+              class="webhook-panel__toggle"
+              :class="wh.enabled ? 'webhook-panel__toggle--enabled' : 'webhook-panel__toggle--disabled'"
+              data-testid="toggle-enabled"
+              :disabled="togglingIds.has(wh.id)"
+              :title="
+                wh.enabled
+                  ? t('autonomy.webhook.disable', '停用')
+                  : t('autonomy.webhook.enable', '启用')
+              "
+              @click.stop="toggleWebhookEnabled(wh)"
+            >
+              <Power v-if="!wh.enabled" :size="13" />
+              <PowerOff v-else :size="13" />
+              {{ wh.enabled ? '启用' : t('autonomy.webhook.itemPending', '未启用') }}
+            </button>
+          </div>
+          <div class="webhook-panel__resource-row">
+            <b>URL</b>
+            <span class="webhook-panel__resource-value">{{ webhookUrlFor(wh.name) }}</span>
+            <button
+              class="webhook-panel__copy"
+              :title="t('webhooks.copyUrl', '复制 URL')"
+              @click="copyWebhookUrl(wh.name)"
+            >
+              <Copy v-if="wh.type !== 'generic'" :size="13" />
+              <span v-else>复制</span>
+            </button>
+          </div>
+          <div class="webhook-panel__item-meta">
+            <span>{{ webhookBindingLabel(wh) }}</span>
+            <span class="webhook-panel__item-count">事件：{{ wh.event_count ?? 0 }}</span>
+            <span>密钥：{{ wh.has_secret ? '已配置' : '未配置' }}</span>
+            <span v-if="wh.type === 'generic'">类型：generic</span>
+            <span v-else>{{ webhookLastEventLabel(wh) }}</span>
+          </div>
+          <div class="webhook-panel__task-actions">
+            <button
+              class="hc-btn hc-btn-ghost hc-btn-sm"
+              @click="copyWebhookUrl(wh.name)"
+            >
+              复制 URL
+            </button>
+            <button
+              class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete"
+              :disabled="deletingIds.has(wh.id)"
+              @click="requestDeleteWebhook(wh)"
+            >
+              <Trash2 v-if="wh.type !== 'generic'" :size="14" />
+              删除
+            </button>
+          </div>
+        </article>
       </div>
     </div>
   </div>
@@ -676,7 +719,23 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 
 <style scoped>
 .webhook-panel {
-  padding: 16px;
+  padding: 16px 26px 48px;
+}
+.webhook-panel__intro {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.webhook-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
 }
 .webhook-panel__header {
   display: flex;
@@ -689,7 +748,13 @@ defineExpose({ loadWebhooks, openCreateForm, form })
   color: var(--hc-text-secondary);
 }
 .webhook-panel__extension-entry {
-  margin-bottom: 16px;
+  display: contents;
+}
+:deep(.webhook-panel__extension-manager) {
+  display: contents;
+}
+:deep(.k12wh--embedded .k12wh__toolbar) {
+  display: none;
 }
 /* 新建 Webhook 弹窗正文（表单字段纵向排列） */
 .webhook-modal__body {
@@ -729,9 +794,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
   color: var(--hc-text-secondary);
 }
 .webhook-panel__list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: contents;
 }
 .webhook-panel__item {
   display: grid;
@@ -797,6 +860,30 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 .webhook-panel__copy:hover {
   color: var(--hc-accent);
   background: var(--hc-bg-hover);
+}
+.webhook-panel__item--generic .webhook-panel__copy {
+  padding: 5px 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: 7px;
+  background: var(--hc-bg-card);
+  font-size: 12px;
+}
+.webhook-panel__item--generic .webhook-panel__task-actions > .hc-btn:first-child {
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+}
+.webhook-panel__item--generic .webhook-panel__toggle {
+  min-height: 0;
+  padding: 4px 9px;
+  border-radius: 99px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.webhook-panel__item--generic .webhook-panel__toggle svg {
+  display: none;
 }
 .webhook-panel__item-meta {
   display: flex;
@@ -1010,5 +1097,129 @@ defineExpose({ loadWebhooks, openCreateForm, form })
   text-align: center;
   padding: 40px;
   color: var(--hc-error, #dc2626);
+}
+/* 通用 Webhook 使用与原型一致的完整信息卡；真实 DTO 不支持的动作不在此投影。 */
+.webhook-panel__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+@media (max-width: 1040px) {
+  .webhook-panel__grid {
+    grid-template-columns: 1fr;
+  }
+}
+.webhook-panel__item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 245px;
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: 14px;
+  box-shadow: var(--hc-shadow-sm);
+}
+.webhook-panel__item-info {
+  gap: 12px;
+  min-width: 0;
+}
+.webhook-panel__item-logo {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  font-size: 18px;
+}
+.webhook-panel__item-heading {
+  min-width: 0;
+}
+.webhook-panel__item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.webhook-panel__item-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 12px;
+}
+.webhook-panel__resource-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.webhook-panel__resource-row b {
+  flex-shrink: 0;
+  color: var(--hc-text-primary);
+}
+.webhook-panel__resource-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.webhook-panel__item-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  min-width: 0;
+}
+.webhook-panel__item-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.webhook-panel__task-actions {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.webhook-panel__task-actions > .hc-btn {
+  min-height: 36px;
+  box-sizing: border-box;
+}
+.webhook-panel__task-actions .webhook-panel__delete {
+  position: static;
+}
+.webhook-panel__delete {
+  flex-shrink: 0;
+}
+.webhook-panel__toggle {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+}
+.webhook-panel__toggle--enabled {
+  background: rgba(50, 213, 131, 0.16);
+  color: var(--hc-success);
+}
+.webhook-panel__toggle--disabled {
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
 }
 </style>

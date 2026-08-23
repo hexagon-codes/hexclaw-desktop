@@ -28,6 +28,27 @@ const Host = defineComponent({
 })
 
 describe('HcSettingsDisclosure', () => {
+  it('keeps the chevron inside a no-action trigger like the approved disclosure pattern', () => {
+    const wrapper = mount(HcSettingsDisclosure, {
+      props: {
+        modelValue: false,
+        bodyId: 'no-action-settings-body',
+        triggerTestId: 'no-action-settings-toggle',
+      },
+      slots: {
+        title: '无动作设置',
+        summary: '摘要',
+      },
+    })
+
+    expect(
+      wrapper.find('[data-testid="no-action-settings-toggle"] .hc-settings-disclosure__chevron').exists(),
+    ).toBe(true)
+    expect(wrapper.find('.hc-settings-disclosure__head > .hc-settings-disclosure__chevron').exists()).toBe(
+      false,
+    )
+  })
+
   it('keeps the panel mounted and synchronizes click, chevron and ARIA state', async () => {
     const wrapper = mount(Host)
     const trigger = wrapper.get('[data-testid="shared-settings-toggle"]')

@@ -1,7 +1,7 @@
 import type { MistakePracticeGenerationState } from '@/api/k12'
 
 export interface MistakePracticeProjection {
-  kind: 'action' | 'pending' | 'joined' | 'hidden'
+  kind: 'action' | 'pending' | 'joined' | 'hidden' | 'unavailable'
   label: string
   action?: 'join' | 'retry'
 }
@@ -20,6 +20,8 @@ export function projectMistakePracticeGeneration(
       return { kind: 'action', action: 'join', label: '再次加入练习集' }
     case 'hidden':
       return { kind: 'hidden', label: '' }
+    case 'unknown':
+      return { kind: 'unavailable', label: '' }
     case 'available':
     default:
       return { kind: 'action', action: 'join', label: '加入练习集' }

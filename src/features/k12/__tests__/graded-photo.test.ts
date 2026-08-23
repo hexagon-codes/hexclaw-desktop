@@ -1,10 +1,28 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { extractBriefFinalAnswer, renderGradedPhotoDataUrl, saveGradedPhoto } from '../graded-photo'
+import { extractBriefFinalAnswer, renderGradedPhotoBlob, saveGradedPhoto } from '../graded-photo'
+
+const { isTauriMock, saveBlobInAppMock, downloadInAppMock } = vi.hoisted(() => ({
+  isTauriMock: vi.fn(() => false),
+  saveBlobInAppMock: vi.fn(),
+  downloadInAppMock: vi.fn(),
+}))
+
+vi.mock('@/utils/platform', () => ({
+  isTauri: isTauriMock,
+}))
+
+vi.mock('@/utils/download', () => ({
+  saveBlobInApp: saveBlobInAppMock,
+  downloadInApp: downloadInAppMock,
+}))
 
 const NativeImage = globalThis.Image
 const nativeCreateElement = document.createElement.bind(document)
 
 function installCanvas() {
+  const pngBlob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+    type: 'image/png',
+  })
   const ctx = {
     drawImage: vi.fn(),
     save: vi.fn(),
@@ -30,6 +48,10 @@ function installCanvas() {
     width: 0,
     height: 0,
     getContext: vi.fn(() => ctx),
+    toBlob: vi.fn((callback: BlobCallback, type?: string) => {
+      expect(type).toBe('image/png')
+      callback(pngBlob)
+    }),
     toDataURL: vi.fn(() => 'data:image/png;base64,R1JBREVE'),
   }
   vi.spyOn(document, 'createElement').mockImplementation(((tag: string) =>
@@ -51,11 +73,14 @@ function installCanvas() {
     writable: true,
     value: LoadedImage,
   })
-  return { ctx, canvas }
+  return { ctx, canvas, pngBlob }
 }
 
 afterEach(() => {
   vi.restoreAllMocks()
+  isTauriMock.mockReset().mockReturnValue(false)
+  saveBlobInAppMock.mockReset()
+  downloadInAppMock.mockReset()
   Object.defineProperty(globalThis, 'Image', {
     configurable: true,
     writable: true,
@@ -78,17 +103,19 @@ describe('批改图片像素级导出', () => {
   })
 
   it('把合法 bbox 的对错标记绘进原图 PNG，非法框不落笔', async () => {
-    const { ctx, canvas } = installCanvas()
-    const result = await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
+    const { ctx, canvas, pngBlob } = installCanvas()
+    const result = await renderGradedPhotoBlob('data:image/jpeg;base64,ORIGINAL', [
       { status: 'correct', bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
       { status: 'wrong', bbox: { x: 0.9, y: 0.2, w: 0.2, h: 0.05 }, correctAnswer: '0.1' },
       // 超纲不是答错；即便坐标合法，也绝不能把红叉烧进原图像素。
       { status: 'out_of_scope', bbox: { x: 0.5, y: 0.5, w: 0.2, h: 0.05 } },
     ])
 
-    expect(result).toBe('data:image/png;base64,R1JBREVE')
+    expect(result).toBe(pngBlob)
     expect(canvas.width).toBe(1000)
     expect(canvas.height).toBe(2000)
+    expect(canvas.toBlob).toHaveBeenCalledOnce()
+    expect(canvas.toDataURL).not.toHaveBeenCalled()
     expect(ctx.drawImage).toHaveBeenCalledOnce()
     expect(ctx.fillRect).not.toHaveBeenCalled()
     expect(ctx.strokeRect).not.toHaveBeenCalled()
@@ -100,7 +127,7 @@ describe('批改图片像素级导出', () => {
 
   it('过程问题从同一 item.status 绘制紫色 ⚠，不落红叉', async () => {
     const { ctx } = installCanvas()
-    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
+    await renderGradedPhotoBlob('data:image/jpeg;base64,ORIGINAL', [
       {
         status: 'correct_with_process_issue',
         bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
@@ -113,7 +140,7 @@ describe('批改图片像素级导出', () => {
   })
 
   it('浏览器环境生成带日期文件名并触发真实下载动作', async () => {
-    installCanvas()
+    const { pngBlob } = installCanvas()
     let clickedHref = ''
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
       this: HTMLAnchorElement,
@@ -137,13 +164,33 @@ describe('批改图片像素级导出', () => {
     })
     expect(path).toMatch(/^作业批改_\d{4}-\d{2}-\d{2}_\d{4}\.png$/)
     expect(click).toHaveBeenCalledOnce()
-    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(createObjectURL).toHaveBeenCalledExactlyOnceWith(pngBlob)
     expect(clickedHref).toBe('blob:http://localhost/graded-photo')
+  })
+
+  it('Tauri 把 canvas PNG Blob 交给共享保存入口，不生成 data URL', async () => {
+    isTauriMock.mockReturnValue(true)
+    const { canvas, pngBlob } = installCanvas()
+    saveBlobInAppMock.mockResolvedValue('作业批改_2026-08-22_1500.png')
+
+    const path = await saveGradedPhoto('data:image/jpeg;base64,ORIGINAL', [
+      { status: 'correct', bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
+    ])
+
+    expect(path).toBe('作业批改_2026-08-22_1500.png')
+    expect(saveBlobInAppMock).toHaveBeenCalledOnce()
+    expect(saveBlobInAppMock).toHaveBeenCalledWith(
+      pngBlob,
+      expect.stringMatching(/^作业批改_\d{4}-\d{2}-\d{2}_\d{4}\.png$/),
+    )
+    expect(downloadInAppMock).not.toHaveBeenCalled()
+    expect(canvas.toBlob).toHaveBeenCalledOnce()
+    expect(canvas.toDataURL).not.toHaveBeenCalled()
   })
 
   it('像素绘制前再清洗订正文案，长解题过程不会烧进图片', async () => {
     const { ctx } = installCanvas()
-    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
+    await renderGradedPhotoBlob('data:image/jpeg;base64,ORIGINAL', [
       {
         status: 'wrong',
         bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },

@@ -577,10 +577,18 @@ function resetAddAgentDialog() {
   showAddSkills.value = false
 }
 
-function openAddAgentDialog() {
+const addAgentDialog = ref<HTMLElement | null>(null)
+
+function openAddAgentDialog(focusDialog = false) {
   errorMsg.value = ''
   resetAddAgentDialog()
   showAddAgent.value = true
+  if (focusDialog) {
+    void nextTick(async () => {
+      await nextTick()
+      addAgentDialog.value?.focus()
+    })
+  }
 }
 
 function closeAddAgentDialog() {
@@ -848,7 +856,7 @@ function onScenarioCreated() {
 /** 专属建档“上一步”回到通用创建起点；宿主必须消费该意图，不能留下无响应按钮。 */
 function onScenarioBack() {
   activeScenarioForm.value = null
-  openAddAgentDialog()
+  openAddAgentDialog(true)
 }
 
 // 场景实例卡扩展（如 K12 辅导老师卡的计数/快捷入口）：本视图零场景知识，只对场景实例渲染 registry 组件
@@ -857,6 +865,17 @@ const agentCardBadgeKey = scenarioRegistry.agentCardBadgeKey
 function isScenarioAgent(agent: AgentConfig): boolean {
   return scenarioRegistry.isScenarioInstance({ agentId: agent.name, metadata: agent.metadata })
 }
+
+// 卡片图标只接受稳定 metadata 投影，不根据数组位置或显示名猜测。
+const AGENT_CARD_ICONS: Record<string, Component> = {
+  'bar-chart': BarChart3,
+  mail: Mail,
+}
+function agentCardIcon(agent: AgentConfig): Component | null {
+  const key = agent.metadata?.card_icon ?? ''
+  return AGENT_CARD_ICONS[key] ?? null
+}
+
 function agentDisplayName(agent: AgentConfig): string {
   return scenarioRegistry.projectInstanceDisplayName(
     {
@@ -1093,7 +1112,7 @@ async function handleUnregisterAgent() {
       </template>
       <template #actions>
         <!-- 「新建智能体」主操作常驻工具栏（打开两步弹窗：选择起点 → 表单） -->
-        <button class="hc-btn hc-btn-primary" @click="openAddAgentDialog">
+        <button class="hc-btn hc-btn-primary" @click="openAddAgentDialog()">
           <Plus :size="14" />
           {{ t('agents.newAgent') }}
         </button>
@@ -1156,7 +1175,8 @@ async function handleUnregisterAgent() {
               >
                 <div class="hc-cxtop hc-agent-card__header">
                   <div class="hc-cxlogo">
-                    <span v-if="agent.metadata?.avatar" class="text-[20px] leading-none">{{
+                    <component v-if="agentCardIcon(agent)" :is="agentCardIcon(agent)" :size="20" />
+                    <span v-else-if="agent.metadata?.avatar" class="text-[20px] leading-none">{{
                       agent.metadata.avatar
                     }}</span>
                     <Bot v-else :size="20" />
@@ -1317,7 +1337,12 @@ async function handleUnregisterAgent() {
           @click.self="closeAddAgentDialog"
         >
           <div
+            ref="addAgentDialog"
             class="w-full rounded-2xl border flex flex-col overflow-hidden max-h-[88vh] max-w-md"
+            role="dialog"
+            aria-modal="true"
+            tabindex="-1"
+            data-testid="add-agent-dialog"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div

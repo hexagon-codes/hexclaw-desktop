@@ -49,17 +49,37 @@ async function installApplicationEntry(): Promise<void> {
   await import('../main')
 }
 
-function dispatchExternalClick(testDocument: Document): MouseEvent {
+function appendExternalLink(testDocument: Document): HTMLAnchorElement {
   const anchor = testDocument.createElement('a')
   anchor.href = 'https://hexclaw.net/zh/third-party-ai-services'
   anchor.target = '_blank'
   anchor.rel = 'noopener noreferrer'
   testDocument.body.append(anchor)
 
+  return anchor
+}
+
+function dispatchExternalClick(testDocument: Document): MouseEvent {
+  const anchor = appendExternalLink(testDocument)
+
   const event = new MouseEvent('click', {
     bubbles: true,
     cancelable: true,
     button: 0,
+  })
+  anchor.dispatchEvent(event)
+  return event
+}
+
+function dispatchExternalKeyboardActivation(
+  testDocument: Document,
+  key: 'Enter' | ' ',
+): KeyboardEvent {
+  const anchor = appendExternalLink(testDocument)
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
   })
   anchor.dispatchEvent(event)
   return event
@@ -115,6 +135,39 @@ describe('BUG-20260728-010 外链一次激活只允许一个派发器', () => {
     dispatchExternalClick(testDocument)
     await settleOpeners()
 
+    expect(harness.shellOpen).toHaveBeenCalledTimes(1)
+    expect(harness.windowOpen).not.toHaveBeenCalled()
+  }, 20_000)
+
+  it('Tauri：捕获阶段必须阻止冒泡的第二派发器处理同一次外链激活', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    harness.shellOpen.mockResolvedValue(undefined)
+    await installApplicationEntry()
+    const secondDispatcher = vi.fn((event: Event) => {
+      void harness.shellOpen((event.target as HTMLAnchorElement).href)
+    })
+    testDocument.addEventListener('click', secondDispatcher)
+
+    const event = dispatchExternalClick(testDocument)
+    await settleOpeners()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(secondDispatcher).not.toHaveBeenCalled()
+    expect(harness.shellOpen).toHaveBeenCalledTimes(1)
+  }, 20_000)
+
+  it.each([
+    ['Enter', 'Enter' as const],
+    ['Space', ' ' as const],
+  ])('Tauri：%s 激活外链时只派发一次', async (_name, key) => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    harness.shellOpen.mockResolvedValue(undefined)
+    await installApplicationEntry()
+
+    const event = dispatchExternalKeyboardActivation(testDocument, key)
+    await settleOpeners()
+
+    expect(event.defaultPrevented).toBe(true)
     expect(harness.shellOpen).toHaveBeenCalledTimes(1)
     expect(harness.windowOpen).not.toHaveBeenCalled()
   }, 20_000)

@@ -118,6 +118,32 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     expect(visibleRows[0]!.text()).toContain(EMBEDDING_MODEL_ID)
   })
 
+  it('keeps a bare catalog model unclassified instead of deriving vision from its id or input metadata', async () => {
+    const provider = providerFixture({
+      selectedModelId: '',
+      models: [],
+    })
+    const catalogModel = {
+      id: 'vendor/vision-image-model',
+      name: 'Vision image model',
+      inputModalities: ['text', 'image'],
+    }
+    const { settings } = mountManager(provider, [catalogModel])
+
+    expect(modelRow(catalogModel.id).text()).not.toContain('视觉')
+
+    await toggleModelRow(catalogModel.id)
+    await dialogBody().get('[data-testid="model-manager-apply"]').trigger('click')
+    await flushPromises()
+
+    expect(settings.config!.llm.providers[0]!.models).toEqual([
+      expect.objectContaining({
+        id: catalogModel.id,
+        capabilities: [],
+      }),
+    ])
+  })
+
   it('searches an OpenRouter-sized catalog without adding the catalog to the enabled pool', async () => {
     const provider = providerFixture()
     const catalog = Array.from({ length: 342 }, (_, index) => ({
@@ -296,7 +322,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
       expect.objectContaining({
         id: 'chat-a',
         name: 'Chat A (latest)',
-        capabilities: ['text', 'vision'],
+        capabilities: ['text'],
       }),
     ])
   })
@@ -397,7 +423,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     ).toBe('true')
   })
 
-  it('persists trusted catalog capability enrichment instead of stale enabled metadata', async () => {
+  it('keeps the enabled static capability instead of promoting catalog input metadata', async () => {
     const provider = providerFixture()
     const { settings } = mountManager(provider, [
       {
@@ -415,7 +441,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     expect(settings.config!.llm.providers[0]!.models[0]).toMatchObject({
       id: 'chat-a',
       name: 'Chat A Vision',
-      capabilities: ['text', 'vision'],
+      capabilities: ['text'],
     })
   })
 

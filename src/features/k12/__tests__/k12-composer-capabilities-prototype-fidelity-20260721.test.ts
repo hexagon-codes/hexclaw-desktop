@@ -88,9 +88,16 @@ describe('K12 composer 能力入口 · app.html 唯一权威', () => {
     expect(k12Zh).not.toHaveProperty('bridge')
     expect(k12En).not.toHaveProperty('bridge')
     expect(k12Ug).not.toHaveProperty('bridge')
-    expect(k12Zh.composer.placeholder).toBe(
-      '发消息，或让我写请假条、回复老师消息、设置订正提醒',
+    expect(k12Zh.composer.placeholder).toBe('发消息，或让我回复老师消息、设置订正提醒')
+    expect(k12En.composer.placeholder).toBe(
+      'Send a message, or ask me to reply to a teacher or set a correction reminder',
     )
+    expect(k12Ug.composer.placeholder).toBe(
+      'ئۇچۇر يوللاڭ، ياكى ئوقۇتقۇچىغا جاۋاب بېرىش ياكى تۈزىتىش ئەسكەرتىشى تەڭشەشنى سوراڭ',
+    )
+    expect(
+      `${k12Zh.composer.placeholder} ${k12En.composer.placeholder} ${k12Ug.composer.placeholder}`,
+    ).not.toMatch(/请假条|leave note|رۇخسەت خېتى/i)
   })
 
   it('公共 ChatView 只接通结构化 action/command，不包含 K12 action 或文案', () => {

@@ -86,8 +86,8 @@ function actionDisabled(action: FinalArtifactAction) {
 }
 .final-artifact-actions button {
   flex: none;
-  font-family: Arial;
-  line-height: normal;
+  font-family: inherit;
+  line-height: 18px;
 }
 .final-artifact-actions__icon {
   width: 15px;

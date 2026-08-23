@@ -43,8 +43,9 @@ function mountCard(overrides: MountOptions = {}) {
       arguments: overrides.arguments,
       risk: overrides.risk ?? 'sensitive',
       reason: overrides.reason ?? 'Writes to filesystem',
-      timeout: overrides.timeout ?? 30,
-      deadlineAt: overrides.deadlineAt,
+      deadlineAt: Object.prototype.hasOwnProperty.call(overrides, 'deadlineAt')
+        ? overrides.deadlineAt
+        : new Date(Date.now() + (overrides.timeout ?? 30) * 1000).toISOString(),
     },
     global: {
       plugins: [createTestI18n()],
@@ -256,6 +257,15 @@ describe('ToolApprovalCard', () => {
 })
 
 describe('ToolApprovalCard approved lifecycle RED contract', () => {
+  it('does not synthesize a local deadline when the backend deadline is absent', () => {
+    const wrapper = mountCard({ deadlineAt: undefined })
+
+    expect(wrapper.get('.hc-approval__timer').text()).toBe('0s')
+    expect(wrapper.get('.hc-approval__btn--approve').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.hc-approval__btn--deny').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('input[type="checkbox"]').attributes('disabled')).toBeDefined()
+  })
+
   it('projects the server deadline without emitting a local denial', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-29T04:00:00.000Z'))
@@ -298,5 +308,12 @@ describe('ToolApprovalCard approved lifecycle RED contract', () => {
     const checkbox = wrapper.get('input[type="checkbox"]')
     const labelCopy = checkbox.element.parentElement?.textContent?.replace(/\s+/g, '')
     expect(labelCopy).toBe('本会话内始终允许此工具')
+  })
+
+  it('keeps approval actions as non-submit buttons', () => {
+    const wrapper = mountCard()
+
+    expect(wrapper.get('.hc-approval__btn--deny').attributes('type')).toBe('button')
+    expect(wrapper.get('.hc-approval__btn--approve').attributes('type')).toBe('button')
   })
 })

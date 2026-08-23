@@ -2,56 +2,93 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 
 // 模型目录：name + 预估 RAM（GB，基于 Q4_K_M 量化）
-interface ModelEntry { name: string; ram: number }
+interface ModelEntry {
+  name: string
+  ram: number
+}
 
 const OLLAMA_MODEL_CATALOG: ModelEntry[] = [
   // Qwen3.5（阿里最新，支持图文，全面取代 Qwen3/2.5）
-  { name: 'qwen3.5:0.8b', ram: 1 }, { name: 'qwen3.5:2b', ram: 2 }, { name: 'qwen3.5:4b', ram: 3 }, { name: 'qwen3.5:9b', ram: 6 },
-  { name: 'qwen3.8:27b', ram: 17 }, { name: 'qwen3.5:35b', ram: 22 }, { name: 'qwen3.5:122b', ram: 75 },
+  { name: 'qwen3.5:0.8b', ram: 1 },
+  { name: 'qwen3.5:2b', ram: 2 },
+  { name: 'qwen3.5:4b', ram: 3 },
+  { name: 'qwen3.5:9b', ram: 6 },
+  { name: 'qwen3.8:27b', ram: 17 },
+  { name: 'qwen3.5:35b', ram: 22 },
+  { name: 'qwen3.5:122b', ram: 75 },
   // Qwen3 专项（Qwen3.5 暂无对应替代）
-  { name: 'qwen3-coder:4b', ram: 3 }, { name: 'qwen3-coder:8b', ram: 5 }, { name: 'qwen3-coder:14b', ram: 9 }, { name: 'qwen3-coder:30b', ram: 19 },
-  { name: 'qwen3-vl:4b', ram: 3 }, { name: 'qwen3-vl:8b', ram: 6 }, { name: 'qwen3-vl:30b', ram: 20 },
+  { name: 'qwen3-coder:4b', ram: 3 },
+  { name: 'qwen3-coder:8b', ram: 5 },
+  { name: 'qwen3-coder:14b', ram: 9 },
+  { name: 'qwen3-coder:30b', ram: 19 },
+  { name: 'qwen3-vl:4b', ram: 3 },
+  { name: 'qwen3-vl:8b', ram: 6 },
+  { name: 'qwen3-vl:30b', ram: 20 },
   // DeepSeek
-  { name: 'deepseek-r1:1.5b', ram: 1.5 }, { name: 'deepseek-r1:7b', ram: 5 }, { name: 'deepseek-r1:8b', ram: 5 },
-  { name: 'deepseek-r1:14b', ram: 9 }, { name: 'deepseek-r1:32b', ram: 20 }, { name: 'deepseek-r1:70b', ram: 43 },
-  { name: 'deepseek-v3', ram: 400 }, { name: 'deepseek-v3:671b', ram: 400 }, { name: 'deepseek-r1', ram: 400 },
+  { name: 'deepseek-r1:1.5b', ram: 1.5 },
+  { name: 'deepseek-r1:7b', ram: 5 },
+  { name: 'deepseek-r1:8b', ram: 5 },
+  { name: 'deepseek-r1:14b', ram: 9 },
+  { name: 'deepseek-r1:32b', ram: 20 },
+  { name: 'deepseek-r1:70b', ram: 43 },
+  { name: 'deepseek-v3', ram: 400 },
+  { name: 'deepseek-v3:671b', ram: 400 },
+  { name: 'deepseek-r1', ram: 400 },
   // Gemma 4（Google 最新，多模态，MoE）
-  { name: 'gemma4:e2b', ram: 4 }, { name: 'gemma4:e4b', ram: 6 }, { name: 'gemma4:26b', ram: 10 }, { name: 'gemma4:31b', ram: 12 },
+  { name: 'gemma4:e2b', ram: 4 },
+  { name: 'gemma4:e4b', ram: 6 },
+  { name: 'gemma4:26b', ram: 10 },
+  { name: 'gemma4:31b', ram: 12 },
   // Gemma 3
-  { name: 'gemma3:1b', ram: 1 }, { name: 'gemma3:4b', ram: 3 }, { name: 'gemma3:12b', ram: 8 }, { name: 'gemma3:27b', ram: 17 },
+  { name: 'gemma3:1b', ram: 1 },
+  { name: 'gemma3:4b', ram: 3 },
+  { name: 'gemma3:12b', ram: 8 },
+  { name: 'gemma3:27b', ram: 17 },
   // Llama（3.2 有独特小尺寸，3.3 是 70B 旗舰）
-  { name: 'llama3.2:1b', ram: 1 }, { name: 'llama3.2:3b', ram: 2 }, { name: 'llama3.3', ram: 43 }, { name: 'llama3.3:70b', ram: 43 },
+  { name: 'llama3.2:1b', ram: 1 },
+  { name: 'llama3.2:3b', ram: 2 },
+  { name: 'llama3.3', ram: 43 },
+  { name: 'llama3.3:70b', ram: 43 },
   // Phi 4（微软）
-  { name: 'phi4-mini', ram: 3 }, { name: 'phi4', ram: 9 }, { name: 'phi4-reasoning', ram: 9 },
+  { name: 'phi4-mini', ram: 3 },
+  { name: 'phi4', ram: 9 },
+  { name: 'phi4-reasoning', ram: 9 },
   // GLM（智谱）：glm4 9B 本地可跑；最新旗舰 glm-5.x/4.7 在 Ollama 为云端模型，无本地权重
   { name: 'glm4:9b', ram: 6 },
   // Mistral
-  { name: 'mistral', ram: 5 }, { name: 'mistral-nemo', ram: 8 }, { name: 'mistral-small', ram: 14 },
+  { name: 'mistral', ram: 5 },
+  { name: 'mistral-nemo', ram: 8 },
+  { name: 'mistral-small', ram: 14 },
   // 其他
-  { name: 'command-r', ram: 21 }, { name: 'command-r-plus', ram: 63 }, { name: 'smollm2', ram: 1 }, { name: 'starcoder2', ram: 2 },
+  { name: 'command-r', ram: 21 },
+  { name: 'command-r-plus', ram: 63 },
+  { name: 'smollm2', ram: 1 },
+  { name: 'starcoder2', ram: 2 },
   // Embedding
-  { name: 'qwen3-embedding:8b', ram: 4.7 }, { name: 'nomic-embed-text', ram: 0.3 }, { name: 'mxbai-embed-large', ram: 0.7 },
+  { name: 'qwen3-embedding:8b', ram: 4.7 },
+  { name: 'nomic-embed-text', ram: 0.3 },
+  { name: 'mxbai-embed-large', ram: 0.7 },
 ]
 
 // 兼容层：纯名称列表
-const OLLAMA_MODEL_LIST = OLLAMA_MODEL_CATALOG.map(m => m.name)
+const OLLAMA_MODEL_LIST = OLLAMA_MODEL_CATALOG.map((m) => m.name)
 
 // RAM 查找表
-const MODEL_RAM_MAP = new Map(OLLAMA_MODEL_CATALOG.map(m => [m.name, m.ram]))
+const MODEL_RAM_MAP = new Map(OLLAMA_MODEL_CATALOG.map((m) => [m.name, m.ram]))
 
 // 空输入时展示的精选列表
 // 排序原则：大众电脑（8-16GB 内存）能跑的优先，同尺寸选质量最高的
 const OLLAMA_FEATURED = [
-  'qwen3.5:9b',        // 6GB — 最新最强，16GB 轻松跑
-  'gemma4:e4b',        // 6GB — Google 多模态，vision+tools+thinking
-  'gemma4:26b',        // 10GB — Google MoE，3.8B 激活，速度快质量高
-  'deepseek-r1:14b',   // 9GB — 推理/数学最强
-  'phi4',               // 9GB — 微软，小模型之王
-  'qwen3.8:27b',       // 17GB — 质量天花板，32GB 舒适
-  'gemma4:31b',        // 12GB — Google Dense 旗舰
+  'qwen3.5:9b', // 6GB — 最新最强，16GB 轻松跑
+  'gemma4:e4b', // 6GB — Google 多模态，vision+tools+thinking
+  'gemma4:26b', // 10GB — Google MoE，3.8B 激活，速度快质量高
+  'deepseek-r1:14b', // 9GB — 推理/数学最强
+  'phi4', // 9GB — 微软，小模型之王
+  'qwen3.8:27b', // 17GB — 质量天花板，32GB 舒适
+  'gemma4:31b', // 12GB — Google Dense 旗舰
   'qwen3-embedding:8b', // 4.7GB — 多语言文本嵌入模型
-  'glm4:9b',           // 6GB — 智谱 GLM-4 9B，大众电脑可跑
-  'qwen3-coder:8b',    // 5GB — 阿里编码专项，16GB 轻松跑
+  'glm4:9b', // 6GB — 智谱 GLM-4 9B，大众电脑可跑
+  'qwen3-coder:8b', // 5GB — 阿里编码专项，16GB 轻松跑
 ]
 
 // 本机总内存（GB）
@@ -64,7 +101,9 @@ async function detectSystemMemory() {
     if ('deviceMemory' in navigator) {
       systemMemoryGB.value = (navigator as unknown as { deviceMemory: number }).deviceMemory
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // fallback：如果 deviceMemory 不可用，默认 8GB 保守估计
   if (!systemMemoryGB.value) systemMemoryGB.value = 8
 }
@@ -101,15 +140,21 @@ import {
   MessageSquare,
 } from 'lucide-vue-next'
 import {
-  getOllamaStatus, pullOllamaModel, getOllamaRunningResult,
-  loadOllamaModel, unloadOllamaModel, deleteOllamaModel, restartOllama,
-  type OllamaStatus, type OllamaRunningModel,
+  getOllamaStatus,
+  pullOllamaModel,
+  getOllamaRunningResult,
+  loadOllamaModel,
+  unloadOllamaModel,
+  deleteOllamaModel,
+  restartOllama,
+  type OllamaStatus,
+  type OllamaRunningModel,
 } from '@/api/ollama'
 import { logger } from '@/utils/logger'
 import { useSettingsStore } from '@/stores/settings'
 import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
-import { resolveOllamaCapabilities } from '@/config/providers'
+import { PROVIDER_PRESETS } from '@/config/providers'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
@@ -118,9 +163,8 @@ import {
   type DisplayModelCapability,
 } from '@/config/model-capability-display'
 
-// 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）
-// Ollama 原生能力名 → 前端模态徽章（BUG-20260704）。只映射「模态」类；
-// tools/thinking/insert/embedding 不是模态徽章，不显示（能力真值另在别处用）。
+// 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）。
+// 只把 Ollama 状态接口显式上报的能力投影为既有标签；未上报或未知能力不补猜。
 const OLLAMA_CAP_TO_MODALITY: Record<string, DisplayModelCapability> = {
   completion: 'text',
   embedding: 'embedding',
@@ -129,27 +173,30 @@ const OLLAMA_CAP_TO_MODALITY: Record<string, DisplayModelCapability> = {
   thinking: 'thinking',
 }
 
-function mapOllamaCapabilities(raw: string[]): DisplayModelCapability[] {
+function mapOllamaCapabilities(raw: readonly string[] | undefined): DisplayModelCapability[] {
+  if (raw === undefined) return []
   const out: DisplayModelCapability[] = []
   for (const c of raw) {
     const modality = OLLAMA_CAP_TO_MODALITY[c.trim().toLowerCase()]
     if (modality && !out.includes(modality)) out.push(modality)
   }
-  // 有能力数据但无可映射模态（如纯 embedding）→ 至少标 text 兜底，避免空徽章。
-  if (out.length === 0) out.push('text')
-  // text 固定排在最前（与静态表风格一致）。
+  // 文本固定排在最前，保持既有能力标签的阅读顺序。
   return out.includes('text') ? ['text', ...out.filter((c) => c !== 'text')] : out
 }
 
-// 显式标出全部能力（含 text），与 HuggingFace pipeline-tag 风格一致，
-// 避免"什么徽章都没有 = 不知道支持什么"的误解。
-// BUG-20260704：优先用 Ollama /api/tags 上报的真实能力（qwen3.5:9b 等视觉模型才能显示
-// 「视觉」）；后端/旧版 Ollama 未上报时回退按模型名查静态表。
+function staticOllamaCapabilities(modelName: string): DisplayModelCapability[] {
+  const normalizedName = modelName.trim()
+  const declared = PROVIDER_PRESETS.ollama.defaultModels.find(
+    (model) => normalizedName === model.id || normalizedName.startsWith(`${model.id}:`),
+  )?.capabilities
+  return declared ? [...declared] : []
+}
+
+// 显式上报的能力才显示为标签，避免把未分类模型伪装为文本或视觉模型。
 function modelCaps(model: { name: string; capabilities?: string[] }): DisplayModelCapability[] {
-  if (model.capabilities && model.capabilities.length > 0) {
-    return mapOllamaCapabilities(model.capabilities)
-  }
-  return resolveOllamaCapabilities(model.name)
+  return model.capabilities === undefined
+    ? staticOllamaCapabilities(model.name)
+    : mapOllamaCapabilities(model.capabilities)
 }
 
 function isOllamaChatModel(model: { name: string; capabilities?: string[] }): boolean {
@@ -181,22 +228,18 @@ const waitingInstall = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let postPullVisibilityAbort: AbortController | null = null
 
-type CardState =
-  | 'detecting'
-  | 'not_running'
-  | 'waiting_install'
-  | 'associated'
-  | 'error'
+type CardState = 'detecting' | 'not_running' | 'waiting_install' | 'associated' | 'error'
 
 /** 仅统计已启用的 Ollama 行；禁用时不算「已关联」，否则会跳过自动关联且会话页无模型 */
-const hasOllamaProvider = computed(() =>
-  settingsStore.config?.llm.providers.some(
-    p =>
-      p.enabled &&
-      (p.type === 'ollama' ||
-        p.backendKey?.toLowerCase().includes('ollama') ||
-        p.name?.toLowerCase().includes('ollama')),
-  ) ?? false,
+const hasOllamaProvider = computed(
+  () =>
+    settingsStore.config?.llm.providers.some(
+      (p) =>
+        p.enabled &&
+        (p.type === 'ollama' ||
+          p.backendKey?.toLowerCase().includes('ollama') ||
+          p.name?.toLowerCase().includes('ollama')),
+    ) ?? false,
 )
 
 const state = computed<CardState>(() => {
@@ -242,19 +285,19 @@ async function detect() {
 
       // 自动预热：默认 provider 是 Ollama + 运行中 + 有已下载模型 + 无模型在跑 → 自动加载
       const dpId = settingsStore.config?.llm.defaultProviderId
-      const dp = settingsStore.config?.llm.providers.find(p => p.id === dpId)
-      const isOllamaDefault = dp && (
-        dp.type === 'ollama' ||
-        dp.backendKey?.toLowerCase().includes('ollama') ||
-        dp.name?.toLowerCase().includes('ollama')
-      )
+      const dp = settingsStore.config?.llm.providers.find((p) => p.id === dpId)
+      const isOllamaDefault =
+        dp &&
+        (dp.type === 'ollama' ||
+          dp.backendKey?.toLowerCase().includes('ollama') ||
+          dp.name?.toLowerCase().includes('ollama'))
       if (
         isOllamaDefault &&
         runningProbeState.value === 'ready' &&
         runningModels.value.length === 0 &&
         status.value?.models?.length
       ) {
-        const downloadedNames = status.value.models.map(m => m.name)
+        const downloadedNames = status.value.models.map((m) => m.name)
         const defaultModel = settingsStore.config?.llm.defaultModel
         // 匹配规则（按优先级）：
         //   1. 精确命中（含 tag，如 "qwen3.5:9b"）
@@ -267,14 +310,14 @@ async function detect() {
             modelToLoad = defaultModel
           } else {
             const base = defaultModel.split(':')[0]
-            modelToLoad = downloadedNames.find(n => n === base || n.split(':')[0] === base)
+            modelToLoad = downloadedNames.find((n) => n === base || n.split(':')[0] === base)
           }
         }
         if (!modelToLoad && dp?.selectedModelId) {
           const sel = dp.selectedModelId
           modelToLoad = downloadedNames.includes(sel)
             ? sel
-            : downloadedNames.find(n => n.split(':')[0] === sel.split(':')[0])
+            : downloadedNames.find((n) => n.split(':')[0] === sel.split(':')[0])
         }
         if (!modelToLoad) modelToLoad = downloadedNames[0]
         if (modelToLoad) {
@@ -338,11 +381,14 @@ function cancelPostPullRefresh() {
 
 function hasDetectedModel(name: string): boolean {
   // Ollama 模型名可能带 :latest 后缀（用户输入 "qwen3" → 存为 "qwen3:latest"）
-  return status.value?.models?.some(model =>
-    model.name === name ||
-    model.name === `${name}:latest` ||
-    model.name.replace(/:latest$/, '') === name,
-  ) ?? false
+  return (
+    status.value?.models?.some(
+      (model) =>
+        model.name === name ||
+        model.name === `${name}:latest` ||
+        model.name.replace(/:latest$/, '') === name,
+    ) ?? false
+  )
 }
 
 async function refreshModelsUntilDetected(name: string) {
@@ -387,7 +433,7 @@ const pendingDeleteModel = ref<string | null>(null)
 const deleteConfirmationAttempt = ref(0)
 
 function isModelRunning(name: string): boolean {
-  return runningModels.value.some(m => m.name === name)
+  return runningModels.value.some((m) => m.name === name)
 }
 
 async function refreshRunning() {
@@ -398,19 +444,18 @@ async function refreshRunning() {
     runningModels.value = result.models
     if (!result.reachable || result.error) {
       runningProbeState.value = 'error'
-      runningProbeError.value = result.error || t(
-        'settings.ollama.runningProbeUnavailable',
-        '无法读取运行模型状态',
-      )
+      runningProbeError.value =
+        result.error || t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态')
       return
     }
     runningProbeState.value = 'ready'
   } catch (probeError) {
     runningModels.value = []
     runningProbeState.value = 'error'
-    runningProbeError.value = probeError instanceof Error
-      ? probeError.message
-      : t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态')
+    runningProbeError.value =
+      probeError instanceof Error
+        ? probeError.message
+        : t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态')
   }
 }
 
@@ -419,7 +464,9 @@ async function handleUnload(name: string) {
   try {
     await unloadOllamaModel(name)
     await refreshRunning()
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   unloadingModel.value = ''
 }
 
@@ -470,7 +517,9 @@ async function refreshModels() {
         await settingsStore.syncOllamaModels()
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // ─── Ollama 重启 ───────────────────────────
@@ -488,7 +537,9 @@ async function handleRestart() {
     try {
       await restartOllama()
       await detect()
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   restarting.value = false
 }
@@ -499,7 +550,9 @@ async function handleRestartEngine() {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('restart_ollama')
-  } catch { /* 非 Tauri 环境或命令失败 */ }
+  } catch {
+    /* 非 Tauri 环境或命令失败 */
+  }
   await detect()
   restarting.value = false
 }
@@ -561,7 +614,7 @@ watch(showModelDropdown, (show) => {
 const filteredModels = computed(() => {
   const q = pullModelName.value.trim().toLowerCase()
   if (!q) return OLLAMA_FEATURED
-  return OLLAMA_MODEL_LIST.filter(m => m.toLowerCase().includes(q)).slice(0, 10)
+  return OLLAMA_MODEL_LIST.filter((m) => m.toLowerCase().includes(q)).slice(0, 10)
 })
 
 function selectModel(name: string) {
@@ -610,7 +663,8 @@ function formatBytes(bytes: number): string {
 function mapPullStatus(raw: string): string {
   if (!raw) return ''
   const lower = raw.toLowerCase()
-  if (lower.includes('pulling manifest')) return t('settings.ollama.pullManifest', '获取模型信息...')
+  if (lower.includes('pulling manifest'))
+    return t('settings.ollama.pullManifest', '获取模型信息...')
   if (lower.includes('downloading')) return t('settings.ollama.downloading', '下载中...')
   if (lower.includes('verifying')) return t('settings.ollama.verifyingModel', '校验文件完整性...')
   if (lower.includes('writing')) return t('settings.ollama.writingModel', '写入模型文件...')
@@ -632,7 +686,9 @@ async function startPull() {
   if (pulling.value) return
   if (!model) {
     pullInputError.value = true
-    setTimeout(() => { pullInputError.value = false }, 2000)
+    setTimeout(() => {
+      pullInputError.value = false
+    }, 2000)
     return
   }
   pullInputError.value = false
@@ -649,41 +705,48 @@ async function startPull() {
   resetStallTimer()
   pullAbort = new AbortController()
   try {
-    await pullOllamaModel(model, (p) => {
-      pullStatus.value = mapPullStatus(p.status || '')
-      // 非下载阶段（校验/写入）清空速度详情，避免残留 "0 KB"
-      const statusLower = (p.status || '').toLowerCase()
-      if (statusLower.includes('verifying') || statusLower.includes('writing')) {
-        pullDetail.value = ''
-        pullProgress.value = 100
-      }
-      if (p.total && p.total > 0 && p.completed !== undefined) {
-        pullProgress.value = Math.round((p.completed / p.total) * 100)
-        // Layer 切换检测：completed 重置时同步重置基准值
-        if (p.completed < lastCompleted) {
-          lastCompleted = 0
-          lastSpeedTime = Date.now()
+    await pullOllamaModel(
+      model,
+      (p) => {
+        pullStatus.value = mapPullStatus(p.status || '')
+        // 非下载阶段（校验/写入）清空速度详情，避免残留 "0 KB"
+        const statusLower = (p.status || '').toLowerCase()
+        if (statusLower.includes('verifying') || statusLower.includes('writing')) {
+          pullDetail.value = ''
+          pullProgress.value = 100
         }
-        // 计算速度
-        const now = Date.now()
-        const elapsed = (now - lastSpeedTime) / 1000
-        if (elapsed >= 1) {
-          const speed = Math.max(0, (p.completed - lastCompleted) / elapsed)
-          pullDetail.value = `${formatBytes(p.completed)} / ${formatBytes(p.total)} · ${formatBytes(speed)}/s`
-          lastCompleted = p.completed
-          lastSpeedTime = now
+        if (p.total && p.total > 0 && p.completed !== undefined) {
+          pullProgress.value = Math.round((p.completed / p.total) * 100)
+          // Layer 切换检测：completed 重置时同步重置基准值
+          if (p.completed < lastCompleted) {
+            lastCompleted = 0
+            lastSpeedTime = Date.now()
+          }
+          // 计算速度
+          const now = Date.now()
+          const elapsed = (now - lastSpeedTime) / 1000
+          if (elapsed >= 1) {
+            const speed = Math.max(0, (p.completed - lastCompleted) / elapsed)
+            pullDetail.value = `${formatBytes(p.completed)} / ${formatBytes(p.total)} · ${formatBytes(speed)}/s`
+            lastCompleted = p.completed
+            lastSpeedTime = now
+          }
+          resetStallTimer()
         }
-        resetStallTimer()
-      }
-      if (p.status === 'success') {
-        pullProgress.value = 100
-        pullDetail.value = t('common.done', '完成')
-      }
-      if (p.error) {
-        pullError.value = p.error
-      }
-    }, pullAbort?.signal)
-    if (stallTimer) { clearTimeout(stallTimer); stallTimer = null }
+        if (p.status === 'success') {
+          pullProgress.value = 100
+          pullDetail.value = t('common.done', '完成')
+        }
+        if (p.error) {
+          pullError.value = p.error
+        }
+      },
+      pullAbort?.signal,
+    )
+    if (stallTimer) {
+      clearTimeout(stallTimer)
+      stallTimer = null
+    }
     if (!pullError.value) {
       pullProgress.value = 100
       pullStatus.value = t('settings.ollama.verifying', '校验中...')
@@ -693,30 +756,45 @@ async function startPull() {
       void finalizePulledModel(model)
     }
   } catch (e) {
-    pullError.value = e instanceof Error ? e.message : t('settings.ollama.downloadFailed', '下载失败')
+    pullError.value =
+      e instanceof Error ? e.message : t('settings.ollama.downloadFailed', '下载失败')
     pullInputError.value = true
-    setTimeout(() => { pullInputError.value = false }, 3000)
+    setTimeout(() => {
+      pullInputError.value = false
+    }, 3000)
   } finally {
     pulling.value = false
     pullAbort = null
-    if (stallTimer) { clearTimeout(stallTimer); stallTimer = null }
+    if (stallTimer) {
+      clearTimeout(stallTimer)
+      stallTimer = null
+    }
   }
 }
 
-onMounted(() => { detect(); detectSystemMemory() })
+onMounted(() => {
+  detect()
+  detectSystemMemory()
+})
 onBeforeUnmount(() => {
   clearPollTimer()
   cancelPostPullRefresh()
-  if (stallTimer) { clearTimeout(stallTimer); stallTimer = null }
+  if (stallTimer) {
+    clearTimeout(stallTimer)
+    stallTimer = null
+  }
   showModelDropdown.value = false
-  if (pullAbort) { pullAbort.abort(); pullAbort = null }
+  if (pullAbort) {
+    pullAbort.abort()
+    pullAbort = null
+  }
 })
 
 // ── 模型驻留时长(keep_alive)设置(BUG-20260710 P1)──
 // 9B 模型驻留 ≈7GB;16GB 机可调短换内存。写 provider.keepAlive 经 saveConfig 持久化,
 // 后端 llmrouter 透传 ollama.WithKeepAlive,下次请求生效。
 const KEEPALIVE_OPTIONS = [
-  { value: '', labelKey: 'settings.ollama.keepAliveDefault' },   // 空=后端默认 30m
+  { value: '', labelKey: 'settings.ollama.keepAliveDefault' }, // 空=后端默认 30m
   { value: '5m', labelKey: 'settings.ollama.keepAlive5m' },
   { value: '15m', labelKey: 'settings.ollama.keepAlive15m' },
   { value: '60m', labelKey: 'settings.ollama.keepAlive60m' },
@@ -765,15 +843,26 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             class="ollama-card__title"
             title="ollama.com"
             @click.stop
-          >{{ t('settings.ollama.title', '本地模型 (Ollama)') }}<ExternalLink :size="10" class="ollama-card__title-link" /></a>
+            >{{ t('settings.ollama.title', '本地模型 (Ollama)')
+            }}<ExternalLink :size="10" class="ollama-card__title-link"
+          /></a>
           <div v-if="status?.version" class="ollama-card__meta">
-            {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} · {{ status.model_count }} {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}
+            {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} ·
+            {{ status.model_count }}
+            {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}
           </div>
         </div>
       </div>
 
       <div class="ollama-card__header-right">
-        <span class="ollama-card__badge" :class="state === 'associated' && !hasOllamaProvider ? 'ollama-card__badge--not_running' : `ollama-card__badge--${state}`">
+        <span
+          class="ollama-card__badge"
+          :class="
+            state === 'associated' && !hasOllamaProvider
+              ? 'ollama-card__badge--not_running'
+              : `ollama-card__badge--${state}`
+          "
+        >
           <Loader2
             v-if="state === 'detecting' || state === 'waiting_install'"
             :size="11"
@@ -800,10 +889,17 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
         <button
           v-if="state === 'associated'"
           class="ollama-card__refresh"
-          :title="hasOllamaProvider ? t('settings.llm.enabled', '已启用') : t('settings.llm.disabled', '已禁用')"
+          :title="
+            hasOllamaProvider
+              ? t('settings.llm.enabled', '已启用')
+              : t('settings.llm.disabled', '已禁用')
+          "
           @click.stop="toggleOllamaProvider"
         >
-          <Power :size="13" :class="hasOllamaProvider ? 'ollama-card__power--on' : 'ollama-card__power--off'" />
+          <Power
+            :size="13"
+            :class="hasOllamaProvider ? 'ollama-card__power--on' : 'ollama-card__power--off'"
+          />
         </button>
         <!-- 刷新：始终可用，正常时低调 -->
         <button
@@ -842,7 +938,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
         >
           <Loader2 v-if="restarting" :size="13" class="ollama-card__spin" />
           <RefreshCw v-else :size="13" />
-          {{ restarting ? t('settings.ollama.restarting', '启动中…') : t('settings.ollama.restartEngine', '启动引擎') }}
+          {{
+            restarting
+              ? t('settings.ollama.restarting', '启动中…')
+              : t('settings.ollama.restartEngine', '启动引擎')
+          }}
         </button>
       </div>
 
@@ -858,7 +958,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             {{ t('settings.ollama.waitingInstallHint', '正在启动本地推理引擎…') }}
           </p>
         </div>
-        <button class="ollama-card__action-btn ollama-card__action-btn--ghost" @click="cancelWaiting">
+        <button
+          class="ollama-card__action-btn ollama-card__action-btn--ghost"
+          @click="cancelWaiting"
+        >
           {{ t('common.cancel', '取消') }}
         </button>
       </div>
@@ -872,7 +975,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
           role="status"
         >
           {{ t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态') }}
-          <span v-if="runningProbeError" :title="runningProbeError">· {{ t('common.retry', '请重试') }}</span>
+          <span v-if="runningProbeError" :title="runningProbeError"
+            >· {{ t('common.retry', '请重试') }}</span
+          >
         </p>
         <p
           v-else-if="runningProbeState === 'ready' && runningModels.length === 0"
@@ -892,7 +997,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                 class="ollama-card__cap"
                 :class="`ollama-card__cap--${cap}`"
                 :title="MODEL_CAPABILITY_DISPLAY[cap].title"
-              >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }} {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
+                {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+              >
             </div>
             <div class="ollama-card__model-right">
               <span class="ollama-card__model-meta">
@@ -908,12 +1015,20 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                 @click="handleUnload(m.name)"
               >
                 <span class="ollama-card__model-status-dot" />
-                {{ unloadingModel === m.name ? t('settings.ollama.unloading', '卸载中...') : t('settings.ollama.running', '运行中') }}
+                {{
+                  unloadingModel === m.name
+                    ? t('settings.ollama.unloading', '卸载中...')
+                    : t('settings.ollama.running', '运行中')
+                }}
               </button>
               <span
                 v-else-if="runningProbeState === 'ready'"
                 class="ollama-card__model-status ollama-card__model-status--idle"
-                :title="isOllamaChatModel(m) ? t('settings.ollama.notLoadedTitle', '就绪，在对话中选择此模型即可自动加载') : undefined"
+                :title="
+                  isOllamaChatModel(m)
+                    ? t('settings.ollama.notLoadedTitle', '就绪，在对话中选择此模型即可自动加载')
+                    : undefined
+                "
               >
                 <span class="ollama-card__model-status-dot" />
                 {{ t('settings.ollama.notLoaded', '就绪') }}
@@ -943,13 +1058,19 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                   :title="t('settings.ollama.deleteModel', { name: m.name })"
                   @click="requestDelete(m.name)"
                 >
-                  {{ deletingModel === m.name ? t('settings.ollama.deleting', '删除中...') : t('common.delete', '删除') }}
+                  {{
+                    deletingModel === m.name
+                      ? t('settings.ollama.deleting', '删除中...')
+                      : t('common.delete', '删除')
+                  }}
                 </button>
               </div>
             </div>
           </div>
         </div>
-        <p v-else class="ollama-card__hint">{{ t('settings.ollama.noModelsInline', '暂无已下载模型，在下方选择或输入模型名下载。') }}</p>
+        <p v-else class="ollama-card__hint">
+          {{ t('settings.ollama.noModelsInline', '暂无已下载模型，在下方选择或输入模型名下载。') }}
+        </p>
 
         <!-- 下载新模型 -->
         <div class="ollama-card__pull">
@@ -957,18 +1078,27 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             <div ref="pullFieldWrapRef" class="ollama-card__pull-field-wrap">
               <HcClearableField>
                 <input
-                v-model="pullModelName"
-                type="text"
-                class="ollama-card__pull-field"
-                :class="{ 'ollama-card__pull-field--error': pullInputError }"
-                :placeholder="pullInputError ? t('settings.ollama.pullPlaceholderError', '请输入模型名称') : t('settings.ollama.pullPlaceholder', '输入模型名，如 qwen3.5:9b、deepseek-r1:7b')"
-                :disabled="pulling"
-                autocomplete="off"
-                @focus="showModelDropdown = true; dropdownIndex = -1; updateDropdownPosition()"
-                @blur="showModelDropdown = false"
-                @keydown="onPullKeydown"
-                @input="pullInputError = false; pullError = ''; dropdownIndex = -1"
-              />
+                  v-model="pullModelName"
+                  type="text"
+                  class="ollama-card__pull-field"
+                  :class="{ 'ollama-card__pull-field--error': pullInputError }"
+                  :placeholder="
+                    pullInputError
+                      ? t('settings.ollama.pullPlaceholderError', '请输入模型名称')
+                      : t(
+                          'settings.ollama.pullPlaceholder',
+                          '输入模型名，如 qwen3.5:9b、deepseek-r1:7b',
+                        )
+                  "
+                  :disabled="pulling"
+                  autocomplete="off"
+                  @focus="
+                    ((showModelDropdown = true), (dropdownIndex = -1), updateDropdownPosition())
+                  "
+                  @blur="showModelDropdown = false"
+                  @keydown="onPullKeydown"
+                  @input="((pullInputError = false), (pullError = ''), (dropdownIndex = -1))"
+                />
               </HcClearableField>
               <Teleport to="body">
                 <Transition name="ollama-dropdown">
@@ -989,9 +1119,21 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                       @mousedown.prevent="selectModel(model)"
                     >
                       <span class="ollama-card__model-option-name">{{ model }}</span>
-                      <span v-if="getModelRamHint(model)" class="ollama-card__model-option-ram">{{ getModelRamHint(model) }}</span>
-                      <span v-if="isModelRecommended(model)" class="ollama-card__model-option-badge ollama-card__model-option-badge--ok" :title="t('settings.ollama.fitsMemory', '适合本机运行')">✓</span>
-                      <span v-else-if="isModelTooLarge(model)" class="ollama-card__model-option-badge ollama-card__model-option-badge--warn" :title="t('settings.ollama.exceedsMemory', '超出本机内存')">!</span>
+                      <span v-if="getModelRamHint(model)" class="ollama-card__model-option-ram">{{
+                        getModelRamHint(model)
+                      }}</span>
+                      <span
+                        v-if="isModelRecommended(model)"
+                        class="ollama-card__model-option-badge ollama-card__model-option-badge--ok"
+                        :title="t('settings.ollama.fitsMemory', '适合本机运行')"
+                        >✓</span
+                      >
+                      <span
+                        v-else-if="isModelTooLarge(model)"
+                        class="ollama-card__model-option-badge ollama-card__model-option-badge--warn"
+                        :title="t('settings.ollama.exceedsMemory', '超出本机内存')"
+                        >!</span
+                      >
                       <button
                         class="ollama-card__model-option-dl"
                         :title="t('settings.ollama.downloadDirect', '直接下载')"
@@ -1011,7 +1153,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             >
               <Loader2 v-if="pulling" :size="13" class="ollama-card__spin" />
               <Download v-else :size="13" />
-              {{ pulling ? t('settings.ollama.downloading', '下载中') : t('settings.ollama.downloadModel', '下载模型') }}
+              {{
+                pulling
+                  ? t('settings.ollama.downloading', '下载中')
+                  : t('settings.ollama.downloadModel', '下载模型')
+              }}
             </button>
           </div>
           <div v-if="pulling || pullStatus" class="ollama-card__pull-progress">
@@ -1019,11 +1165,23 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
               <div class="ollama-card__pull-bar" :style="{ width: pullProgress + '%' }" />
             </div>
             <div class="ollama-card__pull-info">
-              <span class="ollama-card__pull-status">{{ pullStatus === PULL_DONE ? t('settings.ollama.downloadComplete', '下载完成') : pullStatus }}</span>
+              <span class="ollama-card__pull-status">{{
+                pullStatus === PULL_DONE
+                  ? t('settings.ollama.downloadComplete', '下载完成')
+                  : pullStatus
+              }}</span>
               <span v-if="pullDetail" class="ollama-card__pull-detail">{{ pullDetail }}</span>
-              <span v-else-if="pullProgress > 0 && pullProgress < 100" class="ollama-card__pull-detail">{{ pullProgress }}%</span>
+              <span
+                v-else-if="pullProgress > 0 && pullProgress < 100"
+                class="ollama-card__pull-detail"
+                >{{ pullProgress }}%</span
+              >
               <button
-                v-if="pullStatus === PULL_DONE && lastDownloaded && isOllamaChatModel({ name: lastDownloaded })"
+                v-if="
+                  pullStatus === PULL_DONE &&
+                  lastDownloaded &&
+                  isOllamaChatModel({ name: lastDownloaded })
+                "
                 class="ollama-card__pull-go-chat"
                 @click="goChat({ name: lastDownloaded })"
               >
@@ -1046,7 +1204,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
     <div class="ollama-card__keepalive" data-testid="ollama-keepalive">
       <span class="ollama-card__keepalive-label">{{ t('settings.ollama.keepAliveLabel') }}</span>
       <span class="ollama-card__keepalive-sp" />
-      <HcSelect v-model="keepAlive" :options="keepAliveOptions" class="ollama-card__keepalive-select" />
+      <HcSelect
+        v-model="keepAlive"
+        :options="keepAliveOptions"
+        class="ollama-card__keepalive-select"
+      />
     </div>
 
     <!-- Footer -->
@@ -1057,15 +1219,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
     <ConfirmDialog
       :open="pendingDeleteModel !== null"
       :confirmation-key="
-        pendingDeleteModel
-          ? `ollama:${pendingDeleteModel}:${deleteConfirmationAttempt}`
-          : null
+        pendingDeleteModel ? `ollama:${pendingDeleteModel}:${deleteConfirmationAttempt}` : null
       "
       :title="t('settings.llm.deleteModel')"
       :message="
-        pendingDeleteModel
-          ? t('settings.deleteModelConfirm', { name: pendingDeleteModel })
-          : ''
+        pendingDeleteModel ? t('settings.deleteModelConfirm', { name: pendingDeleteModel }) : ''
       "
       :confirm-text="t('common.delete')"
       :cancel-text="t('common.cancel')"
@@ -1159,7 +1317,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 999px;
-  transition: background 0.2s, color 0.2s;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .ollama-card__badge--detecting,
@@ -1178,7 +1338,6 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   background: color-mix(in srgb, var(--hc-success) 10%, transparent);
 }
 
-
 .ollama-card__badge--error {
   color: var(--hc-error);
   background: color-mix(in srgb, var(--hc-error) 10%, transparent);
@@ -1196,7 +1355,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   cursor: pointer;
   border-radius: var(--hc-radius-sm);
   color: var(--hc-text-muted);
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .ollama-card__refresh:hover:not(:disabled) {
@@ -1251,7 +1413,6 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   margin-bottom: 10px;
 }
 
-
 /* ─── Action Button ─────────────────────────────────── */
 .ollama-card__action-btn {
   display: inline-flex;
@@ -1266,7 +1427,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   background: var(--hc-bg-hover);
   color: var(--hc-text-secondary);
   text-decoration: none;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .ollama-card__action-btn:hover {
@@ -1397,9 +1561,23 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 }
 
 /* ─── Header info ──────────────────────────────────── */
-.ollama-card__header-info { display: flex; flex-direction: column; min-width: 0; }
-.ollama-card__meta { font-size: 11px; color: var(--hc-text-muted); margin-top: 1px; }
-.ollama-card__header-divider { width: 1px; height: 14px; background: var(--hc-border-subtle, var(--hc-border)); margin: 0 2px; flex-shrink: 0; }
+.ollama-card__header-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ollama-card__meta {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  margin-top: 1px;
+}
+.ollama-card__header-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--hc-border-subtle, var(--hc-border));
+  margin: 0 2px;
+  flex-shrink: 0;
+}
 
 /* ─── Associated details ────────────────────────────── */
 
@@ -1448,15 +1626,39 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   white-space: nowrap;
 }
 
-.ollama-card__cap--text           { color: var(--hc-text-secondary); background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent); }
-.ollama-card__cap--vision         { color: var(--hc-success, #34c759); background: color-mix(in srgb, var(--hc-success, #34c759) 12%, transparent); }
-.ollama-card__cap--video          { color: var(--hc-warning, #ff9f0a); background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent); }
-.ollama-card__cap--audio          { color: var(--hc-accent, #5fb3ea); background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 12%, transparent); }
+.ollama-card__cap--text {
+  color: var(--hc-text-secondary);
+  background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
+}
+.ollama-card__cap--vision {
+  color: var(--hc-success, #34c759);
+  background: color-mix(in srgb, var(--hc-success, #34c759) 12%, transparent);
+}
+.ollama-card__cap--video {
+  color: var(--hc-warning, #ff9f0a);
+  background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent);
+}
+.ollama-card__cap--audio {
+  color: var(--hc-accent, #5fb3ea);
+  background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 12%, transparent);
+}
 .ollama-card__cap--code,
-.ollama-card__cap--tools          { color: var(--hc-text-secondary); background: color-mix(in srgb, var(--hc-text-secondary) 12%, transparent); }
-.ollama-card__cap--thinking       { color: var(--hc-warning, #ff9f0a); background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent); }
-.ollama-card__cap--image_generation { color: #ec4899; background: color-mix(in srgb, #ec4899 14%, transparent); }
-.ollama-card__cap--video_generation { color: #f59e0b; background: color-mix(in srgb, #f59e0b 14%, transparent); }
+.ollama-card__cap--tools {
+  color: var(--hc-text-secondary);
+  background: color-mix(in srgb, var(--hc-text-secondary) 12%, transparent);
+}
+.ollama-card__cap--thinking {
+  color: var(--hc-warning, #ff9f0a);
+  background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent);
+}
+.ollama-card__cap--image_generation {
+  color: #ec4899;
+  background: color-mix(in srgb, #ec4899 14%, transparent);
+}
+.ollama-card__cap--video_generation {
+  color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+}
 
 .ollama-card__model-status {
   display: inline-flex;
@@ -1481,7 +1683,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   color: var(--hc-success);
   background: color-mix(in srgb, var(--hc-success) 10%, transparent);
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
 }
 
 .ollama-card__model-status--running .ollama-card__model-status-dot {
@@ -1534,8 +1738,16 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   font-size: 11px;
 }
 
-.ollama-card__model-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s; flex-shrink: 0; }
-.ollama-card__model:hover .ollama-card__model-actions { opacity: 1; }
+.ollama-card__model-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  flex-shrink: 0;
+}
+.ollama-card__model:hover .ollama-card__model-actions {
+  opacity: 1;
+}
 
 .ollama-card__model-btn {
   padding: 2px 8px;
@@ -1545,7 +1757,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   background: transparent;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .ollama-card__model-btn:hover:not(:disabled) {
@@ -1620,9 +1834,16 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 }
 
 @keyframes ollama-shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
 }
 
 .ollama-card__pull-field::placeholder {
@@ -1678,7 +1899,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   color: var(--hc-text-muted);
   border-radius: var(--hc-radius-sm);
   flex-shrink: 0;
-  transition: color 0.1s, background 0.1s;
+  transition:
+    color 0.1s,
+    background 0.1s;
 }
 
 .ollama-card__model-option-dl:hover {
@@ -1723,7 +1946,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 
 .ollama-dropdown-enter-active,
 .ollama-dropdown-leave-active {
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
 }
 
 .ollama-dropdown-enter-from,
@@ -1799,7 +2024,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 /* ─── Body transition ───────────────────────────────── */
 .ollama-body-enter-active,
 .ollama-body-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .ollama-body-enter-from {
@@ -1811,8 +2038,22 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   opacity: 0;
   transform: translateY(4px);
 }
-.ollama-card__keepalive { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 0.5px solid var(--hc-border); }
-.ollama-card__keepalive-label { font-size: 12.5px; font-weight: 500; color: var(--hc-text-primary); }
-.ollama-card__keepalive-sp { flex: 1; }
-.ollama-card__keepalive-select { width: 150px; }
+.ollama-card__keepalive {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 0.5px solid var(--hc-border);
+}
+.ollama-card__keepalive-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--hc-text-primary);
+}
+.ollama-card__keepalive-sp {
+  flex: 1;
+}
+.ollama-card__keepalive-select {
+  width: 150px;
+}
 </style>

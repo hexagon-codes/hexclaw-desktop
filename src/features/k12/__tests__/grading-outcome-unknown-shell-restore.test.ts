@@ -76,14 +76,26 @@ describe('K12 会话刷新后的 ImageTaskDispatch 入口恢复', () => {
   it('同 session+agent 的多个绑定分别恢复到原消息锚点', async () => {
     recovery.list.mockResolvedValue([
       {
-        source_session: 'session-1',
+        dispatch_id: 'dispatch-1',
+        source_session_id: 'session-1',
         source_message_id: 'message-1',
-        dispatch: { dispatch_id: 'dispatch-1' },
+        attempt_generation: 1,
+        version: 1,
+        stage: 'awaiting_confirmation',
+        status: 'awaiting_confirmation',
+        projection_ready: true,
+        terminal: false,
       },
       {
-        source_session: 'session-1',
+        dispatch_id: 'dispatch-2',
+        source_session_id: 'session-1',
         source_message_id: 'message-2',
-        dispatch: { dispatch_id: 'dispatch-2' },
+        attempt_generation: 1,
+        version: 1,
+        stage: 'awaiting_confirmation',
+        status: 'awaiting_confirmation',
+        projection_ready: true,
+        terminal: false,
       },
     ])
     render()

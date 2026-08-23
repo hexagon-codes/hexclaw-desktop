@@ -70,7 +70,9 @@ export default {
     empty: 'يېڭى ئۇقتۇرۇش يوق',
     markAllRead: 'ھەممىنى ئوقۇلدى قىلىش',
     clearAll: 'تازىلاش',
-    clearConfirm: 'تازىلاشنى جەزملەش',
+    clearConfirmTitle: 'ئۇقتۇرۇشلارنى تازىلامسىز؟',
+    clearConfirmMessage: 'بۇ مەشغۇلاتنى ئەسلىگە كەلتۈرگىلى بولمايدۇ.',
+    clearConfirm: 'تازىلاش',
     groupToday: 'بۈگۈن',
     groupEarlier: 'بۇرۇن',
     events: {
@@ -343,6 +345,9 @@ export default {
     artifactsHint: 'AI ھاسىل قىلغان كود ۋە ھۆججەتلەر بۇ يەردە كۆرۈنىدۇ',
     selectArtifact: 'تەپسىلاتىنى كۆرۈش ئۈچۈن بىر مەھسۇلاتنى تاللاڭ',
     clearChat: 'سۆھبەتنى تازىلاش',
+    clearConfirmTitle: 'سۆھبەتنى تازىلامسىز؟',
+    clearConfirmMessage: 'بۇ مەشغۇلاتنى ئەسلىگە كەلتۈرگىلى بولمايدۇ.',
+    clearConfirm: 'تازىلاش',
     receivedReply: 'جاۋاب تاپشۇرۇپ ئېلىندى',
     builtinSkillNoModel: 'ئىچكى Skill · مودېل چاقىرىلمىدى',
     noModels: 'مودېل تەڭشەلمىگەن',
@@ -1188,6 +1193,9 @@ export default {
     searchPlaceholder: 'Skill ئىزدەش...',
     enabled: 'قوزغىتىلدى',
     disabled: 'چەكلەندى',
+    uninstallTitle: 'Skill نى ئۆچۈرەمسىز؟',
+    uninstallMessage: '「{name}」 Skill ئۆچۈرۈلىدۇ، بۇ مەشغۇلاتنى ئەسلىگە كەلتۈرگىلى بولمايدۇ.',
+    uninstallConfirm: 'ئۆچۈرۈش',
     enableSkill: 'Skill قوزغىتىش',
     disableSkill: 'Skill چەكلەش',
     skillDetail: 'Skill تەپسىلاتى',
@@ -1282,6 +1290,7 @@ export default {
   },
 
   knowledge: {
+    closeDialog: 'Close dialog',
     embedding: {
       // ug 占位，待母语校订
       inactiveTitle: 'Semantic retrieval inactive',
@@ -1647,6 +1656,7 @@ export default {
     paramValue: 'قىممىتى',
     serverConnected: 'ئۇلاندى',
     serverDisconnected: 'ئۇلانمىدى',
+    serverPendingAuthorization: 'ھوقۇق كۈتۈلمەكتە',
     marketplace: 'بازار',
     searchMarketplace: 'MCP مۇلازىمېتىر ئىزدەش...',
     noMarketplaceResults: 'MCP مۇلازىمېتىرى تېپىلمىدى، باشقا ئاچقۇچلۇق سۆز سىناڭ.',

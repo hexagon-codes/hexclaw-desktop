@@ -26,6 +26,7 @@ import {
   type PracticeItemDTO,
   type PracticePaperResp,
   type PracticeReturnAssetDTO,
+  type MistakePracticeGenerationDTO,
 } from '@/api/k12'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
@@ -41,8 +42,12 @@ const props = defineProps<{
     practiceItemID: string
     nonce: number
   } | null
+  practiceGenerationByMistake?: Record<string, MistakePracticeGenerationDTO>
 }>()
-const emit = defineEmits<{ (event: 'count', count: number): void }>()
+const emit = defineEmits<{
+  (event: 'count', count: number): void
+  (event: 'generation-invalidated'): void
+}>()
 const { t, locale } = useI18n()
 const toast = useToast()
 const delivery = useK12DeliveryBatch({
@@ -155,6 +160,11 @@ function scheduleRegradePoll() {
 
 // ── 待打印篮（单 Learner 单篮：draft 态练习集，§3.8）──
 const basket = computed(() => sets.value.find((s) => s.status === 'draft') ?? null)
+const pendingGenerations = computed(() =>
+  Object.values(props.practiceGenerationByMistake ?? {}).filter(
+    (generation) => generation.state === 'pending',
+  ),
+)
 watch(
   () => basket.value?.record_id,
   (recordId, previous) => {
@@ -237,6 +247,7 @@ async function removeItem(it: PracticeItemDTO) {
   try {
     await k12RemoveFromBasket(props.agentId, b.record_id, it.item_id)
     await load()
+    emit('generation-invalidated')
   } catch (e) {
     toast.error((e as Error).message)
   } finally {
@@ -780,6 +791,22 @@ async function cancelSet(s: PracticeSetDTO) {
             </button>
           </div>
         </header>
+
+        <div
+          v-if="pendingGenerations.length"
+          class="k12ps__generation-pending"
+          data-testid="practice-generation-placeholders"
+          aria-live="polite"
+        >
+          <div
+            v-for="generation in pendingGenerations"
+            :key="generation.source_mistake_id"
+            class="k12ps__generation-placeholder"
+            data-testid="practice-generation-placeholder"
+          >
+            正在生成练习题…
+          </div>
+        </div>
 
         <div
           v-if="!basket || basket.items.length === 0"
@@ -1400,6 +1427,19 @@ async function cancelSet(s: PracticeSetDTO) {
   padding: 18px;
   font-size: 12.5px;
   color: var(--hc-text-muted);
+}
+.k12ps__generation-pending {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+.k12ps__generation-placeholder {
+  padding: 10px 12px;
+  border: 1px dashed var(--hc-border);
+  border-radius: 10px;
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-input);
+  font-size: 11.5px;
 }
 .k12ps__groups {
   padding: 12px 14px 0;

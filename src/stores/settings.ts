@@ -10,6 +10,8 @@ import type {
   AppConfig,
   ProviderConfig,
   ApiError,
+  BackendLLMConfig,
+  ModelCapability,
   ModelOption,
   SecurityConfig,
   SandboxConfig,
@@ -31,10 +33,11 @@ import {
   invalidateChangedProviderProbeReceipt,
   mergeProviderRuntimeIdentities,
   resolveLoadedDefaultSelection,
+  withLLMConfigConditions,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 import { createSettingsProviderSync } from './settings-provider-sync'
-import { resolveOllamaCapabilities } from '@/config/providers'
+import { PROVIDER_PRESETS } from '@/config/providers'
 import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 import {
   collectAvailableChatModels,
@@ -42,6 +45,39 @@ import {
   reasoningControlFromOllamaCapabilities,
   reasoningSupportFromOllamaCapabilities,
 } from '@/config/model-contract'
+
+const OLLAMA_STATUS_CAPABILITY_MAP: Record<string, ModelCapability> = {
+  completion: 'text',
+  vision: 'vision',
+  embedding: 'embedding',
+}
+
+function staticOllamaCapabilities(modelName: string): ModelCapability[] {
+  const normalizedName = modelName.trim()
+  const declared = PROVIDER_PRESETS.ollama.defaultModels.find(
+    (model) => normalizedName === model.id || normalizedName.startsWith(`${model.id}:`),
+  )?.capabilities
+  return declared ? [...declared] : []
+}
+
+/** 仅把 Ollama 状态接口显式上报的能力映射为模型能力，缺失或未知值保持未分类。 */
+function modelCapabilitiesFromOllamaStatus(
+  modelName: string,
+  capabilities: readonly string[] | undefined,
+): ModelCapability[] {
+  // 旧版状态缺字段时，只允许命中静态精确声明，不允许按名称模式推断。
+  if (capabilities === undefined) return staticOllamaCapabilities(modelName)
+
+  const resolved = new Set<ModelCapability>()
+  for (const capability of capabilities) {
+    const mapped = OLLAMA_STATUS_CAPABILITY_MAP[capability.trim().toLowerCase()]
+    if (mapped) resolved.add(mapped)
+  }
+  return [
+    ...(resolved.has('text') ? ['text' as const] : []),
+    ...[...resolved].filter((capability) => capability !== 'text'),
+  ]
+}
 
 export const useSettingsStore = defineStore('settings', () => {
   const fallbackSandbox = (): SandboxConfig => ({
@@ -88,9 +124,25 @@ export const useSettingsStore = defineStore('settings', () => {
   let forceReloadPromise: Promise<void> | null = null
   /** saveConfig 调用版本；旧保存只能提交自己的不可变快照，不能覆盖更新版本的内存状态。 */
   let latestSaveRevision = 0
+  /** 最近一次服务端 GET/提交成功的非敏感条件写入快照。 */
+  let llmConfigConditions: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null = null
+
+  function recordLLMConfigConditions(
+    snapshot?: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'>,
+  ) {
+    const revision = snapshot?.config_revision
+    const digest = snapshot?.config_digest?.trim()
+    llmConfigConditions =
+      Number.isSafeInteger(revision) && (revision ?? -1) >= 0 && digest
+        ? { config_revision: revision, config_digest: digest }
+        : null
+  }
+
   const providerSync = createSettingsProviderSync({
     getConfig: () => config.value,
     getRuntimeProviders: () => runtimeProviders.value,
+    getLLMConfigConditions: () => llmConfigConditions,
+    recordLLMConfigConditions,
   })
 
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
@@ -115,7 +167,7 @@ export const useSettingsStore = defineStore('settings', () => {
             },
           )
           .finally(() => {
-          forceReloadPromise = null
+            forceReloadPromise = null
           })
       }
       return forceReloadPromise
@@ -203,10 +255,7 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         config.value = { ...defaults, llm: persistedLlm }
       }
-      providerSync.invalidateTransitions(
-        previousLoadedProviders,
-        config.value!.llm.providers,
-      )
+      providerSync.invalidateTransitions(previousLoadedProviders, config.value!.llm.providers)
 
       config.value!.llm.providers = await restoreProviderApiKeys(config.value!.llm.providers)
       config.value!.llm.defaultProviderId = resolveDefaultModelProviderId(
@@ -242,6 +291,7 @@ export const useSettingsStore = defineStore('settings', () => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const backendConfig = await getLLMConfig()
+        recordLLMConfigConditions(backendConfig)
         logger.debug('后端 LLM 配置已读取', {
           providerCount: Object.keys(backendConfig.providers).length,
           defaultProvider: backendConfig.default,
@@ -254,7 +304,9 @@ export const useSettingsStore = defineStore('settings', () => {
 
         logger.debug('Provider 配置已转换', {
           providerCount: providers.length,
-          providerIds: providers.map((provider) => provider.providerInstanceId || provider.backendKey || provider.id),
+          providerIds: providers.map(
+            (provider) => provider.providerInstanceId || provider.backendKey || provider.id,
+          ),
         })
         providerSync.invalidateTransitions(config.value!.llm.providers, providers)
         runtimeProviders.value = cloneProviders(providers)
@@ -341,33 +393,35 @@ export const useSettingsStore = defineStore('settings', () => {
     const persistJob = async () => {
       const plainConfig: AppConfig = JSON.parse(JSON.stringify(requestedConfig))
       // 前一项排队保存可能刚拿到服务端身份；构造本次 payload 前先吸收，避免并发重命名漂移 key。
-      plainConfig.llm.providers = mergeProviderRuntimeIdentities(
-        plainConfig.llm.providers,
-        [
-          ...(runtimeProviders.value ?? []),
-          ...(config.value?.llm.providers ?? []),
-        ],
-      )
+      plainConfig.llm.providers = mergeProviderRuntimeIdentities(plainConfig.llm.providers, [
+        ...(runtimeProviders.value ?? []),
+        ...(config.value?.llm.providers ?? []),
+      ])
       plainConfig.llm.providers = await materializeProviderApiKeys(plainConfig.llm.providers)
 
       // LLM 配置保存到后端 API
       try {
-        const backendConfig = providersToBackend(
-          plainConfig.llm.providers,
-          plainConfig.llm.defaultModel,
-          plainConfig.llm.defaultProviderId ?? '',
-          plainConfig.llm.routing,
-          plainConfig.llm.defaultReasoningPolicy,
+        const backendConfig = withLLMConfigConditions(
+          providersToBackend(
+            plainConfig.llm.providers,
+            plainConfig.llm.defaultModel,
+            plainConfig.llm.defaultProviderId ?? '',
+            plainConfig.llm.routing,
+            plainConfig.llm.defaultReasoningPolicy,
+          ),
+          llmConfigConditions,
         )
-        await updateLLMConfig(
+        const mutation = await updateLLMConfig(
           backendConfig,
           providerCredentialReplacements(plainConfig.llm.providers),
         )
+        recordLLMConfigConditions(mutation)
         logger.debug('LLM 配置已保存到后端', {
           providerCount: Object.keys(backendConfig.providers).length,
           defaultProvider: backendConfig.default,
         })
         const backendSnap = await getLLMConfig()
+        recordLLMConfigConditions(backendSnap)
         const liveAfterSave = await restoreProviderApiKeys(
           backendToProviders(backendSnap, plainConfig.llm.providers),
         )
@@ -535,15 +589,17 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const status = await getOllamaStatus()
       if (!status.running) return
-      ollamaModelsCache.value = (status.models || []).map(m => ({
+      ollamaModelsCache.value = (status.models || []).map((m) => ({
         id: m.name,
         name: m.name,
-        // 先查 Ollama preset 白名单（按 base ID 去 tag 匹配），未命中走名称正则推断 vision
-        capabilities: resolveOllamaCapabilities(m.name),
+        // 只接受 Ollama 状态接口的显式能力，不能从模型名推断视觉或其他模态。
+        capabilities: modelCapabilitiesFromOllamaStatus(m.name, m.capabilities),
         reasoningSupport: reasoningSupportFromOllamaCapabilities(m.capabilities),
         reasoningControl: reasoningControlFromOllamaCapabilities(m.capabilities),
       }))
-    } catch { /* Ollama 可能未运行 */ }
+    } catch {
+      /* Ollama 可能未运行 */
+    }
   }
 
   // runtimeProviders 变化时（包括 loadConfig force reload），自动刷新 Ollama 模型缓存。

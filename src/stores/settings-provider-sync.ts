@@ -1,5 +1,5 @@
 import { updateLLMConfig } from '@/api/config'
-import type { AppConfig, ProviderConfig } from '@/types'
+import type { AppConfig, BackendLLMConfig, ProviderConfig } from '@/types'
 import { logger } from '@/utils/logger'
 import { invalidateProviderCatalogSync } from './model-catalog'
 import { syncProviderModelCatalogs } from './provider-model-sync'
@@ -8,11 +8,16 @@ import {
   materializeProviderApiKeys,
   providerCredentialReplacements,
   providersToBackend,
+  withLLMConfigConditions,
 } from './settings-helpers'
 
 interface SettingsProviderSyncContext {
   getConfig: () => AppConfig | null
   getRuntimeProviders: () => ProviderConfig[] | null
+  getLLMConfigConditions: () => Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null
+  recordLLMConfigConditions: (
+    receipt: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'>,
+  ) => void
 }
 
 /**
@@ -55,15 +60,20 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
       if (!current) return
       const snapshot: AppConfig = JSON.parse(JSON.stringify(current))
       snapshot.llm.providers = await materializeProviderApiKeys(snapshot.llm.providers)
-      await updateLLMConfig(
+      const backendConfig = withLLMConfigConditions(
         providersToBackend(
           snapshot.llm.providers,
           snapshot.llm.defaultModel,
           snapshot.llm.defaultProviderId ?? '',
           snapshot.llm.routing,
         ),
+        context.getLLMConfigConditions(),
+      )
+      const receipt = await updateLLMConfig(
+        backendConfig,
         providerCredentialReplacements(snapshot.llm.providers),
       )
+      context.recordLLMConfigConditions(receipt)
     })
     void queued.catch((error) => {
       logger.warn('自动启用的小目录模型持久化失败，将在下次显式保存时重试', error)

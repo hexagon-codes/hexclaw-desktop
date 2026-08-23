@@ -1,8 +1,4 @@
-import {
-  inferCapabilitiesFromId,
-  isChatModel,
-  PROVIDER_PRESETS,
-} from './providers'
+import { isChatModel, PROVIDER_PRESETS } from './providers'
 import type {
   BackendProviderModelSpec,
   CatalogModel,
@@ -147,21 +143,17 @@ export function reasoningSupportFromOllamaCapabilities(
 export function reasoningControlFromOllamaCapabilities(
   capabilities: readonly string[] | undefined,
 ): ModelReasoningControl | undefined {
-  return capabilities?.includes('thinking')
-    ? { dialect: 'think', on: true, off: false }
-    : undefined
+  return capabilities?.includes('thinking') ? { dialect: 'think', on: true, off: false } : undefined
 }
 
 /** Canonical model record shared by config ingest, UI creation and persistence. */
 export function canonicalizeModelOption(model: ModelOption): ModelOption {
   const capabilities = normalizeModelCapabilities(model)
   const embedding = embeddingContractForModel({ ...model, capabilities })
-  const reasoning = normalizeModelReasoningContract(
-    model.reasoningSupport,
-    model.reasoningControl,
-  )
+  const reasoning = normalizeModelReasoningContract(model.reasoningSupport, model.reasoningControl)
   const modelWithoutReasoningControl = { ...model }
-  const hasReasoningDeclaration = hasOwn(model, 'reasoningSupport') || hasOwn(model, 'reasoningControl')
+  const hasReasoningDeclaration =
+    hasOwn(model, 'reasoningSupport') || hasOwn(model, 'reasoningControl')
   delete modelWithoutReasoningControl.reasoningControl
   delete modelWithoutReasoningControl.reasoningSupport
   return {
@@ -173,9 +165,7 @@ export function canonicalizeModelOption(model: ModelOption): ModelOption {
   }
 }
 
-export function isChatModelOption(
-  model: Pick<ModelOption, 'id' | 'capabilities'>,
-): boolean {
+export function isChatModelOption(model: Pick<ModelOption, 'id' | 'capabilities'>): boolean {
   return isChatModel(normalizeModelCapabilities(model))
 }
 
@@ -200,14 +190,25 @@ export function resolveProviderSelectedModelId(
   return chatModels[0]?.id ?? ''
 }
 
+/** 服务端只读模型有效投影。 */
+export interface EffectiveProviderModelProjection {
+  id: string
+  display_name?: string
+  capabilities: ModelCapability[]
+}
+
 export function mergeProviderModels(
   localProvider: ProviderConfig | undefined,
   backendModelId: string,
   backendModels?: string[],
   backendModelSpecs?: BackendProviderModelSpec[],
+  backendEffectiveModels?: EffectiveProviderModelProjection[],
 ): ModelOption[] {
-  if (backendModelSpecs !== undefined) {
-    const specsByID = new Map(backendModelSpecs.map((model) => [model.id, model]))
+  if (backendModelSpecs !== undefined || backendEffectiveModels !== undefined) {
+    const specsByID = new Map((backendModelSpecs ?? []).map((model) => [model.id, model]))
+    const effectiveModelsByID = new Map(
+      (backendEffectiveModels ?? []).map((model) => [model.id, model]),
+    )
     const localByID = new Map((localProvider?.models ?? []).map((model) => [model.id, model]))
     const orderedIDs: string[] = []
     const seen = new Set<string>()
@@ -219,72 +220,94 @@ export function mergeProviderModels(
       }
     }
     for (const id of backendModels ?? []) append(id)
-    for (const spec of backendModelSpecs) append(spec.id)
+    for (const spec of backendModelSpecs ?? []) append(spec.id)
+    for (const effectiveModel of backendEffectiveModels ?? []) append(effectiveModel.id)
     if (orderedIDs.length === 0) append(backendModelId)
 
-    return cloneModels(orderedIDs.map((id) => {
-      const spec = specsByID.get(id)
-      const local = localByID.get(id)
-      if (!spec) {
-        const localReasoningSupport = local?.reasoningSupport === undefined
-          ? undefined
-          : normalizeModelReasoningSupport(local.reasoningSupport)
+    return cloneModels(
+      orderedIDs.map((id) => {
+        const spec = specsByID.get(id)
+        const effectiveModel = effectiveModelsByID.get(id)
+        const local = localByID.get(id)
+        if (!spec && !effectiveModel) {
+          const localReasoningSupport =
+            local?.reasoningSupport === undefined
+              ? undefined
+              : normalizeModelReasoningSupport(local.reasoningSupport)
+          return {
+            id,
+            name: local?.name || id,
+            ...(local?.isCustom === undefined ? {} : { isCustom: local.isCustom }),
+            capabilities: [] as ModelCapability[],
+            ...(localReasoningSupport === undefined
+              ? {}
+              : { reasoningSupport: localReasoningSupport }),
+            ...(local?.reasoningControl ? { reasoningControl: local.reasoningControl } : {}),
+            ...(local?.embedding ? { embedding: local.embedding } : {}),
+          }
+        }
+        const hasBackendReasoningSupport = spec !== undefined && hasOwn(spec, 'reasoning_support')
+        const hasBackendReasoningControl = spec !== undefined && hasOwn(spec, 'reasoning_control')
+        const presetReasoning =
+          !hasBackendReasoningSupport && !hasBackendReasoningControl && localProvider
+            ? PROVIDER_PRESETS[localProvider.type]?.defaultModels.find((model) => model.id === id)
+            : undefined
+        const localPreset = presetReasoning ? canonicalizeModelOption(presetReasoning) : undefined
+        const isCustom = spec?.is_custom ?? local?.isCustom
+        const reasoningSupport = hasBackendReasoningSupport
+          ? normalizeModelReasoningSupport(spec?.reasoning_support)
+          : localPreset?.reasoningSupport
         return {
           id,
-          name: local?.name || id,
-          ...(local?.isCustom === undefined ? {} : { isCustom: local.isCustom }),
-          capabilities: [] as ModelCapability[],
-          ...(localReasoningSupport === undefined ? {} : { reasoningSupport: localReasoningSupport }),
-          ...(local?.reasoningControl ? { reasoningControl: local.reasoningControl } : {}),
-          ...(local?.embedding ? { embedding: local.embedding } : {}),
+          name: effectiveModel?.display_name || spec?.display_name || local?.name || id,
+          ...(isCustom === undefined ? {} : { isCustom }),
+          // Field presence is part of the compatibility contract: an omitted
+          // per-model capability list is legacy text, while an explicit [] is
+          // intentionally unclassified and must remain empty.
+          capabilities:
+            effectiveModel?.capabilities ??
+            (spec === undefined
+              ? []
+              : spec.capabilities === undefined
+                ? ['text']
+                : spec.capabilities),
+          ...(reasoningSupport === undefined ? {} : { reasoningSupport }),
+          ...(hasBackendReasoningControl
+            ? spec?.reasoning_control === undefined
+              ? {}
+              : { reasoningControl: spec.reasoning_control }
+            : localPreset?.reasoningControl
+              ? { reasoningControl: localPreset.reasoningControl }
+              : {}),
+          ...(spec?.embedding === undefined ? {} : { embedding: spec.embedding }),
         }
-      }
-      const hasBackendReasoningSupport = hasOwn(spec, 'reasoning_support')
-      const hasBackendReasoningControl = hasOwn(spec, 'reasoning_control')
-      const presetReasoning = !hasBackendReasoningSupport && !hasBackendReasoningControl && localProvider
-        ? PROVIDER_PRESETS[localProvider.type]?.defaultModels.find((model) => model.id === id)
-        : undefined
-      const localPreset = presetReasoning ? canonicalizeModelOption(presetReasoning) : undefined
-      const isCustom = spec.is_custom ?? local?.isCustom
-      const reasoningSupport = hasBackendReasoningSupport
-        ? normalizeModelReasoningSupport(spec.reasoning_support)
-        : localPreset?.reasoningSupport
-      return {
-        id,
-        name: spec.display_name || local?.name || id,
-        ...(isCustom === undefined ? {} : { isCustom }),
-        // Field presence is part of the compatibility contract: an omitted
-        // per-model capability list is legacy text, while an explicit [] is
-        // intentionally unclassified and must remain empty.
-        capabilities: spec.capabilities === undefined ? ['text'] : spec.capabilities,
-        ...(reasoningSupport === undefined ? {} : { reasoningSupport }),
-        ...(hasBackendReasoningControl
-          ? spec.reasoning_control === undefined ? {} : { reasoningControl: spec.reasoning_control }
-          : localPreset?.reasoningControl ? { reasoningControl: localPreset.reasoningControl } : {}),
-        ...(spec.embedding === undefined ? {} : { embedding: spec.embedding }),
-      }
-    }))
+      }),
+    )
   }
 
   const localModels = cloneModels(localProvider?.models ?? [])
   for (const modelId of backendModels ?? []) {
     const id = modelId.trim()
     if (id && !localModels.some((model) => model.id === id)) {
-      localModels.push(canonicalizeModelOption({
-        id,
-        name: id,
-        capabilities: normalizeModelCapabilities({ id }),
-      }))
+      localModels.push(
+        canonicalizeModelOption({
+          id,
+          name: id,
+          capabilities: normalizeModelCapabilities({ id }),
+        }),
+      )
     }
   }
 
   const trimmedBackendModelId = backendModelId.trim()
   if (trimmedBackendModelId && !localModels.some((model) => model.id === trimmedBackendModelId)) {
-    localModels.unshift(canonicalizeModelOption({
-      id: trimmedBackendModelId,
-      name: trimmedBackendModelId,
-      capabilities: normalizeModelCapabilities({ id: trimmedBackendModelId }),
-    }))
+    localModels.unshift(
+      canonicalizeModelOption({
+        id: trimmedBackendModelId,
+        name: trimmedBackendModelId,
+        capabilities: normalizeModelCapabilities({ id: trimmedBackendModelId }),
+      }),
+    )
   }
   return localModels
 }
@@ -295,7 +318,7 @@ export function mergeRemoteModelsIntoProvider(
   presetDefaults: ModelOption[],
 ): void {
   const existing = new Set(target.models.map((model) => model.id))
-  const presetCaps = new Map(presetDefaults.map((model) => [model.id, model.capabilities]))
+  const presetCaps = new Map(presetDefaults.map((model) => [model.id, model.capabilities ?? []]))
   const presetReasoningSupport = new Map(
     presetDefaults.map((model) => [model.id, model.reasoningSupport]),
   )
@@ -304,24 +327,28 @@ export function mergeRemoteModelsIntoProvider(
   )
   for (const remoteModel of remoteModels) {
     if (existing.has(remoteModel.id)) continue
-    target.models.push(canonicalizeModelOption({
-      id: remoteModel.id,
-      name: remoteModel.name || remoteModel.id,
-      capabilities: presetCaps.get(remoteModel.id) ?? inferCapabilitiesFromId(remoteModel.id),
-      reasoningSupport:
-        remoteModel.reasoningSupport ?? presetReasoningSupport.get(remoteModel.id),
-      reasoningControl:
-        remoteModel.reasoningControl ?? presetReasoningControl.get(remoteModel.id),
-    }))
+    target.models.push(
+      canonicalizeModelOption({
+        id: remoteModel.id,
+        name: remoteModel.name || remoteModel.id,
+        capabilities: [...(presetCaps.get(remoteModel.id) ?? [])],
+        reasoningSupport:
+          remoteModel.reasoningSupport ?? presetReasoningSupport.get(remoteModel.id),
+        reasoningControl:
+          remoteModel.reasoningControl ?? presetReasoningControl.get(remoteModel.id),
+      }),
+    )
   }
 }
 
 export function isOllamaProvider(
   provider: Pick<ProviderConfig, 'type' | 'backendKey' | 'name'>,
 ): boolean {
-  return provider.type === 'ollama' ||
+  return (
+    provider.type === 'ollama' ||
     Boolean(provider.backendKey?.toLowerCase().includes('ollama')) ||
     Boolean(provider.name?.toLowerCase().includes('ollama'))
+  )
 }
 
 export interface AvailableChatModel {
@@ -353,9 +380,7 @@ export function collectAvailableChatModels(
         modelName: canonical.name,
         capabilities: normalizeModelCapabilities(canonical),
         reasoningSupport: normalizeModelReasoningSupport(canonical.reasoningSupport),
-        ...(canonical.reasoningControl
-          ? { reasoningControl: canonical.reasoningControl }
-          : {}),
+        ...(canonical.reasoningControl ? { reasoningControl: canonical.reasoningControl } : {}),
       })
     }
   }

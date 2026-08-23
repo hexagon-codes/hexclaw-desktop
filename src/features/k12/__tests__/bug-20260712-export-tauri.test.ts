@@ -25,12 +25,20 @@ describe('BUG-20260712-#6 导出走 Tauri 原生保存（WKWebView <a download> 
   beforeEach(() => {
     h.createOperation.mockReset().mockReturnValue('save-blob:test')
     h.pickSave.mockReset().mockResolvedValue({
-      grantId: 'destination', operationId: 'save-blob:test', purpose: 'save_copy',
-      name: '错题本.md', mime: 'text/markdown', size: 0,
+      grantId: 'destination',
+      operationId: 'save-blob:test',
+      purpose: 'save_copy',
+      name: '错题本.md',
+      mime: 'text/markdown',
+      size: 0,
     })
     h.stageBlob.mockReset().mockResolvedValue({
-      grantId: 'source', operationId: 'save-blob:test', purpose: 'save_copy',
-      name: '错题本.md', mime: 'text/markdown', size: 24,
+      grantId: 'source',
+      operationId: 'save-blob:test',
+      purpose: 'save_copy',
+      name: '错题本.md',
+      mime: 'text/markdown',
+      size: 24,
     })
     h.copyGrant.mockReset().mockResolvedValue(24)
   })
@@ -39,11 +47,10 @@ describe('BUG-20260712-#6 导出走 Tauri 原生保存（WKWebView <a download> 
     h.tauri = true
     await download('错题本.md', '# 错题\n长方体的体积', 'text/markdown')
     expect(h.pickSave).toHaveBeenCalledWith('错题本.md', 'save_copy', 'save-blob:test')
-    expect(h.stageBlob).toHaveBeenCalledWith(
-      expect.any(Blob),
-      '错题本.md',
-      { purpose: 'save_copy', operationId: 'save-blob:test' },
-    )
+    expect(h.stageBlob).toHaveBeenCalledWith(expect.any(Blob), '错题本.md', {
+      purpose: 'save_copy',
+      operationId: 'save-blob:test',
+    })
     const blob = h.stageBlob.mock.calls[0]![0] as Blob
     expect(blob.type).toBe('text/markdown')
     expect(new TextDecoder().decode(await blob.arrayBuffer())).toContain('长方体的体积')
@@ -54,5 +61,15 @@ describe('BUG-20260712-#6 导出走 Tauri 原生保存（WKWebView <a download> 
     h.tauri = false
     await download('x.md', 'hi', 'text/markdown')
     expect(h.pickSave).not.toHaveBeenCalled()
+  })
+
+  it('Tauri 二进制 Artifact 保留服务端 Blob 字节与 MIME', async () => {
+    h.tauri = true
+    const artifact = new Blob(['%PDF-server'], { type: 'application/pdf' })
+    await download('archive.pdf', artifact, 'application/pdf')
+    const staged = h.stageBlob.mock.calls[0]![0] as Blob
+    expect(staged).toBe(artifact)
+    expect(staged.type).toBe('application/pdf')
+    expect(new TextDecoder().decode(await staged.arrayBuffer())).toBe('%PDF-server')
   })
 })

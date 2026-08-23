@@ -95,6 +95,12 @@ function feedback(type: WorkType = 'writing', suffix = '1'): WorkFeedbackDTO {
     affirmation: `先这样肯定 ${suffix}`,
     parent_guidance: `家长可以这样问 ${suffix}`,
     next_step: `下一次只试一个点 ${suffix}`,
+    projection_markdown: [
+      `## 可见证据 ${suffix}`,
+      `## 先这样肯定 ${suffix}`,
+      `## 家长可以这样问 ${suffix}`,
+      `## 下一次只试一个点 ${suffix}`,
+    ].join('\n\n'),
     source_snapshot: {
       source: 'ai',
       method_ref: `creative-feedback@${suffix}`,

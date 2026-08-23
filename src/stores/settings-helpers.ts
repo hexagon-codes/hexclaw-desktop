@@ -14,10 +14,7 @@ import {
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
 import { resolveEffectiveProviderLocality } from '@/utils/provider-endpoint'
-import {
-  DEFAULT_REASONING_POLICY,
-  normalizeDefaultReasoningPolicy,
-} from '@/utils/reasoning-policy'
+import { DEFAULT_REASONING_POLICY, normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 import type {
   AppConfig,
   DefaultReasoningPolicy,
@@ -105,20 +102,19 @@ export function mergeProviderRuntimeIdentities(
   runtimeIdentityProviders: ProviderConfig[],
 ): ProviderConfig[] {
   return targetProviders.map((provider) => {
-    const runtime = runtimeIdentityProviders.find((candidate) =>
-      candidate.id === provider.id ||
-      Boolean(
-        provider.providerInstanceId &&
-        candidate.providerInstanceId === provider.providerInstanceId,
-      ) ||
-      Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
+    const runtime = runtimeIdentityProviders.find(
+      (candidate) =>
+        candidate.id === provider.id ||
+        Boolean(
+          provider.providerInstanceId &&
+          candidate.providerInstanceId === provider.providerInstanceId,
+        ) ||
+        Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
     )
     if (!runtime) return provider
     return {
       ...provider,
-      ...(runtime.providerInstanceId
-        ? { providerInstanceId: runtime.providerInstanceId }
-        : {}),
+      ...(runtime.providerInstanceId ? { providerInstanceId: runtime.providerInstanceId } : {}),
       ...(runtime.backendKey ? { backendKey: runtime.backendKey } : {}),
     }
   })
@@ -146,7 +142,8 @@ export function invalidateChangedProviderProbeReceipt(
     !next ||
     !next.probeReceipt ||
     providerProbeConnectivityFingerprint(previous) === providerProbeConnectivityFingerprint(next)
-  ) return
+  )
+    return
   next.probeReceipt = undefined
 }
 
@@ -314,13 +311,17 @@ export function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
   }
 
   // Ollama 模型不在 provider.models 里（来自独立 ollamaModelsCache），跳过模型验证
-  const isOllama = defaultProvider.type === 'ollama' || defaultProvider.name?.toLowerCase().includes('ollama')
+  const isOllama =
+    defaultProvider.type === 'ollama' || defaultProvider.name?.toLowerCase().includes('ollama')
   if (isOllama) {
     // 保留用户选择的 defaultModel，不做 provider.models 校验
     defaultProvider.selectedModelId = llmConfig.defaultModel
     return
   }
-  defaultProvider.selectedModelId = resolveProviderSelectedModelId(defaultProvider, llmConfig.defaultModel)
+  defaultProvider.selectedModelId = resolveProviderSelectedModelId(
+    defaultProvider,
+    llmConfig.defaultModel,
+  )
   if (!defaultProvider.models.some((model) => model.id === llmConfig.defaultModel)) {
     llmConfig.defaultModel = defaultProvider.selectedModelId
   }
@@ -346,9 +347,10 @@ export function backendToProviders(
         }
       }
     ).probe_receipt
-    const testedAt = typeof rawProbeReceipt?.tested_at === 'number'
-      ? rawProbeReceipt.tested_at
-      : Date.parse(rawProbeReceipt?.tested_at ?? '')
+    const testedAt =
+      typeof rawProbeReceipt?.tested_at === 'number'
+        ? rawProbeReceipt.tested_at
+        : Date.parse(rawProbeReceipt?.tested_at ?? '')
     const probeReceipt: ProviderConfig['probeReceipt'] =
       rawProbeReceipt?.provider_instance_id &&
       (rawProbeReceipt.outcome === 'passed' || rawProbeReceipt.outcome === 'failed') &&
@@ -360,9 +362,7 @@ export function backendToProviders(
             locality: rawProbeReceipt.locality as 'local' | 'cloud',
             latencyMs: rawProbeReceipt.latency_ms ?? 0,
             testedAt,
-            ...(rawProbeReceipt.error_code
-              ? { errorCode: rawProbeReceipt.error_code }
-              : {}),
+            ...(rawProbeReceipt.error_code ? { errorCode: rawProbeReceipt.error_code } : {}),
             ...(rawProbeReceipt.error_message || rawProbeReceipt.message
               ? { errorMessage: rawProbeReceipt.error_message || rawProbeReceipt.message }
               : {}),
@@ -370,11 +370,8 @@ export function backendToProviders(
         : undefined
     const localProvider =
       (p.provider_instance_id
-        ? localProviders.find(
-            (provider) => provider.providerInstanceId === p.provider_instance_id,
-          )
-        : undefined) ??
-      localProviders.find((provider) => providerMatchesBackendKey(provider, name))
+        ? localProviders.find((provider) => provider.providerInstanceId === p.provider_instance_id)
+        : undefined) ?? localProviders.find((provider) => providerMatchesBackendKey(provider, name))
     const lowerName = name.toLowerCase()
     const matchedType = KNOWN_PROVIDER_TYPES.find((t) => lowerName === t || lowerName.startsWith(t))
     const nextProvider: ProviderConfig = {
@@ -391,15 +388,21 @@ export function backendToProviders(
       apiKeyLength: p.api_key_length ?? localProvider?.apiKeyLength,
       credentialRef: p.credential_ref,
       credentialPresent: p.credential_present,
-      models: mergeProviderModels(localProvider, p.model, p.models, p.model_specs),
+      // effective_models 是 GET 的只读投影；其 capability 与静态声明的路由授权
+      // 保持分层，普通保存仍只序列化 ProviderConfig 的声明字段。
+      models: mergeProviderModels(
+        localProvider,
+        p.model,
+        p.models,
+        p.model_specs,
+        p.effective_models,
+      ),
       selectedModelId: '',
       modelSpecsMode: p.model_specs_mode ?? 'legacy',
       locality: p.locality ?? localProvider?.locality ?? 'auto',
       localitySource: p.locality_source ?? localProvider?.localitySource,
-      confirmedEndpointHost:
-        p.confirmed_endpoint_host ?? localProvider?.confirmedEndpointHost,
-      privateNetworkAccess:
-        p.private_network_access ?? localProvider?.privateNetworkAccess,
+      confirmedEndpointHost: p.confirmed_endpoint_host ?? localProvider?.confirmedEndpointHost,
+      privateNetworkAccess: p.private_network_access ?? localProvider?.privateNetworkAccess,
       keepAlive: p.keep_alive || localProvider?.keepAlive || '',
       numCtx: p.num_ctx ?? localProvider?.numCtx ?? 0,
     }
@@ -423,9 +426,10 @@ export function providersToBackend(
     const key = p.backendKey || p.name || p.id
     // Ollama 模型不在 provider.models 里（来自独立缓存），直接用 defaultModel
     const isOllama = p.type === 'ollama' || p.name?.toLowerCase().includes('ollama')
-    const selectedModelId = isOllama && p.id === defaultProviderId
-      ? defaultModel
-      : resolveProviderSelectedModelId(p, p.id === defaultProviderId ? defaultModel : '')
+    const selectedModelId =
+      isOllama && p.id === defaultProviderId
+        ? defaultModel
+        : resolveProviderSelectedModelId(p, p.id === defaultProviderId ? defaultModel : '')
     backendProviders[key] = {
       ...(p.providerInstanceId ? { provider_instance_id: p.providerInstanceId } : {}),
       display_name: p.name,
@@ -453,9 +457,7 @@ export function providersToBackend(
           ...(canonical.reasoningSupport === undefined
             ? {}
             : { reasoning_support: normalizeModelReasoningSupport(canonical.reasoningSupport) }),
-          ...(canonical.reasoningControl
-            ? { reasoning_control: canonical.reasoningControl }
-            : {}),
+          ...(canonical.reasoningControl ? { reasoning_control: canonical.reasoningControl } : {}),
           ...(embedding ? { embedding } : {}),
         }
       }),
@@ -475,9 +477,10 @@ export function providersToBackend(
     }
   }
   // Find which provider the default model belongs to（默认 provider 必须是启用的）
-  let defaultProvider = Object.entries(backendProviders).find(
-    ([, value]) => value.enabled !== false && Boolean(value.model),
-  )?.[0] ?? ''
+  let defaultProvider =
+    Object.entries(backendProviders).find(
+      ([, value]) => value.enabled !== false && Boolean(value.model),
+    )?.[0] ?? ''
   const exactDefaultProvider = providers.find(
     (provider) =>
       provider.id === defaultProviderId &&
@@ -487,7 +490,8 @@ export function providersToBackend(
   if (exactDefaultProvider) {
     // 必须与上面 backendProviders 的键解析一致（backendKey 优先），否则 backendKey≠name 时
     // default 指向 providers map 不存在的键（后端 router 自愈到首个，但前端是真错）。
-    defaultProvider = exactDefaultProvider.backendKey || exactDefaultProvider.name || exactDefaultProvider.id
+    defaultProvider =
+      exactDefaultProvider.backendKey || exactDefaultProvider.name || exactDefaultProvider.id
   } else {
     for (const [key, val] of Object.entries(backendProviders)) {
       if (val.enabled === false) continue // 默认 provider 不能落到禁用项
@@ -506,5 +510,22 @@ export function providersToBackend(
     },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
     default_reasoning_policy: normalizeDefaultReasoningPolicy(defaultReasoningPolicy),
+  }
+}
+
+/** 将最近一次 GET 的完整非敏感版本快照附加到一次配置写入。 */
+export function withLLMConfigConditions(
+  backendConfig: BackendLLMConfig,
+  snapshot: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null | undefined,
+): BackendLLMConfig {
+  const revision = snapshot?.config_revision
+  const digest = snapshot?.config_digest?.trim()
+  if (!Number.isSafeInteger(revision) || (revision ?? -1) < 0 || !digest) {
+    return backendConfig
+  }
+  return {
+    ...backendConfig,
+    expected_config_revision: revision,
+    expected_config_digest: digest,
   }
 }

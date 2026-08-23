@@ -68,7 +68,7 @@ vi.mock('@/utils/secure-store', () => ({
   credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
     key.ownerKind === 'provider'
       ? `llm_provider/${key.ownerId}/api_key`
-      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
+      : `sidecar-connection:v1:${key.ownerId}:${key.secretKind}`,
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => {

@@ -10,19 +10,58 @@
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 
 /**
- * 弹原生 Save 对话框让用户选路径，再由 Rust 写盘。返回保存路径；用户取消返回 null。
+ * 弹原生 Save 对话框让用户选路径，再由 Rust 写盘。返回目标叶子名；用户取消返回 null。
  * http(s) 资源全程由 Rust 流式落盘；不接受内嵌二进制 data URL。
  */
 export async function downloadInApp(src: string, filename: string): Promise<string | null> {
-  const { downloadIntoGrant, pickSaveFileGrant } = await import('@/api/native-files')
+  const { downloadIntoGrant, pickSaveFileGrant, validateManagedSidecarURL } =
+    await import('@/api/native-files')
+  validateManagedSidecarURL(src)
   const grant = await pickSaveFileGrant(filename, 'save_download')
   if (!grant) return null // 用户取消
 
-  if (!src.startsWith('http')) {
-    throw new Error(`unsupported src: ${src.slice(0, 32)}`)
-  }
   await downloadIntoGrant(grant, src)
   return grant.name
+}
+
+/** 将 Blob 暂存到私有 grant 并复制到 Save grant；成功返回目标叶子名，用户取消返回 null。 */
+export async function saveBlobInApp(
+  blob: Blob,
+  filename: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const {
+    copyGrantedFile,
+    createNativeFileOperation,
+    discardFileGrant,
+    pickSaveFileGrant,
+    stageBlob,
+  } = await import('@/api/native-files')
+
+  if (signal?.aborted) throw new DOMException('Save aborted', 'AbortError')
+  const operationId = createNativeFileOperation('save-blob')
+  let destination: Awaited<ReturnType<typeof pickSaveFileGrant>> = null
+  let source: Awaited<ReturnType<typeof stageBlob>> | null = null
+  try {
+    destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
+    if (!destination) return null
+    source = await stageBlob(blob, filename, { purpose: 'save_copy', operationId, signal })
+    if (signal?.aborted) throw new DOMException('Save aborted', 'AbortError')
+    await copyGrantedFile(source, destination)
+    return destination.name
+  } catch (error) {
+    await Promise.all(
+      [source, destination].map(async (grant) => {
+        if (!grant) return
+        try {
+          await discardFileGrant(grant)
+        } catch {
+          return
+        }
+      }),
+    )
+    throw error
+  }
 }
 
 export interface OpenDocumentDeps {
@@ -37,7 +76,7 @@ export interface OpenDocumentDeps {
   toast: { info: (m: string) => void; error: (m: string) => void; success?: (m: string) => void }
   expiredMsg: string
   failedMsg: string
-  /** 下载成功提示，入参为保存路径。 */
+  /** 下载成功提示，入参为目标叶子名。 */
   savedMsg: (path: string) => string
   // 以下可注入，便于测试 / 非 Tauri 回退
   saveInApp?: (src: string, filename: string) => Promise<string | null>

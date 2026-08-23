@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 const native = vi.hoisted(() => ({
   tauri: false,
@@ -33,23 +34,21 @@ describe('secure-store write-only renderer boundary', () => {
     const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
     const api = await import('../secure-store')
 
-    expect(raw).toContain('browserSessionVault')
+    expect(raw).toContain('Sidecar secret coordinator')
+    expect(raw).toContain('sidecar-connection:v1:')
+    expect(raw).not.toContain('hexclaw-vault:v1:')
     expect(raw).not.toContain('localStorage')
     expect(raw).not.toContain('get_credential')
     expect(raw).not.toContain('read_credential')
     expect(api).not.toHaveProperty('getCredential')
   })
 
-  it('browser fallback exposes only typed presence and deletes process memory', async () => {
+  it('rejects standalone connection mutations instead of using a renderer vault', async () => {
     const { credentialPresent, deleteCredential, putCredential } = await import('../secure-store')
 
-    await expect(putCredential(connectionKey, 'session-secret')).resolves.toEqual({
-      credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
-      updated: true,
-    })
-    await expect(credentialPresent(connectionKey)).resolves.toBe(true)
-    await expect(deleteCredential(connectionKey)).resolves.toMatchObject({ updated: true })
-    await expect(credentialPresent(connectionKey)).resolves.toBe(false)
+    await expect(putCredential(connectionKey, 'session-secret')).rejects.toThrow('Sidecar secret coordinator')
+    await expect(credentialPresent(connectionKey)).rejects.toThrow('Sidecar secret coordinator')
+    await expect(deleteCredential(connectionKey)).rejects.toThrow('Sidecar secret coordinator')
     expect(localStorage.length).toBe(0)
   })
 
@@ -71,29 +70,22 @@ describe('secure-store write-only renderer boundary', () => {
     expect(native.invoke).not.toHaveBeenCalled()
   })
 
-  it('Tauri connection mutations use typed owner keys and return opaque refs', async () => {
+  it('Tauri connection mutations never reach the retired OS vault commands', async () => {
     native.tauri = true
-    native.invoke
-      .mockResolvedValueOnce({
-        credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
-        updated: true,
-      })
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce({
-        credentialRef: 'hexclaw-vault:v1:connection:connector-001:token',
-        updated: true,
-      })
     const { credentialPresent, deleteCredential, putCredential } = await import('../secure-store')
 
-    await putCredential(connectionKey, '密钥=token-abc123')
-    await expect(credentialPresent(connectionKey)).resolves.toBe(true)
-    await deleteCredential(connectionKey)
+    await expect(putCredential(connectionKey, '密钥=token-abc123')).rejects.toThrow('Sidecar secret coordinator')
+    await expect(credentialPresent(connectionKey)).rejects.toThrow('Sidecar secret coordinator')
+    await expect(deleteCredential(connectionKey)).rejects.toThrow('Sidecar secret coordinator')
+    expect(native.invoke).not.toHaveBeenCalled()
+  })
 
-    expect(native.invoke.mock.calls).toEqual([
-      ['put_credential', { key: connectionKey, secret: '密钥=token-abc123' }],
-      ['credential_present', { key: connectionKey }],
-      ['delete_credential', { key: connectionKey }],
-    ])
+  it('does not register the retired Connection vault commands in Tauri', () => {
+    const libSource = readFileSync('src-tauri/src/lib.rs', 'utf8')
+    expect(libSource).not.toContain('pub mod credential_vault')
+    expect(libSource).not.toContain('credential_vault::put_credential')
+    expect(libSource).not.toContain('credential_vault::delete_credential')
+    expect(libSource).not.toContain('credential_vault::credential_present')
   })
 
   it('derives canonical provider and connection references without aliasing', async () => {
@@ -102,7 +94,7 @@ describe('secure-store write-only renderer boundary', () => {
     expect(credentialRefFor(providerKey)).toBe(
       'llm_provider/pvd_v1_00112233445566778899aabbccddeeff/api_key',
     )
-    expect(credentialRefFor(connectionKey)).toBe('hexclaw-vault:v1:connection:connector-001:token')
+    expect(credentialRefFor(connectionKey)).toBe('sidecar-connection:v1:connector-001:token')
     expect(() => credentialRefFor({ ...providerKey, ownerId: '../provider' })).toThrow('identity')
   })
 })

@@ -4,7 +4,7 @@
  *       详情抽屉展开 fields+trace_id / 历史检索 / 单行复制 / 状态栏错误警告计数。
  * 注：jsdom 无布局，viewportH=0 → 虚拟列表回退「全量渲染」，故能断言到行。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -14,13 +14,19 @@ import { useLogsStore } from '@/stores/logs'
 import zhCN from '@/i18n/locales/zh-CN'
 import type { LogEntry } from '@/types'
 
-const { connectLogStream, getLogs, getLogStats } = vi.hoisted(() => ({
+const { connectLogStream, getLogs, getLogStats, nativeRuntime, saveBlobInAppMock } = vi.hoisted(() => ({
   connectLogStream: vi.fn(),
   getLogs: vi.fn(),
   getLogStats: vi.fn(),
+  nativeRuntime: { enabled: false },
+  saveBlobInAppMock: vi.fn(),
 }))
 
 vi.mock('@/api/logs', () => ({ connectLogStream, getLogs, getLogStats }))
+vi.mock('@/utils/platform', () => ({ isTauri: () => nativeRuntime.enabled }))
+vi.mock('@/utils/download', () => ({
+  saveBlobInApp: (...args: unknown[]) => saveBlobInAppMock(...args),
+}))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
@@ -57,9 +63,15 @@ function mountView() {
 describe('LogsView (P0-P2)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    nativeRuntime.enabled = false
+    saveBlobInAppMock.mockResolvedValue('/tmp/hexclaw-logs.log')
     connectLogStream.mockReturnValue({ onopen: null, onclose: null, onmessage: null, close: vi.fn() })
     getLogStats.mockResolvedValue({ total: 0, by_level: {}, by_source: {}, requests_per_minute: 0 })
     getLogs.mockResolvedValue({ logs: [], total: 0 })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('renders the static 5-bucket domain facet and filters the live buffer by domain', async () => {
@@ -153,6 +165,52 @@ describe('LogsView (P0-P2)', () => {
 
     expect(writeText).toHaveBeenCalled()
     expect(String(writeText.mock.calls[0]![0])).toContain('copy-me')
+  })
+
+  it('saves log text through the shared Blob boundary in Tauri', async () => {
+    nativeRuntime.enabled = true
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:logs')
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const w = mountView()
+    const store = useLogsStore()
+    store.entries = [entry({ id: '1', level: 'info', message: 'native-log-line' })]
+    await flushPromises()
+
+    await w.findAll('.hc-logs__action-btn')[1]!.trigger('click')
+
+    expect(saveBlobInAppMock).toHaveBeenCalledTimes(1)
+    const [blob, filename] = saveBlobInAppMock.mock.calls[0] as [Blob, string]
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('text/plain;charset=utf-8')
+    expect(filename).toMatch(/^hexclaw-logs-\d{4}-\d{2}-\d{2}\.log$/)
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(anchorClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps the object URL and anchor download path in the browser', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:logs')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const createElement = document.createElement.bind(document)
+    let anchor: HTMLAnchorElement | undefined
+    vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      const element = createElement(tagName, options)
+      if (tagName === 'a') anchor = element as HTMLAnchorElement
+      return element
+    })
+    const w = mountView()
+    const store = useLogsStore()
+    store.entries = [entry({ id: '1', level: 'info', message: 'browser-log-line' })]
+    await flushPromises()
+
+    await w.findAll('.hc-logs__action-btn')[1]!.trigger('click')
+
+    expect(saveBlobInAppMock).not.toHaveBeenCalled()
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(anchorClick).toHaveBeenCalledTimes(1)
+    expect(anchor?.href).toBe('blob:logs')
+    expect(anchor?.download).toMatch(/^hexclaw-logs-\d{4}-\d{2}-\d{2}\.log$/)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:logs')
   })
 
   it('shows error / warn counts (not req/min) in the status bar', async () => {

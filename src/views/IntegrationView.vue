@@ -81,6 +81,8 @@ const promptsViewRef = ref<{ newPrompt?: () => void }>()
 // 能力页唯一搜索入口：子视图只声明上下文，输入状态与可见控件均由页面壳层持有。
 const searchPlaceholder = computed(() => {
   switch (activeSearchContext.value) {
+    case 'skills-installed':
+      return t('integration.searchInstalledSkills', '搜索已安装 Skill...')
     case 'skills-marketplace':
       return t('skills.hub.searchPlaceholder', '搜索 ClawHub Skill…')
     case 'mcp-tools':
@@ -141,6 +143,7 @@ function onSplitSelect(id: string) {
     <PageToolbar
       :search-placeholder="searchPlaceholder"
       :search-value="integrationSearch"
+      :fixed-search="true"
       @search="integrationSearch = $event"
     >
       <template #tabs>

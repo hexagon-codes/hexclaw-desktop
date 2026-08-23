@@ -8,10 +8,30 @@
 // ─── 领域模型 ───────────────────────────────────────
 
 export type {
-  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, ChatDocumentRef, Artifact, ChatMode, ExecMode, ContentBlock,
-  InteractiveButton, InteractiveType, InteractiveOption, InteractiveApproval, CardField, InteractiveCard,
-  InteractiveResolved, InteractivePayload, ChatContextRef, ReasoningDisclosure, RuntimeEvent,
-  RuntimeEventKind, RuntimeWireFrame, RuntimeWireSnapshot,
+  ChatMessage,
+  ToolCall,
+  ChatSession,
+  ChatRequest,
+  ChatAttachment,
+  ChatDocumentRef,
+  Artifact,
+  ChatMode,
+  ExecMode,
+  ContentBlock,
+  InteractiveButton,
+  InteractiveType,
+  InteractiveOption,
+  InteractiveApproval,
+  CardField,
+  InteractiveCard,
+  InteractiveResolved,
+  InteractivePayload,
+  ChatContextRef,
+  ReasoningDisclosure,
+  RuntimeEvent,
+  RuntimeEventKind,
+  RuntimeWireFrame,
+  RuntimeWireSnapshot,
 } from './chat'
 export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
@@ -27,7 +47,16 @@ export type {
 export type { McpServer, McpTool } from './mcp'
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
 export type { CronJob, CronJobInput, JobSpec } from './task'
-export type { KnowledgeDoc, KnowledgeSearchResult } from './knowledge'
+export type {
+  KnowledgeDoc,
+  KnowledgeSearchResult,
+  KnowledgeTextIndexState,
+  KnowledgeFrozenVisionProjection,
+  KnowledgePreflightProjection,
+  KnowledgeProjectionFields,
+  KnowledgeStructuredProjection,
+  KnowledgeJobProjection,
+} from './knowledge'
 export type {
   CanvasNode,
   CanvasEdge,
@@ -64,6 +93,7 @@ export type {
   BackendLLMProvider,
   BackendProviderModelSpec,
   BackendLLMConfig,
+  LLMConfigMutationReceipt,
   BackendRuntimeConfig,
   RuntimeConfigUpdateRequest,
   ConfigUpdateResponse,

@@ -99,10 +99,15 @@ function mountMemoryView() {
         },
         LoadingState: { template: '<div>loading</div>' },
         ConfirmDialog: {
-          props: ['open', 'title', 'message', 'confirmText', 'danger'],
+          props: ['open', 'title', 'message', 'confirmText', 'danger', 'confirmationKey'],
           emits: ['confirm', 'cancel'],
           template: `
-            <div v-if="open" class="confirm-dialog-stub">
+            <div
+              v-if="open"
+              class="confirm-dialog-stub"
+              :data-confirmation-key="confirmationKey"
+            >
+              <span>{{ title }} {{ message }}</span>
               <button class="confirm-dialog-confirm" @click="$emit('confirm')">
                 {{ confirmText || 'confirm' }}
               </button>
@@ -121,6 +126,11 @@ async function openAddMemoryDialog(wrapper: ReturnType<typeof mountMemoryView>) 
   const vm = wrapper.vm as unknown as { openAddDialog: () => void }
   vm.openAddDialog()
   await flushPromises()
+}
+
+function getEntryDeleteButton(wrapper: ReturnType<typeof mountMemoryView>, index = 0) {
+  const buttons = wrapper.findAll('[data-testid="memory-entry-card"]')[index]!.findAll('button')
+  return buttons[buttons.length - 1]!
 }
 
 describe('MemoryView', () => {
@@ -142,7 +152,7 @@ describe('MemoryView', () => {
     searchMemory.mockResolvedValue({ results: [], vector_results: [], total: 0 })
   })
 
-  it('deleting a memory entry calls deleteMemoryEntry with correct id', async () => {
+  it('confirms the real target before deleting a memory entry', async () => {
     getMemoryEntries.mockResolvedValueOnce({
       entries: [entry('m1', '记忆A'), entry('m2', '记忆B')],
       summary: '',
@@ -160,12 +170,71 @@ describe('MemoryView', () => {
       capacity: { used: 1, max: 50 },
     })
 
-    const vm = wrapper.vm as unknown as { handleDeleteEntry: (id: string) => Promise<void> }
-    await vm.handleDeleteEntry('m1')
+    await getEntryDeleteButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(deleteMemoryEntry).not.toHaveBeenCalled()
+    const dialog = wrapper.get('.confirm-dialog-stub[data-confirmation-key="m1"]')
+    expect(dialog.text()).toContain('删除记忆')
+    expect(dialog.text()).toContain('确定要删除这条记忆吗？此操作不可撤销。')
+
+    await dialog.get('.confirm-dialog-confirm').trigger('click')
     await flushPromises()
 
     expect(deleteMemoryEntry).toHaveBeenCalledWith('m1')
     expect(wrapper.text()).not.toContain('记忆A')
+  })
+
+  it('does not delete a memory entry when confirmation is cancelled', async () => {
+    getMemoryEntries.mockResolvedValueOnce({
+      entries: [entry('m1', '保留的记忆')],
+      summary: '',
+      capacity: { used: 1, max: 50 },
+    })
+    const wrapper = mountMemoryView()
+    await flushPromises()
+
+    await getEntryDeleteButton(wrapper).trigger('click')
+    await flushPromises()
+    await wrapper.get('.confirm-dialog-cancel').trigger('click')
+    await flushPromises()
+
+    expect(deleteMemoryEntry).not.toHaveBeenCalled()
+    expect(wrapper.find('.confirm-dialog-stub').exists()).toBe(false)
+    expect(wrapper.text()).toContain('保留的记忆')
+  })
+
+  it('keeps a failed deletion target available for retry', async () => {
+    getMemoryEntries.mockResolvedValueOnce({
+      entries: [entry('m1', '可重试的记忆')],
+      summary: '',
+      capacity: { used: 1, max: 50 },
+    })
+    deleteMemoryEntry.mockRejectedValueOnce(new Error('delete failed'))
+    const wrapper = mountMemoryView()
+    await flushPromises()
+
+    await getEntryDeleteButton(wrapper).trigger('click')
+    await flushPromises()
+    await wrapper.get('.confirm-dialog-confirm').trigger('click')
+    await flushPromises()
+
+    expect(deleteMemoryEntry).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('可重试的记忆')
+    expect(wrapper.text()).toContain('delete failed')
+
+    getMemoryEntries.mockResolvedValueOnce({
+      entries: [],
+      summary: '',
+      capacity: { used: 0, max: 50 },
+    })
+    await getEntryDeleteButton(wrapper).trigger('click')
+    await flushPromises()
+    await wrapper.get('.confirm-dialog-confirm').trigger('click')
+    await flushPromises()
+
+    expect(deleteMemoryEntry).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('可重试的记忆')
   })
 
   it('passes legacy raw content when deleting a legacy memory entry', async () => {

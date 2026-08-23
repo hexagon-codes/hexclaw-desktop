@@ -12,12 +12,9 @@ interface Props {
   risk: 'safe' | 'sensitive' | 'dangerous'
   reason: string
   deadlineAt?: string
-  timeout?: number // seconds
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  timeout: 30,
-})
+const props = defineProps<Props>()
 
 const emit = defineEmits<{
   respond: [requestId: string, approved: boolean, remember: boolean]
@@ -25,12 +22,10 @@ const emit = defineEmits<{
 
 const remember = ref(false)
 const responded = ref(false)
-const fallbackDeadlineAt = Date.now() + props.timeout * 1000
 
 function projectRemainingSeconds() {
-  const deadlineAt = props.deadlineAt
-    ? new Date(props.deadlineAt).getTime()
-    : fallbackDeadlineAt
+  const deadlineAt = props.deadlineAt ? new Date(props.deadlineAt).getTime() : Number.NaN
+  if (!Number.isFinite(deadlineAt)) return 0
   return Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000))
 }
 
@@ -84,6 +79,7 @@ function deny() {
       <div class="hc-approval__buttons">
         <button
           class="hc-approval__btn hc-approval__btn--deny"
+          type="button"
           :disabled="responded || remaining <= 0"
           @click="deny"
         >
@@ -91,6 +87,7 @@ function deny() {
         </button>
         <button
           class="hc-approval__btn hc-approval__btn--approve"
+          type="button"
           :disabled="responded || remaining <= 0"
           @click="approve"
         >

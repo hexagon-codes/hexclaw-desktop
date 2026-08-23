@@ -38,20 +38,29 @@ describe('BUG-20260816-004: 周练「设置教材进度」标题不折行（对�
   })
 })
 
-describe('BUG-20260816-005: 作品列表一行两个（用户批准两列）', () => {
-  it('k12cw__list 必须是固定两列网格', async () => {
+describe('BUG-20260816-005: 作品列表按已批准的稳定 Collection 投影', () => {
+  it('k12cw__list 必须用 420px auto-fill 形成 1/2/3 列并禁止固定双列', async () => {
     const panel = await source('src/features/k12/views/K12CreativeWorksPanel.vue')
-    expect(panel).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
-    expect(panel).not.toContain('repeat(auto-fill, minmax(min(100%, 420px), 1fr))')
+    expect(panel).toContain(
+      'grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr))',
+    )
+    expect(panel).not.toMatch(
+      /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/su,
+    )
   })
 })
 
 describe('BUG-20260816-006: 到期复习行对齐架构/原型（图 10 + app.html:3104-3109）', () => {
   it('面板到期复习行必须有一键加入练习集动作投影（加入/正在出题/已加入/查看新题）', async () => {
     const panel = await source('src/features/k12/components/K12WeeklyPracticePanel.vue')
-    expect(panel).toMatch(/加入练习集/u)
-    expect(panel).toMatch(/正在出题/u)
-    expect(panel).toMatch(/已加入练习集/u)
+    const projection = await source('src/features/k12/practice-generation-projection.ts')
+    expect(panel).toContain(
+      "import { projectMistakePracticeGeneration } from '../practice-generation-projection'",
+    )
+    expect(panel).toMatch(/projectMistakePracticeGeneration\(/u)
+    expect(projection).toMatch(/加入练习集/u)
+    expect(projection).toMatch(/正在出题/u)
+    expect(projection).toMatch(/已加入练习集/u)
     expect(panel).toMatch(/查看新题/u)
   })
 
@@ -59,6 +68,13 @@ describe('BUG-20260816-006: 到期复习行对齐架构/原型（图 10 + app.ht
     const panel = await source('src/features/k12/components/K12WeeklyPracticePanel.vue')
     expect(panel).toMatch(/item\.subject/u)
     expect(panel).toMatch(/knowledge_point|knowledgePoint/u)
+  })
+
+  it('到期复习只直显本周先不练，长期不再复习复用逐题更多菜单', async () => {
+    const panel = await source('src/features/k12/components/K12WeeklyPracticePanel.vue')
+    expect(panel).toMatch(/本周先不练/u)
+    expect(panel).toMatch(/<K12MistakeReviewMenu/u)
+    expect(panel).not.toMatch(/<K12MistakeReviewMenu[\s\S]{0,240}?display="visible"/u)
   })
 
   it('前端 WeeklyPracticeItemDTO 必须带 subject / knowledge_point 字段', async () => {

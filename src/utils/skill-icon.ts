@@ -75,6 +75,12 @@ function isEmoji(s: string): boolean {
   }
 }
 
+/** 原型允许作者用一到两个非 ASCII 字符作为安全的文字 monogram。 */
+function isShortTextIcon(s: string): boolean {
+  const codePoints = Array.from(s)
+  return codePoints.length > 0 && codePoints.length <= 2 && codePoints.every((char) => /[^\x00-\x7f]/.test(char))
+}
+
 /** djb2-ish 稳定哈希（与平台无关，保证同名同色）。 */
 function hashString(s: string): number {
   let h = 5381
@@ -98,6 +104,7 @@ export function resolveSkillIcon(input: {
   // 1) 作者显式 icon
   if (raw) {
     if (isEmoji(raw)) return { emoji: raw, lucide: 'Puzzle', color: colorFor(name) }
+    if (isShortTextIcon(raw)) return { emoji: raw, lucide: 'Puzzle', color: colorFor(name) }
     if (ALLOWED_LUCIDE.has(raw)) {
       const fromCat = Object.values(CATEGORY_ICON).find((c) => c.lucide === raw)
       return { emoji: null, lucide: raw, color: fromCat?.color ?? colorFor(name) }

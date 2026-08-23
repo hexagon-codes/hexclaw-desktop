@@ -6,6 +6,7 @@ import { createI18n } from 'vue-i18n'
 import SkillsView from '../SkillsView.vue'
 import { useAppStore } from '@/stores/app'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkill, installSkill, getHubSkillContent, getSkillContent } = vi.hoisted(() => ({
   getSkills: vi.fn(),
@@ -107,6 +108,51 @@ function deferred<T>() {
 enableAutoUnmount(afterEach)
 
 describe('SkillsView', () => {
+  it('生活分类只匹配 life 或 lifestyle，不匹配 automotive', async () => {
+    getSkills.mockResolvedValue({ dir: '/tmp/skills', skills: [] })
+    searchClawHub.mockResolvedValue([
+      {
+        name: 'life-skill',
+        display_name: '生活技能',
+        description: '生活类技能',
+        category: 'life',
+        author: 'test',
+        tags: [],
+      },
+      {
+        name: 'lifestyle-skill',
+        display_name: 'Lifestyle 技能',
+        description: 'Lifestyle 类技能',
+        category: 'lifestyle',
+        author: 'test',
+        tags: [],
+      },
+      {
+        name: 'automotive-skill',
+        display_name: '汽车技能',
+        description: '汽车类技能',
+        category: 'automotive',
+        author: 'test',
+        tags: [],
+      },
+    ])
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    const marketplaceTab = wrapper.findAll('button').find((button) => button.text().includes('市场'))
+    expect(marketplaceTab).toBeDefined()
+    await marketplaceTab!.trigger('click')
+
+    const lifeCategory = wrapper.findAll('button').find((button) => button.text().includes('生活'))
+    expect(lifeCategory).toBeDefined()
+    await lifeCategory!.trigger('click')
+
+    expect(wrapper.text()).toContain('生活技能')
+    expect(wrapper.text()).toContain('Lifestyle 技能')
+    expect(wrapper.text()).not.toContain('汽车技能')
+  })
+
   beforeEach(() => {
     vi.restoreAllMocks()
     getSkills.mockReset()
@@ -402,6 +448,79 @@ describe('SkillsView', () => {
     ])
   })
 
+  it('点击已安装和市场 Tab 只显示当前面板，搜索按当前 Tab 过滤', async () => {
+    getSkills.mockResolvedValue({
+      dir: '/tmp/skills',
+      skills: [
+        {
+          name: 'installed-match',
+          description: 'installed match',
+          version: '1.0.0',
+          triggers: [],
+          tags: [],
+        },
+        {
+          name: 'installed-hidden',
+          description: 'installed hidden',
+          version: '1.0.0',
+          triggers: [],
+          tags: [],
+        },
+      ],
+    })
+    searchClawHub.mockResolvedValue([
+      {
+        name: 'market-match',
+        display_name: 'Market Match',
+        description: 'market match',
+        version: '1.0.0',
+        author: 'openclaw',
+        tags: [],
+        downloads: 1,
+        category: 'coding',
+      },
+      {
+        name: 'market-hidden',
+        display_name: 'Market Hidden',
+        description: 'market hidden',
+        version: '1.0.0',
+        author: 'openclaw',
+        tags: [],
+        downloads: 1,
+        category: 'coding',
+      },
+    ])
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    const searchInput = wrapper.find('input[placeholder]')
+    await searchInput.setValue('installed-match')
+    await flushPromises()
+
+    expect(wrapper.find('.hc-capability-installed-track').exists()).toBe(true)
+    expect(wrapper.find('.hc-capability-market-surface').exists()).toBe(false)
+    expect(wrapper.text()).toContain('installed-match')
+    expect(wrapper.text()).not.toContain('installed-hidden')
+    expect(wrapper.text()).not.toContain('Market Match')
+
+    const marketplaceTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
+    expect(marketplaceTab).toBeDefined()
+    await marketplaceTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.hc-capability-installed-track').exists()).toBe(false)
+    expect(wrapper.find('.hc-capability-market-surface').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('installed-match')
+    expect(wrapper.text()).not.toContain('installed-hidden')
+
+    ;(wrapper.vm as unknown as { searchQuery: string }).searchQuery = 'market-match'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Market Match')
+    expect(wrapper.text()).not.toContain('Market Hidden')
+  })
+
   it('previews a hub skill SKILL.md before install, then installs from the preview modal', async () => {
     getSkills.mockResolvedValue({ dir: '/tmp/skills', skills: [] })
     searchClawHub.mockResolvedValue([
@@ -531,9 +650,9 @@ describe('SkillsView', () => {
     await uninstallBtn!.trigger('click')
     await flushPromises()
 
-    const confirmBtn = wrapper.findAll('button').find((btn) => btn.text() === '删除')
-    expect(confirmBtn).toBeDefined()
-    await confirmBtn!.trigger('click')
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    expect(confirmDialog.exists()).toBe(true)
+    confirmDialog.vm.$emit('confirm')
     await flushPromises()
 
     expect(uninstallSkill).toHaveBeenCalledWith('hub-skill')
@@ -546,6 +665,54 @@ describe('SkillsView', () => {
     expect(
       wrapper.findAll('button').some((btn) => btn.text() === '已安装' && btn.attributes('disabled') !== undefined),
     ).toBe(false)
+  })
+
+  it('uses the shared 1500ms confirmation and retains the uninstall target after failure', async () => {
+    uninstallSkill.mockRejectedValueOnce(new Error('uninstall failed'))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    vi.useFakeTimers()
+    try {
+      const uninstallBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '删除')
+      expect(uninstallBtn).toBeDefined()
+      await uninstallBtn!.trigger('click')
+      await flushPromises()
+
+      const dialog = wrapper.findComponent(ConfirmDialog)
+      expect(dialog.exists()).toBe(true)
+      expect(dialog.props('open')).toBe(true)
+      expect(dialog.props('confirmationKey')).toBe('demo-skill')
+      expect(dialog.props('confirmDelayMs')).toBe(1_500)
+      expect(dialog.props('title')).toBe('卸载 Skill？')
+      expect(dialog.props('message')).toBe('将卸载「demo-skill」，此操作不可撤销。')
+      expect(dialog.props('confirmText')).toBe('卸载')
+      expect(dialog.text()).toContain('demo-skill')
+
+      let confirmBtn = dialog.get('button.hc-dialog__btn--danger')
+      expect(confirmBtn.attributes('disabled')).toBeDefined()
+      await confirmBtn.trigger('click')
+      expect(uninstallSkill).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1_499)
+      confirmBtn = wrapper.findComponent(ConfirmDialog).get('button.hc-dialog__btn--danger')
+      expect(confirmBtn.attributes('disabled')).toBeDefined()
+
+      await vi.advanceTimersByTimeAsync(1)
+      confirmBtn = wrapper.findComponent(ConfirmDialog).get('button.hc-dialog__btn--danger')
+      expect(confirmBtn.attributes('disabled')).toBeUndefined()
+      await confirmBtn.trigger('click')
+      await flushPromises()
+
+      expect(uninstallSkill).toHaveBeenCalledWith('demo-skill')
+      expect(consoleError).toHaveBeenCalledWith('卸载 Skill 失败:', expect.any(Error))
+      expect(wrapper.findComponent(ConfirmDialog).props('open')).toBe(true)
+      expect(wrapper.findComponent(ConfirmDialog).props('confirmationKey')).toBe('demo-skill')
+      expect(wrapper.text()).toContain('uninstall failed')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not start a second hub install for the same skill while the first install is still running', async () => {

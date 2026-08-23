@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -18,6 +18,9 @@ const emit = defineEmits<{
 
 const menuOpen = ref(false)
 const confirmOpen = ref(false)
+const menuTrigger = ref<HTMLButtonElement | null>(null)
+const menuElement = ref<HTMLElement | null>(null)
+const menuPosition = ref<Record<string, string>>({})
 
 watch(
   () => props.suppressed,
@@ -30,6 +33,38 @@ watch(
 function askSuppress() {
   menuOpen.value = false
   confirmOpen.value = true
+}
+
+async function toggleMenu() {
+  menuOpen.value = !menuOpen.value
+  if (!menuOpen.value) return
+  await nextTick()
+
+  const anchor = menuTrigger.value
+  const menu = menuElement.value
+  if (!anchor || !menu) return
+
+  const anchorRect = anchor.getBoundingClientRect()
+  const margin = 12
+  const gap = 8
+  const maxHeight = Math.min(300, Math.max(120, window.innerHeight - margin * 2))
+  const width = menu.offsetWidth
+  const height = menu.offsetHeight
+  const left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - width - margin))
+  const roomBelow = window.innerHeight - anchorRect.bottom - margin
+  const roomAbove = anchorRect.top - margin
+  const preferredTop =
+    roomBelow >= height || roomBelow >= roomAbove
+      ? anchorRect.bottom + gap
+      : anchorRect.top - height - gap
+  const top = Math.max(margin, Math.min(preferredTop, window.innerHeight - height - margin))
+
+  menuPosition.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+    maxHeight: `${maxHeight}px`,
+    overflowY: 'auto',
+  }
 }
 
 function confirmSuppress() {
@@ -61,17 +96,24 @@ function confirmSuppress() {
   </button>
   <div v-else-if="!suppressed" class="mistake-more">
     <button
+      ref="menuTrigger"
       type="button"
       class="rl-btn mistake-more__trigger"
       aria-label="更多错题操作"
       aria-haspopup="menu"
       :aria-expanded="menuOpen"
       :disabled="busy"
-      @click="menuOpen = !menuOpen"
+      @click="toggleMenu"
     >
       …
     </button>
-    <div v-if="menuOpen" class="mistake-more__menu" role="menu">
+    <div
+      v-if="menuOpen"
+      ref="menuElement"
+      class="mistake-more__menu"
+      role="menu"
+      :style="menuPosition"
+    >
       <button type="button" role="menuitem" @click="askSuppress">不再复习</button>
     </div>
   </div>
@@ -110,12 +152,12 @@ function confirmSuppress() {
   position: relative;
 }
 .mistake-suppress-visible {
-  height: 28px;
-  padding: 0 9px;
-  border-radius: 8px;
-  font-family: Arial;
-  font-size: 12px;
-  line-height: normal;
+  height: 32px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 18px;
   white-space: nowrap;
 }
 .mistake-more__trigger {
@@ -123,26 +165,35 @@ function confirmSuppress() {
   font-size: 18px;
 }
 .mistake-more__menu {
-  position: absolute;
+  position: fixed;
   z-index: var(--hc-z-popover, 9200);
-  top: calc(100% + 4px);
-  right: 0;
-  min-width: 132px;
-  padding: 4px;
+  width: 170px;
+  padding: 6px;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
   background: var(--hc-bg-elevated);
+  color: var(--hc-text-primary);
   box-shadow: var(--hc-shadow-float);
+  font-size: 14px;
+  line-height: 1.5;
 }
 .mistake-more__menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   border: 0;
   border-radius: 7px;
   padding: 8px 10px;
   background: transparent;
   color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+}
+.mistake-more__menu button:hover {
+  background: var(--hc-bg-hover);
 }
 .review-confirm__overlay {
   position: fixed;

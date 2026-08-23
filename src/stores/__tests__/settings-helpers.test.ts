@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ProviderConfig, ModelOption, ModelCapability, BackendLLMConfig, AppConfig } from '@/types'
+import type {
+  ProviderConfig,
+  ModelOption,
+  ModelCapability,
+  BackendLLMConfig,
+  AppConfig,
+} from '@/types'
 
 /* ------------------------------------------------------------------ */
 /*  Mocks                                                              */
@@ -7,7 +13,9 @@ import type { ProviderConfig, ModelOption, ModelCapability, BackendLLMConfig, Ap
 vi.mock('@/utils/secure-store', () => ({
   credentialRefFor: vi.fn((key: { ownerId: string }) => `llm_provider/${key.ownerId}/api_key`),
 }))
-vi.mock('@/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
+vi.mock('@/utils/logger', () => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}))
 
 import {
   cloneModels,
@@ -28,6 +36,7 @@ import {
   materializeProviderApiKeys,
   syncProviderApiKeys,
   resolveDefaultModelProviderId,
+  withLLMConfigConditions,
 } from '@/stores/settings-helpers'
 
 /* ------------------------------------------------------------------ */
@@ -55,7 +64,12 @@ function makeBackendConfig(overrides: Partial<BackendLLMConfig> = {}): BackendLL
   return {
     default: 'openai',
     providers: {
-      openai: { api_key: 'sk-xxx', base_url: 'https://api.openai.com/v1', model: 'gpt-4', compatible: '' },
+      openai: {
+        api_key: 'sk-xxx',
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-4',
+        compatible: '',
+      },
     },
     routing: { enabled: false, strategy: 'cost-aware' },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
@@ -115,15 +129,25 @@ describe('cloneModels', () => {
       },
       { id: 'acme/embed-chat-pro', name: 'Generic Embed Name' },
       { id: 'acme/embed-chat-explicit', name: 'Generic Explicit Chat', capabilities: ['text'] },
-      { id: 'nvidia/nemotron-3-embed-1b', name: 'Near Match Without Free Suffix', capabilities: ['text'] },
-      { id: 'proxy/nvidia/nemotron-3-embed-1b:free', name: 'Near Match With Prefix', capabilities: ['text'] },
+      {
+        id: 'nvidia/nemotron-3-embed-1b',
+        name: 'Near Match Without Free Suffix',
+        capabilities: ['text'],
+      },
+      {
+        id: 'proxy/nvidia/nemotron-3-embed-1b:free',
+        name: 'Near Match With Prefix',
+        capabilities: ['text'],
+      },
       { id: 'explicit-empty', name: 'Explicit Empty', capabilities: [] },
     ])
 
     expect(result[0]!.capabilities).toEqual(['embedding'])
     expect(result[1]!.capabilities).toEqual(['embedding'])
     expect(result[1]!.embedding).toEqual({
-      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+      protocol: 'openai_embeddings',
+      dimension: 2048,
+      normalization: 'l2',
     })
     expect(result[2]!.capabilities).toEqual(['text'])
     expect(result[3]!.capabilities).toEqual(['text'])
@@ -157,10 +181,7 @@ describe('cloneProviders', () => {
   })
 
   it('clones multiple providers independently', () => {
-    const providers = [
-      makeProvider({ id: 'a', name: 'A' }),
-      makeProvider({ id: 'b', name: 'B' }),
-    ]
+    const providers = [makeProvider({ id: 'a', name: 'A' }), makeProvider({ id: 'b', name: 'B' })]
     const result = cloneProviders(providers)
     expect(result).toHaveLength(2)
     expect(result[0]!.id).toBe('a')
@@ -260,10 +281,7 @@ describe('assertUniqueProviderNames', () => {
 
   it('passes for unique names', () => {
     expect(() =>
-      assertUniqueProviderNames([
-        makeProvider({ name: 'Alpha' }),
-        makeProvider({ name: 'Beta' }),
-      ]),
+      assertUniqueProviderNames([makeProvider({ name: 'Alpha' }), makeProvider({ name: 'Beta' })]),
     ).not.toThrow()
   })
 
@@ -288,10 +306,7 @@ describe('assertUniqueProviderNames', () => {
 
   it('skips whitespace-only names', () => {
     expect(() =>
-      assertUniqueProviderNames([
-        makeProvider({ name: '   ' }),
-        makeProvider({ name: '   ' }),
-      ]),
+      assertUniqueProviderNames([makeProvider({ name: '   ' }), makeProvider({ name: '   ' })]),
     ).not.toThrow()
   })
 })
@@ -538,13 +553,23 @@ describe('mergeConfigProvidersWithRuntime', () => {
   })
 
   it('merges runtime data but preserves config id and enabled', () => {
-    const config = [makeProvider({ id: 'c1', name: 'ConfigName', enabled: false, backendKey: 'openai' })]
-    const runtime = [makeProvider({ id: 'r1', name: 'RuntimeName', enabled: true, backendKey: 'openai', apiKey: 'runtime-key' })]
+    const config = [
+      makeProvider({ id: 'c1', name: 'ConfigName', enabled: false, backendKey: 'openai' }),
+    ]
+    const runtime = [
+      makeProvider({
+        id: 'r1',
+        name: 'RuntimeName',
+        enabled: true,
+        backendKey: 'openai',
+        apiKey: 'runtime-key',
+      }),
+    ]
     const result = mergeConfigProvidersWithRuntime(config, runtime)
 
     expect(result).toHaveLength(1)
-    expect(result[0]!.id).toBe('c1')        // config id preserved
-    expect(result[0]!.enabled).toBe(false)   // config enabled preserved
+    expect(result[0]!.id).toBe('c1') // config id preserved
+    expect(result[0]!.enabled).toBe(false) // config enabled preserved
     expect(result[0]!.apiKey).toBe('runtime-key') // runtime data merged
   })
 
@@ -606,7 +631,9 @@ describe('resolveDefaultModelProviderId', () => {
 describe('reconcileDefaultSelection', () => {
   it('defaults routing when missing', () => {
     const llm: AppConfig['llm'] = {
-      providers: [makeProvider({ id: 'p1', models: [makeModel('gpt-4')], selectedModelId: 'gpt-4' })],
+      providers: [
+        makeProvider({ id: 'p1', models: [makeModel('gpt-4')], selectedModelId: 'gpt-4' }),
+      ],
       defaultModel: 'gpt-4',
       defaultProviderId: 'p1',
     }
@@ -616,7 +643,9 @@ describe('reconcileDefaultSelection', () => {
 
   it('preserves existing routing values', () => {
     const llm: AppConfig['llm'] = {
-      providers: [makeProvider({ id: 'p1', models: [makeModel('gpt-4')], selectedModelId: 'gpt-4' })],
+      providers: [
+        makeProvider({ id: 'p1', models: [makeModel('gpt-4')], selectedModelId: 'gpt-4' }),
+      ],
       defaultModel: 'gpt-4',
       defaultProviderId: 'p1',
       routing: { enabled: true, strategy: 'round-robin' },
@@ -639,7 +668,11 @@ describe('reconcileDefaultSelection', () => {
   it('updates provider selectedModelId when it is the default provider', () => {
     const llm: AppConfig['llm'] = {
       providers: [
-        makeProvider({ id: 'p1', models: [makeModel('m1'), makeModel('m2')], selectedModelId: 'm1' }),
+        makeProvider({
+          id: 'p1',
+          models: [makeModel('m1'), makeModel('m2')],
+          selectedModelId: 'm1',
+        }),
       ],
       defaultModel: 'm2',
       defaultProviderId: 'p1',
@@ -662,7 +695,11 @@ describe('reconcileDefaultSelection', () => {
   it('resolves defaultModel to selectedModelId when model not in provider', () => {
     const llm: AppConfig['llm'] = {
       providers: [
-        makeProvider({ id: 'p1', models: [makeModel('m1'), makeModel('m2')], selectedModelId: 'm1' }),
+        makeProvider({
+          id: 'p1',
+          models: [makeModel('m1'), makeModel('m2')],
+          selectedModelId: 'm1',
+        }),
         makeProvider({ id: 'p2', models: [makeModel('target')], selectedModelId: 'target' }),
       ],
       defaultModel: 'target',
@@ -707,7 +744,14 @@ describe('backendToProviders', () => {
         openai: { api_key: 'new-key', base_url: 'https://new-url', model: 'gpt-4', compatible: '' },
       },
     })
-    const local = [makeProvider({ id: 'local-id', name: 'openai', type: 'openai', models: [makeModel('gpt-3.5')] })]
+    const local = [
+      makeProvider({
+        id: 'local-id',
+        name: 'openai',
+        type: 'openai',
+        models: [makeModel('gpt-3.5')],
+      }),
+    ]
     const result = backendToProviders(backend, local)
 
     // Uses local id and name
@@ -781,7 +825,10 @@ describe('backendToProviders', () => {
     const backend = makeBackendConfig({
       providers: {
         openrouter: {
-          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          api_key: '',
+          base_url: '',
+          model: 'chat',
+          compatible: 'openai',
           provider_instance_id: 'provider-stable-01',
           models: ['chat', 'embed', 'unknown'],
           model_specs_mode: 'explicit',
@@ -808,7 +855,10 @@ describe('backendToProviders', () => {
     const backend = makeBackendConfig({
       providers: {
         openrouter: {
-          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          api_key: '',
+          base_url: '',
+          model: 'chat',
+          compatible: 'openai',
           model_specs_mode: 'explicit',
           model_specs: [
             { id: 'chat', display_name: 'Chat', capabilities: ['text'] },
@@ -818,7 +868,11 @@ describe('backendToProviders', () => {
               capabilities: ['embedding'],
               embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
             },
-            { id: 'vendor/unknown-vector', display_name: 'Unknown Vector', capabilities: ['embedding'] },
+            {
+              id: 'vendor/unknown-vector',
+              display_name: 'Unknown Vector',
+              capabilities: ['embedding'],
+            },
           ],
         },
       },
@@ -826,13 +880,17 @@ describe('backendToProviders', () => {
 
     const provider = backendToProviders(backend)[0]!
     expect(provider.models[1]!.embedding).toEqual({
-      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+      protocol: 'openai_embeddings',
+      dimension: 2048,
+      normalization: 'l2',
     })
     expect(provider.models[2]!.embedding).toBeUndefined()
 
     const serialized = providersToBackend([provider], 'chat', provider.id)
     expect(serialized.providers.openrouter!.model_specs?.[1]?.embedding).toEqual({
-      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+      protocol: 'openai_embeddings',
+      dimension: 2048,
+      normalization: 'l2',
     })
     expect(serialized.providers.openrouter!.model_specs?.[2]?.embedding).toBeUndefined()
   })
@@ -841,12 +899,21 @@ describe('backendToProviders', () => {
     const backend = makeBackendConfig({
       providers: {
         empty: {
-          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
-          models: ['chat', 'vector'], model_specs_mode: 'explicit', model_specs: [],
+          api_key: '',
+          base_url: '',
+          model: 'chat',
+          compatible: 'openai',
+          models: ['chat', 'vector'],
+          model_specs_mode: 'explicit',
+          model_specs: [],
         },
         partial: {
-          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
-          models: ['chat', 'unknown'], model_specs_mode: 'explicit',
+          api_key: '',
+          base_url: '',
+          model: 'chat',
+          compatible: 'openai',
+          models: ['chat', 'unknown'],
+          model_specs_mode: 'explicit',
           model_specs: [{ id: 'chat', display_name: 'Chat', capabilities: ['text'] }],
         },
       },
@@ -867,8 +934,12 @@ describe('backendToProviders', () => {
     const backend = makeBackendConfig({
       providers: {
         custom: {
-          api_key: '', base_url: '', model: 'legacy-item', compatible: 'openai',
-          models: ['legacy-item', 'unclassified'], model_specs_mode: 'explicit',
+          api_key: '',
+          base_url: '',
+          model: 'legacy-item',
+          compatible: 'openai',
+          models: ['legacy-item', 'unclassified'],
+          model_specs_mode: 'explicit',
           model_specs: [
             { id: 'legacy-item', display_name: 'Legacy item' },
             { id: 'unclassified', display_name: 'Unclassified', capabilities: [] },
@@ -953,20 +1024,36 @@ describe('providersToBackend', () => {
   it('falls back to first provider with matching default model', () => {
     const providers = [
       makeProvider({ id: 'p1', name: 'P1', models: [makeModel('m1')] }),
-      makeProvider({ id: 'p2', name: 'P2', models: [makeModel('target')], selectedModelId: 'target' }),
+      makeProvider({
+        id: 'p2',
+        name: 'P2',
+        models: [makeModel('target')],
+        selectedModelId: 'target',
+      }),
     ]
     const result = providersToBackend(providers, 'target', 'nonexistent')
     expect(result.default).toBe('P2')
   })
 
   it('includes routing and cache in output', () => {
-    const result = providersToBackend([makeProvider()], 'gpt-4', '', { enabled: true, strategy: 'round-robin' })
+    const result = providersToBackend([makeProvider()], 'gpt-4', '', {
+      enabled: true,
+      strategy: 'round-robin',
+    })
     expect(result.routing).toEqual({ enabled: true, strategy: 'round-robin' })
-    expect(result.cache).toEqual({ enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 })
+    expect(result.cache).toEqual({
+      enabled: true,
+      similarity: 0.92,
+      ttl: '24h',
+      max_entries: 10000,
+    })
   })
 
   it('defaults routing strategy to cost-aware', () => {
-    const result = providersToBackend([makeProvider()], 'gpt-4', '', { enabled: false, strategy: '' })
+    const result = providersToBackend([makeProvider()], 'gpt-4', '', {
+      enabled: false,
+      strategy: '',
+    })
     expect(result.routing.strategy).toBe('cost-aware')
   })
 
@@ -1016,27 +1103,34 @@ describe('providersToBackend', () => {
 
   it('serializes the approved OpenRouter embedding models with their exact vector contract', () => {
     const provider = makeProvider({
-      id: 'openrouter', name: 'openrouter', backendKey: 'openrouter',
+      id: 'openrouter',
+      name: 'openrouter',
+      backendKey: 'openrouter',
       models: [
         makeModel('chat', 'Chat', ['text']),
         makeModel('nvidia/nemotron-3-embed-1b:free', 'Nemotron Embed', ['text']),
         {
-          ...makeModel('nvidia/llama-nemotron-embed-vl-1b-v2:free', 'Nemotron Embed VL', ['vision']),
+          ...makeModel('nvidia/llama-nemotron-embed-vl-1b-v2:free', 'Nemotron Embed VL', [
+            'vision',
+          ]),
           embedding: { protocol: 'ollama_embeddings', dimension: 7, normalization: 'none' },
         },
       ],
       selectedModelId: 'chat',
     })
 
-    const specs = providersToBackend([provider], 'chat', provider.id).providers.openrouter!.model_specs!
+    const specs = providersToBackend([provider], 'chat', provider.id).providers.openrouter!
+      .model_specs!
     expect(specs.slice(1)).toEqual([
       {
-        id: 'nvidia/nemotron-3-embed-1b:free', display_name: 'Nemotron Embed',
+        id: 'nvidia/nemotron-3-embed-1b:free',
+        display_name: 'Nemotron Embed',
         capabilities: ['embedding'],
         embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
       },
       {
-        id: 'nvidia/llama-nemotron-embed-vl-1b-v2:free', display_name: 'Nemotron Embed VL',
+        id: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+        display_name: 'Nemotron Embed VL',
         capabilities: ['embedding'],
         embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
       },
@@ -1048,13 +1142,15 @@ describe('providersToBackend', () => {
 describe('restoreProviderApiKeys', () => {
   it('marks an absent owner-YAML key for explicit deletion without consulting Keychain', async () => {
     const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
-    const providers = [makeProvider({
-      id: 'p1',
-      providerInstanceId,
-      credentialRef: `llm_provider/${providerInstanceId}/api_key`,
-      apiKey: '',
-      credentialPresent: false,
-    })]
+    const providers = [
+      makeProvider({
+        id: 'p1',
+        providerInstanceId,
+        credentialRef: `llm_provider/${providerInstanceId}/api_key`,
+        apiKey: '',
+        credentialPresent: false,
+      }),
+    ]
 
     const result = await restoreProviderApiKeys(providers)
     expect(result[0]!.apiKey).toBe('')
@@ -1065,13 +1161,15 @@ describe('restoreProviderApiKeys', () => {
 
   it('keeps restored plaintext api key for preserve mutation', async () => {
     const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
-    const providers = [makeProvider({
-      id: 'p1',
-      providerInstanceId,
-      credentialRef: `llm_provider/${providerInstanceId}/api_key`,
-      credentialPresent: true,
-      apiKey: 'recovered-plain-key',
-    })]
+    const providers = [
+      makeProvider({
+        id: 'p1',
+        providerInstanceId,
+        credentialRef: `llm_provider/${providerInstanceId}/api_key`,
+        credentialPresent: true,
+        apiKey: 'recovered-plain-key',
+      }),
+    ]
 
     const result = await restoreProviderApiKeys(providers)
     expect(result[0]!.apiKey).toBe('recovered-plain-key')
@@ -1121,13 +1219,17 @@ describe('materializeProviderApiKeys', () => {
   })
 
   it('throws when masked key has no secure store AND no backendKey', async () => {
-    const providers = [makeProvider({ id: 'p1', name: 'TestProv', apiKey: '****mask', backendKey: undefined })]
+    const providers = [
+      makeProvider({ id: 'p1', name: 'TestProv', apiKey: '****mask', backendKey: undefined }),
+    ]
 
     await expect(materializeProviderApiKeys(providers)).rejects.toThrow(/API Key/)
   })
 
   it('continues silently when masked key has no secure store but has backendKey', async () => {
-    const providers = [makeProvider({ id: 'p1', apiKey: '****mask', backendKey: 'existing-backend' })]
+    const providers = [
+      makeProvider({ id: 'p1', apiKey: '****mask', backendKey: 'existing-backend' }),
+    ]
 
     const result = await materializeProviderApiKeys(providers)
     // Key stays masked — backend will keep the old value
@@ -1156,7 +1258,13 @@ describe('provider enabled 往返（禁用 ≠ 删除 Key）', () => {
     const llm = providersToBackend(
       [
         makeProvider({ id: 'p1', name: 'openai', backendKey: 'openai', enabled: true }),
-        makeProvider({ id: 'p2', name: 'deepseek', backendKey: 'deepseek', enabled: false, apiKey: 'sk-deep' }),
+        makeProvider({
+          id: 'p2',
+          name: 'deepseek',
+          backendKey: 'deepseek',
+          enabled: false,
+          apiKey: 'sk-deep',
+        }),
       ],
       'gpt-4',
       'p1',
@@ -1173,7 +1281,13 @@ describe('provider enabled 往返（禁用 ≠ 删除 Key）', () => {
     const providers = backendToProviders(
       makeBackendConfig({
         providers: {
-          openai: { api_key: '****1234', base_url: '', model: 'gpt-4', compatible: '', enabled: false },
+          openai: {
+            api_key: '****1234',
+            base_url: '',
+            model: 'gpt-4',
+            compatible: '',
+            enabled: false,
+          },
           deepseek: { api_key: '****5678', base_url: '', model: 'deepseek-chat', compatible: '' },
         },
       }),
@@ -1182,5 +1296,27 @@ describe('provider enabled 往返（禁用 ≠ 删除 Key）', () => {
     const deepseek = providers.find((p) => p.backendKey === 'deepseek')
     expect(openai?.enabled).toBe(false) // 后端 enabled:false → 还原禁用
     expect(deepseek?.enabled).toBe(true) // 缺省 → 启用
+  })
+})
+
+describe('withLLMConfigConditions', () => {
+  it('only sends a complete non-secret GET snapshot as a conditional write', () => {
+    const base = makeBackendConfig()
+    const conditioned = withLLMConfigConditions(base, {
+      config_revision: 12,
+      config_digest: 'sha256:current',
+    })
+    expect(conditioned).toMatchObject({
+      expected_config_revision: 12,
+      expected_config_digest: 'sha256:current',
+    })
+    expect(conditioned).not.toHaveProperty('config_revision')
+    expect(conditioned).not.toHaveProperty('config_digest')
+  })
+
+  it('keeps compatibility with Sidecars that do not return a complete snapshot', () => {
+    const base = makeBackendConfig()
+    expect(withLLMConfigConditions(base, { config_revision: 12 })).toBe(base)
+    expect(withLLMConfigConditions(base, { config_digest: 'sha256:current' })).toBe(base)
   })
 })

@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { X, RefreshCw, Sparkles } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-catalog'
-import { inferCapabilitiesFromId } from '@/config/providers'
 import {
   canonicalizeModelOption,
   isChatModelOption,
@@ -229,12 +228,7 @@ const filteredModels = computed(() => {
     if (f.has('chat') && !capabilities.includes('text')) return false
     if (f.has('embedding') && !capabilities.includes('embedding')) return false
     if (f.has('free') && !isCatalogModelFree(m)) return false
-    if (
-      f.has('vision') &&
-      !m.inputModalities?.includes('image') &&
-      !capabilities.includes('vision')
-    )
-      return false
+    if (f.has('vision') && !capabilities.includes('vision')) return false
     if (f.has('tools') && !m.supportsTools) return false
     if (f.has('ctx128') && (m.contextLength ?? 0) < 128_000) return false
     return true
@@ -288,21 +282,17 @@ function cloneModelOption(model: ModelOption): ModelOption {
 
 function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelOption {
   if (existing?.isCustom) return cloneModelOption(existing)
-  const capabilities = existing?.capabilities
-    ? [...existing.capabilities]
-    : inferCapabilitiesFromId(m.id)
-  if (
-    m.inputModalities?.includes('image') &&
-    capabilities.includes('text') &&
-    !capabilities.includes('vision')
-  ) {
-    capabilities.push('vision')
+  if (existing) {
+    return canonicalizeModelOption({
+      ...cloneModelOption(existing),
+      id: m.id,
+      name: m.name || m.id,
+    })
   }
   return canonicalizeModelOption({
-    ...(existing ? cloneModelOption(existing) : {}),
     id: m.id,
     name: m.name || m.id,
-    capabilities,
+    capabilities: [],
   })
 }
 
@@ -708,7 +698,7 @@ function handleKeydown(e: KeyboardEvent) {
                         <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">
                           {{ t('settings.modelManager.badgeFree', '免费') }}
                         </span>
-                        <span v-if="m.inputModalities?.includes('image')" class="mm-badge">
+                        <span v-if="capabilitiesOf(m).includes('vision')" class="mm-badge">
                           {{ t('settings.modelManager.badgeVision', '视觉') }}
                         </span>
                         <span v-if="m.supportsTools" class="mm-badge">

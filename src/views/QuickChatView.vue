@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
 import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { getAssistantDisplayContent, getAssistantReasoningFromMetadata, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { normalizeReasoningReceipt, type ReasoningReceipt } from '@/types/chat'
@@ -26,6 +27,7 @@ interface Message {
 
 const STORAGE_KEY = 'quick-chat-messages'
 const MODEL_STORAGE_KEY = 'quick-chat-model'
+const QUICK_CHAT_CONFIRMATION_KEY = 'quick-chat'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
@@ -44,6 +46,7 @@ const selectedModel = ref('')
 const selectedProviderId = ref('')
 const selectedProviderKey = ref('')
 const showModelDropdown = ref(false)
+const showClearChatConfirm = ref(false)
 const useWebSocket = ref(false)
 const wsConnected = ref(false)
 
@@ -442,6 +445,7 @@ function handleRetry(msg: Message) {
 }
 
 function clearChat() {
+  showClearChatConfirm.value = false
   responseRequestGen++
   streaming.value = false
   replySettled = true
@@ -563,7 +567,7 @@ const selectedModelName = computed(() => {
           class="p-1 rounded transition-colors hover:bg-black/5 dark:hover:bg-white/5"
           :style="{ color: 'var(--hc-text-muted)' }"
           :title="t('chat.clearChat')"
-          @click="clearChat"
+          @click="showClearChatConfirm = true"
         >
           <Trash2 :size="13" />
         </button>
@@ -666,5 +670,17 @@ const selectedModelName = computed(() => {
         </button>
       </div>
     </div>
+
+    <ConfirmDialog
+      :open="showClearChatConfirm"
+      :confirmation-key="QUICK_CHAT_CONFIRMATION_KEY"
+      :title="t('chat.clearConfirmTitle')"
+      :message="t('chat.clearConfirmMessage')"
+      :confirm-text="t('chat.clearConfirm')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="clearChat"
+      @cancel="showClearChatConfirm = false"
+    />
   </div>
 </template>

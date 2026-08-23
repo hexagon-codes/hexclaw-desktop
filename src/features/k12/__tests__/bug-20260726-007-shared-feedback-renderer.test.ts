@@ -16,4 +16,16 @@ describe('BUG-20260726-007 creative feedback single-source renderer', () => {
       /<MarkdownRenderer[\s\S]{0,300}creativeResult\.payload\.feedback\.projection_markdown/,
     )
   })
+
+  it('keeps the server projection as the only creative feedback Markdown source', () => {
+    const body =
+      worksSource.match(
+        /function feedbackMarkdown\(work: CreativeWorkDTO\): string \{([\s\S]*?)\n\}/,
+      )?.[1] ?? ''
+
+    expect(body).toContain('projection_markdown')
+    expect(body).not.toMatch(
+      /feedbackEvidence|feedbackVisibleEvidence|feedbackAffirmation|feedbackParentGuidance|feedbackNextStep/,
+    )
+  })
 })

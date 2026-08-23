@@ -19,6 +19,7 @@ import {
   ChevronRight,
   X,
 } from 'lucide-vue-next'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 import { formatRelative } from '@/utils/time'
 import type { HcNotification, NotificationKind, NotificationLevel } from '@/types/ui'
@@ -102,26 +103,27 @@ function markAllRead() {
   store.markAllRead()
 }
 
-// 清空是破坏性动作 —— 两步确认（首点进入确认态，再点才清空）。
-const confirmingClear = ref(false)
-function onClearClick() {
-  if (!confirmingClear.value) {
-    confirmingClear.value = true
-    return
-  }
+// 持久清空统一进入共享危险确认，取消不得改变通知数据。
+const clearConfirmOpen = ref(false)
+function confirmClearAll() {
   store.clearAll()
-  confirmingClear.value = false
+  clearConfirmOpen.value = false
 }
-function cancelClear() {
-  confirmingClear.value = false
+function cancelClearAll() {
+  clearConfirmOpen.value = false
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div class="hc-notifpanel__backdrop" @click="emit('close')" />
+    <div
+      class="hc-notifpanel__backdrop"
+      :class="{ 'hc-notifpanel__backdrop--confirming': clearConfirmOpen }"
+      @click="emit('close')"
+    />
     <section
       class="hc-notifpanel"
+      :class="{ 'hc-notifpanel--confirming': clearConfirmOpen }"
       role="dialog"
       :aria-label="t('notifications.title')"
       data-testid="notif-panel"
@@ -138,25 +140,14 @@ function cancelClear() {
           >
             <CheckCheck :size="15" />
           </button>
-          <!-- 清空：两步确认 -->
           <button
-            v-if="!confirmingClear"
             class="hc-notifpanel__act"
             :disabled="items.length === 0"
             :title="t('notifications.clearAll')"
             data-testid="notif-clear-all"
-            @click="onClearClick"
+            @click="clearConfirmOpen = true"
           >
             <Trash :size="15" />
-          </button>
-          <button
-            v-else
-            class="hc-notifpanel__act hc-notifpanel__act--danger"
-            data-testid="notif-clear-confirm"
-            @click="onClearClick"
-            @mouseleave="cancelClear"
-          >
-            {{ t('notifications.clearConfirm') }}
           </button>
           <button
             class="hc-notifpanel__act"
@@ -250,6 +241,18 @@ function cancelClear() {
         </template>
       </div>
     </section>
+
+    <ConfirmDialog
+      :open="clearConfirmOpen"
+      :title="t('notifications.clearConfirmTitle')"
+      :message="t('notifications.clearConfirmMessage')"
+      :confirm-text="t('notifications.clearConfirm')"
+      :cancel-text="t('common.cancel')"
+      :danger="true"
+      :confirmation-key="'notifications-clear-all'"
+      @confirm="confirmClearAll"
+      @cancel="cancelClearAll"
+    />
   </Teleport>
 </template>
 
@@ -278,6 +281,11 @@ function cancelClear() {
   backdrop-filter: saturate(180%) blur(var(--hc-blur));
   -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur));
   overflow: hidden;
+}
+
+.hc-notifpanel__backdrop--confirming,
+.hc-notifpanel--confirming {
+  z-index: calc(var(--hc-z-modal) - 1);
 }
 
 .hc-notifpanel__head {
@@ -324,19 +332,6 @@ function cancelClear() {
 .hc-notifpanel__act:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-.hc-notifpanel__act--danger {
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
-}
-
-.hc-notifpanel__act--danger:hover {
-  background: color-mix(in srgb, var(--hc-error) 20%, transparent);
-  color: var(--hc-error);
 }
 
 .hc-notifpanel__empty {

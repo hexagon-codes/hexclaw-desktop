@@ -578,9 +578,15 @@ describe('SessionList', () => {
       'req-approval': {
         requestId: 'req-approval',
         sessionId: 's-2',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-approval',
         toolName: 'write_file',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'needs approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         receivedAt: Date.now(),
       },
     } as typeof store.pendingApprovals
@@ -688,9 +694,15 @@ describe('SessionList', () => {
       'req-delete-failure': {
         requestId: 'req-delete-failure',
         sessionId: 's-extra',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-delete-failure',
         toolName: 'write_file',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'needs approval',
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
         receivedAt: Date.now(),
       },
     } as typeof store.pendingApprovals

@@ -3,6 +3,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 import NotificationPanel from '../NotificationPanel.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 
@@ -119,20 +121,53 @@ describe('NotificationPanel', () => {
     expect(store.unreadCount).toBe(0)
   })
 
-  it('clears all notifications only after a two-step confirm (destructive-action safety)', async () => {
+  it('clears notifications only after the shared destructive confirmation', async () => {
+    vi.useFakeTimers()
     const store = useNotificationsStore()
     store.push({ kind: 'task', level: 'info', title: 'A' })
+    const clearAll = vi.spyOn(store, 'clearAll')
 
     const w = mountPanel()
-    // first click → enters confirm state, NOT cleared yet
     await w.find('[data-testid="notif-clear-all"]').trigger('click')
-    expect(store.items).toHaveLength(1)
-    expect(w.find('[data-testid="notif-clear-confirm"]').exists()).toBe(true)
 
-    // second click on the confirm button → actually clears
-    await w.find('[data-testid="notif-clear-confirm"]').trigger('click')
+    expect(store.items).toHaveLength(1)
+    expect(clearAll).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="notif-clear-confirm"]').exists()).toBe(false)
+
+    let dialog = w.getComponent(ConfirmDialog)
+    expect(dialog.props()).toMatchObject({
+      open: true,
+      title: '清空通知？',
+      message: '此操作不可撤销。',
+      confirmText: '清空',
+      cancelText: '取消',
+      danger: true,
+      confirmationKey: 'notifications-clear-all',
+    })
+
+    const cancelButton = dialog.get('.hc-btn-secondary')
+    await cancelButton.trigger('click')
+    await w.vm.$nextTick()
+    dialog = w.getComponent(ConfirmDialog)
+
+    expect(store.items).toHaveLength(1)
+    expect(clearAll).not.toHaveBeenCalled()
+    expect(dialog.props('open')).toBe(false)
+
+    await w.find('[data-testid="notif-clear-all"]').trigger('click')
+    dialog = w.getComponent(ConfirmDialog)
+    const confirmButton = dialog.get('.hc-dialog__btn--danger')
+    expect(confirmButton.attributes('disabled')).toBeDefined()
+
+    await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS)
+    await confirmButton.trigger('click')
+    await w.vm.$nextTick()
+    dialog = w.getComponent(ConfirmDialog)
+
+    expect(clearAll).toHaveBeenCalledTimes(1)
     expect(store.items).toHaveLength(0)
     expect(w.find('[data-testid="notif-empty"]').exists()).toBe(true)
+    expect(dialog.props('open')).toBe(false)
   })
 
   it('groups notifications into Today / Earlier sections', () => {

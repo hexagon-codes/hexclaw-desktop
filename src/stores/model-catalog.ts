@@ -1,11 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
-import {
-  canonicalizeModelOption,
-  resolveProviderSelectedModelId,
-} from '@/config/model-contract'
-import { inferCapabilitiesFromId } from '@/config/providers'
+import { canonicalizeModelOption, resolveProviderSelectedModelId } from '@/config/model-contract'
 import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
 
 /**
@@ -224,8 +220,11 @@ export function reconcileProviderCatalog(
       .filter((model) => !isExcluded(model.id))
       .map((model) => {
         const remote = remoteById.get(model.id)
-        if (!remote?.name || remote.name === model.name || model.isCustom) return model
-        return canonicalizeModelOption({ ...model, name: remote.name })
+        if (!remote || model.isCustom) return model
+        return canonicalizeModelOption({
+          ...model,
+          name: remote.name || model.name || remote.id,
+        })
       })
   } else {
     const existingById = new Map(target.models.map((model) => [model.id, model]))
@@ -244,8 +243,17 @@ export function reconcileProviderCatalog(
         return canonicalizeModelOption({
           id: remote.id,
           name: remote.name || remote.id,
-          capabilities: preset?.capabilities ?? inferCapabilitiesFromId(remote.id),
-          ...(preset?.embedding ? { embedding: { ...preset.embedding } } : {}),
+          // 带输入模态但没有能力合同的目录项保持显式空数组，不能由模型名或目录元数据推断。
+          // 完全裸的 legacy 目录项保留能力缺失语义，沿用既有文本兼容默认。
+          // 只有命中静态 preset 才写入明确能力，避免把未知目录模型误判为 embedding-only。
+          ...(preset
+            ? {
+                capabilities: [...(preset.capabilities ?? [])],
+                ...(preset.embedding ? { embedding: { ...preset.embedding } } : {}),
+              }
+            : remote.inputModalities === undefined
+              ? {}
+              : { capabilities: [] }),
         })
       })
     for (const existing of target.models) {

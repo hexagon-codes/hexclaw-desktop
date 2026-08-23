@@ -14,6 +14,7 @@ const mockRemoveMcpServer = vi.fn()
 const mockRestartMcpServer = vi.fn()
 const mockGetMcpMarketplace = vi.fn()
 const mockSearchMcpMarketplace = vi.fn()
+const mockRouterPush = vi.fn()
 
 const mockInstallFromHub = vi.fn()
 
@@ -31,6 +32,10 @@ vi.mock('@/api/mcp', () => ({
 
 vi.mock('@/api/skills', () => ({
   installFromHub: (name: string) => mockInstallFromHub(name),
+}))
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: mockRouterPush }),
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -143,8 +148,8 @@ describe('McpView — MCP 全链路', () => {
     await flushPromises()
 
     // filesystem = connected, github = disconnected
-    const statusDots = wrapper.findAll('.w-2\\.5')
-    expect(statusDots.length).toBe(2)
+    const statusPills = wrapper.findAll('.hc-capability-installed-mcp-status')
+    expect(statusPills.length).toBe(2)
   })
 
   it('重启服务器成功后重新加载服务器与工具列表', async () => {
@@ -601,6 +606,53 @@ describe('McpView — MCP 全链路', () => {
     await wrapper.vm.$nextTick()
 
     expect(vm.filteredTools).toHaveLength(1)
+  })
+
+  it('工具行使用原型静态 schema/input 与标准测试按钮', async () => {
+    mockGetMcpTools.mockResolvedValue({
+      tools: [
+        {
+          name: 'filesystem.read_file',
+          description: '读取允许目录内的文件内容',
+          input_schema: {
+            properties: {
+              path: {
+                type: 'string',
+                description: '绝对路径',
+                example: '/Users/hexagon/Documents/report.md',
+              },
+            },
+          },
+        },
+        {
+          name: 'postgres.query',
+          description: '执行只读 SQL 查询',
+          input_schema: {
+            properties: { sql: { type: 'string' }, limit: { type: 'number', default: 100 } },
+          },
+        },
+      ],
+      total: 2,
+    })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+    ;(wrapper.vm as unknown as { activeTab: string }).activeTab = 'tools'
+    await wrapper.vm.$nextTick()
+
+    const rows = wrapper.findAll('.hc-capability-installed-row--tool')
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row.find('.hc-capability-installed-tool-name').exists()).toBe(true)
+      expect(row.find('.hc-capability-installed-tool-description').exists()).toBe(true)
+      expect(row.findAll('button.btn').map((button) => button.text().trim())).toEqual(['测试'])
+      expect(row.find('.hc-capability-installed-tool-caret').exists()).toBe(false)
+      expect(row.find('.hc-capability-installed-schema').exists()).toBe(true)
+      expect(row.find('.hc-capability-installed-main .hc-capability-installed-schema').exists()).toBe(true)
+    }
+    expect(rows[0]!.find('[data-mcp-static-input]').exists()).toBe(true)
+    expect(rows[0]!.find('input').element.value).toBe('/Users/hexagon/Documents/report.md')
+    expect(rows[1]!.find('[data-mcp-static-input]').exists()).toBe(false)
   })
 
   it('展开工具显示 schema', async () => {
@@ -1259,6 +1311,159 @@ describe('McpView — MCP 全链路', () => {
     await wrapper.vm.$nextTick()
     // tools 不应渲染
     expect(wrapper.text()).not.toContain('Read a file')
+  })
+
+  it('点击服务器、工具和市场 Tab 时只显示当前面板', async () => {
+    mockGetMcpMarketplace.mockResolvedValue({
+      skills: [
+        {
+          name: 'market-only',
+          display_name: 'Market Only',
+          description: 'market-only-description',
+          category: '',
+          command: 'cmd',
+          args: [],
+          downloads: 0,
+          rating: 0,
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const serversTab = wrapper.findAll('button').find((btn) => btn.text().includes('服务器'))
+    const toolsTab = wrapper.findAll('button').find((btn) => btn.text().includes('工具'))
+    const marketplaceTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
+    expect(serversTab).toBeDefined()
+    expect(toolsTab).toBeDefined()
+    expect(marketplaceTab).toBeDefined()
+
+    await toolsTab!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Read a file')
+    expect(wrapper.text()).not.toContain('filesystem')
+    expect(wrapper.text()).not.toContain('Market Only')
+
+    await marketplaceTab!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Market Only')
+    expect(wrapper.text()).not.toContain('Read a file')
+    expect(wrapper.text()).not.toContain('filesystem')
+
+    await serversTab!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('filesystem')
+    expect(wrapper.text()).not.toContain('Read a file')
+    expect(wrapper.text()).not.toContain('Market Only')
+  })
+
+  it('将 pending_authorization 映射为待授权', async () => {
+    mockGetMcpServerStatus.mockResolvedValue({
+      statuses: { filesystem: 'pending_authorization', github: 'connected' },
+    })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('待授权')
+  })
+
+  it('待授权服务器使用 amber 状态语义并导航到设置授权', async () => {
+    mockGetMcpServerStatus.mockResolvedValue({
+      statuses: { filesystem: 'pending_authorization', github: 'connected' },
+    })
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const statusBadge = wrapper.get('[data-testid="mcp-server-status-filesystem"]')
+    expect(statusBadge.classes()).toContain('hc-capability-installed-mcp-status--pending')
+
+    const authorizeButton = wrapper.get('[data-testid="mcp-server-authorize-filesystem"]')
+    expect(authorizeButton.text()).toContain('去设置授权')
+    await authorizeButton.trigger('click')
+    expect(mockRouterPush).toHaveBeenCalledWith('/settings')
+  })
+
+  it('服务器行操作集合与原型一致：已连接重启/删除，待授权仅授权/删除', async () => {
+    mockGetMcpServers.mockResolvedValue({
+      servers: [
+        { name: 'filesystem', description: 'stdio · filesystem' },
+        { name: 'github', description: 'stdio · github' },
+      ],
+      total: 2,
+    })
+    mockGetMcpServerStatus.mockResolvedValue({
+      statuses: { filesystem: 'connected', github: 'pending_authorization' },
+    })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const rows = wrapper.findAll('.hc-capability-installed-row--mcp')
+    const connectedRow = rows.find((row) => row.text().includes('filesystem'))
+    const pendingRow = rows.find((row) => row.text().includes('github'))
+    expect(connectedRow).toBeDefined()
+    expect(pendingRow).toBeDefined()
+
+    expect(connectedRow!.findAll('button').map((button) => button.text().trim())).toEqual([
+      '重启',
+      '删除',
+    ])
+    expect(connectedRow!.findAll('button.btn').map((button) => button.text().trim())).toEqual([
+      '重启',
+      '删除',
+    ])
+    expect(connectedRow!.findAll('button.btn-ghost').map((button) => button.text().trim())).toEqual([
+      '删除',
+    ])
+    expect(connectedRow!.find('.hc-capability-installed-icon').exists()).toBe(true)
+    expect(connectedRow!.find('[data-testid="mcp-server-status-dot-filesystem"]').exists()).toBe(false)
+    expect(connectedRow!.find('.hc-capability-installed-server-name').exists()).toBe(true)
+    expect(connectedRow!.find('.hc-capability-installed-server-description').exists()).toBe(true)
+    expect(connectedRow!.find('.hc-capability-installed-mcp-status').classes()).toContain(
+      'hc-capability-installed-mcp-status--connected',
+    )
+
+    expect(pendingRow!.findAll('button').map((button) => button.text().trim())).toEqual([
+      '去设置授权',
+      '删除',
+    ])
+    expect(pendingRow!.find('[data-testid="mcp-server-restart"]').exists()).toBe(false)
+    expect(pendingRow!.findAll('button.btn').map((button) => button.text().trim())).toEqual([
+      '去设置授权',
+      '删除',
+    ])
+    expect(pendingRow!.findAll('button.btn-ghost').map((button) => button.text().trim())).toEqual([
+      '删除',
+    ])
+    expect(pendingRow!.find('.hc-capability-installed-icon').exists()).toBe(true)
+    expect(pendingRow!.find('[data-testid="mcp-server-status-dot-github"]').exists()).toBe(false)
+    expect(pendingRow!.find('.hc-capability-installed-server-name').exists()).toBe(true)
+    expect(pendingRow!.find('.hc-capability-installed-server-description').exists()).toBe(true)
+    expect(pendingRow!.find('.hc-capability-installed-mcp-status').classes()).toContain(
+      'hc-capability-installed-mcp-status--pending',
+    )
+  })
+
+  it('重启操作显示可见文字', async () => {
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const restartButton = wrapper.get('[data-testid="mcp-server-restart"]')
+    expect(restartButton.text()).toContain('重启')
+  })
+
+  it('删除操作显示可见文字', async () => {
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const removeButton = wrapper
+      .findAll('button')
+      .find((button) => button.attributes('title')?.includes('删除'))
+    expect(removeButton).toBeDefined()
+    expect(removeButton!.text()).toContain('删除')
   })
 
   // ─── 9. 状态 API 降级 ─────────────────────────────

@@ -74,3 +74,26 @@ describe('native staging cleanup', () => {
     expect(native.calls.some((call) => call.command === 'discard_file_grant')).toBe(true)
   })
 })
+
+describe('managed Sidecar native transfer URL', () => {
+  it('接受 managed same-origin 的绝对/相对 URL，拒绝 foreign、凭据、hash 与 data URL', async () => {
+    const { validateManagedSidecarURL } = await import('../native-files')
+
+    expect(() => validateManagedSidecarURL('/api/v1/files/generated/result.png')).not.toThrow()
+    expect(() =>
+      validateManagedSidecarURL('http://localhost:16060/api/v1/files/generated/result.png'),
+    ).not.toThrow()
+    expect(() => validateManagedSidecarURL('https://example.com/result.png')).toThrow(
+      'managed Sidecar origin',
+    )
+    expect(() => validateManagedSidecarURL('http://user@localhost:16060/result.png')).toThrow(
+      'managed Sidecar origin',
+    )
+    expect(() => validateManagedSidecarURL('http://localhost:16060/result.png#fragment')).toThrow(
+      'managed Sidecar origin',
+    )
+    expect(() => validateManagedSidecarURL('data:image/png;base64,AAAA')).toThrow(
+      'managed Sidecar origin',
+    )
+  })
+})

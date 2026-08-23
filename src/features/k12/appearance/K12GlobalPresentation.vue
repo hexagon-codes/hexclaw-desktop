@@ -459,6 +459,60 @@ if (
   background: rgba(7, 22, 44, 0.965);
 }
 
+/* K12 顶栏只投影原型既有玻璃材质；页面结构、页签、动作和几何仍由各自组件负责。 */
+:global(body[data-k12-skin-active='k12'] .k12enh-tabs),
+:global(body[data-k12-skin-active='k12'] .hc-settings .hc-toolbar) {
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: saturate(120%) blur(18px);
+  -webkit-backdrop-filter: saturate(120%) blur(18px);
+}
+
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .k12enh-tabs),
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .hc-settings .hc-toolbar) {
+  background: linear-gradient(90deg, rgba(230, 247, 228, 0.98), rgba(239, 249, 240, 0.96));
+}
+
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .k12enh-tabs) {
+  border-bottom-color: rgba(103, 133, 90, 0.22);
+  border-bottom-width: 1px;
+}
+
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .k12enh-seg) {
+  background: rgba(79, 143, 102, 0.14);
+  border-color: rgba(103, 133, 90, 0.22);
+}
+
+:global([data-theme='light'] body[data-k12-skin-active='k12'] .k12enh-seg button.on) {
+  background: rgba(255, 254, 249, 0.96);
+  color: #4f8f66;
+  box-shadow:
+    0 1px 3px color-mix(in srgb, var(--hc-text-primary) 10%, transparent),
+    inset 0 0 0 0.5px rgba(103, 133, 90, 0.22);
+}
+
+:global([data-theme='dark'] body[data-k12-skin-active='k12'] .k12enh-tabs),
+:global([data-theme='dark'] body[data-k12-skin-active='k12'] .hc-settings .hc-toolbar) {
+  background: linear-gradient(90deg, rgba(8, 40, 50, 0.97), rgba(9, 31, 54, 0.96));
+}
+
+:global([data-theme='dark'] body[data-k12-skin-active='k12'] .k12enh-tabs) {
+  border-bottom-color: rgba(121, 188, 229, 0.2);
+  border-bottom-width: 1px;
+}
+
+:global([data-theme='dark'] body[data-k12-skin-active='k12'] .k12enh-seg) {
+  background: rgba(121, 188, 229, 0.15);
+  border-color: rgba(121, 188, 229, 0.2);
+}
+
+:global([data-theme='dark'] body[data-k12-skin-active='k12'] .k12enh-seg button.on) {
+  background: rgba(11, 32, 58, 0.96);
+  color: #79bce5;
+  box-shadow:
+    0 1px 3px color-mix(in srgb, var(--hc-text-primary) 10%, transparent),
+    inset 0 0 0 0.5px rgba(121, 188, 229, 0.2);
+}
+
 :global(body[data-k12-skin-active='k12'] .k12enh-records) {
   inline-size: 100%;
   max-inline-size: none;

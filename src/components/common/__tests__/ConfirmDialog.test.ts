@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import ConfirmDialog from '../ConfirmDialog.vue'
 import confirmDialogSource from '../ConfirmDialog.vue?raw'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
@@ -76,8 +77,125 @@ describe('ConfirmDialog', () => {
       props: { open: true },
       global: { stubs: { Teleport: true } },
     })
-    const cancelBtn = wrapper.findAll('button')[0]!
+    const cancelBtn = wrapper.get('.hc-dialog__actions .hc-btn-secondary')
     await cancelBtn.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+  })
+
+  it('provides the approved header close control and restores the invoking focus', async () => {
+    const invoker = document.createElement('button')
+    invoker.textContent = 'open'
+    document.body.appendChild(invoker)
+    invoker.focus()
+
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: false },
+      attachTo: document.body,
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.setProps({ open: true })
+    await nextTick()
+
+    const dialog = wrapper.get('[role="alertdialog"]')
+    expect(dialog.element.contains(document.activeElement)).toBe(true)
+    const close = wrapper.get('button[aria-label="Close dialog"]')
+    await close.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+
+    await wrapper.setProps({ open: false })
+    await nextTick()
+    expect(document.activeElement).toBe(invoker)
+
+    wrapper.unmount()
+    invoker.remove()
+  })
+
+  it('traps forward and backward Tab navigation inside the open dialog', async () => {
+    const invoker = document.createElement('button')
+    document.body.appendChild(invoker)
+    invoker.focus()
+
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: false, danger: false },
+      attachTo: document.body,
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.setProps({ open: true })
+    await nextTick()
+
+    const buttons = wrapper.findAll('button')
+    const first = buttons[0]!.element
+    const last = buttons[buttons.length - 1]!.element
+
+    last.focus()
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }),
+    )
+    expect(document.activeElement).toBe(first)
+
+    first.focus()
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+    expect(document.activeElement).toBe(last)
+
+    wrapper.unmount()
+    invoker.remove()
+  })
+
+  it('restores the invoking focus when the parent closes the dialog directly', async () => {
+    const invoker = document.createElement('button')
+    document.body.appendChild(invoker)
+    invoker.focus()
+
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: false },
+      attachTo: document.body,
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.setProps({ open: true })
+    await nextTick()
+    expect(wrapper.get('[role="alertdialog"]').element.contains(document.activeElement)).toBe(true)
+    await wrapper.setProps({ open: false })
+
+    expect(document.activeElement).toBe(invoker)
+
+    wrapper.unmount()
+    invoker.remove()
+  })
+
+  it('restores the invoking focus when the open dialog unmounts', async () => {
+    const invoker = document.createElement('button')
+    document.body.appendChild(invoker)
+    invoker.focus()
+
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: false },
+      attachTo: document.body,
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.setProps({ open: true })
+    await nextTick()
+    expect(wrapper.get('[role="alertdialog"]').element.contains(document.activeElement)).toBe(true)
+    wrapper.unmount()
+
+    expect(document.activeElement).toBe(invoker)
+    invoker.remove()
+  })
+
+  it('routes overlay dismissal through the shared cancel event', async () => {
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+
+    await wrapper.get('.hc-dialog-overlay').trigger('click')
+
     expect(wrapper.emitted('cancel')).toHaveLength(1)
   })
 
@@ -88,7 +206,7 @@ describe('ConfirmDialog', () => {
       global: { stubs: { Teleport: true } },
     })
     const buttons = wrapper.findAll('button')
-    const cancelBtn = buttons[0]!
+    const cancelBtn = wrapper.get('.hc-dialog__actions .hc-btn-secondary')
     const confirmBtn = buttons[buttons.length - 1]!
 
     expect(cancelBtn.attributes('disabled')).toBeUndefined()

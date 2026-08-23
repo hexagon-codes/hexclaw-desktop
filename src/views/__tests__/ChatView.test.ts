@@ -11,6 +11,7 @@ import { defaultConfig } from '@/stores/settings-defaults'
 import type { ModelOption, ModelReasoningControl } from '@/types'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
+import { useAppStore } from '@/stores/app'
 import {
   bindSessionAgent,
   clearSessionAgent,
@@ -562,6 +563,26 @@ describe('ChatView — E2E 关键路径', () => {
     expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
   })
 
+  it('[BUG-20260725-008] captures sidecar-ready emitted as the initial directory load begins', async () => {
+    let listenerExistedAtInitialLoad = false
+    mockGetConnectionsResult
+      .mockReset()
+      .mockImplementationOnce(async () => {
+        listenerExistedAtInitialLoad = typeof tauriEventMock.sidecarReady === 'function'
+        await tauriEventMock.sidecarReady?.()
+        return { connections: [], error: 'sidecar cold start' }
+      })
+      .mockResolvedValueOnce({ connections: [] })
+
+    const wrapper = mountChatView()
+
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(2))
+    expect(listenerExistedAtInitialLoad).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('[BUG-20260725-008] reloads connections on sidecar-ready and ignores an older late failure', async () => {
     let rejectColdStart!: (error: Error) => void
     const coldStart = new Promise<never>((_resolve, reject) => {
@@ -573,9 +594,8 @@ describe('ChatView — E2E 关键路径', () => {
       .mockResolvedValueOnce({ connections: [] })
 
     const wrapper = mountChatView()
-    await flushPromises()
 
-    expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1))
     await vi.waitFor(() => expect(tauriEventMock.sidecarReady).toBeTypeOf('function'))
     const settingsStore = useSettingsStore()
     vi.spyOn(settingsStore, 'loadConfig').mockRejectedValueOnce(
@@ -592,6 +612,27 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('[BUG-20260725-008] reloads the failed connection directory when only the health-store fallback becomes ready', async () => {
+    mockGetConnectionsResult
+      .mockReset()
+      .mockResolvedValueOnce({ connections: [], error: 'sidecar cold start' })
+      .mockResolvedValueOnce({ connections: [] })
+
+    const wrapper = mountChatView()
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1))
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(true)
+
+    // 模拟 native sidecar-ready 在 ChatView listener 注册前丢失，只保留 AppLayout health fallback。
+    expect(tauriEventMock.sidecarReady).toBeTypeOf('function')
+    useAppStore().sidecarReady = true
+
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(2))
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   // ────────────────────────────────────────────────────
@@ -1038,6 +1079,7 @@ describe('ChatView — E2E 关键路径', () => {
             toolName: 'filesystem.write',
             argumentsDigest: 'a'.repeat(64),
             securityScopeDigest: 'b'.repeat(64),
+            scopeSchemaVersion: 1,
             risk: 'sensitive',
             reason: 'writes a file',
             deadlineAt: new Date(Date.now() + 60_000).toISOString(),
@@ -1712,6 +1754,8 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   it('BUG-20260724-010 编辑纯图片消息在本会话删除原消息与尾部后重新进入既有场景图片管道', async () => {
+    const sessionId = 'edit-image-session'
+    const agentId = 'edit-image-agent'
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1727,12 +1771,13 @@ describe('ChatView — E2E 关键路径', () => {
       name: 'EditImageScenarioStub',
       template: '<div />',
     })
+    bindSessionAgent(sessionId, agentId)
 
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
           {
-            name: 'edit-image-agent',
+            name: agentId,
             display_name: '图片场景',
             provider: 'hexclaw-gpt',
             model: 'gpt-5.6-sol',
@@ -1745,8 +1790,8 @@ describe('ChatView — E2E 关键路径', () => {
     try {
       await flushPromises()
       const store = useChatStore()
-      store.currentSessionId = 'edit-image-session'
-      store.agentRole = 'edit-image-agent'
+      store.currentSessionId = sessionId
+      store.agentRole = agentId
       store.chatMode = 'agent'
       vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
       vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
@@ -1782,6 +1827,7 @@ describe('ChatView — E2E 关键路径', () => {
       const vm = wrapper.vm as unknown as {
         editingMsgId: string | null
         editingText: string
+        handleEdit: (messageIndex: number) => void
         confirmEdit: (messageId: string) => Promise<void>
         scenarioComposerImage:
           | {
@@ -1791,22 +1837,21 @@ describe('ChatView — E2E 关键路径', () => {
             }
           | ''
       }
-      vm.editingMsgId = 'original-image-message'
-      vm.editingText = ''
+      vm.handleEdit(0)
       await vm.confirmEdit('original-image-message')
 
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
       expect(mockForkSession).not.toHaveBeenCalled()
-      expect(store.currentSessionId).toBe('edit-image-session')
-      expect(store.agentRole).toBe('edit-image-agent')
+      expect(store.currentSessionId).toBe(sessionId)
+      expect(store.agentRole).toBe(agentId)
       expect(store.messages).toHaveLength(1)
       const revisedMessage = store.messages[0]!
       expect(revisedMessage.id).not.toBe('original-image-message')
       expect(revisedMessage.metadata?.attachments).toEqual([attachment])
       expect(mockAppendSessionMessage).toHaveBeenCalledWith(
-        'edit-image-session',
+        sessionId,
         expect.objectContaining({
           id: revisedMessage.id,
           content: '',
@@ -1818,7 +1863,7 @@ describe('ChatView — E2E 关键路径', () => {
         attachment,
         contextText: '',
         requestId: revisedMessage.id,
-        sourceSessionId: 'edit-image-session',
+        sourceSessionId: sessionId,
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -1827,6 +1872,7 @@ describe('ChatView — E2E 关键路径', () => {
       })
     } finally {
       wrapper.unmount()
+      clearSessionAgent(sessionId)
       scenarioRegistry.reset()
     }
   })
@@ -1954,6 +2000,8 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   it('BUG-20260724-010 编辑带说明的图片消息在本会话删除原消息与尾部后保留说明并重入场景管道', async () => {
+    const sessionId = 'edit-image-with-text-session'
+    const agentId = 'edit-image-with-text-agent'
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -1969,12 +2017,13 @@ describe('ChatView — E2E 关键路径', () => {
       name: 'EditImageWithTextScenarioStub',
       template: '<div />',
     })
+    bindSessionAgent(sessionId, agentId)
 
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
           {
-            name: 'edit-image-with-text-agent',
+            name: agentId,
             display_name: '图片场景',
             provider: 'hexclaw-gpt',
             model: 'gpt-5.6-sol',
@@ -1987,8 +2036,8 @@ describe('ChatView — E2E 关键路径', () => {
     try {
       await flushPromises()
       const store = useChatStore()
-      store.currentSessionId = 'edit-image-with-text-session'
-      store.agentRole = 'edit-image-with-text-agent'
+      store.currentSessionId = sessionId
+      store.agentRole = agentId
       store.chatMode = 'agent'
       vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
       vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
@@ -2024,10 +2073,11 @@ describe('ChatView — E2E 关键路径', () => {
       const vm = wrapper.vm as unknown as {
         editingMsgId: string | null
         editingText: string
+        handleEdit: (messageIndex: number) => void
         confirmEdit: (messageId: string) => Promise<void>
         scenarioComposerImage: ScenarioComposerImagePayload | ''
       }
-      vm.editingMsgId = 'original-image-with-text'
+      vm.handleEdit(0)
       vm.editingText = '请按五年级方法详细讲解'
       await vm.confirmEdit('original-image-with-text')
 
@@ -2035,14 +2085,14 @@ describe('ChatView — E2E 关键路径', () => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
       expect(mockForkSession).not.toHaveBeenCalled()
-      expect(store.currentSessionId).toBe('edit-image-with-text-session')
-      expect(store.agentRole).toBe('edit-image-with-text-agent')
+      expect(store.currentSessionId).toBe(sessionId)
+      expect(store.agentRole).toBe(agentId)
       expect(store.messages).toHaveLength(1)
       const revisedMessage = store.messages[0]!
       expect(revisedMessage.content).toBe('请按五年级方法详细讲解')
       expect(revisedMessage.metadata?.attachments).toEqual([attachment])
       expect(mockAppendSessionMessage).toHaveBeenCalledWith(
-        'edit-image-with-text-session',
+        sessionId,
         expect.objectContaining({
           id: revisedMessage.id,
           content: '请按五年级方法详细讲解',
@@ -2054,7 +2104,7 @@ describe('ChatView — E2E 关键路径', () => {
         attachment,
         contextText: '请按五年级方法详细讲解',
         requestId: revisedMessage.id,
-        sourceSessionId: 'edit-image-with-text-session',
+        sourceSessionId: sessionId,
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -2063,6 +2113,7 @@ describe('ChatView — E2E 关键路径', () => {
       })
     } finally {
       wrapper.unmount()
+      clearSessionAgent(sessionId)
       scenarioRegistry.reset()
     }
   })
@@ -2532,6 +2583,8 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   it('BUG-20260820-007 深度思考保留已绑定 Agent 的模型决策，但 Composer 只显示模型', async () => {
+    const sessionId = 'bound-agent-thinking-session'
+    bindSessionAgent(sessionId, 'k12-tutor-mingming')
     const wrapper = mountChatView({
       setup: () => {
         const settingsStore = useSettingsStore()
@@ -2598,14 +2651,17 @@ describe('ChatView — E2E 关键路径', () => {
             provider: 'hexclaw-gpt',
           },
         ]
+        const chatStore = useChatStore()
+        // 用会话持久绑定构造真实入口；仅设置瞬态 agentRole 会被冷启动的无会话清理正确清空。
+        chatStore.currentSessionId = sessionId
+        chatStore.agentRole = 'k12-tutor-mingming'
+        chatStore.chatMode = 'agent'
+        vi.spyOn(chatStore, 'loadSessions').mockResolvedValue(undefined)
       },
     })
     await flushPromises()
 
     const store = useChatStore()
-    store.agentRole = 'k12-tutor-mingming'
-    store.chatMode = 'agent'
-    await flushPromises()
     const vm = wrapper.vm as unknown as {
       selectedModelDisplay: string
       syncChatParams: () => void
@@ -2626,6 +2682,7 @@ describe('ChatView — E2E 关键路径', () => {
     expect(store.chatParams.model).toBeUndefined()
 
     wrapper.unmount()
+    clearSessionAgent(sessionId)
   })
 
   it('绑定 K12 会话开启深度思考并发送后，切走再切回仍保留三枚 Skill chips 与场景提示语', async () => {
@@ -2633,7 +2690,7 @@ describe('ChatView — E2E 关键路径', () => {
     const ordinarySessionId = 'ordinary-thinking-composer-session'
     const k12AgentId = 'k12-tutor-mingming'
     const expectedChips = ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验']
-    const expectedPlaceholder = '发消息，或让我写请假条、回复老师消息、设置订正提醒'
+    const expectedPlaceholder = '发消息，或让我回复老师消息、设置订正提醒'
 
     scenarioRegistry.reset()
     scenarioRegistry.registerResolver((ctx) =>
@@ -2834,7 +2891,7 @@ describe('ChatView — E2E 关键路径', () => {
         running: true,
         associated: true,
         model_count: 1,
-        models: [{ name: 'qwen3:8b', size: 5_000_000_000 }],
+        models: [{ name: 'qwen3:8b', size: 5_000_000_000, capabilities: ['completion'] }],
       })
 
     mountChatView({
@@ -3043,5 +3100,53 @@ describe('ChatView — E2E 关键路径', () => {
       undefined,
       expect.objectContaining({ backendText: expect.any(Function) }),
     )
+  })
+
+  it('uses the configured model capability for image routing instead of inferring it from a visual-looking ID', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const config = defaultConfig()
+        const model: ModelOption = {
+          id: 'qwen-vl-max',
+          name: 'Qwen VL Max',
+          capabilities: ['text'],
+        }
+        config.llm.providers = [
+          {
+            id: 'capability-provider',
+            name: 'Capability provider',
+            type: 'custom',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://example.invalid/v1',
+            backendKey: 'capability-provider',
+            models: [model],
+            selectedModelId: model.id,
+          },
+        ]
+        config.llm.defaultProviderId = 'capability-provider'
+        config.llm.defaultModel = model.id
+        useSettingsStore().config = config
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      selectedModelCapabilities: string[]
+      supportsVision: boolean
+    }
+    const input = wrapper.getComponent({ name: 'ChatInput' })
+    expect(vm.selectedModelCapabilities).toEqual(['text'])
+    expect(vm.supportsVision).toBe(false)
+    expect(input.props('allowImage')).toBe(false)
+
+    const model = useSettingsStore().config!.llm.providers[0]!.models[0]!
+    model.capabilities = ['text', 'vision']
+    await flushPromises()
+
+    expect(vm.selectedModelCapabilities).toEqual(['text', 'vision'])
+    expect(vm.supportsVision).toBe(true)
+    expect(input.props('allowImage')).toBe(true)
+    wrapper.unmount()
   })
 })

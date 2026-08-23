@@ -67,12 +67,16 @@ const subjectTextbooks = computed(() => ({
   information_technology: props.metadata?.['k12.textbook_edition.information_technology'] || '',
   art: props.metadata?.['k12.textbook_edition.art'] || '',
 }))
-// 头部显示名：优先据 metadata 的孩子称呼派生「小明的辅导助手」（bug 修复：display_name 在辅导路径
-// 可能为空、agentName 回退成内部 ID，头部就显示 ID）；无 child_name 时兜底 agentName。
+// 头部显示名：优先据 metadata 的孩子称呼派生原型要求的「小明的辅导助手 · 五年级」；无 child_name 时兜底 agentName。
 const childName = computed(() => props.metadata?.['k12.child_name'] ?? '')
-const headerName = computed(() =>
-  childName.value ? t('k12.tutor.headerName', { child: childName.value }) : props.agentName,
-)
+const headerName = computed(() => {
+  const base = childName.value
+    ? t('k12.tutor.headerName', { child: childName.value })
+    : props.agentName
+  if (!childName.value || !grade.value || base.includes('·')) return base
+  const displayGrade = grade.value.replace(/[上下](?:学期)?$/, '').trim()
+  return displayGrade ? `${base} · ${displayGrade}` : base
+})
 
 const emit = defineEmits<{
   (e: 'update:recordsActive', v: boolean): void
@@ -383,7 +387,7 @@ watch(
   async ([sessionId, agentId]) => {
     const generation = ++imageTaskRecoveryGeneration
     try {
-      await refreshRecoverableImageTaskBindings(agentId)
+      await refreshRecoverableImageTaskBindings(agentId, sessionId)
     } catch {
       // A transient Sidecar read keeps the current disposable projection.
     }
@@ -749,6 +753,9 @@ watch(
   min-width: 0;
 }
 .k12enh-grade {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 7px;
@@ -756,6 +763,14 @@ watch(
   white-space: nowrap;
   background: rgba(50, 213, 131, 0.14);
   color: var(--hc-success);
+}
+.k12enh-grade::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .k12enh-seg {
   display: inline-flex;
@@ -778,6 +793,7 @@ watch(
   border-radius: 8px;
   font-size: 12px;
   font-weight: 500;
+  line-height: normal;
   white-space: nowrap;
   color: var(--hc-text-muted);
   background: transparent;

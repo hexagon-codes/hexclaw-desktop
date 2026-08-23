@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
 import QuickChatView from '../QuickChatView.vue'
 import quickChatSource from '../QuickChatView.vue?raw'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 import { sendChat } from '@/api/chat'
@@ -502,6 +503,49 @@ describe('QuickChatView', () => {
     expect(wrapper.text()).not.toContain('stale reply')
   })
 
+  it('keeps chat state, persistence, and stream callbacks unchanged when clear is cancelled', async () => {
+    const wrapper = await mountReasoningStatusQuickChat()
+
+    await wrapper.get('textarea').setValue('取消后保留')
+    const buttons = wrapper.findAll('button')
+    await buttons[buttons.length - 1]!.trigger('click')
+    await flushPromises()
+
+    wsMock.emitChunk({ content: 'partial' })
+    await flushPromises()
+
+    const persistedBefore = localStorage.getItem('quick-chat-messages')
+    const callbackClearCount = wsMock.clearStreamCallbacks.mock.calls.length
+    const clearBtn = wrapper.get('button[title="清空聊天"]')
+    await clearBtn.trigger('click')
+    await flushPromises()
+
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    expect(confirmDialog.exists()).toBe(true)
+    expect(confirmDialog.props('confirmationKey')).toBe('quick-chat')
+    expect(confirmDialog.props('title')).toBe('清空聊天？')
+    expect(confirmDialog.props('message')).toBe('此操作不可撤销。')
+    expect(confirmDialog.props('confirmText')).toBe('清空')
+    expect(confirmDialog.props('cancelText')).toBe('取消')
+    expect(wrapper.text()).toContain('取消后保留')
+    expect(wrapper.text()).toContain('partial')
+    expect(localStorage.getItem('quick-chat-messages')).toBe(persistedBefore)
+    expect(wsMock.clearStreamCallbacks).toHaveBeenCalledTimes(callbackClearCount)
+
+    confirmDialog.vm.$emit('cancel')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ConfirmDialog).props('open')).toBe(false)
+    expect(wrapper.text()).toContain('取消后保留')
+    expect(wrapper.text()).toContain('partial')
+    expect(localStorage.getItem('quick-chat-messages')).toBe(persistedBefore)
+    expect(wsMock.clearStreamCallbacks).toHaveBeenCalledTimes(callbackClearCount)
+
+    wsMock.emitReply({ content: 'reply after cancel' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('reply after cancel')
+  })
+
   it('ignores stale websocket replies that arrive after the user clears the chat mid-stream', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -572,6 +616,8 @@ describe('QuickChatView', () => {
     const clearBtn = wrapper.find('button[title="清空聊天"]')
     expect(clearBtn.exists()).toBe(true)
     await clearBtn.trigger('click')
+    await flushPromises()
+    wrapper.getComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     wsMock.emitReply({ content: 'stale reply' })
@@ -659,6 +705,8 @@ describe('QuickChatView', () => {
     const clearBtn = wrapper.find('button[title="清空聊天"]')
     expect(clearBtn.exists()).toBe(true)
     await clearBtn.trigger('click')
+    await flushPromises()
+    wrapper.getComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     resolveHttp({ reply: 'stale http reply' })

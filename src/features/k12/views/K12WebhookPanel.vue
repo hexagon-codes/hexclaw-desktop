@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Copy, RefreshCw, Trash2, X } from 'lucide-vue-next'
+import { Copy, RefreshCw, X } from 'lucide-vue-next'
 
 import { getAgents } from '@/api/agents'
 import { setClipboard } from '@/api/desktop'
 import {
   createK12Webhook,
-  deleteK12Webhook,
   getK12WebhookReceipts,
   getK12Webhooks,
   retryK12WebhookReceipt,
@@ -22,7 +21,6 @@ import { useToast } from '@/composables/useToast'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import HcClearableField from '@/components/common/HcClearableField.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { K12_SCENARIO_ID } from '../descriptor'
 
 const toast = useToast()
@@ -53,43 +51,92 @@ const eventOptions: Array<{ value: K12WebhookEventType; label: string; testid: s
   },
 ]
 
-const currentAgent = computed(() =>
-  agents.value.find((agent) => agent.name === selectedAgentId.value),
-)
 const agentOptions = computed(() =>
   agents.value.map((agent) => ({
     value: agent.name,
     label: agent.metadata?.['k12.child_name'] || agent.display_name,
   })),
 )
-const currentLearnerId = computed(
-  () => currentAgent.value?.metadata?.['k12.learner_id'] || currentAgent.value?.name || '',
-)
-const currentAgentLabel = computed(() => {
-  const agent = currentAgent.value
-  if (!agent) return selectedAgentId.value
-  return agent.display_name || agent.metadata?.['k12.child_name'] || agent.name
-})
-const currentAgentGrade = computed(() => {
-  const grade = currentAgent.value?.metadata?.['k12.grade_term']
-  return typeof grade === 'string' ? grade.trim() : ''
-})
-const currentBindingTarget = computed(() =>
-  [currentAgentLabel.value, currentAgentGrade.value].filter(Boolean).join(' · '),
-)
+
+function agentTargetLabel(agentID: string, learnerID = ''): string {
+  const agent = agents.value.find((item) => item.name === agentID)
+  if (!agent) return [agentID, learnerID].filter(Boolean).join(' · ')
+  const displayName = agent.display_name?.trim()
+  if (displayName) return displayName
+  const label = agent.metadata?.['k12.child_name'] || agent.name
+  const grade = agent.metadata?.['k12.grade_term']
+  return [label, typeof grade === 'string' ? grade.trim() : ''].filter(Boolean).join(' · ')
+}
+
+function bindingTarget(binding: K12WebhookBinding): string {
+  return agentTargetLabel(binding.agent_id, binding.learner_id)
+}
+
+type ReceiptCardFacts = {
+  latest: K12WebhookReceipt
+  nonceReplayCount: number
+  retryableFailureCount: number
+}
+
+function bindingReceiptKey(binding: Pick<K12WebhookBinding, 'agent_id' | 'name'>): string {
+  return `${binding.agent_id}::${binding.name}`
+}
+
+function receiptStatusLabel(status: K12WebhookReceipt['status']): string {
+  switch (status) {
+    case 'accepted':
+      return '200 accepted'
+    case 'succeeded':
+      return '200 succeeded'
+    case 'processing':
+      return '202 processing'
+    default:
+      return status
+  }
+}
+
+function receiptAgeLabel(value: string): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return '时间未知'
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000))
+  if (elapsedMinutes < 1) return '刚刚'
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return `${elapsedHours} 小时前`
+  return `${Math.floor(elapsedHours / 24)} 天前`
+}
+
+function projectReceiptFacts(receiptList: K12WebhookReceipt[]): ReceiptCardFacts | null {
+  if (receiptList.length === 0) return null
+  const sorted = [...receiptList].sort((left, right) => {
+    const rightTime = Date.parse(right.created_at || right.updated_at || '')
+    const leftTime = Date.parse(left.created_at || left.updated_at || '')
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0)
+  })
+  const latest = sorted[0]
+  if (!latest) return null
+  return {
+    latest,
+    nonceReplayCount: receiptList.filter((item) => item.failure_kind === 'nonce_replay').length,
+    retryableFailureCount: receiptList.filter(
+      (item) => item.status === 'failed' && item.retryable === true,
+    ).length,
+  }
+}
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingName = ref('')
 const formName = ref('')
+const formAgentId = ref('')
 const formEvents = ref<K12WebhookEventType[]>(['k12.submission.requested.v1'])
 const formWorkflows = ref('')
 
 const secretResult = ref<{ title: string; name: string; secret: string } | null>(null)
 const rotateTarget = ref<K12WebhookBinding | null>(null)
-const deleteTarget = ref<K12WebhookBinding | null>(null)
 const historyName = ref('')
 const receipts = ref<K12WebhookReceipt[]>([])
+const cardReceiptFacts = ref<Record<string, ReceiptCardFacts>>({})
 let historyTimer: ReturnType<typeof setTimeout> | undefined
 let bindingsRequestGeneration = 0
 let historyRequestGeneration = 0
@@ -120,9 +167,10 @@ async function loadBindings() {
   historyRequestGeneration++
   historyName.value = ''
   receipts.value = []
-  const agentID = selectedAgentId.value
+  cardReceiptFacts.value = {}
   const requestGeneration = ++bindingsRequestGeneration
-  if (!agentID) {
+  const agentSnapshot = [...agents.value]
+  if (agentSnapshot.length === 0) {
     bindings.value = []
     loading.value = false
     return
@@ -130,34 +178,56 @@ async function loadBindings() {
   loading.value = true
   error.value = ''
   try {
-    const result = await getK12Webhooks(agentID)
-    if (requestGeneration !== bindingsRequestGeneration || selectedAgentId.value !== agentID) return
-    bindings.value = result.k12_bindings ?? []
+    const results = await Promise.all(
+      agentSnapshot.map(async (agent) => {
+        const result = await getK12Webhooks(agent.name)
+        return (result.k12_bindings ?? []).map((binding) => ({
+          ...binding,
+          agent_id: binding.agent_id || agent.name,
+          learner_id: binding.learner_id || agent.metadata?.['k12.learner_id'] || '',
+        }))
+      }),
+    )
+    if (requestGeneration !== bindingsRequestGeneration) return
+    const nextBindings = results.flat()
+    bindings.value = nextBindings
+    void loadReceiptFacts(nextBindings, requestGeneration)
   } catch (cause) {
-    if (requestGeneration !== bindingsRequestGeneration || selectedAgentId.value !== agentID) return
+    if (requestGeneration !== bindingsRequestGeneration) return
     bindings.value = []
     error.value = (cause as Error)?.message || '读取 K12 Webhook 失败'
   } finally {
-    if (requestGeneration === bindingsRequestGeneration && selectedAgentId.value === agentID) {
+    if (requestGeneration === bindingsRequestGeneration) {
       loading.value = false
     }
   }
 }
 
-function onAgentChanged() {
-  // Child switching is an ownership boundary: never leave another Tutor's
-  // one-time secret or edit form visible in the newly selected scope.
-  secretResult.value = null
-  rotateTarget.value = null
-  deleteTarget.value = null
-  editorOpen.value = false
-  void loadBindings()
+async function loadReceiptFacts(nextBindings: K12WebhookBinding[], requestGeneration: number) {
+  if (nextBindings.length === 0) return
+  try {
+    const entries = await Promise.all(
+      nextBindings.map(async (binding) => {
+        const result = await getK12WebhookReceipts(binding.name, binding.agent_id)
+        return [
+          bindingReceiptKey(binding),
+          projectReceiptFacts(result.receipts ?? []),
+        ] as const
+      }),
+    )
+    if (requestGeneration !== bindingsRequestGeneration) return
+    cardReceiptFacts.value = Object.fromEntries(
+      entries.filter((entry): entry is [string, ReceiptCardFacts] => entry[1] !== null),
+    )
+  } catch (cause) {
+    if (requestGeneration === bindingsRequestGeneration) {
+      toast.error((cause as Error)?.message || '读取 K12 Receipt 汇总失败')
+    }
+  }
 }
 
-function selectAgent(agentID: string) {
-  if (agentID === selectedAgentId.value) return
-  selectedAgentId.value = agentID
-  onAgentChanged()
+function receiptFactsFor(binding: K12WebhookBinding): ReceiptCardFacts | null {
+  return cardReceiptFacts.value[bindingReceiptKey(binding)] ?? null
 }
 
 function openCreate() {
@@ -166,6 +236,7 @@ function openCreate() {
   formName.value = ''
   formEvents.value = ['k12.submission.requested.v1']
   formWorkflows.value = ''
+  formAgentId.value = selectedAgentId.value || agents.value[0]?.name || ''
   editorOpen.value = true
 }
 
@@ -175,6 +246,7 @@ function openEdit(binding: K12WebhookBinding) {
   formName.value = binding.name
   formEvents.value = [...binding.allowed_events]
   formWorkflows.value = (binding.allowed_workflows ?? []).join(', ')
+  formAgentId.value = binding.agent_id
   editorOpen.value = true
 }
 
@@ -200,8 +272,9 @@ function workflowIDs(): string[] {
 async function submitEditor() {
   const name = formName.value.trim()
   const workflows = workflowIDs()
-  const agentID = selectedAgentId.value
-  const learnerID = currentLearnerId.value
+  const agentID = formAgentId.value
+  const learnerID =
+    agents.value.find((agent) => agent.name === agentID)?.metadata?.['k12.learner_id'] || ''
   if (!name || formEvents.value.length === 0) {
     toast.error('名称和至少一个允许事件必填')
     return
@@ -241,7 +314,7 @@ async function submitEditor() {
 
 async function toggleBinding(binding: K12WebhookBinding) {
   if (busy.value) return
-  const agentID = selectedAgentId.value
+  const agentID = binding.agent_id
   busy.value = `toggle:${binding.name}`
   try {
     await updateK12Webhook(binding.name, agentID, {
@@ -263,7 +336,7 @@ function requestRotateSecret(binding: K12WebhookBinding) {
 async function confirmRotateSecret() {
   const binding = rotateTarget.value
   if (!binding || busy.value) return
-  const agentID = selectedAgentId.value
+  const agentID = binding.agent_id
   busy.value = `rotate:${binding.name}`
   try {
     const result = await rotateK12WebhookSecret(binding.name, agentID)
@@ -274,29 +347,6 @@ async function confirmRotateSecret() {
     await loadBindings()
   } catch (cause) {
     toast.error((cause as Error)?.message || '轮换 Secret 失败')
-  } finally {
-    busy.value = ''
-  }
-}
-
-function requestRemoveBinding(binding: K12WebhookBinding) {
-  if (busy.value) return
-  deleteTarget.value = binding
-}
-
-async function removeBinding() {
-  const binding = deleteTarget.value
-  deleteTarget.value = null
-  if (!binding) return
-  if (busy.value) return
-  const agentID = selectedAgentId.value
-  busy.value = `delete:${binding.name}`
-  try {
-    await deleteK12Webhook(binding.name, agentID)
-    await loadBindings()
-    if (selectedAgentId.value === agentID) toast.success('K12 Webhook 已删除')
-  } catch (cause) {
-    toast.error((cause as Error)?.message || '删除 K12 Webhook 失败')
   } finally {
     busy.value = ''
   }
@@ -316,7 +366,7 @@ function closeHistory() {
 
 async function loadHistory(binding: K12WebhookBinding) {
   clearHistoryPoll()
-  const agentID = selectedAgentId.value
+  const agentID = binding.agent_id
   const requestGeneration = ++historyRequestGeneration
   if (historyName.value !== binding.name) receipts.value = []
   historyName.value = binding.name
@@ -324,12 +374,17 @@ async function loadHistory(binding: K12WebhookBinding) {
     const result = await getK12WebhookReceipts(binding.name, agentID)
     if (
       requestGeneration !== historyRequestGeneration ||
-      selectedAgentId.value !== agentID ||
+      historyBinding.value?.agent_id !== agentID ||
       historyName.value !== binding.name
     ) {
       return
     }
     receipts.value = result.receipts ?? []
+    const facts = projectReceiptFacts(receipts.value)
+    const nextFacts = { ...cardReceiptFacts.value }
+    if (facts) nextFacts[bindingReceiptKey(binding)] = facts
+    else delete nextFacts[bindingReceiptKey(binding)]
+    cardReceiptFacts.value = nextFacts
     if (receipts.value.some((item) => item.status === 'accepted' || item.status === 'processing')) {
       historyTimer = setTimeout(() => void loadHistory(binding), 1000)
     }
@@ -342,11 +397,11 @@ async function loadHistory(binding: K12WebhookBinding) {
 
 async function retryReceipt(binding: K12WebhookBinding, receipt: K12WebhookReceipt) {
   if (busy.value || receipt.status !== 'failed' || !receipt.retryable) return
-  const agentID = selectedAgentId.value
+  const agentID = binding.agent_id
   busy.value = `retry:${receipt.receipt_id}`
   try {
     await retryK12WebhookReceipt(binding.name, agentID, receipt.receipt_id)
-    if (selectedAgentId.value !== agentID || historyName.value !== binding.name) return
+    if (historyBinding.value?.agent_id !== agentID || historyName.value !== binding.name) return
     toast.success('Receipt 已重新派发')
     await loadHistory(binding)
   } catch (cause) {
@@ -379,17 +434,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="k12wh" data-testid="k12-webhook-panel">
+  <section class="k12wh k12wh--embedded" data-testid="k12-webhook-panel">
     <header class="k12wh__toolbar">
-      <label class="k12wh__agent" data-testid="k12-webhook-agent">
-        <span>孩子 / 辅导实例</span>
-        <HcSelect
-          :model-value="selectedAgentId"
-          :options="agentOptions"
-          aria-label="孩子 / 辅导实例"
-          @update:model-value="selectAgent"
-        />
-      </label>
       <button
         class="k12wh__button k12wh__button--primary"
         data-testid="k12-webhook-create-open"
@@ -400,7 +446,6 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <p v-if="agents.length === 0 && !error" class="k12wh__empty">请先创建一个 K12 辅导实例。</p>
     <div v-if="error" class="k12wh__error" role="alert">
       <span>{{ error }}</span>
       <button
@@ -412,9 +457,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <p v-if="loading" class="k12wh__empty">读取绑定中…</p>
-    <p v-else-if="selectedAgentId && bindings.length === 0" class="k12wh__empty">
-      这个孩子还没有 K12 Webhook。
-    </p>
+    <p v-else-if="bindings.length === 0" class="k12wh__empty">暂无 K12 Webhook 绑定。</p>
 
     <article
       v-for="binding in bindings"
@@ -426,7 +469,7 @@ onBeforeUnmount(() => {
         <div class="k12wh__logo">K12</div>
         <div class="k12wh__identity">
           <div class="k12wh__name">K12 批改与回传事件</div>
-          <div class="k12wh__meta">绑定：{{ currentBindingTarget }}</div>
+          <div class="k12wh__meta">绑定：{{ bindingTarget(binding) }}</div>
         </div>
         <span class="k12wh__spacer"></span>
         <span
@@ -458,10 +501,17 @@ onBeforeUnmount(() => {
         }}</code>
       </div>
 
-      <div class="k12wh__facts">
-        <span>绑定名：{{ binding.name }}</span>
-        <span>Secret v{{ binding.secret_version }}</span>
-        <span>仅接受 direct 事件</span>
+      <div
+        v-if="receiptFactsFor(binding)"
+        class="k12wh__receipt-facts task-meta"
+        :data-testid="`k12-webhook-receipt-facts-${binding.name}`"
+      >
+        <span
+          >最近回执：{{ receiptAgeLabel(receiptFactsFor(binding)!.latest.created_at) }} ·
+          {{ receiptStatusLabel(receiptFactsFor(binding)!.latest.status) }}</span
+        >
+        <span>nonce 重放：{{ receiptFactsFor(binding)!.nonceReplayCount }} 次已拒绝</span>
+        <span>失败投递：{{ receiptFactsFor(binding)!.retryableFailureCount }} 条可重试</span>
       </div>
 
       <div class="k12wh__actions">
@@ -487,16 +537,6 @@ onBeforeUnmount(() => {
         >
           {{ binding.status === 'enabled' ? '暂停' : '启用' }}
         </button>
-        <button
-          class="k12wh__button k12wh__button--ghost k12wh__delete"
-          :data-testid="`k12-webhook-delete-${binding.name}`"
-          :disabled="Boolean(busy)"
-          aria-label="删除"
-          title="删除"
-          @click="requestRemoveBinding(binding)"
-        >
-          <Trash2 :size="14" />
-        </button>
       </div>
     </article>
 
@@ -519,7 +559,7 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <div class="k12wh__notice">
-          <b>{{ currentBindingTarget }}</b> · 只接受绑定白名单内的 direct 事件；owner
+          <b>{{ bindingTarget(historyBinding) }}</b> · 只接受绑定白名单内的 direct 事件；owner
           由服务端绑定解析。
         </div>
         <div class="k12wh__history">
@@ -590,6 +630,16 @@ onBeforeUnmount(() => {
           </button>
         </header>
         <div class="k12wh__editor-body">
+          <label v-if="editorMode === 'create'" data-testid="k12-webhook-editor-agent">
+            绑定对象
+            <HcSelect
+              :model-value="formAgentId"
+              :options="agentOptions"
+              aria-label="绑定对象"
+              @update:model-value="formAgentId = $event"
+            />
+          </label>
+          <p v-else>绑定对象：{{ agentTargetLabel(formAgentId) }}</p>
           <label>
             名称
             <HcClearableField>
@@ -671,18 +721,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <ConfirmDialog
-      :open="deleteTarget !== null"
-      :confirmation-key="
-        deleteTarget ? `k12-webhook:${selectedAgentId}:${deleteTarget.name}` : null
-      "
-      title="Delete K12 Webhook?"
-      message="This action cannot be undone."
-      confirm-text="Delete"
-      cancel-text="Cancel"
-      @confirm="removeBinding"
-      @cancel="deleteTarget = null"
-    />
   </section>
 </template>
 
@@ -691,6 +729,12 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 14px;
   color: var(--hc-text-primary);
+}
+.k12wh--embedded {
+  display: contents;
+}
+.k12wh--embedded .k12wh__toolbar {
+  display: none;
 }
 .k12wh__toolbar,
 .k12wh__history-title,
@@ -867,7 +911,8 @@ small {
   white-space: nowrap;
 }
 .k12wh__events,
-.k12wh__facts {
+.k12wh__facts,
+.k12wh__receipt-facts {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
@@ -885,12 +930,32 @@ small {
   font-family: 'SF Mono', Menlo, monospace;
   font-size: 9.5px;
 }
+.k12wh--embedded .k12wh__event {
+  justify-self: stretch;
+}
 .k12wh__button--ghost {
   padding: 6px 8px;
   border-color: transparent;
   background: transparent;
   color: var(--hc-text-secondary);
+  font-weight: 500;
   box-shadow: none;
+}
+.k12wh button.k12wh__button--ghost {
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font-weight: 500;
+  line-height: 18px;
+  box-shadow: none;
+}
+.k12wh--embedded .k12wh__signature button.k12wh__button--ghost {
+  height: 32px;
+  box-sizing: border-box;
+}
+.k12wh--embedded .k12wh__actions button {
+  line-height: 18px;
 }
 .k12wh__button--primary {
   border-color: transparent;
@@ -901,13 +966,17 @@ small {
 .k12wh__button--primary:hover {
   background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
 }
-.k12wh__delete {
-  color: var(--hc-error);
-}
 .k12wh__actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+.k12wh--embedded .k12wh__actions {
+  height: 36px;
+}
+.k12wh--embedded .k12wh__actions button {
+  height: 36px;
+  box-sizing: border-box;
 }
 .k12wh__history-tools,
 .k12wh__dialog-actions {
@@ -1051,7 +1120,8 @@ small {
     width: 100%;
   }
   .k12wh__events,
-  .k12wh__facts {
+  .k12wh__facts,
+  .k12wh__receipt-facts {
     grid-template-columns: 1fr;
   }
 }

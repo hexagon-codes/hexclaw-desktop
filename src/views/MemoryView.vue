@@ -63,6 +63,7 @@ const editingId = ref<string | null>(null)
 const editValue = ref('')
 const savingEdit = ref(false)
 const deletingId = ref<string | null>(null)
+const deleteTarget = ref<MemoryEntry | null>(null)
 
 // Archive confirm
 const archiveTarget = ref<MemoryEntry | null>(null)
@@ -319,6 +320,17 @@ async function saveEdit(e?: KeyboardEvent) {
 }
 
 // ─── Single-entry delete ─────────────────────────────────
+function requestDeleteEntry(entry: MemoryEntry) {
+  deleteTarget.value = entry
+}
+
+async function confirmDeleteEntry() {
+  const entry = deleteTarget.value
+  deleteTarget.value = null
+  if (!entry) return
+  await handleDeleteEntry(entry.id)
+}
+
 async function handleDeleteEntry(id: string) {
   if (deletingId.value) return
   deletingId.value = id
@@ -836,7 +848,7 @@ async function handleSearch() {
                     class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                     style="color: var(--hc-error)"
                     :disabled="deletingId === entry.id"
-                    @click="handleDeleteEntry(entry.id)"
+                    @click="requestDeleteEntry(entry)"
                   >
                     <Trash2 :size="12" />
                   </button>
@@ -990,6 +1002,17 @@ async function handleSearch() {
       :confirm-text="t('memory.archiveConfirm', 'Archive')"
       @confirm="confirmArchiveEntry"
       @cancel="archiveTarget = null"
+    />
+
+    <ConfirmDialog
+      :open="!!deleteTarget"
+      :confirmation-key="deleteTarget?.id"
+      :title="t('memory.deleteTitle')"
+      :message="t('memory.deleteMessage')"
+      :confirm-text="t('common.delete')"
+      :danger="true"
+      @confirm="confirmDeleteEntry"
+      @cancel="deleteTarget = null"
     />
 
     <ConfirmDialog

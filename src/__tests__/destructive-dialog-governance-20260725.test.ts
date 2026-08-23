@@ -46,11 +46,16 @@ describe('global destructive-dialog governance (2026-07-25)', () => {
     ['AgentsView', agentsSource],
     ['ConnectionChannelCards', channelsSource],
     ['WebhookPanel', webhookSource],
-    ['K12WebhookPanel', k12WebhookSource],
   ])('%s uses ConfirmDialog instead of the browser-native confirm', (_name, source) => {
     expect(source).toContain("import ConfirmDialog from '@/components/common/ConfirmDialog.vue'")
     expect(source).not.toMatch(/\b(?:window\.)?confirm\s*\(/)
     expect(source).toContain('<ConfirmDialog')
     expect(source).toContain(':confirmation-key=')
+  })
+
+  it('keeps K12 Webhook free of unsupported destructive actions', () => {
+    expect(k12WebhookSource).not.toContain('data-testid="k12-webhook-delete-')
+    expect(k12WebhookSource).not.toContain("import ConfirmDialog from '@/components/common/ConfirmDialog.vue'")
+    expect(k12WebhookSource).not.toMatch(/\b(?:window\.)?confirm\s*\(/)
   })
 })

@@ -743,7 +743,7 @@ function validateCreativeProjection(value: unknown, path: string): WireRecord {
       'commit_required',
       'commit_state',
       'promoted_work_id',
-      'promoted_version_id',
+      'promoted_generation_id',
       'canonical_version',
       'canonical_content',
       'conflicts',
@@ -785,8 +785,18 @@ function validateCreativeProjection(value: unknown, path: string): WireRecord {
   ) {
     fail(`${path}.commit_state`, 'pending|committed')
   }
-  for (const key of ['promoted_work_id', 'promoted_version_id', 'canonical_content']) {
+  for (const key of ['promoted_work_id', 'promoted_generation_id', 'canonical_content']) {
     optionalString(projection[key], `${path}.${key}`)
+  }
+  if (projection.status === 'promoted') {
+    required(projection, ['promoted_work_id', 'promoted_generation_id'], path)
+    stringValue(projection.promoted_work_id, `${path}.promoted_work_id`)
+    stringValue(projection.promoted_generation_id, `${path}.promoted_generation_id`)
+  } else if (
+    projection.promoted_work_id !== undefined ||
+    projection.promoted_generation_id !== undefined
+  ) {
+    fail(path, 'promotion identities only after promotion')
   }
   if (projection.canonical_version !== undefined) {
     numberValue(projection.canonical_version, `${path}.canonical_version`, true)
@@ -1293,6 +1303,17 @@ function validateAuditEnvelope(response: WireRecord): void {
       }
     }
   })
+}
+
+export function assertCurrentImageTaskCreativeEntrySemantics(value: unknown): void {
+  if (value === undefined) return
+  const entry = record(value, '$.creative_entry')
+  exact(entry, ['kind', 'task_intent'], '$.creative_entry')
+  required(entry, ['kind', 'task_intent'], '$.creative_entry')
+  if (entry.kind !== 'new_work') fail('$.creative_entry.kind', 'new_work')
+  if (!['writing', 'artwork'].includes(String(entry.task_intent))) {
+    fail('$.creative_entry.task_intent', 'writing|artwork')
+  }
 }
 
 export function normalizeImageTaskDispatchEnvelope<T>(value: T): T {

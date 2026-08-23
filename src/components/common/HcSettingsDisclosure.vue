@@ -50,6 +50,13 @@ defineExpose({ focus })
         <span v-if="$slots.status" class="hc-settings-disclosure__status">
           <slot name="status" />
         </span>
+        <ChevronDown
+          v-if="!$slots.actions"
+          :size="13"
+          class="hc-settings-disclosure__chevron"
+          :class="{ 'hc-settings-disclosure__chevron--open': modelValue }"
+          aria-hidden="true"
+        />
       </button>
 
       <span v-if="$slots.actions" class="hc-settings-disclosure__actions" @click.stop @keydown.stop>
@@ -57,6 +64,7 @@ defineExpose({ focus })
       </span>
 
       <ChevronDown
+        v-if="$slots.actions"
         :size="13"
         class="hc-settings-disclosure__chevron"
         :class="{ 'hc-settings-disclosure__chevron--open': modelValue }"
@@ -169,6 +177,10 @@ defineExpose({ focus })
   color: currentColor;
   pointer-events: none;
   transition: transform 0.18s var(--hc-ease-out, ease-out);
+}
+
+.hc-settings-disclosure__trigger > .hc-settings-disclosure__chevron {
+  margin-inline-start: auto;
 }
 
 .hc-settings-disclosure__chevron--open {

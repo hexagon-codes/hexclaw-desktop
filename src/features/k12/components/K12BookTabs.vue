@@ -25,53 +25,31 @@ const emit = defineEmits<{
   <div
     :class="[
       'k12-book-tabs',
-      props.variant === 'secondary' ? 'k12-secondary-tabs k12-week-view-tabs' : 'seg',
+      props.variant === 'secondary' ? 'k12-week-view-tabs' : 'seg',
     ]"
     role="tablist"
     :aria-label="props.label"
   >
-    <div
-      v-if="props.variant === 'secondary'"
-      class="k12-secondary-tabs__row"
-      data-filter-kind="period"
+    <!-- 周练内部视图与学习档案对象页签共享同一直接按钮合同，不维护第二套周期卡片或按钮样式。 -->
+    <button
+      v-for="tab in props.tabs"
+      :key="tab.key"
+      type="button"
+      role="tab"
+      :aria-selected="props.modelValue === tab.key"
+      :aria-label="tab.count === undefined ? tab.label : `${tab.label} ${tab.count}`"
+      :class="{ on: props.modelValue === tab.key }"
+      :data-testid="tab.testId"
+      @click="emit('select', tab.key)"
     >
-      <span class="k12-secondary-tabs__label">周期</span>
-      <button
-        v-for="tab in props.tabs"
-        :key="tab.key"
-        type="button"
-        class="source-tag"
-        role="tab"
-        :aria-selected="props.modelValue === tab.key"
-        :aria-label="tab.label"
-        :class="{ on: props.modelValue === tab.key }"
-        :data-testid="tab.testId"
-        @click="emit('select', tab.key)"
-      >
-        {{ tab.label }}
-      </button>
-    </div>
-    <template v-else>
-      <button
-        v-for="tab in props.tabs"
-        :key="tab.key"
-        type="button"
-        role="tab"
-        :aria-selected="props.modelValue === tab.key"
-        :aria-label="tab.count === undefined ? tab.label : `${tab.label} ${tab.count}`"
-        :class="{ on: props.modelValue === tab.key }"
-        :data-testid="tab.testId"
-        @click="emit('select', tab.key)"
-      >
-        {{ tab.label }}
-        <span
-          v-if="tab.count !== undefined"
-          class="k12-tab-count"
-          aria-hidden="true"
-          :data-count="tab.count"
-        />
-      </button>
-    </template>
+      {{ tab.label }}
+      <span
+        v-if="tab.count !== undefined"
+        class="k12-tab-count"
+        aria-hidden="true"
+        :data-count="tab.count"
+      />
+    </button>
   </div>
 </template>
 
@@ -86,6 +64,10 @@ const emit = defineEmits<{
   border: none;
   border-radius: 0;
   padding: 0;
+}
+/* 周练直接页签保持共享原型的普通块容器，让两个 inline-flex 按钮无额外 flex gap 串联。 */
+.k12-week-view-tabs {
+  display: block;
 }
 .k12-book-tabs button {
   appearance: none;
@@ -137,54 +119,4 @@ const emit = defineEmits<{
   color: var(--hc-accent);
 }
 
-.k12-secondary-tabs.k12-book-tabs {
-  display: grid;
-  flex: 1 1 280px;
-  box-sizing: border-box;
-  gap: 9px;
-  max-width: none;
-  overflow: visible;
-  height: 55px;
-  margin: 0;
-  padding: 12px 14px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 14px;
-  background: var(--hc-bg-card);
-}
-.k12-secondary-tabs__row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-.k12-secondary-tabs__label {
-  width: 38px;
-  flex: none;
-  color: var(--hc-text-muted);
-  font-size: 10.5px;
-  font-weight: 700;
-}
-.k12-secondary-tabs__row .source-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 5px 8px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 9px;
-  background: var(--hc-bg-input);
-  color: var(--hc-text-secondary);
-  font: inherit;
-  font-family: Arial;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: normal;
-  cursor: pointer;
-}
-.k12-secondary-tabs__row .source-tag.on {
-  border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
-  background: var(--hc-accent-subtle);
-  color: var(--hc-accent);
-  font-weight: 400;
-}
 </style>

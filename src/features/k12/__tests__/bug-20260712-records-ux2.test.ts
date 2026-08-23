@@ -87,7 +87,7 @@ describe('项-5 本周该练：服务端计划是唯一投影，旧本地队列�
 describe('积累空态（Bug-20260713：对齐原型 rc1——克制列表占位，非大居中卡）', () => {
   beforeEach(() => { setActivePinia(createPinia()); h.mistakes = []; h.queue = []; h.accum = [] })
 
-  it('积累本为空 → 克制列表占位（有文案），入口走上方常驻 bar 的「＋记到积累本」', async () => {
+  it('积累本为空 → 克制列表占位（有文案），入口走上方常驻 bar 的「＋添加积累」', async () => {
     const w = render()
     await flushPromises()
     // 切到「积累」tab（按文本选，不依赖索引——20260718 学习档案加了练习集/作品 tab 后索引变了）

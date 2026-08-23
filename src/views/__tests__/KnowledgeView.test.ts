@@ -20,6 +20,7 @@ const {
   parseDocument,
   getKnowledgeJob,
   cancelKnowledgeJob,
+  getKnowledgeEmbeddingStatus,
 } = vi.hoisted(() => ({
   getDocuments: vi.fn(),
   getDocument: vi.fn(),
@@ -35,6 +36,7 @@ const {
   parseDocument: vi.fn(),
   getKnowledgeJob: vi.fn(),
   cancelKnowledgeJob: vi.fn(),
+  getKnowledgeEmbeddingStatus: vi.fn(),
 }))
 
 vi.mock('@/api/knowledge', () => ({
@@ -61,6 +63,7 @@ vi.mock('@/api/knowledge', () => ({
       candidate_k: 50,
     }),
   putKnowledgeConfig: (c: Record<string, unknown>) => Promise.resolve({ ...c }),
+  getKnowledgeEmbeddingStatus,
 }))
 
 vi.mock('@/utils/file-parser', () => ({
@@ -182,6 +185,116 @@ describe('KnowledgeView', () => {
       chunks_done: null,
       chunks_total: null,
     })
+  })
+
+  it('[BUG-20260723-001/005/020] renders structured failed textbook metadata and recovery actions', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-textbook-failure',
+          title: '高中物理教材.pdf',
+          source: 'image:upload:高中物理教材.pdf',
+          source_type: 'image',
+          content: '',
+          chunk_count: 0,
+          created_at: '2026-07-23T00:00:00Z',
+          status: 'failed',
+          error_message: 'vision preflight blocked',
+          text_index_state: 'ready',
+          ingestion: {
+            failure_code: 'vision_model_unavailable',
+            affected_pages: [2, 5],
+            frozen_vision: {
+              provider: 'openai',
+              model: 'gpt-4o-mini',
+            },
+            preflight: { blocked: true },
+            model_calls: 0,
+          },
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const card = wrapper.get('[data-testid="knowledge-doc-card"]')
+    expect(card.attributes('data-text-index-state')).toBe('ready')
+    expect(card.attributes('data-ingestion-failure-code')).toBe('vision_model_unavailable')
+    expect(card.attributes('data-affected-pages')).toBe('2,5')
+    expect(card.attributes('data-frozen-vision-provider')).toBe('openai')
+    expect(card.attributes('data-frozen-vision-model')).toBe('gpt-4o-mini')
+    expect(card.attributes('data-preflight')).toBe('blocked')
+    expect(card.attributes('data-model-calls')).toBe('0')
+
+    const actionButtons = card.get('[data-testid="knowledge-doc-actions"]').findAll('button')
+    expect(actionButtons.some((button) => /重试|重新处理|retry/i.test(button.text()))).toBe(true)
+    expect(actionButtons.some((button) => /设置|settings/i.test(button.text()))).toBe(true)
+  })
+
+  it('[BUG-20260723-031] renders the add-document dialog DOM contract', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { openUpload: () => void }
+    vm.openUpload()
+    await flushPromises()
+
+    const modal = wrapper.get('[data-testid="knowledge-add-document-modal"]')
+    expect(modal.find('.knowledge-add-document-modal').exists()).toBe(true)
+    expect(modal.find('.knowledge-add-document-modal__body').exists()).toBe(true)
+    const drop = modal.get('.knowledge-add-document-modal__drop')
+    expect(drop.attributes('data-testid')).toBe('knowledge-upload-drop')
+    expect(modal.find('.knowledge-add-document-modal__footer').exists()).toBe(true)
+    const submit = modal.get('[data-testid="knowledge-upload-submit"]')
+    expect(submit.text()).toContain('上传')
+    expect(modal.get('input').attributes('autofocus')).toBeDefined()
+    expect(submit.attributes('disabled')).toBeUndefined()
+  })
+
+  it('[BUG-20260723-005] shows the actual embedding executor in the add-document dialog', async () => {
+    getKnowledgeEmbeddingStatus.mockResolvedValueOnce({
+      enabled: true,
+      configured: true,
+      provider: 'openai_compatible',
+      model: 'text-embedding-3-small',
+      local: false,
+      ready: true,
+      pulling: false,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    ;(wrapper.vm as unknown as { openUpload: () => void }).openUpload()
+    await flushPromises()
+
+    const notice = wrapper.get('[data-testid="knowledge-index-notice"]')
+    expect(notice.text()).toContain('当前索引：自动（推荐）')
+    expect(notice.text()).toContain('OpenAI 兼容 · text-embedding-3-small')
+    expect(notice.text()).toContain('语义索引在后台增强')
+  })
+
+  it('[BUG-20260723-031] opens the retrieval settings disclosure through a real click', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const searchTab = wrapper.findAll('button').find((button) => button.text().includes('检索测试'))
+    expect(searchTab).toBeDefined()
+    await searchTab!.trigger('click')
+    await flushPromises()
+
+    const disclosure = wrapper.get('[data-testid="kb-rag-toggle"]')
+    await disclosure.trigger('click')
+    expect(disclosure.attributes('aria-expanded')).toBe('false')
+
+    await disclosure.trigger('click')
+    await flushPromises()
+
+    expect(disclosure.attributes('aria-expanded')).toBe('true')
+    const body = wrapper.get('[data-testid="kb-rag-body"]')
+    expect(body.isVisible()).toBe(true)
+    expect(body.text()).toContain('重排')
   })
 
   it('uploads multiple files and refreshes document list once after the batch', async () => {
@@ -450,7 +563,7 @@ describe('KnowledgeView', () => {
 
       expect(getDocuments).toHaveBeenCalledTimes(3)
       expect(wrapper.text()).toContain('OCR unavailable')
-      expect(wrapper.text()).toContain('重试索引')
+      expect(wrapper.text()).toContain('重新处理')
       wrapper.unmount()
     } finally {
       vi.useRealTimers()
@@ -824,8 +937,8 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    // 统一 UnderlineTabs 后计数为徽标式（label + 数字，无括号）：全部1
-    const docsTab = wrapper.findAll('button').find((btn) => /全部\s*1/.test(btn.text()))
+    // Knowledge Tab 的计数属于标签文本，格式与权威原型保持一致：全部 (N)。
+    const docsTab = wrapper.findAll('button').find((btn) => /全部\s*\(1\)/.test(btn.text()))
     expect(docsTab?.exists()).toBe(true)
     expect(wrapper.find('[data-testid="knowledge-doc-stats"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain(
@@ -861,6 +974,119 @@ describe('KnowledgeView', () => {
     expect(actions.text()).toContain('删除')
     expect(actions.classes()).toContain('shrink-0')
     expect(card.element.contains(actions.element)).toBe(true)
+  })
+
+  it('does not infer rebuild from chat attachments or expose destructive actions while processing', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-chat',
+          title: '课堂笔记.pdf',
+          chunk_count: 12,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'chat',
+          status: 'indexed',
+          vector_index_state: 'ready',
+        },
+        {
+          id: 'doc-connector',
+          title: '白板流程图.png',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          source_type: 'connector',
+          status: 'processing',
+          vector_index_state: 'building',
+          vector_job_id: 'job-connector',
+          vector_job_state: 'running',
+        },
+      ],
+      total: 2,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const chatActions = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('课堂笔记.pdf'))!
+      .get('[data-testid="knowledge-doc-actions"]')
+    expect(chatActions.text()).not.toContain('重建')
+    expect(chatActions.text()).toContain('详情')
+    expect(chatActions.text()).toContain('删除')
+
+    const connectorCard = wrapper
+      .findAll('[data-testid="knowledge-doc-card"]')
+      .find((card) => card.text().includes('白板流程图.png'))!
+    const connectorActions = connectorCard.get('[data-testid="knowledge-doc-actions"]')
+    expect(connectorActions.text()).not.toContain('详情')
+    expect(connectorActions.text()).not.toContain('重建')
+    expect(connectorActions.text()).not.toContain('删除')
+    expect(connectorActions.get('[data-testid="knowledge-vector-cancel"]').text()).toBe('取消')
+    expect(connectorActions.get('[data-testid="knowledge-vector-cancel"]').attributes('title')).toBe(
+      '取消语义增强',
+    )
+  })
+
+  it('projects source-specific document status metadata without changing action ownership', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-29T06:22:00.000Z'))
+    try {
+      getDocuments.mockResolvedValueOnce({
+        documents: [
+          {
+            id: 'doc-chat-status',
+            title: '课堂笔记.pdf',
+            chunk_count: 12,
+            created_at: '2026-07-29T06:20:00.000Z',
+            source_type: 'chat',
+            status: 'indexed',
+            vector_index_state: 'ready',
+          },
+          {
+            id: 'doc-upload-status',
+            title: '产品 FAQ.md',
+            chunk_count: 8,
+            created_at: '2026-07-29T06:20:00.000Z',
+            source_type: 'upload',
+            status: 'indexed',
+            vector_index_state: 'ready',
+          },
+          {
+            id: 'doc-connector-status',
+            title: '白板流程图.png',
+            chunk_count: 1,
+            created_at: '2026-07-29T06:20:00.000Z',
+            source_type: 'connector',
+            status: 'processing',
+            vector_index_state: 'building',
+            vector_job_id: 'job-connector-status',
+            vector_job_state: 'running',
+          },
+        ],
+        total: 3,
+      })
+
+      const wrapper = mountKnowledgeView()
+      await flushPromises()
+
+      const cards = wrapper.findAll('[data-testid="knowledge-doc-card"]')
+      const chatCard = cards.find((card) => card.text().includes('课堂笔记.pdf'))!
+      const uploadCard = cards.find((card) => card.text().includes('产品 FAQ.md'))!
+      const connectorCard = cards.find((card) => card.text().includes('白板流程图.png'))!
+
+      expect(chatCard.get('[data-testid="knowledge-vector-status"]').text()).toContain(
+        '文本 + 语义已就绪 · 12 个 chunk · 2 分钟前',
+      )
+      expect(uploadCard.get('[data-testid="knowledge-vector-status"]').text()).toContain(
+        '文本 + 语义已就绪 · 8 个 chunk · Contextual 已写入',
+      )
+      expect(connectorCard.get('[data-testid="knowledge-vector-status"]').text()).toBe(
+        '已上传 · 后端正在解析并建索引（扫描件/大文件较慢，请稍候）',
+      )
+      expect(connectorCard.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('filters the document list using the toolbar document search prop', async () => {
@@ -1110,9 +1336,8 @@ describe('KnowledgeView', () => {
     await wrapper.get('textarea').setValue('旧内容')
     await inputs[1]!.setValue('旧来源')
 
-    const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('添加'))
-    expect(addBtn).toBeDefined()
-    await addBtn!.trigger('click')
+    const submitBtn = wrapper.get('[data-testid="knowledge-upload-submit"]')
+    await submitBtn.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('新增失败')
@@ -1393,7 +1618,7 @@ describe('KnowledgeView', () => {
       await flushPromises()
       const retryButton = wrapper
         .findAll('[data-testid="knowledge-doc-actions"] button')
-        .find((button) => button.text().includes('重试索引'))
+        .find((button) => button.text().includes('重新处理'))
       expect(retryButton).toBeDefined()
 
       void retryButton!.trigger('click')
@@ -1610,6 +1835,46 @@ describe('KnowledgeView', () => {
     expect(getDocuments).toHaveBeenCalledTimes(1)
     expect(getDocument).toHaveBeenCalledWith('doc-vector-poll')
     expect(wrapper.text()).toContain('embedding quota exhausted')
+    wrapper.unmount()
+  })
+
+  it('projects numeric affected page counts and the frozen vision failure contract', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-vision-contract',
+          title: '数学讲义.pdf',
+          source: 'upload:数学讲义.pdf',
+          source_type: 'upload',
+          content: '正文',
+          chunk_count: 0,
+          created_at: '2026-01-01T00:00:00Z',
+          status: 'failed',
+          text_index_state: 'ready',
+          failure_code: 'failed_vision_capability',
+          affected_pages: 7,
+          frozen_vision_provider: 'HexClaw-GPT',
+          frozen_vision_model: 'gpt-5.6-sol',
+          preflight_state: 'blocked',
+          model_calls: 0,
+          available_actions: ['settings'],
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const card = wrapper.get('[data-testid="knowledge-doc-card"]')
+    expect(card.attributes('data-affected-pages')).toBe('7')
+    const status = wrapper.get('[data-testid="knowledge-vector-status"]')
+    expect(status.text()).toContain('text_index_state=ready')
+    expect(status.text()).toContain('文本页已提取')
+    expect(status.text()).toContain('ingestion=failed_vision_capability')
+    expect(status.text()).toContain('affected_pages=7')
+    expect(status.text()).toContain('frozen vision provider/model=HexClaw-GPT / gpt-5.6-sol')
+    expect(wrapper.get('[data-testid="knowledge-settings-action"]').text()).toContain('前往设置')
     wrapper.unmount()
   })
 })

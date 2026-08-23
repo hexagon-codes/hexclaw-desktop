@@ -345,6 +345,7 @@ body,
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  line-height: 18px;
   white-space: nowrap;
   transition:
     background 0.15s var(--hc-ease-out),
@@ -534,16 +535,301 @@ select.hc-input:focus {
 }
 
 /* ─── Capability content tracks (Skills / MCP) ─────────── */
+.hc-capability-content-pad {
+  padding: 16px 26px 48px;
+}
+
 .hc-capability-installed-track {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
   min-width: 0;
   max-width: none;
+}
+
+.hc-capability-installed-track--mcp {
+  gap: 10px;
+}
+
+/* Skills 与 MCP 的已安装对象共享同一行容器；页面只负责填充业务内容与操作。 */
+.hc-capability-installed-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px 18px;
+  align-items: center;
+}
+
+/* 两槽行只约束内容与操作列；Skills/MCP 页面不重复实现外壳间距。 */
+.hc-capability-installed-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-capability-installed-main--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.hc-capability-installed-main--mcp-server {
+  flex: 1;
+}
+
+.hc-capability-installed-main--mcp-tool {
+  gap: 0;
+}
+
+.hc-capability-installed-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hc-capability-installed-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--hc-bg-hover);
+}
+
+.hc-capability-installed-icon--mcp-server {
+  background: var(--hc-bg-input);
+}
+
+.hc-capability-installed-server-name {
+  color: var(--hc-text-primary);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 20.25px;
+}
+
+.hc-capability-installed-server-description {
+  margin: 0;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-capability-installed-tool-name {
+  color: var(--hc-text-primary);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 20.25px;
+}
+
+.hc-capability-installed-tool-description {
+  margin: 0;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-capability-installed-name {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hc-text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 21px;
+}
+
+.hc-capability-installed-name:hover {
+  text-decoration: underline;
+}
+
+.hc-capability-installed-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: max-content;
+}
+
+.hc-capability-installed-actions--mcp-server {
+  gap: 10px;
+}
+
+.hc-capability-installed-mcp-status {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 65px;
+  height: 24px;
+  flex: 0 0 65px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.hc-capability-installed-mcp-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.hc-capability-installed-mcp-status--connected {
+  background: color-mix(in srgb, var(--hc-success) 14%, transparent);
+  color: var(--hc-success);
+}
+
+.hc-capability-installed-mcp-status--pending {
+  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  color: var(--hc-warning);
+}
+
+.hc-capability-installed-mcp-status--error {
+  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
+  color: var(--hc-error);
+}
+
+.hc-capability-installed-mcp-status--disconnected {
+  background: var(--hc-bg-active);
+  color: var(--hc-text-muted);
+}
+
+.hc-capability-installed-meta {
+  min-width: 0;
+  margin: 1px 0 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-capability-installed-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hc-capability-installed-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.hc-capability-installed-toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 34px;
+  margin: 3px 3px 3px 4px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: opacity 0.15s var(--hc-ease-out);
+}
+
+.hc-capability-installed-description {
+  margin: 0;
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* MCP 服务器/工具沿用共享 two-slot 行；服务器仅收窄左右 padding，展开内容跨两列。 */
+.hc-capability-installed-row--mcp {
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.hc-capability-installed-row--tool {
+  border-radius: 12px;
+  padding: 12px;
+  column-gap: 10px;
+}
+
+.hc-capability-installed-expanded {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.hc-capability-installed-tool-content {
+  padding-bottom: 16px;
+}
+
+.hc-capability-installed-schema {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 9px 0 0;
+  padding: 9px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 9px;
+  background: var(--hc-bg-main);
+  color: var(--hc-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.hc-capability-installed-static-input-wrapper {
+  margin-top: 8px;
+}
+
+.hc-capability-installed-static-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  outline: none;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 13px;
 }
 
 .hc-capability-market-surface {
   width: 100%;
   min-width: 0;
   container-type: inline-size;
+  container-name: capability-track;
 }
 
 .hc-capability-market-search {
@@ -554,26 +840,37 @@ select.hc-input:focus {
 
 .hc-capability-market-grid {
   display: grid;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   align-items: stretch;
 }
 
-@container (min-width: 640px) {
-  .hc-capability-market-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container (min-width: 960px) {
+@container capability-track (max-width: 1040px) {
   .hc-capability-market-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-@container (min-width: 1280px) {
+@container capability-track (max-width: 760px) {
   .hc-capability-market-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container capability-track (max-width: 500px) {
+  .hc-capability-market-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+}
+
+@container capability-track (max-width: 500px) {
+  .hc-capability-installed-row {
+    grid-template-columns: 1fr;
+  }
+
+  .hc-capability-installed-actions {
+    justify-content: flex-start;
+    min-width: 0;
   }
 }
 

@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Puzzle,
-  Trash2,
   Download,
   FolderOpen,
   Store,
@@ -34,6 +33,7 @@ import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SkillPreviewModal from '@/components/skills/SkillPreviewModal.vue'
 import { useAppStore } from '@/stores/app'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
@@ -176,6 +176,7 @@ async function confirmUninstall() {
   const name = pendingUninstall.value
   if (!name) return
   pendingUninstall.value = null
+  await nextTick()
   try {
     await uninstallSkill(name)
     await restartEngineAfterSkillChange(
@@ -183,6 +184,7 @@ async function confirmUninstall() {
       `技能「${name}」已卸载并重新载入`,
     )
   } catch (e) {
+    pendingUninstall.value = name
     console.error('卸载 Skill 失败:', e)
     statusNotice.value = { tone: 'warn', message: `卸载技能「${name}」失败：${e instanceof Error ? e.message : '请重试'}` }
   }
@@ -355,7 +357,7 @@ const SKILL_PILLS: SkillPill[] = [
   { key: 'productivity', label: t('skills.hub.catProductivity', '生产力'), cats: ['productivity'] },
   { key: 'education', label: t('skills.hub.catEducation', '教育'), cats: ['education'] },
   { key: 'media', label: t('skills.hub.catMedia', '创作'), cats: ['media'] },
-  { key: 'life', label: t('skills.hub.catLife', '生活'), cats: ['automotive'] },
+  { key: 'life', label: t('skills.hub.catLife', '生活'), cats: ['life', 'lifestyle'] },
 ]
 
 const activeSkillCats = computed(() => SKILL_PILLS.find((p) => p.key === hubCategory.value)?.cats ?? null)
@@ -604,7 +606,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
     </div>
 
     <!-- ════════ 已安装 Tab ════════ -->
-    <div v-if="activeTab === 'installed'" class="flex-1 overflow-y-auto p-6">
+    <div v-if="activeTab === 'installed'" class="flex-1 overflow-y-auto hc-capability-content-pad">
       <LoadingState v-if="loading" />
 
       <EmptyState
@@ -622,7 +624,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
         </button>
       </EmptyState>
 
-      <div v-else class="hc-capability-installed-track space-y-3">
+      <div v-else class="hc-capability-installed-track">
         <!-- 技能目录提示 -->
         <div
           v-if="skillsDir"
@@ -636,70 +638,62 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
         <div
           v-for="skill in filteredSkills"
           :key="skill.name"
-          class="hc-card-interactive rounded-xl border overflow-hidden"
+          class="hc-capability-installed-row hc-card-interactive overflow-hidden"
+          :class="{ 'hc-capability-installed-row--with-pills': skill.triggers?.length }"
           :style="{
-            background: 'var(--hc-bg-card)',
-            borderColor: 'var(--hc-border)',
             opacity: isSkillEnabled(skill) ? 1 : 0.6,
           }"
         >
-          <!-- Main card row -->
-          <div class="flex items-start gap-4 p-4">
-            <div
-              class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
-              :style="{ background: 'var(--hc-bg-hover)' }"
-            >
-              <SkillIcon :skill="skill" :size="20" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <!-- 点技能名 → 预览弹窗（与市场同款 · 方案 C；卡片减负,详情/触发词/SKILL.md 全进弹窗） -->
-                <button
-                  class="text-sm font-medium hover:underline text-left"
-                  :style="{ color: 'var(--hc-text-primary)' }"
-                  @click="openInstalledPreview(skill)"
-                >
-                  {{ skill.name }}
-                </button>
-                <span
-                  class="text-[10px] px-1.5 py-0.5 rounded-full"
-                  :style="{
-                    background: getSkillScope(skill) === 'runtime' ? '#0ea5e91a' : '#f59e0b1a',
-                    color: getSkillScope(skill) === 'runtime' ? '#0284c7' : '#b45309',
-                  }"
-                >
-                  {{ getSkillScope(skill) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference') }}
-                </span>
-                <span
-                  v-if="skill.version"
-                  class="text-xs px-1.5 py-0.5 rounded"
-                  :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-                >
-                  v{{ skill.version }}
-                </span>
-                <span
-                  v-if="skill.author"
-                  class="text-xs"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                >
-                  by {{ skill.author }}
-                </span>
-              </div>
-              <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-secondary)' }">
-                {{ skill.description }}
-              </p>
-              <p
-                v-if="skill.requires_restart || skill.message"
-                class="text-[11px] mt-2"
-                :style="{ color: skill.requires_restart ? '#b45309' : 'var(--hc-text-muted)' }"
+          <div class="hc-capability-installed-main">
+            <!-- Main card row -->
+            <div class="hc-capability-installed-header">
+              <div
+                class="hc-capability-installed-icon"
+                :style="{ background: 'var(--hc-bg-hover)' }"
               >
-                {{ skill.message || t('skills.restartRequired') }}
-              </p>
+                <SkillIcon :skill="skill" :size="18" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <!-- 点技能名 → 预览弹窗（与市场同款 · 方案 C；卡片减负,详情/触发词/SKILL.md 全进弹窗） -->
+                  <button
+                    class="hc-capability-installed-name"
+                    :style="{ color: 'var(--hc-text-primary)' }"
+                    @click="openInstalledPreview(skill)"
+                  >
+                    {{ skill.name }}
+                  </button>
+                </div>
+                <p class="hc-capability-installed-meta">
+                  {{ skill.triggers?.length
+                    ? `${t('skills.commandLabel', '命令')}：${skill.triggers.join(' · ')} · ${t('skills.sourceLabel', '来源')}：${skill.author || t('skills.hub.installLocal', '本地安装')}`
+                    : `${t('skills.toolchainLabel', '工具链')}：${skill.tags?.join(' + ') || t('skills.localPreference')} · v${skill.version}` }}
+                </p>
+              </div>
             </div>
 
+            <div v-if="getSkillScope(skill) === 'runtime' && skill.triggers?.length" class="hc-capability-installed-pills">
+              <span class="hc-capability-installed-pill">runtime<span class="sr-only">{{ t('skills.runtimeState') }}</span></span>
+              <span class="hc-capability-installed-pill">local</span>
+              <span class="hc-capability-installed-pill">{{ t('skills.scopeAll', '启用范围：全部会话') }}</span>
+            </div>
+
+            <p class="hc-capability-installed-description">
+              {{ skill.description }}
+            </p>
+            <p
+              v-if="skill.requires_restart || skill.message"
+              class="text-[11px] mt-2"
+              :style="{ color: skill.requires_restart ? '#b45309' : 'var(--hc-text-muted)' }"
+            >
+              {{ skill.message || t('skills.restartRequired') }}
+            </p>
+          </div>
+
+          <div class="hc-capability-installed-actions">
             <!-- Enable/disable toggle -->
             <button
-              class="relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1"
+              class="hc-capability-installed-toggle"
               :style="{
                 background: isSkillEnabled(skill) ? 'var(--hc-accent)' : 'var(--hc-text-muted)',
                 opacity: togglingSkills.has(skill.name) ? 0.65 : 1,
@@ -717,12 +711,20 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
             </button>
 
             <button
-              class="p-1.5 rounded transition-colors hover:bg-red-50 flex-shrink-0"
-              :style="{ color: 'var(--hc-text-muted)' }"
+              type="button"
+              class="btn"
+              @click="openInstalledPreview(skill)"
+            >
+              {{ t('skills.previewAction', '预览') }}
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-ghost"
               :title="t('common.delete')"
               @click="handleUninstall(skill.name)"
             >
-              <Trash2 :size="16" />
+              {{ t('skills.uninstallConfirm', '卸载') }}
             </button>
           </div>
         </div>
@@ -1040,39 +1042,16 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
       @delete="onInstalledPreviewDelete"
     />
 
-    <!-- 卸载确认对话框 -->
-    <Teleport to="body">
-      <div
-        v-if="pendingUninstall"
-        class="fixed inset-0 z-50 flex items-center justify-center"
-        @click.self="pendingUninstall = null"
-      >
-        <div class="absolute inset-0 bg-black/50" @click="pendingUninstall = null" />
-        <div
-          class="relative z-10 w-80 rounded-xl border p-6 shadow-xl"
-          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
-        >
-          <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-primary)' }">
-            {{ t('common.confirm') }} — {{ pendingUninstall }}?
-          </p>
-          <div class="flex justify-end gap-2">
-            <button
-              class="px-3 py-1.5 rounded-lg text-sm"
-              :style="{ color: 'var(--hc-text-secondary)' }"
-              @click="pendingUninstall = null"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              class="px-3 py-1.5 rounded-lg text-sm text-white"
-              style="background: #ef4444;"
-              @click="confirmUninstall"
-            >
-              {{ t('common.delete') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <ConfirmDialog
+      :open="pendingUninstall !== null"
+      :confirmation-key="pendingUninstall"
+      :title="t('skills.uninstallTitle')"
+      :message="pendingUninstall ? t('skills.uninstallMessage', { name: pendingUninstall }) : ''"
+      :confirm-text="t('skills.uninstallConfirm')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="confirmUninstall"
+      @cancel="pendingUninstall = null"
+    />
   </div>
 </template>

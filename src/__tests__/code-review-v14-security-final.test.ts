@@ -84,8 +84,8 @@ describe('write-only renderer credential boundary', () => {
     expect(secureStore).not.toContain('read_credential')
   })
 
-  it('keeps browser secrets in process memory only', () => {
-    expect(secureStore).toContain('browserSessionVault')
+  it('rejects standalone browser mutations in favor of the Sidecar coordinator', () => {
+    expect(secureStore).toContain('Sidecar secret coordinator')
     expect(secureStore).not.toContain('localStorage')
   })
 

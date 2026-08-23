@@ -28,7 +28,7 @@ import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import {
-  k12ExportMd,
+  k12ExportArchive,
   k12AddAccumulation,
   k12DeleteAccumulation,
   k12GenerateAccumulationDictation,
@@ -61,7 +61,7 @@ import {
 } from '@/api/k12'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { MISTAKE_SCHEMA } from '../schemas'
-import { exportArchiveDocument, worksheetFilename, download } from '../export'
+import { worksheetFilename, download } from '../export'
 import type { RecordCollectionView, RecordItem } from '@/contracts'
 import type {
   K12MistakeStatusFilter,
@@ -877,10 +877,38 @@ const practiceCandidateGenerating = ref(false)
 const practiceCandidateCommitting = ref(false)
 const practiceCandidateError = ref('')
 const weeklyDeferBusy = ref(false)
+const practiceCandidateCommandKeys = new Map<string, string>()
 
-function practiceCandidateKey(action: 'open' | 'batch' | 'commit', id: string): string {
+type PracticeCandidateAction = 'open' | 'batch' | 'commit'
+
+function practiceCandidateCommandTarget(
+  action: PracticeCandidateAction,
+  id: string,
+  operation: string,
+): string {
+  return `${action}:${props.agentId}:${id}:${operation}`
+}
+
+function practiceCandidateKey(
+  action: PracticeCandidateAction,
+  id: string,
+  operation: string,
+): string {
+  const target = practiceCandidateCommandTarget(action, id, operation)
+  const existing = practiceCandidateCommandKeys.get(target)
+  if (existing) return existing
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-  return `desktop-practice-candidate-${action}:${props.agentId}:${id}:${random}`
+  const created = `desktop-practice-candidate-${action}:${props.agentId}:${id}:${random}`
+  practiceCandidateCommandKeys.set(target, created)
+  return created
+}
+
+function finishPracticeCandidateCommand(
+  action: PracticeCandidateAction,
+  id: string,
+  operation: string,
+) {
+  practiceCandidateCommandKeys.delete(practiceCandidateCommandTarget(action, id, operation))
 }
 
 function practiceCandidateQuestion(record: RecordItem | null): string {
@@ -899,6 +927,7 @@ const textbookBoundary = computed(() => {
 })
 
 async function openPracticeCandidateSelection(record: RecordItem) {
+  const operation = `${record.recordId}:${props.grade}:${textbookBoundary.value}`
   practiceCandidateRecord.value = record
   practiceCandidateSelection.value = null
   practiceCandidateError.value = ''
@@ -907,10 +936,11 @@ async function openPracticeCandidateSelection(record: RecordItem) {
   try {
     practiceCandidateSelection.value = await k12OpenPracticeCandidateSelection(record.recordId, {
       agent: props.agentId,
-      idempotency_key: practiceCandidateKey('open', record.recordId),
+      idempotency_key: practiceCandidateKey('open', record.recordId, operation),
       grade: props.grade,
       textbook: textbookBoundary.value,
     })
+    finishPracticeCandidateCommand('open', record.recordId, operation)
   } catch (error) {
     practiceCandidateError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -926,6 +956,7 @@ function retryPracticeCandidateSelection() {
 async function generatePracticeCandidateBatch() {
   const selection = practiceCandidateSelection.value
   if (!selection || practiceCandidateGenerating.value) return
+  const operation = `${selection.selection_id}:${selection.revision}`
   practiceCandidateGenerating.value = true
   practiceCandidateError.value = ''
   try {
@@ -934,9 +965,10 @@ async function generatePracticeCandidateBatch() {
       {
         agent: props.agentId,
         revision: selection.revision,
-        idempotency_key: practiceCandidateKey('batch', selection.selection_id),
+        idempotency_key: practiceCandidateKey('batch', selection.selection_id, operation),
       },
     )
+    finishPracticeCandidateCommand('batch', selection.selection_id, operation)
   } catch (error) {
     practiceCandidateError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -947,6 +979,7 @@ async function generatePracticeCandidateBatch() {
 async function commitPracticeCandidateSelection(candidateIds: string[]) {
   const selection = practiceCandidateSelection.value
   if (!selection || practiceCandidateCommitting.value || candidateIds.length === 0) return
+  const operation = `${selection.selection_id}:${selection.revision}:${JSON.stringify(candidateIds)}`
   practiceCandidateCommitting.value = true
   practiceCandidateError.value = ''
   try {
@@ -954,10 +987,12 @@ async function commitPracticeCandidateSelection(candidateIds: string[]) {
       agent: props.agentId,
       revision: selection.revision,
       candidate_ids: candidateIds,
-      idempotency_key: practiceCandidateKey('commit', selection.selection_id),
+      idempotency_key: practiceCandidateKey('commit', selection.selection_id, operation),
     })
+    finishPracticeCandidateCommand('commit', selection.selection_id, operation)
     practiceCandidateSelection.value = result.selection
     practiceCandidateOpen.value = false
+    await Promise.all([reloadPracticeGenerationStates(), reloadObjectCounts()])
     toast.success(`已加入练习集 ${result.added_count} 道`)
   } catch (error) {
     practiceCandidateError.value = error instanceof Error ? error.message : String(error)
@@ -974,6 +1009,14 @@ async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
     toast.error('错题版本尚未同步，请刷新后重试')
     return
   }
+  const operation = [
+    item.item_id,
+    source.version,
+    plan.plan_id,
+    plan.revision,
+    plan.iso_week_year,
+    plan.iso_week_number,
+  ].join(':')
   weeklyDeferBusy.value = true
   try {
     await k12DeferMistakeThisWeek(item.source_ref, {
@@ -984,8 +1027,9 @@ async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
       weekly_item_id: item.item_id,
       iso_year: plan.iso_week_year,
       iso_week: plan.iso_week_number,
-      idempotency_key: practiceCandidateKey('commit', `defer:${item.item_id}`),
+      idempotency_key: practiceCandidateKey('commit', `defer:${item.item_id}`, operation),
     })
+    finishPracticeCandidateCommand('commit', `defer:${item.item_id}`, operation)
     toast.success('本周已暂时移出，后续复习周期仍可重新安排')
     await loadWeeklyPractice()
   } catch (error) {
@@ -1060,16 +1104,22 @@ async function pollPendingPracticeGenerations() {
   const pendingIDs = Object.values(practiceGenerationByMistake.value)
     .filter((projection) => projection.state === 'pending')
     .map((projection) => projection.source_mistake_id)
+    .filter((recordID): recordID is string => Boolean(recordID))
   if (!agent || !pendingIDs.length) return
   const results = await Promise.allSettled(
     pendingIDs.map((recordID) => k12GetMistakePracticeGeneration(agent, recordID)),
   )
   if (props.agentId !== agent) return
   let reachedJoined = false
-  results.forEach((result) => {
-    if (result.status !== 'fulfilled') return
-    setPracticeProjection(result.value)
-    if (result.value.state === 'joined') reachedJoined = true
+  results.forEach((result, index) => {
+    const recordID = pendingIDs[index]
+    if (!recordID) return
+    if (result.status === 'fulfilled') {
+      setPracticeProjection(result.value)
+      if (result.value.state === 'joined') reachedJoined = true
+      return
+    }
+    setPracticeProjection({ state: 'unknown', source_mistake_id: recordID })
   })
   if (reachedJoined) void reloadObjectCounts()
   schedulePracticePoll()
@@ -1089,11 +1139,21 @@ async function reloadPracticeGenerationStates() {
   )
   if (request !== practiceProjectionRequest || props.agentId !== agent) return
   const next: Record<string, MistakePracticeGenerationDTO> = {}
-  results.forEach((result) => {
-    if (result.status === 'fulfilled') next[result.value.source_mistake_id] = result.value
+  results.forEach((result, index) => {
+    const recordID = recordIDs[index]
+    if (!recordID) return
+    if (result.status === 'fulfilled') {
+      next[result.value.source_mistake_id] = result.value
+    } else {
+      next[recordID] = { state: 'unknown', source_mistake_id: recordID }
+    }
   })
   practiceGenerationByMistake.value = next
   schedulePracticePoll()
+}
+
+async function onPracticeGenerationInvalidated() {
+  await Promise.all([reloadPracticeGenerationStates(), reloadObjectCounts()])
 }
 
 function resetPracticeGenerationProjection() {
@@ -1192,6 +1252,7 @@ const ACCUMULATION_DICTATION_STATUSES = new Set<AccumulationDictationStatus>([
   'generating',
   'validating',
   'committed',
+  're_add',
   'failed',
 ])
 const dictationBusy = ref<string[]>([])
@@ -1462,17 +1523,10 @@ function todayLabel(): string {
 // 下方导出仅存档案导出（错题本 PDF/Word/Markdown 档案），非出卷。
 async function doExport(format: 'pdf' | 'docx') {
   closeExportMenu(true)
-  const d = todayLabel().replace(/-/g, '').slice(4)
   try {
-    const res = await k12ExportMd(props.agentId)
-    if (res.render_error) throw new Error(res.render_error)
-    const title = t('k12.tabs.records')
-    await exportArchiveDocument({
-      content: res.content,
-      format,
-      title,
-      filename: worksheetFilename(props.agentName, title, d, d, format),
-    })
+    const res = await k12ExportArchive(props.agentId, format)
+    if (!('blob' in res)) throw new Error('Archive export returned an invalid binary response')
+    await download(res.filename, res.blob, res.contentType)
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e)) // 导出失败 surface，不再静默无反应
   }
@@ -1481,7 +1535,8 @@ async function doExport(format: 'pdf' | 'docx') {
 async function doExportMd() {
   closeExportMenu(true)
   try {
-    const res = await k12ExportMd(props.agentId)
+    const res = await k12ExportArchive(props.agentId, 'md')
+    if ('blob' in res) throw new Error('Archive export returned an invalid Markdown response')
     const d = todayLabel().replace(/-/g, '').slice(4)
     await download(
       worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'),
@@ -1866,7 +1921,9 @@ async function doExportMd() {
         <K12PracticeSetsPanel
           :agent-id="props.agentId"
           :focus-target="practiceTarget"
+          :practice-generation-by-mistake="practiceGenerationByMistake"
           @count="updatePracticeCount"
+          @generation-invalidated="onPracticeGenerationInvalidated"
         />
       </section>
 
@@ -1967,7 +2024,7 @@ async function doExportMd() {
           </div>
         </div>
         <!-- 积累空态：对齐原型 rc1——原型积累区无「大居中卡」形态，只是列表区；空时给克制的
-             列表占位一行（记录入口常驻在上方 .k12accum__bar 的「＋记到积累本」，不再叠一个大 CTA 卡）。 -->
+             列表占位一行（记录入口常驻在上方 .k12accum__bar 的「＋添加积累」，不再叠一个大 CTA 卡）。 -->
         <p v-else class="k12accum__empty" data-testid="accum-empty-card">
           {{ t('k12.emptyAccum.title') }} · {{ t('k12.emptyAccum.sub') }}
         </p>
@@ -2347,7 +2404,8 @@ async function doExportMd() {
 .k12rec__tabs {
   display: flex;
   align-items: center;
-  gap: 9px;
+  /* 与权威原型 .tbar 的 10px 间距一致，保证页签、动作按钮和溢出菜单的横向锚点稳定。 */
+  gap: 10px;
   flex-wrap: nowrap;
   height: 42px;
   box-sizing: border-box;
@@ -2485,6 +2543,11 @@ async function doExportMd() {
 .k12rec__export {
   position: relative;
 }
+.k12rec__export > .btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+}
 .k12rec__menu {
   position: absolute;
   right: 0;
@@ -2614,6 +2677,7 @@ async function doExportMd() {
   font-size: 12.5px;
   color: var(--hc-text-secondary);
 }
+
 .k12rec__sugg {
   margin-top: 10px;
   padding: 10px 12px;
@@ -2968,8 +3032,8 @@ async function doExportMd() {
 }
 /* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
 .k12ic {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 2;
@@ -3016,12 +3080,14 @@ async function doExportMd() {
    当前保留标题起始槽位，避免缺字段时 chip/meta/action 横向跳动。 */
 .k12mistakes :deep(.rl-row) {
   min-width: 0;
-  height: 48px;
+  min-height: 52px;
+  height: auto;
   box-sizing: border-box;
   flex-wrap: nowrap;
   padding: 9px 10px;
   border-radius: 10px;
   background: rgba(255, 254, 249, 0.9);
+  color: var(--hc-text-secondary);
   font-family: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -3083,33 +3149,34 @@ async function doExportMd() {
   align-items: center;
   justify-content: center;
   flex: none;
-  height: 28px;
+  height: 32px;
   box-sizing: border-box;
-  padding: 0 9px;
+  padding: 6px 8px;
   border: 0.5px solid var(--hc-border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--hc-text-secondary);
-  font-family: Arial;
-  font-size: 12px;
+  font-family: inherit;
+  font-size: 13px;
   font-weight: 500;
-  line-height: normal;
+  line-height: 18px;
   white-space: nowrap;
   gap: 6px;
 }
 .k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
-  padding-inline: 11px;
-  color: var(--hc-text-primary);
+  height: 36px;
+  padding: 8px 14px;
+  color: rgb(23, 61, 80);
   background: color-mix(in srgb, var(--hc-accent) 7.5%, transparent);
 }
 .k12mistakes :deep(.rl-row > button[data-testid^='mistake-view-practice-']) {
-  padding-inline: 9px;
+  padding-inline: 8px;
   border-color: transparent;
   color: var(--hc-text-secondary);
 }
 .k12mistakes :deep(.rl-row > .rl-btn:last-child) {
   border-color: transparent;
-  padding-inline: 9px;
+  padding-inline: 8px;
 }
 /* 原型 1193-1212：本周复习用大数字 hero；列表、自动化脚注都收进同一张卡。 */
 :deep(.k12week__hero) {

@@ -11,8 +11,7 @@ export default {
   },
 
   composer: {
-    placeholder:
-      'Send a message, or ask me to write a leave note, reply to a teacher, or set a correction reminder',
+    placeholder: 'Send a message, or ask me to reply to a teacher or set a correction reminder',
     formulaHintLead: 'Paste fractions and math formulas',
     formulaHintDetail:
       'Copyable formulas from webpages, Word, and PDFs render as math after sending; for scanned pages, paste a screenshot.',
@@ -487,6 +486,8 @@ export default {
       art: 'Art',
     },
     skillsLabel: 'Built-in skills',
+    capabilityNote:
+      'Capabilities are defined by the K12 template; technical Skills are managed centrally in Advanced settings.',
     builtinSkills: {
       photo: '📷 Photo recognition',
       progressive: '💡 Progressive hints',

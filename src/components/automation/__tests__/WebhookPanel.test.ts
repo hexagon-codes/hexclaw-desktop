@@ -25,6 +25,7 @@ function mountPanel() {
 const getWebhooks = vi.hoisted(() => vi.fn())
 const createWebhook = vi.hoisted(() => vi.fn())
 const deleteWebhook = vi.hoisted(() => vi.fn())
+const updateWebhookEnabled = vi.hoisted(() => vi.fn())
 const toast = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('@/api/webhook', () => ({
   getWebhooks,
   createWebhook,
   deleteWebhook,
-  updateWebhookEnabled: vi.fn().mockResolvedValue({ name: 'x', enabled: true }),
+  updateWebhookEnabled,
   webhookUrlFor: (name: string) => `http://localhost:16060/api/v1/webhooks/${name}`,
 }))
 // 自动化权限治理 API：组件挂载即静默预检/总览，测试里一律 mock 成全绿空态。
@@ -376,5 +377,141 @@ describe('WebhookPanel — 复制 Webhook URL 反馈（回归锁）', () => {
     await flushPromises()
     expect(toast.error).toHaveBeenCalledTimes(1)
     expect(toast.success).not.toHaveBeenCalled()
+  })
+})
+
+describe('WebhookPanel — BUG-20260723-024/033 RED 合同', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    updateWebhookEnabled.mockResolvedValue({ name: 'hook-a', enabled: true })
+  })
+
+  it('BUG-20260723-024: generic 创建默认 disabled，secret 只在创建响应态显示，端点按 name 生成', async () => {
+    getWebhooks
+      .mockResolvedValueOnce({ webhooks: [] })
+      .mockResolvedValueOnce({
+        webhooks: [
+          {
+            id: 'new-id',
+            name: 'hook-new',
+            type: 'generic',
+            prompt: '处理指令',
+            enabled: false,
+            event_count: 0,
+          },
+        ],
+      })
+    createWebhook.mockResolvedValue({
+      id: 'new-id',
+      name: 'hook-new',
+      enabled: false,
+      secret: 'one-time-secret',
+    })
+    setClipboard.mockResolvedValue(undefined)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-new')
+    await wrapper.find('textarea').setValue('处理指令')
+    await wrapper.findAll('.webhook-modal__actions button')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(createWebhook).toHaveBeenCalledWith({
+      name: 'hook-new',
+      type: 'generic',
+      prompt: '处理指令',
+      secret: '',
+      jobId: '',
+      enabled: false,
+    })
+    expect(updateWebhookEnabled).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="webhook-created-result"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('http://localhost:16060/api/v1/webhooks/hook-new')
+    expect(wrapper.text()).toContain('one-time-secret')
+
+    await wrapper.findAll('.webhook-modal__actions button')[0]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('one-time-secret')
+
+    await wrapper.find('.webhook-panel__copy').trigger('click')
+    await flushPromises()
+    expect(setClipboard).toHaveBeenCalledWith(
+      'http://localhost:16060/api/v1/webhooks/hook-a',
+    )
+  })
+
+  it('BUG-20260723-024: PATCH 只按 name 启停，DELETE 只按 name 删除', async () => {
+    vi.useFakeTimers()
+    getWebhooks.mockResolvedValue({
+      webhooks: [
+        { id: 'hook-id', name: 'hook-a', type: 'generic', prompt: 'p', enabled: false, event_count: 0 },
+      ],
+    })
+    deleteWebhook.mockResolvedValue(undefined)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+    const item = wrapper.find('.webhook-panel__item')
+
+    await item.find('.webhook-panel__toggle').trigger('click')
+    await flushPromises()
+    expect(updateWebhookEnabled).toHaveBeenCalledWith('hook-a', true)
+    expect(updateWebhookEnabled).not.toHaveBeenCalledWith('hook-id', true)
+
+    await item.find('.webhook-panel__delete').trigger('click')
+    await flushPromises()
+    const confirmDialog = wrapper.findComponent(ConfirmDialog)
+    vi.advanceTimersByTime(1500)
+    await flushPromises()
+    await confirmDialog.get('button.hc-dialog__btn--danger').trigger('click')
+    await flushPromises()
+
+    expect(deleteWebhook).toHaveBeenCalledWith('hook-a')
+    expect(deleteWebhook).not.toHaveBeenCalledWith('hook-id')
+    expect(createWebhook).not.toHaveBeenCalled()
+  })
+
+  it('BUG-20260723-033: generic 卡片展示通用字段与可用动作，不混入 K12 语义', async () => {
+    getWebhooks.mockResolvedValue({
+      webhooks: [
+        {
+          id: 'generic-id',
+          name: 'Generic JSON',
+          type: 'generic',
+          has_secret: true,
+          prompt: '处理通用事件',
+          enabled: false,
+          event_count: 0,
+        },
+      ],
+    })
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const card = wrapper.find('.webhook-panel__item--generic')
+    expect(card.exists()).toBe(true)
+    expect(card.find('.webhook-panel__item-logo').text()).toBe('JS')
+    expect(card.text()).toContain('Generic JSON 触发器')
+    expect(card.text()).toContain('URL')
+    expect(card.text()).toContain('绑定：Prompt')
+    expect(card.text()).toContain('事件：0')
+    expect(card.text()).toContain('密钥：已配置')
+    expect(card.text()).toContain('类型：generic')
+    expect(card.text()).toContain('未启用')
+    expect(card.find('.webhook-panel__resource-row').exists()).toBe(true)
+    expect(card.find('.webhook-panel__task-actions').exists()).toBe(true)
+    expect(card.find('.webhook-panel__toggle').exists()).toBe(true)
+    expect(card.findAll('.webhook-panel__task-actions button').map((button) => button.text().trim())).toEqual([
+      '复制 URL',
+      '删除',
+    ])
+    expect(card.text()).not.toContain('测试')
+    expect(card.text()).not.toContain('查看事件')
+    expect(card.text()).not.toContain('编辑')
+    expect(card.text()).not.toMatch(/agent|learner|K12|nonce|回执/i)
   })
 })

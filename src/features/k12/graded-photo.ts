@@ -1,5 +1,5 @@
 import { isTauri } from '@/utils/platform'
-import { downloadInApp } from '@/utils/download'
+import { saveBlobInApp } from '@/utils/download'
 import type { BBox, PhotoJobItemStatus } from '@/api/k12'
 import { PHOTO_PROCESS_ISSUE_COLOR, projectPhotoAssessmentStatus } from './photo-assessment-status'
 
@@ -103,10 +103,10 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * 把批改标记真正绘入原图像素，生成可保存的 PNG。
  * 只绘制通过几何诚实门的 bbox；缺框题继续留在界面文字批改，不冒险错位落叉。
  */
-export async function renderGradedPhotoDataUrl(
+export async function renderGradedPhotoBlob(
   imageSrc: string,
   marks: GradedPhotoMark[],
-): Promise<string> {
+): Promise<Blob> {
   const image = await loadImage(imageSrc)
   const canvas = document.createElement('canvas')
   canvas.width = image.naturalWidth || image.width
@@ -178,7 +178,12 @@ export async function renderGradedPhotoDataUrl(
     }
     ctx.restore()
   }
-  return canvas.toDataURL('image/png')
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('failed to encode graded image'))
+    }, 'image/png')
+  })
 }
 
 function gradedPhotoFilename(now = new Date()): string {
@@ -186,30 +191,18 @@ function gradedPhotoFilename(now = new Date()): string {
   return `作业批改_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.png`
 }
 
-function dataUrlToBlob(dataUrl: string): Blob {
-  const comma = dataUrl.indexOf(',')
-  if (comma < 0) throw new Error('invalid graded image data')
-  const meta = dataUrl.slice(0, comma)
-  const payload = dataUrl.slice(comma + 1)
-  const mime = /^data:([^;,]+)/.exec(meta)?.[1] || 'application/octet-stream'
-  const binary = meta.includes(';base64') ? atob(payload) : decodeURIComponent(payload)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-  return new Blob([bytes], { type: mime })
-}
-
 /** 桌面端走原生保存对话框；浏览器/dev 走 download 链接，供真实 E2E 验证。 */
 export async function saveGradedPhoto(
   imageSrc: string,
   marks: GradedPhotoMark[],
 ): Promise<string | null> {
-  const dataUrl = await renderGradedPhotoDataUrl(imageSrc, marks)
+  const blob = await renderGradedPhotoBlob(imageSrc, marks)
   const filename = gradedPhotoFilename()
-  if (isTauri()) return await downloadInApp(dataUrl, filename)
+  if (isTauri()) return await saveBlobInApp(blob, filename)
 
   // 大图 data: URL 在 Chrome 中可能不触发 download，反而把当前 SPA 导航走。
   // Blob URL 是浏览器原生下载通道，Playwright/真实用户都能得到稳定文件事件。
-  const objectUrl = URL.createObjectURL(dataUrlToBlob(dataUrl))
+  const objectUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = objectUrl
   a.download = filename

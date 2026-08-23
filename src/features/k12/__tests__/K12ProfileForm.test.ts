@@ -191,7 +191,10 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.toastSuccessSpy.mockReset()
     h.toastWarningSpy.mockReset()
   })
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
 
   it('显示名随称呼/年级自动生成「{称呼}的辅导老师 · {年级}」', async () => {
     render()
@@ -645,5 +648,160 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       { value: 'future-senior-3', label: '高三（暂未开放）', disabled: true },
     ])
     expect(semesterOpts).toEqual(['上学期', '下学期'])
+  })
+
+  it('[K12-PROFILE-060] 周练入口聚焦实际数学区并由浏览器滚入正文，零运行时错误', async () => {
+    const nativeFocus = HTMLElement.prototype.focus
+    vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLElement,
+      options?: FocusOptions,
+    ) {
+      nativeFocus.call(this, options)
+    })
+
+    const wrapper = mount(K12ProfileForm, {
+      props: {
+        focusMathProgress: true,
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    const section = B().find<HTMLElement>('[data-testid="k12-math-progress"]')
+    const body = B().find<HTMLElement>('.k12pf__body')
+    Object.defineProperty(section.element, 'offsetTop', { configurable: true, value: 305 })
+    Object.defineProperty(section.element, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ top: 189 } as DOMRect),
+    })
+    Object.defineProperty(body.element, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ top: 0 } as DOMRect),
+    })
+    await flushPromises()
+
+    expect(B().findAll('.k12pf__err')).toHaveLength(0)
+    expect(document.activeElement).toBe(section.element)
+    expect(body.element.scrollTop).toBe(189)
+    wrapper.unmount()
+  })
+
+  it('[K12-PROFILE-060] 智能体编辑入口将默认焦点落到孩子称呼输入框', async () => {
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+
+    const wrapper = mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await flushPromises()
+
+    expect(B().findAll('.k12pf__err')).toHaveLength(0)
+    expect(document.activeElement).toBe(B().find<HTMLInputElement>('input.k12pf__input').element)
+    expect(B().find<HTMLElement>('.k12pf__body').element.scrollTop).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('[K12-PROFILE-056/057] 可见档案面与权威原型保持能力文案、教材状态行和清空控件 exact-set', async () => {
+    mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await flushPromises()
+
+    const root = B().find('.k12pf')
+    expect(root.find('[data-testid="k12-profile-capabilities"] > span').text()).toBe('自带能力')
+    expect(root.find('[data-testid="k12-profile-mounted-skills"]').text()).toContain(
+      '渐进式辅导',
+    )
+    expect(root.find('[data-testid="k12-profile-mounted-skills"]').text()).toContain(
+      '作业批改',
+    )
+    expect(root.find('[data-testid="k12-profile-mounted-skills"]').text()).not.toContain(
+      '作文共写不代写',
+    )
+    expect(root.find('[data-testid="k12-textbook-binding-status"]').exists()).toBe(true)
+    expect(root.find('[data-testid="k12-textbook-binding-status"]').text()).toBe('已识别，可关联')
+    expect(root.find('[data-testid="k12-textbook-manifest"] .hc-select__label').text()).toContain(
+      ' · 可确认',
+    )
+    expect(root.findAll('.hc-clearable-field__button')).toHaveLength(0)
+  })
+
+  it('[K12-PROFILE-061] 高级档案区保留能力说明并与升学提示保持同一原型内容轨', async () => {
+    mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          skills: [
+            'builtin.k12.photo',
+            'builtin.k12.progressive',
+            'builtin.k12.mistakes',
+            'builtin.k12.works',
+            'builtin.k12.subjects',
+          ],
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await flushPromises()
+
+    const root = B().find('.k12pf')
+    expect(root.find('[data-testid="k12-profile-authority"]').exists()).toBe(true)
+    expect(root.find('[data-testid="k12-profile-capability-note"]').text()).toBe(
+      '能力由 K12 模板定义；实际技术 Skill 在高级设置中统一管理。',
+    )
+    expect(root.find('[data-testid="k12-profile-mounted-skills"] summary').text()).toBe(
+      '挂载 Skill · 已挂载 7 个',
+    )
+    expect(root.find('.k12pf__intro').text()).toBe(
+      '升学只改这里，讲题边界 / 识题校验 / 辅导要点全线即时跟随；历史错题不回溯修改。每年 3/1、9/1 会自动提醒确认新学期（不会擅自变更）。',
+    )
   })
 })

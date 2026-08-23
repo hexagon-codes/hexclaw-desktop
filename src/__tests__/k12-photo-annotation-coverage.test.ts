@@ -28,6 +28,16 @@ const outOfScopeGrade = {
   out_of_scope: true,
   record_created: false,
 }
+const processIssueGrade = {
+  solution: 'checked',
+  verdict: 'agree',
+  evidence_type: 'numeric_exec',
+  badge: 'verified-strong',
+  out_of_scope: false,
+  record_created: false,
+  wrong_step: 'intermediate arithmetic step is inconsistent',
+  error_cause: 'the carried value was divided twice',
+}
 
 describe('K12 LIVE photo annotation coverage oracle', () => {
   it('counts immutable-artifact marks separately from visible degraded rows', () => {
@@ -66,6 +76,26 @@ describe('K12 LIVE photo annotation coverage oracle', () => {
       immutableArtifact: false,
       artifactCoverage: 1,
       degradedCoverage: 1,
+    })
+  })
+
+  it('counts correct_with_process_issue as a completed-photo overlay mark', () => {
+    const coverage = summarizePhotoAnnotationCoverage({
+      items: [
+        {
+          status: 'correct_with_process_issue',
+          grade: processIssueGrade,
+          question: { bbox: validBBox },
+        },
+      ],
+      annotated_image: { mime: 'image/png', data_base64: 'QUJD' },
+    })
+
+    expect(coverage).toEqual({
+      evaluated: 1,
+      immutableArtifact: true,
+      artifactCoverage: 1,
+      degradedCoverage: 0,
     })
   })
 

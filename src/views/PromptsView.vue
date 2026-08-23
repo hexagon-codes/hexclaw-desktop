@@ -6,7 +6,7 @@
  *
  * 砍薄版（§5）+ U2 IA 重定位：旧记忆薄版 Tab 已移除，长期记忆统一在「长期记忆」(MemoryView) 管理。
  */
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Trash2, Pencil, X, FileText } from 'lucide-vue-next'
@@ -18,6 +18,7 @@ import {
   type PromptType,
 } from '@/api/prompts'
 import HcSelect from '@/components/common/HcSelect.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -35,14 +36,17 @@ const props = withDefaults(
   },
 )
 
+type PromptEditor = Partial<Prompt> & { command?: string }
+
 // ── 顶栏统一搜索（IntegrationView 注入）──
 const query = computed(() => (props.filter ?? '').toLowerCase().trim())
 
 // ── Prompt 库 ──
 const prompts = ref<Prompt[]>([])
 const loadingPrompts = ref(false)
-const editing = ref<Partial<Prompt> | null>(null) // 非空 = 正在编辑/新建
+const editing = ref<PromptEditor | null>(null) // 非空 = 正在编辑/新建
 const pendingDeletePrompt = ref<Prompt | null>(null)
+const titleInput = ref<HTMLInputElement | null>(null)
 
 // 按标题 / 正文过滤 Prompt 列表
 const filteredPrompts = computed(() => {
@@ -64,8 +68,9 @@ async function loadPrompts() {
 
 function newPrompt() {
   editing.value = {
-    type: 'prompt',
+    type: 'command',
     title: '',
+    command: '/translate',
     body_md: '',
     enabled: true,
     category: '',
@@ -79,7 +84,10 @@ function newPrompt() {
 defineExpose({ newPrompt })
 
 function editPrompt(p: Prompt) {
-  editing.value = { ...p }
+  editing.value = {
+    ...p,
+    command: p.type === 'command' ? (p as PromptEditor).command ?? '/translate' : '',
+  }
 }
 /** 增删改失败提示（PromptsView 原无错误反馈，失败会静默吞掉）。 */
 const actionError = ref('')
@@ -91,7 +99,7 @@ async function savePrompt() {
   try {
     await upsertPrompt({
       id: e.id,
-      type: (e.type as PromptType) ?? 'prompt',
+      type: (e.type as PromptType) ?? 'command',
       title: e.title,
       body_md: e.body_md ?? '',
       category: e.category ?? '',
@@ -132,28 +140,39 @@ const bodyTab = ref<'edit' | 'preview'>('edit')
 const bodyPreviewContent = computed(() => editing.value?.body_md ?? '')
 const hasBodyPreview = computed(() => bodyPreviewContent.value.trim().length > 0)
 // 打开/切换编辑对象时回到「编辑」态（监听 ref 身份，typing 不重置）
-watch(editing, () => {
+watch(editing, (value) => {
   bodyTab.value = 'edit'
+  if (value) void nextTick(() => titleInput.value?.focus())
 })
 
-// ── HcSelect 投影（替代原生 <select>，value 一律 string）──
-const promptTypeOptions = [
-  { value: 'prompt', label: 'prompt' },
-  { value: 'command', label: 'command' },
-]
+// ── Prompt 类型分段：沿用公共 SegmentedControl，避免表单内出现第二套选择交互。 ──
+const promptTypeSegments = [
+  { value: 'command', label: '命令 /' },
+  { value: 'prompt', label: '片段' },
+].map(({ value, label }) => ({ key: value, label }))
 const editingTypeModel = computed<string>({
-  get: () => editing.value?.type ?? 'prompt',
+  get: () => editing.value?.type ?? 'command',
   set: (v) => {
     if (editing.value) editing.value.type = v as PromptType
   },
 })
+
+// 工具范围预设直接写回现有 tool_scope；自定义输入也复用同一字段，避免产生第二份真相。
+const toolScopePresets = computed(() => [
+  { value: '', label: t('prompts.scopeNone', '无工具') },
+  { value: 'knowledge_search', label: t('prompts.scopeKnowledge', '知识库检索') },
+  { value: 'mcp', label: t('prompts.scopeMcp', 'MCP 工具') },
+])
+function setToolScope(value: string) {
+  if (editing.value) editing.value.tool_scope = value
+}
 
 // ── 建议模型：选择型字段 → 下拉（来自已启用 Provider 的可用模型 + 「不指定」默认）──
 const settings = useSettingsStore()
 const modelOptions = computed(() => {
   const seen = new Set<string>()
   const opts: { value: string; label: string }[] = [
-    { value: '', label: t('prompts.fModelPh', '不指定（默认）') },
+    { value: '', label: t('prompts.fModelPh', '跟随当前会话') },
   ]
   for (const m of settings.availableModels) {
     if (!m.modelId || seen.has(m.modelId)) continue
@@ -267,31 +286,45 @@ onMounted(() => {
             <div class="px-5 py-4 hc-modal-body">
               <div class="hc-field">
                 <label>{{ t('prompts.fTitle', '标题') }}</label>
-                <HcClearableField>
-                  <input
-                    v-model="editing.title"
-                    type="text"
-                    :placeholder="t('prompts.fTitlePh', '如：日报总结')"
-                  />
-                </HcClearableField>
+                <input
+                  ref="titleInput"
+                  v-model="editing.title"
+                  type="text"
+                  :placeholder="t('prompts.fTitlePh', '如：日报总结')"
+                />
+              </div>
+              <div class="hc-field hc-field--row hc-field--type">
+                <div>
+                  <label>{{ t('prompts.fType', '类型') }}</label>
+                  <SegmentedControl v-model="editingTypeModel" :segments="promptTypeSegments" />
+                </div>
+                <div>
+                  <label>{{ t('prompts.fCommand', '命令（输入 / 召唤）') }}</label>
+                  <input v-model="editing.command" type="text" placeholder="/translate" />
+                  <small class="hc-prompts__hint">{{
+                    t('prompts.fCommandHint', '短名直呼是效率用户的肌肉记忆。')
+                  }}</small>
+                </div>
               </div>
               <div class="hc-field hc-field--row">
                 <div>
-                  <label>{{ t('prompts.fType', '类型') }}</label>
-                  <HcSelect v-model="editingTypeModel" :options="promptTypeOptions" />
+                  <label>{{ t('prompts.fCategory', '分类') }}</label>
+                  <input
+                    v-model="editing.category"
+                    type="text"
+                    :placeholder="t('prompts.fCategoryPh', '办公 / 写作 / 工程')"
+                  />
                 </div>
                 <div>
-                  <label>{{ t('prompts.fCategory', '分类') }}</label>
-                  <HcClearableField>
-                    <input
-                      v-model="editing.category"
-                      type="text"
-                      :placeholder="t('prompts.fCategoryPh', '如：写作 / 翻译 / 编程（自定义）')"
-                    />
-                  </HcClearableField>
+                  <label>{{ t('prompts.fModel', '建议模型（可选）') }}</label>
+                  <HcSelect
+                    v-model="editingModelModel"
+                    :options="modelOptions"
+                    :placeholder="t('prompts.fModelPh', '跟随当前会话')"
+                  />
                 </div>
               </div>
-              <div class="hc-field">
+              <div class="hc-field hc-field--body">
                 <div class="hc-body-head">
                   <label>{{ t('prompts.fBody', '正文') }}</label>
                   <div class="hc-body-tabs" role="tablist">
@@ -315,22 +348,20 @@ onMounted(() => {
                     </button>
                   </div>
                 </div>
-                <HcClearableField>
-                  <textarea
-                    v-show="bodyTab === 'edit'"
-                    v-model="editing.body_md"
-                    rows="6"
-                    class="hc-body-edit"
-                    :placeholder="
-                      isCommand
-                        ? t(
-                            'prompts.fBodyCmdPh',
-                            '用 $ARGUMENTS 占位用户参数，如：翻译以下内容：$ARGUMENTS',
-                          )
-                        : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
-                    "
-                  />
-                </HcClearableField>
+                <textarea
+                  v-show="bodyTab === 'edit'"
+                  v-model="editing.body_md"
+                  rows="5"
+                  class="hc-body-edit"
+                  :placeholder="
+                    isCommand
+                      ? t(
+                          'prompts.fBodyCmdPh',
+                          '用 $ARGUMENTS 占位用户参数，如：翻译以下内容：$ARGUMENTS',
+                        )
+                      : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
+                  "
+                />
                 <div v-show="bodyTab === 'preview'" class="hc-body-prev">
                   <MarkdownRenderer
                     v-if="hasBodyPreview"
@@ -354,30 +385,29 @@ onMounted(() => {
                   {{ t('prompts.previewNote', '预览仅供阅读，模型看到的是上方原文。') }}</small
                 >
               </div>
-              <div class="hc-field hc-field--row">
-                <div>
-                  <label>{{ t('prompts.fModel', '建议模型（可选）') }}</label>
-                  <HcSelect
-                    v-model="editingModelModel"
-                    :options="modelOptions"
-                    :placeholder="t('prompts.fModelPh', '不指定（默认）')"
-                  />
+              <div class="hc-field hc-field--scope">
+                <label>{{ t('prompts.fScope', '工具范围') }}</label>
+                <div class="hc-prompts__scope-presets" role="group">
+                  <button
+                    v-for="scope in toolScopePresets"
+                    :key="scope.value || 'none'"
+                    type="button"
+                    class="hc-btn hc-prompts__scope-preset"
+                    :class="{ 'is-selected': editing.tool_scope === scope.value }"
+                    :aria-pressed="editing.tool_scope === scope.value"
+                    @click="setToolScope(scope.value)"
+                  >
+                    {{ scope.label }}
+                  </button>
                 </div>
-                <div>
-                  <label>{{ t('prompts.fScope', '工具范围（逗号分隔，可选）') }}</label>
-                  <HcClearableField>
-                    <input
-                      v-model="editing.tool_scope"
-                      type="text"
-                      :placeholder="t('prompts.fScopePh', '如：web_search, code_exec')"
-                    />
-                  </HcClearableField>
-                </div>
+                <input
+                  v-model="editing.tool_scope"
+                  type="text"
+                  :placeholder="
+                    t('prompts.fScopePh', '或自定义：web_search, code_exec（逗号分隔）')
+                  "
+                />
               </div>
-              <label class="hc-switch">
-                <input v-model="editing.enabled" type="checkbox" />
-                {{ t('prompts.enabled', '启用') }}
-              </label>
             </div>
             <div
               class="hc-prompt-modal__footer flex items-center justify-end gap-2 px-5 py-3.5 border-t"
@@ -388,10 +418,9 @@ onMounted(() => {
               </button>
               <button
                 class="hc-btn hc-btn-primary"
-                :disabled="!editing.title?.trim()"
                 @click="savePrompt"
               >
-                {{ t('common.create', '创建') }}
+                {{ t('common.save', '保存') }}
               </button>
             </div>
           </div>
@@ -418,9 +447,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  /* 与 Skills/MCP 二级 tab 容器（px-6 pt-3）对齐：左右 24px、上 12px，
-     避免在三个集成子 tab 间切换时「全部/记忆」这排 tab 左右跳动/缩进不一致。 */
-  padding: 12px 24px 24px;
+  /* 与原型内容区保持同一内边距，避免卡片在集成子页间发生位移。 */
+  padding: 16px 26px 48px;
 }
 .hc-prompts__panel {
   display: flex;
@@ -463,9 +491,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  border-radius: var(--hc-radius-md);
+  gap: 8px;
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 11px;
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
 }
@@ -477,13 +507,15 @@ onMounted(() => {
 }
 .hc-prompts__title {
   font-size: 13px;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .hc-prompts__cat {
-  font-size: 11px;
-  opacity: 0.5;
+  margin-top: 2px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
 }
 .hc-prompts__item-actions {
   display: flex;
@@ -549,10 +581,15 @@ onMounted(() => {
   color: var(--hc-warning);
 }
 .hc-icon-btn {
+  width: 30px;
+  height: 30px;
   border: none;
   background: transparent;
   cursor: pointer;
-  padding: 4px;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 1px 6px;
   border-radius: 8px;
   opacity: 0.7;
   color: var(--hc-text-secondary);
@@ -562,6 +599,9 @@ onMounted(() => {
   background: var(--hc-bg-hover);
 }
 .hc-icon-btn--danger:hover {
+  color: var(--hc-error);
+}
+.hc-icon-btn--danger {
   color: var(--hc-error);
 }
 .hc-switch {
@@ -576,8 +616,20 @@ onMounted(() => {
   display: grid;
   width: min(600px, calc(100vw - 32px));
   min-width: 0;
-  max-height: min(800px, calc(100vh - 32px));
+  max-height: min(686px, calc(100vh - 32px));
   grid-template-rows: auto minmax(0, 1fr) auto;
+  border-radius: 16px;
+  transform: translateY(-8px);
+}
+.hc-prompt-modal > :first-child {
+  padding: 16px 18px;
+}
+.hc-prompt-modal > :first-child > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
 }
 .hc-modal-body {
   display: flex;
@@ -585,11 +637,17 @@ onMounted(() => {
   min-width: 0;
   box-sizing: border-box;
   flex-direction: column;
-  gap: 12px;
+  gap: 15px;
+  padding: 18px;
   overflow-y: auto;
+}
+.hc-modal-body > .hc-field--row + .hc-field--row {
+  margin-top: -15px;
 }
 .hc-prompt-modal__footer {
   min-width: 0;
+  gap: 10px;
+  padding: 14px 18px;
 }
 .hc-field {
   display: flex;
@@ -599,8 +657,16 @@ onMounted(() => {
   flex-direction: column;
   gap: 4px;
 }
+.hc-modal-body .hc-field--scope {
+  order: 4;
+}
+.hc-modal-body .hc-field--body {
+  order: 5;
+}
 .hc-field label {
-  font-size: 12px;
+  margin-bottom: 2px;
+  font-size: 13px;
+  line-height: 19.5px;
   opacity: 0.7;
 }
 .hc-field--row {
@@ -614,6 +680,12 @@ onMounted(() => {
   flex-direction: column;
   gap: 4px;
 }
+.hc-field--type > div:first-child {
+  flex: 0.8;
+}
+.hc-field--type > div:last-child {
+  flex: 1;
+}
 .hc-field input,
 .hc-field select,
 .hc-field textarea {
@@ -621,8 +693,8 @@ onMounted(() => {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 8px 10px;
-  border-radius: var(--hc-radius-md);
+  padding: 9px 12px;
+  border-radius: 10px;
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-input);
   color: var(--hc-text-primary);
@@ -638,6 +710,23 @@ onMounted(() => {
 }
 .hc-field textarea {
   resize: vertical;
+}
+/* 工具范围预设与自定义字段共用 tool_scope，选中态只表达当前字段值。 */
+.hc-prompts__scope-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 2px;
+}
+.hc-prompts__scope-preset {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.hc-prompts__scope-preset.is-selected {
+  color: var(--hc-accent);
+  border-color: var(--hc-border-hl);
+  background: var(--hc-accent-subtle);
 }
 /* P1：正文 编辑/预览 切换 */
 .hc-body-head {
@@ -671,9 +760,19 @@ onMounted(() => {
   box-shadow: var(--hc-shadow-sm);
 }
 .hc-body-edit {
+  min-height: 148px;
+  padding: 11px 13px;
+  border: 1px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.6;
+}
+.hc-field textarea.hc-body-edit {
+  padding: 11px 13px;
+  font-size: 12.5px;
+  line-height: 20px;
 }
 .hc-body-prev {
   width: 100%;

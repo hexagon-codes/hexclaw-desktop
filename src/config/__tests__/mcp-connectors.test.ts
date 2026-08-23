@@ -229,7 +229,26 @@ describe('mcp-connectors 声明式 schema', () => {
     expect(out.args).toEqual(['-y', '@larksuiteoapi/lark-mcp', 'mcp', '-a', 'cli', '-s', ' s e c ']) // app_id trim、secret 原样
   })
 
-  // ── 字段密钥应与 useConnectorInstances 的机密键约定对齐（password 走 secure-store）──
+  it('secret layout marks only credential-bearing args/env for Sidecar encryption', () => {
+    expect(buildMcpServerConfig('mysql', { password: 'pw' })!.secretLayout).toEqual({
+      env: { MYSQL_PASS: 'password' },
+    })
+    expect(buildMcpServerConfig('mysql', {})!.secretLayout).toEqual({
+      env: { MYSQL_PASS: 'password' },
+    })
+    expect(buildMcpServerConfig('postgres', { password: 'pw' })!.secretLayout).toEqual({
+      args: { 2: 'password' },
+    })
+    expect(buildMcpServerConfig('redis', { password: 'pw' })!.secretLayout).toEqual({
+      args: { 2: 'password' },
+    })
+    expect(buildMcpServerConfig('feishuDoc', { app_secret: 'sec' })!.secretLayout).toEqual({
+      args: { 6: 'app_secret' },
+    })
+    expect(buildMcpServerConfig('sqlite', { path: '/tmp/db.sqlite' })!.secretLayout).toBeUndefined()
+  })
+
+  // ── 字段密钥应与 useConnectorInstances 的机密键约定对齐（password 走 Sidecar）──
   it('各类型的 password 字段标记 secret', () => {
     for (const type of ['mysql', 'postgres', 'redis', 'mongodb'] as const) {
       const pw = MCP_CONNECTOR_SPECS[type]!.fields.find((f) => f.key === 'password')

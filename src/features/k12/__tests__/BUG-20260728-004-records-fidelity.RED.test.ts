@@ -63,7 +63,9 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
   })
 
   it('does not expand the approved compact creative-work collection cards', () => {
-    expect(creativeWorksSource.includes('repeat(2, minmax(0, 1fr))')).toBe(true)
+    expect(creativeWorksSource.includes('repeat(auto-fill, minmax(min(100%, 420px), 1fr))')).toBe(
+      true,
+    )
     expect(creativeWorksSource.includes('grid-template-columns: 104px minmax(0, 1fr)')).toBe(true)
     expect(creativeWorksSource.includes('min-height: 104px')).toBe(true)
     expect(creativeWorksSource.includes('height: 104px')).toBe(true)
@@ -84,8 +86,8 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
       /\.k12rec__body:has\(> section\[data-testid=['"]works-section['"]\]\)\s*\{[^}]*padding-top:\s*15px/s,
     )
     expect(recordsSource).toMatch(/\.k12rec__body\s*\{[^}]*padding:\s*15px 26px 48px/s)
-    expect(weeklyPracticeSource).toMatch(
-      /\.weekly-progress\.rc-week-progress\s*>\s*button\s*\{[^}]*height:\s*32px[^}]*font-family:\s*Arial(?:,\s*sans-serif)?[^}]*line-height:\s*normal/s,
+    expect(weeklyPracticeSource).not.toMatch(
+      /\.weekly-progress\.rc-week-progress\s*>\s*button\s*\{[^}]*\b(?:height|font-family|line-height):/s,
     )
   })
 
@@ -103,7 +105,7 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
       /\.k12mistakes\s*:deep\(\.rl-title\)\s*\{[^}]*flex:\s*0\s+0\s+250px/s,
     )
     expect(recordsSource).toMatch(
-      /\.k12mistakes\s*:deep\(\.rl-btn\)\s*\{[^}]*display:\s*inline-flex[^}]*height:\s*28px[^}]*font-family:\s*Arial[^}]*line-height:\s*normal/s,
+      /\.k12mistakes\s*:deep\(\.rl-btn\)\s*\{[^}]*display:\s*inline-flex[^}]*font-family:\s*inherit[^}]*line-height:\s*18px/s,
     )
     expect(zhCNSource).toContain(
       '本周先不练只延后当周；不再复习可在本列表恢复。只有真实作答与系统判定形成已掌握。',

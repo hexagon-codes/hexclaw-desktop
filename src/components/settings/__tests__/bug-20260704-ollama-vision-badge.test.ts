@@ -115,18 +115,26 @@ describe('BUG-20260704 Ollama 视觉能力徽章', () => {
     expect(caps.join(' ')).not.toContain('视觉')
   })
 
-  it('无 capabilities 上报（旧版 Ollama）→ 回退静态表，不炸', async () => {
+  it('无 capabilities 上报时只采用精确静态声明，不按模型名推断视觉', async () => {
     getOllamaStatus.mockResolvedValue({
       running: true,
       associated: true,
-      model_count: 1,
-      models: [{ name: 'qwen3:8b', size: 5000000000, modified: '2026-07-01T00:00:00Z' }],
+      model_count: 2,
+      models: [
+        { name: 'qwen2.5-vl:7b', size: 5000000000, modified: '2026-07-01T00:00:00Z' },
+        { name: 'untrusted-vision-model:latest', size: 5000000000, modified: '2026-07-01T00:00:00Z' },
+      ],
     })
 
     const wrapper = mountCard()
     await flushPromises()
 
-    // 至少渲染出徽章（静态表兜底），不因缺 capabilities 报错。
-    expect(wrapper.findAll('.ollama-card__cap').length).toBeGreaterThan(0)
+    const rows = wrapper.findAll('.ollama-card__model')
+    const declared = rows.find((row) => row.text().includes('qwen2.5-vl:7b'))!
+    const untrusted = rows.find((row) => row.text().includes('untrusted-vision-model:latest'))!
+    expect(declared.findAll('.ollama-card__cap').map((cap) => cap.text()).join(' ')).toContain('视觉')
+    expect(untrusted.findAll('.ollama-card__cap')).toHaveLength(0)
+    expect(declared.find('.ollama-card__model-btn--chat').exists()).toBe(true)
+    expect(untrusted.find('.ollama-card__model-btn--chat').exists()).toBe(false)
   })
 })

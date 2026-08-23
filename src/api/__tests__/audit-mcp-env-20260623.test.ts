@@ -29,4 +29,21 @@ describe('AUDIT addMcpServer env keystone', () => {
     const body = apiPost.mock.calls[0]![1] as Record<string, unknown>
     expect('env' in body).toBe(false)
   })
+
+  it('传 secret mutation 时请求体携带 opaque credential refs 与用户意图', async () => {
+    apiPost.mockResolvedValue({ message: 'ok' })
+    await addMcpServer('postgres', 'npx', ['-y', 'server-postgres', 'postgresql://user@localhost/db'], {
+      secretArgs: [{
+        index: 2,
+        mode: 'preserve',
+        credentialRef: 'sidecar-connection:v1:connection-1:password',
+      }],
+    })
+    const body = apiPost.mock.calls[0]![1] as Record<string, unknown>
+    expect(body.secret_args).toEqual([{
+      index: 2,
+      mode: 'preserve',
+      credentialRef: 'sidecar-connection:v1:connection-1:password',
+    }])
+  })
 })

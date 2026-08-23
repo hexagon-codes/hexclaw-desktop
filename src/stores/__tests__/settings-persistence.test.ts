@@ -44,7 +44,7 @@ vi.mock('@/utils/secure-store', () => ({
   credentialRefFor: (key: { ownerKind: string; ownerId: string; secretKind: string }) =>
     key.ownerKind === 'provider'
       ? `llm_provider/${key.ownerId}/api_key`
-      : `hexclaw-vault:v1:${key.ownerKind}:${key.ownerId}:${key.secretKind}`,
+      : `sidecar-connection:v1:${key.ownerId}:${key.secretKind}`,
   credentialPresent: vi.fn().mockResolvedValue(true),
   loadSecureValue: vi.fn(async (key: string) => {
     if (state.loadSecureValueHook) return state.loadSecureValueHook(key)

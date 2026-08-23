@@ -345,7 +345,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
       running: true,
       associated: true,
       model_count: 1,
-      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000 }],
+      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000, capabilities: ['completion'] }],
     })
     await store.syncOllamaModels()
 
@@ -633,7 +633,7 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
       running: true,
       associated: true,
       model_count: 1,
-      models: [{ name: 'qwen3:8b', size: 5_000_000_000 }],
+      models: [{ name: 'qwen3:8b', size: 5_000_000_000, capabilities: ['completion'] }],
     })
     await store.syncOllamaModels()
     expect(store.availableModels.some(m => m.modelId === 'qwen3:8b')).toBe(true)
@@ -643,7 +643,7 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
       running: true,
       associated: true,
       model_count: 1,
-      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000 }],
+      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000, capabilities: ['completion'] }],
     })
 
     await store.syncOllamaModels()
@@ -678,7 +678,7 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
       running: true,
       associated: true,
       model_count: 1,
-      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000 }],
+      models: [{ name: 'qwen3.5:9b', size: 6_600_000_000, capabilities: ['completion'] }],
     })
 
     // saveConfig 内部会重新 getLLMConfig()，需返回同步后的模型
@@ -710,8 +710,8 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
     mockGetOllamaStatus.mockResolvedValue({
       running: true, associated: true, model_count: 2,
       models: [
-        { name: 'qwen3.5:9b', size: 6_600_000_000 },
-        { name: 'deepseek-r1:7b', size: 4_700_000_000 },
+        { name: 'qwen3.5:9b', size: 6_600_000_000, capabilities: ['completion'] },
+        { name: 'deepseek-r1:7b', size: 4_700_000_000, capabilities: ['completion'] },
       ],
     })
 
@@ -746,18 +746,22 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
     expect(store.availableModels.length).toBe(modelsBefore)
   })
 
-  // Regression: v0.3.12 修复 — Ollama 本地多模态模型应自动带 vision capability
-  // 用户场景：拉取 qwen2.5-vl:7b 后，聊天输入框图片按钮应可用（supportsVision=true）
-  it('Ollama 多模态模型 capabilities 自动含 vision（预设白名单 + 正则兜底）', async () => {
+  it('只采用 Ollama 上报的显式能力，不按模型名提升 vision', async () => {
     const store = await setupStoreWithOllama()
 
     mockGetOllamaStatus.mockResolvedValue({
-      running: true, associated: true, model_count: 4,
+      running: true, associated: true, model_count: 2,
       models: [
-        { name: 'qwen2.5-vl:7b', size: 5_000_000_000 },       // 命中 preset 白名单
-        { name: 'llava:13b', size: 7_400_000_000 },           // 命中 preset 白名单
-        { name: 'qwen3:8b', size: 5_200_000_000 },            // 纯文本
-        { name: 'my-custom-vision-tune:latest', size: 4_000_000_000 }, // 走正则兜底
+        {
+          name: 'qwen3.5:9b',
+          size: 6_600_000_000,
+          capabilities: ['completion', 'vision'],
+        },
+        {
+          name: 'untrusted-vision-model:latest',
+          size: 4_000_000_000,
+          capabilities: ['completion'],
+        },
       ],
     })
 
@@ -769,12 +773,29 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
         .map(m => [m.modelId, m.capabilities]),
     )
 
-    // 预设白名单命中 → vision
-    expect(byId.get('qwen2.5-vl:7b')).toContain('vision')
-    expect(byId.get('llava:13b')).toContain('vision')
-    // 正则兜底（name 含 vision）→ vision
-    expect(byId.get('my-custom-vision-tune:latest')).toContain('vision')
-    // 纯文本模型 → 仅 text
-    expect(byId.get('qwen3:8b')).toEqual(['text'])
+    expect(byId.get('qwen3.5:9b')).toEqual(['text', 'vision'])
+    expect(byId.get('untrusted-vision-model:latest')).toEqual(['text'])
+  })
+
+  it('仅在精确静态声明命中时为缺失上报的模型补充能力', async () => {
+    const store = await setupStoreWithOllama()
+
+    mockGetOllamaStatus.mockResolvedValue({
+      running: true, associated: true, model_count: 2,
+      models: [
+        { name: 'qwen2.5-vl:7b', size: 5_000_000_000 },
+        { name: 'untrusted-vision-model:latest', size: 4_000_000_000 },
+      ],
+    })
+
+    await store.syncOllamaModels()
+
+    const byId = new Map(
+      store.availableModels
+        .filter(m => m.providerKey === 'ollama')
+        .map(m => [m.modelId, m.capabilities]),
+    )
+    expect(byId.get('qwen2.5-vl:7b')).toEqual(['text', 'vision'])
+    expect(byId.has('untrusted-vision-model:latest')).toBe(false)
   })
 })

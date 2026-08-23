@@ -119,7 +119,6 @@ import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { appendSessionMessage, appendSessionMessagesBatch } from '@/api/chat'
-import { inferCapabilitiesFromId } from '@/config/providers'
 import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
 import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
@@ -138,7 +137,7 @@ import type { RenderManifest } from '@/contracts/message-content'
 import { recordNestedRenderManifest, recordRenderManifest } from '@/contracts/render-evidence'
 import { getDocPreviewFile } from '@/utils/doc-preview'
 import { uploadDocumentPreview, documentPreviewUrl } from '@/api/documents'
-import { openOrDownloadDocument } from '@/utils/download'
+import { downloadInApp, openOrDownloadDocument, saveBlobInApp } from '@/utils/download'
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import crabLogo from '@/assets/logo-crab.png'
 
@@ -353,6 +352,7 @@ async function loadConnectionDirectory() {
 }
 
 let stopSidecarReadyListener: (() => void) | null = null
+let stopSidecarReadyStoreWatch: (() => void) | null = null
 let sidecarReadyListenerTimeout: ReturnType<typeof setTimeout> | null = null
 let sidecarReadyHandling = false
 
@@ -365,9 +365,52 @@ function clearSidecarReadyListener() {
   stopSidecarReadyListener = null
 }
 
+async function reloadAfterSidecarReady() {
+  if (connectionDirectoryDisposed || sidecarReadyHandling) return
+  sidecarReadyHandling = true
+  clearSidecarReadyListener()
+  // 各数据域独立恢复：Provider/Ollama、Agent/会话或连接中的任意一个失败，
+  // 都不得短路另外两个。尤其 @连接必须在 sidecar-ready 后获得自己的第二次加载机会。
+  await Promise.allSettled([
+    (async () => {
+      await settingsStore.loadConfig({ force: true })
+      await settingsStore.syncOllamaModels()
+    })(),
+    (async () => {
+      // 冷启动补拉：挂载时引擎未就绪会使会话与智能体目录为空。
+      await agentsStore.loadAgents()
+      await chatStore.loadSessions()
+    })(),
+    // 连接目录与会话/智能体使用同一 sidecar readiness 边界。挂载期的旧失败可能晚于
+    // 本次成功返回；loadConnectionDirectory 内部的 generation 保证只有最新代次可投影。
+    loadConnectionDirectory(),
+  ])
+  if (!connectionDirectoryDisposed) {
+    // 后端延迟就绪后按优先级恢复当前会话模型，避免覆盖会话绑定。
+    initLLMModelForCurrentSession()
+  }
+}
+
+async function installSidecarReadyListener() {
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('sidecar-ready', () => reloadAfterSidecarReady())
+    if (connectionDirectoryDisposed) {
+      unlisten()
+    } else {
+      stopSidecarReadyListener = unlisten
+      sidecarReadyListenerTimeout = setTimeout(clearSidecarReadyListener, 30000)
+    }
+  } catch {
+    // 非 Tauri 环境忽略
+  }
+}
+
 onUnmounted(() => {
   connectionDirectoryDisposed = true
   connectionDirectoryGeneration += 1
+  stopSidecarReadyStoreWatch?.()
+  stopSidecarReadyStoreWatch = null
   clearSidecarReadyListener()
 })
 
@@ -1244,17 +1287,11 @@ function messageRecordChip(msg: {
 }
 
 // 按 Provider 分组的模型列表
-/**
- * 渲染时计算模型有效能力（render-time inference 兜底，兼容存量 ['text']）。
- * 与 SettingsView.displayCapabilities 同源逻辑。
- */
+/** 仅消费配置层合并后的能力声明，缺失的历史记录按文本能力处理。 */
 function effectiveCaps(
-  modelId: string,
   stored?: import('@/types').ModelCapability[],
 ): import('@/types').ModelCapability[] {
-  const arr = stored ?? ['text']
-  const isTextOnly = arr.length === 1 && arr[0] === 'text'
-  return isTextOnly ? inferCapabilitiesFromId(modelId) : arr
+  return stored ?? ['text']
 }
 
 /**
@@ -1298,7 +1335,7 @@ const groupedModels = computed(() => {
   // 全模型可见 — 选中后由 ChatView 按 capability 切换 composer
   // （chat / image-gen / video-gen 三种模式共用同一个会话流）。
   for (const m of settingsStore.availableModels) {
-    const caps = effectiveCaps(m.modelId, m.capabilities)
+    const caps = effectiveCaps(m.capabilities)
     if (!groups[m.providerId]) {
       groups[m.providerId] = { providerName: m.providerName, models: [] }
     }
@@ -1376,30 +1413,24 @@ function makeUniqueDownloadName(hintName: string, src: string): string {
   return `HexClaw-${ts}-${rand}.${ext}`
 }
 
-/**
- * 下载图片 — Tauri WKWebView 下 <a download> / blob URL 不可靠，走原生 Save 对话框。
- * 用户选择保存路径后，由 Rust 侧写盘（http/s 走 save_file_from_url，data: 走
- * save_bytes_to_path）。
- */
+/** 媒体保存统一消费 opaque grant：Sidecar 资源由 Rust 流式下载，WebView 资源分片暂存。 */
 async function downloadImage(src: string, name: string) {
   const filename = makeUniqueDownloadName(name, src)
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog')
-    const { invoke } = await import('@tauri-apps/api/core')
-
-    const chosen = await save({ defaultPath: filename })
-    if (!chosen) return // 用户取消
-
-    if (src.startsWith('http')) {
-      await invoke<number>('save_file_from_url', { url: src, path: chosen })
-    } else if (src.startsWith('data:')) {
-      const commaIdx = src.indexOf(',')
-      if (commaIdx < 0) throw new Error('invalid data URL')
-      const base64 = src.slice(commaIdx + 1)
-      await invoke<number>('save_bytes_to_path', { base64Data: base64, path: chosen })
+    let chosen: string | null
+    if (/^https?:\/\//i.test(src)) {
+      chosen = await downloadInApp(src, filename)
     } else {
-      throw new Error(`unsupported src: ${src.slice(0, 32)}`)
+      // imageSrc 会把历史裸 base64 包装成 data URL；保留直接调用时的兼容入口。
+      const blobSource = /^(?:data:|blob:)/i.test(src)
+        ? src
+        : `data:application/octet-stream;base64,${src}`
+      const response = await fetch(blobSource)
+      if (!response.ok) throw new Error('Failed to read media source')
+      const blob = await response.blob()
+      chosen = await saveBlobInApp(blob, filename)
     }
+    if (!chosen) return
     toast.success?.('已保存到 ' + chosen)
   } catch (e) {
     console.error('[ChatView] download failed', e)
@@ -1459,7 +1490,7 @@ const selectedModelCapabilities = computed(() => {
   const caps =
     found?.capabilities ??
     (pendingModelMeta.value?.capabilities as import('@/types').ModelCapability[] | undefined)
-  return effectiveCaps(selectedModel.value || '', caps)
+  return effectiveCaps(caps)
 })
 
 // 推理能力只读取当前实际路由模型的显式配置，未知时不按模型名或地址猜测。
@@ -1706,6 +1737,16 @@ onMounted(async () => {
   // 未完成前出现“发送按钮可点但消息被静默吞掉”的初始化竞态，同时消除返回会话时的默认模型闪现。
   initLLMModelForCurrentSession()
 
+  // 必须在任何依赖 sidecar 的异步加载前订阅，避免就绪事件在会话、智能体恢复期间丢失。
+  await installSidecarReadyListener()
+  stopSidecarReadyStoreWatch = watch(
+    () => appStore.sidecarReady,
+    (ready) => {
+      if (ready) void reloadAfterSidecarReady()
+    },
+    { immediate: true },
+  )
+
   refreshBackendGenStatus()
   // 窗口聚焦时重查（用户可能在 Settings 更新了 API Key 切回来）
   window.addEventListener('focus', refreshBackendGenStatus)
@@ -1791,44 +1832,6 @@ onMounted(async () => {
     chatStore.agentRole = ''
   }
 
-  // sidecar-ready 事件：后端延迟就绪时重新同步 providers
-  try {
-    const { listen } = await import('@tauri-apps/api/event')
-    const unlisten = await listen('sidecar-ready', async () => {
-      if (connectionDirectoryDisposed || sidecarReadyHandling) return
-      sidecarReadyHandling = true
-      clearSidecarReadyListener()
-      // 各数据域独立恢复：Provider/Ollama、Agent/会话或连接中的任意一个失败，
-      // 都不得短路另外两个。尤其 @连接必须在 sidecar-ready 后获得自己的第二次加载机会。
-      await Promise.allSettled([
-        (async () => {
-          await settingsStore.loadConfig({ force: true })
-          await settingsStore.syncOllamaModels()
-        })(),
-        (async () => {
-          // 冷启动补拉（BUG-20260712-K 同类根因）：挂载时引擎未就绪 → 会话/agents 全空，
-          // 就绪后必须按依赖顺序重拉，否则标题自愈/孤儿文案层拿不到稳定身份。
-          await agentsStore.loadAgents()
-          await chatStore.loadSessions()
-        })(),
-        // 连接目录与会话/智能体使用同一 sidecar readiness 边界。挂载期的旧失败可能晚于
-        // 本次成功返回；loadConnectionDirectory 内部的 generation 保证只有最新代次可投影。
-        loadConnectionDirectory(),
-      ])
-      if (!connectionDirectoryDisposed) {
-        // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
-        initLLMModelForCurrentSession()
-      }
-    })
-    if (connectionDirectoryDisposed) {
-      unlisten()
-    } else {
-      stopSidecarReadyListener = unlisten
-      sidecarReadyListenerTimeout = setTimeout(clearSidecarReadyListener, 30000)
-    }
-  } catch {
-    // 非 Tauri 环境忽略
-  }
 })
 
 async function toggleModelSelector() {
@@ -3398,7 +3401,9 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                   <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
                     <div class="hc-msg__meta">
-                      <span v-if="messageSourceDisplay(msg)">{{ messageSourceDisplay(msg) }}</span>
+                      <span v-if="messageProviderDisplay(msg) || messageSourceDisplay(msg)">
+                        {{ messageSourceDisplay(msg) }}
+                      </span>
                     </div>
                     <div class="hc-msg__actions-inline">
                       <MessageActions

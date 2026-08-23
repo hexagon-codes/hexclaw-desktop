@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { AlertTriangle, Info } from 'lucide-vue-next'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { AlertTriangle, Info, X } from 'lucide-vue-next'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 const props = withDefaults(
@@ -33,7 +33,9 @@ const emit = defineEmits<{
 
 const confirmLocked = ref(false)
 const confirmCommitted = ref(false)
+const dialogRef = ref<HTMLElement | null>(null)
 let confirmUnlockTimer: ReturnType<typeof setTimeout> | null = null
+let invokingElement: HTMLElement | null = null
 
 function clearConfirmDelay() {
   if (confirmUnlockTimer) clearTimeout(confirmUnlockTimer)
@@ -70,17 +72,72 @@ watch(
   { immediate: true, flush: 'sync' },
 )
 
+function getFocusableElements(dialog: HTMLElement) {
+  return Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ),
+  )
+}
+
+function restoreInvokingFocus() {
+  const target = invokingElement
+  invokingElement = null
+  if (target?.isConnected) target.focus()
+}
+
+watch(
+  () => props.open,
+  (open, wasOpen) => {
+    if (open) {
+      const activeElement = document.activeElement
+      invokingElement = activeElement instanceof HTMLElement ? activeElement : null
+      void nextTick(() => {
+        if (!props.open || !dialogRef.value) return
+        const initialFocus = getFocusableElements(dialogRef.value)[0] ?? dialogRef.value
+        initialFocus.focus()
+      })
+      return
+    }
+    if (wasOpen) restoreInvokingFocus()
+  },
+  { immediate: true, flush: 'sync' },
+)
+
 function handleKeydown(event: KeyboardEvent) {
-  if (!props.open || event.key !== 'Escape') return
-  event.preventDefault()
-  event.stopPropagation()
-  handleCancel()
+  if (!props.open) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    handleCancel()
+    return
+  }
+  if (event.key !== 'Tab' || !dialogRef.value) return
+
+  const focusableElements = getFocusableElements(dialogRef.value)
+  if (focusableElements.length === 0) {
+    event.preventDefault()
+    dialogRef.value.focus()
+    return
+  }
+
+  const first = focusableElements[0]!
+  const last = focusableElements[focusableElements.length - 1]!
+  const activeElement = document.activeElement
+  if (event.shiftKey && (activeElement === first || !dialogRef.value.contains(activeElement))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (activeElement === last || !dialogRef.value.contains(activeElement))) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 onMounted(() => document.addEventListener('keydown', handleKeydown))
 onBeforeUnmount(() => {
   clearConfirmDelay()
   document.removeEventListener('keydown', handleKeydown)
+  restoreInvokingFocus()
 })
 </script>
 
@@ -89,10 +146,12 @@ onBeforeUnmount(() => {
     <Transition name="hc-dialog">
       <div v-if="open" class="hc-dialog-overlay" @click.self="handleCancel">
         <div
+          ref="dialogRef"
           class="hc-dialog"
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="hc-confirm-dialog-title"
+          tabindex="-1"
         >
           <div class="hc-dialog__header">
             <div
@@ -102,10 +161,18 @@ onBeforeUnmount(() => {
               <AlertTriangle v-if="danger" :size="20" />
               <Info v-else :size="20" />
             </div>
-            <div>
+            <div class="hc-dialog__header-copy">
               <h3 id="hc-confirm-dialog-title" class="hc-dialog__title">{{ title }}</h3>
               <p class="hc-dialog__msg">{{ message }}</p>
             </div>
+            <button
+              type="button"
+              class="hc-dialog__close"
+              aria-label="Close dialog"
+              @click="handleCancel"
+            >
+              <X :size="18" />
+            </button>
           </div>
           <div class="hc-dialog__actions">
             <button class="hc-btn hc-btn-secondary" @click="handleCancel">{{ cancelText }}</button>
@@ -155,6 +222,37 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 14px;
   margin-bottom: 20px;
+}
+
+.hc-dialog__header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.hc-dialog__close {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--hc-radius-sm);
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+}
+
+.hc-dialog__close:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.hc-dialog__close:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
 }
 
 .hc-dialog__icon {

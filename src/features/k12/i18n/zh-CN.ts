@@ -15,7 +15,7 @@ export default {
   },
 
   composer: {
-    placeholder: '发消息，或让我写请假条、回复老师消息、设置订正提醒',
+    placeholder: '发消息，或让我回复老师消息、设置订正提醒',
     formulaHintLead: '支持粘贴分数与数学公式',
     formulaHintDetail: '网页、Word、PDF 中可复制的公式发送后按数学排版显示；扫描页仍建议粘贴截图。',
     chips: ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验'],
@@ -117,7 +117,7 @@ export default {
   emptyAccum: {
     title: '积累本还空着',
     sub: '好词好句、古诗、易错词，随手记进来',
-    cta: '记到积累本',
+    cta: '添加积累',
   },
 
   // 错题详情弹层（BUG-20260712-#2）
@@ -389,8 +389,8 @@ export default {
     filterAll: '全部',
     filterChinese: '语文',
     filterEnglish: '英语',
-    addOpen: '记到积累本',
-    addTitle: '记一条到积累本',
+    addOpen: '添加积累',
+    addTitle: '添加积累',
     subject: '学科',
     type: '类型',
     content: '内容',
@@ -458,8 +458,7 @@ export default {
       first: '上学期',
       second: '下学期',
     },
-    gradeSupportNote:
-      '当前版本支持小学一至六年级。初高中能力开放后，可直接升级当前孩子档案，历史学习记录会继续保留。',
+    gradeSupportNote: '当前仅支持小学一至六年级；初一至高三暂未开放。',
     textbookBySubject: '数学教材版本',
     textbookCreateNote: '当前版本只开放数学教材与进度管理；其他学科无需在这里配置。',
     textbookEditNote: '当前版本只开放数学教材与进度管理；其他学科历史绑定会原样保留。',
@@ -471,13 +470,14 @@ export default {
       informationTechnology: '信息科技',
       art: '美术',
     },
-    skillsLabel: '自带技能',
+    skillsLabel: '自带能力',
+    capabilityNote: '能力由 K12 模板定义；实际技术 Skill 在高级设置中统一管理。',
     builtinSkills: {
       photo: '📷 拍照识题',
       progressive: '💡 渐进讲解',
-      mistakes: '📕 错题本',
+      mistakes: '📕 错题复习',
       works: '🖼 作品点评',
-      subjects: '📚 语·数·英·科学·信息科技·美术',
+      subjects: '📚 数学教材进度',
     },
     toneAdvanced: '辅导语气 · 已按模板配好，可微调',
     toneReset: '恢复默认语气',
@@ -513,18 +513,17 @@ export default {
     deleteConfirmAction: '删除',
     deleted: '已删除「{name}」',
   },
-  // 键名 physics/chemistry 是历史 skill ID（manifest.ts 他会话活跃禁改）；
-  // 译名按 v0.5.0 学科口径（PRD §1.3 / §4.11）：科学、信息科技。
+  // 键名 physics/chemistry 是历史 skill ID，显示名保持与档案能力清单一致。
   manifest: {
-    pedagogy: '教学法（渐进提示·不直接给答案）',
-    homework: '拍照识题·分题批改',
+    pedagogy: '渐进式辅导',
+    homework: '作业批改',
     math: '数学辅导',
-    chinese: '语文辅导（作文共写不代写）',
+    chinese: '语文辅导',
     english: '英语辅导',
-    concept: '知识点讲解',
-    exercise: '出题·变式·复习卷',
-    physics: '科学辅导',
-    chemistry: '信息科技辅导',
+    concept: '概念讲解',
+    exercise: '练习生成',
+    physics: '物理辅导',
+    chemistry: '化学辅导',
   },
 
   backup: {

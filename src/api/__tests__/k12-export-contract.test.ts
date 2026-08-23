@@ -36,6 +36,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12DeleteCreativeWork',
   'k12DeleteMistake',
   'k12EnsureWeeklyPracticePlan',
+  'k12ExportArchive',
   'k12ExportMd',
   'k12FillPracticeBasket',
   'k12FinalizePracticeSet',

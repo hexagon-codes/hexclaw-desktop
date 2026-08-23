@@ -26,12 +26,10 @@ describe('KnowledgeView visual hierarchy', () => {
   })
 
   it('keeps each document card and its primary content in one stable desktop row', () => {
-    expect(knowledgeView).toMatch(
-      /data-testid="knowledge-doc-card"[\s\S]{0,180}?class="[^"]*\bflex\b[^"]*"/s,
+    expect(knowledgeView).toContain(
+      'class="knowledge-page__resource-row knowledge-page__document-card flex items-center"',
     )
-    expect(knowledgeView).toMatch(
-      /class="knowledge-page__document-main[^"]*\bflex-1\b[^"]*"/s,
-    )
+    expect(knowledgeView).toContain('class="knowledge-page__document-main flex-1 min-w-0"')
   })
 
   it('keeps semantic-index controls in the original vertically ordered card', () => {
