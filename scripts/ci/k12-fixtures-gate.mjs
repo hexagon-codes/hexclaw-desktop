@@ -15,6 +15,9 @@ const contract = JSON.parse(readFileSync(contractPath, 'utf8'))
 
 export const K12_FIXTURE_REPORT_PATH = contract.reportPath
 export const K12_FIXTURE_SPEC_FILES = Object.freeze(contract.specs.map(({ file }) => file))
+export const K12_FIXTURE_TEST_MEMBERS = Object.freeze(
+  contract.specs.flatMap(({ file, tests }) => tests.map((title) => `${file} › ${title}`)),
+)
 
 const absoluteReportPath = resolve(repoRoot, K12_FIXTURE_REPORT_PATH)
 const real10xCycleScenarios = Object.freeze({
@@ -53,12 +56,34 @@ export function real10xScenarioGrep(cycle) {
   return `.*${scenario.title.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`
 }
 
-function collectSpecs(suites, target = []) {
+function isFileSuite(suite) {
+  const title = String(suite?.title ?? '').trim()
+  const file = String(suite?.file ?? '').trim()
+  return Boolean(
+    title &&
+    (title === file || title.endsWith('.spec.ts') || (file && basename(title) === basename(file))),
+  )
+}
+
+function collectSpecs(suites, target = [], suitePath = []) {
   for (const suite of suites ?? []) {
-    target.push(...(suite.specs ?? []))
-    collectSpecs(suite.suites, target)
+    const title = String(suite?.title ?? '').trim()
+    const nextSuitePath = title && !isFileSuite(suite) ? [...suitePath, title] : suitePath
+    for (const spec of suite.specs ?? []) {
+      target.push({ ...spec, __suitePath: nextSuitePath })
+    }
+    collectSpecs(suite.suites, target, nextSuitePath)
   }
   return target
+}
+
+function reportTestMember(spec) {
+  const file = basename(String(spec.file ?? ''))
+  const titlePath = [
+    ...(Array.isArray(spec.__suitePath) ? spec.__suitePath : []),
+    String(spec.title ?? '').trim(),
+  ].filter(Boolean)
+  return `${file} › ${titlePath.join(' › ')}`
 }
 
 function sortedLikeContract(files) {
@@ -101,6 +126,22 @@ export function auditK12FixturesReport(report, { expectedProject, cycle } = {}) 
     throw new Error(
       `K12 Fixture strict gate: Fixture spec exact-set mismatch; missing=[${missing.join(', ')}], unexpected=[${unexpected.join(', ')}]`,
     )
+  }
+
+  if (!scenario) {
+    const expectedMembers = new Set(K12_FIXTURE_TEST_MEMBERS)
+    const actualMembers = specs.map(reportTestMember)
+    const actualMemberSet = new Set(actualMembers)
+    const missingMembers = K12_FIXTURE_TEST_MEMBERS.filter((member) => !actualMemberSet.has(member))
+    const unexpectedMembers = actualMembers.filter((member) => !expectedMembers.has(member))
+    const duplicateMembers = actualMembers.filter(
+      (member, index) => actualMembers.indexOf(member) !== index,
+    )
+    if (missingMembers.length > 0 || unexpectedMembers.length > 0 || duplicateMembers.length > 0) {
+      throw new Error(
+        `K12 Fixture strict gate: canonical test member exact-set mismatch; missing=[${missingMembers.join(', ')}], unexpected=[${unexpectedMembers.join(', ')}], duplicate=[${[...new Set(duplicateMembers)].join(', ')}]`,
+      )
+    }
   }
 
   let total = 0

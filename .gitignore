@@ -30,6 +30,12 @@ tests/e2e/screenshots/
 test-results/
 playwright-report*/
 
+# 本地回归证据（截图、报告、日志和数据库，不作为源码提交）
+test/evidence/
+
+# 本地一次性校验清单
+/SHA256SUMS
+
 # 本地临时产物目录（脚本/调试输出，不入库）
 tmp/
 

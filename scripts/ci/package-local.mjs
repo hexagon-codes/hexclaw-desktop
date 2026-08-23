@@ -72,12 +72,14 @@ const OLLAMA_PAX_MAX_BYTES = 64 * 1024
 const OLLAMA_PAX_XATTR_NAMES = Object.freeze(['CodeSignature', 'CodeRequirements', 'CodeDirectory'])
 const OLLAMA_APPLEDOUBLE_CONTRACTS = Object.freeze({
   'mlx_metal_v3/._mlx.metallib': Object.freeze({
-    bytes: 9662,
-    sha256: 'bfc1c0059a8522c59e3befa0906d1487b0f513b53d5b3b68a6979c053fc2bcdc',
+    // v0.32.13 固定归档的 v3 AppleDouble payload 为 9661 字节，必须与归档摘要逐字节一致。
+    bytes: 9661,
+    sha256: '2bed0f3fa16d3c54a1b187e3314ebf45ba190827e6a4871c725c4f6eda730b6f',
   }),
   'mlx_metal_v4/._mlx.metallib': Object.freeze({
     bytes: 9662,
-    sha256: '4f4128deb87ddfcc5bd30a9e8035c2add6c6d316180c606a29a1d4f0208bfcb6',
+    // 同一固定归档的 v4 AppleDouble payload 摘要也独立绑定，避免不同版本元数据混入。
+    sha256: '3f5ef8ab2637186bc7565967f04a19dffe090ee7ecc5b184997bf7ffb8cd58b1',
   }),
 })
 const PROJECTED_SOURCE_MAX_ENTRIES = 100_000

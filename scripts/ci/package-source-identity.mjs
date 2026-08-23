@@ -30,6 +30,8 @@ const PNPM_BUNDLE_FILE_LIMIT = 2_048
 const PNPM_BUNDLE_TOTAL_LIMIT_BYTES = 64 * 1024 * 1024
 const RUST_BUNDLE_FILE_LIMIT = 1_024
 const RUST_BUNDLE_TOTAL_LIMIT_BYTES = 768 * 1024 * 1024
+const PACKAGE_GENERATION_STAGING_BASENAME = '.package-local.generations'
+const PACKAGE_GENERATION_ID_PATTERN = /^[a-f0-9]{32}$/u
 const PRODUCTION_GIT_EXECUTABLE = '/usr/bin/git'
 const PRODUCTION_CODESIGN_EXECUTABLE = '/usr/bin/codesign'
 const MACH_O_MAGICS = new Set([
@@ -2371,6 +2373,13 @@ function assertManifestDestination(layout, manifestPath) {
     if (!isPathInside(repository.root, manifestPath)) continue
     const rel = relative(repository.root, manifestPath).split('\\').join('/')
     if (!isExcludedOutputPath(rel)) fail('input:manifest-path')
+    const segments = rel.split('/')
+    for (let index = 0; index < segments.length; index += 1) {
+      if (segments[index] !== PACKAGE_GENERATION_STAGING_BASENAME) continue
+      if (!PACKAGE_GENERATION_ID_PATTERN.test(segments[index + 1] ?? '')) {
+        fail('input:manifest-path')
+      }
+    }
   }
 }
 

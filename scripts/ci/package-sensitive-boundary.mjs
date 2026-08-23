@@ -28,37 +28,51 @@ const OLLAMA_RESOURCE_PREFIXES = Object.freeze([
   'HexClaw.app/Contents/Resources/ollama/',
   'ollama/',
 ])
-// 仅固定 Ollama v0.30.10 中携带上述公开 CI 路径的文件可以使用例外；
+const PANDOC_PUBLIC_BUILD_PROVENANCE = '/Users/admin/'
+const PANDOC_PUBLIC_BUILD_PROVENANCE_MASK = '_'.repeat(PANDOC_PUBLIC_BUILD_PROVENANCE.length)
+const PANDOC_RESOURCE_PREFIXES = Object.freeze([
+  'generation-binaries/pandoc-',
+  'dist/pandoc-',
+  'HexClaw.app/Contents/MacOS/pandoc',
+])
+// 固定版本清单中的官方 Pandoc 构建包含公开构建机路径；仅精确字节摘要可放行。
+const PANDOC_PUBLIC_PROVENANCE_SHA256 = Object.freeze(
+  new Set([
+    '901a9d2b3d1484e008cbce7a11739e8c9c22161c4a4222589ed2c53c96b8a55e',
+    '539a4d539386e62ea7dbd6f0b7c0f76dfadaa78d57e47472849b1c878f8a0a6b',
+  ]),
+)
+// 仅固定 Ollama v0.32.13 中携带上述公开 CI 路径的文件可以使用例外；
 // 任何字节变化都会改变 SHA-256，并恢复普通用户目录拒绝规则。
 const OLLAMA_PUBLIC_PROVENANCE_SHA256 = Object.freeze(
   new Set([
-    '00a375a2c23ad478d4f403b3160d7e79214074605f52947ba063836a47fd447a',
-    '0b5d45e319355b04115d3eba2c226a6857fae885744b775be52d8463d2de0a9f',
-    '1bcf60454d2f95124e9bc32967e93e6bebcc46900e905368bc4e747527ab4e08',
-    '1cecd5f0c4d0b73f33ea4f23490d3132526754262274611394e8eb8b9a135fcf',
-    '203ae2eac7e3fd1397f94cf82aca77115056c702681684342dac545e6bee1cf0',
-    '21fb418f21ff06ae09d63ec5250ee49671c67fcccfaeb8ff7e84bc1e949fb909',
-    '34eb4ee88e2ecdf4e48c561990e704ec9150f4eca7ae6ff741eb47a27e2bae78',
-    '42b552cdf255b201c2996cc9b2010fd04f695e7ac46724fe3062b0e19de9b11f',
-    '5926ba03fca5722bf4d03308f08ea409912f16ec7a28e88875e2cda3e475a811',
-    '5982d61eb30df5caca8375854ef5e16c7c1459f22ed7eb1aa3befebfab5c2142',
-    '633c2eb96912f18ccc44e457bcd6de377805b3a8efa95b8eaeea9d2da43abff4',
-    '68d2170f93781afdce87398ffb1be33d770dba7c3bfb709a59d3f55fce7a06a6',
-    '73a3a71eeb295a5dcdd5dc0689e074ecca4099db1ec6541a406cd0fa1fb0bc71',
-    '79894ca114a137ac82872ace85e75fee20be5be883c590d0f73aa279d3081ccd',
-    '7b76e25484a2fa3b86e95d0e24423581339eb418237426ed61f2a3e25e3bf605',
-    '8c0d3e40f250a25b4480a66da165cad3d0269ee91b11e3513c92d4573f692e35',
-    '9c196b9e9afa7a47ab105f9c4565d5f9e7da62dbc7f6007b024e74fb16863c7e',
-    '9ee43dd2cb3c93b713a41e751455ff80f1abe4854abe548bed5975ba41b1d0e4',
-    'c1110cc91be7c17f26d640e78047f86109f9c7f86b433179a64e8084dc18355d',
-    'ca9c1058b90d2b13c80b8387b4037d26e4d6e7cb286f91f9df80acf5f05b889f',
-    'cd19e1a35b3d5d37c78d0b1ad33a62099a08ea255d63592eee9ca34937a9bd11',
-    'd02803fc1968943f9e7ae6f9e8b19a45198b37640ea65a6fea281d3c4397cdde',
-    'dddb5f902b7cd4c671ecd15c5ae87d940653ace7f2392a7bdf2ed05799120c40',
-    'ed8e8158fee6c131a1d9eb5fe804501e04d0ed2b5e5716fc69d33d46e2a6450b',
-    'ef4a73ef68f0125d085d931d1fd3c68b7d77a5d990995933eb19687dcdc74dd1',
-    'f080d6d463aa4281a4d293cae58017f916c77273c4b779ba707a04ad7c40a54c',
-    'f16d38256a089e81a5016dd42a2c088a79baef031d5122ff5799d28089063437',
+    '11afcc9eed5e49982c77dc56521341407d5b77e4d94961564901d736c375303f',
+    '14288d566f53442dfa9a324ddaa17bc2c2e0cd451ea6565836a10faa9d423886',
+    '14f17a8f3f16908db0e73b61e7df8308089f8adb55929c7866c100de2ff72675',
+    '15e56fb040f21f813fbe60a68968385e7260000980462410b0abad4670c6c52b',
+    '1afb4d29b9086749a65ad0c1db8e460e1c9f245d97534d3d81ba711f0f67c7cf',
+    '2ffb1aebbe9582d83569b864dcf52f2a756dada69d79af41e26facc71925a58d',
+    '31a62f8d4b9771fbe0ac977aa9ee27d15c9929a6015a3ebdbf56e1d7bf428487',
+    '3571c56a6adfe3c6afce8b3fcac7bc37b5db8edcc61a2977479dda656bb75d6c',
+    '4271467e82f1bc3fe9c45bd813dd5c991798c8a679a1280bc4cef1840367c695',
+    '4a06846aef7fac3d039937791ee4eb347909f2a173e694ed5fa561eae84459a2',
+    '4cd73d31398cace6102e1d25501234b0704483ddceebbf59c5a15fdf0a60c5b0',
+    '59c78e48310b1942c2fb7d5d69e7ada52c49632ee34bf1b694639dfd09ba4d04',
+    '607ec8599e3a51bf62441445d756079fd392c679cafe7682141531079e6511aa',
+    '6c956122d7982ae85197c1e4c08eb415ce3928e863cfdd731e3decf98c73bc10',
+    '7bd6a4a8a064745f48b0611f6eb2971f1dd126204508ee3e053041a16d47e504',
+    '81e13635e5d94c3d409410259949e83d664d305263c0f5a77bef6d71d488a358',
+    '81f81e589207516921d7d2afc237b8e0bca7d6e6cd65c2855047bcff58b45919',
+    '8ff626bf95485fad8d3432db1b901943d8fed51e213899a9fcdee36a149b1b40',
+    '9fcd65f706a1ff79cc717f3779930895aed54abe6bdf02115695869e5e1f1e31',
+    'b849f75ba7cfef8ca9677140078b2aec5fc89f1c4ad4a99e82ea380ec080fd9a',
+    'd26be58bad147d4739e688538cac14b1bfd65e0553aa0637cc315a6ecc779432',
+    'e1060299a14bb48e1ebb0e0b13df860abee334015f428a0687af609578d530d4',
+    'e3f511198204f81a54e6bc721a9b8e6764b0f1c83ac021fa5c982ab54d6adb3f',
+    'ed5e899aedbf89f72e3b36a5fc537b58e0a2344409e6178b8421dd6fff939d25',
+    'f553397edf4b3975e6398d6d682e5ece2403e6b344362a39911d054678ef50d3',
+    'fba3f945f86ddf7683bffe774bebb830c735414f848623d91b3342eb246e6a26',
+    'ffb19addaec6e44c77018db1ecb1dfba60b2baf29167c17aad7d81fe09feb7dd',
   ]),
 )
 
@@ -232,11 +246,18 @@ function stablePatternMatch(pattern, text, stableLength) {
 function contentCategory(text, displayPath, stableLength = text.length) {
   // 固定摘要的 Ollama 官方制品带有公开 CI 源码路径；仅在其专属资源目录内忽略该精确前缀，
   // 其它用户目录、其它位置及任何相似前缀仍按普通敏感路径拒绝。
-  const homeInspectionText = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
+  const isOllamaResource = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
     displayPath?.startsWith(prefix),
   )
-    ? text.replaceAll(OLLAMA_PUBLIC_BUILD_PROVENANCE, OLLAMA_PUBLIC_BUILD_PROVENANCE_MASK)
-    : text
+  const isPandocResource = PANDOC_RESOURCE_PREFIXES.some((prefix) =>
+    displayPath?.startsWith(prefix),
+  )
+  const homeInspectionText =
+    isOllamaResource || isPandocResource
+      ? text
+          .replaceAll(OLLAMA_PUBLIC_BUILD_PROVENANCE, OLLAMA_PUBLIC_BUILD_PROVENANCE_MASK)
+          .replaceAll(PANDOC_PUBLIC_BUILD_PROVENANCE, PANDOC_PUBLIC_BUILD_PROVENANCE_MASK)
+      : text
   const currentUserHome = currentDarwinUserHomePattern()
   if (currentUserHome && stablePatternMatch(currentUserHome, homeInspectionText, stableLength)) {
     return 'path:user-home'
@@ -538,13 +559,17 @@ async function scanFile(
     }
 
     const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES)
-    const isOllamaResource = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
+   const isOllamaResource = OLLAMA_RESOURCE_PREFIXES.some((prefix) =>
+     displayPath.startsWith(prefix),
+   )
+    const isPandocResource = PANDOC_RESOURCE_PREFIXES.some((prefix) =>
       displayPath.startsWith(prefix),
     )
-    const digest = isOllamaResource ? createHash('sha256') : undefined
+    const digest = isOllamaResource || isPandocResource ? createHash('sha256') : undefined
     const expectedBytes = Number(before.size)
     let carry = ''
-    let observedOllamaProvenance = false
+   let observedOllamaProvenance = false
+    let observedPandocProvenance = false
     let position = 0
     while (position < expectedBytes) {
       const length = Math.min(chunk.length, expectedBytes - position)
@@ -555,8 +580,11 @@ async function scanFile(
       const text = `${carry}${bytes.toString('latin1')}`
       const finalChunk = position + bytesRead === expectedBytes
       const stableLength = finalChunk ? text.length : Math.max(0, text.length - SCAN_OVERLAP_BYTES)
-      if (isOllamaResource && text.includes(OLLAMA_PUBLIC_BUILD_PROVENANCE)) {
-        observedOllamaProvenance = true
+     if (isOllamaResource && text.includes(OLLAMA_PUBLIC_BUILD_PROVENANCE)) {
+       observedOllamaProvenance = true
+     }
+      if (isPandocResource && text.includes(PANDOC_PUBLIC_BUILD_PROVENANCE)) {
+        observedPandocProvenance = true
       }
       const category = contentCategory(text, displayPath, stableLength)
       if (category) fail(category, displayPath)
@@ -565,10 +593,13 @@ async function scanFile(
       position += bytesRead
     }
     const sha256 = digest?.digest('hex')
-    if (observedOllamaProvenance && !allowedOllamaProvenance.has(sha256 ?? '')) {
+   if (observedOllamaProvenance && !allowedOllamaProvenance.has(sha256 ?? '')) {
+     fail('path:user-home', displayPath)
+   }
+    if (observedPandocProvenance && !PANDOC_PUBLIC_PROVENANCE_SHA256.has(sha256 ?? '')) {
       fail('path:user-home', displayPath)
     }
-    const after = await handle.stat({ bigint: true })
+   const after = await handle.stat({ bigint: true })
     if (!sameFileIdentity(before, after)) fail('file:identity-changed', displayPath)
   } catch (error) {
     if (error instanceof BoundaryError) throw error

@@ -2,9 +2,21 @@
 
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createFixtureRuntime,
@@ -65,6 +77,98 @@ function digest(value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function portableRelative(root, pathname) {
+  return relative(root, pathname).split(sep).join('/')
+}
+
+function collectRegularEvidenceFiles(root, current = root, files = []) {
+  for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  )) {
+    const pathname = resolve(current, entry.name)
+    if (entry.isSymbolicLink()) gateFail('cycle evidence must not contain symlinks')
+    if (entry.isDirectory()) {
+      collectRegularEvidenceFiles(root, pathname, files)
+      continue
+    }
+    if (!entry.isFile()) gateFail('cycle evidence must contain only regular files')
+    files.push({ pathname, relativePath: portableRelative(root, pathname) })
+  }
+  return files
+}
+
+function copyEvidenceFile(source, target) {
+  if (!existsSync(source) || lstatSync(source).isSymbolicLink() || !statSync(source).isFile()) {
+    gateFail('passed current-bug cycle report must be a regular non-symlink file')
+  }
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 })
+  copyFileSync(source, target)
+  chmodSync(target, 0o600)
+  const bytes = readFileSync(target)
+  return { sha256: digest(bytes), bytes: bytes.length }
+}
+
+export function archiveCurrentBugCycleEvidence({ cycle, cycleRunId, baseRunId, cwd }) {
+  if (cycle?.hook?.module !== 'scripts/ci/k12-current-bug-live-gate.mjs') return undefined
+
+  const sourceRoot = resolve(cwd, 'test-results/k12-current-bug-live')
+  const sourceReport = resolve(sourceRoot, 'report.json')
+  const sourceArtifacts = resolve(sourceRoot, 'artifacts')
+  const relativeArchiveRoot = [
+    'test-results',
+    'k12-real-10x-release',
+    'runs',
+    digest(baseRunId),
+    cycle.id,
+    'current-bug-live',
+  ].join('/')
+  const archiveRoot = resolve(cwd, relativeArchiveRoot)
+  const temporaryRoot = `${archiveRoot}.tmp-${process.pid}`
+  if (existsSync(archiveRoot)) gateFail(`${cycle.id} cycle evidence archive already exists`)
+  rmSync(temporaryRoot, { recursive: true, force: true })
+  mkdirSync(temporaryRoot, { recursive: true, mode: 0o700 })
+
+  try {
+    const report = copyEvidenceFile(sourceReport, resolve(temporaryRoot, 'report.json'))
+    const attachments = []
+    if (existsSync(sourceArtifacts)) {
+      if (lstatSync(sourceArtifacts).isSymbolicLink() || !statSync(sourceArtifacts).isDirectory()) {
+        gateFail('current-bug cycle artifacts must be a regular directory')
+      }
+      for (const file of collectRegularEvidenceFiles(sourceArtifacts)) {
+        attachments.push({
+          path: `artifacts/${file.relativePath}`,
+          ...copyEvidenceFile(
+            file.pathname,
+            resolve(temporaryRoot, 'artifacts', file.relativePath),
+          ),
+        })
+      }
+    }
+    const manifest = {
+      schema_version: 1,
+      cycle_id: cycle.id,
+      cycle_run_id_sha256: digest(cycleRunId),
+      source: 'k12-current-bug-live',
+      report: { path: 'report.json', ...report },
+      attachments,
+    }
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
+    writeFileSync(resolve(temporaryRoot, 'manifest.json'), manifestBytes, {
+      mode: 0o600,
+      flag: 'wx',
+    })
+    renameSync(temporaryRoot, archiveRoot)
+    return Object.freeze({
+      manifest_path: `${relativeArchiveRoot}/manifest.json`,
+      manifest_sha256: digest(manifestBytes),
+    })
+  } catch (error) {
+    rmSync(temporaryRoot, { recursive: true, force: true })
+    throw error
+  }
+}
+
 export function validatePreparedC10Handoff(value, { cycleRunId, parentRunId }) {
   exactKeys(
     value,
@@ -94,17 +198,15 @@ export function validatePreparedC10Handoff(value, { cycleRunId, parentRunId }) {
   return Object.freeze({ HEX_K12_C10_RESTART_AUTHORIZED: '1', ...value.environment })
 }
 
-export function executeCallerC10HandoffPrepare(
-  {
-    cycle,
-    cycleRunId,
-    parentRunId,
-    knowledgeLineage,
-    env = process.env,
-    spawn = spawnSync,
-    cwd = repoRoot,
-  },
-) {
+export function executeCallerC10HandoffPrepare({
+  cycle,
+  cycleRunId,
+  parentRunId,
+  knowledgeLineage,
+  env = process.env,
+  spawn = spawnSync,
+  cwd = repoRoot,
+}) {
   if (cycle?.id !== 'C10') gateFail('C10 prepare may run only for C10')
   if ((env.HEX_K12_C10_PREPARE_AUTHORIZED ?? '').trim() !== '1') {
     gateFail('C10 prepare requires HEX_K12_C10_PREPARE_AUTHORIZED=1')
@@ -371,6 +473,15 @@ export function executeReleasePlan(
       },
     )
     const exitCode = Number.isInteger(child.status) ? child.status : 1
+    const evidence =
+      exitCode === 0
+        ? archiveCurrentBugCycleEvidence({
+            cycle,
+            cycleRunId,
+            baseRunId,
+            cwd,
+          })
+        : undefined
     results.push({
       id: cycle.id,
       scope: cycle.scope,
@@ -378,6 +489,7 @@ export function executeReleasePlan(
       runIdSha256: digest(cycleRunId),
       exitCode,
       status: exitCode === 0 ? 'passed' : 'failed',
+      ...(evidence ? { evidence } : {}),
     })
     if (exitCode !== 0) return { status: 'failed', cycles: results }
   }
@@ -516,7 +628,7 @@ export async function runGate(
             ` - ${
               cycle
                 ? `${cycle}${scope ? ` ${scope}` : ''}${name ? ` · ${name}` : ''}`
-                : name ?? kind
+                : (name ?? kind)
             }: ${reason}`,
         )
         .join('\n')}\n`,

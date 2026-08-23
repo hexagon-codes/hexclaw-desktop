@@ -548,7 +548,7 @@ function validateGradingCalibrationArtifact(
       !exactObjectFields(measurement, GRADING_CALIBRATION_MEASUREMENT_FIELDS) ||
       measurement.max_problems !== maxProblems ||
       !Number.isSafeInteger(measurement.sample_count) ||
-      measurement.sample_count <= 0 ||
+      measurement.sample_count < 5 ||
       measurement.success_count !== measurement.sample_count ||
       !Number.isSafeInteger(measurement.p50_ms) ||
       measurement.p50_ms <= 0 ||

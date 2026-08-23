@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, lstat, mkdir, mkdtemp, open, rm } from 'node:fs/promises'
+import { chown, chmod, lstat, mkdir, mkdtemp, open, rm } from 'node:fs/promises'
 import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 
 const MAX_BINARY_HEADER_BYTES = 1024 * 1024
@@ -691,6 +691,13 @@ export async function withSecureFileSnapshot(sourcePath, options, operation) {
       throw new SecureSnapshotError('private generation snapshot containment failed')
     }
     await chmod(temporaryDirectory, 0o700)
+    // macOS /private/tmp 的 mkdtemp 可能把新目录归到 gid=0；先显式归属当前用户组，
+    // 再创建可信副本并继续复核 owner、mode、nlink、size 与摘要。
+    await chown(
+      temporaryDirectory,
+      Number(initialAncestry.currentIdentity.uid),
+      Number(initialAncestry.currentIdentity.gid),
+    )
     const temporaryBefore = await lstat(temporaryDirectory, { bigint: true })
     if (!isPrivateSnapshotRoot(temporaryBefore, initialAncestry.currentIdentity.uid)) {
       throw new SecureSnapshotError(`${kind} changed`)

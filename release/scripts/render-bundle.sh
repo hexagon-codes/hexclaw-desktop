@@ -1248,7 +1248,9 @@ EOF
   encoded+="$separator--remap-path-prefix=$rustup_home=/build/rustup"
   encoded+="$separator--remap-path-prefix=$private_cargo_home=/build/cargo"
   encoded+="$separator--remap-path-prefix=$private_target=/build/target"
-  encoded+="$separator-C$separator"'link-arg=-Wl,-no_uuid'
+  # 保留 Mach-O 的 LC_UUID；当前 macOS loader 会拒绝缺少该载荷的原生 Typst，
+  # 版本校验必须实际执行生成的二进制，不能用去 UUID 换取表面可复现性。
+  build_env=("${common_env[@]}" CARGO_ENCODED_RUSTFLAGS="$encoded")
   build_env=("${common_env[@]}" CARGO_ENCODED_RUSTFLAGS="$encoded")
 
   if ! "$ENV_BIN" -i "${build_env[@]}" "$cargo_bin" fetch \

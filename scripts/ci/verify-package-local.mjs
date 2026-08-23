@@ -27,6 +27,8 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const CLEANUP_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 const EXPECTED_UNSIGNED_MESSAGE = 'code object is not signed at all'
+const EXPECTED_ADHOC_NO_RESOURCES_MESSAGE =
+  'code has no resources but signature indicates they must be present'
 const APP_TREE_LIMITS = Object.freeze({
   maxEntries: 100_000,
   maxFileBytes: 4 * 1024 * 1024 * 1024,
@@ -80,6 +82,10 @@ function isExpectedUnsignedFailure(result, appBundle) {
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean)
+  if (lines[0] === `${appBundle}: ${EXPECTED_ADHOC_NO_RESOURCES_MESSAGE}`) {
+    // 当前 macOS 对未签名、无资源封装的 ad-hoc App 只输出这一条固定诊断。
+    return lines.length === 1
+  }
   if (lines[0] !== `${appBundle}: ${EXPECTED_UNSIGNED_MESSAGE}`) return false
   if (lines.length === 1) return true
   return lines.length === 2 && /^In architecture: (?:arm64|x86_64)$/u.test(lines[1])
