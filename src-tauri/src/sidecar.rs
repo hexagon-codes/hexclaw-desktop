@@ -255,13 +255,7 @@ fn spawn_sidecar_generation(
             ctx.sidecar_port
         );
     } else {
-        if let Err(err) = ensure_desktop_knowledge_enabled() {
-            log::warn!("准备桌面知识库配置失败: {}", err);
-        }
-
-        if let Err(err) = ensure_desktop_voice_enabled() {
-            log::warn!("准备桌面语音(TTS)配置失败: {}", err);
-        }
+        // 默认能力由 Sidecar DefaultConfig 在内存中补齐，启动不可回写 owner YAML。
     }
 
     let binary_name = if cfg!(target_os = "windows") {
@@ -608,82 +602,13 @@ fn executable_basename(executable: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn ensure_desktop_knowledge_enabled() -> Result<(), String> {
-    let config_path = desktop_config_path()?;
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建配置目录失败 ({}): {}", parent.display(), e))?;
-    }
-
-    let existing = match std::fs::read_to_string(&config_path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => {
-            return Err(format!(
-                "读取配置文件失败 ({}): {}",
-                config_path.display(),
-                err
-            ))
-        }
-    };
-
-    let (next, changed) = ensure_knowledge_enabled_yaml(&existing);
-    if !changed {
-        return Ok(());
-    }
-
-    std::fs::write(&config_path, next)
-        .map_err(|e| format!("写入配置文件失败 ({}): {}", config_path.display(), e))?;
-    log::info!("桌面模式已确保知识库默认启用: {}", config_path.display());
-    Ok(())
-}
-
-/// 桌面模式默认启用语音合成（TTS），使用免费、无需 API Key 的 edge-tts。
-///
-/// 聊天气泡的「朗读」按钮（MessageActions）依赖后端 `/api/v1/voice/synthesize`，
-/// 而该路由仅在 `voice.enabled` 且配置了 TTS provider 时注册。`Voice.Enabled`
-/// 默认零值 false（DefaultConfig 不含 voice 段），桌面端又无语音设置 UI，导致朗读
-/// 按钮开箱即坏（404/503 → toast 失败）。这里仿照知识库的桌面默认，注入 edge-tts。
-/// edge-tts 免费、无 Key、仅在用户点击朗读时才请求微软 TTS（不自动外发数据）。
-fn ensure_desktop_voice_enabled() -> Result<(), String> {
-    let config_path = desktop_config_path()?;
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建配置目录失败 ({}): {}", parent.display(), e))?;
-    }
-
-    let existing = match std::fs::read_to_string(&config_path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => {
-            return Err(format!(
-                "读取配置文件失败 ({}): {}",
-                config_path.display(),
-                err
-            ))
-        }
-    };
-
-    let (next, changed) = ensure_voice_tts_enabled_yaml(&existing);
-    if !changed {
-        return Ok(());
-    }
-
-    std::fs::write(&config_path, next)
-        .map_err(|e| format!("写入配置文件失败 ({}): {}", config_path.display(), e))?;
-    log::info!(
-        "桌面模式已确保语音 TTS(edge-tts) 默认启用: {}",
-        config_path.display()
-    );
-    Ok(())
-}
-
 /// 注入默认 voice/TTS 配置块，确保免费 edge-tts 始终可用。
 ///
 /// - 空文件 / 无顶层 `voice:` → 写入完整 voice 块。
 /// - 已有 `voice:` 块但**缺有效 TTS provider** → 注入/补全 `tts.provider: edge-tts`
 ///   （修"半截 voice 块朗读仍坏"：enabled 但无 provider 时后端 HasTTS=false→503）。
 /// - 已有非空 provider 或用户显式 `enabled: false` → **尊重不动**，保证幂等。
+#[cfg(test)]
 fn ensure_voice_tts_enabled_yaml(content: &str) -> (String, bool) {
     const VOICE_BLOCK: &str = "voice:\n  enabled: true\n  tts:\n    provider: edge-tts\n";
 
@@ -756,6 +681,7 @@ fn line_indent(line: &str) -> usize {
 }
 
 /// voice 顶层块的结束行（exclusive）：start 之后第一处顶层 key，或文件尾。
+#[cfg(test)]
 fn voice_block_end(lines: &[String], start: usize) -> usize {
     for (i, l) in lines.iter().enumerate().skip(start + 1) {
         let t = l.trim();
@@ -773,6 +699,7 @@ fn voice_block_end(lines: &[String], start: usize) -> usize {
 /// 子段范围限定在该子段头之后、到缩进 ≤ 子段头缩进的下一行为止——因此 stt 子段的
 /// provider 绝不会被误当成 tts 的（修旧实现 `position(starts_with("provider:"))` 命中首个
 /// provider=stt 的 bug）。
+#[cfg(test)]
 fn voice_subsection_provider(
     lines: &[String],
     start: usize,
@@ -800,6 +727,7 @@ fn voice_subsection_provider(
 }
 
 /// provider 值是否"空"——去掉首尾引号与空白后为空（hexclaw 默认序列化为 `""`）。
+#[cfg(test)]
 fn provider_value_is_empty(val: &str) -> bool {
     val.trim()
         .trim_matches('"')
@@ -826,6 +754,7 @@ pub(crate) fn desktop_config_path() -> Result<std::path::PathBuf, String> {
         .join("hexclaw.yaml"))
 }
 
+#[cfg(test)]
 fn ensure_knowledge_enabled_yaml(content: &str) -> (String, bool) {
     if content.trim().is_empty() {
         return ("knowledge:\n  enabled: true\n".to_string(), true);
@@ -872,6 +801,7 @@ fn ensure_knowledge_enabled_yaml(content: &str) -> (String, bool) {
     (join_yaml_lines(&lines), true)
 }
 
+#[cfg(test)]
 fn is_top_level_key(line: &str, key: &str) -> bool {
     if line.starts_with(' ') || line.starts_with('\t') {
         return false;
@@ -913,6 +843,7 @@ fn rewrite_enabled_line(line: &str) -> Option<String> {
     Some(next)
 }
 
+#[cfg(test)]
 fn join_yaml_lines(lines: &[String]) -> String {
     let mut joined = lines.join("\n");
     if !joined.ends_with('\n') {

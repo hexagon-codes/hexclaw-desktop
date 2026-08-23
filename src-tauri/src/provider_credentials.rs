@@ -66,6 +66,16 @@ impl Drop for ProviderCredentialReplacement {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCredentialApplyReceipt {
     provider_instance_ids: BTreeMap<String, String>,
+    config_revision: Option<u64>,
+    config_digest: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct LLMConfigMutationReceipt {
+    #[serde(default)]
+    config_revision: Option<u64>,
+    #[serde(default)]
+    config_digest: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -409,11 +419,52 @@ fn mutation_credential_ref(provider: &Map<String, Value>) -> Result<Option<&str>
     }
 }
 
+fn optional_config_revision(value: &Value, field: &str) -> Result<Option<u64>, String> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("{field} must be an unsigned integer")),
+        Some(_) => Err(format!("{field} must be an unsigned integer")),
+    }
+}
+
+fn optional_config_digest<'a>(value: &'a Value, field: &str) -> Result<Option<&'a str>, String> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(digest)) if !digest.trim().is_empty() => Ok(Some(digest)),
+        Some(Value::String(_)) => Err(format!("{field} must be non-empty")),
+        Some(_) => Err(format!("{field} must be a string")),
+    }
+}
+
+// 在凭据 hydrate 前先拒绝已经过期的桌面快照；最终 PUT 仍由 Sidecar 负责原子校验。
+fn validate_config_conditions(config: &Value, current: &Value) -> Result<(), String> {
+    let expected_revision = optional_config_revision(config, "expected_config_revision")?;
+    let expected_digest = optional_config_digest(config, "expected_config_digest")?;
+    match (expected_revision, expected_digest) {
+        (None, None) => Ok(()),
+        (Some(expected_revision), Some(expected_digest)) => {
+            let current_revision = optional_config_revision(current, "config_revision")?
+                .ok_or_else(|| "LLM configuration condition cannot be verified".to_string())?;
+            let current_digest = optional_config_digest(current, "config_digest")?
+                .ok_or_else(|| "LLM configuration condition cannot be verified".to_string())?;
+            if expected_revision == current_revision && expected_digest == current_digest {
+                Ok(())
+            } else {
+                Err("LLM configuration is stale".to_string())
+            }
+        }
+        _ => Err("LLM configuration conditions are incomplete".to_string()),
+    }
+}
+
 async fn put_config(
     client: &SidecarClient,
     config: &Value,
     request_id: &str,
-) -> Result<(), String> {
+) -> Result<LLMConfigMutationReceipt, String> {
     let response = client
         .request(Method::PUT, CONFIG_PATH)?
         .json(config)
@@ -425,7 +476,8 @@ async fn put_config(
     let status = response.status();
     let body = read_bounded(response, MAX_ERROR_BYTES).await?;
     if status.is_success() {
-        return Ok(());
+        // 旧 Sidecar 的成功响应可不含版本回执，保持兼容；当前 Sidecar 则返回二者。
+        return Ok(serde_json::from_slice(&body).unwrap_or_default());
     }
     Err(format!(
         "update LLM config failed with HTTP {}{}",
@@ -438,7 +490,10 @@ async fn put_config(
     ))
 }
 
-fn identity_receipt(config: &Value) -> Result<ProviderCredentialApplyReceipt, String> {
+fn identity_receipt(
+    config: &Value,
+    mutation: LLMConfigMutationReceipt,
+) -> Result<ProviderCredentialApplyReceipt, String> {
     let mut provider_instance_ids = BTreeMap::new();
     for (provider_key, provider) in providers_object(config)? {
         let provider = provider
@@ -451,6 +506,8 @@ fn identity_receipt(config: &Value) -> Result<ProviderCredentialApplyReceipt, St
     }
     Ok(ProviderCredentialApplyReceipt {
         provider_instance_ids,
+        config_revision: mutation.config_revision,
+        config_digest: mutation.config_digest,
     })
 }
 
@@ -462,7 +519,9 @@ pub async fn read_provider_api_key(provider_id: String) -> Result<Option<String>
     read_provider_api_key_from_owner_yaml(&provider_id).await
 }
 
-async fn read_provider_api_key_from_owner_yaml(provider_id: &str) -> Result<Option<String>, String> {
+async fn read_provider_api_key_from_owner_yaml(
+    provider_id: &str,
+) -> Result<Option<String>, String> {
     let path = desktop_config_path()?;
     let yaml = tokio::fs::read_to_string(&path)
         .await
@@ -472,14 +531,12 @@ async fn read_provider_api_key_from_owner_yaml(provider_id: &str) -> Result<Opti
     Ok(owner_config
         .llm
         .map(|llm| {
-            llm.providers
-                .into_iter()
-                .find_map(|(owner_name, entry)| {
-                    let api_key = entry.api_key.filter(|value| !value.trim().is_empty())?;
-                    let matches = entry.provider_instance_id.as_deref() == Some(provider_id)
-                        || owner_name == provider_id;
-                    matches.then_some(api_key)
-                })
+            llm.providers.into_iter().find_map(|(owner_name, entry)| {
+                let api_key = entry.api_key.filter(|value| !value.trim().is_empty())?;
+                let matches = entry.provider_instance_id.as_deref() == Some(provider_id)
+                    || owner_name == provider_id;
+                matches.then_some(api_key)
+            })
         })
         .unwrap_or_default())
 }
@@ -508,6 +565,7 @@ pub async fn apply_llm_config_with_credentials(
     let _guard = state.operation_lock.lock().await;
     let client = SidecarClient::new(Duration::from_secs(300))?;
     let current = get_config(&client).await?;
+    validate_config_conditions(&config, &current)?;
     let current_refs = provider_credential_refs(&current)?;
     let prepared = prepare_config(&client, &mut config, replacements).await?;
     let replacement_refs = prepared
@@ -524,10 +582,13 @@ pub async fn apply_llm_config_with_credentials(
     post_hydrate(&client, hydrate_entries).await?;
 
     let request_id = format!("llm-config:{}", Uuid::new_v4());
-    if let Err(error) = put_config(&client, &config, &request_id).await {
-        let _ = post_dehydrate(&client, &replacement_refs).await;
-        return Err(error);
-    }
+    let mutation = match put_config(&client, &config, &request_id).await {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let _ = post_dehydrate(&client, &replacement_refs).await;
+            return Err(error);
+        }
+    };
 
     let next_refs = provider_credential_refs(&config)?;
     let stale_refs = current_refs
@@ -535,7 +596,7 @@ pub async fn apply_llm_config_with_credentials(
         .cloned()
         .collect::<Vec<_>>();
     post_dehydrate(&client, &stale_refs).await?;
-    identity_receipt(&config)
+    identity_receipt(&config, mutation)
 }
 
 #[cfg(test)]
@@ -573,6 +634,34 @@ mod tests {
             "api_key_mutation": {"mode": "replace", "credential_ref": 7}
         });
         assert!(mutation_credential_ref(provider.as_object().expect("provider")).is_err());
+    }
+
+    #[test]
+    fn stale_conditions_are_rejected_before_credential_hydration() {
+        let current = serde_json::json!({
+            "config_revision": 8,
+            "config_digest": "sha256:current"
+        });
+        let matching = serde_json::json!({
+            "expected_config_revision": 8,
+            "expected_config_digest": "sha256:current"
+        });
+        assert!(validate_config_conditions(&matching, &current).is_ok());
+
+        let stale = serde_json::json!({
+            "expected_config_revision": 7,
+            "expected_config_digest": "sha256:previous"
+        });
+        assert_eq!(
+            validate_config_conditions(&stale, &current).expect_err("stale condition"),
+            "LLM configuration is stale"
+        );
+
+        let partial = serde_json::json!({"expected_config_revision": 8});
+        assert_eq!(
+            validate_config_conditions(&partial, &current).expect_err("partial condition"),
+            "LLM configuration conditions are incomplete"
+        );
     }
 
     #[tokio::test]

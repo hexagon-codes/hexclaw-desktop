@@ -11,7 +11,6 @@ use tauri::Manager;
 
 pub mod autostart;
 pub mod commands;
-pub mod credential_vault;
 pub mod menu;
 pub mod native_file;
 pub mod native_print;
@@ -191,9 +190,6 @@ pub fn run() {
             native_file::download_file_grant,
             native_file::copy_file_grant,
             native_file::render_artifact_to_grant,
-            credential_vault::put_credential,
-            credential_vault::delete_credential,
-            credential_vault::credential_present,
             provider_credentials::get_llm_config_with_credentials,
             provider_credentials::apply_llm_config_with_credentials,
             provider_credentials::read_provider_api_key,
