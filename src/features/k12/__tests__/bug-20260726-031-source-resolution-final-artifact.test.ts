@@ -585,7 +585,11 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
 
     expect(final.findAll('[data-testid="recognize-guard"]')).toHaveLength(1)
     const finalShell = final.get('[data-testid="recognize-guard"]').element
-    for (const action of ['打印', '导出 PDF', '发送到手机']) {
+    const tutoringTips = final.get('[data-testid="tutoring-tips"]')
+    expect(
+      tutoringTips.get<HTMLButtonElement>('[data-testid="tutoring-tips-send"]').element.disabled,
+    ).toBe(false)
+    for (const action of ['打印', '导出 PDF']) {
       const button = buttonByName(finalShell, action)
       expect(
         button,
@@ -594,5 +598,13 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
       expect(button!.disabled).toBe(false)
       expect(button!.closest('[data-testid="recognize-guard"]')).toBe(finalShell)
     }
+    const sendButtons = Array.from(finalShell.querySelectorAll('button')).filter(
+      (button) => button.textContent?.trim() === '发送到手机',
+    )
+    expect(sendButtons).toHaveLength(1)
+    expect(sendButtons[0]).toBe(
+      tutoringTips.get<HTMLButtonElement>('[data-testid="tutoring-tips-send"]').element,
+    )
+    expect(final.get('[data-testid="final-artifact-actions"]').text()).not.toContain('发送到手机')
   })
 })

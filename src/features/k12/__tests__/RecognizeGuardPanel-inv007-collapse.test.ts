@@ -38,7 +38,7 @@ vi.mock('@/api/k12', () => ({
   k12AddGrounding: vi.fn(),
   k12QueryDeliveryReceipt: vi.fn(),
   k12RetryDeliveryReceipt: vi.fn(),
-  k12SendTutoringTips: vi.fn(),
+  k12SendGradingFinalArtifact: vi.fn(),
   k12InsightReport: vi.fn(),
   k12ListAccumulation: vi.fn(),
   k12ColdStart: vi.fn(),
@@ -201,10 +201,7 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
   })
 
   it('整卷自动批改结果中正确题默认折叠，错题与家长讲法默认展开', async () => {
-    const completed = dispatch('completed_homework', 'completed', [
-      correctQuestion,
-      wrongQuestion,
-    ])
+    const completed = dispatch('completed_homework', 'completed', [correctQuestion, wrongQuestion])
     h.create.mockResolvedValue({ created: true, ...completed })
     h.get.mockResolvedValue(completed)
     h.getResult.mockResolvedValue({

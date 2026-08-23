@@ -104,7 +104,6 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12SendAccumulation',
   'k12SendCreativeWork',
   'k12SendGradingFinalArtifact',
-  'k12SendTutoringTips',
   'k12SendWeeklyPracticeSnapshot',
   'k12Solve',
   'k12StartMistakePracticeGeneration',
@@ -172,16 +171,11 @@ describe('K12 Desktop runtime export contract', () => {
     const generationMethodSource = apiSource.match(
       /export type WeeklyPracticeGenerationMethod =([\s\S]*?)\n\nexport interface WeeklyPracticeItemVerificationDTO/,
     )?.[1]
-    const generationMethods = generationMethodSource?.match(/'[^']+'/g)?.map((value) =>
-      value.slice(1, -1),
-    )
+    const generationMethods = generationMethodSource
+      ?.match(/'[^']+'/g)
+      ?.map((value) => value.slice(1, -1))
 
-    expect(generationMethods).toEqual([
-      'original',
-      'ai_variant',
-      'ai_generated',
-      'rule_generated',
-    ])
+    expect(generationMethods).toEqual(['original', 'ai_variant', 'ai_generated', 'rule_generated'])
     expect(apiSource).toMatch(
       /export interface WeeklyPracticeItemDTO \{[\s\S]*?source_ref:\s*string[\s\S]*?\n\}/,
     )

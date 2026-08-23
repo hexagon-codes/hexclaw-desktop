@@ -15,7 +15,7 @@ import {
   k12QueryDeliveryBatch,
   k12RetryDeliveryBatch,
   k12SendAccumulation,
-  k12SendTutoringTips,
+  k12SendGradingFinalArtifact,
 } from '../k12'
 
 describe('K12 全绑定 DeliveryBatch API', () => {
@@ -25,13 +25,14 @@ describe('K12 全绑定 DeliveryBatch API', () => {
   })
 
   it('三个批准入口都只提交业务对象，不传平台、接收人或发送目标', async () => {
-    await k12SendTutoringTips('ming', '【辅导要点】\n正文')
+    await k12SendGradingFinalArtifact('ming', 'grading-final-1', 'sha256:grading-final-1')
     await k12SendAccumulation('ming', 'accum-1')
     await k12FinalizePracticeSet('ming', 'set-1', 'send')
 
     expect(h.apiPost).toHaveBeenNthCalledWith(1, '/api/k12/tutoring-tips/send', {
       agent: 'ming',
-      content: '【辅导要点】\n正文',
+      final_artifact_id: 'grading-final-1',
+      final_artifact_digest: 'sha256:grading-final-1',
     })
     expect(h.apiPost).toHaveBeenNthCalledWith(2, '/api/k12/accumulation/accum-1/send', {
       agent: 'ming',

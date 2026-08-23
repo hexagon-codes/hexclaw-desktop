@@ -13,11 +13,7 @@ interface DeliveryBatchControllerOptions {
   pollDelayMs?: number
 }
 
-const IN_FLIGHT = new Set<DeliveryBatchDTO['status']>([
-  'pending',
-  'sending',
-  'outcome_unknown',
-])
+const IN_FLIGHT = new Set<DeliveryBatchDTO['status']>(['pending', 'sending', 'outcome_unknown'])
 const RETRYABLE = new Set<DeliveryBatchDTO['status']>(['failed', 'partial_failed'])
 
 /**
@@ -31,6 +27,7 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   const busy = ref(false)
   const createFailed = ref(false)
   let pollTimer: ReturnType<typeof setTimeout> | null = null
+  let generation = 0
 
   function clearPoll() {
     if (pollTimer !== null) clearTimeout(pollTimer)
@@ -38,6 +35,7 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   }
 
   function reset() {
+    generation += 1
     clearPoll()
     batch.value = null
     busy.value = false
@@ -45,28 +43,33 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   }
 
   async function reconcile() {
+    const operationGeneration = generation
     const current = batch.value
     const agent = options.agent().trim()
     if (!current || !agent || !IN_FLIGHT.has(current.status) || busy.value) return
     busy.value = true
     try {
       // pending/sending/outcome_unknown 都只查询原批次；这里绝不调用 retry。
-      adopt(await k12QueryDeliveryBatch(agent, current.batch_id))
+      adopt(await k12QueryDeliveryBatch(agent, current.batch_id), operationGeneration)
     } catch {
       // 查询失败不能证明外发失败，更不能重发；保持「发送中…」并继续安全查询。
-      scheduleReconcile()
+      scheduleReconcile(operationGeneration)
     } finally {
-      busy.value = false
+      if (operationGeneration === generation) busy.value = false
     }
   }
 
-  function scheduleReconcile() {
+  function scheduleReconcile(operationGeneration = generation) {
+    if (operationGeneration !== generation) return
     clearPoll()
     if (!batch.value || !IN_FLIGHT.has(batch.value.status)) return
-    pollTimer = setTimeout(() => void reconcile(), options.pollDelayMs ?? 1_500)
+    pollTimer = setTimeout(() => {
+      if (operationGeneration === generation) void reconcile()
+    }, options.pollDelayMs ?? 1_500)
   }
 
-  function adopt(next: DeliveryBatchDTO | null | undefined) {
+  function adopt(next: DeliveryBatchDTO | null | undefined, operationGeneration = generation) {
+    if (operationGeneration !== generation) return
     clearPoll()
     if (!next) return
     batch.value = next
@@ -81,25 +84,27 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
       createFailed.value = true
       return
     }
+    const operationGeneration = generation
     busy.value = true
     createFailed.value = false
     try {
       const current = batch.value
       if (current && RETRYABLE.has(current.status)) {
         // 服务端只重发 failed child；delivered/unknown child 均不进入重发集合。
-        adopt(await k12RetryDeliveryBatch(agent, current.batch_id))
+        adopt(await k12RetryDeliveryBatch(agent, current.batch_id), operationGeneration)
       } else if (current && IN_FLIGHT.has(current.status)) {
-        adopt(await k12QueryDeliveryBatch(agent, current.batch_id))
+        adopt(await k12QueryDeliveryBatch(agent, current.batch_id), operationGeneration)
       } else {
         // 初次发送或创建响应丢失后的重放。稳定业务 dedupe 由服务端返回原 batch。
-        adopt(await create())
+        adopt(await create(), operationGeneration)
       }
     } catch {
+      if (operationGeneration !== generation) return
       if (!batch.value) createFailed.value = true
       else if (RETRYABLE.has(batch.value.status)) createFailed.value = true
-      else scheduleReconcile()
+      else scheduleReconcile(operationGeneration)
     } finally {
-      busy.value = false
+      if (operationGeneration === generation) busy.value = false
     }
   }
 
@@ -107,14 +112,16 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
     const id = batchId?.trim()
     const agent = options.agent().trim()
     if (!id || !agent) return
+    const operationGeneration = generation
     busy.value = true
     try {
-      adopt(await k12GetDeliveryBatch(agent, id))
+      adopt(await k12GetDeliveryBatch(agent, id), operationGeneration)
     } catch {
+      if (operationGeneration !== generation) return
       // 恢复读取失败不创建新批次；原按钮保持可重试，下一次业务命令由服务端稳定去重。
       createFailed.value = true
     } finally {
-      busy.value = false
+      if (operationGeneration === generation) busy.value = false
     }
   }
 
@@ -134,7 +141,10 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   )
 
   watch(options.agent, reset)
-  onBeforeUnmount(clearPoll)
+  onBeforeUnmount(() => {
+    generation += 1
+    clearPoll()
+  })
 
   return { batch, label, disabled, send, restore, adopt, reset }
 }

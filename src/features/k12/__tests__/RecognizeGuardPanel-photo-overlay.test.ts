@@ -40,7 +40,7 @@ vi.mock('@/api/k12', () => ({
   k12AddGrounding: vi.fn(),
   k12QueryDeliveryReceipt: vi.fn(),
   k12RetryDeliveryReceipt: vi.fn(),
-  k12SendTutoringTips: vi.fn(),
+  k12SendGradingFinalArtifact: vi.fn(),
   k12InsightReport: vi.fn(),
   k12ListAccumulation: vi.fn(),
   k12ColdStart: vi.fn(),

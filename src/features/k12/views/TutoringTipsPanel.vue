@@ -8,12 +8,10 @@ import { useI18n } from 'vue-i18n'
 import { Printer } from 'lucide-vue-next'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useToast } from '@/composables/useToast'
-import {
-  k12SendTutoringTips,
-} from '@/api/k12'
+import { k12SendGradingFinalArtifact } from '@/api/k12'
 import { useK12Store } from '../store'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
-import { printTutoringTips, tutoringTipsToMarkdown, tutoringTipsToText } from '../export'
+import { printTutoringTips, tutoringTipsToMarkdown } from '../export'
 import type { PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 
@@ -24,6 +22,9 @@ const props = defineProps<{
   dispatchId: string
   /** 当前会话稳定 ID；与图片任务的持久绑定共同构成可信生成作用域。 */
   sessionId?: string
+  /** 同一图片任务已冻结的批改最终产物身份；页面正文不得作为发送载荷。 */
+  finalArtifactId?: string
+  finalArtifactDigest?: string
   /** Job 结果未知时冻结所有生成型动作；已生成内容与投递/打印仍保留。 */
   generationLocked?: boolean
   grade: string
@@ -60,6 +61,9 @@ const generationAllowed = computed(
     !!props.dispatchId?.trim() &&
     !!props.sessionId?.trim(),
 )
+const deliveryIdentityReady = computed(
+  () => !!props.finalArtifactId?.trim() && !!props.finalArtifactDigest?.trim(),
+)
 
 function requestTutoringTips(
   agentId = props.agentId,
@@ -80,12 +84,27 @@ function requestTutoringTips(
 watch(
   () => [props.agentId, props.dispatchId, props.sessionId, props.generationLocked] as const,
   ([agentId, dispatchId, sessionId, generationLocked], previous) => {
-    if (!previous || previous[0] !== agentId || previous[1] !== dispatchId || previous[2] !== sessionId) {
+    if (
+      !previous ||
+      previous[0] !== agentId ||
+      previous[1] !== dispatchId ||
+      previous[2] !== sessionId
+    ) {
       delivery.reset()
     }
     requestTutoringTips(agentId, dispatchId, sessionId, generationLocked)
   },
   { immediate: true },
+)
+
+// 最终产物身份只界定投递批次；冻结身份不得中止或重复触发真实模型生成。
+watch(
+  () => [props.finalArtifactId, props.finalArtifactDigest] as const,
+  ([finalArtifactId, finalArtifactDigest], previous) => {
+    if (previous && (previous[0] !== finalArtifactId || previous[1] !== finalArtifactDigest)) {
+      delivery.reset()
+    }
+  },
 )
 
 /** AI 归纳段落用告警色徽章（未校验），课本与学情来源用 accent。 */
@@ -130,22 +149,16 @@ function onPersistentPrintError(error: Error) {
 }
 
 async function doSendPhone() {
-  if (!store.tutoringTips) return
+  if (!store.tutoringTips || !deliveryIdentityReady.value) return
   await delivery.send(() =>
-    k12SendTutoringTips(
-      props.agentId,
-      tutoringTipsToText(store.tutoringTips!, tutoringTipsMeta()),
-    ),
+    k12SendGradingFinalArtifact(props.agentId, props.finalArtifactId!, props.finalArtifactDigest!),
   )
 }
 </script>
 
 <template>
   <section class="tutoring-tips" data-testid="tutoring-tips" aria-label="这份作业的辅导要点">
-    <K12PersistentPrintController
-      ref="persistentPrintController"
-      @error="onPersistentPrintError"
-    />
+    <K12PersistentPrintController ref="persistentPrintController" @error="onPersistentPrintError" />
     <div class="tutoring-tips__head">
       <b>📋 {{ t('k12.tutoringTips.title') }}</b>
       <span
@@ -159,7 +172,7 @@ async function doSendPhone() {
           class="icbtn tutoring-tips__send"
           :title="t('k12.tutoringTips.sendPhone')"
           data-testid="tutoring-tips-send"
-          :disabled="delivery.disabled.value || !store.tutoringTips"
+          :disabled="delivery.disabled.value || !store.tutoringTips || !deliveryIdentityReady"
           @click="doSendPhone"
         >
           {{ delivery.label.value }}
@@ -176,7 +189,9 @@ async function doSendPhone() {
     </div>
 
     <div class="tutoring-tips__body">
-      <p v-if="store.tutoringTipsLoading" class="tutoring-tips__hint">{{ t('k12.tutoringTips.generating') }}</p>
+      <p v-if="store.tutoringTipsLoading" class="tutoring-tips__hint">
+        {{ t('k12.tutoringTips.generating') }}
+      </p>
       <div v-else-if="store.tutoringTipsError" class="tutoring-tips__error" role="alert">
         <p class="tutoring-tips__hint tutoring-tips__hint--err">{{ store.tutoringTipsError }}</p>
         <button

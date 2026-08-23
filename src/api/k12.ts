@@ -3298,11 +3298,6 @@ export interface DeliveryBatchDTO {
   updated_at: number
 }
 
-/** 将当前会话内已生成的辅导要点发送给该智能体绑定的全部有效私聊。 */
-export function k12SendTutoringTips(agent: string, content: string) {
-  return apiPost<DeliveryBatchDTO>(`${BASE}/tutoring-tips/send`, { agent, content })
-}
-
 /** 仅按冻结的批改最终产物身份发送；客户端不能注入或重新渲染正文。 */
 export function k12SendGradingFinalArtifact(
   agent: string,

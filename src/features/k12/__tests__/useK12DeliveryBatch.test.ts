@@ -49,6 +49,14 @@ const batch = (status: string) => ({
   updated_at: 1,
 })
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function wrapper() {
   return mount(
     defineComponent({
@@ -131,6 +139,26 @@ describe('K12 DeliveryBatch 单按钮状态机', () => {
 
     expect(h.get).toHaveBeenCalledWith('ming', 'batch-1')
     expect(h.start).not.toHaveBeenCalled()
+    expect(w.text()).toContain('发送成功')
+  })
+
+  it('重置身份后忽略旧代次的在途结果，不覆盖新身份批次', async () => {
+    const oldRequest = deferred<ReturnType<typeof batch>>()
+    h.start
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockResolvedValueOnce({ ...batch('delivered'), batch_id: 'batch-new' })
+    const w = wrapper()
+
+    await w.get('[data-testid="send"]').trigger('click')
+    w.vm.delivery.reset()
+    await flushPromises()
+    await w.get('[data-testid="send"]').trigger('click')
+    await flushPromises()
+    expect(w.vm.delivery.batch.value?.batch_id).toBe('batch-new')
+
+    oldRequest.resolve({ ...batch('delivered'), batch_id: 'batch-old' })
+    await flushPromises()
+    expect(w.vm.delivery.batch.value?.batch_id).toBe('batch-new')
     expect(w.text()).toContain('发送成功')
   })
 })

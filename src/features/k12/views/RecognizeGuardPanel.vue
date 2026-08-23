@@ -2538,6 +2538,7 @@ async function coldStart() {
         :artifact-id="finalArtifactID"
         :artifact-digest="finalArtifactDigest"
         :artifact-title="finalArtifactTitle"
+        :actions="['print', 'export_pdf']"
         @intent="emit('finalArtifactAction', $event)"
       />
     </section>
@@ -2941,7 +2942,7 @@ async function coldStart() {
     <TutoringTipsPanel
       v-if="
         !hasBlankWorksheetGuide &&
-        !taskCoverage &&
+        (!taskCoverage || taskCoverage.state === 'full') &&
         confirmed &&
         selectedSubject &&
         rows.length &&
@@ -2950,6 +2951,8 @@ async function coldStart() {
       :agent-id="agentId"
       :dispatch-id="currentDispatchId"
       :session-id="sessionId"
+      :final-artifact-id="finalArtifactID"
+      :final-artifact-digest="finalArtifactDigest"
       :generation-locked="outcomeUnknown"
       :grade="props.grade || ''"
       :subject="selectedSubject"
