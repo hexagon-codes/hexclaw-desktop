@@ -78,6 +78,9 @@ test('ordinary development keeps the local env mechanism', async () => {
     development.plugins.some((plugin) => plugin.name === 'hexclaw-pdf-worker-package-asset'),
     false,
   )
+  const sidecarProxy = development.server.proxy?.['/_hexclaw']
+  assert.equal(sidecarProxy?.ws, true)
+  assert.equal(sidecarProxy?.rewriteWsOrigin, true)
 })
 
 test('an actual package-local build excludes host VITE and TAURI canaries', async (t) => {

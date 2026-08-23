@@ -33,6 +33,8 @@ export default defineConfig(({ mode }) => {
               target: sidecarProxyTarget,
               changeOrigin: true,
               ws: true,
+              // 浏览器握手来自开发端口；转发时保持 Sidecar 的严格同源校验。
+              rewriteWsOrigin: true,
               rewrite: (path: string) => path.replace(/^\/_hexclaw/, ''),
             },
           },

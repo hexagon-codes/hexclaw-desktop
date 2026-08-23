@@ -229,7 +229,7 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
     await confirmAll.click()
     await expect(guard.getByTestId('recognize-batch-actions')).toBeVisible()
   } else {
-    await expect(guard).toContainText(/共\s*\d+\s*个可作答小题|正在批改作业/)
+    await expect(guard.getByTestId('recognize-confirm-branch')).toContainText('清晰题已自动通过')
   }
 
   const backup = await page.request.get(

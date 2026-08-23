@@ -61,6 +61,10 @@ test('agent-delete lane requires an observed durable sent receipt before the pro
   assert.equal(creativeRealCases['agent-delete'].activeDelete, true)
   assert.match(source, /waitForSentWorkFeedbackInvocation/)
   assert.match(source, /invocation_status:\s*'sent'/)
+  assert.match(source, /route_snapshot_json/)
+  assert.match(source, /route_provider:\s*routeSnapshot\.provider/)
+  assert.match(source, /route_model:\s*routeSnapshot\.model/)
+  assert.match(source, /capability_receipt_digest:\s*routeSnapshot\.capability_receipt_digest/)
   assert.match(source, /delete_http_status:\s*200/)
   assert.match(source, /active-delete-receipt\.json/)
 })
@@ -184,6 +188,12 @@ export function validateActiveDeleteReceipt(value) {
       'invocation_status',
       'invocation_id_sha256',
       'provider_request_key_sha256',
+      'route_provider',
+      'route_model',
+      'provider_instance_id_sha256',
+      'config_fingerprint',
+      'capability_receipt_digest',
+      'probe_policy_version',
       'attempt',
       'provider_call_rows',
       'target_rows',
@@ -193,6 +203,12 @@ export function validateActiveDeleteReceipt(value) {
   assert.equal(value.before_delete.invocation_status, 'sent')
   assert.match(value.before_delete.invocation_id_sha256, /^[a-f0-9]{64}$/)
   assert.match(value.before_delete.provider_request_key_sha256, /^[a-f0-9]{64}$/)
+  assert.equal(value.before_delete.route_provider, 'hexclaw-gpt')
+  assert.equal(value.before_delete.route_model, 'gpt-5.6-sol')
+  assert.match(value.before_delete.provider_instance_id_sha256, /^[a-f0-9]{64}$/)
+  assert.match(value.before_delete.config_fingerprint, /^[a-f0-9]{64}$/)
+  assert.match(value.before_delete.capability_receipt_digest, /^[a-f0-9]{64}$/)
+  assert.equal(value.before_delete.probe_policy_version, 'v4')
   assert.equal(value.before_delete.attempt, 1)
   assert.equal(value.before_delete.provider_call_rows, 1)
   exactKeys(value.before_delete.target_rows, activeDeleteCountKeys, 'active-delete target_rows')
@@ -453,6 +469,7 @@ test(
           HEX_K12_ACCEPTANCE_LIVE: '1',
           HEX_K12_REAL_MODEL: '1',
           HEX_K12_CREATIVE_AI: '1',
+          HEX_K12_LIVE_FIXTURE_STORE: storePath,
           HEX_K12_CREATIVE_DELETE_OUTPUT_DIR: playwrightOutput,
           HEX_K12_IDENTITY_OUTPUT_DIR: playwrightOutput,
           HEX_E2E_SIDECAR_CONTROLLER: controllerPath,

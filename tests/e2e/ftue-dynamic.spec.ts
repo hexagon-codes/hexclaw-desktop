@@ -8,6 +8,8 @@ import { cleanupK12Child } from './live-fixture-cleanup'
 /** REG-FTUE-001/002 + E2E-FTUE-001/002 against a real Desktop/sidecar profile. */
 const LIVE = process.env.HEX_K12_ACCEPTANCE_LIVE === '1'
 const LIVE_MODEL = process.env.HEX_K12_REAL_MODEL === '1'
+const EXPECTED_PROVIDER = process.env.HEX_E2E_PROVIDER || 'hexclaw-gpt'
+const EXPECTED_MODEL = process.env.HEX_E2E_MODEL || 'gpt-5.6-sol'
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
 const FTUE_FIXTURE = {
   id: 'FX-MATH-D5-CLEAR-001',
@@ -19,6 +21,8 @@ const FTUE_FIXTURE = {
 interface AgentProjection {
   name?: string
   display_name?: string
+  provider?: string
+  model?: string
   metadata?: Record<string, string>
 }
 
@@ -51,6 +55,7 @@ async function createTutor(
   gradeLevel = '五年级',
   semester = '下学期',
   textbook = '北师大版',
+  route?: { provider: string; model: string },
 ): Promise<AgentProjection> {
   const existingAgentNames = new Set(
     (await listAgents(page)).map((agent) => agent.name).filter(Boolean),
@@ -64,6 +69,19 @@ async function createTutor(
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: semester }).click()
   await dialog.getByTestId('k12-textbook-math').locator('.hc-select__trigger').click()
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: textbook }).click()
+  if (route) {
+    await dialog.getByTestId('k12pf-model').locator('summary').click()
+    await dialog.getByTestId('k12pf-provider').locator('.hc-select__trigger').click()
+    await page
+      .locator('.hc-select__dropdown .hc-select__option-label')
+      .filter({ hasText: new RegExp(`^${route.provider}$`, 'i') })
+      .click()
+    await dialog.getByTestId('k12pf-model-select').locator('.hc-select__trigger').click()
+    await page
+      .locator('.hc-select__dropdown .hc-select__option-label')
+      .filter({ hasText: new RegExp(`^${route.model}$`) })
+      .click()
+  }
 
   const profileResponse = page.waitForResponse(
     (response) =>
@@ -85,6 +103,10 @@ async function createTutor(
     `${gradeLevel}${semester === '上学期' ? '上' : '下'}`,
   )
   expect(matches[0]?.metadata?.['k12.textbook_edition']).toBe(textbook)
+  if (route) {
+    expect(matches[0]?.provider).toBe(route.provider)
+    expect(matches[0]?.model).toBe(route.model)
+  }
   return matches[0]!
 }
 
@@ -149,7 +171,10 @@ test.describe('dynamic K12 first-use owner and thread', () => {
     )
     const childName = `首消息-${e2eMarker('child')}`
     cleanupNames.add(childName)
-    await createTutor(page, childName)
+    await createTutor(page, childName, '五年级', '下学期', '北师大版', {
+      provider: EXPECTED_PROVIDER,
+      model: EXPECTED_MODEL,
+    })
     await enterTutor(page, childName)
 
     const marker = e2eMarker('first-turn')

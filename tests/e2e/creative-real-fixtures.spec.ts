@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isAbsolute, resolve } from 'node:path'
 import { expect, test, type APIResponse, type Page, type TestInfo } from '@playwright/test'
 import { BASE_URL, e2eMarker } from './helpers'
 import { cleanupK12Child } from './live-fixture-cleanup'
@@ -11,12 +10,11 @@ import { cleanupK12Child } from './live-fixture-cleanup'
 const LIVE = process.env.HEX_K12_ACCEPTANCE_LIVE === '1'
 const LIVE_AI =
   LIVE && process.env.HEX_K12_REAL_MODEL === '1' && process.env.HEX_K12_CREATIVE_AI === '1'
+const EXPECTED_PROVIDER = process.env.HEX_E2E_PROVIDER?.trim() || 'hexclaw-gpt'
+const EXPECTED_MODEL = process.env.HEX_E2E_MODEL?.trim() || 'gpt-5.6-sol'
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
-// 主动删除夹具读取 sidecar 数据库，不能依赖可选的 Playwright outputDir。
-const LOCAL_SIDECAR_DATABASE = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../.hexclaw/data.db',
-)
+// 主动删除夹具只读取父级运行器创建的隔离 Sidecar store，禁止从测试路径猜测。
+const LOCAL_SIDECAR_DATABASE = process.env.HEX_K12_LIVE_FIXTURE_STORE?.trim() || ''
 const FIXTURES = {
   writing: {
     id: 'FX-WRITING-001',
@@ -101,7 +99,8 @@ async function waitForSentWorkFeedbackInvocation(
   expect(statSync(databasePath).isFile(), 'active-delete store must be a regular file').toBe(true)
   const database = new DatabaseSync(databasePath, { readOnly: true })
   database.exec('PRAGMA busy_timeout=2000')
-  const invocation = database.prepare(`SELECT invocation_id,status,attempt,provider_request_key
+  const invocation = database.prepare(`SELECT invocation_id,status,attempt,provider_request_key,
+      route_snapshot_json
     FROM k12_image_task_invocations
     WHERE agent_name=? AND operation='work_feedback'
     ORDER BY created_at DESC,invocation_id DESC LIMIT 1`)
@@ -117,6 +116,7 @@ async function waitForSentWorkFeedbackInvocation(
             status: string
             attempt: number
             provider_request_key: string
+            route_snapshot_json: string
           }
         | undefined
       if (row?.status === 'sent') {
@@ -125,6 +125,20 @@ async function waitForSentWorkFeedbackInvocation(
         expect(count, 'active-delete must observe exactly one physical Provider send').toBe(1)
         expect(row.attempt).toBe(1)
         expect(row.provider_request_key).not.toBe('')
+        const routeSnapshot = JSON.parse(row.route_snapshot_json) as {
+          provider?: string
+          model?: string
+          provider_instance_id?: string
+          config_fingerprint?: string
+          capability_receipt_digest?: string
+          probe_policy_version?: string
+        }
+        expect(routeSnapshot.provider).toBe(EXPECTED_PROVIDER)
+        expect(routeSnapshot.model).toBe(EXPECTED_MODEL)
+        expect(routeSnapshot.provider_instance_id).toBeTruthy()
+        expect(routeSnapshot.config_fingerprint).toMatch(/^[a-f0-9]{64}$/)
+        expect(routeSnapshot.capability_receipt_digest).toMatch(/^[a-f0-9]{64}$/)
+        expect(routeSnapshot.probe_policy_version).toBe('v4')
         expect(counts.agent_rows).toBe(1)
         expect(counts.creative_work_rows).toBe(1)
         expect(counts.feedback_generation_rows).toBe(1)
@@ -133,6 +147,12 @@ async function waitForSentWorkFeedbackInvocation(
           invocation_status: 'sent' as const,
           invocation_id_sha256: sha256(Buffer.from(row.invocation_id)),
           provider_request_key_sha256: sha256(Buffer.from(row.provider_request_key)),
+          route_provider: routeSnapshot.provider,
+          route_model: routeSnapshot.model,
+          provider_instance_id_sha256: sha256(Buffer.from(routeSnapshot.provider_instance_id!)),
+          config_fingerprint: routeSnapshot.config_fingerprint,
+          capability_receipt_digest: routeSnapshot.capability_receipt_digest,
+          probe_policy_version: routeSnapshot.probe_policy_version,
           attempt: row.attempt,
           provider_call_rows: count,
           target_rows: counts,
@@ -265,8 +285,11 @@ test('§1.2 creative manifest freezes writing and art source bytes', () => {
   for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
 })
 
-test('creative active-delete fixture resolves its sidecar database without Playwright outputDir', () => {
-  expect(LOCAL_SIDECAR_DATABASE).toBe(resolve(process.cwd(), '.hexclaw/data.db'))
+test('creative active-delete fixture requires its explicit isolated sidecar database', () => {
+  test.skip(!LIVE, 'NOT RUN: the isolated Sidecar store is parent-owned')
+  expect(LOCAL_SIDECAR_DATABASE).not.toBe('')
+  expect(isAbsolute(LOCAL_SIDECAR_DATABASE)).toBe(true)
+  expect(statSync(LOCAL_SIDECAR_DATABASE).isFile()).toBe(true)
 })
 
 test.describe('real creative source, OCR, owner and feedback', () => {
