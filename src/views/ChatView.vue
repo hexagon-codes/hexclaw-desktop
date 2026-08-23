@@ -1742,7 +1742,11 @@ onMounted(async () => {
   stopSidecarReadyStoreWatch = watch(
     () => appStore.sidecarReady,
     (ready) => {
-      if (ready) void reloadAfterSidecarReady()
+      if (!ready) {
+        sidecarReadyHandling = false
+        return
+      }
+      void reloadAfterSidecarReady()
     },
     { immediate: true },
   )
@@ -1831,7 +1835,6 @@ onMounted(async () => {
   if (!roleQuery && !getSessionAgent(chatStore.currentSessionId ?? '')) {
     chatStore.agentRole = ''
   }
-
 })
 
 async function toggleModelSelector() {
@@ -3697,7 +3700,11 @@ function startSidebarResize(event: MouseEvent) {
             role="status"
           >
             <span>{{ t('chat.connectionsUnavailable') }}</span>
-            <button class="hc-chat__connection-retry" type="button" @click="loadConnectionDirectory">
+            <button
+              class="hc-chat__connection-retry"
+              type="button"
+              @click="loadConnectionDirectory"
+            >
               {{ t('common.retry', '重试') }}
             </button>
           </div>

@@ -11,7 +11,7 @@ vi.mock('@/utils/platform', () => ({ isTauri: () => nativeHarness.enabled }))
 vi.mock('@/config/env', () => ({
   env: {
     apiBase: 'http://localhost:8787',
-    wsBase: 'ws://localhost:8787',
+    wsBase: 'ws://localhost:8787/_hexclaw',
   },
 }))
 vi.mock('@tauri-apps/api/core', () => ({
@@ -24,7 +24,9 @@ vi.mock('@tauri-apps/api/core', () => ({
     nativeHarness.calls.push({ command, args })
     if (command === 'sidecar_socket_open') return Promise.resolve('socket-1')
     if (command === 'sidecar_socket_send') {
-      return new Promise<void>((resolve) => { nativeHarness.resolveSend = resolve })
+      return new Promise<void>((resolve) => {
+        nativeHarness.resolveSend = resolve
+      })
     }
     return Promise.resolve()
   },
@@ -88,7 +90,7 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
     const delegate = (socket as unknown as { browserSocket: BrowserSocketDouble }).browserSocket
 
     expect(delegate).toBeInstanceOf(BrowserSocketDouble)
-    expect(delegate.url).toBe('ws://localhost:8787/ws')
+    expect(delegate.url).toBe('ws://localhost:8787/_hexclaw/ws')
     delegate.open()
     expect(socket.readyState).toBe(NativeSidecarWebSocket.OPEN)
 
@@ -102,7 +104,7 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
     const socket = new NativeSidecarWebSocket('/ws')
 
     await vi.waitFor(() => {
-      expect(nativeHarness.calls.map(call => call.command)).toEqual(['sidecar_socket_open'])
+      expect(nativeHarness.calls.map((call) => call.command)).toEqual(['sidecar_socket_open'])
       expect((socket as unknown as { socketId: string | null }).socketId).toBe('socket-1')
     })
     nativeHarness.eventHandler?.({ type: 'open' })
@@ -112,13 +114,13 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
     socket.close()
 
     await vi.waitFor(() => {
-      expect(nativeHarness.calls.map(call => call.command)).toContain('sidecar_socket_send')
+      expect(nativeHarness.calls.map((call) => call.command)).toContain('sidecar_socket_send')
     })
-    expect(nativeHarness.calls.map(call => call.command)).not.toContain('sidecar_socket_close')
+    expect(nativeHarness.calls.map((call) => call.command)).not.toContain('sidecar_socket_close')
 
     nativeHarness.resolveSend?.()
     await vi.waitFor(() => {
-      expect(nativeHarness.calls.map(call => call.command)).toEqual([
+      expect(nativeHarness.calls.map((call) => call.command)).toEqual([
         'sidecar_socket_open',
         'sidecar_socket_send',
         'sidecar_socket_close',

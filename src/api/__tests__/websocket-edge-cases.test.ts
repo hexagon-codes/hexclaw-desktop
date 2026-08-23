@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/config/env', () => ({
-  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
+  OLLAMA_BASE: 'http://localhost:11434',
+  env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
 }))
 
 class MockWebSocket {
@@ -107,23 +108,37 @@ describe('WebSocket Edge Cases', () => {
       const approvalCb = vi.fn()
       hexclawWS.onApprovalRequest(approvalCb)
 
-      wsInstance!.simulateMessage(JSON.stringify({
-        type: 'tool_approval_request',
-        content: 'Tool shell_exec wants to run rm -rf /',
-        session_id: 's1',
-        metadata: {
-          request_id: 'req-123',
-          tool_name: 'shell_exec',
-          risk: 'dangerous',
-        },
-      }))
+      wsInstance!.simulateMessage(
+        JSON.stringify({
+          type: 'tool_approval_request',
+          content: 'Tool shell_exec wants to run rm -rf /',
+          session_id: 's1',
+          owner_id: 'desktop-user',
+          invocation_id: 'invocation-123',
+          arguments_digest: 'a'.repeat(64),
+          security_scope_digest: 'b'.repeat(64),
+          scope_schema_version: 1,
+          deadline_at: '2026-07-29T05:00:00.000Z',
+          metadata: {
+            request_id: 'req-123',
+            tool_name: 'shell_exec',
+            risk: 'dangerous',
+          },
+        }),
+      )
 
       expect(approvalCb).toHaveBeenCalledWith({
         requestId: 'req-123',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-123',
         toolName: 'shell_exec',
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
         risk: 'dangerous',
         reason: 'Tool shell_exec wants to run rm -rf /',
         sessionId: 's1',
+        deadlineAt: '2026-07-29T05:00:00.000Z',
       })
     })
 
@@ -202,11 +217,20 @@ describe('WebSocket Edge Cases', () => {
       expect(errorCb).not.toHaveBeenCalled()
 
       // Approval should still work
-      wsInstance!.simulateMessage(JSON.stringify({
-        type: 'tool_approval_request',
-        content: 'test',
-        metadata: { request_id: 'r1', tool_name: 't1', risk: 'low' },
-      }))
+      wsInstance!.simulateMessage(
+        JSON.stringify({
+          type: 'tool_approval_request',
+          content: 'test',
+          session_id: 's1',
+          owner_id: 'desktop-user',
+          invocation_id: 'invocation-1',
+          arguments_digest: 'a'.repeat(64),
+          security_scope_digest: 'b'.repeat(64),
+          scope_schema_version: 1,
+          deadline_at: '2026-07-29T05:00:00.000Z',
+          metadata: { request_id: 'r1', tool_name: 't1', risk: 'low' },
+        }),
+      )
       expect(approvalCb).toHaveBeenCalled()
     })
 
@@ -220,11 +244,13 @@ describe('WebSocket Edge Cases', () => {
 
       hexclawWS.clearCallbacks()
 
-      wsInstance!.simulateMessage(JSON.stringify({
-        type: 'tool_approval_request',
-        content: 'test',
-        metadata: {},
-      }))
+      wsInstance!.simulateMessage(
+        JSON.stringify({
+          type: 'tool_approval_request',
+          content: 'test',
+          metadata: {},
+        }),
+      )
       expect(approvalCb).not.toHaveBeenCalled()
     })
 
@@ -358,7 +384,17 @@ describe('WebSocket Edge Cases', () => {
       await vi.advanceTimersByTimeAsync(10)
       await connectPromise
 
-      hexclawWS.sendMessage('hi', undefined, undefined, undefined, undefined, undefined, undefined, undefined, {})
+      hexclawWS.sendMessage(
+        'hi',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {},
+      )
       const sent = JSON.parse(wsInstance!.sent[wsInstance!.sent.length - 1]!)
       expect(sent.metadata).toBeUndefined()
     })

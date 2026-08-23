@@ -635,6 +635,25 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
+  it('[BUG-20260725-008] reloads the connection directory after every sidecar restart generation', async () => {
+    mockGetConnectionsResult.mockReset().mockResolvedValue({ connections: [] })
+
+    const wrapper = mountChatView()
+    const appStore = useAppStore()
+
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1))
+
+    appStore.sidecarReady = true
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(2))
+
+    appStore.sidecarReady = false
+    await wrapper.vm.$nextTick()
+    appStore.sidecarReady = true
+
+    await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(3))
+    wrapper.unmount()
+  })
+
   // ────────────────────────────────────────────────────
   // 3. 发送消息：用户输入并点击发送
   // ────────────────────────────────────────────────────

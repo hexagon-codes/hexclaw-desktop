@@ -46,7 +46,8 @@ export class NativeSidecarWebSocket extends EventTarget {
       throw new DOMException('Sidecar WebSocket path is invalid', 'SyntaxError')
     }
     if (!isTauri()) {
-      this.url = new URL(path, env.wsBase).toString()
+      // 开发态 wsBase 带 /_hexclaw 代理前缀；绝对 path 不能交给 URL 重置该前缀。
+      this.url = `${env.wsBase.replace(/\/+$/, '')}${path}`
       this.connectBrowser()
       return
     }
@@ -93,9 +94,10 @@ export class NativeSidecarWebSocket extends EventTarget {
   private emitClose(code = 1006, reason = '', wasClean = false) {
     if (this.readyState === NativeSidecarWebSocket.CLOSED) return
     this.readyState = NativeSidecarWebSocket.CLOSED
-    const event = typeof CloseEvent === 'undefined'
-      ? Object.assign(new Event('close'), { code, reason, wasClean }) as CloseEvent
-      : new CloseEvent('close', { code, reason, wasClean })
+    const event =
+      typeof CloseEvent === 'undefined'
+        ? (Object.assign(new Event('close'), { code, reason, wasClean }) as CloseEvent)
+        : new CloseEvent('close', { code, reason, wasClean })
     this.onclose?.call(this, event)
     this.dispatchEvent(event)
   }
@@ -135,8 +137,8 @@ export class NativeSidecarWebSocket extends EventTarget {
 
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
     if (
-      this.readyState !== NativeSidecarWebSocket.OPEN
-      || (!this.browserSocket && !this.socketId)
+      this.readyState !== NativeSidecarWebSocket.OPEN ||
+      (!this.browserSocket && !this.socketId)
     ) {
       throw new DOMException('WebSocket is not open', 'InvalidStateError')
     }
