@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { resolve } from 'node:path'
-import { expect, test, type APIResponse, type Page } from '@playwright/test'
+import { expect, test, type APIResponse, type Page, type TestInfo } from '@playwright/test'
 import { BASE_URL, e2eMarker } from './helpers'
 import { cleanupK12Child } from './live-fixture-cleanup'
 
@@ -31,9 +32,125 @@ const FIXTURES = {
 
 type Fixture = (typeof FIXTURES)[keyof typeof FIXTURES]
 type Json = Record<string, unknown>
+type ActiveDeleteCounts = {
+  agent_rows: number
+  creative_work_rows: number
+  feedback_generation_rows: number
+  image_task_invocation_rows: number
+  image_task_dispatch_rows: number
+  creative_intake_rows: number
+  current_create_receipt_rows: number
+  agent_rule_rows: number
+}
+
+const ACTIVE_DELETE_RECEIPT = 'active-delete-receipt.json'
+const ACTIVE_DELETE_OBSERVATION_MS = 500
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+function activeDeleteCounts(database: DatabaseSync, agent: string): ActiveDeleteCounts {
+  const row = database
+    .prepare(
+      `SELECT
+      (SELECT COUNT(*) FROM agents WHERE name=?1) AS agent_rows,
+      (SELECT COUNT(*) FROM k12_creative_works WHERE agent_name=?1) AS creative_work_rows,
+      (SELECT COUNT(*) FROM k12_work_feedback_generations WHERE agent_name=?1)
+        AS feedback_generation_rows,
+      (SELECT COUNT(*) FROM k12_image_task_invocations WHERE agent_name=?1)
+        AS image_task_invocation_rows,
+      (SELECT COUNT(*) FROM k12_image_task_dispatches WHERE agent_name=?1)
+        AS image_task_dispatch_rows,
+      (SELECT COUNT(*) FROM k12_creative_work_intakes WHERE agent_name=?1)
+        AS creative_intake_rows,
+      (SELECT COUNT(*) FROM k12_current_create_receipts WHERE agent_name=?1)
+        AS current_create_receipt_rows,
+      (SELECT COUNT(*) FROM agent_rules WHERE agent_name=?1) AS agent_rule_rows`,
+    )
+    .get(agent) as ActiveDeleteCounts
+  return Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [key, Number(value)]),
+  ) as ActiveDeleteCounts
+}
+
+function assertDeletedExactSet(counts: ActiveDeleteCounts) {
+  expect(counts).toEqual({
+    agent_rows: 0,
+    creative_work_rows: 0,
+    feedback_generation_rows: 0,
+    image_task_invocation_rows: 0,
+    image_task_dispatch_rows: 0,
+    creative_intake_rows: 0,
+    current_create_receipt_rows: 0,
+    agent_rule_rows: 0,
+  })
+}
+
+async function waitForSentWorkFeedbackInvocation(
+  databasePath: string,
+  agent: string,
+  timeoutMS = 6 * 60_000,
+) {
+  expect(statSync(databasePath).isFile(), 'active-delete store must be a regular file').toBe(true)
+  const database = new DatabaseSync(databasePath, { readOnly: true })
+  database.exec('PRAGMA busy_timeout=2000')
+  const invocation = database.prepare(`SELECT invocation_id,status,attempt,provider_request_key
+    FROM k12_image_task_invocations
+    WHERE agent_name=? AND operation='work_feedback'
+    ORDER BY created_at DESC,invocation_id DESC LIMIT 1`)
+  const providerCalls = database.prepare(`SELECT COUNT(*) AS count
+    FROM k12_image_task_invocations
+    WHERE agent_name=? AND operation='work_feedback' AND provider_request_key<>''`)
+  const deadline = Date.now() + timeoutMS
+  try {
+    while (Date.now() < deadline) {
+      const row = invocation.get(agent) as
+        | {
+            invocation_id: string
+            status: string
+            attempt: number
+            provider_request_key: string
+          }
+        | undefined
+      if (row?.status === 'sent') {
+        const count = Number((providerCalls.get(agent) as { count: number }).count)
+        const counts = activeDeleteCounts(database, agent)
+        expect(count, 'active-delete must observe exactly one physical Provider send').toBe(1)
+        expect(row.attempt).toBe(1)
+        expect(row.provider_request_key).not.toBe('')
+        expect(counts.agent_rows).toBe(1)
+        expect(counts.creative_work_rows).toBe(1)
+        expect(counts.feedback_generation_rows).toBe(1)
+        expect(counts.image_task_invocation_rows).toBe(1)
+        return {
+          invocation_status: 'sent' as const,
+          invocation_id_sha256: sha256(Buffer.from(row.invocation_id)),
+          provider_request_key_sha256: sha256(Buffer.from(row.provider_request_key)),
+          attempt: row.attempt,
+          provider_call_rows: count,
+          target_rows: counts,
+        }
+      }
+      if (row && ['succeeded', 'failed', 'outcome_unknown', 'reconciled'].includes(row.status)) {
+        throw new Error(`active-delete missed durable sent boundary; terminal=${row.status}`)
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
+    }
+    throw new Error('active-delete timed out waiting for durable work_feedback sent receipt')
+  } finally {
+    database.close()
+  }
+}
+
+function readActiveDeleteCounts(databasePath: string, agent: string): ActiveDeleteCounts {
+  const database = new DatabaseSync(databasePath, { readOnly: true })
+  database.exec('PRAGMA busy_timeout=2000')
+  try {
+    return activeDeleteCounts(database, agent)
+  } finally {
+    database.close()
+  }
 }
 
 function verifyFixture(fixture: Fixture): Buffer {
@@ -127,12 +244,10 @@ async function listWorks(page: Page, owner: string): Promise<Json[]> {
 }
 
 function feedbackPayload(work: Json | undefined): Json | undefined {
-  const generation = (
-    work?.latest_feedback ??
+  const generation = (work?.latest_feedback ??
     work?.latest_feedback_generation ??
     work?.initial_feedback ??
-    work?.initial_feedback_generation
-  ) as Json | undefined
+    work?.initial_feedback_generation) as Json | undefined
   return generation?.feedback as Json | undefined
 }
 
@@ -159,7 +274,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
 
   test('art upload stores the frozen image under the exact Tutor owner and round-trips its bytes', async ({
     page,
-  }) => {
+  }, testInfo: TestInfo) => {
     childName = `美术原图-${e2eMarker('child')}`
     const owner = await createTutorAndOpenWorks(page, childName)
     const modal = await openAddWork(page, 'art')
@@ -169,13 +284,75 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     ).toBeDisabled()
     const assetID = await uploadWorkPhoto(page, FIXTURES.art)
     expect(assetID).toMatch(new RegExp(`^asset://${owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`))
+    const assetFile = assetID.slice(assetID.lastIndexOf('/') + 1)
+    const storedAsset = await page.request.get(
+      `${BASE_URL}/api/k12/assets/${encodeURIComponent(assetFile)}?agent=${encodeURIComponent(owner)}`,
+    )
+    expect(storedAsset.status()).toBe(200)
+    expect(sha256(Buffer.from(await storedAsset.body()))).toBe(FIXTURES.art.sha256)
     const title = `彩虹女孩-${e2eMarker('work')}`
     await modal.getByTestId('cw-add-title').fill(title)
     await expect(modal.getByTestId('cw-add-task')).toHaveCount(0)
     await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
     await expect(modal.getByTestId('cw-add-submit')).toBeEnabled()
+    const activeDelete = testInfo.project.name === 'system-chrome'
+    const databasePath = resolve(testInfo.config.outputDir, '../.hexclaw/data.db')
+    const sentReceipt = activeDelete
+      ? waitForSentWorkFeedbackInvocation(databasePath, owner)
+      : undefined
     await modal.getByTestId('cw-add-submit').click()
     await expect(modal).toHaveCount(0, { timeout: 30_000 })
+
+    if (sentReceipt) {
+      const beforeDelete = await sentReceipt
+      const deleted = await page.request.delete(
+        `/_hexclaw/api/v1/agents/${encodeURIComponent(owner)}`,
+      )
+      expect(deleted.status()).toBe(200)
+      const afterDelete = readActiveDeleteCounts(databasePath, owner)
+      assertDeletedExactSet(afterDelete)
+      await new Promise((resolvePromise) =>
+        setTimeout(resolvePromise, ACTIVE_DELETE_OBSERVATION_MS),
+      )
+      const afterObservation = readActiveDeleteCounts(databasePath, owner)
+      assertDeletedExactSet(afterObservation)
+
+      const agents = await json<{
+        agents?: Array<{ name?: string }>
+      }>(await page.request.get('/_hexclaw/api/v1/agents'))
+      expect((agents.agents || []).filter(({ name }) => name === owner)).toHaveLength(0)
+      expect(await listWorks(page, owner)).toHaveLength(0)
+      const deletedAsset = await page.request.get(
+        `${BASE_URL}/api/k12/assets/${encodeURIComponent(assetFile)}?agent=${encodeURIComponent(owner)}`,
+      )
+      expect(deletedAsset.status()).toBe(404)
+
+      const receipt = {
+        schema_version: 1,
+        transition: ['sent', 'delete_200', 'cascade_zero'],
+        before_delete: beforeDelete,
+        delete_http_status: 200,
+        after_delete: {
+          first_snapshot: afterDelete,
+          observation_ms: ACTIVE_DELETE_OBSERVATION_MS,
+          second_snapshot: afterObservation,
+          agent_api_rows: 0,
+          creative_work_api_rows: 0,
+          asset_http_status: 404,
+        },
+        dingtalk_sends: 0,
+      }
+      const receiptPath = testInfo.outputPath(ACTIVE_DELETE_RECEIPT)
+      writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {
+        mode: 0o600,
+        flag: 'wx',
+      })
+      await testInfo.attach('K12 creative active-delete receipt', {
+        path: receiptPath,
+        contentType: 'application/json',
+      })
+      return
+    }
 
     const work = (await listWorks(page, owner)).find((item) => item.work_title === title)
     expect(work, 'visible save must create a sidecar CreativeWork').toBeTruthy()
@@ -281,9 +458,8 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     await expect
       .poll(
         async () =>
-          (await listWorks(page, owner)).filter(
-            (item) => item.content_markdown === secondDraft,
-          ).length,
+          (await listWorks(page, owner)).filter((item) => item.content_markdown === secondDraft)
+            .length,
         { timeout: 60_000 },
       )
       .toBe(1)
@@ -403,9 +579,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
         { timeout: 60_000 },
       )
       .toBe(1)
-    const created = (await listWorks(page, owner)).find(
-      (item) => item.content_markdown === draft,
-    )
+    const created = (await listWorks(page, owner)).find((item) => item.content_markdown === draft)
     const workID = String(created?.work_id || '')
     expect(workID).not.toBe('')
     const card = page.locator(`.k12cw__card[data-work-id="${workID}"]`)
@@ -433,10 +607,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     let regeneratePosts = 0
     let commandID = ''
     page.on('request', (request) => {
-      if (
-        request.method() === 'POST' &&
-        new URL(request.url()).pathname.endsWith(regeneratePath)
-      ) {
+      if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith(regeneratePath)) {
         regeneratePosts++
         commandID = request.headers()['idempotency-key'] || commandID
       }

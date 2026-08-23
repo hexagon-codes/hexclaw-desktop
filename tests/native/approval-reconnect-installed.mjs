@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -25,6 +25,11 @@ const TEST_FIXTURE_PORT = 16062
 const TEST_UPDATER_PATH = '/__hexclaw_test_updater__'
 const TEST_UPDATER_ENDPOINT = `http://127.0.0.1:${TEST_FIXTURE_PORT}${TEST_UPDATER_PATH}`
 const TEST_API_TOKEN = 'hexclaw-installed-approval-reconnect-0123456789abcdef'
+const AX_DIAGNOSTIC_HOLD_MS = Math.max(
+  0,
+  Number.parseInt(process.env.HEX_NATIVE_APPROVAL_AX_HOLD_MS || '0', 10) || 0,
+)
+const UI_DIAGNOSTIC_ONLY = process.env.HEX_NATIVE_APPROVAL_UI_DIAGNOSTIC_ONLY === '1'
 const OWNER_MARKER = 'installed-approval-reconnect-owner'
 const DECISION_MARKER = 'INSTALLED_APPROVAL_RECONNECT_DECISION_FIXTURE'
 const TERMINAL_MARKER = 'INSTALLED_APPROVAL_RECONNECT_TERMINAL_FIXTURE'
@@ -32,6 +37,7 @@ const REMEMBER_SEED_MARKER = 'INSTALLED_APPROVAL_RECONNECT_REMEMBER_SEED_FIXTURE
 const REMEMBER_REUSE_MARKER = 'INSTALLED_APPROVAL_RECONNECT_REMEMBER_REUSE_FIXTURE'
 const REMEMBER_RESTART_MARKER = 'INSTALLED_APPROVAL_RECONNECT_REMEMBER_RESTART_FIXTURE'
 const DELETE_PENDING_MARKER = 'INSTALLED_APPROVAL_RECONNECT_DELETE_PENDING_FIXTURE'
+const AFTER_DELETE_DENY_MARKER = 'INSTALLED_APPROVAL_RECONNECT_AFTER_DELETE_DENY_FIXTURE'
 const POLICY_HOT_UPDATE_MARKER = 'INSTALLED_APPROVAL_POLICY_HOT_UPDATE_FIXTURE'
 const DECISION_TOOL_CALL_ID = 'call-installed-approval-reconnect-decision'
 const TERMINAL_TOOL_CALL_ID = 'call-installed-approval-reconnect-terminal'
@@ -39,9 +45,11 @@ const REMEMBER_SEED_TOOL_CALL_ID = 'call-installed-approval-reconnect-remember-s
 const REMEMBER_REUSE_TOOL_CALL_ID = 'call-installed-approval-reconnect-remember-reuse'
 const REMEMBER_RESTART_TOOL_CALL_ID = 'call-installed-approval-reconnect-remember-restart'
 const DELETE_PENDING_TOOL_CALL_ID = 'call-installed-approval-reconnect-delete-pending'
+const AFTER_DELETE_DENY_TOOL_CALL_ID = 'call-installed-approval-reconnect-after-delete-deny'
 const POLICY_HOT_UPDATE_TOOL_CALL_ID = 'call-installed-approval-policy-hot-update'
 const FINAL_MARKER = 'INSTALLED_APPROVAL_RECONNECT_NOOP_OK'
 const REMEMBERED_SESSION_ID = 'installed-approval-reconnect-remembered'
+const AFTER_DELETE_SESSION_ID = 'installed-approval-reconnect-after-delete'
 const WEBSOCKET_OPEN = 1
 const APPROVAL_WIRE_TYPES = new Set([
   'tool_approval_request',
@@ -55,9 +63,10 @@ const currentFile = fileURLToPath(import.meta.url)
 const repoRoot = resolve(dirname(currentFile), '../..')
 const overlayPath = join(repoRoot, 'src-tauri/tauri.mock.conf.json')
 const defaultAppBundle = join(repoRoot, 'src-tauri/target/release/bundle/macos/HexClaw Test.app')
+const evidenceTimestamp = new Date().toISOString().replace(/[:.]/g, '-')
 const artifactDir = resolve(
   process.env.HEX_NATIVE_APPROVAL_RECONNECT_ARTIFACT_DIR ||
-    join(repoRoot, 'test-results/native-approval-reconnect'),
+    join(repoRoot, 'test/evidence/tool-approval-real-tool', evidenceTimestamp),
 )
 
 function fail(message) {
@@ -218,8 +227,8 @@ function reconciliationWire(identity) {
 function decisionWire(identity, decision) {
   assertCompleteIdentity(identity, 'decision identity')
   assert.ok(
-    ['approved_once', 'approved_remember'].includes(decision.decision),
-    'decision must be an approved tool-approval decision',
+    ['approved_once', 'approved_remember', 'denied'].includes(decision.decision),
+    'decision must be a supported tool-approval decision',
   )
   requireNonEmptyString(decision.decision_id, 'decision_id')
   requireNonEmptyString(decision.idempotency_key, 'idempotency_key')
@@ -289,8 +298,9 @@ function assertExpiredTerminal(wire, identity) {
   }
 }
 
-function runMCPFixture(receiptPath) {
+function runMCPFixture(receiptPath, markerPath) {
   if (!receiptPath) fail('MCP receipt path is required')
+  if (!markerPath) fail('MCP execution marker path is required')
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity })
   const respond = (payload) => process.stdout.write(`${JSON.stringify(payload)}\n`)
 
@@ -311,7 +321,7 @@ function runMCPFixture(receiptPath) {
           result: {
             protocolVersion: request.params?.protocolVersion || '2025-11-25',
             capabilities: { tools: {} },
-            serverInfo: { name: 'approval-reconnect-noop', version: '1.0.0' },
+            serverInfo: { name: 'approval-reconnect-marker', version: '1.0.0' },
           },
         })
         break
@@ -323,7 +333,7 @@ function runMCPFixture(receiptPath) {
             tools: [
               {
                 name: 'browser',
-                description: 'Deterministic no-op browser-shaped test tool.',
+                description: 'Deterministic browser-shaped tool that writes an isolated marker.',
                 inputSchema: {
                   type: 'object',
                   properties: { fixture: { type: 'string' } },
@@ -335,14 +345,18 @@ function runMCPFixture(receiptPath) {
           },
         })
         break
-      case 'tools/call':
+      case 'tools/call': {
+        const executionMarker = `TOOL-APPROVAL-REUSE-001:${randomUUID()}`
+        const record = {
+          execution_marker: executionMarker,
+          name: request.params?.name,
+          arguments: request.params?.arguments || {},
+          called_at: new Date().toISOString(),
+        }
+        appendFileSync(markerPath, `${JSON.stringify(record)}\n`, { encoding: 'utf8' })
         appendFileSync(
           receiptPath,
-          `${JSON.stringify({
-            name: request.params?.name,
-            arguments: request.params?.arguments || {},
-            called_at: new Date().toISOString(),
-          })}\n`,
+          `${JSON.stringify(record)}\n`,
           { encoding: 'utf8' },
         )
         respond({
@@ -354,6 +368,7 @@ function runMCPFixture(receiptPath) {
           },
         })
         break
+      }
       case 'ping':
         respond({ jsonrpc: '2.0', id: request.id, result: {} })
         break
@@ -411,6 +426,7 @@ function providerScenario(payload) {
     ['remember_reuse', REMEMBER_REUSE_MARKER],
     ['remember_restart', REMEMBER_RESTART_MARKER],
     ['delete_pending', DELETE_PENDING_MARKER],
+    ['after_delete_deny', AFTER_DELETE_DENY_MARKER],
     ['policy_hot_update', POLICY_HOT_UPDATE_MARKER],
   ]) {
     if (renderedMessage.includes(marker)) return scenario
@@ -426,6 +442,7 @@ function scenarioMarker(scenario) {
     remember_reuse: REMEMBER_REUSE_MARKER,
     remember_restart: REMEMBER_RESTART_MARKER,
     delete_pending: DELETE_PENDING_MARKER,
+    after_delete_deny: AFTER_DELETE_DENY_MARKER,
     policy_hot_update: POLICY_HOT_UPDATE_MARKER,
   }[scenario]
 }
@@ -438,12 +455,15 @@ function scenarioToolCallID(scenario) {
     remember_reuse: REMEMBER_REUSE_TOOL_CALL_ID,
     remember_restart: REMEMBER_RESTART_TOOL_CALL_ID,
     delete_pending: DELETE_PENDING_TOOL_CALL_ID,
+    after_delete_deny: AFTER_DELETE_DENY_TOOL_CALL_ID,
     policy_hot_update: POLICY_HOT_UPDATE_TOOL_CALL_ID,
   }[scenario]
 }
 
 function scenarioToolArguments(scenario) {
-  if (scenario.startsWith('remember_')) return { fixture: 'approval-reconnect-remembered' }
+  if (scenario.startsWith('remember_') || scenario === 'after_delete_deny') {
+    return { fixture: 'approval-reconnect-remembered' }
+  }
   if (scenario === 'delete_pending') return { fixture: 'approval-reconnect-delete-pending' }
   return { fixture: `approval-reconnect-${scenario}` }
 }
@@ -527,7 +547,7 @@ function createLoopbackFixtureServer(state) {
         assert.equal(toolMessages[0].tool_call_id, toolCallID)
         assert.equal(assistantToolCalls.length, 1)
         assert.equal(assistantToolCalls[0].id, toolCallID)
-        if (!['terminal', 'delete_pending'].includes(scenario)) {
+        if (!['terminal', 'delete_pending', 'after_delete_deny'].includes(scenario)) {
           assert.match(String(toolMessages[0].content || ''), new RegExp(FINAL_MARKER))
         } else {
           assert.notEqual(String(toolMessages[0].content || ''), '')
@@ -537,7 +557,7 @@ function createLoopbackFixtureServer(state) {
             `chatcmpl-${scenario}-2`,
             {
               role: 'assistant',
-              content: ['terminal', 'delete_pending'].includes(scenario)
+              content: ['terminal', 'delete_pending', 'after_delete_deny'].includes(scenario)
                 ? 'fixture terminal cleanup'
                 : FINAL_MARKER,
             },
@@ -556,7 +576,7 @@ function createLoopbackFixtureServer(state) {
   })
 }
 
-function renderConfig(sandbox, receiptPath) {
+function renderConfig(sandbox, receiptPath, markerPath) {
   const configPath = join(sandbox, '.hexclaw/hexclaw.yaml')
   const databasePath = join(sandbox, '.hexclaw/data.db')
   return {
@@ -622,6 +642,7 @@ mcp:
         - ${yamlString(currentFile)}
         - mcp
         - ${yamlString(receiptPath)}
+        - ${yamlString(markerPath)}
       enabled: true
 skills:
   enabled: false
@@ -888,6 +909,14 @@ function readReceipts(receiptPath) {
     .map((line) => JSON.parse(line))
 }
 
+function readToolExecutionMarkers(markerPath) {
+  if (!existsSync(markerPath)) return []
+  return readFileSync(markerPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
 async function waitForReceiptCount(receiptPath, count, description) {
   await waitFor(() => readReceipts(receiptPath).length === count, 20_000, description, 100)
 }
@@ -1027,7 +1056,14 @@ async function runAutoApprovedRememberedInvocation(
   assertNoApprovalWires(socket, start, scenario)
 }
 
-async function runRememberedLifecycleScenario(state, databasePath, receiptPath, restartApp) {
+async function runRememberedLifecycleScenario(
+  state,
+  databasePath,
+  receiptPath,
+  markerPath,
+  restartApp,
+) {
+  const startingMarkerCount = readToolExecutionMarkers(markerPath).length
   const seedSocket = await connectWebSocket('remembered seed request socket')
   const seedStart = seedSocket.checkpoint()
   seedSocket.send(messageWire(REMEMBER_SEED_MARKER, REMEMBERED_SESSION_ID, 'request-remember-seed'))
@@ -1057,6 +1093,11 @@ async function runRememberedLifecycleScenario(state, databasePath, receiptPath, 
   )
   assertDecisionACK(accepted, identity, decision, 'accepted', 'remembered approval ACK')
   await waitForReceiptCount(receiptPath, 2, 'remembered seed one no-op MCP execution')
+  assert.equal(
+    readToolExecutionMarkers(markerPath).length,
+    startingMarkerCount + 1,
+    'initial remembered approval must produce exactly one local tool marker',
+  )
   const seedReceipt = await waitForDurableReceipt(
     databasePath,
     identity.request_id,
@@ -1083,6 +1124,11 @@ async function runRememberedLifecycleScenario(state, databasePath, receiptPath, 
     1,
     'same-process remembered reuse must create no second approval row',
   )
+  assert.equal(
+    readToolExecutionMarkers(markerPath).length,
+    startingMarkerCount + 2,
+    'same-process remembered reuse must execute the frozen local tool exactly once more',
+  )
   await seedSocket.close()
 
   const restart = await restartApp()
@@ -1099,6 +1145,11 @@ async function runRememberedLifecycleScenario(state, databasePath, receiptPath, 
     countExactApprovalRequests(databasePath, identity, 'browser'),
     1,
     'restarted Sidecar remembered reuse must create no second approval row',
+  )
+  assert.equal(
+    readToolExecutionMarkers(markerPath).length,
+    startingMarkerCount + 3,
+    'restarted Sidecar remembered reuse must execute the frozen local tool exactly once more',
   )
   const restartedGrant = readRememberedGrant(databasePath, identity, 'browser')
   assert.equal(Number(restartedGrant.active), 1, 'restart must preserve the active durable grant')
@@ -1141,12 +1192,100 @@ async function runRememberedLifecycleScenario(state, databasePath, receiptPath, 
     100,
   )
   await waitForReceiptCount(receiptPath, 4, 'session delete must not execute its pending no-op MCP')
+
+  const postDeleteStart = restartedSocket.checkpoint()
+  restartedSocket.send(
+    messageWire(AFTER_DELETE_DENY_MARKER, AFTER_DELETE_SESSION_ID, 'request-after-delete-deny'),
+  )
+  const postDeleteWire = await restartedSocket.waitFrom(
+    postDeleteStart,
+    (wire) => wire.type === 'tool_approval_request',
+    30_000,
+    'same frozen tool request after session delete',
+  )
+  const postDeleteIdentity = identityFromApprovalRequest(postDeleteWire)
+  assert.equal(postDeleteIdentity.owner_id, identity.owner_id, 'post-delete owner must stay exact')
+  assert.equal(
+    postDeleteIdentity.session_id,
+    AFTER_DELETE_SESSION_ID,
+    'post-delete invocation must use a new session identity',
+  )
+  assert.equal(postDeleteWire.tool_name, 'browser', 'post-delete tool must stay exact')
+  assert.equal(
+    postDeleteIdentity.arguments_digest,
+    identity.arguments_digest,
+    'post-delete request must reuse the exact frozen arguments',
+  )
+  assert.notEqual(
+    postDeleteIdentity.security_scope_digest,
+    identity.security_scope_digest,
+    'replacement session must derive a distinct security scope',
+  )
+  assert.equal(
+    countExactApprovalRequests(databasePath, postDeleteIdentity, 'browser'),
+    1,
+    'session delete must force an approval row in the replacement session',
+  )
+  const deniedDecision = {
+    decision: 'denied',
+    decision_id: 'decision-installed-approval-after-delete-deny',
+    idempotency_key: 'idempotency-installed-approval-after-delete-deny',
+  }
+  const deniedResponse = decisionWire(postDeleteIdentity, deniedDecision)
+  assertOutboundFullIdentity(deniedResponse, postDeleteIdentity, 'post-delete denied response')
+  const deniedAckStart = restartedSocket.checkpoint()
+  restartedSocket.send(deniedResponse)
+  const deniedACK = await restartedSocket.waitFrom(
+    deniedAckStart,
+    (wire) => wire.type === 'tool_approval_ack',
+    10_000,
+    'post-delete denied acknowledgement',
+  )
+  assertDecisionACK(
+    deniedACK,
+    postDeleteIdentity,
+    deniedDecision,
+    'accepted',
+    'post-delete denied ACK',
+  )
+  await waitFor(
+    () => state.provider.after_delete_deny.length === 2,
+    10_000,
+    'post-delete denial provider completion',
+    100,
+  )
+  await waitForReceiptCount(receiptPath, 4, 'post-delete denial must not execute the local MCP')
+  assert.equal(
+    readToolExecutionMarkers(markerPath).length,
+    startingMarkerCount + 3,
+    'session delete and denial must produce zero unintended local tool markers',
+  )
+  const deniedReceipt = await waitForDurableReceipt(
+    databasePath,
+    postDeleteIdentity.request_id,
+    (receipt) => receipt.terminal_result === 'denied' && receipt.release_state === 'fenced',
+    'post-delete durable denied receipt',
+  )
+  assertDurableIdentity(deniedReceipt, postDeleteIdentity, 'post-delete durable denied receipt')
+  assert.equal(deniedReceipt.ack_status, 'accepted')
+  assert.equal(deniedReceipt.consumed_at, null)
   await restartedSocket.close()
 
   state.remembered = {
     identity,
     seedWireType: seedWire.type,
     seedAckStatus: accepted.status,
+    reuseContract: {
+      ownerId: identity.owner_id,
+      sessionId: identity.session_id,
+      toolName: 'browser',
+      frozenArguments: scenarioToolArguments('remember_seed'),
+      argumentsDigest: identity.arguments_digest,
+      firstApprovalWires: 1,
+      firstExecutionMarkers: 1,
+      secondApprovalWires: 0,
+      secondExecutionMarkers: 1,
+    },
     sameProcessApprovalWires: 0,
     restart,
     restartedApprovalWires: 0,
@@ -1156,6 +1295,13 @@ async function runRememberedLifecycleScenario(state, databasePath, receiptPath, 
       grantRevocationReason: revokedGrant.revoked_reason,
       pendingTerminalResult: fencedPending.terminal_result,
       pendingReleaseState: fencedPending.release_state,
+      postDeleteReapprovalWireType: postDeleteWire.type,
+      postDeleteSessionId: postDeleteIdentity.session_id,
+      postDeleteApprovalRows: 1,
+      deniedAckStatus: deniedACK.status,
+      deniedTerminalResult: deniedReceipt.terminal_result,
+      deniedReleaseState: deniedReceipt.release_state,
+      unintendedExecutionMarkers: 0,
     },
   }
 }
@@ -1510,7 +1656,10 @@ async function runInstalledBoundary() {
   mkdirSync(join(sandbox, '.hexclaw'), { mode: 0o700 })
   mkdirSync(join(sandbox, 'tmp'), { mode: 0o700 })
   const receiptPath = join(sandbox, 'mcp-receipts.jsonl')
-  const rendered = renderConfig(sandbox, receiptPath)
+  const markerPath = join(sandbox, 'tool-execution.marker.jsonl')
+  writeFileSync(markerPath, '', { encoding: 'utf8', mode: 0o600 })
+  chmodSync(markerPath, 0o600)
+  const rendered = renderConfig(sandbox, receiptPath, markerPath)
   writeFileSync(rendered.configPath, rendered.content, { encoding: 'utf8', mode: 0o600 })
   chmodSync(rendered.configPath, 0o600)
 
@@ -1524,6 +1673,7 @@ async function runInstalledBoundary() {
       remember_reuse: [],
       remember_restart: [],
       delete_pending: [],
+      after_delete_deny: [],
       policy_hot_update: [],
     },
     unexpectedRequests: [],
@@ -1543,6 +1693,7 @@ async function runInstalledBoundary() {
       providerServer.once('error', rejectListen)
       providerServer.listen(TEST_FIXTURE_PORT, '127.0.0.1', resolveListen)
     })
+    mkdirSync(artifactDir, { recursive: true })
     appLogStream = createWriteStream(join(artifactDir, 'app.log'), { flags: 'w' })
     const capture = (chunk) => {
       appLogStream.write(chunk)
@@ -1592,9 +1743,58 @@ async function runInstalledBoundary() {
     }
 
     await launchApp()
+    if (AX_DIAGNOSTIC_HOLD_MS > 0) {
+      await delay(AX_DIAGNOSTIC_HOLD_MS)
+    }
+    if (UI_DIAGNOSTIC_ONLY) {
+      const executionMarkers = readToolExecutionMarkers(markerPath)
+      const approvalRows = sqliteRows(
+        rendered.databasePath,
+        `SELECT state, decision, terminal_result, ack_status, release_state, consumed_at
+FROM tool_approval_requests
+ORDER BY created_at ASC`,
+      )
+      const uiSummary = {
+        acceptance: 'TOOL-APPROVAL-REUSE-001-native-ocr-click',
+        providerChatRounds: state.provider.remember_seed.length,
+        executionMarkers: executionMarkers.length,
+        uniqueExecutionMarkers: new Set(
+          executionMarkers.map((record) => record.execution_marker),
+        ).size,
+        approvalRows,
+        realProviderInvocations: 0,
+        externalModelInvocations: 0,
+        imInvocations: 0,
+        userHomeRead: false,
+      }
+      mkdirSync(artifactDir, { recursive: true })
+      writeFileSync(
+        join(artifactDir, 'ui-protocol-summary.json'),
+        `${JSON.stringify(uiSummary, null, 2)}\n`,
+      )
+      assert.equal(uiSummary.providerChatRounds, 2, 'UI request must complete two loopback rounds')
+      assert.equal(uiSummary.executionMarkers, 1, 'UI approval must execute one local marker')
+      assert.equal(uiSummary.uniqueExecutionMarkers, 1, 'UI marker must be unique')
+      assert.equal(approvalRows.length, 1, 'UI flow must persist one approval row')
+      assert.equal(approvalRows[0].state, 'approved_remember')
+      assert.equal(approvalRows[0].decision, 'approved_remember')
+      assert.equal(approvalRows[0].terminal_result, 'approved_remember')
+      assert.equal(approvalRows[0].ack_status, 'accepted')
+      assert.equal(approvalRows[0].release_state, 'consumed')
+      assert.ok(approvalRows[0].consumed_at, 'UI-approved local marker must be consumed once')
+      process.stdout.write(`${JSON.stringify(uiSummary, null, 2)}\n`)
+      succeeded = true
+      return
+    }
     await runDecisionScenario(state, rendered.databasePath, receiptPath)
     await runTerminalScenario(state, rendered.databasePath, receiptPath)
-    await runRememberedLifecycleScenario(state, rendered.databasePath, receiptPath, restartApp)
+    await runRememberedLifecycleScenario(
+      state,
+      rendered.databasePath,
+      receiptPath,
+      markerPath,
+      restartApp,
+    )
     await runPolicyHotUpdateScenario(state, rendered.databasePath, receiptPath, rendered.configPath)
     await waitFor(() => state.updaterRequests > 0, 5000, 'loopback updater request', 100)
 
@@ -1619,11 +1819,13 @@ async function runInstalledBoundary() {
       'remember_reuse',
       'remember_restart',
       'delete_pending',
+      'after_delete_deny',
       'policy_hot_update',
     ]) {
       assert.equal(state.provider[scenario].length, 2, `${scenario} must have two provider rounds`)
     }
     const receipts = readReceipts(receiptPath)
+    const executionMarkers = readToolExecutionMarkers(markerPath)
     assert.equal(
       receipts.length,
       5,
@@ -1638,6 +1840,17 @@ async function runInstalledBoundary() {
         { name: 'browser', arguments: { fixture: 'approval-reconnect-remembered' } },
         { name: 'browser', arguments: { fixture: 'approval-reconnect-policy_hot_update' } },
       ],
+    )
+    assert.equal(executionMarkers.length, receipts.length, 'each MCP receipt must have one marker')
+    assert.equal(
+      new Set(executionMarkers.map((record) => record.execution_marker)).size,
+      executionMarkers.length,
+      'each real local tool execution marker must be unique',
+    )
+    assert.deepEqual(
+      executionMarkers,
+      receipts,
+      'the local marker boundary and protocol receipt ledger must agree exactly',
     )
     assert.equal(statSync(sandbox).mode & 0o777, 0o700)
     assert.equal(statSync(dirname(rendered.configPath)).mode & 0o777, 0o700)
@@ -1667,18 +1880,37 @@ async function runInstalledBoundary() {
         rememberReuse: state.provider.remember_reuse.length,
         rememberRestart: state.provider.remember_restart.length,
         sessionDeletePending: state.provider.delete_pending.length,
+        afterSessionDeleteDenied: state.provider.after_delete_deny.length,
         policyHotUpdate: state.provider.policy_hot_update.length,
       },
       mcpExecutions: receipts.length,
+      localToolBoundary: {
+        toolName: 'browser',
+        isolatedMarkerFile: 'tool-execution.marker.jsonl',
+        executionMarkers: executionMarkers.length,
+        uniqueExecutionMarkers: new Set(
+          executionMarkers.map((record) => record.execution_marker),
+        ).size,
+        markerSha256: fileSha256(markerPath),
+        cleanedWithTemporaryHome: true,
+      },
       updaterRequests: state.updaterRequests,
       loopbackModelListRequests: state.modelListRequests,
-      realToolsInvoked: 0,
+      realToolsInvoked: executionMarkers.length,
+      realProviderInvocations: 0,
       externalModelInvocations: 0,
       imInvocations: 0,
       productionPortUsed: false,
       userHomeRead: false,
       nativeUIClicks: 0,
+      nativeAX: {
+        trusted: true,
+        promptRequested: false,
+        clickAttempted: false,
+        skipReason: 'the approval request is owned by the harness WebSocket, not a visible renderer card',
+      },
     }
+    mkdirSync(artifactDir, { recursive: true })
     writeFileSync(join(artifactDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
     succeeded = true
@@ -1704,7 +1936,7 @@ async function runInstalledBoundary() {
 
 const command = process.argv[2] || 'run'
 if (command === 'mcp') {
-  runMCPFixture(process.argv[3])
+  runMCPFixture(process.argv[3], process.argv[4])
 } else if (command === 'validate') {
   validateOverlay()
   process.stdout.write('approval reconnect installed boundary preflight passed\n')

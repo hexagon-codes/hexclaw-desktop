@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -151,6 +151,58 @@ test('public Ollama CI provenance is allowed only inside bundled Ollama resource
   await mkdir(unrelatedOllama, { recursive: true })
   await writeFile(join(unrelatedOllama, 'private-path.bin'), privatePath)
   await expectCategory(unrelatedHome, 'path:user-home', privatePath)
+})
+
+test('pinned Ollama v0.32.13 provenance allowlist covers every fixed archive payload', async () => {
+  const source = await readFile(boundaryModuleURL, 'utf8')
+  const fixedDigests = [
+    '11afcc9eed5e49982c77dc56521341407d5b77e4d94961564901d736c375303f',
+    '14288d566f53442dfa9a324ddaa17bc2c2e0cd451ea6565836a10faa9d423886',
+    '14f17a8f3f16908db0e73b61e7df8308089f8adb55929c7866c100de2ff72675',
+    '15e56fb040f21f813fbe60a68968385e7260000980462410b0abad4670c6c52b',
+    '1afb4d29b9086749a65ad0c1db8e460e1c9f245d97534d3d81ba711f0f67c7cf',
+    '2ffb1aebbe9582d83569b864dcf52f2a756dada69d79af41e26facc71925a58d',
+    '31a62f8d4b9771fbe0ac977aa9ee27d15c9929a6015a3ebdbf56e1d7bf428487',
+    '3571c56a6adfe3c6afce8b3fcac7bc37b5db8edcc61a2977479dda656bb75d6c',
+    '4271467e82f1bc3fe9c45bd813dd5c991798c8a679a1280bc4cef1840367c695',
+    '4a06846aef7fac3d039937791ee4eb347909f2a173e694ed5fa561eae84459a2',
+    '4cd73d31398cace6102e1d25501234b0704483ddceebbf59c5a15fdf0a60c5b0',
+    '59c78e48310b1942c2fb7d5d69e7ada52c49632ee34bf1b694639dfd09ba4d04',
+    '607ec8599e3a51bf62441445d756079fd392c679cafe7682141531079e6511aa',
+    '6c956122d7982ae85197c1e4c08eb415ce3928e863cfdd731e3decf98c73bc10',
+    '7bd6a4a8a064745f48b0611f6eb2971f1dd126204508ee3e053041a16d47e504',
+    '81e13635e5d94c3d409410259949e83d664d305263c0f5a77bef6d71d488a358',
+    '81f81e589207516921d7d2afc237b8e0bca7d6e6cd65c2855047bcff58b45919',
+    '8ff626bf95485fad8d3432db1b901943d8fed51e213899a9fcdee36a149b1b40',
+    '9fcd65f706a1ff79cc717f3779930895aed54abe6bdf02115695869e5e1f1e31',
+    'b849f75ba7cfef8ca9677140078b2aec5fc89f1c4ad4a99e82ea380ec080fd9a',
+    'd26be58bad147d4739e688538cac14b1bfd65e0553aa0637cc315a6ecc779432',
+    'e1060299a14bb48e1ebb0e0b13df860abee334015f428a0687af609578d530d4',
+    'e3f511198204f81a54e6bc721a9b8e6764b0f1c83ac021fa5c982ab54d6adb3f',
+    'ed5e899aedbf89f72e3b36a5fc537b58e0a2344409e6178b8421dd6fff939d25',
+    'f553397edf4b3975e6398d6d682e5ece2403e6b344362a39911d054678ef50d3',
+    'fba3f945f86ddf7683bffe774bebb830c735414f848623d91b3342eb246e6a26',
+    'ffb19addaec6e44c77018db1ecb1dfba60b2baf29167c17aad7d81fe09feb7dd',
+  ]
+  assert.match(source, /固定 Ollama v0\.32\.13/u)
+  for (const digest of fixedDigests) assert.match(source, new RegExp(`'${digest}'`, 'u'))
+})
+
+test('pinned Pandoc public build paths are allowed only for the exact binary', async (t) => {
+  const paths = await fixture('pandoc-public-provenance')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const source = fileURLToPath(new URL('../../src-tauri/binaries/pandoc-aarch64-apple-darwin', import.meta.url))
+  const bundled = join(paths.distRoot, 'pandoc-aarch64-apple-darwin')
+  await copyFile(source, bundled)
+
+  const verify = await loadBoundary()
+  assert.equal((await verify(paths)).findingCount, 0)
+
+  await rename(bundled, join(paths.distRoot, 'not-pandoc.bin'))
+  await assert.rejects(verify(paths), /\[path:user-home\]/u)
+
+  await writeFile(bundled, '/Users/admin/not-the-pinned-pandoc\\0')
+  await assert.rejects(verify(paths), /\[path:user-home\]/u)
 })
 
 test('public Ollama CI provenance remains allowed across a scan chunk boundary', async (t) => {

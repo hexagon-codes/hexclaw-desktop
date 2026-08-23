@@ -868,7 +868,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
 
     await page.getByTestId('subtab-accumulation').click()
     const accumAdd = page.getByTestId('accum-add-open')
-    await expect(accumAdd).toHaveText('记到积累本')
+    await expect(accumAdd).toHaveText('添加积累')
     await expect(accumAdd.locator('svg')).toHaveCount(1)
     await page.screenshot({
       path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-accum-single-plus-runtime.png',

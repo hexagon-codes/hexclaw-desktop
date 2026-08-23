@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -162,10 +162,7 @@ test('K12-REAL10X-PREFLIGHT-OBS-001 names every cycle-scoped C10 prepare environ
     'HEX_K12_C10_PREPARE_HOOK',
     'HEX_K12_C10_PREPARE_HOOK_SHA256',
   ]) {
-    assert.match(
-      output,
-      new RegExp(`C10 installed-app-sidecar-restart-recovery \\u00b7 ${name}:`),
-    )
+    assert.match(output, new RegExp(`C10 installed-app-sidecar-restart-recovery \\u00b7 ${name}:`))
   }
   assert.doesNotMatch(output, /explicit-test-input/)
 })
@@ -250,6 +247,64 @@ test('runner assigns one unique run id per cycle and forces DingTalk off', async
     calls.map(({ command }) => command),
     Array(10).fill(process.execPath),
   )
+})
+
+test('runner archives C05 and C06 current-bug reports and attachments before the fixed child paths are reused', async () => {
+  const contract = await loadContract()
+  const { executeReleasePlan } = await loadRunner()
+  const runnable = structuredClone(contract)
+  runnable.cycles = runnable.cycles.filter(({ id }) => id === 'C05' || id === 'C06')
+  const root = mkdtempSync(join(tmpdir(), 'k12-real-10x-cycle-evidence-'))
+  const sourceRoot = join(root, 'test-results/k12-current-bug-live')
+  const runID = 'release-cycle-evidence'
+  const runDigest = createHash('sha256').update(runID).digest('hex')
+
+  try {
+    const result = executeReleasePlan(runnable, {
+      baseRunId: runID,
+      cwd: root,
+      env: {},
+      spawn: (_command, _args, options) => {
+        const cycle = options.env.HEX_K12_REAL_10X_CYCLE_ID
+        rmSync(sourceRoot, { recursive: true, force: true })
+        mkdirSync(join(sourceRoot, 'artifacts'), { recursive: true })
+        writeFileSync(join(sourceRoot, 'report.json'), `${JSON.stringify({ cycle })}\n`)
+        writeFileSync(join(sourceRoot, 'artifacts', 'provider-receipt.json'), `${cycle}\n`)
+        return { status: 0 }
+      },
+    })
+
+    assert.equal(result.status, 'passed')
+    for (const [index, cycle] of ['C05', 'C06'].entries()) {
+      const archiveRoot = join(
+        root,
+        'test-results/k12-real-10x-release/runs',
+        runDigest,
+        cycle,
+        'current-bug-live',
+      )
+      assert.deepEqual(JSON.parse(readFileSync(join(archiveRoot, 'report.json'), 'utf8')), {
+        cycle,
+      })
+      assert.equal(
+        readFileSync(join(archiveRoot, 'artifacts', 'provider-receipt.json'), 'utf8'),
+        `${cycle}\n`,
+      )
+      const manifest = JSON.parse(readFileSync(join(archiveRoot, 'manifest.json'), 'utf8'))
+      assert.equal(manifest.cycle_id, cycle)
+      assert.deepEqual(
+        manifest.attachments.map(({ path }) => path),
+        ['artifacts/provider-receipt.json'],
+      )
+      assert.equal(
+        result.cycles[index].evidence.manifest_path,
+        `test-results/k12-real-10x-release/runs/${runDigest}/${cycle}/current-bug-live/manifest.json`,
+      )
+      assert.match(result.cycles[index].evidence.manifest_sha256, /^[a-f0-9]{64}$/)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('runner stops on the first non-passing trusted lane and never retries', async () => {

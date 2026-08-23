@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile)
 const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 const IMPLEMENTATION_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
 const REQUESTED_SURFACE = process.env.HEX_UI_SURFACE?.trim()
+const REQUESTED_INTERACTION = process.env.HEX_UI_INTERACTION?.trim()
 const AGENT = 'k12-fidelity-ming'
 const SESSION = 'k12-fidelity-session'
 const PIXEL_THRESHOLD = 8
@@ -731,7 +732,7 @@ const surfaces: Surface[] = [
       { name: 'hero-trend', selector: '#k12BookPanel0 .rc-week-hero__head > .stpill' },
       {
         name: 'period-tab-buttons',
-        selector: '#k12BookPanel0 .k12-week-view-tabs .source-tag',
+        selector: '#k12BookPanel0 .k12-week-view-tabs > button',
         all: true,
       },
       { name: 'toolbar-buttons', selector: '#k12ReviewAction .btn', all: true },
@@ -763,7 +764,7 @@ const surfaces: Surface[] = [
       { name: 'hero-trend', selector: '.weekly-hero__head > .stpill' },
       {
         name: 'period-tab-buttons',
-        selector: '.weekly-toolbar .k12-secondary-tabs .source-tag',
+        selector: '.weekly-toolbar .k12-book-tabs > button',
         all: true,
       },
       { name: 'toolbar-buttons', selector: '.weekly-toolbar .btn', all: true },
@@ -1010,6 +1011,17 @@ async function captureSurface(
 ) {
   await surface.openReference(referencePage)
   await surface.openImplementation(implementationPage)
+  if (REQUESTED_INTERACTION === 'weekly-review-menu') {
+    expect(surface.name).toBe('k12-weekly-current')
+    const referenceTrigger = referencePage.locator('#k12BookPanel0 .mistake-more-action').first()
+    const implementationTrigger = implementationPage
+      .locator('.weekly-hero .mistake-more__trigger')
+      .first()
+    await referenceTrigger.click()
+    await implementationTrigger.click()
+    await expect(referencePage.locator('.menu[role="menu"]')).toBeVisible()
+    await expect(implementationPage.locator('.mistake-more__menu[role="menu"]')).toBeVisible()
+  }
   await freezeVisualState(referencePage)
   await freezeVisualState(implementationPage)
 
@@ -1021,10 +1033,19 @@ async function captureSurface(
   const geometryPath = path.join(outputDir, 'geometry.json')
   const reportPath = path.join(outputDir, 'diff-report.json')
 
+  const referenceTargets = [...surface.referenceGeometry]
+  const implementationTargets = [...surface.implementationGeometry]
+  if (REQUESTED_INTERACTION === 'weekly-review-menu') {
+    referenceTargets.push({ name: 'review-menu', selector: '.menu[role="menu"]' })
+    implementationTargets.push({
+      name: 'review-menu',
+      selector: '.mistake-more__menu[role="menu"]',
+    })
+  }
   const [referenceGeometry, implementationGeometry, referenceLayers, implementationLayers] =
     await Promise.all([
-      geometry(referencePage, surface.referenceGeometry),
-      geometry(implementationPage, surface.implementationGeometry),
+      geometry(referencePage, referenceTargets),
+      geometry(implementationPage, implementationTargets),
       shellLayers(referencePage, referenceShellLayers),
       shellLayers(implementationPage, implementationShellLayers),
     ])

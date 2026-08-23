@@ -212,6 +212,12 @@ async function commandAdapter(paths, scenario = '') {
             `${args.at(-1)}: code object is not signed at all\nresource envelope is obsolete`,
           )
         }
+        if (scenario === 'unsigned-no-resources') {
+          return commandResult(
+            1,
+            `${args.at(-1)}: code has no resources but signature indicates they must be present`,
+          )
+        }
         return commandResult(1, `${args.at(-1)}: code object is not signed at all`)
       }
       if (action === 'hdiutil:detach') {
@@ -447,6 +453,17 @@ test('canonical package verifier accepts the standard unsigned architecture deta
   )
   assert.equal(realCodesign.code, 1)
   assert.match(realCodesign.stderr, /code object is not signed at all/u)
+
+  const result = await verifyPackageLocal(paths, adapter)
+
+  assert.equal(result.unsignedVerified, true)
+  await assertMountRemoved(adapter)
+})
+
+test('canonical package verifier accepts the current macOS ad-hoc no-resource unsigned failure only', async () => {
+  const paths = await fixture('unsigned-no-resources')
+  const adapter = await commandAdapter(paths, 'unsigned-no-resources')
+  const { verifyPackageLocal } = await loadVerifier()
 
   const result = await verifyPackageLocal(paths, adapter)
 

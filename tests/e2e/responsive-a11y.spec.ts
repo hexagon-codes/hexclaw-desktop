@@ -29,14 +29,19 @@ function verifyClearFixture(): Buffer {
   const bytes = readFileSync(CLEAR.path)
   expect(statSync(CLEAR.path).isFile()).toBe(true)
   expect(bytes.length, `${CLEAR.id} byte count drift`).toBe(CLEAR.bytes)
-  expect(createHash('sha256').update(bytes).digest('hex'), `${CLEAR.id} SHA drift`).toBe(CLEAR.sha256)
+  expect(createHash('sha256').update(bytes).digest('hex'), `${CLEAR.id} SHA drift`).toBe(
+    CLEAR.sha256,
+  )
   expect(bytes.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
   return bytes
 }
 
 async function json<T>(response: APIResponse): Promise<T> {
   const text = await response.text()
-  expect(response.ok(), `${new URL(response.url()).pathname} => ${response.status()} (body redacted)`).toBe(true)
+  expect(
+    response.ok(),
+    `${new URL(response.url()).pathname} => ${response.status()} (body redacted)`,
+  ).toBe(true)
   return JSON.parse(text) as T
 }
 
@@ -55,14 +60,19 @@ async function createTutorAndOpenArchive(page: Page, childName: string): Promise
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '下学期' }).click()
   await createDialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(createDialog).toHaveCount(0, { timeout: 30_000 })
-  const agents = await json<{ agents?: Array<{ name?: string; metadata?: Record<string, string> }> }>(
-    await page.request.get('/_hexclaw/api/v1/agents'),
+  const agents = await json<{
+    agents?: Array<{ name?: string; metadata?: Record<string, string> }>
+  }>(await page.request.get('/_hexclaw/api/v1/agents'))
+  const matches = (agents.agents || []).filter(
+    (agent) => agent.metadata?.['k12.child_name'] === childName,
   )
-  const matches = (agents.agents || []).filter((agent) => agent.metadata?.['k12.child_name'] === childName)
   expect(matches).toHaveLength(1)
   const owner = matches[0]!.name!
   await page.getByText('我的智能体', { exact: false }).first().click()
-  await page.locator('.hc-cxcard', { hasText: childName }).getByRole('button', { name: /错题本|学习档案/ }).click()
+  await page
+    .locator('.hc-cxcard', { hasText: childName })
+    .getByRole('button', { name: /错题本|学习档案/ })
+    .click()
   await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
   return owner
 }
@@ -72,7 +82,10 @@ async function assertNoHorizontalOverflow(page: Page, label: string): Promise<vo
     document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     body: document.body.scrollWidth - document.body.clientWidth,
   }))
-  expect(overflow.document, `${label}: document must not horizontally overflow`).toBeLessThanOrEqual(1)
+  expect(
+    overflow.document,
+    `${label}: document must not horizontally overflow`,
+  ).toBeLessThanOrEqual(1)
   expect(overflow.body, `${label}: body must not horizontally overflow`).toBeLessThanOrEqual(1)
 }
 
@@ -90,31 +103,46 @@ async function assertInsideViewport(page: Page, locator: Locator, label: string)
 }
 
 async function unnamedControls(scope: Locator): Promise<string[]> {
-  return scope.locator('button, a[href], input:not([type="hidden"]), textarea, select, [role="button"], [role="tab"], [role="radio"], [role="menuitem"]').evaluateAll((nodes) => {
-    function labelledBy(node: Element): string {
-      return (node.getAttribute('aria-labelledby') || '')
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((id) => document.getElementById(id)?.textContent || '')
-        .join(' ')
-    }
-    function labelText(node: Element): string {
-      const control = node as HTMLInputElement
-      const explicit = control.id ? document.querySelector(`label[for="${CSS.escape(control.id)}"]`)?.textContent : ''
-      return explicit || node.closest('label')?.textContent || ''
-    }
-    return nodes.filter((node) => {
-      const element = node as HTMLElement
-      if (element.hidden || element.getAttribute('aria-hidden') === 'true') return false
-      const style = getComputedStyle(element)
-      if (style.display === 'none' || style.visibility === 'hidden') return false
-      const name = [
-        element.getAttribute('aria-label'), labelledBy(element), labelText(element),
-        element.getAttribute('alt'), element.getAttribute('title'), element.innerText,
-      ].find((value) => value?.trim())
-      return !name
-    }).map((node) => `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.getAttribute('data-testid') ? `[data-testid=${node.getAttribute('data-testid')}]` : ''}`)
-  })
+  return scope
+    .locator(
+      'button, a[href], input:not([type="hidden"]), textarea, select, [role="button"], [role="tab"], [role="radio"], [role="menuitem"]',
+    )
+    .evaluateAll((nodes) => {
+      function labelledBy(node: Element): string {
+        return (node.getAttribute('aria-labelledby') || '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((id) => document.getElementById(id)?.textContent || '')
+          .join(' ')
+      }
+      function labelText(node: Element): string {
+        const control = node as HTMLInputElement
+        const explicit = control.id
+          ? document.querySelector(`label[for="${CSS.escape(control.id)}"]`)?.textContent
+          : ''
+        return explicit || node.closest('label')?.textContent || ''
+      }
+      return nodes
+        .filter((node) => {
+          const element = node as HTMLElement
+          if (element.hidden || element.getAttribute('aria-hidden') === 'true') return false
+          const style = getComputedStyle(element)
+          if (style.display === 'none' || style.visibility === 'hidden') return false
+          const name = [
+            element.getAttribute('aria-label'),
+            labelledBy(element),
+            labelText(element),
+            element.getAttribute('alt'),
+            element.getAttribute('title'),
+            element.innerText,
+          ].find((value) => value?.trim())
+          return !name
+        })
+        .map(
+          (node) =>
+            `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.getAttribute('data-testid') ? `[data-testid=${node.getAttribute('data-testid')}]` : ''}`,
+        )
+    })
 }
 
 test('§1.2 responsive/a11y gate freezes the clear-sheet source identity', () => {
@@ -124,7 +152,10 @@ test('§1.2 responsive/a11y gate freezes the clear-sheet source identity', () =>
 
 test.describe('K12 responsive and accessibility release gate', () => {
   test.setTimeout(12 * 60_000)
-  test.skip(!LIVE, 'NOT RUN: set HEX_K12_ACCEPTANCE_LIVE=1 for an isolated current-source Desktop + sidecar')
+  test.skip(
+    !LIVE,
+    'NOT RUN: set HEX_K12_ACCEPTANCE_LIVE=1 for an isolated current-source Desktop + sidecar',
+  )
   let childName = ''
   test.afterEach(async ({ request }) => {
     await cleanupK12Child(request, childName)
@@ -132,47 +163,77 @@ test.describe('K12 responsive and accessibility release gate', () => {
     verifyClearFixture()
   })
 
-  test('core archive and add-work dialog stay operable at four canonical viewports and 200% zoom', async ({ page }) => {
+  test('core archive and add-work dialog stay operable at four canonical viewports and 200% zoom', async ({
+    page,
+  }) => {
     childName = `响应式-${e2eMarker('child')}`
     await page.setViewportSize(VIEWPORTS[0])
     await createTutorAndOpenArchive(page, childName)
 
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport)
-      await page.evaluate(() => { document.documentElement.style.zoom = '1' })
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = '1'
+      })
       await page.getByTestId('subtab-works').click()
       await expect(page.getByTestId('works-section')).toBeVisible()
       await assertNoHorizontalOverflow(page, viewport.slug)
-      await assertInsideViewport(page, page.getByTestId('subtab-works'), `${viewport.slug} works tab`)
+      await assertInsideViewport(
+        page,
+        page.getByTestId('subtab-works'),
+        `${viewport.slug} works tab`,
+      )
       const add = page.getByTestId('cw-add-open')
       const addBox = await assertInsideViewport(page, add, `${viewport.slug} add-work`)
       if (viewport.width <= 390) {
-        expect(Math.max(addBox.width, addBox.height), `${viewport.slug} add-work touch target`).toBeGreaterThanOrEqual(44)
+        expect(
+          Math.max(addBox.width, addBox.height),
+          `${viewport.slug} add-work touch target`,
+        ).toBeGreaterThanOrEqual(44)
       }
       await add.click()
       const overlay = page.getByTestId('cw-add-modal')
       const dialog = overlay.getByRole('dialog')
       await assertInsideViewport(page, dialog, `${viewport.slug} add-work dialog`)
-      await assertInsideViewport(page, dialog.getByTestId('cw-add-photo'), `${viewport.slug} photo dropzone`)
-      await assertInsideViewport(page, dialog.getByTestId('cw-add-submit'), `${viewport.slug} save action`)
+      await assertInsideViewport(
+        page,
+        dialog.getByTestId('cw-add-photo'),
+        `${viewport.slug} photo dropzone`,
+      )
+      await assertInsideViewport(
+        page,
+        dialog.getByTestId('cw-add-submit'),
+        `${viewport.slug} save action`,
+      )
       await assertNoHorizontalOverflow(page, `${viewport.slug} modal`)
-      await page.screenshot({ path: `test-results/k12-responsive-${viewport.slug}.png`, fullPage: true })
+      await page.screenshot({
+        path: `test-results/k12-responsive-${viewport.slug}.png`,
+        fullPage: true,
+      })
       await dialog.getByRole('button', { name: /取消/ }).last().click()
       await expect(overlay).toHaveCount(0)
     }
 
     await page.setViewportSize({ width: 640, height: 1136 })
-    await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = '2'
+    })
     await page.getByTestId('subtab-works').click()
     await assertNoHorizontalOverflow(page, '200% zoom')
     await assertInsideViewport(page, page.getByTestId('cw-add-open'), '200% zoom add-work')
     await page.getByTestId('cw-add-open').click()
-    await assertInsideViewport(page, page.getByTestId('cw-add-modal').getByRole('dialog'), '200% zoom dialog')
+    await assertInsideViewport(
+      page,
+      page.getByTestId('cw-add-modal').getByRole('dialog'),
+      '200% zoom dialog',
+    )
     await assertInsideViewport(page, page.getByTestId('cw-add-submit'), '200% zoom save action')
     await page.screenshot({ path: 'test-results/k12-responsive-200-percent.png', fullPage: true })
   })
 
-  test('archive controls and add-work modal expose names, roles, states, focus and Escape return', async ({ page }) => {
+  test('archive controls and add-work modal expose names, roles, states, focus and Escape return', async ({
+    page,
+  }) => {
     childName = `无障碍-${e2eMarker('child')}`
     await page.setViewportSize({ width: 1280, height: 720 })
     await createTutorAndOpenArchive(page, childName)
@@ -206,53 +267,112 @@ test.describe('K12 responsive and accessibility release gate', () => {
     await expect(art).toHaveAttribute('aria-pressed', 'true')
     await expect(writing).toHaveAttribute('aria-pressed', 'false')
     await expect(unnamedControls(overlay)).resolves.toEqual([])
-    expect(await page.locator('[id]').evaluateAll((nodes) => {
-      const ids = nodes.map((node) => node.id).filter(Boolean)
-      return ids.filter((id, index) => ids.indexOf(id) !== index)
-    }), 'DOM ids must be unique for label/description resolution').toEqual([])
+    expect(
+      await page.locator('[id]').evaluateAll((nodes) => {
+        const ids = nodes.map((node) => node.id).filter(Boolean)
+        return ids.filter((id, index) => ids.indexOf(id) !== index)
+      }),
+      'DOM ids must be unique for label/description resolution',
+    ).toEqual([])
     await page.keyboard.press('Escape')
     await expect(overlay, 'Escape must close the modal').toHaveCount(0)
     await expect(opener, 'modal close must restore focus to its opener').toBeFocused()
   })
 
-  test('reduced-motion keeps the core journey stable and disables infinite decorative motion', async ({ page }) => {
+  test('reduced-motion keeps the core journey stable and disables infinite decorative motion', async ({
+    page,
+  }) => {
     childName = `减少动态-${e2eMarker('child')}`
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await createTutorAndOpenArchive(page, childName)
     await page.getByTestId('subtab-works').click()
     await page.getByTestId('cw-add-open').click()
-    const offenders = await page.locator('body *').evaluateAll((nodes) => nodes.flatMap((node) => {
-      const style = getComputedStyle(node)
-      if (style.display === 'none' || style.visibility === 'hidden') return []
-      return style.animationIterationCount === 'infinite' && style.animationName !== 'none'
-        ? [`${node.tagName.toLowerCase()}.${(node as HTMLElement).className}`]
-        : []
-    }))
-    expect(offenders, 'prefers-reduced-motion must not leave infinite decorative animations running').toEqual([])
+    const offenders = await page.locator('body *').evaluateAll((nodes) =>
+      nodes.flatMap((node) => {
+        const style = getComputedStyle(node)
+        if (style.display === 'none' || style.visibility === 'hidden') return []
+        return style.animationIterationCount === 'infinite' && style.animationName !== 'none'
+          ? [`${node.tagName.toLowerCase()}.${(node as HTMLElement).className}`]
+          : []
+      }),
+    )
+    expect(
+      offenders,
+      'prefers-reduced-motion must not leave infinite decorative animations running',
+    ).toEqual([])
     await expect(page.getByTestId('cw-add-modal').getByRole('dialog')).toBeVisible()
   })
 
-  test('real photo recognition is completable by keyboard with named live status and non-color verdicts', async ({ page }) => {
-    test.skip(!LIVE_VISION, 'NOT RUN: requires HEX_K12_REAL_MODEL=1 and an authorized vision provider')
+  test('real photo recognition is completable by keyboard with named live status and non-color verdicts', async ({
+    page,
+  }) => {
+    test.skip(
+      !LIVE_VISION,
+      'NOT RUN: requires HEX_K12_REAL_MODEL=1 and an authorized vision provider',
+    )
     childName = `键盘批改-${e2eMarker('child')}`
     const owner = await createTutorAndOpenArchive(page, childName)
     await page.getByRole('tab', { name: '辅导', exact: true }).click()
     const source = verifyClearFixture()
-    const requestPromise = page.waitForRequest((request) =>
-      request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/api/k12/grading-jobs'),
-    )
+    const requestPromise = page.waitForRequest((request) => {
+      const path = new URL(request.url()).pathname
+      return request.method() === 'POST' && path.endsWith('/api/k12/image-tasks')
+    })
     await page.locator('.hc-composer input[type="file"]').setInputFiles(CLEAR.path)
     const request = await requestPromise
-    const payload = request.postDataJSON() as { agent?: string; image_base64?: string }
+    const payload = request.postDataJSON() as {
+      agent?: string
+      source_session?: string
+      source_kind?: string
+      source_ref?: string
+      source_asset_refs?: string[]
+      attempt_generation?: number
+      route_request?: {
+        provider?: string
+        model?: string
+        selection_source?: string
+      }
+    }
     expect(payload.agent).toBe(owner)
-    expect(createHash('sha256').update(Buffer.from(payload.image_base64 || '', 'base64')).digest('hex')).toBe(CLEAR.sha256)
-    expect(Buffer.from(payload.image_base64 || '', 'base64')).toHaveLength(source.length)
+    expect(payload.source_kind).toBe('desktop')
+    expect(payload.source_session).toBeTruthy()
+    expect(payload.source_ref).toBeTruthy()
+    expect(payload.source_asset_refs).toHaveLength(1)
+    expect(payload.source_asset_refs?.[0]).toMatch(
+      new RegExp(`^asset://${owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`),
+    )
+    expect(payload.attempt_generation).toBe(1)
+    expect(payload.route_request).toMatchObject({
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      selection_source: 'explicit',
+    })
+    expect(source.length).toBe(CLEAR.bytes)
 
     const message = page.getByTestId('k12-photo-assistant-message').last()
     const guard = message.getByTestId('recognize-guard')
     await expect(guard).toBeVisible({ timeout: 30_000 })
-    await expect(guard.locator('[aria-live], [role="status"]').first(), 'recognition progress must be announced').toBeAttached()
-    await expect(guard.getByTestId('rq-item').first()).toBeVisible({ timeout: 6 * 60_000 })
+    await expect(
+      guard.locator('[aria-live], [role="status"]').first(),
+      'recognition progress must be announced',
+    ).toBeAttached()
+    const readyOrFailed = await Promise.race([
+      guard
+        .getByTestId('rq-item')
+        .first()
+        .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+        .then(() => 'ready' as const),
+      guard
+        .locator('.rec-panel__err')
+        .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+        .then(() => 'failed' as const),
+    ])
+    if (readyOrFailed === 'failed') {
+      throw new Error(
+        `real image task failed before producing questions: ${await guard.locator('.rec-panel__err').innerText()}`,
+      )
+    }
+    await expect(guard.locator('.rec-panel__err')).toHaveCount(0)
     for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all()) {
       await checkbox.focus()
       await page.keyboard.press('Space')
@@ -267,7 +387,9 @@ test.describe('K12 responsive and accessibility release gate', () => {
     await page.keyboard.press('Enter')
     const overlay = guard.getByTestId('photo-grade-overlay')
     await expect(overlay).toBeVisible({ timeout: 8 * 60_000 })
-    await expect(overlay, 'verdicts need text/symbol meaning in addition to color').toContainText(/正确|错误|对|错|✓|✗/)
+    await expect(overlay, 'verdicts need text/symbol meaning in addition to color').toContainText(
+      /正确|错误|对|错|✓|✗/,
+    )
     await expect(unnamedControls(guard)).resolves.toEqual([])
   })
 })

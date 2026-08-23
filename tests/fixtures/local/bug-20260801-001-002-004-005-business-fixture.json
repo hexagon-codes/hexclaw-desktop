@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "bug-20260801-001-002-004-005-business-fixture-v2",
+  "locale": "zh-CN",
+  "reducedMotion": true,
+  "now": "2026-07-29T12:49:13+08:00",
+  "appearance": {
+    "version": 1,
+    "preference": "k12",
+    "introSeen": true
+  },
+  "agents": [
+    {
+      "name": "mingming",
+      "display_name": "小明的辅导助手",
+      "description": "五年级辅导",
+      "provider": "",
+      "model": "",
+      "metadata": {
+        "scenario": "k12-tutor",
+        "avatar": "🎓",
+        "k12.child_name": "小明",
+        "k12.grade_term": "五年级上",
+        "k12.textbook_edition": "人教版"
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-k12",
+      "title": "小明的辅导助手 · 五年级",
+      "created_at": "2026-07-29T12:00:00+08:00",
+      "updated_at": "2026-07-29T12:48:00+08:00",
+      "message_count": 6
+    },
+    {
+      "id": "session-k12-hong",
+      "title": "🎓 小红的辅导助手 · 三年级",
+      "created_at": "2026-06-15T10:00:00+08:00",
+      "updated_at": "2026-06-15T10:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-decimal",
+      "title": "小数乘法讲解",
+      "created_at": "2026-07-29T14:32:00+08:00",
+      "updated_at": "2026-07-29T14:32:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-orphan",
+      "title": "已删除的智能体",
+      "created_at": "2026-07-29T09:18:00+08:00",
+      "updated_at": "2026-07-29T09:18:00+08:00",
+      "message_count": 28
+    },
+    {
+      "id": "session-research",
+      "title": "高级研究分析师",
+      "created_at": "2026-06-16T10:00:00+08:00",
+      "updated_at": "2026-06-16T10:00:00+08:00",
+      "message_count": 4
+    },
+    {
+      "id": "session-baidu",
+      "title": "百度热搜采集问题",
+      "created_at": "2026-06-16T09:00:00+08:00",
+      "updated_at": "2026-06-16T09:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-summary-1",
+      "title": "总结以下三条科技要点，并把…",
+      "created_at": "2026-06-13T10:00:00+08:00",
+      "updated_at": "2026-06-13T10:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-browser-1",
+      "title": "用 browser 工具访问 http://to…",
+      "created_at": "2026-06-12T10:00:00+08:00",
+      "updated_at": "2026-06-12T10:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-browser-2",
+      "title": "用 browser 工具访问 http://to…",
+      "created_at": "2026-06-12T09:00:00+08:00",
+      "updated_at": "2026-06-12T09:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-browser-3",
+      "title": "用 browser 工具访问 http://to…",
+      "created_at": "2026-06-12T08:00:00+08:00",
+      "updated_at": "2026-06-12T08:00:00+08:00",
+      "message_count": 1
+    },
+    {
+      "id": "session-baidu-page",
+      "title": "访问百度热搜榜页面 https://to…",
+      "created_at": "2026-06-12T07:00:00+08:00",
+      "updated_at": "2026-06-12T07:00:00+08:00",
+      "message_count": 2
+    },
+    {
+      "id": "session-summary-2",
+      "title": "总结以下三条科技要点，并把…",
+      "created_at": "2026-06-12T06:00:00+08:00",
+      "updated_at": "2026-06-12T06:00:00+08:00",
+      "message_count": 2
+    }
+  ],
+  "pinnedSessionIds": ["session-k12", "session-k12-hong"],
+  "mistakes": [
+    {
+      "record_id": "m-apple",
+      "question": "苹果和梨的价钱",
+      "knowledge_point": "小数乘法",
+      "error_cause": "连续错 2 次",
+      "status": "reviewing",
+      "review_state": "scheduled",
+      "subject": "数学",
+      "review_kind": "verify",
+      "entry_source": "photo",
+      "created_at": 1785254400,
+      "version": 1
+    },
+    {
+      "record_id": "m-circuit",
+      "question": "小灯泡没有形成闭合回路",
+      "knowledge_point": "简单电路",
+      "error_cause": "实验图判断错误",
+      "status": "reviewing",
+      "review_state": "scheduled",
+      "subject": "科学",
+      "review_kind": "verify",
+      "entry_source": "photo",
+      "created_at": 1784044800,
+      "version": 1
+    },
+    {
+      "record_id": "m-loop",
+      "question": "重复执行积木少循环 1 次",
+      "knowledge_point": "图形化编程",
+      "error_cause": "运行结果已复核 · 到期可再练",
+      "status": "retried",
+      "subject": "信息科技",
+      "review_kind": "verify",
+      "entry_source": "verified",
+      "created_at": 1783872000,
+      "version": 1
+    },
+    {
+      "record_id": "m-eq",
+      "question": "解方程 2x+15=43",
+      "knowledge_point": "简易方程",
+      "error_cause": "移项符号错",
+      "status": "retried",
+      "subject": "数学",
+      "review_kind": "verify",
+      "entry_source": "verified",
+      "created_at": 1783612800,
+      "version": 1
+    },
+    {
+      "record_id": "m-believe",
+      "question": "believe —— 拼成 belive（少 e）",
+      "knowledge_point": "错词",
+      "error_cause": "Unit 4 听写错题",
+      "status": "reviewing",
+      "review_state": "scheduled",
+      "subject": "英语",
+      "review_kind": "verbatim",
+      "entry_source": "photo",
+      "created_at": 1783440000,
+      "version": 1
+    },
+    {
+      "record_id": "m-poem",
+      "question": "「梅须逊雪三分白」漏「须」字",
+      "knowledge_point": "默写",
+      "error_cause": "古诗默写错题",
+      "status": "reviewing",
+      "review_state": "scheduled",
+      "subject": "语文",
+      "review_kind": "verbatim",
+      "entry_source": "manual",
+      "created_at": 1783267200,
+      "version": 1
+    }
+  ],
+  "insightReport": {
+    "grade_term": "五年级",
+    "trend": { "mastered": 6, "reviewing": 5, "retried": 6, "archived": 0, "total": 11 },
+    "weak_top3": [
+      { "knowledge_point": "简易方程", "count": 5, "share": 0.5555555555555556, "subject": "数学" },
+      { "knowledge_point": "小数乘法", "count": 3, "share": 0.3333333333333333, "subject": "数学" },
+      {
+        "knowledge_point": "多边形面积",
+        "count": 1,
+        "share": 0.1111111111111111,
+        "subject": "数学"
+      }
+    ],
+    "month_new_mistakes": 9,
+    "review_completion_rate": 0.72,
+    "consecutive_fail_kps": ["简易方程"],
+    "week_pending": 6,
+    "practice_pending": 1,
+    "suggestion": "“等式两边同时变化”连续 3 次未通过。建议先做 2 道等式性质热身，再进入本周复习卷中的方程题。"
+  }
+}

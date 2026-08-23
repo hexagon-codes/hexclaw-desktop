@@ -19,7 +19,13 @@ export interface PhotoAnnotationCoverage {
   degradedCoverage: number
 }
 
-const OVERLAY_ITEM_STATUSES = new Set(['correct', 'wrong', 'out_of_scope', 'untrusted'])
+const OVERLAY_ITEM_STATUSES = new Set([
+  'correct',
+  'correct_with_process_issue',
+  'wrong',
+  'out_of_scope',
+  'untrusted',
+])
 const SAFE_ANNOTATED_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 function asRecord(value: unknown, label: string): Json {

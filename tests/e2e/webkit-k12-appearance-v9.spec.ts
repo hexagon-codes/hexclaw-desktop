@@ -671,9 +671,15 @@ async function installSourceFixture(
         items: k12TutorRecovery
           ? [
               {
-                source_session: 'session-k12',
+                dispatch_id: K12_TUTOR_DISPATCH_ID,
+                source_session_id: 'session-k12',
                 source_message_id: K12_TUTOR_SOURCE_MESSAGE_ID,
-                dispatch: k12TutorRecoveryDispatch,
+                attempt_generation: 1,
+                version: 1,
+                stage: 'awaiting_confirmation',
+                status: 'awaiting_confirmation',
+                projection_ready: true,
+                terminal: false,
               },
             ]
           : [],

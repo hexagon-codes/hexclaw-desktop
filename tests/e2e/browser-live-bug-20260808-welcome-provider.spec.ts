@@ -157,7 +157,45 @@ test('BUG-20260808 welcome uses current OpenAI models and one-row connection rec
   )
   await page.keyboard.press('Escape')
 
-  const correctedProviderModels = [
+  const cloudProviderModels = [
+    {
+      provider: 'OpenAI',
+      models: ['GPT-5.6 Sol', 'GPT-5.6 Terra', 'GPT-5.6 Luna'],
+    },
+    {
+      provider: 'DeepSeek',
+      models: ['DeepSeek V4 Pro', 'DeepSeek V4 Flash'],
+    },
+    {
+      provider: 'Anthropic',
+      models: ['Claude Fable 5', 'Claude Opus 5', 'Claude Sonnet 5', 'Claude Haiku 4.5'],
+    },
+    {
+      provider: 'Google Gemini',
+      models: [
+        'Gemini 3.6 Flash',
+        'Gemini 3.5 Flash',
+        'Gemini 3.5 Flash-Lite',
+        'Gemini 3.1 Pro Preview',
+      ],
+    },
+    {
+      provider: '通义千问',
+      models: ['Qwen3.7 Max', 'Qwen3.7 Plus', 'Qwen3.6 Flash'],
+    },
+    {
+      provider: '豆包 (Ark)',
+      models: [
+        'Doubao Seed 2.0 Pro',
+        'Doubao Seed 2.0 Lite',
+        'Doubao Seed 2.0 Mini',
+        'Doubao Seed 2.0 Code Preview',
+      ],
+    },
+    {
+      provider: '智谱 AI',
+      models: ['GLM-5.2', 'GLM-5.1', 'GLM-4.7 Flash', 'GLM-5V Turbo'],
+    },
     {
       provider: 'Kimi (月之暗面)',
       models: ['Kimi K3', 'Kimi K2.7 Code', 'Kimi K2.7 Code Highspeed', 'Kimi K2.6'],
@@ -167,9 +205,11 @@ test('BUG-20260808 welcome uses current OpenAI models and one-row connection rec
       models: ['ERNIE 5.1', 'ERNIE 5.0', 'ERNIE X1.1 Preview'],
     },
     { provider: '腾讯混元', models: ['Tencent HY 3'] },
+    { provider: '讯飞星火', models: ['Spark X2'] },
+    { provider: 'MiniMax', models: ['MiniMax M2.7', 'MiniMax M2.7 Highspeed'] },
   ]
 
-  for (const candidate of correctedProviderModels) {
+  for (const candidate of cloudProviderModels) {
     await page.locator('.hc-provider-select__trigger').click()
     await page.getByRole('option', { name: candidate.provider, exact: true }).click()
     await modelSelect.click()

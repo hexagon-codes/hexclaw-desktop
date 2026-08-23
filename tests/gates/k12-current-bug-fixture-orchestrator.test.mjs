@@ -318,6 +318,41 @@ test('environment validation rejects mock, incomplete and release-drifted gradin
   }
 })
 
+test('environment validation requires five completed grading calibration samples in every bucket', async () => {
+  const { validateFixtureEnvironment } = await loadOrchestrator()
+  for (const sampleCount of [0, 1, 2, 4]) {
+    const raw = JSON.stringify(
+      syntheticGradingCalibrationArtifact({
+        measurements: syntheticGradingCalibrationArtifact().measurements.map((measurement) => ({
+          ...measurement,
+          sample_count: sampleCount,
+          success_count: sampleCount,
+        })),
+      }),
+    )
+    const env = environmentForRawCalibration(raw)
+    assert.throws(
+      () => validateFixtureEnvironment(env, rawCalibrationAdapters(env, raw)),
+      /grading calibration/i,
+      `sample_count=${sampleCount} must not enter the release gate`,
+    )
+  }
+
+  const validRaw = JSON.stringify(
+    syntheticGradingCalibrationArtifact({
+      measurements: syntheticGradingCalibrationArtifact().measurements.map((measurement) => ({
+        ...measurement,
+        sample_count: 5,
+        success_count: 5,
+      })),
+    }),
+  )
+  const validEnv = environmentForRawCalibration(validRaw)
+  assert.doesNotThrow(() =>
+    validateFixtureEnvironment(validEnv, rawCalibrationAdapters(validEnv, validRaw)),
+  )
+})
+
 test('recognition-only preflight requires an independent approved recognizing v2 artifact', async () => {
   const { validateFixtureEnvironment } = await loadOrchestrator()
   const env = recognitionEnvironment()

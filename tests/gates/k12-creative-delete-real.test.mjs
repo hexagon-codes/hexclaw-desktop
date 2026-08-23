@@ -8,16 +8,18 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import test from 'node:test'
 
 import { startReleaseStaticGateway } from '../../scripts/ci/k12-release-static-gateway.mjs'
+import { parseStrictJSON } from '../../scripts/ci/k12-strict-json.mjs'
 
 const repoRoot = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const hexclawSource = join(repoRoot, '..', 'hexclaw')
@@ -36,6 +38,7 @@ const creativeRealCases = {
     config: 'playwright.k12.creative-delete.system-chrome.config.ts',
     title:
       'art upload stores the frozen image under the exact Tutor owner and round-trips its bytes',
+    activeDelete: true,
   },
   'art-feedback': {
     config: 'playwright.k12.creative-delete.system-chrome.config.ts',
@@ -51,6 +54,16 @@ const creativeRealCases = {
     title: 'BUG-20260726-029 installed real model isolates identity across two children',
   },
 }
+
+test('agent-delete lane requires an observed durable sent receipt before the production DELETE', async () => {
+  const source = await readFile(join(repoRoot, 'tests/e2e/creative-real-fixtures.spec.ts'), 'utf8')
+
+  assert.equal(creativeRealCases['agent-delete'].activeDelete, true)
+  assert.match(source, /waitForSentWorkFeedbackInvocation/)
+  assert.match(source, /invocation_status:\s*'sent'/)
+  assert.match(source, /delete_http_status:\s*200/)
+  assert.match(source, /active-delete-receipt\.json/)
+})
 
 const candidatePolicy = {
   policy_version: 1,
@@ -124,6 +137,134 @@ async function fileSHA256(pathname) {
   return createHash('sha256')
     .update(await readFile(pathname))
     .digest('hex')
+}
+
+const activeDeleteCountKeys = [
+  'agent_rows',
+  'creative_work_rows',
+  'feedback_generation_rows',
+  'image_task_invocation_rows',
+  'image_task_dispatch_rows',
+  'creative_intake_rows',
+  'current_create_receipt_rows',
+  'agent_rule_rows',
+]
+
+function exactKeys(value, expected, label) {
+  assert.ok(
+    value && typeof value === 'object' && !Array.isArray(value),
+    `${label} must be an object`,
+  )
+  assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), `${label} exact field set`)
+}
+
+function assertZeroCounts(value, label) {
+  exactKeys(value, activeDeleteCountKeys, label)
+  for (const key of activeDeleteCountKeys) assert.equal(value[key], 0, `${label}.${key}`)
+}
+
+export function validateActiveDeleteReceipt(value) {
+  exactKeys(
+    value,
+    [
+      'schema_version',
+      'transition',
+      'before_delete',
+      'delete_http_status',
+      'after_delete',
+      'dingtalk_sends',
+    ],
+    'active-delete receipt',
+  )
+  assert.equal(value.schema_version, 1)
+  assert.deepEqual(value.transition, ['sent', 'delete_200', 'cascade_zero'])
+  exactKeys(
+    value.before_delete,
+    [
+      'invocation_status',
+      'invocation_id_sha256',
+      'provider_request_key_sha256',
+      'attempt',
+      'provider_call_rows',
+      'target_rows',
+    ],
+    'active-delete before_delete',
+  )
+  assert.equal(value.before_delete.invocation_status, 'sent')
+  assert.match(value.before_delete.invocation_id_sha256, /^[a-f0-9]{64}$/)
+  assert.match(value.before_delete.provider_request_key_sha256, /^[a-f0-9]{64}$/)
+  assert.equal(value.before_delete.attempt, 1)
+  assert.equal(value.before_delete.provider_call_rows, 1)
+  exactKeys(value.before_delete.target_rows, activeDeleteCountKeys, 'active-delete target_rows')
+  for (const key of [
+    'agent_rows',
+    'creative_work_rows',
+    'feedback_generation_rows',
+    'image_task_invocation_rows',
+  ]) {
+    assert.equal(value.before_delete.target_rows[key], 1, `active-delete target_rows.${key}`)
+  }
+  assert.equal(value.delete_http_status, 200)
+  exactKeys(
+    value.after_delete,
+    [
+      'first_snapshot',
+      'observation_ms',
+      'second_snapshot',
+      'agent_api_rows',
+      'creative_work_api_rows',
+      'asset_http_status',
+    ],
+    'active-delete after_delete',
+  )
+  assertZeroCounts(value.after_delete.first_snapshot, 'active-delete first_snapshot')
+  assert.equal(value.after_delete.observation_ms, 500)
+  assertZeroCounts(value.after_delete.second_snapshot, 'active-delete second_snapshot')
+  assert.equal(value.after_delete.agent_api_rows, 0)
+  assert.equal(value.after_delete.creative_work_api_rows, 0)
+  assert.equal(value.after_delete.asset_http_status, 404)
+  assert.equal(value.dingtalk_sends, 0)
+  return value
+}
+
+async function findNamedFiles(root, name, matches = []) {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const pathname = join(root, entry.name)
+    assert.equal(entry.isSymbolicLink(), false, 'Playwright evidence must not contain symlinks')
+    if (entry.isDirectory()) {
+      await findNamedFiles(pathname, name, matches)
+    } else if (entry.isFile() && entry.name === name) {
+      matches.push(pathname)
+    }
+  }
+  return matches
+}
+
+async function persistActiveDeleteReceipt(playwrightOutput) {
+  const matches = await findNamedFiles(playwrightOutput, 'active-delete-receipt.json')
+  assert.equal(matches.length, 1, 'agent-delete must produce one active-delete receipt')
+  const source = matches[0]
+  const sourceStat = await stat(source)
+  assert.equal(sourceStat.isFile(), true)
+  assert.equal(sourceStat.mode & 0o777, 0o600)
+  const bytes = await readFile(source)
+  const receipt = validateActiveDeleteReceipt(
+    parseStrictJSON(bytes.toString('utf8'), { label: 'K12 creative active-delete receipt' }),
+  )
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const evidenceRoot = join(repoRoot, 'test-results/k12-creative-delete-real')
+  const evidencePath = join(evidenceRoot, `${sha256}.json`)
+  await mkdir(evidenceRoot, { recursive: true, mode: 0o700 })
+  if (await exists(evidencePath)) {
+    assert.equal(await fileSHA256(evidencePath), sha256)
+  } else {
+    await privateWrite(evidencePath, bytes)
+  }
+  return {
+    receipt,
+    receipt_sha256: sha256,
+    evidence_path: relative(repoRoot, evidencePath),
+  }
 }
 
 function lastJSON(stdout, label) {
@@ -320,6 +461,10 @@ test(
       },
     )
     const classification = playwright.status === 0 ? null : failureClass(playwright)
+    const activeDeleteEvidence =
+      playwright.status === 0 && selectedCase.activeDelete
+        ? await persistActiveDeleteReceipt(playwrightOutput)
+        : undefined
     const stop = await runController('stop')
     await assertStopped(controllerConfig)
     console.log(
@@ -338,6 +483,13 @@ test(
         listener_absent: true,
         health_absent: true,
         dingtalk_sends: 0,
+        ...(activeDeleteEvidence
+          ? {
+              active_delete_receipt: activeDeleteEvidence.receipt,
+              active_delete_receipt_sha256: activeDeleteEvidence.receipt_sha256,
+              active_delete_evidence_path: activeDeleteEvidence.evidence_path,
+            }
+          : {}),
       })}`,
     )
     assert.equal(

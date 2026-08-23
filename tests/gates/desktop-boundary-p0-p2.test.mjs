@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -11,12 +11,34 @@ function read(root, relativePath) {
   return existsSync(path) ? readFileSync(path, 'utf8') : ''
 }
 
+function productionSources(root, relativeDir) {
+  const base = join(root, relativeDir)
+  const entries = []
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const absolute = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (!['__tests__', 'test', 'tests'].includes(entry.name)) visit(absolute)
+        continue
+      }
+      if (!/\.(?:ts|vue|rs)$/.test(entry.name) || /\.test\./.test(entry.name)) continue
+      entries.push({ path: absolute.slice(base.length + 1), source: readFileSync(absolute, 'utf8') })
+    }
+  }
+  visit(base)
+  return entries
+}
+
 test('BUG-20260802-013 uses opaque native file grants and removes base64 binary IPC', () => {
   const lib = read(desktopRoot, 'src-tauri/src/lib.rs')
   const commands = read(desktopRoot, 'src-tauri/src/commands.rs')
   const desktopApi = read(desktopRoot, 'src/api/desktop.ts')
   const download = read(desktopRoot, 'src/utils/download.ts')
   const exportSource = read(desktopRoot, 'src/features/k12/export.ts')
+  const gradedPhoto = read(desktopRoot, 'src/features/k12/graded-photo.ts')
+  const staleSaveConsumers = productionSources(desktopRoot, 'src').filter(({ source }) =>
+    /save_file_from_url|save_bytes_to_path/.test(source),
+  )
 
   assert.match(lib, /mod native_file/)
   assert.match(lib, /native_file::(?:open|save|upload)_.*grant/)
@@ -25,6 +47,16 @@ test('BUG-20260802-013 uses opaque native file grants and removes base64 binary 
   assert.doesNotMatch(desktopApi, /read_file_as_base64|atob\(/)
   assert.doesNotMatch(download, /save_bytes_to_path|data:.*base64/)
   assert.doesNotMatch(exportSource, /bytesToBase64|blobToBase64|pdfBase64/)
+  assert.deepEqual(
+    staleSaveConsumers.map(({ path }) => path),
+    [],
+    'reachable production consumers must not invoke removed native save commands',
+  )
+  assert.doesNotMatch(
+    gradedPhoto,
+    /downloadInApp\(dataUrl/,
+    'graded-photo must not pass a data URL to the managed HTTP download API',
+  )
 })
 
 test('BUG-20260802-014 gives the Rust print coordinator sole ownership of the native saga', () => {

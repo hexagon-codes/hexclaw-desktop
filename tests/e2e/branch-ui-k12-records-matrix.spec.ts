@@ -7,14 +7,18 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
-const IMPLEMENTATION_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
+const IMPLEMENTATION_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:15151'
 const AGENT = 'k12-fidelity-ming'
 const SESSION = 'k12-records-matrix-session'
-const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-fidelity/evidence')
-const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
+const EVIDENCE_ROOT = path.resolve(
+  process.env.HEX_UI_EVIDENCE_ROOT?.trim() || 'test-results/branch-ui-fidelity/evidence',
+)
+const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/k12_visual_pixel_diff.swift')
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
+const GEOMETRY_TOLERANCE = 1
 const STATE_FILTER = process.env.HEX_UI_STATE_FILTER?.trim()
+const TARGET_ONLY = process.env.HEX_UI_TARGET_ONLY?.trim() === '1'
 
 type Side = 'reference' | 'implementation'
 
@@ -32,6 +36,35 @@ interface StateDefinition {
   openImplementation(page: Page): Promise<string[]>
   referenceTargets: Target[]
   implementationTargets: Target[]
+  comparisonTargets?: string[]
+}
+
+interface CapturedTarget {
+  tag: string
+  id: string
+  className: string
+  visible: boolean
+  text: string
+  attributes: {
+    title: string | null
+  }
+  rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  metrics: {
+    clientWidth: number
+    scrollWidth: number
+    textClipped: boolean
+  }
+  style: Record<string, string>
+}
+
+interface TargetEvidence {
+  targets: Record<string, { selector: string; matches: CapturedTarget[] }>
+  requiredMissing: string[]
 }
 
 function json(route: Route, body: unknown, status = 200) {
@@ -149,29 +182,116 @@ const weeklyPlan = {
 const mistakes = [
   {
     record_id: 'mistake-apple',
-    question: '苹果和梨的价钱',
+    question: '苹果和梨的价钱（P52·3）',
     knowledge_point: '小数乘法',
-    error_cause: '连续错 2 次',
-    status: 'reviewing',
+    error_cause: '连续错 2 次 · 计算失误',
+    status: 'new',
     review_state: 'scheduled',
-    version: 1,
-    due_at: 1785081600,
     subject: '数学',
-    review_kind: 'verify',
+    created_at: Date.parse('2026-07-16T08:00:00+08:00') / 1000,
+    entry_source: 'photo',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-bulb',
+    question: '小灯泡没有形成闭合回路',
+    knowledge_point: '简单电路',
+    error_cause: '实验图判断错误',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '科学',
+    created_at: Date.parse('2026-07-15T08:00:00+08:00') / 1000,
+    entry_source: 'photo',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-decimal',
+    question: '重复执行积木少循环 1 次',
+    knowledge_point: '图形化编程',
+    error_cause: '运行结果已复核 · 到期可再练',
+    status: 'retried',
+    review_state: 'retried',
+    subject: '信息科技',
+    created_at: Date.parse('2026-07-13T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-equation',
+    question: '解方程 2x + 15 = 43',
+    knowledge_point: '简易方程',
+    error_cause: '复练 1 次 · 仍需巩固',
+    status: 'retried',
+    review_state: 'retried',
+    subject: '数学',
+    created_at: Date.parse('2026-07-12T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
   },
   {
     record_id: 'mistake-believe',
     question: 'believe —— 拼成 belive（少 e）',
-    knowledge_point: 'Unit 4 听写',
-    error_cause: '少写一个 e',
-    status: 'reviewing',
+    knowledge_point: '错词',
+    error_cause: '本轮已跳过 · 系统证据不足',
+    status: 'new',
     review_state: 'scheduled',
-    version: 1,
-    due_at: 1785081600,
     subject: '英语',
-    review_kind: 'verbatim',
+    created_at: Date.parse('2026-07-09T08:00:00+08:00') / 1000,
+    entry_source: 'writing_confirmed',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-poem',
+    question: '「梅须逊雪三分白」漏「须」字',
+    knowledge_point: '默写',
+    error_cause: '上次生成任务未完成',
+    status: 'new',
+    review_state: 'scheduled',
+    subject: '语文',
+    created_at: Date.parse('2026-07-08T08:00:00+08:00') / 1000,
+    entry_source: 'manual',
+    version: 1,
+  },
+  {
+    record_id: 'mistake-position',
+    question: '用数对表示位置',
+    knowledge_point: '位置',
+    error_cause: '两次独立复练正确',
+    status: 'mastered',
+    review_state: 'mastered',
+    subject: '数学',
+    created_at: Date.parse('2026-06-21T08:00:00+08:00') / 1000,
+    entry_source: 'verified',
+    version: 1,
   },
 ]
+
+function practiceGeneration(recordID: string) {
+  if (recordID === 'mistake-apple') {
+    return {
+      state: 'joined',
+      source_mistake_id: recordID,
+      practice_set_id: 'practice-set-visual',
+      practice_item_id: 'practice-item-apple',
+      item: {
+        question_markdown: '苹果和梨的价钱 · 变式题',
+        verification_evidence: '小数乘法进位 · 确定性答案已校验',
+        expected_answer_markdown: '已验证',
+      },
+    }
+  }
+  if (recordID === 'mistake-poem') {
+    return {
+      state: 'failed',
+      source_mistake_id: recordID,
+      failure_reason: '上次生成任务未完成',
+    }
+  }
+  if (recordID === 'mistake-decimal') {
+    return { state: 're_add', source_mistake_id: recordID }
+  }
+  return { state: 'available', source_mistake_id: recordID }
+}
 
 const accumulation = [
   {
@@ -510,8 +630,12 @@ async function installImplementationMocks(page: Page) {
         next_cursor: null,
       })
     }
-    if (apiPath === '/api/k12/mistakes') return json(route, { items: mistakes })
-    if (apiPath === '/api/k12/review-queue') return json(route, { items: mistakes })
+    const generationMatch = apiPath.match(/^\/api\/k12\/mistakes\/([^/]+)\/practice-generation$/)
+    if (generationMatch && method === 'GET') {
+      return json(route, practiceGeneration(decodeURIComponent(generationMatch[1])))
+    }
+    if (apiPath === '/api/k12/mistakes') return json(route, { items: mistakes, total: 11 })
+    if (apiPath === '/api/k12/review-queue') return json(route, { items: mistakes.slice(0, 6) })
     if (apiPath === '/api/k12/accumulation' || apiPath === '/api/k12/accumulations') {
       const subject = requestURL.searchParams.get('subject')
       return json(route, {
@@ -701,6 +825,12 @@ const states: StateDefinition[] = [
     referenceTargets: [
       ...weeklyTargets.referenceTargets,
       { name: 'period-tabs', selector: '#k12BookPanel0 .k12-week-view-tabs', required: true },
+      {
+        name: 'period-tab-buttons',
+        selector: '#k12BookPanel0 .k12-week-view-tabs > button',
+        all: true,
+        required: true,
+      },
       { name: 'progress', selector: '#k12BookPanel0 .rc-week-progress', required: true },
       { name: 'hero', selector: '#k12BookPanel0 .rc-week-hero', required: true },
       {
@@ -713,11 +843,18 @@ const states: StateDefinition[] = [
     implementationTargets: [
       ...weeklyTargets.implementationTargets,
       { name: 'period-tabs', selector: '.weekly-toolbar .k12-book-tabs', required: true },
+      {
+        name: 'period-tab-buttons',
+        selector: '.weekly-toolbar .k12-book-tabs > button',
+        all: true,
+        required: true,
+      },
       { name: 'progress', selector: '.weekly-progress', required: true },
       { name: 'hero', selector: '.weekly-hero', required: true },
       { name: 'weekly-tracks', selector: '.weekly-track', all: true, required: true },
       { name: 'weekly-items', selector: '.weekly-item', all: true, required: true },
     ],
+    comparisonTargets: ['period-tab-buttons', 'progress'],
   },
   {
     name: 'weekly-history',
@@ -780,10 +917,35 @@ const states: StateDefinition[] = [
   },
   {
     name: 'mistakes',
-    fixture: '小明 / 全学科 + 全状态 / 2 条代表性错题',
+    fixture: '小明 / 全学科 + 全状态 / 与原型相同的 7 条代表性错题及动作状态',
     openReference: async (page) => openReferenceRecords(page, 1),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-mistakes'),
-    ...mistakeTargets,
+    referenceTargets: [
+      ...mistakeTargets.referenceTargets,
+      {
+        name: 'mistake-rows',
+        selector: '#k12MistakeList .resource-row',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'mistake-actions',
+        selector: '#k12MistakeList .resource-row > button',
+        all: true,
+        required: true,
+      },
+    ],
+    implementationTargets: [
+      ...mistakeTargets.implementationTargets,
+      { name: 'mistake-rows', selector: '.k12mistakes .rl-row', all: true, required: true },
+      {
+        name: 'mistake-actions',
+        selector: '.k12mistakes .rl-row > button',
+        all: true,
+        required: true,
+      },
+    ],
+    comparisonTargets: ['mistake-rows', 'mistake-actions'],
   },
   {
     name: 'practice-sets',
@@ -797,7 +959,23 @@ const states: StateDefinition[] = [
     fixture: '小明 / 全部 / 语文与英语积累各 1 条',
     openReference: async (page) => openReferenceRecords(page, 3),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-accumulation'),
-    ...accumulationTargets,
+    referenceTargets: [
+      ...accumulationTargets.referenceTargets,
+      {
+        name: 'accumulation-add-button',
+        selector: '#k12BookToolbar .rc-3',
+        required: true,
+      },
+    ],
+    implementationTargets: [
+      ...accumulationTargets.implementationTargets,
+      {
+        name: 'accumulation-add-button',
+        selector: '[data-testid="accum-add-open"]',
+        required: true,
+      },
+    ],
+    comparisonTargets: ['accumulation-add-button'],
   },
   {
     name: 'works',
@@ -806,16 +984,23 @@ const states: StateDefinition[] = [
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-works'),
     referenceTargets: [
       ...worksTargets.referenceTargets,
+      {
+        name: 'description',
+        selector: '#k12BookPanel4 .practice-overview__copy > p',
+        required: true,
+      },
       { name: 'card-footer', selector: '.creative-work-card__foot', all: true, required: true },
       { name: 'card-time', selector: '.creative-work-card__time', all: true, required: true },
       { name: 'card-action', selector: '.creative-work-card__action', all: true, required: true },
     ],
     implementationTargets: [
       ...worksTargets.implementationTargets,
+      { name: 'description', selector: '.k12cw__desc', required: true },
       { name: 'card-footer', selector: '.k12cw__foot', all: true, required: true },
       { name: 'card-time', selector: '.k12cw__time', all: true, required: true },
       { name: 'card-action', selector: '.k12cw__detail-toggle', all: true, required: true },
     ],
+    comparisonTargets: ['description'],
   },
   {
     name: 'insights',
@@ -977,8 +1162,8 @@ const states: StateDefinition[] = [
   },
 ]
 
-async function targetEvidence(page: Page, targets: Target[]) {
-  const result: Record<string, unknown> = {}
+async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvidence> {
+  const result: TargetEvidence['targets'] = {}
   const requiredMissing: string[] = []
   for (const target of targets) {
     const value = await page.locator(target.selector).evaluateAll(
@@ -1001,11 +1186,19 @@ async function targetEvidence(page: Page, targets: Target[]) {
               className: node.className,
               visible,
               text: node.innerText.replace(/\s+/g, ' ').trim().slice(0, 320),
+              attributes: {
+                title: node.getAttribute('title'),
+              },
               rect: {
                 x: Number(rect.x.toFixed(2)),
                 y: Number(rect.y.toFixed(2)),
                 width: Number(rect.width.toFixed(2)),
                 height: Number(rect.height.toFixed(2)),
+              },
+              metrics: {
+                clientWidth: node.clientWidth,
+                scrollWidth: node.scrollWidth,
+                textClipped: node.scrollWidth > node.clientWidth,
               },
               style: {
                 display: style.display,
@@ -1030,6 +1223,8 @@ async function targetEvidence(page: Page, targets: Target[]) {
                 lineHeight: style.lineHeight,
                 overflowX: style.overflowX,
                 overflowY: style.overflowY,
+                whiteSpace: style.whiteSpace,
+                textOverflow: style.textOverflow,
               },
             }
           })
@@ -1041,6 +1236,106 @@ async function targetEvidence(page: Page, targets: Target[]) {
     if (target.required && value.length === 0) requiredMissing.push(target.name)
   }
   return { targets: result, requiredMissing }
+}
+
+function compareTargetEvidence(
+  reference: TargetEvidence,
+  implementation: TargetEvidence,
+  targetNames: string[],
+) {
+  const differences: Array<{
+    target: string
+    index: number | null
+    field: string
+    reference: unknown
+    implementation: unknown
+    delta?: number
+  }> = []
+  const add = (
+    target: string,
+    index: number | null,
+    field: string,
+    referenceValue: unknown,
+    implementationValue: unknown,
+    delta?: number,
+  ) => {
+    differences.push({
+      target,
+      index,
+      field,
+      reference: referenceValue,
+      implementation: implementationValue,
+      ...(delta === undefined ? {} : { delta: Number(delta.toFixed(2)) }),
+    })
+  }
+
+  for (const target of targetNames) {
+    const referenceMatches = reference.targets[target]?.matches ?? []
+    const implementationMatches = implementation.targets[target]?.matches ?? []
+    if (referenceMatches.length !== implementationMatches.length) {
+      add(target, null, 'count', referenceMatches.length, implementationMatches.length)
+    }
+    const pairCount = Math.min(referenceMatches.length, implementationMatches.length)
+    for (let index = 0; index < pairCount; index += 1) {
+      const referenceMatch = referenceMatches[index]!
+      const implementationMatch = implementationMatches[index]!
+      if (referenceMatch.text !== implementationMatch.text) {
+        add(target, index, 'text', referenceMatch.text, implementationMatch.text)
+      }
+      if (referenceMatch.attributes.title !== implementationMatch.attributes.title) {
+        add(
+          target,
+          index,
+          'attributes.title',
+          referenceMatch.attributes.title,
+          implementationMatch.attributes.title,
+        )
+      }
+      if (referenceMatch.metrics.textClipped !== implementationMatch.metrics.textClipped) {
+        add(
+          target,
+          index,
+          'metrics.textClipped',
+          referenceMatch.metrics.textClipped,
+          implementationMatch.metrics.textClipped,
+        )
+      }
+      for (const field of ['x', 'y', 'width', 'height'] as const) {
+        const delta = Math.abs(referenceMatch.rect[field] - implementationMatch.rect[field])
+        if (delta > GEOMETRY_TOLERANCE) {
+          add(
+            target,
+            index,
+            `rect.${field}`,
+            referenceMatch.rect[field],
+            implementationMatch.rect[field],
+            delta,
+          )
+        }
+      }
+      const styleKeys = new Set([
+        ...Object.keys(referenceMatch.style),
+        ...Object.keys(implementationMatch.style),
+      ])
+      for (const styleKey of styleKeys) {
+        if (referenceMatch.style[styleKey] !== implementationMatch.style[styleKey]) {
+          add(
+            target,
+            index,
+            `style.${styleKey}`,
+            referenceMatch.style[styleKey],
+            implementationMatch.style[styleKey],
+          )
+        }
+      }
+    }
+  }
+  return {
+    comparedTargets: targetNames,
+    geometryTolerance: GEOMETRY_TOLERANCE,
+    equal: differences.length === 0,
+    differences,
+  }
 }
 
 async function rootEvidence(page: Page, side: Side) {
@@ -1125,6 +1420,11 @@ async function captureState(
   const implementationPath = path.join(outputDir, 'implementation.png')
   const diffPath = path.join(outputDir, 'pixel-diff.png')
   const geometryPath = path.join(outputDir, 'geometry-style.json')
+  const targetDiffPath = path.join(outputDir, 'target-diff.json')
+  const targetReferencePath = path.join(outputDir, 'target-reference.png')
+  const targetImplementationPath = path.join(outputDir, 'target-implementation.png')
+  const targetPixelDiffPath = path.join(outputDir, 'target-pixel-diff.png')
+  const targetPixelReportPath = path.join(outputDir, 'target-pixel-report.json')
   const reportPath = path.join(outputDir, 'diff-report.json')
 
   await referencePage.screenshot({
@@ -1159,36 +1459,99 @@ async function captureState(
     ),
   )
 
-  await writeFile(
-    geometryPath,
-    `${JSON.stringify(
-      {
-        state: state.name,
-        fixture: state.fixture,
-        viewport: { width: 1440, height: 900 },
-        deviceScaleFactor: 1,
-        locale: 'zh-CN',
-        timezone: 'Asia/Shanghai',
-        colorScheme: 'light',
-        reference: {
-          url: referencePage.url(),
-          issues: referenceIssues,
-          roots: referenceRoots,
-          ...referenceTargets,
-        },
-        implementation: {
-          url: implementationPage.url(),
-          issues: implementationIssues,
-          roots: implementationRoots,
-          ...implementationTargets,
-        },
-      },
-      null,
-      2,
-    )}\n`,
+  const targetDiff = compareTargetEvidence(
+    referenceTargets,
+    implementationTargets,
+    state.comparisonTargets ?? [],
   )
 
-  const { stdout } = await execFileAsync('python3', [
+  const targetBounds = (
+    evidence: typeof referenceTargets,
+  ): { x: number; y: number; width: number; height: number } | null => {
+    const matches = (state.comparisonTargets ?? []).flatMap(
+      (name) => evidence.targets[name]?.matches.filter((match) => match.visible) ?? [],
+    )
+    if (matches.length === 0) return null
+    const left = Math.min(...matches.map((match) => match.rect.x))
+    const top = Math.min(...matches.map((match) => match.rect.y))
+    const right = Math.max(...matches.map((match) => match.rect.x + match.rect.width))
+    const bottom = Math.max(...matches.map((match) => match.rect.y + match.rect.height))
+    return {
+      x: Math.max(0, Math.floor(left) - 4),
+      y: Math.max(0, Math.floor(top) - 4),
+      width: Math.ceil(right) - Math.max(0, Math.floor(left) - 4) + 4,
+      height: Math.ceil(bottom) - Math.max(0, Math.floor(top) - 4) + 4,
+    }
+  }
+  const referenceTargetBounds = targetBounds(referenceTargets)
+  const implementationTargetBounds = targetBounds(implementationTargets)
+
+  if (referenceTargetBounds && implementationTargetBounds) {
+    const cropSize = {
+      width: Math.max(referenceTargetBounds.width, implementationTargetBounds.width),
+      height: Math.max(referenceTargetBounds.height, implementationTargetBounds.height),
+    }
+    await Promise.all([
+      referencePage.screenshot({
+        path: targetReferencePath,
+        animations: 'disabled',
+        caret: 'hide',
+        scale: 'css',
+        clip: { ...referenceTargetBounds, ...cropSize },
+      }),
+      implementationPage.screenshot({
+        path: targetImplementationPath,
+        animations: 'disabled',
+        caret: 'hide',
+        scale: 'css',
+        clip: { ...implementationTargetBounds, ...cropSize },
+      }),
+    ])
+    const { stdout: targetPixelStdout } = await execFileAsync('xcrun', [
+      'swift',
+      PIXEL_DIFF_TOOL,
+      targetReferencePath,
+      targetImplementationPath,
+      targetPixelDiffPath,
+      String(PIXEL_THRESHOLD),
+    ])
+    await writeFile(targetPixelReportPath, `${targetPixelStdout.trim()}\n`)
+  }
+
+  await Promise.all([
+    writeFile(
+      geometryPath,
+      `${JSON.stringify(
+        {
+          state: state.name,
+          fixture: state.fixture,
+          viewport: { width: 1440, height: 900 },
+          deviceScaleFactor: 1,
+          locale: 'zh-CN',
+          timezone: 'Asia/Shanghai',
+          colorScheme: 'light',
+          reference: {
+            url: referencePage.url(),
+            issues: referenceIssues,
+            roots: referenceRoots,
+            ...referenceTargets,
+          },
+          implementation: {
+            url: implementationPage.url(),
+            issues: implementationIssues,
+            roots: implementationRoots,
+            ...implementationTargets,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    writeFile(targetDiffPath, `${JSON.stringify(targetDiff, null, 2)}\n`),
+  ])
+
+  const { stdout } = await execFileAsync('xcrun', [
+    'swift',
     PIXEL_DIFF_TOOL,
     referencePath,
     implementationPath,
@@ -1204,7 +1567,7 @@ async function captureState(
   const status =
     referenceIssues.length > 0 || implementationIssues.length > 0
       ? 'blocked'
-      : diff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO
+      : diff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO && targetDiff.equal
         ? 'pass'
         : 'red'
   await writeFile(
@@ -1220,6 +1583,11 @@ async function captureState(
         maxChangedPixelRatio: MAX_CHANGED_PIXEL_RATIO,
         referenceIssues,
         implementationIssues,
+        targetComparison: {
+          equal: targetDiff.equal,
+          differenceCount: targetDiff.differences.length,
+          evidence: 'target-diff.json',
+        },
         ...diff,
       },
       null,
@@ -1243,6 +1611,10 @@ async function captureState(
     body: await readFile(geometryPath),
     contentType: 'application/json',
   })
+  await testInfo.attach(`${state.name}-target-diff`, {
+    body: await readFile(targetDiffPath),
+    contentType: 'application/json',
+  })
 
   expect
     .soft(referenceIssues, `${state.name} reference is blocked; evidence=${geometryPath}`)
@@ -1251,11 +1623,16 @@ async function captureState(
     .soft(implementationIssues, `${state.name} implementation is blocked; evidence=${geometryPath}`)
     .toEqual([])
   expect
-    .soft(
-      diff.changed_pixel_ratio,
-      `${state.name} changed ${diff.changed_pixels}/${diff.total_pixels} pixels; evidence=${outputDir}`,
-    )
-    .toBeLessThanOrEqual(MAX_CHANGED_PIXEL_RATIO)
+    .soft(targetDiff.differences, `${state.name} target mismatch; evidence=${targetDiffPath}`)
+    .toEqual([])
+  if (!TARGET_ONLY) {
+    expect
+      .soft(
+        diff.changed_pixel_ratio,
+        `${state.name} changed ${diff.changed_pixels}/${diff.total_pixels} pixels; evidence=${outputDir}`,
+      )
+      .toBeLessThanOrEqual(MAX_CHANGED_PIXEL_RATIO)
+  }
 }
 
 test.use({
@@ -1271,8 +1648,18 @@ test.describe('feat/v0.5.0-k12-parent-tutor learning-record visual matrix', () =
   test('all authoritative records surfaces preserve screenshot triplets and geometry/style evidence', async ({
     browser,
   }, testInfo) => {
-    const referencePage = await browser.newPage()
-    const implementationPage = await browser.newPage()
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
+      colorScheme: 'light',
+      reducedMotion: 'reduce',
+    })
+    const [referencePage, implementationPage] = await Promise.all([
+      context.newPage(),
+      context.newPage(),
+    ])
     await installImplementationMocks(implementationPage)
     try {
       const selectedStates = STATE_FILTER
@@ -1285,7 +1672,7 @@ test.describe('feat/v0.5.0-k12-parent-tutor learning-record visual matrix', () =
         await captureState(referencePage, implementationPage, state, testInfo)
       }
     } finally {
-      await Promise.all([referencePage.close(), implementationPage.close()])
+      await context.close()
     }
   })
 })

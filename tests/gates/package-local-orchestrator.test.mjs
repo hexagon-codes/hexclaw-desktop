@@ -76,8 +76,8 @@ function ollamaMetallibPaxPayload(overrides = {}, schilyOverrides = {}) {
   return Buffer.concat(records)
 }
 
-function appleDoublePayload(fill = 0) {
-  const payload = Buffer.alloc(9662, fill)
+function appleDoublePayload(fill = 0, bytes = 9662) {
+  const payload = Buffer.alloc(bytes, fill)
   Buffer.from('00051607000200004d6163204f53205820202020202020200002', 'hex').copy(payload)
   return payload
 }
@@ -1317,6 +1317,47 @@ test('Ollama archive extraction validates local PAX metadata without publishing 
     'metallib',
   )
   assert.deepEqual(await readdir(join(destination, 'mlx_metal_v3')), ['mlx.metallib'])
+})
+
+test('Ollama v0.32.13 archive accepts the v3 AppleDouble payload captured from its fixed digest', async (t) => {
+  const { extractPinnedTarGzipArchive } = await import(moduleURL)
+  const packageLocalSource = await readFile(moduleURL, 'utf8')
+  assert.match(packageLocalSource, /'mlx_metal_v3\/\._mlx\.metallib': Object\.freeze\(/u)
+  assert.match(packageLocalSource, /bytes: 9661/u)
+  assert.match(
+    packageLocalSource,
+    /sha256: '2bed0f3fa16d3c54a1b187e3314ebf45ba190827e6a4871c725c4f6eda730b6f'/u,
+  )
+  const root = await mkdtemp(join(tmpdir(), 'hexclaw-package-ollama-v03213-v3-'))
+  t.after(() => rm(root, { force: true, recursive: true }))
+  const archivePath = join(root, 'ollama.tgz')
+  const destination = join(root, 'ollama')
+  const metadata = appleDoublePayload(0, 9661)
+  const archive = tarGzip([
+    tarEntry('ollama', 'official-binary'),
+    tarEntry('mlx_metal_v3', '', '5'),
+    tarEntry('mlx_metal_v3/._mlx.metallib', metadata),
+    tarEntry('mlx_metal_v3/PaxHeader/mlx.metallib', ollamaMetallibPaxPayload(), 'x'),
+    tarEntry('mlx_metal_v3/mlx.metallib', 'metallib'),
+  ])
+  await writeFile(archivePath, archive, { mode: 0o600 })
+
+  const result = await extractPinnedTarGzipArchive({
+    appleDoubleContracts: appleDoubleContracts([['mlx_metal_v3/._mlx.metallib', metadata]]),
+    archivePath,
+    destination,
+    expectedArchiveBytes: archive.length,
+    expectedArchiveSha256: createHash('sha256').update(archive).digest('hex'),
+    expectedBinaryBytes: 15,
+    expectedBinaryRelativePath: 'ollama',
+    maxEntries: 8,
+    maxExpandedBytes: 32 * 1024,
+    maxFileBytes: 16 * 1024,
+  })
+
+  assert.equal(result.entries, 5)
+  assert.equal(result.files, 2)
+  assert.equal(await readFile(join(destination, 'ollama'), 'utf8'), 'official-binary')
 })
 
 test('Ollama archive extraction rejects unsafe or detached local PAX metadata', async (t) => {

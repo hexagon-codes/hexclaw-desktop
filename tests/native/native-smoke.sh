@@ -13,6 +13,12 @@ PORT="${HEX_NATIVE_PORT:-16061}"
 COMMAND="${1:-run}"
 APP_PID=""
 SANDBOX=""
+LOCKED_APP_16060_FIXTURE="${HEX_NATIVE_LOCKED_APP_16060_FIXTURE:-0}"
+PROVIDER_FIXTURE="${HEX_NATIVE_PROVIDER_FIXTURE:-0}"
+UI_HOLD_RELEASE_FILE="${HEX_NATIVE_UI_HOLD_RELEASE_FILE:-}"
+TEST_LLM_CONFIG_MODE=""
+CHILD_PID_FILE="${HEX_NATIVE_CHILD_PID_FILE:-}"
+CHILD_EXIT_STATUS_FILE="${HEX_NATIVE_CHILD_EXIT_STATUS_FILE:-}"
 
 usage() {
   cat <<'USAGE'
@@ -33,6 +39,12 @@ Environment:
                                  the explicit value com.hexclaw.desktop.
   HEX_NATIVE_PORT                Dedicated unprivileged Sidecar port. Defaults
                                  to 16061; production port 16060 is forbidden.
+  HEX_NATIVE_LOCKED_APP_16060_FIXTURE=1
+                                 Permit port 16060 only for an isolated mock
+                                 Test.app fixture.
+  HEX_NATIVE_PROVIDER_FIXTURE=1 Preseed an isolated Provider config fixture.
+  HEX_NATIVE_UI_HOLD_RELEASE_FILE
+                                 Hold after health until this file exists.
 USAGE
 }
 
@@ -63,8 +75,16 @@ validate_port() {
     printf 'HEX_NATIVE_PORT must be an unprivileged TCP port between 1024 and 65535\n' >&2
     return 1
   fi
-  if (( PORT == 16060 )); then
+  if (( PORT == 16060 )) && [[ "${LOCKED_APP_16060_FIXTURE}" != "1" ]]; then
     printf 'HEX_NATIVE_PORT must not use the production port 16060\n' >&2
+    return 1
+  fi
+  if (( PORT == 16060 )) && [[ "${EXPECTED_BUNDLE_ID}" != "com.hexclaw.desktop.mock" ]]; then
+    printf 'port 16060 fixture requires com.hexclaw.desktop.mock\n' >&2
+    return 1
+  fi
+  if [[ "${PROVIDER_FIXTURE}" == "1" && "${LOCKED_APP_16060_FIXTURE}" != "1" ]]; then
+    printf 'provider fixture requires HEX_NATIVE_LOCKED_APP_16060_FIXTURE=1\n' >&2
     return 1
   fi
 }
@@ -82,7 +102,9 @@ validate() {
   done
   validate_expected_bundle_id
   validate_port
-  node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1])); if(c.identifier!=='com.hexclaw.desktop.mock'||!c.app.security.csp.includes('localhost:16061')||c.app.security.csp.includes('localhost:11434')) process.exit(1)" "${OVERLAY}"
+  if (( PORT != 16060 )); then
+    node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1])); if(c.identifier!=='com.hexclaw.desktop.mock'||!c.app.security.csp.includes('localhost:16061')||c.app.security.csp.includes('localhost:11434')) process.exit(1)" "${OVERLAY}"
+  fi
   bash -n "${BASH_SOURCE[0]}"
 }
 
@@ -110,17 +132,27 @@ listener_pids() {
 
 cleanup() {
   local status=$?
-  local pid command
+  local pid command app_exit_status="not-started"
   trap - EXIT INT TERM
 
-  if [[ -n "${APP_PID}" ]] && kill -0 "${APP_PID}" 2>/dev/null; then
-    kill -TERM "${APP_PID}" 2>/dev/null || true
-    for _ in 1 2 3 4 5; do
-      kill -0 "${APP_PID}" 2>/dev/null || break
-      sleep 1
-    done
-    kill -KILL "${APP_PID}" 2>/dev/null || true
-    wait "${APP_PID}" 2>/dev/null || true
+  if [[ -n "${APP_PID}" ]]; then
+    if kill -0 "${APP_PID}" 2>/dev/null; then
+      kill -TERM "${APP_PID}" 2>/dev/null || true
+      for _ in 1 2 3 4 5; do
+        kill -0 "${APP_PID}" 2>/dev/null || break
+        sleep 1
+      done
+      kill -KILL "${APP_PID}" 2>/dev/null || true
+    fi
+    if wait "${APP_PID}" 2>/dev/null; then
+      app_exit_status=0
+    else
+      app_exit_status=$?
+    fi
+  fi
+
+  if [[ -n "${CHILD_EXIT_STATUS_FILE}" ]]; then
+    printf 'pid=%s\nexit_status=%s\n' "${APP_PID}" "${app_exit_status}" > "${CHILD_EXIT_STATUS_FILE}"
   fi
 
   for pid in $(listener_pids); do
@@ -169,6 +201,125 @@ assert_protected_sidecar_requires_capability() {
   fi
 }
 
+write_provider_fixture_config() {
+  if [[ "${PROVIDER_FIXTURE}" != "1" ]]; then
+    return
+  fi
+  TEST_LLM_CONFIG_MODE="preseeded-owner-yaml"
+  mkdir -p "${SANDBOX}/.hexclaw"
+  chmod 700 "${SANDBOX}/.hexclaw"
+  cat > "${SANDBOX}/.hexclaw/hexclaw.yaml" <<EOF
+server:
+  host: 127.0.0.1
+  port: ${PORT}
+  mode: development
+platforms:
+  web:
+    enabled: true
+llm:
+  default: fixture
+  providers:
+    openai:
+      provider_instance_id: pvd_v1_00000000000000000000000000000006
+      display_name: OpenAI Fixture
+      type: openai
+      api_key: local-fixture-only
+      base_url: http://127.0.0.1:${PORT}/v1
+      model: fixture-openai-model
+      models:
+        - fixture-openai-model
+      model_specs_mode: explicit
+      model_specs:
+        - id: fixture-openai-model
+          display_name: Fixture OpenAI Model
+          capabilities:
+            - text
+      compatible: openai
+      locality: cloud
+      tools_enabled: false
+      enabled: true
+    fixture:
+      provider_instance_id: pvd_v1_00000000000000000000000000000004
+      display_name: Fixture Provider
+      api_key: local-fixture-only
+      base_url: http://127.0.0.1:${PORT}/v1
+      model: fixture-model
+      models:
+        - fixture-model
+      model_specs_mode: explicit
+      model_specs:
+        - id: fixture-model
+          display_name: Fixture Model
+          capabilities:
+            - text
+      compatible: openai
+      locality: cloud
+      tools_enabled: false
+      enabled: true
+    fixture-local-embedding:
+      provider_instance_id: pvd_v1_00000000000000000000000000000005
+      display_name: Fixture Local Embedding
+      api_key: local-fixture-only
+      base_url: http://127.0.0.1:${PORT}/v1
+      model: fixture-embedding
+      models:
+        - fixture-embedding
+      model_specs_mode: explicit
+      model_specs:
+        - id: fixture-embedding
+          display_name: Fixture Embedding
+          capabilities:
+            - text
+            - embedding
+          embedding:
+            protocol: openai_embeddings
+            dimension: 3
+            normalization: l2
+      compatible: openai
+      locality: local
+      tools_enabled: false
+      enabled: true
+  routing:
+    enabled: false
+  cache:
+    enabled: false
+  tools:
+    enabled: "off"
+storage:
+  driver: sqlite
+  sqlite:
+    path: ${SANDBOX}/.hexclaw/data.db
+knowledge:
+  enabled: false
+  embedding:
+    provider: fixture-local-embedding
+    model: fixture-embedding
+    disable_auto_install: true
+memory:
+  long_term:
+    enabled: false
+  vector:
+    enabled: false
+file_memory:
+  enabled: false
+heartbeat:
+  enabled: false
+mcp:
+  enabled: false
+EOF
+  chmod 600 "${SANDBOX}/.hexclaw/hexclaw.yaml"
+}
+
+wait_for_ui_capture_release() {
+  if [[ -z "${UI_HOLD_RELEASE_FILE}" ]]; then
+    return
+  fi
+  printf 'native smoke UI capture hold: release=%s\n' "${UI_HOLD_RELEASE_FILE}"
+  while [[ ! -e "${UI_HOLD_RELEASE_FILE}" ]]; do
+    sleep 1
+  done
+}
+
 run_smoke() {
   validate
   if [[ ! -f "${APP_BUNDLE}/Contents/Info.plist" ]]; then
@@ -189,6 +340,7 @@ run_smoke() {
   SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/hexclaw-native-smoke.XXXXXX")"
   SANDBOX="$(cd "${SANDBOX}" && pwd -P)"
   mkdir -p "${SANDBOX}/tmp"
+  write_provider_fixture_config
   trap cleanup EXIT INT TERM
 
   HOME="${SANDBOX}" \
@@ -200,8 +352,12 @@ run_smoke() {
   HEXCLAW_TEST_MODE=1 \
   HEXCLAW_TEST_HOME="${SANDBOX}" \
   HEXCLAW_SIDECAR_PORT="${PORT}" \
+  HEXCLAW_TEST_LLM_CONFIG_MODE="${TEST_LLM_CONFIG_MODE}" \
     "${APP_EXECUTABLE}" >"${ARTIFACT_DIR}/app.log" 2>&1 &
   APP_PID=$!
+  if [[ -n "${CHILD_PID_FILE}" ]]; then
+    printf '%s\n' "${APP_PID}" > "${CHILD_PID_FILE}"
+  fi
 
   wait_for_health
   assert_protected_sidecar_requires_capability
@@ -209,6 +365,7 @@ run_smoke() {
   grep -q "port: ${PORT}" "${SANDBOX}/.hexclaw/hexclaw.yaml"
   grep -q "${SANDBOX}/.hexclaw/data.db" "${SANDBOX}/.hexclaw/hexclaw.yaml"
   test -f "${SANDBOX}/.hexclaw/data.db"
+  wait_for_ui_capture_release
   printf 'native Tauri smoke passed: app=%s sidecar=http://localhost:%s sandbox=%s\n' \
     "${APP_BUNDLE}" "${PORT}" "${SANDBOX}"
 }

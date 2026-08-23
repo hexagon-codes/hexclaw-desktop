@@ -50,7 +50,7 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     const scenarioTabs = page.locator('.k12enh-seg')
     await expect(scenarioTabs.getByRole('tab')).toHaveText(['辅导', '学习档案', '学情'])
     const chatInput = page.getByTestId('chat-input')
-    const composerPlaceholder = '发消息，或让我写请假条、回复老师消息、设置订正提醒'
+    const composerPlaceholder = '发消息，或让我回复老师消息、设置订正提醒'
     await expect(chatInput).toHaveAttribute('contenteditable', 'true')
     await expect(chatInput).toHaveAttribute('data-placeholder', composerPlaceholder)
     await expect(chatInput).toHaveAttribute('aria-placeholder', composerPlaceholder)
@@ -114,9 +114,7 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
 
     await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
-    const objectTabs = page
-      .getByRole('tablist', { name: '学习档案', exact: true })
-      .getByRole('tab')
+    const objectTabs = page.getByRole('tablist', { name: '学习档案', exact: true }).getByRole('tab')
     await expect(objectTabs).toHaveCount(5)
     for (const [index, label] of ['本周该练', '全部错题', '练习集', '积累', '作品'].entries()) {
       await expect(objectTabs.nth(index)).toHaveAccessibleName(new RegExp(`^${label} \\d+$`))

@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { expect, test, type APIRequestContext, type Download, type Page } from '@playwright/test'
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Download,
+  type Page,
+  type Response,
+} from '@playwright/test'
 import {
   assertLiveRuntime,
   cleanupLiveChild,
@@ -25,6 +32,8 @@ const ARCHIVE_TABS = [
   ['subtab-accumulation', '积累'],
   ['subtab-works', '作品'],
 ] as const
+// 导出采用周计划对象的权威名称，不复用当前导航标签文案。
+const ARCHIVE_HEADINGS = ['本周该练', '全部错题', '练习集', '积累', '作品']
 const ARCHIVE_ACTIONS = ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复']
 
 interface AgentProjection {
@@ -36,7 +45,14 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-async function json<T>(response: import('@playwright/test').APIResponse): Promise<T> {
+function levelTwoHeadings(markdown: string): string[] {
+  return markdown.split(/\r?\n/u).flatMap((line) => {
+    const match = /^##[\t ]+(.+?)[\t ]*$/.exec(line)
+    return match ? [match[1]!] : []
+  })
+}
+
+async function json<T>(response: Response): Promise<T> {
   const body = await response.text()
   expect(
     response.ok(),
@@ -92,7 +108,7 @@ async function exportFromOpenMenu(
 ): Promise<{ sourceDigest: string; bytes: Buffer }> {
   const responsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url())
-    return url.pathname.endsWith('/api/v1/k12/export') && url.searchParams.get('agent') === agentID
+    return url.pathname.endsWith('/api/k12/export') && url.searchParams.get('agent') === agentID
   })
   const downloadPromise = page.waitForEvent('download')
   await page.locator('.k12rec__menu').getByRole('button', { name: label, exact: true }).click()
@@ -100,9 +116,9 @@ async function exportFromOpenMenu(
   const payload = await json<{ content?: string; render_error?: string }>(response)
   expect(payload.render_error || '', `${label} must not hide a renderer failure`).toBe('')
   expect(
-    payload.content?.trim().length,
-    `${label} must render the canonical archive, not an empty shell`,
-  ).toBeGreaterThan(20)
+    levelTwoHeadings(payload.content || ''),
+    `${label} must render the canonical five-object archive exact-set`,
+  ).toEqual(ARCHIVE_HEADINGS)
   return { sourceDigest: sha256(payload.content!), bytes: await downloadedBytes(download) }
 }
 

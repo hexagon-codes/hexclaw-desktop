@@ -11,7 +11,10 @@ const SOURCE_URL =
   process.env.HEX_UI_SOURCE_URL?.trim() ||
   process.env.HEX_UI_IMPLEMENTATION_URL?.trim() ||
   'http://127.0.0.1:16061'
-const EVIDENCE_ROOT = path.resolve('test-results/branch-ui-general-routes-visual-matrix/evidence')
+const EVIDENCE_ROOT = path.resolve(
+  process.env.HEX_UI_EVIDENCE_ROOT?.trim() ||
+    'test-results/branch-ui-general-routes-visual-matrix/evidence',
+)
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
@@ -191,19 +194,47 @@ const surfaces: Surface[] = [
     referenceTargets: refTargets('knowledge', [
       { name: 'subview', selector: '[data-pane="knowledge"] [data-sub="kn0"]' },
       { name: 'document-rows', selector: '[data-pane="knowledge"] .resource-row', all: true },
+      {
+        name: 'structured-failure-facts',
+        selector:
+          '#kbLargePdfRow[data-text-index-state="ready"][data-ingestion-state="failed_vision_capability"][data-failure-code="failed_vision_capability"][data-affected-pages="7"][data-preflight-state="blocked"][data-model-calls="0"]',
+      },
+      {
+        name: 'frozen-vision-projection',
+        selector:
+          '#kbLargePdfRow[data-frozen-provider-display="HexClaw-GPT"][data-frozen-model="gpt-5.6-sol"]',
+      },
     ]),
     sourceTargets: sourceTargets('.hc-page-shell__content', [
       { name: 'document-cards', selector: '[data-testid="knowledge-doc-card"]', all: true },
+      {
+        name: 'structured-failure-facts',
+        selector:
+          '[data-testid="knowledge-doc-card"][data-text-index-state="ready"][data-ingestion-failure-code="failed_vision_capability"][data-affected-pages="7"][data-preflight-state="blocked"][data-model-calls="0"]',
+      },
+      {
+        name: 'frozen-vision-projection',
+        selector:
+          '[data-testid="knowledge-doc-card"][data-frozen-vision-provider="HexClaw-GPT"][data-frozen-vision-model="gpt-5.6-sol"]',
+      },
     ]),
     anchors: [
       { label: 'documents-tab', variants: ['文档'] },
       { label: 'large-pdf', variants: ['义务教育教科书·数学五年级下册.pdf'] },
       { label: 'notes-pdf', variants: ['课堂笔记.pdf'] },
+      { label: 'failure-code', variants: ['failure_code=failed_vision_capability'] },
+      { label: 'affected-pages', variants: ['affected_pages=7'] },
+      { label: 'preflight-state', variants: ['preflight=blocked'] },
+      { label: 'model-calls', variants: ['model_calls=0'] },
+      {
+        label: 'frozen-vision-provider',
+        variants: ['frozen vision provider/model=HexClaw-GPT / gpt-5.6-sol'],
+      },
     ],
     fixtureComparison: {
-      status: 'NOT_COMPARABLE',
+      status: 'COMPARABLE',
       reason:
-        'The same four document identities and processing categories are fixed, but prototype OCR/VLM failure copy carries frozen-provider evidence not expressible by the current list DTO.',
+        'The source fixture includes the same structured failure projection as the prototype: text_index_state=ready, ingestion/failure code=failed_vision_capability, affected_pages=7, preflight=blocked, frozen vision provider/model, model_calls=0, and the settings recovery action.',
     },
   },
   {
@@ -277,19 +308,64 @@ const surfaces: Surface[] = [
         selector: '[data-pane="automation"] [data-sub="au1"] .cxcard',
         all: true,
       },
+      {
+        name: 'generic-webhook-state',
+        selector:
+          '[data-pane="automation"] [data-sub="au1"] .cxcards > .cxcard:nth-child(3)',
+      },
+      {
+        name: 'generic-webhook-events',
+        selector:
+          '[data-pane="automation"] [data-sub="au1"] .cxcards > .cxcard:nth-child(3) .task-meta',
+        all: true,
+      },
+      {
+        name: 'k12-webhook-state',
+        selector: '[data-pane="automation"] [data-sub="au1"] .k12-webhook-card',
+      },
+      {
+        name: 'k12-allowed-events',
+        selector: '[data-pane="automation"] [data-sub="au1"] .k12-webhook-event',
+        all: true,
+      },
     ]),
     sourceTargets: sourceTargets('.hc-page-shell__content', [
       { name: 'webhook-cards', selector: '.hc-webhook-card', all: true },
+      {
+        name: 'generic-webhook-state',
+        selector: '.webhook-panel__list > .webhook-panel__item:nth-child(2)',
+      },
+      {
+        name: 'generic-webhook-events',
+        selector:
+          '.webhook-panel__list > .webhook-panel__item:nth-child(2) .webhook-panel__item-type, .webhook-panel__list > .webhook-panel__item:nth-child(2) .webhook-panel__item-count',
+        all: true,
+      },
+      {
+        name: 'k12-webhook-state',
+        selector: '[data-testid="k12-webhook-panel"] .k12wh__card',
+        all: true,
+      },
+      {
+        name: 'k12-allowed-events',
+        selector: '[data-testid="k12-webhook-panel"] .k12wh__event',
+        all: true,
+      },
     ]),
     anchors: [
       { label: 'webhook-tab', variants: ['Webhooks', 'Webhook'] },
       { label: 'github-webhook', variants: ['GitHub Push 触发器'] },
       { label: 'generic-webhook', variants: ['Generic JSON 触发器'] },
+      { label: 'generic-type', variants: ['generic'] },
+      { label: 'generic-event-count', variants: ['事件：0', '事件数：0', '0 个事件'] },
+      { label: 'k12-submission-event', variants: ['k12.submission.requested.v1'] },
+      { label: 'k12-practice-return-event', variants: ['k12.practice_return.requested.v1'] },
+      { label: 'k12-workflow-run-event', variants: ['k12.workflow_run.requested.v1'] },
     ],
     fixtureComparison: {
       status: 'NOT_COMPARABLE',
       reason:
-        'Generic webhook records are fixed, but the prototype also contains a K12 binding whose event contract is currently contradictory and is intentionally not fabricated here.',
+        'The generic DTO is deterministic, but the K12 binding and receipt projection is verified by the dedicated K12 visual surface and is not yet present in this general route fixture.',
     },
   },
   {
@@ -398,7 +474,7 @@ const surfaces: Surface[] = [
     fixtureComparison: {
       status: 'NOT_COMPARABLE',
       reason:
-        'Installed and marketplace entries are deterministic, but the static prototype and live ClawHub DTO use different sample catalogs.',
+        'The static prototype and current ClawHub catalog still use different sample entries; Skills search behavior is verified separately from catalog identity.',
     },
   },
   {
@@ -411,27 +487,51 @@ const surfaces: Surface[] = [
     referenceTargets: refTargets('integration', [
       {
         name: 'server-rows',
-        selector: '[data-pane="integration"] [data-sub="in1"] .mcp-row',
+        selector:
+          '[data-pane="integration"] [data-sub="in1"] [data-mcp-panel="servers"].mcp-row',
+        all: true,
+      },
+      {
+        name: 'pending-authorization',
+        selector:
+          '[data-pane="integration"] [data-sub="in1"] [data-mcp-panel="servers"] .pill-amber',
+      },
+      {
+        name: 'tool-rows',
+        selector:
+          '[data-pane="integration"] [data-sub="in1"] [data-mcp-panel="tools"].mcp-row',
         all: true,
       },
       {
         name: 'market-cards',
-        selector: '[data-pane="integration"] [data-sub="in1"] .market-card',
+        selector:
+          '[data-pane="integration"] [data-sub="in1"] [data-mcp-panel="marketplace"] .market-card',
         all: true,
       },
     ]),
     sourceTargets: sourceTargets('.hc-page-shell__content', [
-      { name: 'server-cards', selector: '.hc-mcp-card', all: true },
-      { name: 'market-cards', selector: '.hc-market-card', all: true },
+      { name: 'server-cards', selector: '.hc-capability-installed-row--mcp', all: true },
+      {
+        name: 'pending-authorization',
+        selector: '.hc-capability-installed-row--mcp [title="待授权"]',
+      },
+      { name: 'tool-rows', selector: '.hc-capability-installed-row--tool', all: true },
+      { name: 'market-cards', selector: '.hc-mcp-market-card', all: true },
     ]),
     anchors: [
       { label: 'mcp-tab', variants: ['MCP'] },
       { label: 'filesystem', variants: ['filesystem'] },
+      { label: 'pending-authorization', variants: ['待授权'] },
+      { label: 'authorization-action', variants: ['去设置授权'] },
+      { label: 'filesystem-tool', variants: ['filesystem.read_file'] },
+      { label: 'postgres-tool', variants: ['postgres.query'] },
+      { label: 'github-mcp-market', variants: ['GitHub MCP'] },
+      { label: 'browser-mcp-market', variants: ['Browser MCP'] },
     ],
     fixtureComparison: {
-      status: 'NOT_COMPARABLE',
+      status: 'COMPARABLE',
       reason:
-        'The filesystem server is fixed, but prototype tool-test rows and marketplace catalog are not the same endpoint projection as the source fixture.',
+        'The source fixture projects the same connected filesystem server, pending-authorization postgres-readonly server, tool schemas and MCP marketplace entries as the prototype.',
     },
   },
   {
@@ -444,22 +544,41 @@ const surfaces: Surface[] = [
     referenceTargets: refTargets('integration', [
       {
         name: 'prompt-cards',
-        selector: '[data-pane="integration"] [data-sub="in2"] .prompt-card',
+        selector: '[data-pane="integration"] [data-sub="in2"] .prompt-item',
         all: true,
+      },
+      {
+        name: 'prompt-categories',
+        selector: '[data-pane="integration"] [data-sub="in2"] .prompt-sub',
+        all: true,
+      },
+      {
+        name: 'search-context',
+        selector:
+          '.screen[data-pane="integration"] #capabilityContextSearch[placeholder="搜索Prompt 库..."]',
       },
     ]),
     sourceTargets: sourceTargets('.hc-page-shell__content', [
-      { name: 'prompt-cards', selector: '.hc-prompt-card', all: true },
+      { name: 'prompt-cards', selector: '.hc-prompts__item', all: true },
+      { name: 'prompt-categories', selector: '.hc-prompts__cat', all: true },
+      {
+        name: 'search-context',
+        selector: '.hc-toolbar__search input[placeholder="搜索Prompt 库..."]',
+      },
     ]),
     anchors: [
       { label: 'prompts-tab', variants: ['Prompt 库'] },
       { label: 'translation', variants: ['翻译润色'] },
       { label: 'minutes', variants: ['会议纪要'] },
+      { label: 'translation-category', variants: ['翻译'] },
+      { label: 'minutes-category', variants: ['办公'] },
+      { label: 'review-category', variants: ['知识库检索'] },
+      { label: 'prompt-search-context', variants: ['搜索Prompt 库...', '搜索 Prompt…'] },
     ],
     fixtureComparison: {
       status: 'COMPARABLE',
       reason:
-        'The same three prompt identities, types and ordering are supplied on both legs; full-page pixel comparison is an applicable RED/PASS oracle.',
+        'Prompt identities, types, ordering, categories and Prompt-scoped search controls use the same deterministic fixture on both legs.',
     },
   },
   {
@@ -572,15 +691,34 @@ const knowledgeDocuments = [
   {
     id: 'kb-doc-math-grade5-002',
     title: '义务教育教科书·数学五年级下册.pdf',
+    source: '手动上传',
+    source_type: 'upload',
     chunk_count: 120,
     created_at: NOW,
     status: 'failed',
     vector_index_state: 'failed',
+    text_index_state: 'ready',
+    failure_code: 'failed_vision_capability',
+    affected_pages: 7,
+    preflight: { state: 'blocked' },
+    frozen_vision: { provider: 'HexClaw-GPT', model: 'gpt-5.6-sol' },
+    model_calls: 0,
+    available_actions: ['settings'],
+    ingestion: {
+      failure_code: 'failed_vision_capability',
+      affected_pages: 7,
+      preflight: { state: 'blocked' },
+      frozen_vision: { provider: 'HexClaw-GPT', model: 'gpt-5.6-sol' },
+      model_calls: 0,
+      available_actions: ['settings'],
+    },
     error_message: '7 页需要 OCR/VLM',
   },
   {
     id: 'kb-class-notes',
     title: '课堂笔记.pdf',
+    source: '聊天附件',
+    source_type: 'chat',
     chunk_count: 12,
     created_at: NOW,
     status: 'indexed',
@@ -589,6 +727,8 @@ const knowledgeDocuments = [
   {
     id: 'kb-product-faq',
     title: '产品 FAQ.md',
+    source: '手动上传',
+    source_type: 'upload',
     chunk_count: 8,
     created_at: NOW,
     status: 'indexed',
@@ -597,10 +737,14 @@ const knowledgeDocuments = [
   {
     id: 'kb-whiteboard',
     title: '白板流程图.png',
+    source: '连接器同步',
+    source_type: 'connector',
     chunk_count: 1,
     created_at: NOW,
     status: 'processing',
     vector_index_state: 'building',
+    vector_job_id: 'job-kb-whiteboard',
+    vector_job_state: 'running',
   },
 ]
 
@@ -670,7 +814,7 @@ const prompts = [
     args_json: '[]',
     tool_scope: '',
     model: '',
-    category: '写作',
+    category: '翻译',
     enabled: true,
     updated_at: NOW,
   },
@@ -870,7 +1014,11 @@ function runtimeFixture(apiPath: string, method: string, requestURL: URL): unkno
       total: knowledgeDocuments.length,
       limit: 50,
       offset: 0,
-      sources: [],
+      sources: [
+        { source: '手动上传', count: 2 },
+        { source: '聊天附件', count: 1 },
+        { source: '连接器同步', count: 1 },
+      ],
     }
   }
   if (apiPath === '/api/v1/knowledge/config') {
@@ -878,16 +1026,53 @@ function runtimeFixture(apiPath: string, method: string, requestURL: URL): unkno
       rerank_enabled: false,
       rerank_model: '',
       query_expansion: false,
-      contextual: false,
+      contextual: true,
       min_score: 0.2,
       candidate_k: 50,
     }
   }
   if (apiPath === '/api/v1/knowledge/embedding-status') {
-    return { enabled: true, configured: false, local: false, ready: false, pulling: false }
+    return {
+      enabled: true,
+      configured: true,
+      provider: 'openai_compatible',
+      model: 'text-embedding-3-small',
+      local: false,
+      ready: true,
+      pulling: false,
+    }
   }
   if (apiPath.includes('/embedding-policy')) {
-    return { provider: '', model: '', status: 'not_configured' }
+    const profile = {
+      profile_id: 'openai-compatible-embedding',
+      model_name: 'text-embedding-3-small',
+      provider_id: 'openai-compatible',
+      provider_name: 'OpenAI 兼容',
+      location: 'cloud',
+      capability: 'embedding',
+      dimension: 1536,
+      availability: 'connected',
+      display_order: 1,
+    }
+    return {
+      policy_version: 1,
+      selection: { kind: 'auto' },
+      active_revision: {
+        revision_id: 'embedding-revision-1',
+        state: 'ready',
+        profile,
+      },
+      desired_revision: null,
+      indexing_activity: {
+        state: 'building',
+        processing_documents: 1,
+        chunks_done: 12,
+        chunks_total: 120,
+      },
+      available_profiles: [profile],
+      recommendation: null,
+      catalog_version: 1,
+    }
   }
   if (apiPath === '/api/v1/memory') {
     if (requestURL.searchParams.get('source') === 'reflect_profile') {
@@ -1136,9 +1321,18 @@ function runtimeFixture(apiPath: string, method: string, requestURL: URL): unkno
       total: 2,
     }
   }
-  if (apiPath === '/api/v1/mcp/servers') return { servers: ['filesystem'], total: 1 }
+  if (apiPath === '/api/v1/mcp/servers') {
+    return { servers: ['filesystem', 'postgres-readonly'], total: 2 }
+  }
   if (apiPath === '/api/v1/mcp/status') {
-    return { statuses: { filesystem: 'connected' }, servers: [], total: 1 }
+    return {
+      statuses: {
+        filesystem: 'connected',
+        'postgres-readonly': 'pending_authorization',
+      },
+      servers: [],
+      total: 2,
+    }
   }
   if (apiPath === '/api/v1/mcp/tools') {
     return {
@@ -1151,8 +1345,19 @@ function runtimeFixture(apiPath: string, method: string, requestURL: URL): unkno
             properties: { path: { type: 'string', description: '绝对路径' } },
           },
         },
+        {
+          name: 'postgres.query',
+          description: '执行只读 SQL 查询',
+          input_schema: {
+            type: 'object',
+            properties: {
+              sql: { type: 'string' },
+              limit: { type: 'number', default: 100 },
+            },
+          },
+        },
       ],
-      total: 1,
+      total: 2,
     }
   }
   if (apiPath === '/api/v1/prompts' || apiPath === '/api/v1/prompts/all') {
@@ -1190,6 +1395,7 @@ async function installSourceFixture(page: Page) {
     ({ config, session }) => {
       localStorage.clear()
       sessionStorage.clear()
+      Date.now = () => Date.parse('2026-07-29T06:22:00.000Z')
       localStorage.setItem('hc-theme', 'light')
       localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
       sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
@@ -1271,10 +1477,12 @@ async function openReference(page: Page, surface: Surface) {
       const api = window as typeof window & {
         seg?: (set: string, index: number) => void
         ctab?: (index: number) => void
+        syncCapabilitySearchContext?: () => void
       }
       if (paneSwitch.kind === 'segment') {
         if (!api.seg) throw new Error('prototype segment API is unavailable')
         api.seg(paneSwitch.set, paneSwitch.index)
+        api.syncCapabilitySearchContext?.()
       } else {
         if (!api.ctab) throw new Error('prototype connection API is unavailable')
         api.ctab(paneSwitch.index)
@@ -1386,7 +1594,17 @@ async function geometrySnapshot(
 }
 
 async function visibleText(page: Page) {
-  return page.locator('body').evaluate((body) => (body.innerText || '').replace(/\s+/g, ' ').trim())
+  return page.locator('body').evaluate((body) => {
+    const text = (body.innerText || '').trim()
+    const fields = Array.from(body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'))
+      .filter((field) => {
+        const style = getComputedStyle(field)
+        return style.display !== 'none' && style.visibility !== 'hidden'
+      })
+      .flatMap((field) => [field.value, field.placeholder])
+      .filter(Boolean)
+    return [text, ...fields].join(' ').replace(/\s+/g, ' ').trim()
+  })
 }
 
 function anchorEvidence(text: string, anchors: Anchor[]) {
@@ -1669,8 +1887,8 @@ test.describe('non-K12 general routes — whole-page prototype/current-source ma
     for (const surface of surfaces) {
       const referencePage = await browser.newPage()
       const sourcePage = await browser.newPage()
-      await installSourceFixture(sourcePage)
       try {
+        await installSourceFixture(sourcePage)
         results.push(await captureSurface(referencePage, sourcePage, surface, testInfo))
       } catch (error) {
         const outputDir = path.join(EVIDENCE_ROOT, testInfo.project.name, surface.id)

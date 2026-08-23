@@ -30,7 +30,7 @@ const moduleByRepository = new Map([
   ['hexagon', 'github.com/hexagon-codes/hexagon'],
   ['hexclaw', 'github.com/hexagon-codes/hexclaw'],
 ])
-const target = 'x86_64-apple-darwin'
+const target = process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
 
 async function loadIdentity() {
   const module = await import(identityModuleURL).catch(() => ({}))
@@ -139,6 +139,8 @@ function shellQuote(value) {
 }
 
 async function createFakeToolchain(root, options = {}) {
+  const requestedTarget = options.target ?? target
+  const goArchitecture = requestedTarget === 'aarch64-apple-darwin' ? 'arm64' : 'amd64'
   const bin = join(root, 'bin')
   const goRoot = join(root, 'go-root')
   const rustupHome = join(root, 'rustup-home')
@@ -161,19 +163,19 @@ async function createFakeToolchain(root, options = {}) {
   await write(
     bin,
     'go',
-    `#!/bin/sh\ncase "$1" in\n  version) printf '%s\\n' 'go version go1.25.7 darwin/amd64' ;;\n  tool) printf '%s\\n' 'compile version go1.25.7' ;;\n  env) printf '%s\\n' ${shellQuote(JSON.stringify({ CGO_ENABLED: '1', GOARCH: 'amd64', GOEXPERIMENT: '', GOOS: 'darwin', GOROOT: goRoot, GOTOOLCHAIN: 'local', GOVERSION: 'go1.25.7' }))} ;;\n  *) exit 64 ;;\nesac\n`,
+    `#!/bin/sh\ncase "$1" in\n  version) printf '%s\\n' 'go version go1.25.7 darwin/${goArchitecture}' ;;\n  tool) printf '%s\\n' 'compile version go1.25.7' ;;\n  env) printf '%s\\n' ${shellQuote(JSON.stringify({ CGO_ENABLED: '1', GOARCH: goArchitecture, GOEXPERIMENT: '', GOOS: 'darwin', GOROOT: goRoot, GOTOOLCHAIN: 'local', GOVERSION: 'go1.25.7' }))} ;;\n  *) exit 64 ;;\nesac\n`,
     0o500,
   )
   const rustcPath = await write(
     rustToolchainBin,
     'rustc-real',
-    "#!/bin/sh\nprintf '%s\\n' 'rustc 1.94.0 (fixture)' 'binary: rustc' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: x86_64-apple-darwin' 'release: 1.94.0' 'LLVM version: fixture'\n",
+    `#!/bin/sh\nprintf '%s\\n' 'rustc 1.94.0 (fixture)' 'binary: rustc' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: ${requestedTarget}' 'release: 1.94.0' 'LLVM version: fixture'\n`,
     0o500,
   )
   const cargoPath = await write(
     rustToolchainBin,
     'cargo-real',
-    "#!/bin/sh\nprintf '%s\\n' 'cargo 1.94.0 (fixture)' 'release: 1.94.0' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: x86_64-apple-darwin' 'libgit2: fixture' 'libcurl: fixture' 'ssl: fixture' 'os: macos fixture'\n",
+    `#!/bin/sh\nprintf '%s\\n' 'cargo 1.94.0 (fixture)' 'release: 1.94.0' 'commit-hash: fixture' 'commit-date: 2026-08-10' 'host: ${requestedTarget}' 'libgit2: fixture' 'libcurl: fixture' 'ssl: fixture' 'os: macos fixture'\n`,
     0o500,
   )
   const rustupPath = await write(
@@ -184,8 +186,8 @@ async function createFakeToolchain(root, options = {}) {
   )
   await link(rustupPath, join(bin, 'rustc'))
   await link(rustupPath, join(bin, 'cargo'))
-  const rustObjcopyRelative = 'lib/rustlib/x86_64-apple-darwin/bin/rust-objcopy'
-  const rustLibraryRelative = 'lib/rustlib/x86_64-apple-darwin/lib/libstd.rlib'
+  const rustObjcopyRelative = `lib/rustlib/${requestedTarget}/bin/rust-objcopy`
+  const rustLibraryRelative = `lib/rustlib/${requestedTarget}/lib/libstd.rlib`
   await write(rustToolchainRoot, rustObjcopyRelative, '#!/bin/sh\nexit 0\n', 0o500)
   await write(rustToolchainRoot, rustLibraryRelative, 'fixture rust library\n', 0o400)
   await write(bin, 'pnpm', "#!/bin/sh\nprintf '%s\\n' '10.0.0'\n", 0o500)
@@ -283,6 +285,42 @@ test('production layout is derived from the script realpath and resolves the can
 
   const source = await readFile(identityModuleURL, 'utf8')
   assert.equal(source.includes(['/Users', 'guoyanjun'].join('/')), false)
+})
+
+test('manifest destination rejects non-generation staging children before creating them', async (t) => {
+  const fixture = await createFixture('publication-staging-destination')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const adapter = await adapterFor(fixture)
+  const desktopRoot = await realpath(fixture.roots['hexclaw-desktop'])
+  const stagingRoot = join(
+    desktopRoot,
+    'src-tauri',
+    'target',
+    'release',
+    'bundle',
+    'dmg',
+    '.package-local.generations',
+  )
+
+  for (const name of ['source-diagnostic-20260822', '.tmp-source-manifest-1234']) {
+    await t.test(name, async () => {
+      const childRoot = join(stagingRoot, name)
+      await assert.rejects(
+        adapter.create({
+          manifestPath: join(childRoot, 'source-manifest.json'),
+          target,
+        }),
+        /\[input:manifest-path\]/u,
+      )
+      await assert.rejects(stat(childRoot), { code: 'ENOENT' })
+    })
+  }
+
+  const generationRoot = join(stagingRoot, 'a'.repeat(32))
+  const manifestPath = join(generationRoot, 'release', 'source-manifest.json')
+  const created = await adapter.create({ manifestPath, target })
+  assert.match(created.sha256, /^[a-f0-9]{64}$/u)
+  assert.equal((await stat(manifestPath)).isFile(), true)
 })
 
 test('canonical manifest covers dirty tracked and relevant untracked source inputs but excludes outputs', async (t) => {
@@ -1060,6 +1098,7 @@ test('toolchain capture executes private snapshots with a clean environment and 
   const environmentLog = join(fixture.workRoot, 'tool-environment.log')
   const toolchainOptions = await createFakeToolchain(join(fixture.workRoot, 'tools'), {
     environmentLog,
+    target,
   })
   const module = await loadIdentity()
   const adapter = module.createPackageSourceIdentityTestAdapter({
@@ -1120,7 +1159,7 @@ test('toolchain capture executes private snapshots with a clean environment and 
   assert.equal(
     (
       await stat(
-        join(bindings.rustToolchain.canonical, 'lib/rustlib/x86_64-apple-darwin/bin/rust-objcopy'),
+        join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/bin/rust-objcopy`),
       )
     ).mode & 0o777,
     0o500,
@@ -1128,7 +1167,7 @@ test('toolchain capture executes private snapshots with a clean environment and 
   assert.equal(
     (
       await stat(
-        join(bindings.rustToolchain.canonical, 'lib/rustlib/x86_64-apple-darwin/lib/libstd.rlib'),
+        join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/lib/libstd.rlib`),
       )
     ).mode & 0o777,
     0o400,

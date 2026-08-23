@@ -2793,18 +2793,18 @@ const k12Surfaces = [
     coveredStates: ['current', 'history'],
     prototype: {
       document: 'hexclaw-docs/prototype/app.html',
-      anchor: '.k12-secondary-tabs',
-      readySelector: '.k12-secondary-tabs',
+      anchor: '.k12-book-tabs.k12-week-view-tabs',
+      readySelector: '.k12-book-tabs.k12-week-view-tabs',
       openFunction: "switchK12WeeklyView('current' | 'history')",
     },
     priority: 'P0',
     touchReason: ['range-direct'],
-    oracle: 'blocked',
+    oracle: 'pixel',
     runner: 'browser',
     installedThirdLeg: 'required',
-    currentStatus: 'blocked',
+    currentStatus: 'mapped-awaiting-installed',
     statusReason:
-      'Prototype/source naming and the architecture shared-tab invariant disagree: the period control is not consistently projected through .k12-book-tabs.',
+      'Prototype and current source now project the approved shared K12BookTabs contract; paired Chromium/WebKit current-source target evidence passes. Installed-app two-child, resize, focus and restart evidence remains required.',
   },
   {
     id: 'k12.weekly-current',
@@ -3006,7 +3006,7 @@ const k12Surfaces = [
     installedThirdLeg: 'required',
     currentStatus: 'blocked',
     statusReason:
-      'K12RecordsView still routes weekly print through K12PersistentPrintController/K12PrintPreviewModal instead of directly invoking native print as required.',
+      'K12RecordsView routes current and archived weekly print through K12PersistentPrintController mode="native-dialog", which invokes the native print boundary without K12PrintPreviewModal.',
   },
   {
     id: 'k12.mistakes-list',

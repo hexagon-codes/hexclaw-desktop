@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import {
   assertLiveRuntime,
@@ -12,7 +13,8 @@ import {
 
 /** UICLICK-006 / PHOTO-* / E2E grading-vs-solving golden matrix. */
 const blockers = liveGateBlockers({ isolatedProfile: true, model: true })
-const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || '/Users/guoyanjun/work/hexclaw-docs'
+const DOCS_ROOT =
+  process.env.HEXCLAW_DOCS_ROOT || fileURLToPath(new URL('../../../hexclaw-docs/', import.meta.url))
 
 const FIXTURES = {
   clear: {
@@ -83,38 +85,87 @@ async function uploadAndRecognize(page: Page, fixture: Fixture) {
   const apiPaths: string[] = []
   const onRequest = (request: import('@playwright/test').Request) => {
     const pathname = new URL(request.url()).pathname
-    if (pathname.includes('/api/v1/k12/')) apiPaths.push(`${request.method()} ${pathname}`)
+    if (pathname.includes('/api/k12/')) apiPaths.push(`${request.method()} ${pathname}`)
   }
   page.on('request', onRequest)
-  await page.locator('.hc-composer input[type="file"]').setInputFiles(fixture.path)
-  const guard = page.getByTestId('recognize-guard').last()
-  await expect(guard).toBeVisible({ timeout: 30_000 })
-  await expect(guard.getByTestId('rq-item').first()).toBeVisible({ timeout: 6 * 60_000 })
-  page.off('request', onRequest)
+  try {
+    const createRequest = page.waitForRequest((request) => {
+      const pathname = new URL(request.url()).pathname
+      return request.method() === 'POST' && pathname.endsWith('/api/k12/image-tasks')
+    })
+    await page.locator('.hc-composer input[type="file"]').setInputFiles(fixture.path)
+    const request = await createRequest
+    const body = request.postDataJSON() as {
+      agent?: string
+      source_session?: string
+      source_kind?: string
+      source_ref?: string
+      source_asset_refs?: string[]
+      attempt_generation?: number
+      route_request?: {
+        provider?: string
+        model?: string
+        selection_source?: string
+      }
+    }
+    expect(body.agent).toBeTruthy()
+    expect(body.source_kind).toBe('desktop')
+    expect(body.source_session).toBeTruthy()
+    expect(body.source_ref).toBeTruthy()
+    expect(body.source_asset_refs).toHaveLength(1)
+    expect(body.source_asset_refs?.[0]).toMatch(/^asset:\/\//)
+    expect(body.attempt_generation).toBe(1)
+    expect(body.route_request).toMatchObject({
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      selection_source: 'explicit',
+    })
 
-  expect(
-    apiPaths.some((path) => path === 'POST /api/v1/k12/grading-jobs'),
-    `${fixture.id} must enter through public GradingJob creation`,
-  ).toBe(true)
-  expect(
-    apiPaths.some((path) => /\/recognize(?:$|\/)/.test(path)),
-    `${fixture.id} must not bypass GradingJob via a public recognize endpoint`,
-  ).toBe(false)
-  await expect(guard.locator('.rec-panel__err')).toHaveCount(0)
+    const guard = page.getByTestId('recognize-guard').last()
+    await expect(guard).toBeVisible({ timeout: 30_000 })
+    const readyOrFailed = await Promise.race([
+      guard
+        .getByTestId('rq-item')
+        .first()
+        .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+        .then(() => 'ready' as const),
+      guard
+        .locator('.rec-panel__err')
+        .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+        .then(() => 'failed' as const),
+    ])
+    if (readyOrFailed === 'failed') {
+      throw new Error(
+        `real image task failed before producing questions: ${await guard.locator('.rec-panel__err').innerText()}`,
+      )
+    }
+    await expect(guard.locator('.rec-panel__err')).toHaveCount(0)
 
-  const subject = guard.getByTestId('recognize-subject')
-  if (await subject.isVisible().catch(() => false)) {
-    await subject.locator('.hc-select__trigger').click()
-    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '数学' }).click()
+    expect(
+      apiPaths.some((path) => path.endsWith('/api/k12/image-tasks')),
+      `${fixture.id} must enter through public ImageTask creation`,
+    ).toBe(true)
+    expect(
+      apiPaths.some((path) => /\/recognize(?:$|\/)/.test(path)),
+      `${fixture.id} must not bypass ImageTask through a public recognize endpoint`,
+    ).toBe(false)
+
+    const subject = guard.getByTestId('recognize-subject')
+    if (await subject.isVisible().catch(() => false)) {
+      await subject.locator('.hc-select__trigger').click()
+      await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '数学' }).click()
+    }
+    for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all()) {
+      await checkbox.check()
+    }
+    const confirm = guard.getByTestId('recognize-confirm-all')
+    await expect(confirm).toBeEnabled()
+    await confirm.click()
+    await expect(guard.getByTestId('recognize-batch-actions')).toBeVisible()
+    return guard
+  } finally {
+    page.off('request', onRequest)
   }
-  for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all()) {
-    await checkbox.check()
-  }
-  const confirm = guard.getByTestId('recognize-confirm-all')
-  await expect(confirm).toBeEnabled()
-  await confirm.click()
-  await expect(guard.getByTestId('recognize-batch-actions')).toBeVisible()
-  return guard
 }
 
 async function inputValues(locator: Locator): Promise<string[]> {

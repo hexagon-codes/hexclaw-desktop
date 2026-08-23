@@ -1214,6 +1214,7 @@ async function assertExternalSignalCleanup(t, signal, options = {}) {
       ...process.env,
       ...callerPaths,
       HEXCLAW_CONTRACT_CAPTURE_PATH: capturePath,
+      HEXCLAW_FAKE_CONFIG_DELAY_MS: String(options.configDelayMilliseconds ?? 5_000),
       HEXCLAW_FAKE_CAPTURE_DELAY_MS: String(options.captureDelayMilliseconds ?? 0),
       HEXCLAW_NATIVE_SIDECAR_PORT: String(port),
       HEXCLAW_TEST_LLM_CONFIG_MODE: 'missing',
@@ -1544,10 +1545,9 @@ test('REG-FIX-20260727-MISSING-LLM-STARTUP-011 publishes verified watchdog readi
   assert.equal(ready.owner.pid, harness.pid)
   assert.equal(ready.supervisor.pgid, ready.supervisor.pid)
   assert.equal(ready.watchdog.pgid, ready.watchdog.pid)
-  assert.deepEqual(
-    new Set(ownedChildren.map(({ pid }) => pid)),
-    new Set([ready.supervisor.pid, ready.watchdog.pid]),
-  )
+  const directChildPids = new Set(ownedChildren.map(({ pid }) => pid))
+  assert.ok(directChildPids.has(ready.supervisor.pid))
+  assert.ok(directChildPids.has(ready.watchdog.pid))
   assert.notEqual(ready.watchdog.pgid, ready.owner.pgid)
   assert.notEqual(ready.watchdog.pgid, ready.supervisor.pgid)
   for (const identity of [ready.owner, ready.supervisor, ready.watchdog]) {

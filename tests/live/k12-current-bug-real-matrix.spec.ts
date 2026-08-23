@@ -337,6 +337,7 @@ async function confirmRecognizedRowsIfRequired(
   testInfo: TestInfo,
   evidenceLabel: string,
   trace: ReturnType<typeof traceImageTaskFacade>,
+  options: { expectedManualConfirmationCount?: number } = {},
   timeout = 8 * 60_000,
 ): Promise<Locator> {
   const guard = shell.getByTestId('recognize-guard')
@@ -406,7 +407,16 @@ async function confirmRecognizedRowsIfRequired(
     await subject.locator('.hc-select__trigger').click()
     await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '数学' }).click()
   }
-  for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all()) {
+  const confirmationCheckboxes = guard.locator('input[data-testid^="rq-confirm-"]')
+  const expectedManualConfirmationCount = options.expectedManualConfirmationCount
+  if (expectedManualConfirmationCount !== undefined) {
+    await expect(
+      confirmationCheckboxes,
+      `${evidenceLabel} manual confirmation exact-set`,
+    ).toHaveCount(expectedManualConfirmationCount)
+  }
+  if (expectedManualConfirmationCount === 0) return guard
+  for (const checkbox of await confirmationCheckboxes.all()) {
     if (!(await checkbox.isChecked())) await checkbox.check()
   }
   const confirmAll = guard.getByTestId('recognize-confirm-all')
@@ -753,8 +763,22 @@ const homeworkGroundTruth = [
     answer: ['8/5', '1又3/5'],
     status: 'correct',
   },
-  { source: homeworkSources[14], question: '周长是300米', answer: ['11250'], status: 'correct' },
-  { source: homeworkSources[15], question: '5,6,12,14,23,29', answer: ['29'], status: 'wrong' },
+  {
+    source: homeworkSources[14],
+    question: '周长是300米',
+    answer: ['11250'],
+    status: 'correct_with_process_issue',
+    processDiagnosis: ['300/2/2=50'],
+    processTeaching: [],
+  },
+  {
+    source: homeworkSources[15],
+    question: '5,6,12,14,23,29',
+    answer: ['29'],
+    status: 'correct_with_process_issue',
+    processDiagnosis: ['42=18*2'],
+    processTeaching: ['40', '20'],
+  },
 ] as const
 
 const sourceLabels = homeworkSources.map((item) => item.label)
@@ -1195,6 +1219,12 @@ function assertHomeworkResult(payload: Json): void {
   const items = array(payload.items, 'homework result items')
   expect(items).toHaveLength(homeworkGroundTruth.length)
   assertHomeworkSourceFacts(items.map((item) => record(item.question, 'homework result question')))
+  expect(
+    items.map((item) => item.status),
+    'C02 assessment status exact-set',
+  ).toEqual(homeworkGroundTruth.map((item) => item.status))
+  expect(items.filter((item) => item.status === 'correct')).toHaveLength(14)
+  expect(items.filter((item) => item.status === 'correct_with_process_issue')).toHaveLength(2)
   items.forEach((item, index) => {
     const oracle = homeworkGroundTruth[index]!
     const label = oracle.source.label
@@ -1206,6 +1236,7 @@ function assertHomeworkResult(payload: Json): void {
     expect(item.status, `${label} judgment`).toBe(oracle.status)
     expect(grade.solve_only, `${label} must remain grading, not solve-only`).toBe(false)
     expect(grade.out_of_scope, `${label} must remain in-scope`).toBe(false)
+    expect(grade.assessment_status, `${label} grade status`).toBe(oracle.status)
     expect(grade.verdict, `${label} verdict`).toBe(
       oracle.status === 'correct' ? 'agree' : 'disagree',
     )
@@ -1217,14 +1248,17 @@ function assertHomeworkResult(payload: Json): void {
       ).toBeUndefined()
       return
     }
+    expect(oracle.status).toBe('correct_with_process_issue')
+    expect(grade.final_answer_correct, `${label} final answer fact`).toBe(true)
+    expect(grade.record_created, `${label} must not create a mistake record`).toBe(false)
     const diagnostic = normalizeSemantic(
       `${String(grade.wrong_step ?? '')} ${String(grade.error_cause ?? '')}`,
     )
-    for (const token of ['42', '18', '2']) {
+    for (const token of oracle.processDiagnosis) {
       expect(diagnostic, `${label} process diagnosis must preserve ${token}`).toContain(token)
     }
     const guide = assertParentGuide(item.parent_guide, label)
-    expectSemanticAlternative(guide.answer, ['29'], `${label} correct final answer`)
+    expectSemanticAlternative(guide.answer, oracle.answer, `${label} correct final answer`)
     const teaching = normalizeSemantic(
       [
         ...(guide.parent_teaching_sequence as string[]),
@@ -1232,8 +1266,9 @@ function assertHomeworkResult(payload: Json): void {
         String(guide.checking_method),
       ].join(' '),
     )
-    expect(teaching, `${label} guide must teach the valid 40=20×2 partition`).toContain('40')
-    expect(teaching, `${label} guide must teach the valid 40=20×2 partition`).toContain('20')
+    for (const token of oracle.processTeaching) {
+      expect(teaching, `${label} process teaching must preserve ${token}`).toContain(token)
+    }
   })
   if (payload.annotated_image !== undefined) {
     const annotated = record(payload.annotated_image, 'annotated homework image')
@@ -1739,6 +1774,7 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         testInfo,
         'homework',
         homework.trace!,
+        { expectedManualConfirmationCount: 0 },
       )
       const homeworkDispatchId = await dispatchID(homework.shell)
       const homeworkDispatch = await loadDispatch(page, homeworkDispatchId)

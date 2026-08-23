@@ -74,25 +74,48 @@ async function loadGateModule() {
   return import(repoFile('scripts/ci/k12-fixtures-gate.mjs'))
 }
 
+function passingTest() {
+  return {
+    projectName: 'chromium',
+    expectedStatus: 'passed',
+    results: [{ status: 'passed' }],
+  }
+}
+
 function passingReport(specs = expectedSpecs) {
   return {
     errors: [],
-    suites: [
-      {
-        title: 'K12 real Fixture current-source gate',
-        specs: specs.map((file) => ({
-          title: file,
+    suites: specs.map((file) => {
+      const titles = expectedTestsBySpec[file] ?? ['unexpected test']
+      const direct = titles
+        .filter((title) => !title.includes(' › '))
+        .map((title) => ({
+          title,
           file: `/workspace/tests/e2e/${file}`,
-          tests: [
-            {
-              projectName: 'chromium',
-              expectedStatus: 'passed',
-              results: [{ status: 'passed' }],
-            },
-          ],
+          tests: [passingTest()],
+        }))
+      const nested = new Map()
+      for (const title of titles.filter((item) => item.includes(' › '))) {
+        const [suiteTitle, ...leaf] = title.split(' › ')
+        const list = nested.get(suiteTitle) ?? []
+        list.push({
+          title: leaf.join(' › '),
+          file: `/workspace/tests/e2e/${file}`,
+          tests: [passingTest()],
+        })
+        nested.set(suiteTitle, list)
+      }
+      return {
+        title: `tests/e2e/${file}`,
+        file: `/workspace/tests/e2e/${file}`,
+        specs: direct,
+        suites: [...nested].map(([title, nestedSpecs]) => ({
+          title,
+          file: `/workspace/tests/e2e/${file}`,
+          specs: nestedSpecs,
         })),
-      },
-    ],
+      }
+    }),
   }
 }
 
@@ -206,8 +229,16 @@ test('report audit accepts only a passed exact seven-file result set', async () 
   const { auditK12FixturesReport } = await loadGateModule()
   const audit = auditK12FixturesReport(passingReport())
 
-  assert.equal(audit.total, 7)
+  assert.equal(audit.total, expectedMembers.length)
   assert.deepEqual(audit.files, expectedSpecs)
+})
+
+test('report audit rejects a report that omits contract-declared test members', async () => {
+  const { auditK12FixturesReport } = await loadGateModule()
+  const report = passingReport()
+  report.suites[0].specs[0].title = 'uncontracted fixture test'
+
+  assert.throws(() => auditK12FixturesReport(report), /canonical|test member|exact-set/i)
 })
 
 test('report audit rejects zero tests and exact-set drift', async () => {

@@ -24,13 +24,19 @@ const TEST_SIDECAR_PORT = Number.parseInt(
   process.env.HEX_NATIVE_FULL_ACCESS_SIDECAR_PORT || '16061',
   10,
 )
-const TEST_FIXTURE_PORT = 16062
+const TEST_FIXTURE_PORT = Number.parseInt(
+  process.env.HEX_NATIVE_FULL_ACCESS_FIXTURE_PORT || '16062',
+  10,
+)
 const TEST_UPDATER_PATH = '/__hexclaw_test_updater__'
 const TEST_UPDATER_ENDPOINT = `http://127.0.0.1:${TEST_FIXTURE_PORT}${TEST_UPDATER_PATH}`
 const TEST_API_TOKEN = 'hexclaw-installed-full-access-approval-zero-0123456789abcdef'
 const USER_MARKER = 'FULL_ACCESS_APPROVAL_ZERO_CARD_FIXTURE'
 const FINAL_MARKER = 'FULL_ACCESS_APPROVAL_ZERO_CARD_OK'
 const TOOL_CALL_ID = 'call-full-access-approval-zero'
+const CODEEXEC_USER_MARKER = 'CODEEXEC_DIRECT_GO_ONLY_FIXTURE'
+const CODEEXEC_FINAL_MARKER = 'CODEEXEC_DIRECT_GO_ONLY_OK'
+const CODEEXEC_TOOL_CALL_ID = 'call-codeexec-direct-go-only'
 const APPROVAL_EVENT_TYPES = new Set([
   'tool_approval_request',
   'tool_permission_request',
@@ -41,7 +47,10 @@ const APPROVAL_EVENT_TYPES = new Set([
 
 const currentFile = fileURLToPath(import.meta.url)
 const repoRoot = resolve(dirname(currentFile), '../..')
-const overlayPath = join(repoRoot, 'src-tauri/tauri.mock.conf.json')
+const overlayPath = resolve(
+  process.env.HEX_NATIVE_FULL_ACCESS_OVERLAY ||
+    join(repoRoot, 'src-tauri/tauri.mock.conf.json'),
+)
 const defaultAppBundle = join(repoRoot, 'src-tauri/target/release/bundle/macos/HexClaw Test.app')
 const artifactDir = resolve(
   process.env.HEX_NATIVE_FULL_ACCESS_ARTIFACT_DIR ||
@@ -68,7 +77,7 @@ function validateOverlay() {
   const overlay = JSON.parse(readFileSync(overlayPath, 'utf8'))
   assert.equal(overlay.identifier, 'com.hexclaw.desktop.mock')
   const csp = String(overlay.app?.security?.csp || '')
-  assert.match(csp, /localhost:16061/)
+  assert.match(csp, new RegExp(`localhost:${TEST_SIDECAR_PORT}`))
   assert.doesNotMatch(csp, /localhost:11434|127\.0\.0\.1:11434/)
 
   const updater = overlay.plugins?.updater
@@ -195,6 +204,22 @@ function openAIChunk(delta, finishReason = null) {
   }
 }
 
+function writeOpenAIResponse(response, message, finishReason) {
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    connection: 'close',
+  })
+  response.end(
+    JSON.stringify({
+      id: 'chatcmpl-full-access-approval-zero',
+      object: 'chat.completion',
+      created: 1,
+      model: 'mock-model',
+      choices: [{ index: 0, message, finish_reason: finishReason }],
+    }),
+  )
+}
+
 function createLoopbackFixtureServer(state) {
   return createServer(async (request, response) => {
     const requestURL = new URL(request.url || '/', `http://127.0.0.1:${TEST_FIXTURE_PORT}`)
@@ -226,12 +251,12 @@ function createLoopbackFixtureServer(state) {
     try {
       assert.equal(request.headers.authorization, 'Bearer local-synthetic-credential')
       assert.equal(payload.model, 'mock-model')
-      assert.equal(payload.stream, true)
       const toolMessages = (payload.messages || []).filter((message) => message.role === 'tool')
       const assistantToolCalls = (payload.messages || []).flatMap((message) =>
         message.role === 'assistant' && Array.isArray(message.tool_calls) ? message.tool_calls : [],
       )
       if (turn === 1) {
+        assert.equal(payload.stream, true)
         assert.match(JSON.stringify(payload.messages || []), new RegExp(USER_MARKER))
         assert.equal(toolMessages.length, 0)
         assert.ok(
@@ -259,6 +284,7 @@ function createLoopbackFixtureServer(state) {
         return
       }
       if (turn === 2) {
+        assert.equal(payload.stream, true)
         assert.equal(toolMessages.length, 1)
         assert.equal(toolMessages[0].tool_call_id, TOOL_CALL_ID)
         assert.match(String(toolMessages[0].content || ''), /NOOP_MCP_BROWSER_OK/)
@@ -268,6 +294,57 @@ function createLoopbackFixtureServer(state) {
           openAIChunk({ role: 'assistant', content: FINAL_MARKER }, 'stop'),
           '[DONE]',
         ])
+        return
+      }
+      if (turn === 3) {
+        assert.equal(payload.stream, false)
+        assert.match(JSON.stringify(payload.messages || []), new RegExp(CODEEXEC_USER_MARKER))
+        assert.equal(toolMessages.length, 0)
+        assert.ok(
+          (payload.tools || []).some((tool) => tool?.function?.name === 'code_exec'),
+          'third provider turn must expose the builtin code_exec tool',
+        )
+        writeOpenAIResponse(
+          response,
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: CODEEXEC_TOOL_CALL_ID,
+                type: 'function',
+                function: {
+                  name: 'code_exec',
+                  arguments: JSON.stringify({
+                    mode: 'project',
+                    language: 'go',
+                    project_root: state.codeExecProjectRoot,
+                    command: ['env', 'LANG=C', 'go', 'run', '.'],
+                    artifacts: false,
+                  }),
+                },
+              },
+            ],
+          },
+          'tool_calls',
+        )
+        return
+      }
+      if (turn === 4) {
+        assert.equal(payload.stream, false)
+        assert.equal(toolMessages.length, 1)
+        assert.equal(toolMessages[0].tool_call_id, CODEEXEC_TOOL_CALL_ID)
+        assert.match(
+          String(toolMessages[0].content || ''),
+          /go execution accepts only structured direct go argv/,
+        )
+        assert.equal(assistantToolCalls.length, 1)
+        assert.equal(assistantToolCalls[0].id, CODEEXEC_TOOL_CALL_ID)
+        writeOpenAIResponse(
+          response,
+          { role: 'assistant', content: CODEEXEC_FINAL_MARKER },
+          'stop',
+        )
         return
       }
       fail(`unexpected provider chat turn ${turn}`)
@@ -388,7 +465,7 @@ skill:
     browser: false
     code: false
     shell: false
-    code_exec: false
+    code_exec: true
     file_ops: false
     media_gen: false
     send_message: false
@@ -486,7 +563,15 @@ async function stopOwnedSidecar(appBundle) {
   }
 }
 
-async function runWebSocketBoundary(state) {
+async function runWebSocketBoundary(
+  state,
+  {
+    userMarker = USER_MARKER,
+    finalMarker = FINAL_MARKER,
+    sessionID = 'installed-full-access-approval-zero',
+    requestID = 'installed-full-access-approval-zero-request',
+  } = {},
+) {
   const { default: WebSocket } = await import('ws')
   const outbound = []
   const inbound = []
@@ -506,10 +591,10 @@ async function runWebSocketBoundary(state) {
     ws.on('open', () => {
       const message = {
         type: 'message',
-        content: USER_MARKER,
+        content: userMarker,
         user_id: 'installed-boundary',
-        session_id: 'installed-full-access-approval-zero',
-        request_id: 'installed-full-access-approval-zero-request',
+        session_id: sessionID,
+        request_id: requestID,
         provider: 'mock-openai',
         model: 'mock-model',
       }
@@ -540,8 +625,8 @@ async function runWebSocketBoundary(state) {
         return
       }
       if (
-        (message.type === 'chunk' && message.done && streamedContent.includes(FINAL_MARKER)) ||
-        (message.type === 'reply' && message.content?.includes(FINAL_MARKER))
+        (message.type === 'chunk' && message.done && streamedContent.includes(finalMarker)) ||
+        (message.type === 'reply' && message.content?.includes(finalMarker))
       ) {
         clearTimeout(timeout)
         resolveResult(message)
@@ -560,7 +645,7 @@ async function runWebSocketBoundary(state) {
   const approvalResponses = outbound.filter((message) =>
     ['tool_approval_response', 'tool_permission_response'].includes(message.type),
   )
-  state.ws = {
+  state.webSocketBoundaries[userMarker] = {
     inboundEvents: inbound.length,
     approvalWires: approvalWires.length,
     deadlineEvents: deadlineEvents.length,
@@ -578,6 +663,10 @@ async function runInstalledBoundary() {
   assert.ok(
     Number.isInteger(TEST_SIDECAR_PORT) && TEST_SIDECAR_PORT >= 1024 && TEST_SIDECAR_PORT <= 65535,
     'test Sidecar port must be an unprivileged TCP port',
+  )
+  assert.ok(
+    Number.isInteger(TEST_FIXTURE_PORT) && TEST_FIXTURE_PORT >= 1024 && TEST_FIXTURE_PORT <= 65535,
+    'test fixture port must be an unprivileged TCP port',
   )
   assert.notEqual(TEST_SIDECAR_PORT, 16060)
   assert.notEqual(TEST_FIXTURE_PORT, 16060)
@@ -604,6 +693,17 @@ async function runInstalledBoundary() {
   mkdirSync(join(sandbox, '.hexclaw'), { mode: 0o700 })
   mkdirSync(join(sandbox, 'tmp'), { mode: 0o700 })
   const receiptPath = join(sandbox, 'mcp-receipts.jsonl')
+  const codeExecProjectRoot = join(sandbox, '.hexclaw/workspace/codeexec-direct-go-only')
+  mkdirSync(codeExecProjectRoot, { recursive: true, mode: 0o700 })
+  writeFileSync(join(codeExecProjectRoot, 'go.mod'), 'module codeexecfixture\n\ngo 1.26\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  writeFileSync(
+    join(codeExecProjectRoot, 'main.go'),
+    'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("must-not-run") }\n',
+    { encoding: 'utf8', mode: 0o600 },
+  )
   const rendered = renderConfig(sandbox, receiptPath)
   writeFileSync(rendered.configPath, rendered.content, { encoding: 'utf8', mode: 0o600 })
   chmodSync(rendered.configPath, 0o600)
@@ -613,7 +713,8 @@ async function runInstalledBoundary() {
     chatRequests: [],
     unexpectedRequests: [],
     protocolErrors: [],
-    ws: null,
+    codeExecProjectRoot,
+    webSocketBoundaries: {},
   }
   const providerServer = createLoopbackFixtureServer(state)
   let appProcess
@@ -654,18 +755,34 @@ async function runInstalledBoundary() {
 
     await waitForHealth(appProcess, () => appTail)
     await runWebSocketBoundary(state)
+    await runWebSocketBoundary(state, {
+      userMarker: CODEEXEC_USER_MARKER,
+      finalMarker: CODEEXEC_FINAL_MARKER,
+      sessionID: 'installed-codeexec-direct-go-only',
+      requestID: 'installed-codeexec-direct-go-only-request',
+    })
     await waitFor(() => state.updaterRequests > 0, 5000, 'loopback updater request', 100)
 
     assert.deepEqual(state.unexpectedRequests, [])
     assert.deepEqual(state.protocolErrors, [])
-    assert.equal(state.chatRequests.length, 2, 'provider chat rounds must equal two')
-    assert.deepEqual(state.ws, {
-      inboundEvents: state.ws.inboundEvents,
+    assert.equal(state.chatRequests.length, 4, 'provider chat rounds must equal four')
+    const approvalBoundary = state.webSocketBoundaries[USER_MARKER]
+    const codeExecBoundary = state.webSocketBoundaries[CODEEXEC_USER_MARKER]
+    assert.deepEqual(approvalBoundary, {
+      inboundEvents: approvalBoundary.inboundEvents,
       approvalWires: 0,
       deadlineEvents: 0,
       approvalResponses: 0,
-      terminalType: state.ws.terminalType,
+      terminalType: approvalBoundary.terminalType,
       streamedContent: FINAL_MARKER,
+    })
+    assert.deepEqual(codeExecBoundary, {
+      inboundEvents: codeExecBoundary.inboundEvents,
+      approvalWires: 0,
+      deadlineEvents: 0,
+      approvalResponses: 0,
+      terminalType: codeExecBoundary.terminalType,
+      streamedContent: CODEEXEC_FINAL_MARKER,
     })
 
     const receipts = readFileSync(receiptPath, 'utf8')
@@ -683,7 +800,11 @@ async function runInstalledBoundary() {
     assert.match(readFileSync(rendered.configPath, 'utf8'), /profile: full_access/)
 
     const summary = {
-      acceptance: ['REG-TOOL-APPROVAL-PROFILE-001', 'REG-TOOL-APPROVAL-PROFILE-002'],
+      acceptance: [
+        'REG-TOOL-APPROVAL-PROFILE-001',
+        'REG-TOOL-APPROVAL-PROFILE-002',
+        'REG-BUG-20260727-CODEEXEC-006',
+      ],
       appBundle: relative(repoRoot, appBundle),
       bundleIdentifier: 'com.hexclaw.desktop.mock',
       bundleVersion: plutilValue(infoPlist, 'CFBundleShortVersionString'),
@@ -695,9 +816,11 @@ async function runInstalledBoundary() {
       providerChatRounds: state.chatRequests.length,
       mcpExecutions: receipts.length,
       updaterRequests: state.updaterRequests,
-      approvalWireEvents: state.ws.approvalWires,
-      approvalDeadlineEvents: state.ws.deadlineEvents,
-      approvalResponsesSent: state.ws.approvalResponses,
+      approvalWireEvents: approvalBoundary.approvalWires + codeExecBoundary.approvalWires,
+      approvalDeadlineEvents: approvalBoundary.deadlineEvents + codeExecBoundary.deadlineEvents,
+      approvalResponsesSent: approvalBoundary.approvalResponses + codeExecBoundary.approvalResponses,
+      builtinCodeExecAttempts: 1,
+      builtinCodeExecRejectedBeforeExecution: true,
       realToolsInvoked: 0,
       externalModelInvocations: 0,
       imInvocations: 0,
@@ -711,8 +834,17 @@ async function runInstalledBoundary() {
     if (existsSync(sandbox)) {
       cpSync(sandbox, join(artifactDir, 'sandbox'), { recursive: true })
     }
+    const diagnosticState = {
+      ...state,
+      chatRequests: state.chatRequests.map((request) => ({
+        model: request.model,
+        stream: request.stream,
+        messageRoles: (request.messages || []).map((message) => message.role),
+        toolNames: (request.tools || []).map((tool) => tool?.function?.name).filter(Boolean),
+      })),
+    }
     fail(
-      `${error.stack || error.message}\nFixture state:\n${JSON.stringify(state, null, 2)}\nApp log tail:\n${appTail}`,
+      `${error.stack || error.message}\nFixture state:\n${JSON.stringify(diagnosticState, null, 2)}\nApp log tail:\n${appTail}`,
     )
   } finally {
     await stopProcess(appProcess)

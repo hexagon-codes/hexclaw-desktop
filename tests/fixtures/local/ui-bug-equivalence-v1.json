@@ -1,0 +1,667 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "fixture_id": "ui-bug-equivalence-v1",
+    "locale": "zh-CN",
+    "theme": "light",
+    "viewport": { "width": 1440, "height": 900 },
+    "device_scale_factor": 1,
+    "now": "2026-07-23T12:00:00.000Z",
+    "timezone": "Asia/Shanghai",
+    "reduced_motion": true
+  },
+  "source": {
+    "config": {
+      "general": {
+        "language": "zh-CN",
+        "log_level": "info",
+        "data_dir": "",
+        "auto_start": false,
+        "defaultAgentRole": "",
+        "welcomeCompleted": true
+      },
+      "knowledge": { "enabled": true },
+      "notification": {
+        "system_enabled": true,
+        "sound_enabled": false,
+        "agent_complete": true
+      },
+      "memory": { "enabled": true },
+      "sandbox": { "network_enabled": true },
+      "security": {
+        "gateway_enabled": true,
+        "injection_detection": true,
+        "pii_filter": false,
+        "content_filter": true,
+        "rate_limit_rpm": 60
+      },
+      "mcp": { "default_protocol": "stdio" },
+      "llm": {
+        "default": "openai/gpt-4o",
+        "defaultModel": "gpt-4o",
+        "defaultProviderId": "openai",
+        "routing": { "enabled": false, "strategy": "cost-aware" },
+        "cache": { "enabled": false },
+        "providers": []
+      }
+    },
+    "knowledge": {
+      "documents": [
+        {
+          "id": "kb-doc-math-grade5-002",
+          "title": "义务教育教科书·数学五年级下册.pdf",
+          "content": "",
+          "source": "upload:义务教育教科书·数学五年级下册.pdf",
+          "source_type": "upload",
+          "status": "failed",
+          "chunk_count": 120,
+          "text_index_state": "ready",
+          "ingestion_state": "failed_vision_capability",
+          "failure_code": "failed_vision_capability",
+          "affected_pages": [7],
+          "preflight_state": "blocked",
+          "model_calls": 0,
+          "available_actions": ["settings"],
+          "frozen_vision_provider": "HexClaw-GPT",
+          "frozen_vision_model": "gpt-5.6-sol",
+          "created_at": "2026-07-23T12:00:00.000Z",
+          "updated_at": "2026-07-23T12:00:00.000Z",
+          "vector_index_state": "failed",
+          "error_message": "7 pages require OCR/VLM"
+        },
+        {
+          "id": "kb-class-notes",
+          "title": "课堂笔记.pdf",
+          "content": "分数与小数课堂笔记",
+          "source": "upload:课堂笔记.pdf",
+          "source_type": "upload",
+          "status": "indexed",
+          "chunk_count": 12,
+          "created_at": "2026-07-23T12:00:00.000Z",
+          "updated_at": "2026-07-23T12:00:00.000Z",
+          "vector_index_state": "ready"
+        },
+        {
+          "id": "kb-product-faq",
+          "title": "产品 FAQ.md",
+          "content": "产品常见问题",
+          "source": "manual:产品 FAQ.md",
+          "source_type": "manual",
+          "status": "indexed",
+          "chunk_count": 8,
+          "created_at": "2026-07-23T12:00:00.000Z",
+          "updated_at": "2026-07-23T12:00:00.000Z",
+          "vector_index_state": "ready"
+        },
+        {
+          "id": "kb-whiteboard",
+          "title": "白板流程图.png",
+          "content": "",
+          "source": "upload:白板流程图.png",
+          "source_type": "image",
+          "status": "processing",
+          "chunk_count": 1,
+          "created_at": "2026-07-23T12:00:00.000Z",
+          "updated_at": "2026-07-23T12:00:00.000Z",
+          "vector_index_state": "building"
+        }
+      ],
+      "config": {
+        "rerank": true,
+        "rerank_model": "",
+        "query_expand": true,
+        "contextual": true,
+        "min_score": 0.55,
+        "candidate_k": 50
+      },
+      "embedding_status": {
+        "enabled": true,
+        "configured": true,
+        "local": true,
+        "ready": true,
+        "pulling": false
+      },
+      "embedding_policy": {
+        "policy_version": 3,
+        "selection": { "kind": "auto" },
+        "active_revision": {
+          "revision_id": "revision-ready",
+          "state": "ready",
+          "profile": {
+            "profile_id": "local-qwen3-embedding-8b",
+            "model_name": "qwen3-embedding:8b",
+            "provider_id": "ollama",
+            "provider_name": "Ollama",
+            "location": "local",
+            "capability": "embedding",
+            "dimension": 4096,
+            "availability": "installed",
+            "display_order": 10
+          },
+          "chunks_done": 141,
+          "chunks_total": 141
+        },
+        "desired_revision": null,
+        "indexing_activity": {
+          "state": "idle",
+          "processing_documents": 0,
+          "chunks_done": 141,
+          "chunks_total": 141
+        },
+        "available_profiles": [
+          {
+            "profile_id": "local-qwen3-embedding-8b",
+            "model_name": "qwen3-embedding:8b",
+            "provider_id": "ollama",
+            "provider_name": "Ollama",
+            "location": "local",
+            "capability": "embedding",
+            "dimension": 4096,
+            "availability": "installed",
+            "display_order": 10
+          }
+        ],
+        "recommendation": {
+          "profile_id": "local-qwen3-embedding-8b",
+          "reason_code": "configured_embedding",
+          "reason_text": "Configured local embedding model"
+        },
+        "catalog_version": 1
+      }
+    },
+    "prompts": [
+      {
+        "id": "prompt-translate",
+        "type": "command",
+        "title": "翻译润色",
+        "body_md": "把以下内容翻译为地道、通顺的中文：\n\n$ARGUMENTS",
+        "args_json": "[]",
+        "tool_scope": "",
+        "model": "",
+        "category": "翻译",
+        "enabled": true,
+        "updated_at": "2026-07-23T12:00:00.000Z"
+      },
+      {
+        "id": "prompt-minutes",
+        "type": "command",
+        "title": "会议纪要",
+        "body_md": "把下面的讨论整理成结构化会议纪要：\n\n$ARGUMENTS",
+        "args_json": "[]",
+        "tool_scope": "",
+        "model": "",
+        "category": "办公",
+        "enabled": true,
+        "updated_at": "2026-07-23T12:00:00.000Z"
+      },
+      {
+        "id": "prompt-review",
+        "type": "prompt",
+        "title": "每日复盘",
+        "body_md": "用三段做每日复盘。",
+        "args_json": "[]",
+        "tool_scope": "",
+        "model": "",
+        "category": "知识库检索",
+        "enabled": true,
+        "updated_at": "2026-07-23T12:00:00.000Z"
+      }
+    ],
+    "webhooks": [
+      {
+        "id": "webhook-github",
+        "name": "GitHub Push 触发器",
+        "type": "github",
+        "has_secret": true,
+        "prompt": "分拣 GitHub Push",
+        "user_id": "desktop-user",
+        "enabled": true,
+        "event_count": 12,
+        "last_event_at": "2026-07-23T12:00:00.000Z",
+        "created_at": "2026-07-23T12:00:00.000Z"
+      },
+      {
+        "id": "webhook-generic",
+        "name": "Generic JSON 触发器",
+        "type": "generic",
+        "has_secret": true,
+        "prompt": "运行独立 Prompt",
+        "user_id": "desktop-user",
+        "enabled": false,
+        "event_count": 0,
+        "created_at": "2026-07-23T12:00:00.000Z"
+      }
+    ],
+    "agents": [
+      {
+        "name": "k12-ming",
+        "display_name": "小明的辅导助手 · 五年级",
+        "description": "五年级上 · 数学教材与当前进度",
+        "provider": "",
+        "model": "",
+        "metadata": {
+          "scenario": "k12-tutor",
+          "avatar": "K12",
+          "k12.child_name": "小明",
+          "k12.grade_term": "五年级上",
+          "k12.learner_id": "learner-ming"
+        }
+      }
+    ],
+    "k12_bindings": [
+      {
+        "binding_id": "binding-homework-hook",
+        "name": "homework-hook",
+        "agent_id": "k12-ming",
+        "learner_id": "learner-ming",
+        "scope": "direct",
+        "allowed_events": [
+          "k12.submission.requested.v1",
+          "k12.practice_return.requested.v1",
+          "k12.workflow_run.requested.v1"
+        ],
+        "allowed_workflows": [],
+        "has_secret": true,
+        "secret_version": 1,
+        "replay_window_minutes": 5,
+        "status": "enabled",
+        "created_by": "desktop-user",
+        "rotated_at": "2026-07-23T12:00:00.000Z",
+        "created_at": "2026-07-23T12:00:00.000Z",
+        "updated_at": "2026-07-23T12:00:00.000Z"
+      }
+    ],
+    "k12_receipts": [
+      {
+        "receipt_id": "receipt-accepted",
+        "binding_id": "binding-homework-hook",
+        "event_id": "event-accepted",
+        "event_type": "k12.submission.requested.v1",
+        "payload_digest": "digest-accepted",
+        "status": "accepted",
+        "created_at": "2026-07-23T12:00:00.000Z",
+        "updated_at": "2026-07-23T12:00:00.000Z"
+      },
+      {
+        "receipt_id": "receipt-replay",
+        "binding_id": "binding-homework-hook",
+        "event_id": "event-replay",
+        "event_type": "k12.delivery.updated.v1",
+        "payload_digest": "digest-replay",
+        "status": "rejected",
+        "failure_kind": "nonce_replay",
+        "created_at": "2026-07-23T11:59:00.000Z",
+        "updated_at": "2026-07-23T11:59:00.000Z"
+      },
+      {
+        "receipt_id": "receipt-retryable",
+        "binding_id": "binding-homework-hook",
+        "event_id": "event-retryable",
+        "event_type": "k12.practice_return.requested.v1",
+        "payload_digest": "digest-retryable",
+        "status": "failed",
+        "failure_kind": "upstream_unavailable",
+        "retryable": true,
+        "created_at": "2026-07-23T11:58:00.000Z",
+        "updated_at": "2026-07-23T11:58:00.000Z"
+      }
+    ],
+    "skills": {
+      "installed": [
+        {
+          "name": "translate-polish",
+          "display_name": "翻译润色",
+          "description": "把中英文内容翻译为地道表达，保留代码、变量和专有名词。",
+          "version": "1.0.0",
+          "author": "hexclaw",
+          "triggers": ["/translate"],
+          "tags": ["writing"],
+          "enabled": true
+        },
+        {
+          "name": "web-fetch",
+          "display_name": "网页抓取",
+          "description": "读取网页正文、保留标题/作者/日期，并输出结构化摘要。",
+          "version": "1.4.2",
+          "author": "hexclaw",
+          "triggers": [],
+          "tags": ["research"],
+          "enabled": true
+        }
+      ],
+      "marketplace": [
+        {
+          "name": "sql-analyst",
+          "display_name": "SQL 分析师",
+          "description": "根据自然语言生成查询、解释结果并发现异常。",
+          "author": "hexclaw",
+          "version": "1.0.0",
+          "tags": ["data"],
+          "category": "data",
+          "downloads": 2100,
+          "rating": 4.8,
+          "type": "skill"
+        },
+        {
+          "name": "document-organizer",
+          "display_name": "文档整理",
+          "description": "把散乱材料整理成 Markdown 报告、目录和待办。",
+          "author": "hexclaw",
+          "version": "1.0.0",
+          "tags": ["writing"],
+          "category": "writing",
+          "downloads": 900,
+          "rating": 4.6,
+          "type": "skill"
+        },
+        {
+          "name": "test-case-generator",
+          "display_name": "测试用例生成",
+          "description": "从需求和代码生成单元、集成和回归测试清单。",
+          "author": "hexclaw",
+          "version": "1.0.0",
+          "tags": ["research", "testing"],
+          "category": "research",
+          "downloads": 860,
+          "rating": 4.5,
+          "type": "skill"
+        }
+      ]
+    },
+    "mcp": {
+      "servers": ["filesystem", "postgres-readonly"],
+      "statuses": {
+        "filesystem": "connected",
+        "postgres-readonly": "pending_authorization"
+      },
+      "tools": [
+        {
+          "name": "filesystem.read_file",
+          "description": "读取允许目录内的文件内容",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "description": "绝对路径" }
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "name": "postgres.query",
+          "description": "执行只读 SQL 查询",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "sql": { "type": "string" },
+              "limit": { "type": "number", "default": 100 }
+            },
+            "required": ["sql"]
+          }
+        }
+      ],
+      "marketplace": [
+        {
+          "name": "github-mcp",
+          "display_name": "GitHub MCP",
+          "description": "读取仓库、Issue、PR，并可按审批写入标签。",
+          "author": "modelcontextprotocol",
+          "version": "1.0.0",
+          "tags": ["coding"],
+          "category": "development",
+          "downloads": 2100,
+          "rating": 4.8,
+          "url": "https://github.com/modelcontextprotocol/servers",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"]
+        },
+        {
+          "name": "browser-mcp",
+          "display_name": "Browser MCP",
+          "description": "打开页面、截图、点击、提取内容。",
+          "author": "modelcontextprotocol",
+          "version": "1.0.0",
+          "tags": ["browser"],
+          "category": "automation",
+          "downloads": 1800,
+          "rating": 4.7,
+          "url": "https://github.com/microsoft/playwright-mcp",
+          "command": "npx",
+          "args": ["-y", "@playwright/mcp"]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "bug_id": "BUG-20260723-001",
+      "id": "knowledge-documents",
+      "route": "/knowledge",
+      "pane": "knowledge",
+      "segment": ["kn", 0],
+      "reference_root": ".screen[data-pane=\"knowledge\"] [data-sub=\"kn0\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "kb-doc-math-grade5-002", "kind": "pdf", "aliases": ["义务教育教科书·数学五年级下册.pdf"], "statuses": ["失败", "OCR", "VLM"] },
+        { "key": "kb-class-notes", "kind": "pdf", "aliases": ["课堂笔记.pdf"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-product-faq", "kind": "markdown", "aliases": ["产品 FAQ.md"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-whiteboard", "kind": "image", "aliases": ["白板流程图.png"], "statuses": ["处理中", "构建中", "building"] }
+      ],
+      "state": { "primary": ["知识库"], "secondary": ["全部", "检索测试"], "search": "", "dialog": null },
+      "actions": [
+        { "key": "add", "aliases": ["添加文档"] },
+        { "key": "details", "aliases": ["详情"] },
+        { "key": "delete", "aliases": ["删除"] }
+      ],
+      "contract_gaps": [
+      ]
+    },
+    {
+      "bug_id": "BUG-20260723-003",
+      "id": "prompt-create-dialog",
+      "route": "/integration/prompts",
+      "pane": "integration",
+      "segment": ["in", 2],
+      "reference_root": ".screen[data-pane=\"integration\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "prompt-translate", "kind": "command", "aliases": ["翻译润色"], "statuses": ["启用", "已启用"] },
+        { "key": "prompt-minutes", "kind": "command", "aliases": ["会议纪要"], "statuses": ["启用", "已启用"] },
+        { "key": "prompt-review", "kind": "prompt", "aliases": ["每日复盘"], "statuses": ["启用", "已启用"] }
+      ],
+      "interaction": { "kind": "button", "aliases": ["新建 Prompt"] },
+      "state": { "primary": ["集成"], "secondary": ["Prompt 库"], "search": "", "dialog": "新建 Prompt" },
+      "actions": [{ "key": "create", "aliases": ["创建"] }, { "key": "cancel", "aliases": ["取消"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-005",
+      "id": "knowledge-add-dialog",
+      "route": "/knowledge",
+      "pane": "knowledge",
+      "segment": ["kn", 0],
+      "reference_root": ".screen[data-pane=\"knowledge\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "kb-doc-math-grade5-002", "kind": "pdf", "aliases": ["义务教育教科书·数学五年级下册.pdf"], "statuses": ["失败", "OCR", "VLM"] },
+        { "key": "kb-class-notes", "kind": "pdf", "aliases": ["课堂笔记.pdf"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-product-faq", "kind": "markdown", "aliases": ["产品 FAQ.md"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-whiteboard", "kind": "image", "aliases": ["白板流程图.png"], "statuses": ["处理中", "构建中", "building"] }
+      ],
+      "interaction": { "kind": "button", "aliases": ["添加文档"] },
+      "state": { "primary": ["知识库"], "secondary": ["全部"], "search": "", "dialog": "添加文档" },
+      "actions": [{ "key": "add", "aliases": ["添加"] }, { "key": "cancel", "aliases": ["取消"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-020",
+      "id": "knowledge-whole-page",
+      "route": "/knowledge",
+      "pane": "knowledge",
+      "segment": ["kn", 0],
+      "reference_root": ".screen[data-pane=\"knowledge\"] [data-sub=\"kn0\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "kb-doc-math-grade5-002", "kind": "pdf", "aliases": ["义务教育教科书·数学五年级下册.pdf"], "statuses": ["失败", "OCR", "VLM"] },
+        { "key": "kb-class-notes", "kind": "pdf", "aliases": ["课堂笔记.pdf"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-product-faq", "kind": "markdown", "aliases": ["产品 FAQ.md"], "statuses": ["已索引", "可检索", "就绪", "ready"] },
+        { "key": "kb-whiteboard", "kind": "image", "aliases": ["白板流程图.png"], "statuses": ["处理中", "构建中", "building"] }
+      ],
+      "state": { "primary": ["知识库"], "secondary": ["全部", "检索测试"], "search": "", "dialog": null },
+      "actions": [{ "key": "add", "aliases": ["添加文档"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-024",
+      "id": "k12-webhook-manager",
+      "route": "/automation/webhooks",
+      "pane": "automation",
+      "segment": ["au", 1],
+      "reference_root": ".screen[data-pane=\"automation\"] [data-sub=\"au1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "binding-homework-hook", "kind": "k12-webhook", "aliases": ["homework-hook", "K12 批改与回传事件"], "statuses": ["启用", "已启用"] }
+      ],
+      "state": { "primary": ["自动化"], "secondary": ["Webhooks", "Webhook"], "search": "", "dialog": null },
+      "actions": [
+        { "key": "history", "aliases": ["事件与回执", "Receipt"] },
+        { "key": "edit", "aliases": ["编辑绑定", "编辑"] },
+        { "key": "rotate", "aliases": ["轮换密钥", "轮换 Secret"] }
+      ],
+      "contract_gaps": [
+      ]
+    },
+    {
+      "bug_id": "BUG-20260723-025",
+      "id": "mcp-servers",
+      "route": "/integration/mcp",
+      "pane": "integration",
+      "segment": ["in", 1],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "filesystem", "kind": "server", "aliases": ["filesystem"], "statuses": ["已连接", "connected"] },
+        { "key": "postgres-readonly", "kind": "server", "aliases": ["postgres-readonly"], "statuses": ["待授权", "pending_authorization"] }
+      ],
+      "state": { "primary": ["集成"], "secondary": ["服务器"], "search": "", "dialog": null },
+      "actions": [{ "key": "restart", "aliases": ["重启"] }, { "key": "delete", "aliases": ["删除", "移除"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-025",
+      "id": "mcp-tools",
+      "route": "/integration/mcp",
+      "pane": "integration",
+      "segment": ["in", 1],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "filesystem.read_file", "kind": "tool", "aliases": ["filesystem.read_file"], "statuses": [] },
+        { "key": "postgres.query", "kind": "tool", "aliases": ["postgres.query"], "statuses": [] }
+      ],
+      "interaction": { "kind": "tab", "aliases": ["工具"] },
+      "state": { "primary": ["集成"], "secondary": ["工具"], "search": "", "dialog": null },
+      "actions": [{ "key": "test", "aliases": ["测试"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-025",
+      "id": "mcp-marketplace",
+      "route": "/integration/mcp",
+      "pane": "integration",
+      "segment": ["in", 1],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "github-mcp", "kind": "marketplace", "aliases": ["GitHub MCP"], "statuses": [] },
+        { "key": "browser-mcp", "kind": "marketplace", "aliases": ["Browser MCP"], "statuses": [] }
+      ],
+      "interaction": { "kind": "tab", "aliases": ["市场", "Marketplace"] },
+      "state": { "primary": ["集成"], "secondary": ["市场", "Marketplace"], "search": "", "dialog": null },
+      "actions": [{ "key": "install", "aliases": ["安装"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-031",
+      "id": "knowledge-settings-disclosure",
+      "route": "/knowledge",
+      "pane": "knowledge",
+      "segment": ["kn", 0],
+      "reference_root": ".screen[data-pane=\"knowledge\"] [data-sub=\"kn0\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "rerank", "kind": "setting", "aliases": ["重排", "Rerank"], "statuses": ["开启", "启用"] },
+        { "key": "query-expand", "kind": "setting", "aliases": ["查询扩展"], "statuses": ["开启", "启用"] },
+        { "key": "contextual", "kind": "setting", "aliases": ["上下文", "Contextual"], "statuses": ["开启", "启用"] },
+        { "key": "min-score", "kind": "setting", "aliases": ["0.55", "最低分数"], "statuses": [] },
+        { "key": "candidate-k", "kind": "setting", "aliases": ["50", "候选"] , "statuses": [] }
+      ],
+      "state": { "primary": ["知识库"], "secondary": ["全部"], "search": "", "dialog": null, "disclosure": "expanded" },
+      "actions": [{ "key": "reset", "aliases": ["恢复默认", "重置"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-033",
+      "id": "generic-webhooks",
+      "route": "/automation/webhooks",
+      "pane": "automation",
+      "segment": ["au", 1],
+      "reference_root": ".screen[data-pane=\"automation\"] [data-sub=\"au1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "webhook-github", "kind": "github", "aliases": ["GitHub Push 触发器"], "statuses": ["启用", "已启用"] },
+        { "key": "webhook-generic", "kind": "generic", "aliases": ["Generic JSON 触发器"], "statuses": ["停用", "未启用", "已禁用"] }
+      ],
+      "state": { "primary": ["自动化"], "secondary": ["Webhooks", "Webhook"], "search": "", "dialog": null },
+      "actions": [{ "key": "copy", "aliases": ["复制"] }, { "key": "delete", "aliases": ["删除"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-035",
+      "id": "skills-search",
+      "route": "/integration",
+      "pane": "integration",
+      "segment": ["in", 0],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in0\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "web-fetch", "kind": "skill", "aliases": ["网页抓取"], "statuses": ["启用", "已启用"] }
+      ],
+      "interaction": { "kind": "search", "value": "网页" },
+      "state": { "primary": ["集成"], "secondary": ["已安装"], "search": "网页", "dialog": null },
+      "actions": [{ "key": "preview", "aliases": ["预览"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-035",
+      "id": "mcp-server-search",
+      "route": "/integration/mcp",
+      "pane": "integration",
+      "segment": ["in", 1],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "filesystem", "kind": "server", "aliases": ["filesystem"], "statuses": ["已连接", "connected"] }
+      ],
+      "interaction": { "kind": "search", "value": "file" },
+      "state": { "primary": ["集成"], "secondary": ["服务器"], "search": "file", "dialog": null },
+      "actions": [{ "key": "restart", "aliases": ["重启"] }],
+      "contract_gaps": []
+    },
+    {
+      "bug_id": "BUG-20260723-035",
+      "id": "mcp-tool-search",
+      "route": "/integration/mcp",
+      "pane": "integration",
+      "segment": ["in", 1],
+      "reference_root": ".screen[data-pane=\"integration\"] [data-sub=\"in1\"]",
+      "source_root": ".hc-page-shell__content",
+      "items": [
+        { "key": "filesystem.read_file", "kind": "tool", "aliases": ["filesystem.read_file"], "statuses": [] }
+      ],
+      "interaction": { "kind": "tab-search", "aliases": ["工具"], "value": "read" },
+      "state": { "primary": ["集成"], "secondary": ["工具"], "search": "read", "dialog": null },
+      "actions": [{ "key": "test", "aliases": ["测试"] }],
+      "contract_gaps": []
+    }
+  ]
+}

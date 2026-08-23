@@ -7,12 +7,12 @@ import { BRANCH_UI_FIDELITY_SURFACES } from './branch-ui-fidelity-manifest'
 
 const execFileAsync = promisify(execFile)
 const REF = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
-const SRC = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
+const SRC = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:15151'
 const AGENT = 'k12-deep-fidelity-ming'
 const SESSION = 'k12-deep-fidelity-session'
 const EVIDENCE =
   process.env.HEX_UI_EVIDENCE_ROOT?.trim() || '/tmp/hexclaw-k12-deep-surfaces-evidence'
-const DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
+const DIFF_TOOL = path.resolve('tests/e2e/tools/k12_visual_pixel_diff.swift')
 const MAX_RATIO = 0.001
 const STATE_FILTER = process.env.HEX_UI_STATE?.trim() || ''
 
@@ -578,7 +578,7 @@ async function referenceWork(page: Page, action: 'detail' | 'add' | 'preview' | 
       : await prototypeButtonCall(
           page,
           4,
-          '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
+          '#k12BookPanel4 .creative-work-card[data-work-id="ART-20260716-001"] button[onclick*="openCreativeWorkDetail"]',
           'openCreativeWorkDetail',
         )
   if (action === 'preview') {
@@ -975,6 +975,20 @@ const states: State[] = [
     manifestIds: ['k12.work-detail-modal'],
     fixture: 'reviewed art work',
     ...NC('manifest blocks works modals behind open works visual gate'),
+    criticalSelectors: {
+      reference: {
+        modal: '#overlayCard .creative-work-detail-modal',
+        body: '#overlayCard .creative-work-detail-modal .modal-b',
+        feedback: '[data-creative-work-latest-review-host]',
+        actions: '[data-creative-work-action-bar]',
+      },
+      source: {
+        modal: '[data-testid="cw-detail-modal"]',
+        body: '.k12cw-detail-modal__body',
+        feedback: '[data-testid="cw-latest-feedback"]',
+        actions: '[data-testid="cw-action-bar"]',
+      },
+    },
     reference: (page) => referenceWork(page, 'detail'),
     source: (page) =>
       clickSource(
@@ -1216,7 +1230,14 @@ async function capture(referencePage: Page, sourcePage: Page, state: State, test
   let diff: Record<string, unknown> = {}
   let diffError = ''
   try {
-    const { stdout } = await execFileAsync('python3', [DIFF_TOOL, refPath, srcPath, diffPath, '8'])
+    const { stdout } = await execFileAsync('xcrun', [
+      'swift',
+      DIFF_TOOL,
+      refPath,
+      srcPath,
+      diffPath,
+      '8',
+    ])
     diff = JSON.parse(stdout.trim()) as Record<string, unknown>
   } catch (error) {
     diffError = error instanceof Error ? error.message : String(error)

@@ -239,6 +239,23 @@ test('restart recovery preserves current and removes uncommitted staging and pub
   assert.equal((await lstat(current.layout.publishedGenerationRoot)).isDirectory(), true)
 })
 
+test('restart recovery remains fail-closed for an unsafe generation-shaped staging directory', async (t) => {
+  const module = await import(moduleURL)
+  const root = await createReleaseRoot(t, 'unsafe-staging-generation')
+  await module.recoverPackagePublication({ releaseRoot: root })
+  const layout = module.createPackagePublicationLayout({
+    generationId: 'd'.repeat(32),
+    releaseRoot: root,
+  })
+  await mkdir(layout.stagingGenerationRoot, { mode: 0o755 })
+
+  await assert.rejects(
+    module.recoverPackagePublication({ releaseRoot: root }),
+    /category=cleanup-path/u,
+  )
+  assert.equal((await lstat(layout.stagingGenerationRoot)).isDirectory(), true)
+})
+
 test('resolver binds the complete generation tree before returning any consumable path', async (t) => {
   const module = await import(moduleURL)
   for (const [surface, relativePath] of [

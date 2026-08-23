@@ -234,6 +234,28 @@ test('secure snapshot rejects a group- or other-writable source', async (t) => {
   )
 })
 
+test('secure snapshot normalizes group ownership under macOS private tmp parents', async (t) => {
+  if (process.platform !== 'darwin') {
+    t.skip('macOS private tmp group inheritance contract')
+    return
+  }
+  const fixtureRoot = await mkdtemp('/private/tmp/hexclaw-snapshot-group-')
+  t.after(() => rm(fixtureRoot, { force: true, recursive: true }))
+  const binaryPath = join(fixtureRoot, 'binary')
+  await writeFile(binaryPath, machO64(CPU_TYPE_X86_64), { mode: 0o500 })
+
+  const evidence = await withSecureBinarySnapshot(
+    binaryPath,
+    { snapshotRoot: fixtureRoot },
+    async (snapshot) => snapshot.evidence,
+  )
+
+  assert.equal(evidence.copyIdentity.ownerUserId, String(process.getuid()))
+  assert.equal(evidence.copyIdentity.ownerGroupId, String(process.getgid()))
+  assert.equal(evidence.copyIdentity.mode, '400')
+  assert.equal(evidence.copyIdentity.linkCount, '1')
+})
+
 test('secure snapshot rejects a symlink in the generation-root ancestry', async (t) => {
   const fixtureRoot = await privateTestRoot('hexclaw-snapshot-ancestor-link-')
   t.after(() => rm(fixtureRoot, { force: true, recursive: true }))

@@ -163,8 +163,7 @@ const providerHeaderLayoutConfig = {
         locality: 'cloud',
         latency_ms: 15_000,
         tested_at: '2026-08-06T19:32:00+08:00',
-        error_message:
-          'openai complete request failed: Post "https://integrate.api.nvidia.com/v1/chat/completions": context deadline exceeded',
+        error_message: '请检查 API Key、Base URL 或网络连接。',
       },
     },
   },
@@ -488,7 +487,7 @@ test.describe('Settings / Agents / Capability current-source contracts', () => {
     await expect(openRouterCard.locator('.hc-model-enabled-summary')).toContainText('2 / 11')
 
     const longModel = openRouterCard
-      .locator('button.hc-model-chip')
+      .locator('.hc-model-chip')
       .filter({ has: page.locator('.hc-model-chip__name', { hasText: LONG_MODEL_NAME }) })
     await expect(longModel).toBeVisible()
     await expect(longModel.locator('.hc-model-chip__free-label')).toHaveText('免费')
@@ -539,9 +538,12 @@ test.describe('Settings / Agents / Capability current-source contracts', () => {
       expect(badge.afterName).toBe(true)
     }
 
-    const customRemove = openRouterCard.locator('.hc-model-chip--custom .hc-model-chip__remove')
+    const customModel = openRouterCard
+      .locator('.hc-model-chip--custom')
+      .filter({ has: page.locator('.hc-model-chip__name', { hasText: '家长自定义辅导模型' }) })
+    const customRemove = customModel.locator('.hc-model-chip__remove')
     await expect(customRemove).toHaveCount(1)
-    await openRouterCard.locator('.hc-model-chip--custom').hover()
+    await customModel.hover()
     await expect(customRemove).toBeVisible()
 
     await openRouterCard.screenshot({
@@ -564,8 +566,12 @@ test.describe('Settings / Agents / Capability current-source contracts', () => {
     await expect(smallCard.locator('.hc-provider__model-count')).toContainText('4', {
       timeout: 20_000,
     })
-    await smallCard.locator('.hc-provider__card-head').click()
-    await expect(smallCard.locator('.hc-model-chip--manage')).toHaveCount(0)
+    const smallEditPanel = smallCard.locator('.hc-provider__edit')
+    if (!(await smallEditPanel.isVisible())) {
+      await smallCard.locator('.hc-provider__card-head').click()
+    }
+    await expect(smallEditPanel).toBeVisible()
+    await expect(smallCard.locator('.hc-model-chip--manage')).toHaveCount(1)
     await expect(
       smallCard.locator('.hc-model-chips > .hc-model-chip:not(.hc-model-chip--add)'),
     ).toHaveCount(4)
@@ -757,6 +763,9 @@ test.describe('BUG-20260723-021 Provider card-header layout', () => {
         .filter({ has: page.locator('.hc-provider__card-name', { hasText: provider.name }) })
       await expect(card).toBeVisible({ timeout: 20_000 })
       await expect(card.locator('.hc-provider__model-count')).toContainText(provider.expectedModels)
+      if (provider.expectsFailureDetail) {
+        await card.locator('.hc-provider__card-head').click()
+      }
 
       const geometry = await card.evaluate((node) => {
         const header = node.querySelector<HTMLElement>('.hc-provider__card-head')!

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 export const syntheticSidecarConfigSHA256 = 'b'.repeat(64)
+const samplesPerBucket = 5
 
 export function syntheticGradingCalibrationEnvironment(pathname) {
   return {
@@ -39,12 +40,12 @@ export function syntheticGradingCalibrationArtifact(overrides = {}) {
     grading_budget: syntheticGradingBudget(),
     measurements: [1, 8, 16, 32].map((maxProblems, index) => ({
       max_problems: maxProblems,
-      sample_count: 2,
-      success_count: 2,
+      sample_count: samplesPerBucket,
+      success_count: samplesPerBucket,
       p50_ms: 1_000 + index,
       p95_ms: 2_000 + index,
-      logical_operations: index + 1,
-      physical_provider_calls: index + 1,
+      logical_operations: samplesPerBucket * (index + 1),
+      physical_provider_calls: samplesPerBucket * (index + 1),
       complete: true,
       result_digest: String(index + 1).repeat(64),
     })),

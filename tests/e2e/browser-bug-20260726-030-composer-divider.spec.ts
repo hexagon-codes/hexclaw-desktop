@@ -253,7 +253,7 @@ async function installBug030Boundary(page: Page) {
     { agent: k12Agent },
   )
 
-  await page.route('**/api/**', async (route) => {
+  await page.route('**/_hexclaw/api/**', async (route) => {
     const requestUrl = new URL(route.request().url())
     const path = requestUrl.pathname.replace('/_hexclaw', '')
     const method = route.request().method()

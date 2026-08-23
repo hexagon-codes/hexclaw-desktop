@@ -339,6 +339,11 @@ test.describe('K12 建档二级联动 current-source contract', () => {
 
     await form.getByTestId('k12pf-back').click()
     await expect(form).toHaveCount(0)
+    const startDialog = page.getByTestId('add-agent-dialog')
+    await expect(startDialog).toBeVisible()
+    await expect(startDialog).toHaveAttribute('role', 'dialog')
+    await expect(startDialog).toHaveAttribute('aria-modal', 'true')
+    await expect(startDialog).toBeFocused()
     await expect(page.getByText('选择起点', { exact: true })).toBeVisible()
     await expect(page.getByTestId('start-blank')).toBeVisible()
     await expect(page.getByTestId('start-from-library')).toBeVisible()

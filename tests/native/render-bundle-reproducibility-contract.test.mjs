@@ -130,6 +130,17 @@ test('typst is built from an exact locked source graph with all build roots rema
   )
 })
 
+test('native source Typst keeps the Mach-O loader metadata required by --version', async () => {
+  const script = await readFile(scriptURL, 'utf8')
+
+  // macOS 当前 loader 会拒绝缺少 LC_UUID 的 Mach-O；版本校验必须真的能够执行二进制。
+  assert.doesNotMatch(
+    script,
+    /link-arg=-Wl,-no_uuid/u,
+    'source Typst must retain a valid Mach-O UUID load command',
+  )
+})
+
 test('source mode rejects a pre-existing generation destination', async (t) => {
   if (process.platform !== 'darwin') {
     t.skip('source mode is native macOS only')

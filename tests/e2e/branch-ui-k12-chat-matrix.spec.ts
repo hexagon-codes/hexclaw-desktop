@@ -1067,6 +1067,10 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
         releaseResult = resolve
       })
     : Promise.resolve()
+  const hasPersistedSourceMessage = () =>
+    hasTask || (composerUpload && evidence.sourceMessagePersisted === true)
+  const hasPersistedImageTask = () =>
+    hasTask || (composerUpload && evidence.imageTaskCreated === true)
   await page.addInitScript(
     ({ agent, session, message, dispatchId, bindTask }) => {
       localStorage.clear()
@@ -1160,7 +1164,7 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
             agent_id: AGENT,
             created_at: NOW,
             updated_at: NOW,
-            message_count: hasTask ? 1 : 0,
+            message_count: hasPersistedSourceMessage() ? 1 : 0,
           },
         ],
         total: 1,
@@ -1186,7 +1190,7 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
     }
     if (apiPath === `/api/v1/sessions/${SESSION}/messages` && method === 'GET') {
       return json(route, {
-        messages: hasTask
+        messages: hasPersistedSourceMessage()
           ? [
               {
                 id: MESSAGE,
@@ -1197,7 +1201,7 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
               },
             ]
           : [],
-        total: hasTask ? 1 : 0,
+        total: hasPersistedSourceMessage() ? 1 : 0,
       })
     }
     if (apiPath === `/api/v1/sessions/${SESSION}/artifacts`) {
@@ -1257,15 +1261,22 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
       await new Promise((resolve) => setTimeout(resolve, 500))
       return json(route, {
         items:
-          hasTask && dispatch
-            ? [
-                {
-                  source_session: SESSION,
-                  source_message_id: MESSAGE,
-                  dispatch,
-                },
-              ]
-            : [],
+          hasPersistedImageTask() &&
+          dispatch
+          ? [
+              {
+                dispatch_id: dispatch.dispatch_id,
+                source_session_id: SESSION,
+                source_message_id: MESSAGE,
+                attempt_generation: 1,
+                version: dispatch.version,
+                stage: dispatch.target_projection.stage,
+                status: dispatch.status,
+                projection_ready: true,
+                terminal: dispatch.progress.state === 'completed',
+              },
+            ]
+          : [],
       })
     }
     if (apiPath === `/api/k12/image-tasks/${DISPATCH}` && method === 'GET' && dispatch) {
@@ -2751,6 +2762,27 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
 }
 
 test.describe('feat/v0.5.0-k12-parent-tutor · K12 chat authoritative state matrix', () => {
+  test('C02 process issue keeps its source task through fixture recovery refresh', async ({
+    browser,
+  }) => {
+    test.skip(REQUESTED_STATE !== '08b-photo-process-issue', 'runs only for the C02 process fixture')
+    const page = await browser.newPage()
+    const processOverlay = page.locator(
+      '[data-testid="photo-grade-overlay"][data-assessment-status="correct_with_process_issue"]',
+    )
+    try {
+      const fixture = await openCurrentSource(page, 'homework-process-issue')
+      expect(fixture.sourceMessagePersisted).toBe(true)
+      expect(fixture.imageTaskCreated).toBe(true)
+      await expect(processOverlay).toBeVisible()
+
+      await page.waitForTimeout(12_000)
+      await expect(processOverlay).toBeVisible({ timeout: 5_000 })
+    } finally {
+      await page.close()
+    }
+  })
+
   test('captures reference/current-source/diff/geometry for every reachable or explicitly blocked state', async ({
     browser,
   }, testInfo) => {
