@@ -79,22 +79,26 @@ test.describe('K12 全链路 UI 冒烟', () => {
     // 6) 学习档案 tab → 五对象视图接管消息区。学情不得退回二级 Tab。
     await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 15_000 })
-    const objectTabs = page.locator('.k12rec__object-tabs')
-    await expect(objectTabs.getByRole('tab')).toHaveCount(5)
-    await expect(objectTabs.getByRole('tab')).toHaveText([
-      /^本周复习\s*\d+$/,
+    const objectTabs = page.getByRole('tablist', { name: '学习档案', exact: true })
+    const objectTabItems = objectTabs.getByRole('tab')
+    await expect(objectTabItems).toHaveCount(5)
+    const objectTabNames = [
+      /^本周该练\s+\d+$/,
       /^全部错题\s*\d+$/,
       /^练习集\s*\d+$/,
       /^积累\s*\d+$/,
       /^作品\s*\d+$/,
-    ])
+    ]
+    for (const [index, name] of objectTabNames.entries()) {
+      await expect(objectTabItems.nth(index)).toHaveAccessibleName(name)
+    }
     await expect(objectTabs.getByRole('tab', { name: /学情/ })).toHaveCount(0)
     await expect(page.getByTestId('week-section')).toBeVisible()
 
     // 7) 顶栏学情 → 真实 insight-report。有数据时展示四张路由卡；fresh-DB 展示证据不足空态。
     await scenarioTabs.getByRole('tab', { name: '学情', exact: true }).click()
     await expect(page.getByTestId('insight-panel')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByTestId('insight-title')).toHaveText('六年级学习概览')
+    await expect(page.getByTestId('insight-title')).toHaveText('六年级上学习概览')
     await expect(page.getByTestId('insight-loading')).toHaveCount(0, { timeout: 15_000 })
     const insightSettledState = page.locator(
       '[data-testid="insight-empty"], [data-testid="insight-tile-semester"]',
@@ -121,7 +125,7 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await page.goto('/agents', { waitUntil: 'domcontentloaded' })
     const card2 = page.locator('.hc-cxcard', { hasText: CHILD })
     await card2.getByRole('button', { name: /编辑档案/ }).click()
-    await expect(page.getByText(`孩子档案 · ${cardName}`, { exact: false })).toBeVisible({
+    await expect(page.getByText(`孩子档案 · ${CHILD}`, { exact: true })).toBeVisible({
       timeout: 15_000,
     })
     // 既有 grade_term=六年级上 无损拆成两个 HcSelect。

@@ -31,18 +31,16 @@ test.describe('K12 prototype visual conformance', () => {
     await expect(page).toHaveURL(/\/chat/, { timeout: 30_000 })
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
 
+    const objectTabs = page.getByRole('tablist', { name: '学习档案', exact: true })
     const tabs = [
-      ['本周复习', 'weekly'],
+      ['本周该练', 'weekly'],
       ['全部错题', 'all-mistakes'],
       ['练习集', 'practice-sets'],
       ['积累', 'accumulation'],
       ['作品', 'works'],
     ] as const
     for (const [label, slug] of tabs) {
-      await page
-        .locator('.k12rec__object-tabs')
-        .getByRole('tab', { name: new RegExp(`^${label}\\s*\\d*$`) })
-        .click()
+      await objectTabs.getByRole('tab', { name: new RegExp(`^${label}\\s+\\d+$`) }).click()
       await expect(page.locator('.k12rec__body')).toBeVisible()
       const archiveMore = page.locator('.k12rec__export > button')
       await archiveMore.click()

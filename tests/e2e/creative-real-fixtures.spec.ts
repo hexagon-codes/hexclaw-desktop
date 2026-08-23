@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test, type APIResponse, type Page, type TestInfo } from '@playwright/test'
 import { BASE_URL, e2eMarker } from './helpers'
 import { cleanupK12Child } from './live-fixture-cleanup'
@@ -11,6 +12,11 @@ const LIVE = process.env.HEX_K12_ACCEPTANCE_LIVE === '1'
 const LIVE_AI =
   LIVE && process.env.HEX_K12_REAL_MODEL === '1' && process.env.HEX_K12_CREATIVE_AI === '1'
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
+// 主动删除夹具读取 sidecar 数据库，不能依赖可选的 Playwright outputDir。
+const LOCAL_SIDECAR_DATABASE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../.hexclaw/data.db',
+)
 const FIXTURES = {
   writing: {
     id: 'FX-WRITING-001',
@@ -259,6 +265,10 @@ test('§1.2 creative manifest freezes writing and art source bytes', () => {
   for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
 })
 
+test('creative active-delete fixture resolves its sidecar database without Playwright outputDir', () => {
+  expect(LOCAL_SIDECAR_DATABASE).toBe(resolve(process.cwd(), '.hexclaw/data.db'))
+})
+
 test.describe('real creative source, OCR, owner and feedback', () => {
   test.setTimeout(15 * 60_000)
   test.skip(
@@ -296,7 +306,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
     await expect(modal.getByTestId('cw-add-submit')).toBeEnabled()
     const activeDelete = testInfo.project.name === 'system-chrome'
-    const databasePath = resolve(testInfo.config.outputDir, '../.hexclaw/data.db')
+    const databasePath = LOCAL_SIDECAR_DATABASE
     const sentReceipt = activeDelete
       ? waitForSentWorkFeedbackInvocation(databasePath, owner)
       : undefined
@@ -364,10 +374,22 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     await expect(thumb).toBeVisible()
     const src = await thumb.getAttribute('src')
     expect(src).toBeTruthy()
-    const bytes = Buffer.from(await (await page.request.get(src!)).body())
-    expect(sha256(bytes), 'rendered thumbnail must return the immutable original bytes').toBe(
-      FIXTURES.art.sha256,
-    )
+    // 缩略图使用浏览器 Blob URL；应在页面上下文读取并校验原始字节，不能交给 HTTP 客户端。
+    const rendered = await page.evaluate(async (url) => {
+      const response = await fetch(url)
+      const bytes = await response.arrayBuffer()
+      const digest = await crypto.subtle.digest('SHA-256', bytes)
+      return {
+        bytes: bytes.byteLength,
+        sha256: Array.from(new Uint8Array(digest), (value) =>
+          value.toString(16).padStart(2, '0'),
+        ).join(''),
+      }
+    }, src!)
+    expect(rendered, 'rendered thumbnail must return the immutable original bytes').toEqual({
+      bytes: FIXTURES.art.bytes,
+      sha256: FIXTURES.art.sha256,
+    })
     await expect(page.getByTestId('works-section')).not.toContainText(
       /(?:评分|分数)\s*[:：]?\s*\d+(?:\.\d+)?(?:\s*分)?|排名\s*[:：]?\s*(?:第\s*)?\d+/,
     )

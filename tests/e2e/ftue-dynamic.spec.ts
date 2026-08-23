@@ -48,32 +48,42 @@ async function openTutorTemplate(page: Page): Promise<void> {
 async function createTutor(
   page: Page,
   childName: string,
-  grade = '五年级下',
+  gradeLevel = '五年级',
+  semester = '下学期',
   textbook = '北师大版',
 ): Promise<AgentProjection> {
-  const existingAgentNames = new Set((await listAgents(page)).map((agent) => agent.name).filter(Boolean))
+  const existingAgentNames = new Set(
+    (await listAgents(page)).map((agent) => agent.name).filter(Boolean),
+  )
   await openTutorTemplate(page)
   const dialog = page.getByRole('dialog')
   await dialog.locator('.k12pf__input').fill(childName)
-  await dialog.locator('.hc-select__trigger').nth(0).click()
-  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: grade }).click()
-  await dialog.locator('.hc-select__trigger').nth(1).click()
+  await dialog.getByTestId('k12pf-grade').locator('.hc-select__trigger').click()
+  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: gradeLevel }).click()
+  await dialog.getByTestId('k12pf-semester').locator('.hc-select__trigger').click()
+  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: semester }).click()
+  await dialog.getByTestId('k12-textbook-math').locator('.hc-select__trigger').click()
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: textbook }).click()
 
-  const profileResponse = page.waitForResponse((response) =>
-    response.request().method() === 'PUT' && new URL(response.url()).pathname.endsWith('/api/k12/profile'),
+  const profileResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith('/api/v1/agents'),
   )
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   expect((await profileResponse).ok(), '建档必须真实写入 K12 Profile，而不是只关闭弹窗').toBe(true)
   await expect(dialog).toHaveCount(0, { timeout: 30_000 })
 
   const matches = (await listAgents(page)).filter(
-    (agent) => agent.metadata?.['k12.child_name'] === childName && !existingAgentNames.has(agent.name),
+    (agent) =>
+      agent.metadata?.['k12.child_name'] === childName && !existingAgentNames.has(agent.name),
   )
   expect(matches, `${childName} 本次建档必须新增唯一 TutorAgent owner`).toHaveLength(1)
   expect(matches[0]?.name).toMatch(/^k12-tutor-/)
   expect(matches[0]?.metadata?.['k12.learner_id'], '展示名不能充当 learner owner key').toBeTruthy()
-  expect(matches[0]?.metadata?.['k12.grade_term']).toBe(grade)
+  expect(matches[0]?.metadata?.['k12.grade_term']).toBe(
+    `${gradeLevel}${semester === '上学期' ? '上' : '下'}`,
+  )
   expect(matches[0]?.metadata?.['k12.textbook_edition']).toBe(textbook)
   return matches[0]!
 }
@@ -85,11 +95,17 @@ async function enterTutor(page: Page, childName: string): Promise<void> {
   await expect(card).toBeVisible({ timeout: 30_000 })
   await card.getByRole('button', { name: /进入辅导/ }).click()
   await expect(page).toHaveURL(/\/chat/, { timeout: 30_000 })
-  await expect(page.locator('.hc-composer input[type="file"]'), '首会话必须有真实上传入口').toBeAttached()
+  await expect(
+    page.locator('.hc-composer input[type="file"]'),
+    '首会话必须有真实上传入口',
+  ).toBeAttached()
 }
 
 test('§1.2 FTUE upload anchor reads the frozen real-fixture SHA', () => {
-  test.skip(!existsSync(FTUE_FIXTURE.path), `NOT RUN: private fixture is absent: ${FTUE_FIXTURE.id}`)
+  test.skip(
+    !existsSync(FTUE_FIXTURE.path),
+    `NOT RUN: private fixture is absent: ${FTUE_FIXTURE.id}`,
+  )
   const bytes = readFileSync(FTUE_FIXTURE.path)
   expect(statSync(FTUE_FIXTURE.path).isFile()).toBe(true)
   expect(bytes.length).toBe(FTUE_FIXTURE.bytes)
@@ -99,7 +115,10 @@ test('§1.2 FTUE upload anchor reads the frozen real-fixture SHA', () => {
 
 test.describe('dynamic K12 first-use owner and thread', () => {
   test.setTimeout(8 * 60_000)
-  test.skip(!LIVE, 'NOT RUN: set HEX_K12_ACCEPTANCE_LIVE=1 for an isolated current-source Desktop + sidecar')
+  test.skip(
+    !LIVE,
+    'NOT RUN: set HEX_K12_ACCEPTANCE_LIVE=1 for an isolated current-source Desktop + sidecar',
+  )
 
   const cleanupNames = new Set<string>()
   test.afterEach(async ({ request }) => {
@@ -107,10 +126,12 @@ test.describe('dynamic K12 first-use owner and thread', () => {
     cleanupNames.clear()
   })
 
-  test('non-default textbook persists through the visible template flow and refresh', async ({ page }) => {
+  test('non-default textbook persists through the visible template flow and refresh', async ({
+    page,
+  }) => {
     const childName = `动态建档-${e2eMarker('child')}`
     cleanupNames.add(childName)
-    const owner = await createTutor(page, childName, '五年级下', '北师大版')
+    const owner = await createTutor(page, childName, '五年级', '下学期', '北师大版')
     await enterTutor(page, childName)
     await expect(page.locator('.k12enh-grade')).toContainText('五年级下')
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -119,15 +140,20 @@ test.describe('dynamic K12 first-use owner and thread', () => {
     expect(persisted?.metadata?.['k12.textbook_edition']).toBe('北师大版')
   })
 
-  test('the first request creates a visible durable thread and survives refresh', async ({ page }) => {
-    test.skip(!LIVE_MODEL, 'NOT RUN: set HEX_K12_REAL_MODEL=1 only when a real configured chat provider is authorized')
+  test('the first request creates a visible durable thread and survives refresh', async ({
+    page,
+  }) => {
+    test.skip(
+      !LIVE_MODEL,
+      'NOT RUN: set HEX_K12_REAL_MODEL=1 only when a real configured chat provider is authorized',
+    )
     const childName = `首消息-${e2eMarker('child')}`
     cleanupNames.add(childName)
     await createTutor(page, childName)
     await enterTutor(page, childName)
 
     const marker = e2eMarker('first-turn')
-    const prompt = `请只回复 ${marker}`
+    const prompt = `请用五年级学生能听懂的方式，分步骤讲解 3/4 × 2/5，并检查结果。最后一行必须原样写：${marker}`
     await page.getByTestId('chat-input').fill(prompt)
     await page.getByTestId('chat-send').click()
     await expect(page.getByTestId('chat-message-user').filter({ hasText: marker })).toBeVisible()
@@ -139,18 +165,24 @@ test.describe('dynamic K12 first-use owner and thread', () => {
     expect(sessionID).toBeTruthy()
 
     await page.reload({ waitUntil: 'domcontentloaded' })
-    await expect(page.getByTestId('chat-message-user').filter({ hasText: marker })).toBeVisible({ timeout: 30_000 })
-    await expect(page.getByTestId('chat-message-assistant').filter({ hasText: marker })).toBeVisible()
+    await expect(page.getByTestId('chat-message-user').filter({ hasText: marker })).toBeVisible({
+      timeout: 30_000,
+    })
+    await expect(
+      page.getByTestId('chat-message-assistant').filter({ hasText: marker }),
+    ).toBeVisible()
     await expect(page.locator(`.hc-sessions__item[data-session-id="${sessionID}"]`)).toBeVisible()
   })
 
-  test('two equal display names keep distinct learner and TutorAgent identities when one is renamed', async ({ page }) => {
+  test('two equal display names keep distinct learner and TutorAgent identities when one is renamed', async ({
+    page,
+  }) => {
     const sharedName = `同名-${e2eMarker('child')}`
     const renamed = `${sharedName}-改名`
     cleanupNames.add(sharedName)
     cleanupNames.add(renamed)
-    await createTutor(page, sharedName, '四年级上', '人教版')
-    await createTutor(page, sharedName, '六年级下', '苏教版')
+    await createTutor(page, sharedName, '四年级', '上学期', '人教版')
+    await createTutor(page, sharedName, '六年级', '下学期', '苏教版')
     const sameName = (await listAgents(page)).filter(
       (agent) => agent.metadata?.['k12.child_name'] === sharedName,
     )
@@ -167,7 +199,9 @@ test.describe('dynamic K12 first-use owner and thread', () => {
     await dialog.getByRole('button', { name: '保存', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30_000 })
     const after = await listAgents(page)
-    expect(after.filter((agent) => agent.metadata?.['k12.child_name'] === sharedName)).toHaveLength(1)
+    expect(after.filter((agent) => agent.metadata?.['k12.child_name'] === sharedName)).toHaveLength(
+      1,
+    )
     expect(after.filter((agent) => agent.metadata?.['k12.child_name'] === renamed)).toHaveLength(1)
   })
 })

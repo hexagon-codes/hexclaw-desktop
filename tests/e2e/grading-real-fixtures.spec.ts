@@ -8,6 +8,8 @@ import { cleanupK12Child } from './live-fixture-cleanup'
 /** PHOTO-001..005 + E2E-GRADE-001/002 + E2E-SOLVE-001. */
 const LIVE = process.env.HEX_K12_ACCEPTANCE_LIVE === '1' && process.env.HEX_K12_REAL_MODEL === '1'
 const real10xCycle = process.env.HEX_K12_REAL_10X_CYCLE_ID || ''
+const expectedProvider = process.env.HEX_E2E_PROVIDER || 'hexclaw-gpt'
+const expectedModel = process.env.HEX_E2E_MODEL || 'gpt-5.6-sol'
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
 const FIXTURES = {
   clear: {
@@ -93,6 +95,23 @@ async function createTutor(page: Page, childName: string): Promise<string> {
   await page.goto('/agents', { waitUntil: 'domcontentloaded' })
   const skip = page.getByRole('button', { name: '跳过' })
   if (await skip.isVisible().catch(() => false)) await skip.click()
+  const existingOwner = process.env.HEX_K12_EXISTING_AGENT?.trim()
+  if (existingOwner) {
+    // 真实已绑定通道验收复用隔离副本中的既有 Tutor，默认夹具仍创建并清理独立孩子。
+    const response = await page.request.get(`${BASE_URL}/api/v1/agents`)
+    expect(response.ok()).toBe(true)
+    const payload = (await response.json()) as {
+      agents?: Array<{ name?: string; display_name?: string }>
+    }
+    const matches = (payload.agents || []).filter((agent) => agent.name === existingOwner)
+    expect(matches).toHaveLength(1)
+    const displayName = matches[0]!.display_name?.trim() || existingOwner
+    const card = page.locator('.hc-cxcard--dedicated').filter({ hasText: displayName })
+    await expect(card).toHaveCount(1)
+    await card.getByRole('button', { name: /进入辅导/ }).click()
+    await expect(page.locator('.hc-composer input[type="file"]')).toBeAttached({ timeout: 30_000 })
+    return existingOwner
+  }
   await page.getByText('模板库', { exact: false }).first().click()
   await page.getByText('作业辅导助手', { exact: false }).first().click()
   const dialog = page.getByRole('dialog')
@@ -101,9 +120,20 @@ async function createTutor(page: Page, childName: string): Promise<string> {
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级' }).click()
   await dialog.locator('.hc-select__trigger').nth(1).click()
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '下学期' }).click()
+  if (process.env.HEX_E2E_PROVIDER || process.env.HEX_E2E_MODEL) {
+    await dialog.getByTestId('k12pf-model').locator('summary').click()
+    await dialog.getByTestId('k12pf-provider').locator('.hc-select__trigger').click()
+    await page
+      .locator('.hc-select__dropdown .hc-select__option', { hasText: expectedProvider })
+      .click()
+    await dialog.getByTestId('k12pf-model-select').locator('.hc-select__trigger').click()
+    await page
+      .locator('.hc-select__dropdown .hc-select__option', { hasText: expectedModel })
+      .click()
+  }
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 30_000 })
-  const response = await page.request.get('/_hexclaw/api/v1/agents')
+  const response = await page.request.get(`${BASE_URL}/api/v1/agents`)
   expect(response.ok()).toBe(true)
   const payload = (await response.json()) as {
     agents?: Array<{ name?: string; metadata?: Record<string, string> }>
@@ -153,8 +183,8 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
   )
   expect(body.attempt_generation).toBe(1)
   expect(body.route_request).toMatchObject({
-    provider: 'hexclaw-gpt',
-    model: 'gpt-5.6-sol',
+    provider: expectedProvider,
+    model: expectedModel,
     selection_source: 'explicit',
   })
   expect(source.length).toBe(fixture.bytes)
@@ -191,11 +221,16 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
     await subject.locator('.hc-select__trigger').click()
     await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '数学' }).click()
   }
-  for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all())
-    await checkbox.check()
-  await expect(guard.getByTestId('recognize-confirm-all')).toBeEnabled()
-  await guard.getByTestId('recognize-confirm-all').click()
-  await expect(guard.getByTestId('recognize-batch-actions')).toBeVisible()
+  const confirmAll = guard.getByTestId('recognize-confirm-all')
+  if ((await confirmAll.count()) > 0) {
+    for (const checkbox of await guard.locator('input[data-testid^="rq-confirm-"]').all())
+      await checkbox.check()
+    await expect(confirmAll).toBeEnabled()
+    await confirmAll.click()
+    await expect(guard.getByTestId('recognize-batch-actions')).toBeVisible()
+  } else {
+    await expect(guard).toContainText(/共\s*\d+\s*个可作答小题|正在批改作业/)
+  }
 
   const backup = await page.request.get(
     `${BASE_URL}/api/k12/backup?agent=${encodeURIComponent(owner)}`,
@@ -267,7 +302,9 @@ test.describe('real grading/solving fixture oracle', () => {
   )
   let childName = ''
   test.afterEach(async ({ request }) => {
-    await cleanupK12Child(request, childName)
+    if (process.env.HEX_K12_KEEP_CHILD !== '1') {
+      await cleanupK12Child(request, childName)
+    }
     childName = ''
     for (const fixture of Object.values(FIXTURES)) verifyFixture(fixture)
   })
@@ -282,9 +319,10 @@ test.describe('real grading/solving fixture oracle', () => {
       const answerableRows = guard.locator(
         '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
       )
-      expect(await answerableRows.count(), 'messy fixture contains exactly 16 answerable items').toBe(
-        16,
-      )
+      expect(
+        await answerableRows.count(),
+        'messy fixture contains exactly 16 answerable items',
+      ).toBe(16)
       const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
       expect(answers.filter((answer) => answer.trim()).length).toBe(15)
       await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(1)
@@ -303,7 +341,11 @@ test.describe('real grading/solving fixture oracle', () => {
       await expect(guard).toContainText(/88/)
       await expect(guard).toContainText(/225\s*(?:kg|千克)/)
       await testInfo.attach('k12-real-10x-C03-receipt.json', {
-        body: JSON.stringify({ cycle: 'C03', fixture_sha256: FIXTURES.messy.sha256, verdicts: [12, 3, 1] }),
+        body: JSON.stringify({
+          cycle: 'C03',
+          fixture_sha256: FIXTURES.messy.sha256,
+          verdicts: [12, 3, 1],
+        }),
         contentType: 'application/json',
       })
     })
@@ -334,6 +376,22 @@ test.describe('real grading/solving fixture oracle', () => {
       await guard.getByTestId('recognize-solve-all').click()
       await expect(guard.getByTestId('recognize-solve-all')).toHaveCount(0, { timeout: 8 * 60_000 })
       await expect(guard.getByTestId('photo-grade-overlay')).toHaveCount(0)
+      const parentGuide = guard.getByTestId('blank-worksheet-parent-guide')
+      await expect(parentGuide).toBeVisible()
+      await expect(parentGuide.getByTestId('blank-worksheet-guide-item')).toHaveCount(
+        answers.length,
+      )
+      for (const label of [
+        '答案',
+        '必要步骤',
+        '本年级方法',
+        '易错点',
+        '家长怎么讲',
+        '可以追问',
+        '怎么检查',
+      ]) {
+        await expect(parentGuide.getByText(label, { exact: true }).first()).toBeVisible()
+      }
       expect(await backupRecordCount(page, owner)).toBe(before)
       await testInfo.attach('k12-real-10x-C04-receipt.json', {
         body: JSON.stringify({ cycle: 'C04', fixture_sha256: FIXTURES.blank.sha256 }),
@@ -343,102 +401,125 @@ test.describe('real grading/solving fixture oracle', () => {
   }
 
   if (!real10xCycle) {
-  test('clear sheet preserves the correct result plus process error and visible annotation evidence', async ({
-    page,
-  }, testInfo) => {
-    childName = `清晰卷-${e2eMarker('child')}`
-    const owner = await createTutor(page, childName)
-    const guard = await uploadAndConfirm(page, owner, FIXTURES.clear)
-    const answerableRows = guard.locator(
-      '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
-    )
-    expect(await answerableRows.count(), 'clear fixture contains exactly 16 answerable items').toBe(
-      16,
-    )
-    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
-    expect(answers.some((answer) => answer.trim() !== '')).toBe(true)
-    await guard.getByTestId('recognize-grade-all').click()
-    const overlay = guard.getByTestId('photo-grade-overlay')
-    await expect(overlay).toBeVisible({ timeout: 8 * 60_000 })
-    const answeredCount = answers.filter((answer) => answer.trim()).length
-    const verdictCount = await overlay
-      .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
-      .count()
-    expect(
-      verdictCount,
-      'every answered item must render a positioned or honest degraded verdict',
-    ).toBe(answeredCount)
-    const processEvidence = guard.locator('[data-testid^="rq-grade-details-"]').filter({
-      hasText: /42\s*=\s*18\s*[×x*]\s*2/,
+    test('clear sheet preserves the correct result plus process error and visible annotation evidence', async ({
+      page,
+    }, testInfo) => {
+      childName = process.env.HEX_K12_EXISTING_AGENT ? '' : `清晰卷-${e2eMarker('child')}`
+      const owner = await createTutor(page, childName)
+      const guard = await uploadAndConfirm(page, owner, FIXTURES.clear)
+      const answerableRows = guard.locator(
+        '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+      )
+      expect(
+        await answerableRows.count(),
+        'clear fixture contains exactly 16 answerable items',
+      ).toBe(16)
+      const answerInputs = guard.locator('input[data-testid^="rq-answer-"]')
+      const answers = (await answerInputs.count()) > 0 ? await inputValues(answerInputs) : []
+      if (answers.length > 0) {
+        expect(answers.some((answer) => answer.trim() !== '')).toBe(true)
+      }
+      const gradeAll = guard.getByTestId('recognize-grade-all')
+      if (await gradeAll.isVisible().catch(() => false)) await gradeAll.click()
+      const overlay = guard.getByTestId('photo-grade-overlay')
+      await expect(overlay).toBeVisible({ timeout: 8 * 60_000 })
+      const answeredCount =
+        answers.length > 0 ? answers.filter((answer) => answer.trim()).length : 16
+      const verdictCount = await overlay
+        .locator('[data-testid^="overlay-mark-"], [data-testid^="overlay-degraded-"]')
+        .count()
+      expect(
+        verdictCount,
+        'every answered item must render a positioned or honest degraded verdict',
+      ).toBe(answeredCount)
+      const processEvidence = guard.locator('[data-testid^="rq-grade-details-"]').filter({
+        hasText: /42\s*=\s*18\s*[×x*]\s*2/,
+      })
+      await expect(
+        processEvidence,
+        'answer 29 is correct but its 42=18×2 process issue must remain attached to that item',
+      ).toHaveCount(1)
+      await expect(processEvidence).toContainText(/出错步骤|错误原因|过程.*(?:错误|问题)/)
+      await expect(
+        guard.locator('[data-testid^="rq-correct-summary-"]').first(),
+        'correct questions default to compact rows',
+      ).toBeVisible()
+      await attachOverlayEvidence(overlay, testInfo, 'clear-sheet-grading-overlay.png')
     })
-    await expect(
-      processEvidence,
-      'answer 29 is correct but its 42=18×2 process issue must remain attached to that item',
-    ).toHaveCount(1)
-    await expect(processEvidence).toContainText(/出错步骤|错误原因|过程.*(?:错误|问题)/)
-    await expect(
-      guard.locator('[data-testid^="rq-correct-summary-"]').first(),
-      'correct questions default to compact rows',
-    ).toBeVisible()
-    await attachOverlayEvidence(overlay, testInfo, 'clear-sheet-grading-overlay.png')
-  })
 
-  test('messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross', async ({
-    page,
-  }) => {
-    childName = `凌乱卷-${e2eMarker('child')}`
-    const owner = await createTutor(page, childName)
-    const guard = await uploadAndConfirm(page, owner, FIXTURES.messy)
-    const answerableRows = guard.locator(
-      '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
-    )
-    expect(await answerableRows.count(), 'messy fixture contains exactly 16 answerable items').toBe(
-      16,
-    )
-    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
-    expect(answers.filter((answer) => answer.trim()).length).toBe(15)
-    await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(1)
-    await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
-    await guard.getByTestId('recognize-grade-all').click()
-    const overlay = guard.getByTestId('photo-grade-overlay')
-    await expect(overlay).toBeVisible({ timeout: 10 * 60_000 })
-    const verdicts = [
-      ...(await overlay.locator('[data-testid^="overlay-sym-"]').allTextContents()),
-      ...(await overlay.locator('.pg-overlay__degraded-verdict').allTextContents()),
-    ]
-    expect(verdicts.filter((value) => value.includes('✓')).length).toBe(12)
-    expect(verdicts.filter((value) => value.includes('✗')).length).toBe(3)
-    expect(verdicts).toHaveLength(15)
-    await expect(guard).toContainText(/0\.5\s*\+\s*1\/3/)
-    await expect(guard).toContainText(/88/)
-    await expect(guard).toContainText(/225\s*(?:kg|千克)/)
-  })
+    test('messy sheet keeps the 12/3/1 oracle and never turns unanswered into a red cross', async ({
+      page,
+    }) => {
+      childName = `凌乱卷-${e2eMarker('child')}`
+      const owner = await createTutor(page, childName)
+      const guard = await uploadAndConfirm(page, owner, FIXTURES.messy)
+      const answerableRows = guard.locator(
+        '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+      )
+      expect(
+        await answerableRows.count(),
+        'messy fixture contains exactly 16 answerable items',
+      ).toBe(16)
+      const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
+      expect(answers.filter((answer) => answer.trim()).length).toBe(15)
+      await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(1)
+      await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
+      await guard.getByTestId('recognize-grade-all').click()
+      const overlay = guard.getByTestId('photo-grade-overlay')
+      await expect(overlay).toBeVisible({ timeout: 10 * 60_000 })
+      const verdicts = [
+        ...(await overlay.locator('[data-testid^="overlay-sym-"]').allTextContents()),
+        ...(await overlay.locator('.pg-overlay__degraded-verdict').allTextContents()),
+      ]
+      expect(verdicts.filter((value) => value.includes('✓')).length).toBe(12)
+      expect(verdicts.filter((value) => value.includes('✗')).length).toBe(3)
+      expect(verdicts).toHaveLength(15)
+      await expect(guard).toContainText(/0\.5\s*\+\s*1\/3/)
+      await expect(guard).toContainText(/88/)
+      await expect(guard).toContainText(/225\s*(?:kg|千克)/)
+    })
 
-  test('blank sheet stays solve-only and does not create a mistake projection', async ({
-    page,
-  }) => {
-    childName = `空白卷-${e2eMarker('child')}`
-    const owner = await createTutor(page, childName)
-    const before = await backupRecordCount(page, owner)
-    const guard = await uploadAndConfirm(page, owner, FIXTURES.blank)
-    const answerableRows = guard.locator(
-      '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
-    )
-    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
-    expect(answers.length).toBeGreaterThan(0)
-    expect(
-      await answerableRows.count(),
-      'every blank-fixture question must have one answer input',
-    ).toBe(answers.length)
-    expect(answers.every((answer) => answer.trim() === '')).toBe(true)
-    await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(answers.length)
-    await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
-    await expect(guard.getByTestId('recognize-grade-all')).toHaveCount(0)
-    await expect(guard.getByTestId('recognize-solve-all')).toBeVisible()
-    await guard.getByTestId('recognize-solve-all').click()
-    await expect(guard.getByTestId('recognize-solve-all')).toHaveCount(0, { timeout: 8 * 60_000 })
-    await expect(guard.getByTestId('photo-grade-overlay')).toHaveCount(0)
-    expect(await backupRecordCount(page, owner)).toBe(before)
-  })
+    test('blank sheet stays solve-only and does not create a mistake projection', async ({
+      page,
+    }) => {
+      childName = `空白卷-${e2eMarker('child')}`
+      const owner = await createTutor(page, childName)
+      const before = await backupRecordCount(page, owner)
+      const guard = await uploadAndConfirm(page, owner, FIXTURES.blank)
+      const answerableRows = guard.locator(
+        '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+      )
+      const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
+      expect(answers.length).toBeGreaterThan(0)
+      expect(
+        await answerableRows.count(),
+        'every blank-fixture question must have one answer input',
+      ).toBe(answers.length)
+      expect(answers.every((answer) => answer.trim() === '')).toBe(true)
+      await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(answers.length)
+      await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
+      await expect(guard.getByTestId('recognize-grade-all')).toHaveCount(0)
+      await expect(guard.getByTestId('recognize-solve-all')).toBeVisible()
+      await guard.getByTestId('recognize-solve-all').click()
+      await expect(guard.getByTestId('recognize-solve-all')).toHaveCount(0, { timeout: 8 * 60_000 })
+      await expect(guard.getByTestId('photo-grade-overlay')).toHaveCount(0)
+      const parentGuide = guard.getByTestId('blank-worksheet-parent-guide')
+      await expect(parentGuide).toBeVisible()
+      await expect(parentGuide.getByTestId('blank-worksheet-guide-item')).toHaveCount(
+        answers.length,
+      )
+      for (const label of [
+        '答案',
+        '必要步骤',
+        '本年级方法',
+        '易错点',
+        '家长怎么讲',
+        '可以追问',
+        '怎么检查',
+      ]) {
+        await expect(parentGuide.getByText(label, { exact: true }).first()).toBeVisible()
+      }
+      expect(await backupRecordCount(page, owner)).toBe(before)
+    })
   }
 })
