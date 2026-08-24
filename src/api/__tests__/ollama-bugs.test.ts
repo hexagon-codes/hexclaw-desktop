@@ -27,7 +27,9 @@ vi.mock('@/api/settings', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -63,8 +65,21 @@ describe('Bug 4: Ollama Provider 识别逻辑不一致', () => {
         defaultProviderId: 'custom-local',
         routing: { enabled: false, strategy: 'cost-aware' },
       },
-      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: '',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -99,8 +114,21 @@ describe('Bug 4: Ollama Provider 识别逻辑不一致', () => {
         defaultProviderId: '',
         routing: { enabled: false, strategy: 'cost-aware' },
       },
-      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: '',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -111,8 +139,10 @@ describe('Bug 4: Ollama Provider 识别逻辑不一致', () => {
 
     // sync 后有模型
     mockGetOllamaStatus.mockResolvedValue({
-      running: true, associated: true, model_count: 1,
-      models: [{ name: 'qwen3:8b', size: 5_000_000_000 }],
+      running: true,
+      associated: true,
+      model_count: 1,
+      models: [{ name: 'qwen3:8b', size: 5_000_000_000, capabilities: ['completion'] }],
     })
     await store.syncOllamaModels()
 

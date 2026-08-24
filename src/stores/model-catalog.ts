@@ -36,6 +36,31 @@ export interface ProviderCatalog {
 
 type CatalogMap = Record<string, ProviderCatalog>
 type ExclusionMap = Record<string, string[]>
+type ReasoningContract = Pick<ModelOption, 'reasoningSupport' | 'reasoningControl'>
+
+function hasReasoningDeclaration(
+  source: ReasoningContract | undefined,
+): source is ReasoningContract {
+  return source?.reasoningSupport !== undefined || source?.reasoningControl !== undefined
+}
+
+function reasoningContractFrom(
+  ...sources: Array<ReasoningContract | undefined>
+): Partial<ReasoningContract> {
+  const source = sources.find(hasReasoningDeclaration)
+  if (!source) return {}
+  return {
+    ...(source.reasoningSupport === undefined ? {} : { reasoningSupport: source.reasoningSupport }),
+    ...(source.reasoningControl === undefined ? {} : { reasoningControl: source.reasoningControl }),
+  }
+}
+
+function withoutReasoningContract(model: ModelOption): ModelOption {
+  const copy = { ...model }
+  delete copy.reasoningSupport
+  delete copy.reasoningControl
+  return copy
+}
 
 function normalizeExcludedModelId(modelId: string): string {
   return modelId.trim().toLowerCase()
@@ -144,7 +169,14 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
     if (models.length <= AUTO_ENABLE_CATALOG_LIMIT) return
     if ((catalogs.value[providerId]?.models.length ?? 0) > 0) return
     catalogs.value[providerId] = {
-      models: models.map((model) => ({ id: model.id, name: model.name || model.id })),
+      models: models.map((model) => {
+        const canonical = canonicalizeModelOption(model)
+        return {
+          id: canonical.id,
+          name: canonical.name || canonical.id,
+          ...reasoningContractFrom(canonical),
+        }
+      }),
       syncedAt: new Date().toISOString(),
       newIds: [],
       source: 'fallback',
@@ -209,6 +241,7 @@ export function reconcileProviderCatalog(
   const before = modelListSignature(target.models, target.selectedModelId)
   const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
+  const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
   const normalizedExclusions = new Set(
     [...excludedModelIds].map(normalizeExcludedModelId).filter(Boolean),
   )
@@ -222,13 +255,13 @@ export function reconcileProviderCatalog(
         const remote = remoteById.get(model.id)
         if (!remote || model.isCustom) return model
         return canonicalizeModelOption({
-          ...model,
+          ...withoutReasoningContract(model),
           name: remote.name || model.name || remote.id,
+          ...reasoningContractFrom(remote, model, presetById.get(model.id)),
         })
       })
   } else {
     const existingById = new Map(target.models.map((model) => [model.id, model]))
-    const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
     const next: ModelOption[] = remoteModels
       .filter((remote) => !isExcluded(remote.id))
       .map((remote) => {
@@ -236,8 +269,9 @@ export function reconcileProviderCatalog(
         const preset = presetById.get(remote.id)
         if (existing) {
           return canonicalizeModelOption({
-            ...existing,
+            ...withoutReasoningContract(existing),
             name: remote.name || existing.name || remote.id,
+            ...reasoningContractFrom(remote, existing, preset),
           })
         }
         return canonicalizeModelOption({
@@ -254,6 +288,7 @@ export function reconcileProviderCatalog(
             : remote.inputModalities === undefined
               ? {}
               : { capabilities: [] }),
+          ...reasoningContractFrom(remote, preset),
         })
       })
     for (const existing of target.models) {

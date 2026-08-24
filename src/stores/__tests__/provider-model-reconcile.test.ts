@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
-import {
-  beginProviderCatalogSync,
-  reconcileProviderCatalog,
-} from '../model-catalog'
+import type { CatalogModel, ModelOption, ModelReasoningControl, ProviderConfig } from '@/types'
+import { beginProviderCatalogSync, reconcileProviderCatalog } from '../model-catalog'
 
 function provider(models: ModelOption[]): ProviderConfig {
   return {
@@ -20,13 +17,23 @@ function provider(models: ModelOption[]): ProviderConfig {
   }
 }
 
+const reasoningControl: ModelReasoningControl = {
+  dialect: 'reasoning_effort',
+  on: 'high',
+  off: 'none',
+  allowed_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+}
+
 describe('provider catalog reconciliation', () => {
   it('10→4 时自动启用新的四项、刷新名称，并把上游缺失的既有启用项保留为 stale', () => {
-    const existing = Array.from({ length: 10 }, (_, index): ModelOption => ({
-      id: `model-${index}`,
-      name: `Old ${index}`,
-      capabilities: ['text'],
-    }))
+    const existing = Array.from(
+      { length: 10 },
+      (_, index): ModelOption => ({
+        id: `model-${index}`,
+        name: `Old ${index}`,
+        capabilities: ['text'],
+      }),
+    )
     const target = provider(existing)
     const catalog: CatalogModel[] = Array.from({ length: 4 }, (_, index) => ({
       id: `model-${index}`,
@@ -144,11 +151,13 @@ describe('provider catalog reconciliation', () => {
 
     reconcileProviderCatalog(
       target,
-      [{
-        id: 'vendor/vision-image-model',
-        name: 'Vision image model',
-        inputModalities: ['text', 'image'],
-      }],
+      [
+        {
+          id: 'vendor/vision-image-model',
+          name: 'Vision image model',
+          inputModalities: ['text', 'image'],
+        },
+      ],
       [],
     )
 
@@ -158,6 +167,76 @@ describe('provider catalog reconciliation', () => {
         capabilities: [],
       }),
     ])
+  })
+
+  it('20 项大目录用同 ID 的显式推理合同替换旧 unknown，并标记配置需要持久化', () => {
+    const target = provider([
+      {
+        id: 'gpt-5.6-sol',
+        name: 'gpt-5.6-sol',
+        capabilities: ['text'],
+        reasoningSupport: 'unknown',
+      },
+    ])
+    const catalog: CatalogModel[] = [
+      {
+        id: 'gpt-5.6-sol',
+        name: 'gpt-5.6-sol',
+        reasoningSupport: 'supported',
+        reasoningControl,
+      },
+      ...Array.from({ length: 19 }, (_, index) => ({
+        id: `remote-only-${index}`,
+        name: `Remote only ${index}`,
+      })),
+    ]
+
+    const result = reconcileProviderCatalog(target, catalog, [])
+
+    expect(result).toEqual({ changed: true, managed: true })
+    expect(target.models).toHaveLength(1)
+    expect(target.models[0]).toMatchObject({
+      id: 'gpt-5.6-sol',
+      reasoningSupport: 'supported',
+      reasoningControl,
+    })
+  })
+
+  it('小目录同样用同 ID 的显式推理合同替换旧 unknown，并标记配置需要持久化', () => {
+    const target = provider([
+      {
+        id: 'gpt-5.6-sol',
+        name: 'gpt-5.6-sol',
+        capabilities: ['text'],
+        reasoningSupport: 'unknown',
+      },
+    ])
+    const catalog: CatalogModel[] = [
+      {
+        id: 'gpt-5.6-sol',
+        name: 'gpt-5.6-sol',
+        reasoningSupport: 'supported',
+        reasoningControl,
+      },
+    ]
+
+    const result = reconcileProviderCatalog(target, catalog, [])
+
+    expect(result).toEqual({ changed: true, managed: false })
+    expect(target.models[0]).toMatchObject({
+      id: 'gpt-5.6-sol',
+      reasoningSupport: 'supported',
+      reasoningControl,
+    })
+  })
+
+  it('目录未声明推理合同的精确模型 ID 仍保持缺失，不按名称猜测能力', () => {
+    const target = provider([])
+
+    reconcileProviderCatalog(target, [{ id: 'gpt-5.6-sol', name: 'gpt-5.6-sol' }], [])
+
+    expect(Object.prototype.hasOwnProperty.call(target.models[0]!, 'reasoningSupport')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(target.models[0]!, 'reasoningControl')).toBe(false)
   })
 })
 

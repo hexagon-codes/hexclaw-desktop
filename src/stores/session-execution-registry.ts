@@ -9,10 +9,7 @@ export interface SessionExecutionSnapshot {
   operationDeadlineAt?: number
 }
 
-export type SessionExecutionState = Record<
-  string,
-  Record<string, SessionExecutionSnapshot>
->
+export type SessionExecutionState = Record<string, Record<string, SessionExecutionSnapshot>>
 
 const TERMINAL_STATES = new Set([
   'completed',
@@ -24,6 +21,8 @@ const TERMINAL_STATES = new Set([
   'feedback_failed',
   'cancelled',
 ])
+
+const QUERY_ONLY_STATES = new Set(['recovering', 'outcome_unknown'])
 
 export function isTerminalSessionExecutionState(state: string): boolean {
   return TERMINAL_STATES.has(state.trim().toLowerCase())
@@ -47,14 +46,14 @@ export function createSessionExecutionRegistry(executions: Ref<SessionExecutionS
     executions.value = next
   }
 
-  function setSessionExecution(
-    sessionId: string,
-    snapshot: SessionExecutionSnapshot,
-  ): void {
+  function setSessionExecution(sessionId: string, snapshot: SessionExecutionSnapshot): void {
     const normalizedSessionId = sessionId.trim()
     const normalizedExecutionId = snapshot.executionId.trim()
     if (!normalizedSessionId || !normalizedExecutionId) return
-    if (isTerminalSessionExecutionState(snapshot.state)) {
+    if (
+      isTerminalSessionExecutionState(snapshot.state) ||
+      QUERY_ONLY_STATES.has(snapshot.state.trim().toLowerCase())
+    ) {
       clearSessionExecution(normalizedSessionId, normalizedExecutionId)
       return
     }

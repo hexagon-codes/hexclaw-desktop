@@ -69,8 +69,17 @@ const THINKING_STATES = new Set<ThinkingState>(['running', 'completed', 'failed'
 const REASONING_VISIBILITIES = new Set<ReasoningVisibility>(['visible', 'not_exposed'])
 const REASONING_REQUESTS = new Set<ReasoningRequest>(['on', 'off'])
 const REASONING_SUPPORT = new Set<ModelReasoningSupport>(['supported', 'unsupported', 'unknown'])
-const REASONING_EXECUTIONS = new Set<ReasoningExecution>(['applied', 'ignored', 'rejected', 'unknown'])
-const RUNTIME_TOOL_KINDS = new Set<RuntimeEventKind>(['tool_started', 'tool_completed', 'tool_failed'])
+const REASONING_EXECUTIONS = new Set<ReasoningExecution>([
+  'applied',
+  'ignored',
+  'rejected',
+  'unknown',
+])
+const RUNTIME_TOOL_KINDS = new Set<RuntimeEventKind>([
+  'tool_started',
+  'tool_completed',
+  'tool_failed',
+])
 const RUNTIME_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -88,9 +97,7 @@ function nonEmptyString(value: unknown): value is string {
 }
 
 function normalizeReasoningRequest(value: unknown): ReasoningRequest {
-  return REASONING_REQUESTS.has(value as ReasoningRequest)
-    ? value as ReasoningRequest
-    : 'off'
+  return REASONING_REQUESTS.has(value as ReasoningRequest) ? (value as ReasoningRequest) : 'off'
 }
 
 export function normalizeReasoningReceipt(
@@ -112,19 +119,22 @@ export function normalizeReasoningReceipt(
 }
 
 export function parseReasoningReceipt(value: unknown): ReasoningReceipt | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    'version',
-    'reasoning_request',
-    'reasoning_support',
-    'reasoning_execution',
-  ])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'version',
+      'reasoning_request',
+      'reasoning_support',
+      'reasoning_execution',
+    ])
+  ) {
     return undefined
   }
   if (
-    value.version !== 1
-    || !REASONING_REQUESTS.has(value.reasoning_request as ReasoningRequest)
-    || !REASONING_SUPPORT.has(value.reasoning_support as ModelReasoningSupport)
-    || !REASONING_EXECUTIONS.has(value.reasoning_execution as ReasoningExecution)
+    value.version !== 1 ||
+    !REASONING_REQUESTS.has(value.reasoning_request as ReasoningRequest) ||
+    !REASONING_SUPPORT.has(value.reasoning_support as ModelReasoningSupport) ||
+    !REASONING_EXECUTIONS.has(value.reasoning_execution as ReasoningExecution)
   ) {
     return undefined
   }
@@ -141,15 +151,15 @@ function mergeReasoningReceipt(
   next: ReasoningReceipt,
 ): ReasoningReceipt {
   if (current.reasoning_request !== next.reasoning_request) return current
-  const reasoningSupport = current.reasoning_support === 'unknown'
-    ? next.reasoning_support
-    : current.reasoning_support
-  const reasoningExecution = current.reasoning_execution === 'unknown'
-    ? next.reasoning_execution
-    : current.reasoning_execution
+  const reasoningSupport =
+    current.reasoning_support === 'unknown' ? next.reasoning_support : current.reasoning_support
+  const reasoningExecution =
+    current.reasoning_execution === 'unknown'
+      ? next.reasoning_execution
+      : current.reasoning_execution
   if (
-    reasoningSupport === current.reasoning_support
-    && reasoningExecution === current.reasoning_execution
+    reasoningSupport === current.reasoning_support &&
+    reasoningExecution === current.reasoning_execution
   ) {
     return current
   }
@@ -164,7 +174,10 @@ function mergeReasoningReceipt(
 function stableFrameDigest(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableFrameDigest).join(',')}]`
   if (isRecord(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableFrameDigest(value[key])}`).join(',')}}`
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableFrameDigest(value[key])}`)
+      .join(',')}}`
   }
   return JSON.stringify(value)
 }
@@ -173,21 +186,24 @@ export function normalizeReasoningDisclosure(
   value: unknown,
   route?: { provider?: string; model?: string },
 ): ReasoningDisclosure | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, ['visibility', 'source', 'dialect', 'provider', 'model'])) {
-    return undefined
-  }
   if (
-    !REASONING_VISIBILITIES.has(value.visibility as ReasoningVisibility)
-    || !nonEmptyString(value.source)
-    || !nonEmptyString(value.dialect)
-    || !nonEmptyString(value.provider)
-    || !nonEmptyString(value.model)
+    !isRecord(value) ||
+    !hasExactKeys(value, ['visibility', 'source', 'dialect', 'provider', 'model'])
   ) {
     return undefined
   }
   if (
-    (route?.provider && value.provider !== route.provider)
-    || (route?.model && value.model !== route.model)
+    !REASONING_VISIBILITIES.has(value.visibility as ReasoningVisibility) ||
+    !nonEmptyString(value.source) ||
+    !nonEmptyString(value.dialect) ||
+    !nonEmptyString(value.provider) ||
+    !nonEmptyString(value.model)
+  ) {
+    return undefined
+  }
+  if (
+    (route?.provider && value.provider !== route.provider) ||
+    (route?.model && value.model !== route.model)
   ) {
     return undefined
   }
@@ -204,9 +220,9 @@ export function normalizeRuntimeEvent(value: unknown, sequence: number): Runtime
   if (!isRecord(value) || value.version !== 1 || !nonEmptyString(value.event_id)) return undefined
   if (RUNTIME_TOOL_KINDS.has(value.kind as RuntimeEventKind)) {
     if (
-      !hasExactKeys(value, ['version', 'event_id', 'kind', 'tool_call_id', 'tool_name'])
-      || !nonEmptyString(value.tool_call_id)
-      || !nonEmptyString(value.tool_name)
+      !hasExactKeys(value, ['version', 'event_id', 'kind', 'tool_call_id', 'tool_name']) ||
+      !nonEmptyString(value.tool_call_id) ||
+      !nonEmptyString(value.tool_name)
     ) {
       return undefined
     }
@@ -220,9 +236,9 @@ export function normalizeRuntimeEvent(value: unknown, sequence: number): Runtime
     }
   }
   if (
-    value.kind !== 'terminal'
-    || !hasExactKeys(value, ['version', 'event_id', 'kind', 'terminal_status'])
-    || !RUNTIME_TERMINAL_STATES.has(value.terminal_status as string)
+    value.kind !== 'terminal' ||
+    !hasExactKeys(value, ['version', 'event_id', 'kind', 'terminal_status']) ||
+    !RUNTIME_TERMINAL_STATES.has(value.terminal_status as string)
   ) {
     return undefined
   }
@@ -261,15 +277,12 @@ export function mergeRuntimeWireFrame(
     return { snapshot: current, accepted: false }
   }
 
-  const sequence = Number.isSafeInteger(raw.sequence) && Number(raw.sequence) > 0
-    ? Number(raw.sequence)
-    : 0
-  const candidateReasoningReceipt = raw.reasoning_receipt === undefined
-    ? current.reasoningReceipt
-    : normalizeReasoningReceipt(
-        raw.reasoning_receipt,
-        current.reasoningReceipt.reasoning_request,
-      )
+  const sequence =
+    Number.isSafeInteger(raw.sequence) && Number(raw.sequence) > 0 ? Number(raw.sequence) : 0
+  const candidateReasoningReceipt =
+    raw.reasoning_receipt === undefined
+      ? current.reasoningReceipt
+      : normalizeReasoningReceipt(raw.reasoning_receipt, current.reasoningReceipt.reasoning_request)
   const reasoningReceipt = mergeReasoningReceipt(
     current.reasoningReceipt,
     candidateReasoningReceipt,
@@ -278,9 +291,8 @@ export function mergeRuntimeWireFrame(
     if (candidateId || raw.reasoning_disclosure != null || raw.runtime_event != null) {
       return { snapshot: current, accepted: false }
     }
-    const next = reasoningReceipt === current.reasoningReceipt
-      ? current
-      : { ...current, reasoningReceipt }
+    const next =
+      reasoningReceipt === current.reasoningReceipt ? current : { ...current, reasoningReceipt }
     return {
       snapshot: next,
       accepted: true,
@@ -351,9 +363,9 @@ export function normalizeRuntimeSnapshotMetadata(
       : fallbackAssistantMessageId
   const alias = nonEmptyString(metadata.message_id) ? metadata.message_id : undefined
   const identityConflict = !!(
-    nonEmptyString(metadata.assistant_message_id)
-    && alias
-    && metadata.assistant_message_id !== alias
+    nonEmptyString(metadata.assistant_message_id) &&
+    alias &&
+    metadata.assistant_message_id !== alias
   )
   metadata.assistant_message_id = identityConflict ? fallbackAssistantMessageId : canonical
   if (metadata.assistant_message_id) metadata.message_id = metadata.assistant_message_id
@@ -368,9 +380,10 @@ export function normalizeRuntimeSnapshotMetadata(
   metadata.reasoning_visibility = disclosure?.visibility ?? 'not_exposed'
   if (disclosure?.visibility !== 'visible') delete metadata.reasoning
 
-  const lastSequence = Number.isSafeInteger(metadata.last_sequence) && Number(metadata.last_sequence) >= 0
-    ? Number(metadata.last_sequence)
-    : 0
+  const lastSequence =
+    Number.isSafeInteger(metadata.last_sequence) && Number(metadata.last_sequence) >= 0
+      ? Number(metadata.last_sequence)
+      : 0
   metadata.last_sequence = lastSequence
   const events: RuntimeEvent[] = []
   const eventIds = new Set<string>()
@@ -397,7 +410,6 @@ export function normalizeRuntimeSnapshotMetadata(
   return metadata
 }
 
-
 export function normalizeThinkingDuration(value: unknown): number | undefined {
   if (value == null || value === '') return undefined
   const duration = Number(value)
@@ -418,22 +430,29 @@ export function normalizeThinkingMetadata(
   const explicitVisibility = REASONING_VISIBILITIES.has(
     metadata.reasoning_visibility as ReasoningVisibility,
   )
-    ? metadata.reasoning_visibility as ReasoningVisibility
+    ? (metadata.reasoning_visibility as ReasoningVisibility)
     : undefined
   const hasReasoning = !!reasoning?.trim()
-  const visibility = disclosure?.visibility
-    ?? (explicitVisibility === 'not_exposed' || hasReasoning || duration != null ? 'not_exposed' : undefined)
+  const visibility =
+    disclosure?.visibility ??
+    (explicitVisibility === 'not_exposed' || hasReasoning || duration != null
+      ? 'not_exposed'
+      : undefined)
   if (visibility) metadata.reasoning_visibility = visibility
   else delete metadata.reasoning_visibility
 
   const explicitState = THINKING_STATES.has(metadata.thinking_state as ThinkingState)
-    ? metadata.thinking_state as ThinkingState
+    ? (metadata.thinking_state as ThinkingState)
     : undefined
   const receipt = parseReasoningReceipt(metadata.reasoning_receipt)
-  const hasThinkingEvidence = hasReasoning || duration != null || disclosure != null ||
-    explicitState != null || receipt?.reasoning_request === 'on'
+  const hasThinkingEvidence =
+    hasReasoning ||
+    duration != null ||
+    disclosure != null ||
+    explicitState != null ||
+    receipt?.reasoning_request === 'on'
   const inferredState = hasThinkingEvidence
-    ? terminalState ?? (metadata.is_error === true ? 'failed' : 'completed')
+    ? (terminalState ?? (metadata.is_error === true ? 'failed' : 'completed'))
     : undefined
   const state = explicitState ?? inferredState
   if (state) metadata.thinking_state = state
@@ -529,10 +548,28 @@ export interface InteractivePayload {
 export type ContentBlock =
   | { type: 'text'; text: string; message_content?: MessageContent }
   | { type: 'thinking'; thinking: string; duration?: number }
-  | { type: 'tool_use'; id: string; name: string; input: string; status?: 'running' | 'success' | 'error' }
-  | { type: 'tool_result'; toolUseId: string; toolName: string; output: string; isError: boolean; message_content?: MessageContent }
+  | {
+      type: 'tool_use'
+      id: string
+      name: string
+      input: string
+      status?: 'running' | 'success' | 'error'
+    }
+  | {
+      type: 'tool_result'
+      toolUseId: string
+      toolName: string
+      output: string
+      isError: boolean
+      message_content?: MessageContent
+    }
   | { type: 'code'; language: string; content: string; title?: string }
-  | { type: 'buttons'; prompt?: string; buttons: InteractiveButton[]; resolved?: { action: string; label: string } }
+  | {
+      type: 'buttons'
+      prompt?: string
+      buttons: InteractiveButton[]
+      resolved?: { action: string; label: string }
+    }
 
 /** 聊天消息 */
 export interface ChatMessage {
@@ -612,6 +649,7 @@ export interface ChatAttachment {
    * - data URL（图像生成 base64 包装后），形如 "data:image/png;base64,xxx"
    * - HTTP(S) URL（video gen / voice chat 的持久化路径或 Provider 临时 URL）
    * - blob URL（仅当前 WebView 会话中新选图片的本地预览；聊天 wire 不携带它）
+   * - asset:// 稳定身份（K12 持久图片；渲染前必须经认证客户端读取为受控 blob URL）
    *
    * 渲染处按 data URL 前缀自动判别。
    */

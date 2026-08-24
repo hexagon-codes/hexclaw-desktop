@@ -28,9 +28,7 @@ export interface ScenarioIdentityProjection {
 }
 
 /** 身份投影解析器：场景包只从自身权威 metadata 生成，缺少事实时返回 null。 */
-export type IdentityProjectionResolver = (
-  ctx: ScenarioContext,
-) => ScenarioIdentityProjection | null
+export type IdentityProjectionResolver = (ctx: ScenarioContext) => ScenarioIdentityProjection | null
 
 /**
  * 场景投影到通用 composer 的结构化 chip。shell 只转发稳定 action id，
@@ -62,10 +60,9 @@ export interface ScenarioTextModelRoute {
   capability: 'text'
 }
 
-/** 场景资产固化后的最小回执；shell 只消费稳定的显示 URL，不解释领域资产身份。 */
+/** 场景资产固化后的最小回执；shell 只消费稳定身份，显示地址由认证读取链路生成。 */
 export interface ScenarioComposerImageAssetReceipt {
   assetId: string
-  displayUrl: string
 }
 
 /**
@@ -231,11 +228,7 @@ export const scenarioRegistry = {
     const raw = (candidate ?? '').trim()
     const projection = this.resolveIdentityProjection(ctx)
     if (!projection) return raw
-    if (
-      raw === '' ||
-      raw === ctx.agentId.trim() ||
-      projection.generatedAliases.includes(raw)
-    ) {
+    if (raw === '' || raw === ctx.agentId.trim() || projection.generatedAliases.includes(raw)) {
       return projection.displayName
     }
     return raw

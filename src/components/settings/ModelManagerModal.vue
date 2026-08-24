@@ -280,20 +280,46 @@ function cloneModelOption(model: ModelOption): ModelOption {
   })
 }
 
+function applyCatalogReasoningContract(
+  model: ModelOption,
+  catalogModel: CatalogModel,
+): ModelOption {
+  const hasReasoningSupport = Object.prototype.hasOwnProperty.call(catalogModel, 'reasoningSupport')
+  const hasReasoningControl = Object.prototype.hasOwnProperty.call(catalogModel, 'reasoningControl')
+  if (!hasReasoningSupport && !hasReasoningControl) return model
+
+  const next = { ...model }
+  delete next.reasoningSupport
+  delete next.reasoningControl
+  if (hasReasoningSupport) next.reasoningSupport = catalogModel.reasoningSupport
+  if (hasReasoningControl) next.reasoningControl = catalogModel.reasoningControl
+  return next
+}
+
 function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelOption {
   if (existing?.isCustom) return cloneModelOption(existing)
   if (existing) {
-    return canonicalizeModelOption({
-      ...cloneModelOption(existing),
-      id: m.id,
-      name: m.name || m.id,
-    })
+    return canonicalizeModelOption(
+      applyCatalogReasoningContract(
+        {
+          ...cloneModelOption(existing),
+          id: m.id,
+          name: m.name || m.id,
+        },
+        m,
+      ),
+    )
   }
-  return canonicalizeModelOption({
-    id: m.id,
-    name: m.name || m.id,
-    capabilities: [],
-  })
+  return canonicalizeModelOption(
+    applyCatalogReasoningContract(
+      {
+        id: m.id,
+        name: m.name || m.id,
+        capabilities: [],
+      },
+      m,
+    ),
+  )
 }
 
 function normalizeAgainstCatalog(model: ModelOption): ModelOption {

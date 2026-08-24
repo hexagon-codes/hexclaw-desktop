@@ -237,15 +237,18 @@ describe('model reasoning support contract', () => {
   })
 
   it('restores only a same-ID exact preset when an upgraded backend spec omits both reasoning fields', () => {
-    const localPresetProvider = makeProvider([
-      {
-        id: 'gpt-5.6-sol',
-        name: 'GPT-5.6 Sol',
-        capabilities: ['text', 'vision'],
-        reasoningSupport: 'supported',
-        reasoningControl: effortControl,
-      },
-    ], 'openai')
+    const localPresetProvider = makeProvider(
+      [
+        {
+          id: 'gpt-5.6-sol',
+          name: 'GPT-5.6 Sol',
+          capabilities: ['text', 'vision'],
+          reasoningSupport: 'supported',
+          reasoningControl: effortControl,
+        },
+      ],
+      'openai',
+    )
 
     const omitted = mergeProviderModels(
       localPresetProvider,
@@ -257,23 +260,27 @@ describe('model reasoning support contract', () => {
       localPresetProvider,
       'gpt-5.6-sol',
       ['gpt-5.6-sol'],
-      [{
-        id: 'gpt-5.6-sol',
-        display_name: 'GPT-5.6 Sol',
-        capabilities: ['text', 'vision'],
-        reasoning_support: 'unknown',
-      }],
+      [
+        {
+          id: 'gpt-5.6-sol',
+          display_name: 'GPT-5.6 Sol',
+          capabilities: ['text', 'vision'],
+          reasoning_support: 'unknown',
+        },
+      ],
     )[0]
     const explicitControl = mergeProviderModels(
       localPresetProvider,
       'gpt-5.6-sol',
       ['gpt-5.6-sol'],
-      [{
-        id: 'gpt-5.6-sol',
-        display_name: 'GPT-5.6 Sol',
-        capabilities: ['text', 'vision'],
-        reasoning_control: { dialect: 'think', on: true, off: false },
-      }],
+      [
+        {
+          id: 'gpt-5.6-sol',
+          display_name: 'GPT-5.6 Sol',
+          capabilities: ['text', 'vision'],
+          reasoning_control: { dialect: 'think', on: true, off: false },
+        },
+      ],
     )[0]
 
     expect(reasoningSupportOf(omitted)).toBe('supported')
@@ -343,7 +350,7 @@ describe('model reasoning support contract', () => {
     mockGetOllamaStatus.mockResolvedValue({
       running: true,
       associated: true,
-      model_count: 3,
+      model_count: 4,
       models: [
         {
           name: 'plain-chat:latest',
@@ -354,6 +361,10 @@ describe('model reasoning support contract', () => {
           name: 'deepseek-r1-thinking:latest',
           size: 1,
           capabilities: ['completion'],
+        },
+        {
+          name: 'qwen2.5-vl:7b',
+          size: 1,
         },
         {
           name: 'qwen-thinking-name-only:latest',
@@ -369,16 +380,17 @@ describe('model reasoning support contract', () => {
     )
     expect.soft(supports.get('plain-chat:latest')).toBe('supported')
     expect.soft(supports.get('deepseek-r1-thinking:latest')).toBe('unsupported')
-    expect.soft(supports.get('qwen-thinking-name-only:latest')).toBe('unknown')
+    expect.soft(supports.get('qwen2.5-vl:7b')).toBe('unknown')
+    expect.soft(supports.has('qwen-thinking-name-only:latest')).toBe(false)
     const supported = store.availableModels.find((model) => model.modelId === 'plain-chat:latest')
     expect(reasoningControlOf(supported)).toEqual({ dialect: 'think', on: true, off: false })
   })
 
   it('never infers reasoning support from a model id', () => {
     const ids = ['o1-pro', 'deepseek-r1', 'qwen3-thinking', 'claude-extended-thinking']
-    const results = ids.map((id) => normalizeModelReasoningSupport(
-      reasoningSupportOf(canonicalizeModelOption({ id, name: id })),
-    ))
+    const results = ids.map((id) =>
+      normalizeModelReasoningSupport(reasoningSupportOf(canonicalizeModelOption({ id, name: id }))),
+    )
 
     expect(results).toEqual(ids.map(() => 'unknown'))
   })

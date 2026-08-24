@@ -236,8 +236,10 @@ export async function fetchProviderModels(
     completionPrice: m.completion_price,
     inputModalities: m.input_modalities,
     supportsTools: m.supports_tools,
-    reasoningSupport: normalizeModelReasoningSupport(m.reasoning_support),
-    reasoningControl: m.reasoning_control,
+    ...(m.reasoning_support === undefined
+      ? {}
+      : { reasoningSupport: normalizeModelReasoningSupport(m.reasoning_support) }),
+    ...(m.reasoning_control === undefined ? {} : { reasoningControl: m.reasoning_control }),
   }))
   if (models.length === 0) {
     throw new Error('fetchProviderModels: empty model catalog')
