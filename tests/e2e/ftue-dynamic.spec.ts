@@ -26,6 +26,14 @@ interface AgentProjection {
   metadata?: Record<string, string>
 }
 
+interface MessageProjection {
+  id?: string
+  role?: string
+  content?: string
+  metadata?: string | Record<string, unknown> | null
+  meta?: string | Record<string, unknown> | null
+}
+
 async function responseJSON<T>(response: APIResponse): Promise<T> {
   const body = await response.text()
   expect(response.ok(), `${response.url()} => ${response.status()} ${body}`).toBe(true)
@@ -37,6 +45,32 @@ async function listAgents(page: Page): Promise<AgentProjection[]> {
     await page.request.get('/_hexclaw/api/v1/agents'),
   )
   return payload.agents || []
+}
+
+async function listMessages(page: Page, sessionID: string): Promise<MessageProjection[]> {
+  const payload = await responseJSON<{ messages?: MessageProjection[] }>(
+    await page.request.get(
+      `/_hexclaw/api/v1/sessions/${encodeURIComponent(sessionID)}/messages?user_id=desktop-user&limit=200`,
+    ),
+  )
+  return payload.messages || []
+}
+
+function persistedMetadata(message: MessageProjection): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const raw of [message.metadata, message.meta]) {
+    if (!raw) continue
+    if (typeof raw === 'string') {
+      try {
+        Object.assign(result, JSON.parse(raw) as Record<string, unknown>)
+      } catch {
+        throw new Error(`assistant message ${message.id || '<unknown>'} has malformed metadata`)
+      }
+    } else {
+      Object.assign(result, raw)
+    }
+  }
+  return result
 }
 
 async function openTutorTemplate(page: Page): Promise<void> {
@@ -197,6 +231,32 @@ test.describe('dynamic K12 first-use owner and thread', () => {
       page.getByTestId('chat-message-assistant').filter({ hasText: marker }),
     ).toBeVisible()
     await expect(page.locator(`.hc-sessions__item[data-session-id="${sessionID}"]`)).toBeVisible()
+
+    let persistedAssistant: MessageProjection | undefined
+    await expect
+      .poll(
+        async () => {
+          persistedAssistant = (await listMessages(page, sessionID!)).find(
+            (message) => message.role === 'assistant' && message.content?.includes(marker),
+          )
+          return persistedAssistant?.id || ''
+        },
+        {
+          timeout: 30_000,
+          message: 'terminal assistant reply must exist in the public persisted history',
+        },
+      )
+      .not.toBe('')
+
+    const terminalMetadata = persistedMetadata(persistedAssistant!)
+    expect(
+      terminalMetadata.provider,
+      'persisted execution provenance must retain the pinned provider; a cross-provider fallback must not pass silently',
+    ).toBe(EXPECTED_PROVIDER)
+    expect(
+      terminalMetadata.model,
+      'persisted execution provenance must retain the pinned model; a same-provider model fallback must not pass silently',
+    ).toBe(EXPECTED_MODEL)
   })
 
   test('two equal display names keep distinct learner and TutorAgent identities when one is renamed', async ({

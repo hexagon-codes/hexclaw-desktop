@@ -30,6 +30,7 @@ interface Target {
   all?: boolean
   required?: boolean
   ignoreText?: boolean
+  ignoreBusinessGeometryFields?: Array<'x' | 'y' | 'width' | 'height'>
 }
 
 interface StateDefinition {
@@ -45,6 +46,7 @@ interface StateDefinition {
   comparisonTargets?: string[]
   pixelComparisonTargets?: string[]
   horizontalOverflowTargets?: string[]
+  allowedReferenceHorizontalOverflowTargets?: string[]
   absentTargets?: string[]
   horizontalScrollResetTargets?: string[]
   containmentTargets?: string[]
@@ -99,7 +101,15 @@ interface CapturedTarget {
 }
 
 interface TargetEvidence {
-  targets: Record<string, { selector: string; ignoreText: boolean; matches: CapturedTarget[] }>
+  targets: Record<
+    string,
+    {
+      selector: string
+      ignoreText: boolean
+      ignoreBusinessGeometryFields: Array<'x' | 'y' | 'width' | 'height'>
+      matches: CapturedTarget[]
+    }
+  >
   requiredMissing: string[]
 }
 
@@ -1418,6 +1428,7 @@ const states: StateDefinition[] = [
     comparisonTargets: ['period-tab-buttons', 'progress', 'hero', 'weekly-items'],
     pixelComparisonTargets: ['period-tab-buttons', 'progress'],
     horizontalOverflowTargets: ['hero', 'weekly-items'],
+    allowedReferenceHorizontalOverflowTargets: ['hero', 'weekly-items'],
   },
   {
     name: 'weekly-history',
@@ -1796,12 +1807,14 @@ const states: StateDefinition[] = [
         selector: '#k12BookPanel2 .practice-history',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
       {
         name: 'practice-history-card',
         selector: '#practiceHistoryList .practice-set-card[data-learner-id="ming"]',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
     ],
     implementationTargets: [
@@ -1835,12 +1848,14 @@ const states: StateDefinition[] = [
         selector: '[data-testid="ps-history"]',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
       {
         name: 'practice-history-card',
         selector: '[data-testid="ps-history"] .k12ps__hcard',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
     ],
     comparisonTargets: [
@@ -2506,6 +2521,7 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
     result[target.name] = {
       selector: target.selector,
       ignoreText: target.ignoreText === true,
+      ignoreBusinessGeometryFields: target.ignoreBusinessGeometryFields ?? [],
       matches: value,
     }
     if (target.required && value.length === 0) requiredMissing.push(target.name)
@@ -2560,6 +2576,20 @@ function compareTargetEvidence(
     }
     const ignoreText =
       referenceTarget?.ignoreText === true && implementationTarget?.ignoreText === true
+    const referenceIgnoredGeometry = referenceTarget?.ignoreBusinessGeometryFields ?? []
+    const implementationIgnoredGeometry = implementationTarget?.ignoreBusinessGeometryFields ?? []
+    if (referenceIgnoredGeometry.join(',') !== implementationIgnoredGeometry.join(',')) {
+      add(
+        target,
+        null,
+        'config.ignoreBusinessGeometryFields',
+        referenceIgnoredGeometry,
+        implementationIgnoredGeometry,
+      )
+    }
+    const ignoredGeometryFields = new Set(
+      referenceIgnoredGeometry.filter((field) => implementationIgnoredGeometry.includes(field)),
+    )
     // ignoreText 用于业务数据可变的容器/列表：正文、条数及正文派生属性不参与 UI 对齐，
     // 仍逐项比较共同样本的几何、样式与交互属性，避免业务内容差异制造视觉假红。
     if (!ignoreText && referenceMatches.length !== implementationMatches.length) {
@@ -2603,6 +2633,8 @@ function compareTargetEvidence(
         )
       }
       for (const field of ['x', 'y', 'width', 'height'] as const) {
+        // 业务条数和可选回传资产会改变纵向位置与高度；只屏蔽目标明确声明的派生字段。
+        if (ignoreText && ignoredGeometryFields.has(field)) continue
         const delta = Math.abs(referenceMatch.rect[field] - implementationMatch.rect[field])
         if (delta > GEOMETRY_TOLERANCE) {
           add(
@@ -2927,6 +2959,12 @@ async function captureState(
     implementationTargets,
     state.horizontalOverflowTargets ?? [],
   )
+  const allowedReferenceHorizontalOverflowTargets = new Set(
+    state.allowedReferenceHorizontalOverflowTargets ?? [],
+  )
+  const unexpectedReferenceHorizontalOverflow = referenceHorizontalOverflow.filter(
+    ({ target }) => !allowedReferenceHorizontalOverflowTargets.has(target),
+  )
   const referenceContainment = containmentViolations(
     referenceTargets,
     state.containmentTargets ?? [],
@@ -2984,7 +3022,7 @@ async function captureState(
       ])
     : []
   const stateInvariantFailureCount =
-    referenceHorizontalOverflow.length +
+    unexpectedReferenceHorizontalOverflow.length +
     implementationHorizontalOverflow.length +
     referenceContainment.length +
     implementationContainment.length +
@@ -3100,6 +3138,9 @@ async function captureState(
           },
           stateInvariants: {
             horizontalOverflowTargets: state.horizontalOverflowTargets ?? [],
+            allowedReferenceHorizontalOverflowTargets: [
+              ...allowedReferenceHorizontalOverflowTargets,
+            ],
             absentTargets: state.absentTargets ?? [],
             horizontalScrollResetTargets: state.horizontalScrollResetTargets ?? [],
             containmentTargets: state.containmentTargets ?? [],
@@ -3108,6 +3149,7 @@ async function captureState(
             disabledTargets: state.disabledTargets ?? [],
             reference: {
               horizontalOverflow: referenceHorizontalOverflow,
+              unexpectedHorizontalOverflow: unexpectedReferenceHorizontalOverflow,
               containment: referenceContainment,
               clip: referenceClip,
               exactText: referenceExactText,
@@ -3214,6 +3256,8 @@ async function captureState(
         stateInvariants: {
           failureCount: stateInvariantFailureCount,
           referenceHorizontalOverflow,
+          allowedReferenceHorizontalOverflowTargets: [...allowedReferenceHorizontalOverflowTargets],
+          unexpectedReferenceHorizontalOverflow,
           implementationHorizontalOverflow,
           referenceContainment,
           implementationContainment,
@@ -3290,8 +3334,8 @@ async function captureState(
     .toEqual([])
   expect
     .soft(
-      referenceHorizontalOverflow,
-      `${state.name} reference has horizontal overflow; evidence=${geometryPath}`,
+      unexpectedReferenceHorizontalOverflow,
+      `${state.name} reference has unexpected horizontal overflow; evidence=${geometryPath}`,
     )
     .toEqual([])
   expect

@@ -70,6 +70,22 @@ export interface HistoryMessage {
   render_manifest?: RenderManifestEvidence
 }
 
+export interface LiveAgentRule {
+  id?: number
+  platform?: string
+  instance_id?: string
+  user_id?: string
+  chat_id?: string
+  agent_name?: string
+}
+
+export interface LiveDirectPhysicalTarget {
+  binding_id: string
+  platform: string
+  instance_id: string
+  chat_id: string
+}
+
 export function envValue(name: string): string {
   return process.env[name]?.trim() ?? ''
 }
@@ -87,8 +103,122 @@ function invalidURLGate(name: string): boolean {
   }
 }
 
+function loopbackSidecarOrigin(raw: string): URL | undefined {
+  try {
+    const value = new URL(raw)
+    if (!['http:', 'https:'].includes(value.protocol)) return undefined
+    if (value.username || value.password) return undefined
+    if (!['127.0.0.1', '[::1]', 'localhost'].includes(value.hostname)) return undefined
+    if (value.pathname !== '/' || value.search || value.hash) return undefined
+    return value
+  } catch {
+    return undefined
+  }
+}
+
 function invalidDigestGate(name: string): boolean {
   return !/^(?:sha256:)?[0-9a-f]{64}$/i.test(envValue(name))
+}
+
+function validSidecarCapability(value: string): boolean {
+  const bytes = Buffer.byteLength(value)
+  return bytes >= 32 && bytes <= 512 && !/[\p{Cc}\p{White_Space}]/u.test(value)
+}
+
+function sidecarCapabilityEnv(): string {
+  return trimGoSpace(process.env.HEXCLAW_SIDECAR_CAPABILITY_TOKEN ?? '')
+}
+
+function sidecarCapability(): string {
+  const value = sidecarCapabilityEnv()
+  if (!value) {
+    throw new Error('required live environment gate is absent: HEXCLAW_SIDECAR_CAPABILITY_TOKEN')
+  }
+  if (!validSidecarCapability(value)) {
+    throw new Error('required live Sidecar capability is invalid')
+  }
+  return value
+}
+
+function trimGoSpace(value: string): string {
+  return value.replace(
+    /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu,
+    '',
+  )
+}
+
+function compareText(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left), Buffer.from(right))
+}
+
+function normalizedLiveRule(rule: LiveAgentRule): Required<LiveAgentRule> {
+  return {
+    id: Number.isInteger(rule.id) ? Number(rule.id) : 0,
+    platform: trimGoSpace(rule.platform ?? '').toLowerCase(),
+    instance_id: trimGoSpace(rule.instance_id ?? ''),
+    user_id: trimGoSpace(rule.user_id ?? ''),
+    chat_id: trimGoSpace(rule.chat_id ?? ''),
+    agent_name: trimGoSpace(rule.agent_name ?? ''),
+  }
+}
+
+function stableLiveBindingID(rule: Required<LiveAgentRule>): string {
+  if (rule.id > 0) return `agent-rule:${rule.id}`
+  const identity = [
+    rule.platform,
+    rule.instance_id,
+    rule.user_id,
+    rule.chat_id,
+    rule.agent_name,
+  ].join('\0')
+  return `agent-rule:sha256:${sha256Text(identity)}`
+}
+
+/**
+ * 与生产 k12IMDeliverer.resolveDirectBindings 保持相同的规范化、排序与物理目标去重规则。
+ * 返回值只用于发送前快照和回执集合比对，不参与选择或改写生产目标。
+ */
+export function resolveLiveDirectPhysicalTargets(
+  rules: LiveAgentRule[],
+  agentName: string,
+): LiveDirectPhysicalTarget[] {
+  const owner = trimGoSpace(agentName)
+  const candidates = rules
+    .map(normalizedLiveRule)
+    .filter(
+      (rule) =>
+        rule.agent_name === owner &&
+        rule.platform !== '' &&
+        rule.chat_id !== '' &&
+        rule.chat_id.charCodeAt(0) >= 0x20,
+    )
+    .sort((left, right) => {
+      for (const key of ['platform', 'instance_id', 'chat_id'] as const) {
+        const compared = compareText(left[key], right[key])
+        if (compared !== 0) return compared
+      }
+      if (left.id > 0 && right.id > 0 && left.id !== right.id) return left.id - right.id
+      return compareText(stableLiveBindingID(left), stableLiveBindingID(right))
+    })
+
+  const targets: LiveDirectPhysicalTarget[] = []
+  for (const candidate of candidates) {
+    const previous = targets.at(-1)
+    if (
+      previous?.platform === candidate.platform &&
+      previous.instance_id === candidate.instance_id &&
+      previous.chat_id === candidate.chat_id
+    ) {
+      continue
+    }
+    targets.push({
+      binding_id: stableLiveBindingID(candidate),
+      platform: candidate.platform,
+      instance_id: candidate.instance_id,
+      chat_id: candidate.chat_id,
+    })
+  }
+  return targets
 }
 
 export function liveGateBlockers(options?: {
@@ -108,11 +238,14 @@ export function liveGateBlockers(options?: {
   requireValue('HEX_K12_LIVE_APP_BINARY')
   requireValue('HEX_K12_LIVE_APP_SHA256')
   requireValue('HEX_K12_LIVE_EXPECTED_VERSION')
+  if (!sidecarCapabilityEnv()) blockers.push('HEXCLAW_SIDECAR_CAPABILITY_TOKEN')
   if (invalidURLGate('HEX_K12_LIVE_APP_URL')) blockers.push('HEX_K12_LIVE_APP_URL(valid-http-url)')
-  if (invalidURLGate('HEX_K12_LIVE_SIDECAR_URL'))
-    blockers.push('HEX_K12_LIVE_SIDECAR_URL(valid-http-url)')
+  if (!loopbackSidecarOrigin(envValue('HEX_K12_LIVE_SIDECAR_URL')))
+    blockers.push('HEX_K12_LIVE_SIDECAR_URL(valid-loopback-origin)')
   if (invalidDigestGate('HEX_K12_LIVE_APP_SHA256'))
     blockers.push('HEX_K12_LIVE_APP_SHA256(valid-sha256)')
+  if (!validSidecarCapability(sidecarCapabilityEnv()))
+    blockers.push('HEXCLAW_SIDECAR_CAPABILITY_TOKEN(valid-process-capability)')
 
   if (options?.isolatedProfile) requireValue('HEX_K12_LIVE_PROFILE_ISOLATED', '1')
   if (options?.model) {
@@ -123,10 +256,7 @@ export function liveGateBlockers(options?: {
   }
   if (options?.dingTalk) {
     requireValue('DINGTALK_LIVE_SEND', '1')
-    requireValue('DINGTALK_LIVE_CONFIRM', 'SEND_TO_EXPLICIT_DINGTALK_USER')
-    requireValue('DINGTALK_LIVE_INSTANCE')
-    requireValue('DINGTALK_LIVE_INSTANCE_ID')
-    requireValue('DINGTALK_LIVE_USERID')
+    requireValue('DINGTALK_LIVE_CONFIRM', 'SEND_TO_ALL_CURRENT_AGENT_BINDINGS')
     requireValue('HEX_K12_LIVE_AGENT')
     requireValue('HEX_K12_LIVE_RUN_ID')
   }
@@ -156,7 +286,18 @@ export function liveAppURL(path = '/'): string {
 }
 
 export function liveSidecarURL(path = '/'): string {
-  return absoluteURL('HEX_K12_LIVE_SIDECAR_URL', path)
+  const origin = loopbackSidecarOrigin(requiredEnv('HEX_K12_LIVE_SIDECAR_URL'))
+  if (!origin) throw new Error('live Sidecar URL must be a loopback origin without userinfo')
+  let resolved: URL
+  try {
+    resolved = new URL(path, `${origin.origin}/`)
+  } catch {
+    throw new Error('live Sidecar path must stay on the loopback origin')
+  }
+  if (resolved.origin !== origin.origin || resolved.username || resolved.password) {
+    throw new Error('live Sidecar path must stay on the loopback origin')
+  }
+  return resolved.toString()
 }
 
 export async function liveJSON<T>(
@@ -166,11 +307,20 @@ export async function liveJSON<T>(
   data?: unknown,
 ): Promise<T> {
   const url = liveSidecarURL(path)
-  const response = await request.fetch(url, {
-    method,
-    data,
-    timeout: 240_000,
-  })
+  let response: Awaited<ReturnType<APIRequestContext['fetch']>>
+  try {
+    response = await request.fetch(url, {
+      method,
+      data,
+      headers: {
+        Authorization: `Bearer ${sidecarCapability()}`,
+      },
+      maxRedirects: 0,
+      timeout: 240_000,
+    })
+  } catch {
+    throw new Error(`${method} ${new URL(url).pathname} request failed (detail redacted)`)
+  }
   if (!response.ok()) {
     // Deliberately do not interpolate the response body: provider errors can
     // include credentials or target identifiers.
