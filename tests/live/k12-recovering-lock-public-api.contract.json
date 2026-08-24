@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "acceptance_ids": [
+    "K12-OUTCOME-UNKNOWN-NOT-EXECUTING-001",
+    "K12-SESSION-SERIAL-009",
+    "K12-SESSION-DEADLINE-010"
+  ],
+  "layer_a": {
+    "name": "public_dto_restart_query_only",
+    "required": true,
+    "installed_sidecar": true,
+    "direct_database_mutation": false,
+    "real_im_send": false,
+    "public_api_exact_set": [
+      "POST /api/v1/agents",
+      "POST /api/v1/sessions",
+      "POST /api/v1/sessions/{session_id}/messages",
+      "GET /api/v1/config/llm",
+      "POST /api/v1/config/llm/probe",
+      "POST /api/k12/assets",
+      "POST /api/k12/image-tasks",
+      "GET /api/k12/image-tasks/{dispatch_id}",
+      "GET /api/k12/image-tasks/{dispatch_id}/result"
+    ],
+    "recovering_projection": {
+      "dispatch_status": "failed",
+      "progress_operation": "classification",
+      "progress_state": "recovering",
+      "retryable": false,
+      "internal_outcome_unknown_visible": false
+    },
+    "restart": {
+      "business_methods": [
+        "GET"
+      ],
+      "same_dispatch": true,
+      "same_version": true,
+      "provider_post_delta": 0,
+      "create_confirm_retry_generate_delta": 0
+    }
+  },
+  "layer_b": {
+    "name": "installed_ui_consumes_real_recovering_dto",
+    "required": true,
+    "api_only_harness_can_complete": false,
+    "required_evidence": [
+      "session_list_has_no_execution_spinner",
+      "composer_is_enabled",
+      "red_stop_button_is_absent",
+      "task_shell_keeps_querying_same_dispatch"
+    ]
+  },
+  "layer_c": {
+    "name": "provider_query_identity_terminal_reconciliation",
+    "required_when_provider_supports_query_identity": true,
+    "image_task_public_reconcile_api": false,
+    "permitted_terminal_states": [
+      "delivered",
+      "not_sent"
+    ],
+    "must_not_invent_reconciliation_api": true
+  },
+  "validate_side_effects": {
+    "sidecar_starts": 0,
+    "provider_posts": 0,
+    "dingtalk_sends": 0,
+    "database_mutations": 0
+  }
+}
