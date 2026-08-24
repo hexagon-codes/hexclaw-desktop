@@ -146,6 +146,98 @@ describe('HexClawWS', () => {
   })
 
   // ─── 消息解析 ──────────────────────────────────────
+  // ─── 连接 single-flight 与有界收敛 ───
+  it('CONNECTING 期间的并发 connect 共享唯一物理 socket 和连接结果', async () => {
+    const first = hexclawWS.connect()
+    const second = hexclawWS.connect()
+
+    expect(second).toBe(first)
+    expect(MockWebSocket.instances).toHaveLength(1)
+
+    MockWebSocket.instances[0]!.simulateOpen()
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined])
+  })
+
+  it('open 前关闭时所有并发等待者都必须 reject', async () => {
+    const firstRejected = vi.fn()
+    const secondRejected = vi.fn()
+    const first = hexclawWS.connect()
+    const second = hexclawWS.connect()
+    void first.catch(firstRejected)
+    void second.catch(secondRejected)
+
+    MockWebSocket.instances[0]!.close()
+    await Promise.resolve()
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(firstRejected).toHaveBeenCalledTimes(1)
+    expect(secondRejected).toHaveBeenCalledTimes(1)
+    expect(firstRejected.mock.calls[0]![0]).toMatchObject({
+      message: expect.stringMatching(/closed before opening/i),
+    })
+    expect(secondRejected.mock.calls[0]![0]).toBe(firstRejected.mock.calls[0]![0])
+  })
+
+  it('连接 error 后关闭也只会让所有并发等待者 reject 一次', async () => {
+    const firstRejected = vi.fn()
+    const secondRejected = vi.fn()
+    const first = hexclawWS.connect()
+    const second = hexclawWS.connect()
+    void first.catch(firstRejected)
+    void second.catch(secondRejected)
+
+    MockWebSocket.instances[0]!.simulateError()
+    MockWebSocket.instances[0]!.close()
+    await Promise.resolve()
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(firstRejected).toHaveBeenCalledTimes(1)
+    expect(secondRejected).toHaveBeenCalledTimes(1)
+    expect(firstRejected.mock.calls[0]![0]).toMatchObject({
+      message: expect.stringMatching(/connection failed/i),
+    })
+    expect(secondRejected.mock.calls[0]![0]).toBe(firstRejected.mock.calls[0]![0])
+  })
+
+  it('主动断开时所有并发连接等待者都必须 reject', async () => {
+    const firstRejected = vi.fn()
+    const secondRejected = vi.fn()
+    const first = hexclawWS.connect()
+    const second = hexclawWS.connect()
+    void first.catch(firstRejected)
+    void second.catch(secondRejected)
+
+    hexclawWS.disconnect()
+    await Promise.resolve()
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(firstRejected).toHaveBeenCalledTimes(1)
+    expect(secondRejected).toHaveBeenCalledTimes(1)
+    expect(firstRejected.mock.calls[0]![0]).toMatchObject({
+      message: expect.stringMatching(/cancelled/i),
+    })
+    expect(secondRejected.mock.calls[0]![0]).toBe(firstRejected.mock.calls[0]![0])
+  })
+
+  it('连接始终未打开时所有并发等待者在预算内 reject', async () => {
+    const firstRejected = vi.fn()
+    const secondRejected = vi.fn()
+    const first = hexclawWS.connect()
+    const second = hexclawWS.connect()
+    void first.catch(firstRejected)
+    void second.catch(secondRejected)
+
+    await vi.advanceTimersByTimeAsync(30_001)
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(firstRejected).toHaveBeenCalledTimes(1)
+    expect(secondRejected).toHaveBeenCalledTimes(1)
+    expect(firstRejected.mock.calls[0]![0]).toMatchObject({
+      message: expect.stringMatching(/timed out/i),
+    })
+    expect(secondRejected.mock.calls[0]![0]).toBe(firstRejected.mock.calls[0]![0])
+  })
+
   it('收到非 JSON 消息不应崩溃', async () => {
     const chunkCb = vi.fn()
     hexclawWS.onChunk(chunkCb)

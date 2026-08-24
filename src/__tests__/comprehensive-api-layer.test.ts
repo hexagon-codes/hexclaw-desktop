@@ -964,26 +964,53 @@ describe('websocket.ts', () => {
       )
     })
 
-    it('handles tool_approval_request with missing metadata (defaults to empty strings)', async () => {
+    it('审批身份缺失时 fail closed，完整 canonical 事件仅回调一次', async () => {
       await connectAndCapture()
 
       const approvalCb = vi.fn()
       hexclawWS.onApprovalRequest(approvalCb)
 
-      const msg = JSON.stringify({
-        type: 'tool_approval_request',
-        content: 'Approve file write?',
-        // metadata is missing entirely
-      })
-      capturedWs.simulateMessage(msg)
+      capturedWs.simulateMessage(
+        JSON.stringify({
+          type: 'tool_approval_request',
+          content: 'Approve file write?',
+        }),
+      )
+      expect(approvalCb).not.toHaveBeenCalled()
+
+      capturedWs.simulateMessage(
+        JSON.stringify({
+          type: 'tool_approval_request',
+          request_id: 'approval-request-1',
+          session_id: 'session-1',
+          owner_id: 'desktop-user',
+          invocation_id: 'invocation-1',
+          tool_name: 'file_edit',
+          arguments: { path: '/workspace/report.md' },
+          arguments_digest: 'a'.repeat(64),
+          security_scope_digest: 'b'.repeat(64),
+          scope_schema_version: 1,
+          deadline_at: '2026-07-29T05:00:00.000Z',
+          content: 'Approve file write?',
+          metadata: { risk: 'sensitive' },
+        }),
+      )
 
       expect(approvalCb).toHaveBeenCalledTimes(1)
-      const req = approvalCb.mock.calls[0]![0]
-      expect(req.requestId).toBe('')
-      expect(req.toolName).toBe('')
-      expect(req.risk).toBe('sensitive') // default
-      expect(req.reason).toBe('Approve file write?')
-      expect(req.sessionId).toBe('')
+      expect(approvalCb).toHaveBeenCalledWith({
+        requestId: 'approval-request-1',
+        ownerId: 'desktop-user',
+        invocationId: 'invocation-1',
+        toolName: 'file_edit',
+        arguments: { path: '/workspace/report.md' },
+        argumentsDigest: 'a'.repeat(64),
+        securityScopeDigest: 'b'.repeat(64),
+        scopeSchemaVersion: 1,
+        risk: 'sensitive',
+        reason: 'Approve file write?',
+        sessionId: 'session-1',
+        deadlineAt: '2026-07-29T05:00:00.000Z',
+      })
     })
   })
 

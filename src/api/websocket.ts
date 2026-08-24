@@ -238,66 +238,91 @@ class HexClawWS {
   private pongTimeoutMs = 10000
 
   private intentionalClose = false
-  private connectResolved = false
+  private connectPromise: Promise<void> | null = null
+  private connectResolve: (() => void) | null = null
+  private connectReject: ((error: Error) => void) | null = null
+  private connectTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly connectionTimeoutMs = 30_000
 
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws && this.ws.readyState === NativeSidecarWebSocket.OPEN) {
-        resolve()
-        return
-      }
+    if (this.ws && this.ws.readyState === NativeSidecarWebSocket.OPEN) {
+      return Promise.resolve()
+    }
+    if (
+      this.connectPromise &&
+      this.ws &&
+      this.ws.readyState === NativeSidecarWebSocket.CONNECTING
+    ) {
+      return this.connectPromise
+    }
 
-      // Clean up any existing connection
-      this.cleanupConnection()
+    this.cleanupConnection()
+    this.intentionalClose = false
 
-      this.intentionalClose = false
-      this.connectResolved = false
-
-      try {
-        this.ws = new NativeSidecarWebSocket('/ws')
-      } catch (e) {
-        reject(e)
-        return
-      }
-
-      this.ws.onopen = () => {
-        logger.info('WebSocket connected')
-        // Only reset reconnect counter after connection stays stable for 10s
-        // This prevents infinite reconnect loops when the server immediately closes
-        const stableTimer = setTimeout(() => { this.reconnectAttempts = 0 }, 10_000)
-        this.ws!.addEventListener('close', () => clearTimeout(stableTimer), { once: true })
-        this.lastPongTime = Date.now()
-        this.startHeartbeat()
-        this.connectResolved = true
-        resolve()
-      }
-
-      this.ws.onmessage = (event: MessageEvent) => {
-        this.handleMessage(event.data)
-      }
-
-      this.ws.onclose = () => {
-        logger.info('WebSocket disconnected')
-        this.stopHeartbeat()
-        if (!this.intentionalClose) {
-          // 先尝试重连 + 恢复流，不立即触发 errorCallbacks
-          // 避免产生"错误助手消息" + "恢复助手消息"重复
-          this.attemptReconnect()
-        }
-      }
-
-      this.ws.onerror = (event) => {
-        logger.error('WebSocket error', event)
-        if (!this.connectResolved) {
-          this.connectResolved = true
-          reject(new Error('WebSocket connection failed'))
-        }
-      }
+    const promise = new Promise<void>((resolve, reject) => {
+      this.connectResolve = resolve
+      this.connectReject = reject
     })
+    this.connectPromise = promise
+
+    let socket: NativeSidecarWebSocket
+    try {
+      socket = new NativeSidecarWebSocket('/ws')
+      this.ws = socket
+    } catch (error) {
+      this.settleConnect(promise, error instanceof Error ? error : new Error(String(error)))
+      return promise
+    }
+
+    this.connectTimer = setTimeout(() => {
+      if (this.connectPromise !== promise) return
+      this.settleConnect(promise, new Error('WebSocket connection timed out'))
+      if (this.ws === socket && socket.readyState === NativeSidecarWebSocket.CONNECTING) {
+        socket.close()
+      }
+    }, this.connectionTimeoutMs)
+
+    socket.onopen = () => {
+      if (this.ws !== socket || this.connectPromise !== promise) return
+      logger.info('WebSocket connected')
+      // 连接稳定十秒后再重置重连计数，避免服务端立即断开引发无限重连。
+      const stableTimer = setTimeout(() => {
+        this.reconnectAttempts = 0
+      }, 10_000)
+      socket.addEventListener('close', () => clearTimeout(stableTimer), { once: true })
+      this.lastPongTime = Date.now()
+      this.startHeartbeat()
+      this.settleConnect(promise)
+    }
+
+    socket.onmessage = (event: MessageEvent) => {
+      this.handleMessage(event.data)
+    }
+
+    socket.onclose = () => {
+      logger.info('WebSocket disconnected')
+      this.stopHeartbeat()
+      this.settleConnect(promise, new Error('WebSocket connection closed before opening'))
+      if (!this.intentionalClose) {
+        // 先尝试重连 + 恢复流，不立即触发 errorCallbacks
+        // 避免产生"错误助手消息" + "恢复助手消息"重复
+        this.attemptReconnect()
+      }
+    }
+
+    socket.onerror = (event) => {
+      logger.error('WebSocket error', event)
+      this.settleConnect(promise, new Error('WebSocket connection failed'))
+    }
+
+    return promise
   }
 
   disconnect(): void {
     this.intentionalClose = true
+    if (this.connectPromise) {
+      this.settleConnect(this.connectPromise, new Error('WebSocket connection cancelled'))
+    }
     this.stopHeartbeat()
     this.stopReconnect()
     if (this.ws) {
@@ -534,6 +559,21 @@ class HexClawWS {
       this.reconnectTimer = null
     }
     this.reconnectAttempts = 0
+  }
+
+  private settleConnect(promise: Promise<void>, error?: Error): void {
+    if (this.connectPromise !== promise) return
+    const resolve = this.connectResolve
+    const reject = this.connectReject
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer)
+      this.connectTimer = null
+    }
+    this.connectPromise = null
+    this.connectResolve = null
+    this.connectReject = null
+    if (error) reject?.(error)
+    else resolve?.()
   }
 
   private cleanupConnection(): void {
