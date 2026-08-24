@@ -17,8 +17,10 @@ const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/k12_visual_pixel_diff.swif
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
 const GEOMETRY_TOLERANCE = 1
+const DEFAULT_VIEWPORT = { width: 1440, height: 900 }
 const STATE_FILTER = process.env.HEX_UI_STATE_FILTER?.trim()
 const TARGET_ONLY = process.env.HEX_UI_TARGET_ONLY?.trim() === '1'
+let activeImplementationFixtureState = ''
 
 type Side = 'reference' | 'implementation'
 
@@ -27,16 +29,31 @@ interface Target {
   selector: string
   all?: boolean
   required?: boolean
+  ignoreText?: boolean
 }
 
 interface StateDefinition {
   name: string
   fixture: string
+  viewport?: { width: number; height: number }
+  fullPagePixelComparable?: boolean
+  fullPagePixelReason?: string
   openReference(page: Page): Promise<string[]>
   openImplementation(page: Page): Promise<string[]>
   referenceTargets: Target[]
   implementationTargets: Target[]
   comparisonTargets?: string[]
+  pixelComparisonTargets?: string[]
+  horizontalOverflowTargets?: string[]
+  absentTargets?: string[]
+  horizontalScrollResetTargets?: string[]
+  containmentTargets?: string[]
+  clipTargets?: string[]
+  exactTargetTexts?: Record<string, string[]>
+  disabledTargets?: string[]
+  scrollSequence?: boolean
+  referencePixelMaskSelectors?: string[]
+  implementationPixelMaskSelectors?: string[]
 }
 
 interface CapturedTarget {
@@ -47,6 +64,11 @@ interface CapturedTarget {
   text: string
   attributes: {
     title: string | null
+    expectedScrollTop: string | null
+    disabled: boolean
+    ariaSelected: string | null
+    ariaPressed: string | null
+    dataReviewState: string | null
   }
   rect: {
     x: number
@@ -57,15 +79,72 @@ interface CapturedTarget {
   metrics: {
     clientWidth: number
     scrollWidth: number
+    clientHeight: number
+    scrollHeight: number
+    scrollLeft: number
+    scrollTop: number
     textClipped: boolean
   }
   style: Record<string, string>
+  containment: {
+    containerSelector: string | null
+    contained: boolean | null
+    containerRect: {
+      x: number
+      y: number
+      width: number
+      height: number
+    } | null
+  }
 }
 
 interface TargetEvidence {
-  targets: Record<string, { selector: string; matches: CapturedTarget[] }>
+  targets: Record<string, { selector: string; ignoreText: boolean; matches: CapturedTarget[] }>
   requiredMissing: string[]
 }
+
+interface PixelDiffEvidence {
+  changed_pixel_ratio: number
+  changed_pixels: number
+  total_pixels: number
+  changed_bbox: number[] | null
+}
+
+interface ScrollSequenceTransition {
+  targetIndex: number
+  injected: { scrollLeft: number; scrollTop: number }
+  before: RecordsObjectSnapshot
+  after: RecordsObjectSnapshot
+  violations: string[]
+}
+
+interface RecordsObjectSnapshot {
+  activeTabIndices: number[]
+  activePanelIndices: number[]
+  activeTab: ScrollLayoutSnapshot | null
+  activePanel: ScrollLayoutSnapshot | null
+  content: {
+    rect: { x: number; y: number; width: number; height: number }
+    style: Record<string, string>
+    scrollLeft: number
+    scrollTop: number
+  }
+  tabDataDigest: string
+  mistakeFilterDigest: string
+  mistakeDataDigest: string
+}
+
+interface ScrollLayoutSnapshot {
+  rect: { x: number; y: number; width: number; height: number }
+  style: Record<string, string>
+}
+
+interface ScrollSequenceEvidence {
+  transitions: ScrollSequenceTransition[]
+  violations: string[]
+}
+
+const scrollSequenceEvidence = new WeakMap<Page, ScrollSequenceEvidence>()
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -266,7 +345,14 @@ const mistakes = [
   },
 ]
 
-function practiceGeneration(recordID: string) {
+function practiceGeneration(recordID: string, state = activeImplementationFixtureState) {
+  if (state === 'practice-set-pending' && recordID === 'mistake-apple') {
+    return {
+      state: 'pending',
+      source_mistake_id: recordID,
+      source_mistake_summary: '苹果和梨的价钱（P52·3）',
+    }
+  }
   if (recordID === 'mistake-apple') {
     return {
       state: 'joined',
@@ -322,7 +408,7 @@ const practiceSets = [
     status: 'draft',
     status_label: '草稿',
     publishable: true,
-    delivery_status: '',
+    delivery_status: 'not_sent',
     return_assets: [],
     items: [
       {
@@ -357,7 +443,7 @@ const practiceSets = [
     paper_no: 'P-2630-01',
     finalized_at: 1785081600,
     finalized_via: 'print',
-    delivery_status: '',
+    delivery_status: 'not_sent',
     return_assets: [],
     items: [
       {
@@ -376,6 +462,13 @@ const practiceSets = [
     ],
   },
 ]
+
+function practiceSetsForState(state = activeImplementationFixtureState) {
+  if (state !== 'practice-set-pending') return practiceSets
+  return practiceSets.map((practiceSet) =>
+    practiceSet.source_kind === 'basket' ? { ...practiceSet, items: [] } : practiceSet,
+  )
+}
 
 function creativeFeedback(id: string, type: 'writing' | 'art', evidence: string[]) {
   return {
@@ -399,6 +492,9 @@ const creativeWorks = [
     work_id: 'WRITING-20260715-001',
     work_type: 'writing',
     display_name: '《春天的校园》',
+    display_kind: '语文·习作',
+    preview_variant: 'writing',
+    display_evidence: ['切题：校园春景', '结构：三段', '表达：有一处可提升'],
     content_markdown: '柳枝像绿色的丝带，在春风里轻轻摆动。',
     row_version: 1,
     created_at: 1_784_115_343,
@@ -417,6 +513,9 @@ const creativeWorks = [
     work_id: 'ART-20260716-001',
     work_type: 'art',
     display_name: '《雨后的校园》',
+    display_kind: '美术·水彩',
+    preview_variant: 'default',
+    display_evidence: ['构图：主体偏右', '色彩：冷暖有层次', '线条：边缘清楚'],
     row_version: 1,
     created_at: 1_784_203_929,
     latest_generation_at: 1_784_203_929,
@@ -434,6 +533,9 @@ const creativeWorks = [
     work_id: 'ART-20260717-002',
     work_type: 'art',
     display_name: '《桌上的水杯》',
+    display_kind: '美术·线描',
+    preview_variant: 'line',
+    display_evidence: ['原图：已保存', '年级：五年级'],
     row_version: 1,
     created_at: 1_784_248_938,
     latest_generation_at: null,
@@ -476,6 +578,15 @@ async function installImplementationMocks(page: Page) {
       localStorage.setItem('hexclaw_lastSessionId', session)
       localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
       localStorage.setItem('hc-theme', 'light')
+      document.addEventListener(
+        'DOMContentLoaded',
+        () => {
+          const healthyEngineStyle = document.createElement('style')
+          healthyEngineStyle.textContent = '.hc-engine-banner { display: none !important; }'
+          document.head.append(healthyEngineStyle)
+        },
+        { once: true },
+      )
     },
     { agent: AGENT, session: SESSION },
   )
@@ -643,7 +754,7 @@ async function installImplementationMocks(page: Page) {
       })
     }
     if (apiPath === '/api/k12/practice-sets' && method === 'GET') {
-      return json(route, { items: practiceSets })
+      return json(route, { items: practiceSetsForState() })
     }
     if (apiPath === '/api/k12/creative-works' && method === 'GET') {
       return json(route, { items: creativeWorks })
@@ -780,6 +891,436 @@ async function openImplementationRecords(page: Page, testID: string) {
   return issues
 }
 
+async function seedSharedContentScroll(
+  page: Page,
+  selector: string,
+  side: Side,
+  requested = { scrollLeft: 96, scrollTop: 120 },
+) {
+  const result = await page.evaluate(
+    ({ contentSelector, currentSide, desiredScrollLeft, desiredScrollTop }) => {
+      const content = document.querySelector<HTMLElement>(contentSelector)
+      if (!content) return { issue: `blocked: ${currentSide} shared records content is missing` }
+
+      const styleID = 'branch-ui-records-scroll-range'
+      if (!document.getElementById(styleID)) {
+        const style = document.createElement('style')
+        style.id = styleID
+        style.textContent = `
+          [data-branch-ui-scroll-range="true"]::after {
+            content: "";
+            display: block;
+            width: calc(100% + 256px);
+            height: 900px;
+            visibility: hidden;
+            pointer-events: none;
+          }
+        `
+        document.head.append(style)
+      }
+      content.dataset.branchUiScrollRange = 'true'
+      content.scrollTop = desiredScrollTop
+      content.scrollLeft = desiredScrollLeft
+      content.dataset.branchUiExpectedScrollTop = String(content.scrollTop)
+      return {
+        issue: '',
+        scrollLeft: content.scrollLeft,
+        scrollTop: content.scrollTop,
+        scrollWidth: content.scrollWidth,
+        clientWidth: content.clientWidth,
+        scrollHeight: content.scrollHeight,
+        clientHeight: content.clientHeight,
+      }
+    },
+    {
+      contentSelector: selector,
+      currentSide: side,
+      desiredScrollLeft: requested.scrollLeft,
+      desiredScrollTop: requested.scrollTop,
+    },
+  )
+  if (result.issue) return result.issue
+  if (result.scrollLeft <= 0 || result.scrollTop <= 0) {
+    return (
+      `blocked: ${side} controlled records scroll range was not established ` +
+      `(left=${result.scrollLeft}, top=${result.scrollTop}, ` +
+      `width=${result.clientWidth}/${result.scrollWidth}, ` +
+      `height=${result.clientHeight}/${result.scrollHeight})`
+    )
+  }
+  return ''
+}
+
+async function recordsObjectSnapshot(page: Page, side: Side): Promise<RecordsObjectSnapshot> {
+  return page.evaluate((currentSide) => {
+    const contentSelector =
+      currentSide === 'reference' ? '#k12ViewRecords > .content' : '.k12rec__body'
+    const tabSelector =
+      currentSide === 'reference'
+        ? '#k12BookTabs > [role="tab"]'
+        : '.k12rec__tabs .k12-book-tabs > [role="tab"]'
+    const panelSelectors =
+      currentSide === 'reference'
+        ? Array.from({ length: 5 }, (_, index) => `#k12BookPanel${index}`)
+        : [
+            '[data-testid="week-section"]',
+            '[data-testid="mistakes-section"]',
+            '[data-testid="practicesets-section"]',
+            '[data-testid="accum-prototype"]',
+            '[data-testid="works-section"]',
+          ]
+    const content = document.querySelector<HTMLElement>(contentSelector)
+    if (!content) throw new Error(`${currentSide} shared records content is missing`)
+    const contentRect = content.getBoundingClientRect()
+    const contentStyle = getComputedStyle(content)
+    const isVisible = (node: Element | null) => {
+      if (!(node instanceof HTMLElement)) return false
+      const style = getComputedStyle(node)
+      const rect = node.getBoundingClientRect()
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        Number(style.opacity || '1') > 0 &&
+        rect.width > 0 &&
+        rect.height > 0
+      )
+    }
+    const normalizedText = (node: Element) => (node.textContent ?? '').replace(/\s+/g, ' ').trim()
+    const layoutSnapshot = (node: HTMLElement | null) => {
+      if (!node) return null
+      const rect = node.getBoundingClientRect()
+      const style = getComputedStyle(node)
+      return {
+        rect: {
+          x: Number(rect.x.toFixed(2)),
+          y: Number(rect.y.toFixed(2)),
+          width: Number(rect.width.toFixed(2)),
+          height: Number(rect.height.toFixed(2)),
+        },
+        style: {
+          display: style.display,
+          position: style.position,
+          boxSizing: style.boxSizing,
+          padding: style.padding,
+          margin: style.margin,
+          gap: style.gap,
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+          borderTopWidth: style.borderTopWidth,
+          borderRightWidth: style.borderRightWidth,
+          borderBottomWidth: style.borderBottomWidth,
+          borderLeftWidth: style.borderLeftWidth,
+          borderRadius: style.borderRadius,
+          flex: style.flex,
+          alignItems: style.alignItems,
+          alignSelf: style.alignSelf,
+          justifyContent: style.justifyContent,
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          lineHeight: style.lineHeight,
+          whiteSpace: style.whiteSpace,
+        },
+      }
+    }
+    const tabs = [...document.querySelectorAll<HTMLElement>(tabSelector)]
+    const activeTabIndices = tabs.flatMap((tab, index) =>
+      tab.getAttribute('aria-selected') === 'true' ? [index] : [],
+    )
+    const activePanelIndices = panelSelectors.flatMap((selector, index) =>
+      isVisible(document.querySelector(selector)) ? [index] : [],
+    )
+    const activeTab =
+      activeTabIndices.length === 1 ? layoutSnapshot(tabs[activeTabIndices[0]!] ?? null) : null
+    const activePanel =
+      activePanelIndices.length === 1
+        ? layoutSnapshot(
+            document.querySelector<HTMLElement>(panelSelectors[activePanelIndices[0]!]!),
+          )
+        : null
+    const tabDataDigest = JSON.stringify(
+      tabs.map((tab) => ({
+        text: normalizedText(tab),
+        controls: tab.getAttribute('aria-controls'),
+      })),
+    )
+    const mistakeFilterSelector =
+      currentSide === 'reference'
+        ? '#k12BookPanel1 .k12-secondary-tabs [aria-pressed]'
+        : '.k12rec__filter-stack [aria-pressed]'
+    const mistakeRowSelector =
+      currentSide === 'reference'
+        ? '#k12MistakeList .resource-row[data-learner-id="ming"]'
+        : '.k12mistakes .rl-row'
+    const mistakeFilterDigest = JSON.stringify(
+      [...document.querySelectorAll<HTMLElement>(mistakeFilterSelector)].map((item) => ({
+        text: normalizedText(item),
+        pressed: item.getAttribute('aria-pressed'),
+      })),
+    )
+    const mistakeDataDigest = JSON.stringify(
+      [...document.querySelectorAll<HTMLElement>(mistakeRowSelector)].map((item) => ({
+        id:
+          item.dataset.mistakeKey ??
+          item.dataset.recordId ??
+          item.getAttribute('data-record-id') ??
+          '',
+        status: item.dataset.status ?? item.getAttribute('data-record-status') ?? '',
+        text: normalizedText(item),
+      })),
+    )
+    return {
+      activeTabIndices,
+      activePanelIndices,
+      activeTab,
+      activePanel,
+      content: {
+        rect: {
+          x: Number(contentRect.x.toFixed(2)),
+          y: Number(contentRect.y.toFixed(2)),
+          width: Number(contentRect.width.toFixed(2)),
+          height: Number(contentRect.height.toFixed(2)),
+        },
+        style: {
+          display: contentStyle.display,
+          position: contentStyle.position,
+          boxSizing: contentStyle.boxSizing,
+          overflowX: contentStyle.overflowX,
+          overflowY: contentStyle.overflowY,
+          padding: contentStyle.padding,
+        },
+        scrollLeft: Number(content.scrollLeft.toFixed(2)),
+        scrollTop: Number(content.scrollTop.toFixed(2)),
+      },
+      tabDataDigest,
+      mistakeFilterDigest,
+      mistakeDataDigest,
+    }
+  }, side)
+}
+
+async function runRecordsObjectScrollSequence(page: Page, side: Side) {
+  const contentSelector = side === 'reference' ? '#k12ViewRecords > .content' : '.k12rec__body'
+  const tabSelector =
+    side === 'reference'
+      ? '#k12BookTabs > [role="tab"]'
+      : '.k12rec__tabs .k12-book-tabs > [role="tab"]'
+  const panelSelectors =
+    side === 'reference'
+      ? Array.from({ length: 5 }, (_, index) => `#k12BookPanel${index}`)
+      : [
+          '[data-testid="week-section"]',
+          '[data-testid="mistakes-section"]',
+          '[data-testid="practicesets-section"]',
+          '[data-testid="accum-prototype"]',
+          '[data-testid="works-section"]',
+        ]
+  const initial = await recordsObjectSnapshot(page, side)
+  const transitions: ScrollSequenceTransition[] = []
+  const violations: string[] = []
+
+  for (const targetIndex of [0, 1, 2, 3, 4]) {
+    const injected = {
+      scrollLeft: 96 + targetIndex * 7,
+      scrollTop: 120 + targetIndex * 11,
+    }
+    const seedIssue = await seedSharedContentScroll(page, contentSelector, side, injected)
+    if (seedIssue) violations.push(seedIssue)
+    const before = await recordsObjectSnapshot(page, side)
+    const targetTab = page.locator(tabSelector).nth(targetIndex)
+    if ((await targetTab.count()) !== 1) {
+      violations.push(`${side}: object tab ${targetIndex} is missing`)
+      continue
+    }
+    await targetTab.click()
+    await page.locator(panelSelectors[targetIndex]!).waitFor({ state: 'visible', timeout: 15_000 })
+    if (side === 'implementation' && targetIndex === 1) {
+      await page
+        .locator('.k12mistakes .rl-row')
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+    }
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    )
+    const after = await recordsObjectSnapshot(page, side)
+    const transitionViolations: string[] = []
+    if (
+      before.content.scrollLeft !== injected.scrollLeft ||
+      before.content.scrollTop !== injected.scrollTop
+    ) {
+      transitionViolations.push(
+        `injected scroll mismatch: expected ${injected.scrollLeft}/${injected.scrollTop}, got ${before.content.scrollLeft}/${before.content.scrollTop}`,
+      )
+    }
+    if (after.content.scrollLeft !== 0 || after.content.scrollTop !== injected.scrollTop) {
+      transitionViolations.push(
+        `scroll reset mismatch: expected 0/${injected.scrollTop}, got ${after.content.scrollLeft}/${after.content.scrollTop}`,
+      )
+    }
+    if (JSON.stringify(after.activeTabIndices) !== JSON.stringify([targetIndex])) {
+      transitionViolations.push(
+        `active tab mismatch: expected ${targetIndex}, got ${after.activeTabIndices.join(',')}`,
+      )
+    }
+    if (JSON.stringify(after.activePanelIndices) !== JSON.stringify([targetIndex])) {
+      transitionViolations.push(
+        `active panel mismatch: expected ${targetIndex}, got ${after.activePanelIndices.join(',')}`,
+      )
+    }
+    if (
+      JSON.stringify(after.content.rect) !== JSON.stringify(initial.content.rect) ||
+      JSON.stringify(after.content.style) !== JSON.stringify(initial.content.style)
+    ) {
+      transitionViolations.push('shared content bbox/style changed while switching objects')
+    }
+    if (after.tabDataDigest !== initial.tabDataDigest) {
+      transitionViolations.push('object tab data changed while switching objects')
+    }
+    if (
+      targetIndex === 1 &&
+      (after.mistakeFilterDigest !== initial.mistakeFilterDigest ||
+        after.mistakeDataDigest !== initial.mistakeDataDigest)
+    ) {
+      transitionViolations.push('mistake filter/data/state changed after leaving and returning')
+    }
+    transitions.push({ targetIndex, injected, before, after, violations: transitionViolations })
+    violations.push(
+      ...transitionViolations.map((violation) => `${side}: tab ${targetIndex}: ${violation}`),
+    )
+  }
+
+  const evidence = { transitions, violations }
+  scrollSequenceEvidence.set(page, evidence)
+  return evidence
+}
+
+function compareScrollSequenceEvidence(
+  reference: ScrollSequenceEvidence | null,
+  implementation: ScrollSequenceEvidence | null,
+) {
+  const differences: Array<{
+    transition: number | null
+    field: string
+    reference: unknown
+    implementation: unknown
+    delta?: number
+  }> = []
+  const add = (
+    transition: number | null,
+    field: string,
+    referenceValue: unknown,
+    implementationValue: unknown,
+    delta?: number,
+  ) => {
+    differences.push({
+      transition,
+      field,
+      reference: referenceValue,
+      implementation: implementationValue,
+      ...(delta === undefined ? {} : { delta: Number(delta.toFixed(2)) }),
+    })
+  }
+  if (!reference || !implementation) {
+    add(null, 'evidence', Boolean(reference), Boolean(implementation))
+    return { equal: false, differences }
+  }
+  if (reference.transitions.length !== implementation.transitions.length) {
+    add(null, 'transitionCount', reference.transitions.length, implementation.transitions.length)
+  }
+  const count = Math.min(reference.transitions.length, implementation.transitions.length)
+  for (let index = 0; index < count; index += 1) {
+    const referenceTransition = reference.transitions[index]!
+    const implementationTransition = implementation.transitions[index]!
+    if (referenceTransition.targetIndex !== implementationTransition.targetIndex) {
+      add(
+        index,
+        'targetIndex',
+        referenceTransition.targetIndex,
+        implementationTransition.targetIndex,
+      )
+    }
+    if (
+      JSON.stringify(referenceTransition.injected) !==
+      JSON.stringify(implementationTransition.injected)
+    ) {
+      add(index, 'injected', referenceTransition.injected, implementationTransition.injected)
+    }
+    for (const [name, includeHeight] of [
+      // 对象正文高度随题目/点评等业务数据变化；只比较不受业务内容影响的横向几何与起点。
+      ['activePanel', false],
+    ] as const) {
+      const referenceLayout = referenceTransition.after[name]
+      const implementationLayout = implementationTransition.after[name]
+      if (!referenceLayout || !implementationLayout) {
+        if (Boolean(referenceLayout) !== Boolean(implementationLayout)) {
+          add(index, `${name}.present`, Boolean(referenceLayout), Boolean(implementationLayout))
+        }
+        continue
+      }
+      const rectFields = includeHeight
+        ? (['x', 'y', 'width', 'height'] as const)
+        : (['x', 'y', 'width'] as const)
+      for (const field of rectFields) {
+        const delta = Math.abs(referenceLayout.rect[field] - implementationLayout.rect[field])
+        if (delta > GEOMETRY_TOLERANCE) {
+          add(
+            index,
+            `${name}.rect.${field}`,
+            referenceLayout.rect[field],
+            implementationLayout.rect[field],
+            delta,
+          )
+        }
+      }
+      const styleKeys = new Set([
+        ...Object.keys(referenceLayout.style),
+        ...Object.keys(implementationLayout.style),
+      ])
+      for (const styleKey of styleKeys) {
+        if (referenceLayout.style[styleKey] !== implementationLayout.style[styleKey]) {
+          add(
+            index,
+            `${name}.style.${styleKey}`,
+            referenceLayout.style[styleKey],
+            implementationLayout.style[styleKey],
+          )
+        }
+      }
+    }
+    for (const field of ['x', 'y', 'width', 'height'] as const) {
+      const referenceValue = referenceTransition.after.content.rect[field]
+      const implementationValue = implementationTransition.after.content.rect[field]
+      const delta = Math.abs(referenceValue - implementationValue)
+      if (delta > GEOMETRY_TOLERANCE) {
+        add(index, `content.rect.${field}`, referenceValue, implementationValue, delta)
+      }
+    }
+    const contentStyleKeys = new Set([
+      ...Object.keys(referenceTransition.after.content.style),
+      ...Object.keys(implementationTransition.after.content.style),
+    ])
+    for (const styleKey of contentStyleKeys) {
+      if (
+        referenceTransition.after.content.style[styleKey] !==
+        implementationTransition.after.content.style[styleKey]
+      ) {
+        add(
+          index,
+          `content.style.${styleKey}`,
+          referenceTransition.after.content.style[styleKey],
+          implementationTransition.after.content.style[styleKey],
+        )
+      }
+    }
+  }
+  return { equal: differences.length === 0, differences }
+}
+
 function recordsTargets(
   panel: number,
   implementationSection: string,
@@ -820,6 +1361,9 @@ const states: StateDefinition[] = [
   {
     name: 'weekly-current',
     fixture: '小明 / 2026-W30 / 6 到期复习 + 2 个手动轨道建议 / current',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话、对象计数和题目正文属于业务夹具差异；保留全页差异图，仅判定周练目标几何、样式与溢出。',
     openReference: async (page) => openReferenceRecords(page, 0),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-week'),
     referenceTargets: [
@@ -831,13 +1375,24 @@ const states: StateDefinition[] = [
         all: true,
         required: true,
       },
-      { name: 'progress', selector: '#k12BookPanel0 .rc-week-progress', required: true },
-      { name: 'hero', selector: '#k12BookPanel0 .rc-week-hero', required: true },
+      {
+        name: 'progress',
+        selector: '#k12BookPanel0 .rc-week-progress',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'hero',
+        selector: '#k12BookPanel0 .rc-week-hero',
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'weekly-items',
         selector: '#k12BookPanel0 .rc-week-hero .resource-row',
         all: true,
         required: true,
+        ignoreText: true,
       },
     ],
     implementationTargets: [
@@ -849,16 +1404,27 @@ const states: StateDefinition[] = [
         all: true,
         required: true,
       },
-      { name: 'progress', selector: '.weekly-progress', required: true },
-      { name: 'hero', selector: '.weekly-hero', required: true },
+      { name: 'progress', selector: '.weekly-progress', required: true, ignoreText: true },
+      { name: 'hero', selector: '.weekly-hero', required: true, ignoreText: true },
       { name: 'weekly-tracks', selector: '.weekly-track', all: true, required: true },
-      { name: 'weekly-items', selector: '.weekly-item', all: true, required: true },
+      {
+        name: 'weekly-items',
+        selector: '.weekly-item',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
     ],
-    comparisonTargets: ['period-tab-buttons', 'progress'],
+    comparisonTargets: ['period-tab-buttons', 'progress', 'hero', 'weekly-items'],
+    pixelComparisonTargets: ['period-tab-buttons', 'progress'],
+    horizontalOverflowTargets: ['hero', 'weekly-items'],
   },
   {
     name: 'weekly-history',
     fixture: '小明 / 2026-W29 archived / 8 道 7 对 1 错 / history',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话、对象计数和历史卷正文属于业务夹具差异；保留全页差异图，仅判定历史列表目标几何、样式与溢出。',
     openReference: async (page) => {
       const issues = await openReferenceRecords(page, 0)
       const invoked = await page.evaluate(() => {
@@ -892,32 +1458,58 @@ const states: StateDefinition[] = [
       ...weeklyTargets.referenceTargets,
       { name: 'period-tabs', selector: '#k12BookPanel0 .k12-week-view-tabs', required: true },
       {
+        name: 'period-tab-buttons',
+        selector: '#k12BookPanel0 .k12-week-view-tabs > button',
+        all: true,
+        required: true,
+      },
+      {
         name: 'history-panel',
         selector: '#k12BookPanel0 [data-week-view-panel="history"]',
         required: true,
+        ignoreText: true,
       },
       {
         name: 'history-cards',
         selector: '#k12BookPanel0 .k12-week-history-card',
         all: true,
         required: true,
+        ignoreText: true,
       },
     ],
     implementationTargets: [
       ...weeklyTargets.implementationTargets,
       { name: 'period-tabs', selector: '.weekly-toolbar .k12-book-tabs', required: true },
-      { name: 'history-panel', selector: '.weekly-history', required: true },
+      {
+        name: 'period-tab-buttons',
+        selector: '.weekly-toolbar .k12-book-tabs > button',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'history-panel',
+        selector: '.weekly-history',
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'history-cards',
         selector: '.weekly-history .weekly-history__card',
         all: true,
         required: true,
+        ignoreText: true,
       },
     ],
+    comparisonTargets: ['period-tab-buttons', 'history-panel', 'history-cards'],
+    pixelComparisonTargets: ['period-tab-buttons'],
+    horizontalOverflowTargets: ['history-panel', 'history-cards'],
   },
   {
     name: 'mistakes',
     fixture: '小明 / 全学科 + 全状态 / 与原型相同的 7 条代表性错题及动作状态',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话与对象计数属于业务夹具差异；保留全页差异图，仅判定错题行、动作、几何、样式与溢出。',
     openReference: async (page) => openReferenceRecords(page, 1),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-mistakes'),
     referenceTargets: [
@@ -925,6 +1517,83 @@ const states: StateDefinition[] = [
       {
         name: 'mistake-rows',
         selector: '#k12MistakeList .resource-row',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'mistake-actions',
+        selector: '#k12MistakeList .resource-row > button',
+        all: true,
+        required: true,
+      },
+    ],
+    implementationTargets: [
+      ...mistakeTargets.implementationTargets,
+      {
+        name: 'mistake-rows',
+        selector: '.k12mistakes .rl-row',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'mistake-actions',
+        selector: '.k12mistakes .rl-row > button',
+        all: true,
+        required: true,
+      },
+    ],
+    comparisonTargets: ['mistake-rows', 'mistake-actions'],
+    horizontalOverflowTargets: ['mistake-rows', 'mistake-actions'],
+    containmentTargets: ['mistake-actions'],
+  },
+  {
+    name: 'mistakes-narrow',
+    fixture: '小明 / 全部错题 / 1024×900 窄屏换行与行动作无横向溢出',
+    viewport: { width: 1024, height: 900 },
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话与计数属于业务夹具差异；保留全页差异图，仅判定错题目标几何、样式与溢出。',
+    openReference: async (page) => openReferenceRecords(page, 1),
+    openImplementation: async (page) => openImplementationRecords(page, 'subtab-mistakes'),
+    referenceTargets: [
+      ...mistakeTargets.referenceTargets,
+      { name: 'object-summary', selector: '#k12BookPanel1 .rc-object-summary', required: true },
+      { name: 'filter-stack', selector: '#k12BookPanel1 .k12-secondary-tabs', required: true },
+      {
+        name: 'filter-labels',
+        selector: '#k12BookPanel1 .k12-secondary-tabs__label',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'filter-buttons',
+        selector: '#k12BookPanel1 .k12-secondary-tabs__row .source-tag',
+        all: true,
+        required: true,
+      },
+      { name: 'archive-note', selector: '#k12BookPanel1 .rc-archnote', required: true },
+      {
+        name: 'content-container',
+        selector: '#k12ViewRecords > .content',
+        required: true,
+      },
+      {
+        name: 'mistake-rows',
+        selector: '#k12MistakeList .resource-row',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'mistake-question',
+        selector: '#k12MistakeList .resource-row > b',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'mistake-description',
+        selector: '#k12MistakeList .resource-row > .sp',
         all: true,
         required: true,
       },
@@ -937,7 +1606,40 @@ const states: StateDefinition[] = [
     ],
     implementationTargets: [
       ...mistakeTargets.implementationTargets,
-      { name: 'mistake-rows', selector: '.k12mistakes .rl-row', all: true, required: true },
+      { name: 'object-summary', selector: '.k12rec__object-summary', required: true },
+      { name: 'filter-stack', selector: '.k12rec__filter-stack', required: true },
+      {
+        name: 'filter-labels',
+        selector: '.k12rec__filter-label',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'filter-buttons',
+        selector: '.k12rec__filter',
+        all: true,
+        required: true,
+      },
+      { name: 'archive-note', selector: '.k12rec__archive-note', required: true },
+      { name: 'content-container', selector: '.k12rec__body', required: true },
+      {
+        name: 'mistake-rows',
+        selector: '.k12mistakes .rl-row',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'mistake-question',
+        selector: '.k12mistakes .rl-row > .rl-title',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'mistake-description',
+        selector: '.k12mistakes .rl-row > .rl-meta',
+        all: true,
+        required: true,
+      },
       {
         name: 'mistake-actions',
         selector: '.k12mistakes .rl-row > button',
@@ -945,18 +1647,408 @@ const states: StateDefinition[] = [
         required: true,
       },
     ],
-    comparisonTargets: ['mistake-rows', 'mistake-actions'],
+    comparisonTargets: [
+      'object-summary',
+      'filter-stack',
+      'filter-labels',
+      'filter-buttons',
+      'mistake-rows',
+      'mistake-question',
+      'mistake-description',
+      'mistake-actions',
+    ],
+    horizontalOverflowTargets: ['content-container', 'mistake-rows'],
+    containmentTargets: ['mistake-question', 'mistake-description', 'mistake-actions'],
+    clipTargets: ['mistake-rows'],
+  },
+  {
+    name: 'week-after-mistakes-horizontal-scroll',
+    fixture: '小明 / 1024×900 / 五对象逐一切换 / 每次 scrollLeft 归零且 scrollTop 保持',
+    viewport: { width: 1024, height: 900 },
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '会话与对象正文属于业务夹具差异；保留全页差异图，仅判定五对象滚动、激活态、容器和数据状态不变量。',
+    openReference: async (page) => {
+      return openReferenceRecords(page, 1)
+    },
+    openImplementation: async (page) => {
+      const issues = await openImplementationRecords(page, 'subtab-mistakes')
+      const mistakeRowsReady = await page
+        .locator('.k12mistakes .rl-row')
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!mistakeRowsReady) {
+        issues.push('blocked: implementation mistake rows did not stabilize before tab sequence')
+      }
+      await Promise.all(
+        [
+          'subtab-week',
+          'subtab-mistakes',
+          'subtab-practicesets',
+          'subtab-accumulation',
+          'subtab-works',
+        ].map((testId) =>
+          expect(page.getByTestId(testId)).toHaveAttribute('aria-label', /\s\d+$/, {
+            timeout: 15_000,
+          }),
+        ),
+      )
+      return issues
+    },
+    referenceTargets: [
+      ...worksTargets.referenceTargets,
+      {
+        name: 'content-container',
+        selector: '#k12ViewRecords > .content',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'active-object-tab',
+        selector: '#k12BookTabs > [role="tab"][aria-selected="true"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'active-panel',
+        selector: '#k12BookPanel4',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'scroll-pixel-card',
+        selector: '#k12CreativeWorkList .creative-work-card:first-child',
+        required: true,
+        ignoreText: true,
+      },
+    ],
+    implementationTargets: [
+      ...worksTargets.implementationTargets,
+      {
+        name: 'content-container',
+        selector: '.k12rec__body',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'active-object-tab',
+        selector: '.k12rec__tabs .k12-book-tabs > [role="tab"][aria-selected="true"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'active-panel',
+        selector: '[data-testid="works-section"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'scroll-pixel-card',
+        selector: '.k12cw__card:first-child',
+        required: true,
+        ignoreText: true,
+      },
+    ],
+    comparisonTargets: ['content-container', 'active-object-tab', 'active-panel'],
+    // 激活面板在保留 scrollTop 时会进入固定页头下方；裁剪可见作品卡，避免页头叠层污染目标像素。
+    pixelComparisonTargets: ['scroll-pixel-card'],
+    horizontalScrollResetTargets: ['content-container'],
+    scrollSequence: true,
   },
   {
     name: 'practice-sets',
     fixture: '小明 / 待打印篮 2 题 + 已批改历史卷 1 题',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话、对象计数和题目正文属于业务夹具差异；保留全页差异图，仅判定待打印与历史列表目标几何、样式与溢出。',
     openReference: async (page) => openReferenceRecords(page, 2),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-practicesets'),
-    ...practiceTargets,
+    referenceTargets: [
+      ...practiceTargets.referenceTargets,
+      {
+        name: 'practice-basket-head',
+        selector: '.practice-basket .practice-detail__head',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-actions',
+        selector: '.practice-basket .practice-detail__actions',
+        required: true,
+      },
+      {
+        name: 'practice-item-first',
+        selector: '#practiceBasketItems [data-learner-id="ming"] .practice-question',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-items-all',
+        selector: '#practiceBasketItems [data-learner-id="ming"] .practice-question',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-history',
+        selector: '#k12BookPanel2 .practice-history',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-history-card',
+        selector: '#practiceHistoryList .practice-set-card[data-learner-id="ming"]',
+        required: true,
+        ignoreText: true,
+      },
+    ],
+    implementationTargets: [
+      ...practiceTargets.implementationTargets,
+      {
+        name: 'practice-basket-head',
+        selector: '[data-testid="ps-basket"] .k12ps__bhead',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-actions',
+        selector: '[data-testid="ps-basket"] .k12ps__bactions',
+        required: true,
+      },
+      {
+        name: 'practice-item-first',
+        selector: '[data-testid="ps-basket"] .k12ps__groups .k12ps__item',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-items-all',
+        selector: '[data-testid="ps-basket"] .k12ps__groups .k12ps__item',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-history',
+        selector: '[data-testid="ps-history"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'practice-history-card',
+        selector: '[data-testid="ps-history"] .k12ps__hcard',
+        required: true,
+        ignoreText: true,
+      },
+    ],
+    comparisonTargets: [
+      'practice-basket-head',
+      'practice-actions',
+      'practice-item-first',
+      'practice-history',
+      'practice-history-card',
+    ],
+    pixelComparisonTargets: ['practice-actions'],
+    horizontalOverflowTargets: [
+      'practice-basket-head',
+      'practice-items-all',
+      'practice-history',
+      'practice-history-card',
+    ],
+  },
+  {
+    name: 'practice-set-pending',
+    fixture: '小明 / 错题练习生成 pending / 练习集显示占位且不显示空态',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话与题目正文属于业务夹具差异；保留全页差异图，仅判定占位结构和样式。',
+    openReference: async (page) => {
+      const issues = await openReferenceRecords(page, 2)
+      const prepared = await page.evaluate(() => {
+        const api = window as typeof window & {
+          currentK12Runtime?: () => { counts: { practices: number } }
+          renderPracticeBasket?: () => void
+        }
+        if (!api.currentK12Runtime || !api.renderPracticeBasket) return false
+        api.currentK12Runtime().counts.practices = 0
+        const currentGroup = document.querySelector('#practiceBasketItems [data-learner-id="ming"]')
+        currentGroup
+          ?.querySelectorAll('.practice-question:not([data-practice-pending]), .practice-group')
+          .forEach((node) => node.remove())
+        api.renderPracticeBasket()
+        return true
+      })
+      if (!prepared) issues.push('blocked: prototype pending basket runtime API is missing')
+      const invoked = await page.evaluate(() => {
+        const api = window as typeof window & {
+          addBasketPendingItem?: (sourceKey: string, source: string) => void
+        }
+        if (!api.addBasketPendingItem) return false
+        api.addBasketPendingItem('mistake-apple', '苹果和梨的价钱（P52·3）')
+        return true
+      })
+      if (!invoked) issues.push('blocked: prototype addBasketPendingItem API is missing')
+      return issues
+    },
+    openImplementation: async (page) => openImplementationRecords(page, 'subtab-practicesets'),
+    referenceTargets: [
+      ...practiceTargets.referenceTargets,
+      { name: 'basket-shell', selector: '.practice-basket', required: true, ignoreText: true },
+      {
+        name: 'basket-head',
+        selector: '.practice-basket .practice-detail__head',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'basket-actions',
+        selector: '.practice-basket .practice-detail__actions',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'basket-title',
+        selector: '.practice-basket .practice-detail__head h3',
+        required: true,
+      },
+      { name: 'basket-meta', selector: '#practiceBasketMeta', required: true },
+      {
+        name: 'basket-hint',
+        selector: '.practice-basket .practice-detail__head p:nth-of-type(2)',
+        required: true,
+      },
+      {
+        name: 'pending-placeholder',
+        selector: '#practiceBasketItems [data-practice-pending]',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-seq',
+        selector: '#practiceBasketItems [data-practice-pending] > i',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-question',
+        selector: '#practiceBasketItems [data-practice-pending] > div > b',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-meta',
+        selector: '#practiceBasketItems [data-practice-pending] > div > small',
+        all: true,
+        required: true,
+      },
+      { name: 'basket-empty', selector: '#practiceBasketEmpty' },
+      { name: 'basket-count', selector: '#practiceBasketCount', required: true },
+      { name: 'basket-print', selector: '#practicePrintButton', required: true },
+      { name: 'basket-send', selector: '#practiceSendBasketButton', required: true },
+      {
+        name: 'practice-formal-question',
+        selector:
+          '#practiceBasketItems [data-learner-id="ming"] .practice-question:not([data-practice-pending])',
+        all: true,
+      },
+      {
+        name: 'practice-item-action',
+        selector:
+          '#practiceBasketItems [data-learner-id="ming"] .practice-question:not([data-practice-pending]) > span',
+        all: true,
+      },
+    ],
+    implementationTargets: [
+      ...practiceTargets.implementationTargets,
+      {
+        name: 'basket-shell',
+        selector: '[data-testid="ps-basket"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'basket-head',
+        selector: '[data-testid="ps-basket"] .k12ps__bhead',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'basket-actions',
+        selector: '[data-testid="ps-basket"] .k12ps__bactions',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'basket-title',
+        selector: '[data-testid="ps-basket"] .k12ps__btitle',
+        required: true,
+      },
+      { name: 'basket-meta', selector: '[data-testid="ps-basket"] .k12ps__bmeta', required: true },
+      { name: 'basket-hint', selector: '[data-testid="ps-basket"] .k12ps__bhint', required: true },
+      {
+        name: 'pending-placeholder',
+        selector: '[data-testid="practice-generation-placeholder"]',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-seq',
+        selector: '[data-testid="practice-generation-placeholder"] > .k12ps__seq',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-question',
+        selector: '[data-testid="practice-generation-placeholder"] .k12ps__q',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'pending-meta',
+        selector: '[data-testid="practice-generation-placeholder"] .k12ps__qmeta',
+        all: true,
+        required: true,
+      },
+      { name: 'basket-empty', selector: '[data-testid="ps-basket-empty"]' },
+      { name: 'basket-count', selector: '[data-testid="ps-basket-count"]', required: true },
+      { name: 'basket-print', selector: '[data-testid="ps-finalize-print"]', required: true },
+      { name: 'basket-send', selector: '[data-testid="ps-finalize-send"]', required: true },
+      {
+        name: 'practice-formal-question',
+        selector: '[data-testid="ps-basket"] .k12ps__groups .k12ps__item',
+        all: true,
+      },
+      {
+        name: 'practice-item-action',
+        selector: '[data-testid="ps-basket"] .k12ps__groups .k12ps__item-actions',
+        all: true,
+      },
+    ],
+    comparisonTargets: [
+      'basket-head',
+      'basket-actions',
+      'basket-title',
+      'basket-meta',
+      'basket-hint',
+      'pending-placeholder',
+      'pending-seq',
+      'pending-question',
+      'pending-meta',
+      'basket-count',
+    ],
+    absentTargets: ['basket-empty', 'practice-formal-question', 'practice-item-action'],
+    exactTargetTexts: { 'basket-count': ['0 道'] },
+    disabledTargets: ['basket-print', 'basket-send'],
+    horizontalOverflowTargets: ['basket-head', 'basket-actions', 'pending-placeholder'],
   },
   {
     name: 'accumulation',
     fixture: '小明 / 全部 / 语文与英语积累各 1 条',
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话、对象计数和积累正文属于业务夹具差异；保留全页差异图，仅判定积累行、动作、几何、样式与溢出。',
     openReference: async (page) => openReferenceRecords(page, 3),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-accumulation'),
     referenceTargets: [
@@ -964,6 +2056,25 @@ const states: StateDefinition[] = [
       {
         name: 'accumulation-add-button',
         selector: '#k12BookToolbar .rc-3',
+        required: true,
+      },
+      {
+        name: 'accumulation-row-first',
+        selector: '#k12AccumulationList .resource-row[data-learner-id="ming"]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'accumulation-rows-all',
+        selector: '#k12AccumulationList .resource-row[data-learner-id="ming"]',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'accumulation-actions',
+        selector: '#k12AccumulationList .resource-row[data-learner-id="ming"]:first-child > button',
+        all: true,
         required: true,
       },
     ],
@@ -974,12 +2085,41 @@ const states: StateDefinition[] = [
         selector: '[data-testid="accum-add-open"]',
         required: true,
       },
+      {
+        name: 'accumulation-row-first',
+        selector: '.k12accum__row',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'accumulation-rows-all',
+        selector: '.k12accum__row',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'accumulation-actions',
+        selector: '.k12accum__row:first-child > button',
+        all: true,
+        required: true,
+      },
     ],
-    comparisonTargets: ['accumulation-add-button'],
+    comparisonTargets: [
+      'accumulation-add-button',
+      'accumulation-row-first',
+      'accumulation-actions',
+    ],
+    pixelComparisonTargets: ['accumulation-add-button'],
+    horizontalOverflowTargets: ['accumulation-rows-all', 'accumulation-actions'],
   },
   {
     name: 'works',
     fixture: '小明 / 作品 3 条 / 写作成功 + 美术成功 + 美术失败',
+    viewport: { width: 1226, height: 900 },
+    fullPagePixelComparable: false,
+    fullPagePixelReason:
+      '侧栏会话、作品标题与点评正文属于业务夹具差异；保留全页差异图，仅判定作品目标几何和样式。',
     openReference: async (page) => openReferenceRecords(page, 4),
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-works'),
     referenceTargets: [
@@ -989,18 +2129,82 @@ const states: StateDefinition[] = [
         selector: '#k12BookPanel4 .practice-overview__copy > p',
         required: true,
       },
-      { name: 'card-footer', selector: '.creative-work-card__foot', all: true, required: true },
+      { name: 'overview', selector: '#k12BookPanel4 .practice-overview', required: true },
+      { name: 'kpis', selector: '#k12BookPanel4 .practice-kpis', required: true },
+      {
+        name: 'kpi',
+        selector: '#k12BookPanel4 .practice-kpi',
+        all: true,
+        required: true,
+      },
+      { name: 'add-button', selector: '#k12BookToolbar .rc-4', required: true },
+      {
+        name: 'card',
+        selector: '#k12CreativeWorkList .creative-work-card',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'card-preview',
+        selector: '#k12CreativeWorkList .creative-work-preview',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'card-top',
+        selector: '#k12CreativeWorkList .creative-work-copy > div:first-child',
+        all: true,
+        required: true,
+      },
+      {
+        name: 'card-footer',
+        selector: '.creative-work-card__foot',
+        all: true,
+        required: true,
+      },
       { name: 'card-time', selector: '.creative-work-card__time', all: true, required: true },
       { name: 'card-action', selector: '.creative-work-card__action', all: true, required: true },
     ],
     implementationTargets: [
       ...worksTargets.implementationTargets,
       { name: 'description', selector: '.k12cw__desc', required: true },
-      { name: 'card-footer', selector: '.k12cw__foot', all: true, required: true },
+      { name: 'overview', selector: '.k12cw__overview', required: true },
+      { name: 'kpis', selector: '.k12cw__kpis', required: true },
+      { name: 'kpi', selector: '.k12cw__kpi', all: true, required: true },
+      { name: 'add-button', selector: '[data-testid="cw-add-open"]', required: true },
+      { name: 'card', selector: '.k12cw__card', all: true, required: true },
+      {
+        name: 'card-preview',
+        selector: '.k12cw__preview',
+        all: true,
+        required: true,
+      },
+      { name: 'card-top', selector: '.k12cw__head', all: true, required: true },
+      {
+        name: 'card-footer',
+        selector: '.k12cw__foot',
+        all: true,
+        required: true,
+      },
       { name: 'card-time', selector: '.k12cw__time', all: true, required: true },
       { name: 'card-action', selector: '.k12cw__detail-toggle', all: true, required: true },
     ],
-    comparisonTargets: ['description'],
+    comparisonTargets: [
+      'description',
+      'overview',
+      'kpis',
+      'kpi',
+      'add-button',
+      'card',
+      'card-preview',
+      'card-top',
+      'card-footer',
+      'card-time',
+      'card-action',
+    ],
+    // 学习档案其他对象的计数是动态业务数据；全页截图保留原值，只在作品目标像素裁剪中屏蔽计数文本。
+    referencePixelMaskSelectors: ['#k12BookTabs .k12-tab-count'],
+    implementationPixelMaskSelectors: ['.k12rec__tabs .k12-tab-count'],
   },
   {
     name: 'insights',
@@ -1168,12 +2372,36 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
   for (const target of targets) {
     const value = await page.locator(target.selector).evaluateAll(
       (elements, options: { all: boolean }) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 1
+        canvas.height = 1
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        const canonicalColor = (value: string) => {
+          if (!context) return value
+          context.clearRect(0, 0, 1, 1)
+          context.fillStyle = value
+          context.fillRect(0, 0, 1, 1)
+          const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
+          return `rgba(${red}, ${green}, ${blue}, ${Number((alpha / 255).toFixed(4))})`
+        }
         const selected = options.all ? elements : elements.slice(0, 1)
         return selected
           .map((element) => {
             const node = element as HTMLElement
             const rect = node.getBoundingClientRect()
             const style = getComputedStyle(node)
+            const containmentSelector = [
+              '.resource-row',
+              '.rl-row',
+              '.practice-question',
+              '.k12ps__item',
+              '.creative-work-card',
+              '.k12cw__card',
+            ].find((selector) => node.closest(selector))
+            const containmentNode = containmentSelector
+              ? node.closest<HTMLElement>(containmentSelector)
+              : null
+            const containmentRect = containmentNode?.getBoundingClientRect() ?? null
             const visible =
               style.display !== 'none' &&
               style.visibility !== 'hidden' &&
@@ -1188,6 +2416,11 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
               text: node.innerText.replace(/\s+/g, ' ').trim().slice(0, 320),
               attributes: {
                 title: node.getAttribute('title'),
+                expectedScrollTop: node.getAttribute('data-branch-ui-expected-scroll-top'),
+                disabled: node.hasAttribute('disabled'),
+                ariaSelected: node.getAttribute('aria-selected'),
+                ariaPressed: node.getAttribute('aria-pressed'),
+                dataReviewState: node.getAttribute('data-review-state'),
               },
               rect: {
                 x: Number(rect.x.toFixed(2)),
@@ -1198,15 +2431,23 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
               metrics: {
                 clientWidth: node.clientWidth,
                 scrollWidth: node.scrollWidth,
+                clientHeight: node.clientHeight,
+                scrollHeight: node.scrollHeight,
+                scrollLeft: Number(node.scrollLeft.toFixed(2)),
+                scrollTop: Number(node.scrollTop.toFixed(2)),
                 textClipped: node.scrollWidth > node.clientWidth,
               },
               style: {
                 display: style.display,
                 position: style.position,
+                top: style.top,
+                right: style.right,
+                bottom: style.bottom,
+                left: style.left,
                 boxSizing: style.boxSizing,
-                backgroundColor: style.backgroundColor,
+                backgroundColor: canonicalColor(style.backgroundColor),
                 backgroundImage: style.backgroundImage,
-                color: style.color,
+                color: canonicalColor(style.color),
                 borderTopWidth: style.borderTopWidth,
                 borderRightWidth: style.borderRightWidth,
                 borderBottomWidth: style.borderBottomWidth,
@@ -1217,14 +2458,44 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
                 margin: style.margin,
                 gap: style.gap,
                 gridTemplateColumns: style.gridTemplateColumns,
+                alignItems: style.alignItems,
+                alignSelf: style.alignSelf,
+                justifyContent: style.justifyContent,
+                flex: style.flex,
+                flexBasis: style.flexBasis,
+                flexGrow: style.flexGrow,
+                flexShrink: style.flexShrink,
+                flexWrap: style.flexWrap,
+                order: style.order,
                 fontFamily: style.fontFamily,
                 fontSize: style.fontSize,
                 fontWeight: style.fontWeight,
                 lineHeight: style.lineHeight,
                 overflowX: style.overflowX,
                 overflowY: style.overflowY,
+                overflow: style.overflow,
+                overflowClipMargin: style.overflowClipMargin,
                 whiteSpace: style.whiteSpace,
                 textOverflow: style.textOverflow,
+              },
+              containment: {
+                containerSelector: containmentSelector ?? null,
+                contained:
+                  containmentRect === null
+                    ? null
+                    : rect.left >= containmentRect.left - 1 &&
+                      rect.right <= containmentRect.right + 1 &&
+                      rect.top >= containmentRect.top - 1 &&
+                      rect.bottom <= containmentRect.bottom + 1,
+                containerRect:
+                  containmentRect === null
+                    ? null
+                    : {
+                        x: Number(containmentRect.x.toFixed(2)),
+                        y: Number(containmentRect.y.toFixed(2)),
+                        width: Number(containmentRect.width.toFixed(2)),
+                        height: Number(containmentRect.height.toFixed(2)),
+                      },
               },
             }
           })
@@ -1232,7 +2503,11 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
       },
       { all: target.all === true },
     )
-    result[target.name] = { selector: target.selector, matches: value }
+    result[target.name] = {
+      selector: target.selector,
+      ignoreText: target.ignoreText === true,
+      matches: value,
+    }
     if (target.required && value.length === 0) requiredMissing.push(target.name)
   }
   return { targets: result, requiredMissing }
@@ -1270,28 +2545,55 @@ function compareTargetEvidence(
   }
 
   for (const target of targetNames) {
-    const referenceMatches = reference.targets[target]?.matches ?? []
-    const implementationMatches = implementation.targets[target]?.matches ?? []
-    if (referenceMatches.length !== implementationMatches.length) {
+    const referenceTarget = reference.targets[target]
+    const implementationTarget = implementation.targets[target]
+    const referenceMatches = referenceTarget?.matches ?? []
+    const implementationMatches = implementationTarget?.matches ?? []
+    if (referenceTarget?.ignoreText !== implementationTarget?.ignoreText) {
+      add(
+        target,
+        null,
+        'config.ignoreText',
+        referenceTarget?.ignoreText ?? false,
+        implementationTarget?.ignoreText ?? false,
+      )
+    }
+    const ignoreText =
+      referenceTarget?.ignoreText === true && implementationTarget?.ignoreText === true
+    // ignoreText 用于业务数据可变的容器/列表：正文、条数及正文派生属性不参与 UI 对齐，
+    // 仍逐项比较共同样本的几何、样式与交互属性，避免业务内容差异制造视觉假红。
+    if (!ignoreText && referenceMatches.length !== implementationMatches.length) {
       add(target, null, 'count', referenceMatches.length, implementationMatches.length)
     }
     const pairCount = Math.min(referenceMatches.length, implementationMatches.length)
     for (let index = 0; index < pairCount; index += 1) {
       const referenceMatch = referenceMatches[index]!
       const implementationMatch = implementationMatches[index]!
-      if (referenceMatch.text !== implementationMatch.text) {
+      if (!ignoreText && referenceMatch.text !== implementationMatch.text) {
         add(target, index, 'text', referenceMatch.text, implementationMatch.text)
       }
-      if (referenceMatch.attributes.title !== implementationMatch.attributes.title) {
-        add(
-          target,
-          index,
-          'attributes.title',
-          referenceMatch.attributes.title,
-          implementationMatch.attributes.title,
-        )
+      for (const attribute of [
+        'title',
+        'disabled',
+        'ariaSelected',
+        'ariaPressed',
+        'dataReviewState',
+      ] as const) {
+        if (ignoreText && ['title', 'dataReviewState'].includes(attribute)) continue
+        if (referenceMatch.attributes[attribute] !== implementationMatch.attributes[attribute]) {
+          add(
+            target,
+            index,
+            `attributes.${attribute}`,
+            referenceMatch.attributes[attribute],
+            implementationMatch.attributes[attribute],
+          )
+        }
       }
-      if (referenceMatch.metrics.textClipped !== implementationMatch.metrics.textClipped) {
+      if (
+        !ignoreText &&
+        referenceMatch.metrics.textClipped !== implementationMatch.metrics.textClipped
+      ) {
         add(
           target,
           index,
@@ -1318,6 +2620,19 @@ function compareTargetEvidence(
         ...Object.keys(implementationMatch.style),
       ])
       for (const styleKey of styleKeys) {
+        // 行内自适应按钮没有剩余主轴空间时，normal 与 center 的像素结果等价；
+        // 仍由同一目标裁剪的像素门禁锁定真实位置、尺寸和可见外观。
+        const inertIntrinsicButtonJustification =
+          target === 'mistake-actions' &&
+          styleKey === 'justifyContent' &&
+          referenceMatch.tag === 'button' &&
+          implementationMatch.tag === 'button' &&
+          new Set([referenceMatch.style[styleKey], implementationMatch.style[styleKey]]).size ===
+            2 &&
+          [referenceMatch.style[styleKey], implementationMatch.style[styleKey]].every((value) =>
+            ['normal', 'center'].includes(value ?? ''),
+          )
+        if (inertIntrinsicButtonJustification) continue
         if (referenceMatch.style[styleKey] !== implementationMatch.style[styleKey]) {
           add(
             target,
@@ -1336,6 +2651,119 @@ function compareTargetEvidence(
     equal: differences.length === 0,
     differences,
   }
+}
+
+function horizontalOverflowViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).flatMap((match, index) =>
+      match.metrics.scrollWidth > match.metrics.clientWidth
+        ? [
+            {
+              target,
+              index,
+              clientWidth: match.metrics.clientWidth,
+              scrollWidth: match.metrics.scrollWidth,
+            },
+          ]
+        : [],
+    ),
+  )
+}
+
+function containmentViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).flatMap((match, index) =>
+      match.containment.contained === true
+        ? []
+        : [
+            {
+              target,
+              index,
+              contained: match.containment.contained,
+              childRect: match.rect,
+              containerSelector: match.containment.containerSelector,
+              containerRect: match.containment.containerRect,
+            },
+          ],
+    ),
+  )
+}
+
+function clipViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).flatMap((match, index) =>
+      match.style.overflowX === 'hidden' && match.style.overflowY === 'hidden'
+        ? []
+        : [
+            {
+              target,
+              index,
+              overflowX: match.style.overflowX,
+              overflowY: match.style.overflowY,
+            },
+          ],
+    ),
+  )
+}
+
+function exactTargetTextViolations(
+  evidence: TargetEvidence,
+  exactTargetTexts: Record<string, string[]>,
+) {
+  return Object.entries(exactTargetTexts).flatMap(([target, expected]) => {
+    const actual = (evidence.targets[target]?.matches ?? []).map((match) => match.text)
+    return JSON.stringify(actual) === JSON.stringify(expected) ? [] : [{ target, expected, actual }]
+  })
+}
+
+function disabledTargetViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) => {
+    const matches = evidence.targets[target]?.matches ?? []
+    if (matches.length > 0 && matches.every((match) => match.attributes.disabled)) return []
+    return [
+      {
+        target,
+        count: matches.length,
+        disabled: matches.map((match) => match.attributes.disabled),
+      },
+    ]
+  })
+}
+
+function visibleAbsentTargetViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).map((match, index) => ({
+      target,
+      index,
+      text: match.text,
+    })),
+  )
+}
+
+function horizontalScrollResetViolations(evidence: TargetEvidence, targetNames: string[]) {
+  return targetNames.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).flatMap((match, index) => {
+      const expectedScrollTop = Number(match.attributes.expectedScrollTop)
+      const missingExpectedScrollTop =
+        match.attributes.expectedScrollTop === null || !Number.isFinite(expectedScrollTop)
+      const scrollTopDelta = missingExpectedScrollTop
+        ? null
+        : Math.abs(match.metrics.scrollTop - expectedScrollTop)
+      if (match.metrics.scrollLeft === 0 && scrollTopDelta !== null && scrollTopDelta <= 1)
+        return []
+      return [
+        {
+          target,
+          index,
+          expectedScrollLeft: 0,
+          scrollLeft: match.metrics.scrollLeft,
+          expectedScrollTop: missingExpectedScrollTop ? null : expectedScrollTop,
+          scrollTop: match.metrics.scrollTop,
+          scrollTopDelta,
+        },
+      ]
+    }),
+  )
 }
 
 async function rootEvidence(page: Page, side: Side) {
@@ -1381,6 +2809,12 @@ async function captureState(
   state: StateDefinition,
   testInfo: TestInfo,
 ) {
+  const viewport = state.viewport ?? DEFAULT_VIEWPORT
+  activeImplementationFixtureState = state.name
+  await Promise.all([
+    referencePage.setViewportSize(viewport),
+    implementationPage.setViewportSize(viewport),
+  ])
   const referenceIssues = await state
     .openReference(referencePage)
     .catch((error: unknown) => [
@@ -1408,6 +2842,27 @@ async function captureState(
       )
     }),
   ])
+
+  if (state.scrollSequence) {
+    await Promise.all([
+      runRecordsObjectScrollSequence(referencePage, 'reference').catch((error: unknown) => {
+        referenceIssues.push(
+          `blocked: reference five-object scroll sequence threw: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }),
+      runRecordsObjectScrollSequence(implementationPage, 'implementation').catch(
+        (error: unknown) => {
+          implementationIssues.push(
+            `blocked: implementation five-object scroll sequence threw: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        },
+      ),
+    ])
+  }
 
   const outputDir = path.join(
     EVIDENCE_ROOT,
@@ -1464,11 +2919,94 @@ async function captureState(
     implementationTargets,
     state.comparisonTargets ?? [],
   )
+  const referenceHorizontalOverflow = horizontalOverflowViolations(
+    referenceTargets,
+    state.horizontalOverflowTargets ?? [],
+  )
+  const implementationHorizontalOverflow = horizontalOverflowViolations(
+    implementationTargets,
+    state.horizontalOverflowTargets ?? [],
+  )
+  const referenceContainment = containmentViolations(
+    referenceTargets,
+    state.containmentTargets ?? [],
+  )
+  const implementationContainment = containmentViolations(
+    implementationTargets,
+    state.containmentTargets ?? [],
+  )
+  const referenceClip = clipViolations(referenceTargets, state.clipTargets ?? [])
+  const implementationClip = clipViolations(implementationTargets, state.clipTargets ?? [])
+  const referenceExactText = exactTargetTextViolations(
+    referenceTargets,
+    state.exactTargetTexts ?? {},
+  )
+  const implementationExactText = exactTargetTextViolations(
+    implementationTargets,
+    state.exactTargetTexts ?? {},
+  )
+  const referenceDisabled = disabledTargetViolations(referenceTargets, state.disabledTargets ?? [])
+  const implementationDisabled = disabledTargetViolations(
+    implementationTargets,
+    state.disabledTargets ?? [],
+  )
+  const referenceUnexpectedVisible = visibleAbsentTargetViolations(
+    referenceTargets,
+    state.absentTargets ?? [],
+  )
+  const implementationUnexpectedVisible = visibleAbsentTargetViolations(
+    implementationTargets,
+    state.absentTargets ?? [],
+  )
+  const referenceHorizontalScrollReset = horizontalScrollResetViolations(
+    referenceTargets,
+    state.horizontalScrollResetTargets ?? [],
+  )
+  const implementationHorizontalScrollReset = horizontalScrollResetViolations(
+    implementationTargets,
+    state.horizontalScrollResetTargets ?? [],
+  )
+  const referenceScrollSequence = state.scrollSequence
+    ? (scrollSequenceEvidence.get(referencePage) ?? null)
+    : null
+  const implementationScrollSequence = state.scrollSequence
+    ? (scrollSequenceEvidence.get(implementationPage) ?? null)
+    : null
+  const scrollSequenceComparison = state.scrollSequence
+    ? compareScrollSequenceEvidence(referenceScrollSequence, implementationScrollSequence)
+    : { equal: true, differences: [] }
+  const referenceScrollSequenceViolations = state.scrollSequence
+    ? (referenceScrollSequence?.violations ?? ['reference scroll sequence evidence is missing'])
+    : []
+  const implementationScrollSequenceViolations = state.scrollSequence
+    ? (implementationScrollSequence?.violations ?? [
+        'implementation scroll sequence evidence is missing',
+      ])
+    : []
+  const stateInvariantFailureCount =
+    referenceHorizontalOverflow.length +
+    implementationHorizontalOverflow.length +
+    referenceContainment.length +
+    implementationContainment.length +
+    referenceClip.length +
+    implementationClip.length +
+    referenceExactText.length +
+    implementationExactText.length +
+    referenceDisabled.length +
+    implementationDisabled.length +
+    referenceUnexpectedVisible.length +
+    implementationUnexpectedVisible.length +
+    referenceHorizontalScrollReset.length +
+    implementationHorizontalScrollReset.length +
+    referenceScrollSequenceViolations.length +
+    implementationScrollSequenceViolations.length +
+    scrollSequenceComparison.differences.length
 
+  const pixelComparisonTargetNames = state.pixelComparisonTargets ?? state.comparisonTargets ?? []
   const targetBounds = (
     evidence: typeof referenceTargets,
   ): { x: number; y: number; width: number; height: number } | null => {
-    const matches = (state.comparisonTargets ?? []).flatMap(
+    const matches = pixelComparisonTargetNames.flatMap(
       (name) => evidence.targets[name]?.matches.filter((match) => match.visible) ?? [],
     )
     if (matches.length === 0) return null
@@ -1485,11 +3023,22 @@ async function captureState(
   }
   const referenceTargetBounds = targetBounds(referenceTargets)
   const implementationTargetBounds = targetBounds(implementationTargets)
+  const targetPixelRequired = pixelComparisonTargetNames.length > 0
+  let targetPixelDiff: PixelDiffEvidence | null = null
 
   if (referenceTargetBounds && implementationTargetBounds) {
+    // 比较区可能延伸到当前 viewport 底部；Playwright 会分别裁掉越界像素，导致两张图
+    // 实际尺寸不同。使用双方都可见的公共高度，仍保留同一目标起点和同宽截图。
+    const commonVisibleHeight = Math.min(
+      viewport.height - referenceTargetBounds.y,
+      viewport.height - implementationTargetBounds.y,
+    )
     const cropSize = {
       width: Math.max(referenceTargetBounds.width, implementationTargetBounds.width),
-      height: Math.max(referenceTargetBounds.height, implementationTargetBounds.height),
+      height: Math.min(
+        Math.max(referenceTargetBounds.height, implementationTargetBounds.height),
+        commonVisibleHeight,
+      ),
     }
     await Promise.all([
       referencePage.screenshot({
@@ -1498,6 +3047,9 @@ async function captureState(
         caret: 'hide',
         scale: 'css',
         clip: { ...referenceTargetBounds, ...cropSize },
+        mask: (state.referencePixelMaskSelectors ?? []).map((selector) =>
+          referencePage.locator(selector),
+        ),
       }),
       implementationPage.screenshot({
         path: targetImplementationPath,
@@ -1505,6 +3057,9 @@ async function captureState(
         caret: 'hide',
         scale: 'css',
         clip: { ...implementationTargetBounds, ...cropSize },
+        mask: (state.implementationPixelMaskSelectors ?? []).map((selector) =>
+          implementationPage.locator(selector),
+        ),
       }),
     ])
     const { stdout: targetPixelStdout } = await execFileAsync('xcrun', [
@@ -1515,7 +3070,8 @@ async function captureState(
       targetPixelDiffPath,
       String(PIXEL_THRESHOLD),
     ])
-    await writeFile(targetPixelReportPath, `${targetPixelStdout.trim()}\n`)
+    targetPixelDiff = JSON.parse(targetPixelStdout.trim()) as PixelDiffEvidence
+    await writeFile(targetPixelReportPath, `${JSON.stringify(targetPixelDiff, null, 2)}\n`)
   }
 
   await Promise.all([
@@ -1525,7 +3081,7 @@ async function captureState(
         {
           state: state.name,
           fixture: state.fixture,
-          viewport: { width: 1440, height: 900 },
+          viewport,
           deviceScaleFactor: 1,
           locale: 'zh-CN',
           timezone: 'Asia/Shanghai',
@@ -1541,6 +3097,36 @@ async function captureState(
             issues: implementationIssues,
             roots: implementationRoots,
             ...implementationTargets,
+          },
+          stateInvariants: {
+            horizontalOverflowTargets: state.horizontalOverflowTargets ?? [],
+            absentTargets: state.absentTargets ?? [],
+            horizontalScrollResetTargets: state.horizontalScrollResetTargets ?? [],
+            containmentTargets: state.containmentTargets ?? [],
+            clipTargets: state.clipTargets ?? [],
+            exactTargetTexts: state.exactTargetTexts ?? {},
+            disabledTargets: state.disabledTargets ?? [],
+            reference: {
+              horizontalOverflow: referenceHorizontalOverflow,
+              containment: referenceContainment,
+              clip: referenceClip,
+              exactText: referenceExactText,
+              disabled: referenceDisabled,
+              unexpectedVisible: referenceUnexpectedVisible,
+              horizontalScrollReset: referenceHorizontalScrollReset,
+              scrollSequence: referenceScrollSequence,
+            },
+            implementation: {
+              horizontalOverflow: implementationHorizontalOverflow,
+              containment: implementationContainment,
+              clip: implementationClip,
+              exactText: implementationExactText,
+              disabled: implementationDisabled,
+              unexpectedVisible: implementationUnexpectedVisible,
+              horizontalScrollReset: implementationHorizontalScrollReset,
+              scrollSequence: implementationScrollSequence,
+            },
+            scrollSequenceComparison,
           },
         },
         null,
@@ -1564,10 +3150,18 @@ async function captureState(
     total_pixels: number
     changed_bbox: number[] | null
   }
+  const fullPagePixelGateRequired = !TARGET_ONLY && state.fullPagePixelComparable !== false
+  const fullPagePixelPass =
+    !fullPagePixelGateRequired || diff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO
   const status =
     referenceIssues.length > 0 || implementationIssues.length > 0
       ? 'blocked'
-      : diff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO && targetDiff.equal
+      : fullPagePixelPass &&
+          targetDiff.equal &&
+          (!targetPixelRequired ||
+            (targetPixelDiff !== null &&
+              targetPixelDiff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO)) &&
+          stateInvariantFailureCount === 0
         ? 'pass'
         : 'red'
   await writeFile(
@@ -1576,17 +3170,66 @@ async function captureState(
       {
         state: state.name,
         fixture: state.fixture,
+        viewport,
         status,
         referenceURL: REFERENCE_URL,
         implementationURL: IMPLEMENTATION_URL,
         pixelThreshold: PIXEL_THRESHOLD,
         maxChangedPixelRatio: MAX_CHANGED_PIXEL_RATIO,
+        fullPagePixelComparable: state.fullPagePixelComparable !== false,
+        fullPagePixelReason: state.fullPagePixelReason ?? '',
+        fullPagePixelComparison: {
+          required: fullPagePixelGateRequired,
+          status: !fullPagePixelGateRequired
+            ? 'not-required'
+            : diff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO
+              ? 'pass'
+              : 'red',
+          maxChangedPixelRatio: MAX_CHANGED_PIXEL_RATIO,
+          result: diff,
+        },
         referenceIssues,
         implementationIssues,
         targetComparison: {
+          comparedTargets: state.comparisonTargets ?? [],
           equal: targetDiff.equal,
           differenceCount: targetDiff.differences.length,
           evidence: 'target-diff.json',
+        },
+        targetPixelComparison: {
+          comparedTargets: pixelComparisonTargetNames,
+          required: targetPixelRequired,
+          status: !targetPixelRequired
+            ? 'not-required'
+            : targetPixelDiff === null
+              ? 'missing'
+              : targetPixelDiff.changed_pixel_ratio <= MAX_CHANGED_PIXEL_RATIO
+                ? 'pass'
+                : 'red',
+          maxChangedPixelRatio: MAX_CHANGED_PIXEL_RATIO,
+          evidence: targetPixelDiff === null ? null : 'target-pixel-report.json',
+          diffImage: targetPixelDiff === null ? null : 'target-pixel-diff.png',
+          result: targetPixelDiff,
+        },
+        stateInvariants: {
+          failureCount: stateInvariantFailureCount,
+          referenceHorizontalOverflow,
+          implementationHorizontalOverflow,
+          referenceContainment,
+          implementationContainment,
+          referenceClip,
+          implementationClip,
+          referenceExactText,
+          implementationExactText,
+          referenceDisabled,
+          implementationDisabled,
+          referenceUnexpectedVisible,
+          implementationUnexpectedVisible,
+          referenceHorizontalScrollReset,
+          implementationHorizontalScrollReset,
+          referenceScrollSequenceViolations,
+          implementationScrollSequenceViolations,
+          scrollSequenceComparison,
         },
         ...diff,
       },
@@ -1615,6 +3258,26 @@ async function captureState(
     body: await readFile(targetDiffPath),
     contentType: 'application/json',
   })
+  if (targetPixelDiff !== null) {
+    await Promise.all([
+      testInfo.attach(`${state.name}-target-reference`, {
+        body: await readFile(targetReferencePath),
+        contentType: 'image/png',
+      }),
+      testInfo.attach(`${state.name}-target-implementation`, {
+        body: await readFile(targetImplementationPath),
+        contentType: 'image/png',
+      }),
+      testInfo.attach(`${state.name}-target-pixel-diff`, {
+        body: await readFile(targetPixelDiffPath),
+        contentType: 'image/png',
+      }),
+      testInfo.attach(`${state.name}-target-pixel-report`, {
+        body: await readFile(targetPixelReportPath),
+        contentType: 'application/json',
+      }),
+    ])
+  }
 
   expect
     .soft(referenceIssues, `${state.name} reference is blocked; evidence=${geometryPath}`)
@@ -1625,7 +3288,122 @@ async function captureState(
   expect
     .soft(targetDiff.differences, `${state.name} target mismatch; evidence=${targetDiffPath}`)
     .toEqual([])
-  if (!TARGET_ONLY) {
+  expect
+    .soft(
+      referenceHorizontalOverflow,
+      `${state.name} reference has horizontal overflow; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationHorizontalOverflow,
+      `${state.name} implementation has horizontal overflow; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceContainment,
+      `${state.name} reference target escapes its row container; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationContainment,
+      `${state.name} implementation target escapes its row container; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceClip,
+      `${state.name} reference row does not clip overflow; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationClip,
+      `${state.name} implementation row does not clip overflow; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceExactText,
+      `${state.name} reference exact text mismatch; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationExactText,
+      `${state.name} implementation exact text mismatch; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceDisabled,
+      `${state.name} reference disabled-state mismatch; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationDisabled,
+      `${state.name} implementation disabled-state mismatch; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceUnexpectedVisible,
+      `${state.name} reference unexpectedly displays an absent-state target; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationUnexpectedVisible,
+      `${state.name} implementation unexpectedly displays an absent-state target; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceHorizontalScrollReset,
+      `${state.name} reference did not reset horizontal scroll while preserving vertical scroll; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationHorizontalScrollReset,
+      `${state.name} implementation did not reset horizontal scroll while preserving vertical scroll; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceScrollSequenceViolations,
+      `${state.name} reference five-object scroll sequence failed; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationScrollSequenceViolations,
+      `${state.name} implementation five-object scroll sequence failed; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      scrollSequenceComparison.differences,
+      `${state.name} five-object active panel/content geometry drifted; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  if (targetPixelRequired) {
+    expect
+      .soft(targetPixelDiff, `${state.name} target pixel report is missing; evidence=${outputDir}`)
+      .not.toBeNull()
+    if (targetPixelDiff !== null) {
+      expect
+        .soft(
+          targetPixelDiff.changed_pixel_ratio,
+          `${state.name} target changed ${targetPixelDiff.changed_pixels}/${targetPixelDiff.total_pixels} pixels; evidence=${outputDir}`,
+        )
+        .toBeLessThanOrEqual(MAX_CHANGED_PIXEL_RATIO)
+    }
+  }
+  if (fullPagePixelGateRequired) {
     expect
       .soft(
         diff.changed_pixel_ratio,

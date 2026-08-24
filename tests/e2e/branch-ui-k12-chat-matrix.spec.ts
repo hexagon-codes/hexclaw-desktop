@@ -1,15 +1,13 @@
 import { expect, test, type Browser, type Page, type Route, type TestInfo } from '@playwright/test'
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
-
-const execFileAsync = promisify(execFile)
 
 const REFERENCE_URL = process.env.HEX_UI_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
 const CURRENT_SOURCE_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
 const AGENT = 'k12-chat-matrix-ming'
+const ORDINARY_AGENT = 'chat-matrix-assistant'
+const ORDINARY_AGENT_DISPLAY_NAME = '小蟹'
 const SESSION = 'k12-chat-matrix-session'
 const MESSAGE = 'k12-chat-matrix-message'
 const DISPATCH = 'k12-chat-matrix-dispatch'
@@ -17,7 +15,6 @@ const NOW = '2026-07-29T11:32:00+08:00'
 const EVIDENCE_ROOT =
   process.env.HEX_UI_EVIDENCE_ROOT?.trim() || `/tmp/hexclaw-k12-chat-evidence-${process.pid}`
 const REQUESTED_STATE = process.env.HEX_UI_STATE?.trim() || ''
-const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const PIXEL_THRESHOLD = 8
 const C02_FIXTURE = {
   path:
@@ -41,7 +38,9 @@ test.use({
 
 type ReferenceMode =
   | 'empty'
+  | 'ordinary-assistant'
   | 'entry'
+  | 'image-routing'
   | 'progress'
   | 'failure'
   | 'recognized-tips'
@@ -54,6 +53,7 @@ type ReferenceMode =
 
 type ImplementationMode =
   | 'empty'
+  | 'ordinary-assistant'
   | 'routing'
   | 'homework-confirmation'
   | 'homework-processing'
@@ -89,6 +89,57 @@ interface PixelDiffReport {
   total_pixels: number
   changed_pixel_ratio: number
   changed_bbox: [number, number, number, number] | null
+}
+
+const TASK_SHELL_FOOTER_TARGET_STATES = new Set([
+  '04-homework-recognition-confirmation',
+  '05-homework-progress-and-source-resolver',
+  '06-homework-failed-retryable',
+])
+const ORDINARY_ASSISTANT_ACTIONS_STATE = '02b-ordinary-assistant-actions'
+const IMAGE_ROUTING_TARGET_STATE = '03-image-routing'
+const ACTION_TOOLBAR_TARGET_STATES = new Set([
+  ORDINARY_ASSISTANT_ACTIONS_STATE,
+  ...TASK_SHELL_FOOTER_TARGET_STATES,
+])
+
+interface ActionToolbarContract {
+  sequence: readonly string[]
+  width: number
+}
+
+const ACTION_TOOLBAR_CONTRACTS: Record<string, ActionToolbarContract> = {
+  [ORDINARY_ASSISTANT_ACTIONS_STATE]: {
+    sequence: [
+      'button:赞',
+      'button:踩',
+      'divider',
+      'button:复制',
+      'button:重新生成',
+      'button:朗读',
+      'button:创建分支',
+    ],
+    width: 161,
+  },
+  '04-homework-recognition-confirmation': {
+    sequence: ['button:赞', 'button:踩', 'divider', 'button:复制', 'button:朗读'],
+    width: 109,
+  },
+  '05-homework-progress-and-source-resolver': {
+    sequence: ['button:赞', 'button:踩', 'divider', 'button:复制', 'button:朗读'],
+    width: 109,
+  },
+  '06-homework-failed-retryable': {
+    sequence: [
+      'button:赞',
+      'button:踩',
+      'divider',
+      'button:复制',
+      'button:朗读',
+      'button:重试当前阶段',
+    ],
+    width: 135,
+  },
 }
 
 const questions = [
@@ -307,14 +358,27 @@ const matrices: MatrixState[] = [
       '原型只提供带演示照片消息且处于 operation lock 的静态会话，没有可切换的真实空会话 fixture；实现为空会话 composer。',
   },
   {
-    name: '03-image-routing',
-    title: '图片意图识别处理中',
-    referenceMode: 'artwork-processing',
-    implementationMode: 'routing',
+    name: ORDINARY_ASSISTANT_ACTIONS_STATE,
+    title: '普通助手消息动作顺序',
+    referenceMode: 'ordinary-assistant',
+    implementationMode: 'ordinary-assistant',
     classification: 'NOT_COMPARABLE',
     reason:
-      '原型 artwork 模拟会在定时器中立即进入已识别作品，缺少可冻结的 unknown/routing 权威画面。',
-    implementationSelector: '[data-testid="image-task-routing-progress"]',
+      '两侧都使用 light 主题的普通 Chat 与确定性助手动作 fixture；全页正文仍不同，仅 toolbar 裁剪和结构化证据参与本目标验收。',
+    referenceSelector:
+      '#chatNormalView .msg.bot[data-reasoning-fixture-message] .msg-actions--assistant',
+    implementationSelector: '[data-testid="chat-message-assistant"] .hc-msg-actions--assistant',
+  },
+  {
+    name: '03-image-routing',
+    title: '图片意图识别处理中',
+    referenceMode: 'image-routing',
+    implementationMode: 'routing',
+    classification: 'COMPARABLE',
+    reason: '两侧冻结同一图片意图尚未判定状态，只比较状态行，不比较会话正文。',
+    referenceSelector:
+      '[data-artwork-review-output] [data-component="AssistantRunStatus"] > .think-summary',
+    implementationSelector: '[data-testid="recognize-guard"] [data-component="AssistantRunStatus"]',
   },
   {
     name: '04-homework-recognition-confirmation',
@@ -504,20 +568,36 @@ function homeworkDispatch(
       confirmation_state: options.confirmation ?? (final ? 'confirmed' : 'pending'),
       anchor_state: 'located',
       recognition: { questions, subject: '数学' },
-      structure_version: 2,
-      problems: final
-        ? problemProgress.map((problem) => ({
-            ...problem,
-            source_state: 'ready',
-            operation_state: 'completed',
-            disposition_state: 'result',
-            published_revision: 1,
-          }))
-        : problemProgress,
-      coverage: final
-        ? { state: 'full', total: 2, processed: 2, skipped: 0 }
-        : { state: 'incomplete', total: 2, processed: 1, skipped: 0 },
-      projection_revision: 8,
+      progressive: {
+        structure_version: 2,
+        snapshot_revision: 8,
+        problem_progress: problemProgress.map((problem, index) => ({
+          problem_id: problem.problem_id,
+          status: final || index === 0 ? 'correct' : 'awaiting_source',
+          input_revision: problem.input_revision,
+          published_revision: final || index === 0 ? 1 : 0,
+          current_disposition: 'current',
+        })),
+        coverage: final
+          ? {
+              total: 2,
+              published: 2,
+              skipped: 0,
+              awaiting: 0,
+              failed: 0,
+              status: 'complete',
+              projection_revision: 8,
+            }
+          : {
+              total: 2,
+              published: 1,
+              skipped: 0,
+              awaiting: 1,
+              failed: 0,
+              status: 'in_progress',
+              projection_revision: 8,
+            },
+      },
       final_artifact: final
         ? {
             artifact_id: 'artifact-chat-matrix',
@@ -546,9 +626,11 @@ function homeworkDispatch(
 }
 
 function homeworkTipsDispatch() {
+  const dispatch = homeworkDispatch('completed', { final: true })
   return {
-    ...homeworkDispatch('completed', { final: true }),
+    ...dispatch,
     target_projection: {
+      ...dispatch.target_projection,
       kind: 'homework',
       stage: 'completed',
       confirmation_state: 'confirmed',
@@ -782,6 +864,8 @@ function creativeDispatch(
             ],
           }
         : {
+            promoted_work_id: writing ? 'work-writing-matrix' : 'work-art-matrix',
+            promoted_generation_id: writing ? 'generation-writing-matrix' : 'generation-art-matrix',
             work: {
               work_id: writing ? 'work-writing-matrix' : 'work-art-matrix',
               display_name: writing ? '《我的好爸爸》' : '《雨后的校园》',
@@ -809,6 +893,7 @@ function dispatchFor(mode: ImplementationMode) {
       intent_evidence: [],
       intent_confidence: 0,
       confirmation_candidates: [],
+      target_projection: { stage: 'routing' },
       progress: { operation: 'classification', state: 'routing' },
       version: 1,
       created_at: 1785295800,
@@ -1030,9 +1115,14 @@ interface CurrentSourceFixtureControl {
 }
 
 async function installCurrentSourceFixture(page: Page, mode: ImplementationMode) {
-  const composerUpload = mode === 'homework-process-issue'
-  const hasTask = mode !== 'empty' && !composerUpload
+  const composerUpload = mode === 'routing' || mode === 'homework-process-issue'
+  const ordinaryAssistant = mode === 'ordinary-assistant'
+  const fixtureAgent = ordinaryAssistant ? ORDINARY_AGENT : AGENT
+  const fixtureAgentDisplayName = ordinaryAssistant ? ORDINARY_AGENT_DISPLAY_NAME : '小明的辅导助手'
+  const hasTask = mode !== 'empty' && !ordinaryAssistant && !composerUpload
   const dispatch = dispatchFor(mode)
+  const wireDispatch =
+    mode === 'routing' && dispatch ? { ...dispatch, target_projection: undefined } : dispatch
   const completedDispatch = composerUpload ? c02ProcessIssueDispatch(true) : dispatch
   const result = resultFor(mode)
   const evidence: Record<string, unknown> = {
@@ -1068,7 +1158,7 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
       })
     : Promise.resolve()
   const hasPersistedSourceMessage = () =>
-    hasTask || (composerUpload && evidence.sourceMessagePersisted === true)
+    hasTask || ordinaryAssistant || (composerUpload && evidence.sourceMessagePersisted === true)
   const hasPersistedImageTask = () =>
     hasTask || (composerUpload && evidence.imageTaskCreated === true)
   await page.addInitScript(
@@ -1097,7 +1187,13 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
         )
       }
     },
-    { agent: AGENT, session: SESSION, message: MESSAGE, dispatchId: DISPATCH, bindTask: hasTask },
+    {
+      agent: fixtureAgent,
+      session: SESSION,
+      message: MESSAGE,
+      dispatchId: DISPATCH,
+      bindTask: hasTask,
+    },
   )
 
   await page.route('http://localhost:11434/**', (route) =>
@@ -1129,26 +1225,37 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
     }
     if (apiPath === '/api/v1/agents' && method === 'GET') {
       return json(route, {
-        agents: [
-          {
-            name: AGENT,
-            display_name: '小明的辅导助手',
-            description: '五年级下 · 各学科教材独立绑定',
-            provider: '',
-            model: '',
-            metadata: {
-              scenario: 'k12-tutor',
-              avatar: '🎓',
-              'k12.child_name': '小明',
-              'k12.learner_id': 'learner-chat-matrix',
-              'k12.grade_term': '五年级下',
-              'k12.textbook_edition': '人教版',
-              'k12.textbook_edition.math': '人教版',
-            },
-          },
-        ],
+        agents: ordinaryAssistant
+          ? [
+              {
+                name: ORDINARY_AGENT,
+                display_name: ORDINARY_AGENT_DISPLAY_NAME,
+                description: '普通助手确定性视觉夹具',
+                provider: 'openai',
+                model: 'gpt-5.6-sol',
+                metadata: { avatar: '🦀' },
+              },
+            ]
+          : [
+              {
+                name: AGENT,
+                display_name: '小明的辅导助手',
+                description: '五年级下 · 各学科教材独立绑定',
+                provider: '',
+                model: '',
+                metadata: {
+                  scenario: 'k12-tutor',
+                  avatar: '🎓',
+                  'k12.child_name': '小明',
+                  'k12.learner_id': 'learner-chat-matrix',
+                  'k12.grade_term': '五年级下',
+                  'k12.textbook_edition': '人教版',
+                  'k12.textbook_edition.math': '人教版',
+                },
+              },
+            ],
         total: 1,
-        default: AGENT,
+        default: fixtureAgent,
       })
     }
     if (apiPath === '/api/v1/agents/rules') return json(route, { rules: [], total: 0 })
@@ -1160,11 +1267,11 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
         sessions: [
           {
             id: SESSION,
-            title: '小明的辅导助手',
-            agent_id: AGENT,
+            title: fixtureAgentDisplayName,
+            agent_id: fixtureAgent,
             created_at: NOW,
             updated_at: NOW,
-            message_count: hasPersistedSourceMessage() ? 1 : 0,
+            message_count: ordinaryAssistant ? 2 : hasPersistedSourceMessage() ? 1 : 0,
           },
         ],
         total: 1,
@@ -1190,18 +1297,41 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
     }
     if (apiPath === `/api/v1/sessions/${SESSION}/messages` && method === 'GET') {
       return json(route, {
-        messages: hasPersistedSourceMessage()
+        messages: ordinaryAssistant
           ? [
               {
-                id: MESSAGE,
+                id: `${MESSAGE}-user`,
                 role: 'user',
-                content: '请处理这张作业或作品图片',
+                content: '请解释一道小数乘法题。',
                 timestamp: NOW,
                 created_at: NOW,
               },
+              {
+                id: `${MESSAGE}-assistant`,
+                role: 'assistant',
+                content: '先按整数乘法计算，再补回小数位。',
+                agent_name: fixtureAgent,
+                timestamp: NOW,
+                created_at: NOW,
+                metadata: {
+                  provider: 'openai',
+                  provider_display_name: 'HexClaw-GPT',
+                  model: 'gpt-5.6-sol',
+                },
+              },
             ]
-          : [],
-        total: hasPersistedSourceMessage() ? 1 : 0,
+          : hasPersistedSourceMessage()
+            ? [
+                {
+                  id: MESSAGE,
+                  role: 'user',
+                  content: '请处理这张作业或作品图片',
+                  timestamp: NOW,
+                  created_at: NOW,
+                },
+              ]
+            : [],
+        total: ordinaryAssistant ? 2 : hasPersistedSourceMessage() ? 1 : 0,
       })
     }
     if (apiPath === `/api/v1/sessions/${SESSION}/artifacts`) {
@@ -1242,7 +1372,7 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
       }
       evidence.imageTaskCreated = true
       evidence.imageTaskRequest = body
-      return json(route, { created: true, dispatch })
+      return json(route, { created: true, dispatch: wireDispatch })
     }
     if (
       apiPath === `/api/k12/image-tasks/${DISPATCH}/confirm` &&
@@ -1261,27 +1391,26 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
       await new Promise((resolve) => setTimeout(resolve, 500))
       return json(route, {
         items:
-          hasPersistedImageTask() &&
-          dispatch
-          ? [
-              {
-                dispatch_id: dispatch.dispatch_id,
-                source_session_id: SESSION,
-                source_message_id: MESSAGE,
-                attempt_generation: 1,
-                version: dispatch.version,
-                stage: dispatch.target_projection.stage,
-                status: dispatch.status,
-                projection_ready: true,
-                terminal: dispatch.progress.state === 'completed',
-              },
-            ]
-          : [],
+          hasPersistedImageTask() && dispatch
+            ? [
+                {
+                  dispatch_id: dispatch.dispatch_id,
+                  source_session_id: SESSION,
+                  source_message_id: MESSAGE,
+                  attempt_generation: 1,
+                  version: dispatch.version,
+                  stage: dispatch.target_projection.stage,
+                  status: dispatch.status,
+                  projection_ready: true,
+                  terminal: dispatch.progress.state === 'completed',
+                },
+              ]
+            : [],
       })
     }
     if (apiPath === `/api/k12/image-tasks/${DISPATCH}` && method === 'GET' && dispatch) {
       return json(route, {
-        dispatch: c02Confirmed && completedDispatch ? completedDispatch : dispatch,
+        dispatch: c02Confirmed && completedDispatch ? completedDispatch : wireDispatch,
       })
     }
     if (apiPath === `/api/k12/image-tasks/${DISPATCH}/result` && method === 'GET' && result) {
@@ -1420,6 +1549,18 @@ async function openReference(page: Page, mode: ReferenceMode) {
     )
   }
   await page.goto(REFERENCE_URL, { waitUntil: 'domcontentloaded' })
+  if (mode === 'ordinary-assistant') {
+    await page.evaluate(() => {
+      const api = window as typeof window & { openNormalChat?: () => void }
+      api.openNormalChat?.()
+    })
+    await expect(
+      page.locator(
+        '#chatNormalView .msg.bot[data-reasoning-fixture-message] .msg-actions--assistant',
+      ),
+    ).toBeVisible()
+    return
+  }
   await page.evaluate(() => {
     const api = window as typeof window & { goK12Learner?: (learner: string) => void }
     api.goK12Learner?.('ming')
@@ -1477,7 +1618,19 @@ async function openReference(page: Page, mode: ReferenceMode) {
       api.showK12CorrectWithProcessIssueResult?.()
       show(document.querySelector('#k12-batch'))
     }
-    if (referenceMode === 'artwork-processing' || referenceMode === 'artwork-result') {
+    if (referenceMode === 'image-routing') {
+      const api = window as typeof window & { startK12ArtworkReview?: () => void }
+      const nativeSetTimeout = window.setTimeout
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (timeout === 550 || timeout === 1550) return 0
+        return nativeSetTimeout(handler, timeout, ...args)
+      }) as typeof window.setTimeout
+      try {
+        api.startK12ArtworkReview?.()
+      } finally {
+        window.setTimeout = nativeSetTimeout
+      }
+    } else if (referenceMode === 'artwork-processing' || referenceMode === 'artwork-result') {
       const api = window as typeof window & { startK12ArtworkReview?: () => void }
       api.startK12ArtworkReview?.()
     }
@@ -1502,15 +1655,36 @@ async function openReference(page: Page, mode: ReferenceMode) {
 
 async function openCurrentSource(page: Page, mode: ImplementationMode) {
   const control = await installCurrentSourceFixture(page, mode)
+  const ordinaryAssistant = mode === 'ordinary-assistant'
+  const fixtureAgent = ordinaryAssistant ? ORDINARY_AGENT : AGENT
+  const fixtureAgentDisplayName = ordinaryAssistant ? ORDINARY_AGENT_DISPLAY_NAME : '小明的辅导助手'
   await page.goto(
-    `${CURRENT_SOURCE_URL}/chat?role=${AGENT}&roleTitle=${encodeURIComponent('小明的辅导助手')}`,
+    `${CURRENT_SOURCE_URL}/chat?role=${fixtureAgent}&roleTitle=${encodeURIComponent(fixtureAgentDisplayName)}`,
     { waitUntil: 'domcontentloaded' },
   )
-  await expect(page.locator('.k12enh-tabs')).toBeVisible({ timeout: 20_000 })
+  if (ordinaryAssistant) {
+    await expect(
+      page.locator('[data-testid="chat-message-assistant"] .hc-msg-actions--assistant'),
+    ).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('.k12enh-tabs')).toHaveCount(0)
+  } else {
+    await expect(page.locator('.k12enh-tabs')).toBeVisible({ timeout: 20_000 })
+  }
   await page.waitForURL((url) => url.pathname === '/chat' && url.search === '', {
     waitUntil: 'domcontentloaded',
     timeout: 5_000,
   })
+  if (mode === 'routing') {
+    try {
+      await page.locator('.hc-composer input[type="file"]').setInputFiles(C02_FIXTURE.path)
+      await expect(
+        page.getByTestId('recognize-guard').locator('[data-component="AssistantRunStatus"]'),
+      ).toBeVisible({ timeout: 20_000 })
+    } finally {
+      control.releaseResult()
+    }
+    return control.evidence
+  }
   if (mode === 'homework-process-issue') {
     try {
       await page.locator('.hc-composer input[type="file"]').setInputFiles(C02_FIXTURE.path)
@@ -1583,7 +1757,7 @@ async function openCurrentSource(page: Page, mode: ImplementationMode) {
     expect(control.evidence.overlayImageSource).toBe('blob')
     return control.evidence
   }
-  if (mode !== 'empty') {
+  if (mode !== 'empty' && mode !== 'ordinary-assistant') {
     await expect(page.getByTestId('recognize-guard')).toBeVisible({ timeout: 20_000 })
   }
   control.releaseResult()
@@ -1599,6 +1773,10 @@ const geometrySelectors = {
     '#k12Thread',
     '#k12ThreadMing > .msg:visible',
     '[data-k12-task-shell]:visible',
+    '[data-k12-task-shell-footer]:visible',
+    '[data-k12-task-shell-footer] > .msg-meta:visible',
+    '[data-k12-task-shell-footer] > .msg-actions--assistant:visible',
+    '#chatNormalView .msg.bot[data-reasoning-fixture-message] .msg-actions--assistant:visible',
     '.k12-pipeline:visible',
     '.k12-source-issue-resolver:visible',
     '#k12-recognized .guide:visible',
@@ -1629,6 +1807,10 @@ const geometrySelectors = {
     '.hc-chat__messages',
     '[data-testid="k12-photo-assistant-message"]:visible',
     '[data-testid="recognize-guard"]:visible',
+    '[data-testid="task-shell-footer"]:visible',
+    '[data-testid="task-shell-footer"] > [data-testid="task-shell-metadata"]:visible',
+    '[data-testid="task-shell-footer"] > .hc-msg-actions--assistant:visible',
+    '[data-testid="chat-message-assistant"] .hc-msg-actions--assistant:visible',
     '[data-testid="recognize-pipeline"]:visible',
     '[data-testid="tutoring-tips"]:visible',
     '[data-testid="photo-grade-overlay"]:visible',
@@ -1689,12 +1871,25 @@ async function collectGeometry(page: Page, selectors: readonly string[]) {
             borderRadius: style.borderRadius,
             boxShadow: style.boxShadow,
             padding: style.padding,
+            paddingTop: style.paddingTop,
             margin: style.margin,
+            marginTop: style.marginTop,
+            marginLeft: style.marginLeft,
+            marginRight: style.marginRight,
+            marginInlineStart: style.marginInlineStart,
+            marginInlineEnd: style.marginInlineEnd,
             gap: style.gap,
+            justifyContent: style.justifyContent,
+            alignItems: style.alignItems,
+            flexGrow: style.flexGrow,
+            flexShrink: style.flexShrink,
             fontFamily: style.fontFamily,
             fontSize: style.fontSize,
             fontWeight: style.fontWeight,
             lineHeight: style.lineHeight,
+            minHeight: style.minHeight,
+            opacity: style.opacity,
+            whiteSpace: style.whiteSpace,
             overflowX: style.overflowX,
             overflowY: style.overflowY,
           },
@@ -1710,6 +1905,891 @@ type GeometryNode = {
   text: string
   rect: { x: number; y: number; width: number; height: number }
   style: Record<string, string>
+}
+
+function actionToolbarSelectors(stateName: string) {
+  if (stateName === ORDINARY_ASSISTANT_ACTIONS_STATE) {
+    return {
+      reference: '#chatNormalView .msg.bot[data-reasoning-fixture-message] .msg-actions--assistant',
+      currentSource: '[data-testid="chat-message-assistant"] .hc-msg-actions--assistant',
+    }
+  }
+  return {
+    reference: '[data-k12-task-shell-footer] > .msg-actions--assistant',
+    currentSource: '[data-testid="task-shell-footer"] > .hc-msg-actions--assistant',
+  }
+}
+
+async function collectActionToolbarEvidence(page: Page, selector: string) {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((node) => {
+      const toolbar = node as HTMLElement
+      const toolbarRect = toolbar.getBoundingClientRect()
+      const toolbarStyle = getComputedStyle(toolbar)
+      const rect = (element: Element) => {
+        const box = element.getBoundingClientRect()
+        return {
+          x: Number(box.x.toFixed(2)),
+          y: Number(box.y.toFixed(2)),
+          width: Number(box.width.toFixed(2)),
+          height: Number(box.height.toFixed(2)),
+        }
+      }
+      const resolveThemeColor = (token: string) => {
+        const probe = document.createElement('span')
+        probe.style.color = `var(${token})`
+        probe.style.display = 'none'
+        toolbar.appendChild(probe)
+        const value = getComputedStyle(probe).color
+        probe.remove()
+        return value
+      }
+      const footer = toolbar.closest<HTMLElement>(
+        '.msg-footer, .hc-msg__footer, [data-testid="task-shell-footer"]',
+      )
+      const metadata = footer?.querySelector<HTMLElement>(
+        ':scope > .msg-meta, :scope > .hc-msg__meta, :scope > [data-testid="task-shell-metadata"]',
+      )
+      const footerRect = footer?.getBoundingClientRect()
+      const metadataRect = metadata?.getBoundingClientRect()
+      const children = [...toolbar.children]
+        .filter((child) => {
+          const element = child as HTMLElement
+          return !element.hidden && getComputedStyle(element).display !== 'none'
+        })
+        .map((child) => {
+          const element = child as HTMLElement
+          const style = getComputedStyle(element)
+          const button = element instanceof HTMLButtonElement
+          const divider = element.matches('.msg-action-sep, .hc-msg-actions__divider')
+          const label = button ? (element.getAttribute('aria-label') ?? '') : ''
+          const icon = element.querySelector('svg')
+          return {
+            kind: button ? 'button' : divider ? 'divider' : 'unexpected',
+            key: button ? `button:${label}` : divider ? 'divider' : `unexpected:${element.tagName}`,
+            ariaLabel: label,
+            ariaHidden: element.getAttribute('aria-hidden'),
+            disabled: button ? element.disabled : undefined,
+            rect: rect(element),
+            style: {
+              display: style.display,
+              width: style.width,
+              height: style.height,
+              padding: style.padding,
+              margin: style.margin,
+              borderRadius: style.borderRadius,
+              backgroundColor: style.backgroundColor,
+              color: style.color,
+            },
+            icon: icon
+              ? {
+                  rect: rect(icon),
+                  style: {
+                    strokeWidth: getComputedStyle(icon).strokeWidth,
+                  },
+                }
+              : null,
+          }
+        })
+      return {
+        role: toolbar.getAttribute('role'),
+        ariaLabel: toolbar.getAttribute('aria-label'),
+        sequence: children.map((child) => child.key),
+        rect: {
+          x: Number(toolbarRect.x.toFixed(2)),
+          y: Number(toolbarRect.y.toFixed(2)),
+          width: Number(toolbarRect.width.toFixed(2)),
+          height: Number(toolbarRect.height.toFixed(2)),
+        },
+        style: {
+          display: toolbarStyle.display,
+          height: toolbarStyle.height,
+          padding: toolbarStyle.padding,
+          marginLeft: toolbarStyle.marginLeft,
+          marginInlineStart: toolbarStyle.marginInlineStart,
+          gap: toolbarStyle.gap,
+          border: toolbarStyle.border,
+          borderRadius: toolbarStyle.borderRadius,
+          backgroundColor: toolbarStyle.backgroundColor,
+          boxShadow: toolbarStyle.boxShadow,
+          color: toolbarStyle.color,
+          opacity: toolbarStyle.opacity,
+        },
+        theme: {
+          colorScheme: document.documentElement.dataset.theme ?? '',
+          k12Skin: document.body.dataset.k12SkinActive ?? '',
+          textSecondary: resolveThemeColor('--hc-text-secondary'),
+          textMuted: resolveThemeColor('--hc-text-muted'),
+        },
+        footerContext:
+          footer && footerRect && metadata && metadataRect
+            ? {
+                footer: rect(footer),
+                metadata: rect(metadata),
+                metadataToActionsGap: Number(
+                  (toolbarRect.x - (metadataRect.x + metadataRect.width)).toFixed(2),
+                ),
+                actionsTrailingSpace: Number(
+                  (footerRect.x + footerRect.width - (toolbarRect.x + toolbarRect.width)).toFixed(
+                    2,
+                  ),
+                ),
+                style: {
+                  display: getComputedStyle(footer).display,
+                  gap: getComputedStyle(footer).gap,
+                  justifyContent: getComputedStyle(footer).justifyContent,
+                },
+              }
+            : null,
+        children,
+      }
+    })
+}
+
+type ActionToolbarEvidence = Awaited<ReturnType<typeof collectActionToolbarEvidence>>
+
+function validateActionToolbarSide(
+  surface: 'reference' | 'currentSource',
+  evidence: ActionToolbarEvidence,
+  contract: ActionToolbarContract,
+) {
+  const issues: string[] = []
+  const expectValue = (actual: unknown, expected: unknown, invariant: string) => {
+    if (actual !== expected)
+      issues.push(`${surface}: ${invariant} is ${String(actual)}, expected ${String(expected)}`)
+  }
+  const expectPixels = (actual: number, expected: number, invariant: string) => {
+    if (Math.abs(actual - expected) > 0.01) {
+      issues.push(`${surface}: ${invariant} is ${actual}px, expected ${expected}px`)
+    }
+  }
+
+  if (JSON.stringify(evidence.sequence) !== JSON.stringify(contract.sequence)) {
+    issues.push(
+      `${surface}: action sequence is ${evidence.sequence.join('→')}, expected ${contract.sequence.join('→')}`,
+    )
+  }
+  expectValue(evidence.role, 'toolbar', 'toolbar role')
+  expectValue(evidence.ariaLabel, '消息操作', 'toolbar aria-label')
+  expectPixels(evidence.rect.width, contract.width, 'toolbar width')
+  expectPixels(evidence.rect.height, 24, 'toolbar height')
+  expectValue(evidence.style.display, 'flex', 'toolbar display')
+  expectValue(evidence.style.height, '24px', 'toolbar computed height')
+  expectValue(evidence.style.padding, '0px', 'toolbar padding')
+  expectValue(evidence.style.marginLeft, '0px', 'toolbar margin-left')
+  expectValue(evidence.style.marginInlineStart, '0px', 'toolbar margin-inline-start')
+  expectValue(evidence.style.gap, '2px', 'toolbar gap')
+  expectValue(evidence.style.borderRadius, '8px', 'toolbar border-radius')
+  expectValue(evidence.style.backgroundColor, 'rgba(0, 0, 0, 0)', 'toolbar background')
+  expectValue(evidence.style.boxShadow, 'none', 'toolbar box-shadow')
+  expectValue(evidence.style.color, evidence.theme.textSecondary, 'toolbar theme color')
+  expectValue(evidence.style.opacity, '0.68', 'toolbar opacity')
+  if (!evidence.footerContext) {
+    issues.push(`${surface}: toolbar footer/metadata context is missing`)
+  } else {
+    expectValue(evidence.footerContext.style.display, 'flex', 'footer display')
+    expectValue(evidence.footerContext.style.gap, '8px', 'footer gap')
+    if (evidence.footerContext.style.justifyContent === 'space-between') {
+      issues.push(`${surface}: footer must not use space-between`)
+    }
+    expectPixels(evidence.footerContext.metadataToActionsGap, 8, 'metadata-to-actions gap')
+    if (evidence.footerContext.actionsTrailingSpace <= 0) {
+      issues.push(`${surface}: actions are pinned to the footer row end`)
+    }
+  }
+
+  for (const child of evidence.children) {
+    if (child.kind === 'button') {
+      expectPixels(child.rect.width, 24, `${child.key} width`)
+      expectPixels(child.rect.height, 24, `${child.key} height`)
+      expectValue(child.style.width, '24px', `${child.key} computed width`)
+      expectValue(child.style.height, '24px', `${child.key} computed height`)
+      expectValue(child.style.padding, '0px', `${child.key} padding`)
+      expectValue(child.style.borderRadius, '7px', `${child.key} border-radius`)
+      expectValue(child.style.backgroundColor, 'rgba(0, 0, 0, 0)', `${child.key} background`)
+      expectValue(child.style.color, evidence.theme.textMuted, `${child.key} theme color`)
+      if (!child.icon) {
+        issues.push(`${surface}: ${child.key} has no SVG icon`)
+      } else {
+        expectPixels(child.icon.rect.width, 14, `${child.key} icon width`)
+        expectPixels(child.icon.rect.height, 14, `${child.key} icon height`)
+        expectValue(child.icon.style.strokeWidth, '1.9px', `${child.key} icon stroke-width`)
+      }
+    } else if (child.kind === 'divider') {
+      expectValue(child.ariaHidden, 'true', 'divider aria-hidden')
+      expectPixels(child.rect.width, 1, 'divider width')
+      expectPixels(child.rect.height, 16, 'divider height')
+      expectValue(child.style.margin, '0px 2px', 'divider margin')
+    } else {
+      issues.push(`${surface}: unexpected toolbar child ${child.key}`)
+    }
+  }
+  return issues
+}
+
+async function compareActionToolbarTarget(
+  stateName: string,
+  referencePage: Page,
+  currentSourcePage: Page,
+) {
+  const contract = ACTION_TOOLBAR_CONTRACTS[stateName]
+  if (!contract) throw new Error(`missing action toolbar contract for ${stateName}`)
+  const selectors = actionToolbarSelectors(stateName)
+  const [reference, currentSource] = await Promise.all([
+    collectActionToolbarEvidence(referencePage, selectors.reference),
+    collectActionToolbarEvidence(currentSourcePage, selectors.currentSource),
+  ])
+  const issues = [
+    ...validateActionToolbarSide('reference', reference, contract),
+    ...validateActionToolbarSide('currentSource', currentSource, contract),
+  ]
+  if (stateName === ORDINARY_ASSISTANT_ACTIONS_STATE) {
+    if (reference.theme.k12Skin === 'k12') issues.push('reference: ordinary Chat uses the K12 skin')
+    if (currentSource.theme.k12Skin === 'k12') {
+      issues.push('currentSource: ordinary Chat uses the K12 skin')
+    }
+    if (reference.theme.textSecondary !== currentSource.theme.textSecondary) {
+      issues.push(
+        `ordinary Chat --hc-text-secondary differs: ${reference.theme.textSecondary} != ${currentSource.theme.textSecondary}`,
+      )
+    }
+    if (reference.theme.textMuted !== currentSource.theme.textMuted) {
+      issues.push(
+        `ordinary Chat --hc-text-muted differs: ${reference.theme.textMuted} != ${currentSource.theme.textMuted}`,
+      )
+    }
+  }
+  return {
+    classification: 'COMPARABLE_TARGET' as const,
+    status: issues.length === 0 ? ('PASS' as const) : ('RED' as const),
+    contract,
+    selectors,
+    normalization: 'toolbar-only crop on a deterministic white evidence stage; no business copy',
+    reference,
+    currentSource,
+    issues,
+  }
+}
+
+async function captureNormalizedActionToolbar(
+  page: Page,
+  selector: string,
+  outputPath: string,
+  expectedWidth: number,
+) {
+  const stageID = `visual-action-toolbar-${Math.random().toString(36).slice(2)}`
+  const toolbar = page.locator(selector).first()
+  await toolbar.evaluate(
+    (node, stageOptions) => {
+      const source = node as HTMLElement
+      const stage = document.createElement('div')
+      stage.id = stageOptions.id
+      stage.dataset.visualNormalization = 'toolbar-only-white-stage'
+      Object.assign(stage.style, {
+        position: 'fixed',
+        left: '0',
+        top: '0',
+        width: `${stageOptions.expectedWidth}px`,
+        height: '24px',
+        margin: '0',
+        padding: '0',
+        overflow: 'hidden',
+        background: '#fff',
+        zIndex: '2147483647',
+      })
+      const clone = source.cloneNode(true) as HTMLElement
+      clone.removeAttribute('id')
+      clone.style.margin = '0'
+      stage.appendChild(clone)
+      document.body.appendChild(stage)
+    },
+    { id: stageID, expectedWidth },
+  )
+  try {
+    await page.locator(`#${stageID}`).screenshot({ path: outputPath, animations: 'disabled' })
+  } finally {
+    await page
+      .locator(`#${stageID}`)
+      .evaluate((node) => node.remove())
+      .catch(() => {})
+  }
+}
+
+async function captureNormalizedImageRoutingTarget(
+  page: Page,
+  selector: string,
+  surface: 'reference' | 'currentSource',
+  outputPath: string,
+) {
+  const stageID = `visual-image-routing-${Math.random().toString(36).slice(2)}`
+  await page
+    .locator(selector)
+    .first()
+    .evaluate(
+      (node, options) => {
+        const summary = node as HTMLElement
+        const host =
+          options.surface === 'reference'
+            ? summary.closest<HTMLElement>('[data-component="AssistantRunStatus"]')
+            : summary
+        if (!host) throw new Error(`${options.surface}: image-routing host is missing`)
+
+        const stage = document.createElement('div')
+        stage.id = options.id
+        stage.dataset.visualNormalization = 'image-routing-status-line-white-stage'
+        Object.assign(stage.style, {
+          position: 'fixed',
+          left: '0',
+          top: '0',
+          width: '137px',
+          height: '30px',
+          margin: '0',
+          padding: '0',
+          overflow: 'hidden',
+          background: '#fff',
+          zIndex: '2147483647',
+        })
+        const clone = host.cloneNode(true) as HTMLElement
+        clone.removeAttribute('id')
+        clone.style.margin = '0'
+        clone.style.position = 'static'
+        clone.style.transform = 'none'
+        clone.style.animation = 'none'
+        clone.style.transition = 'none'
+        stage.appendChild(clone)
+        document.body.appendChild(stage)
+      },
+      { id: stageID, surface },
+    )
+  try {
+    await page.locator(`#${stageID}`).screenshot({ path: outputPath, animations: 'disabled' })
+  } finally {
+    await page
+      .locator(`#${stageID}`)
+      .evaluate((node) => node.remove())
+      .catch(() => {})
+  }
+}
+
+async function createBrowserPixelDiff(
+  browser: Browser,
+  referencePath: string,
+  implementationPath: string,
+  diffPath: string,
+  threshold: number,
+): Promise<PixelDiffReport> {
+  const [reference, implementation] = await Promise.all([
+    readFile(referencePath, 'base64'),
+    readFile(implementationPath, 'base64'),
+  ])
+  const page = await browser.newPage()
+  try {
+    const result = await page.evaluate(
+      async ({ referencePng, implementationPng, pixelThreshold }) => {
+        const loadImage = (source: string) =>
+          new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image()
+            image.onload = () => resolve(image)
+            image.onerror = reject
+            image.src = `data:image/png;base64,${source}`
+          })
+        const [referenceImage, implementationImage] = await Promise.all([
+          loadImage(referencePng),
+          loadImage(implementationPng),
+        ])
+        if (
+          referenceImage.width !== implementationImage.width ||
+          referenceImage.height !== implementationImage.height
+        ) {
+          throw new Error(
+            `screenshot size mismatch: reference=${referenceImage.width}x${referenceImage.height}, implementation=${implementationImage.width}x${implementationImage.height}`,
+          )
+        }
+
+        const width = referenceImage.width
+        const height = referenceImage.height
+        const sourceCanvas = document.createElement('canvas')
+        sourceCanvas.width = width
+        sourceCanvas.height = height
+        const sourceContext = sourceCanvas.getContext('2d')
+        if (!sourceContext) throw new Error('2D source canvas is unavailable')
+        sourceContext.drawImage(referenceImage, 0, 0)
+        const referencePixels = sourceContext.getImageData(0, 0, width, height).data
+        sourceContext.clearRect(0, 0, width, height)
+        sourceContext.drawImage(implementationImage, 0, 0)
+        const implementationPixels = sourceContext.getImageData(0, 0, width, height).data
+
+        const diffCanvas = document.createElement('canvas')
+        diffCanvas.width = width
+        diffCanvas.height = height
+        const diffContext = diffCanvas.getContext('2d')
+        if (!diffContext) throw new Error('2D diff canvas is unavailable')
+        const output = diffContext.createImageData(width, height)
+        let changedPixels = 0
+        let minX = width
+        let minY = height
+        let maxX = -1
+        let maxY = -1
+        for (let index = 0; index < referencePixels.length; index += 4) {
+          const changed =
+            Math.max(
+              Math.abs(referencePixels[index]! - implementationPixels[index]!),
+              Math.abs(referencePixels[index + 1]! - implementationPixels[index + 1]!),
+              Math.abs(referencePixels[index + 2]! - implementationPixels[index + 2]!),
+              Math.abs(referencePixels[index + 3]! - implementationPixels[index + 3]!),
+            ) > pixelThreshold
+          const pixel = index / 4
+          const x = pixel % width
+          const y = Math.floor(pixel / width)
+          if (changed) {
+            changedPixels += 1
+            minX = Math.min(minX, x)
+            minY = Math.min(minY, y)
+            maxX = Math.max(maxX, x)
+            maxY = Math.max(maxY, y)
+            output.data[index] = 255
+            output.data[index + 1] = 35
+            output.data[index + 2] = 35
+          } else {
+            const luminance = Math.round(
+              (referencePixels[index]! * 0.299 +
+                referencePixels[index + 1]! * 0.587 +
+                referencePixels[index + 2]! * 0.114) *
+                0.45,
+            )
+            output.data[index] = luminance
+            output.data[index + 1] = luminance
+            output.data[index + 2] = luminance
+          }
+          output.data[index + 3] = 255
+        }
+        diffContext.putImageData(output, 0, 0)
+        return {
+          png: diffCanvas.toDataURL('image/png').split(',')[1]!,
+          width,
+          height,
+          threshold: pixelThreshold,
+          changed_pixels: changedPixels,
+          total_pixels: width * height,
+          changed_pixel_ratio: width * height > 0 ? changedPixels / (width * height) : 0,
+          changed_bbox: changedPixels > 0 ? ([minX, minY, maxX + 1, maxY + 1] as const) : null,
+        }
+      },
+      {
+        referencePng: reference,
+        implementationPng: implementation,
+        pixelThreshold: threshold,
+      },
+    )
+    await writeFile(diffPath, Buffer.from(result.png, 'base64'))
+    return {
+      width: result.width,
+      height: result.height,
+      threshold: result.threshold,
+      changed_pixels: result.changed_pixels,
+      total_pixels: result.total_pixels,
+      changed_pixel_ratio: result.changed_pixel_ratio,
+      changed_bbox: result.changed_bbox ? [...result.changed_bbox] : null,
+    }
+  } finally {
+    await page.close()
+  }
+}
+
+async function collectImageRoutingTargetEvidence(
+  page: Page,
+  selector: string,
+  surface: 'reference' | 'currentSource',
+) {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((node, surfaceName) => {
+      const summary = node as HTMLElement
+      const host =
+        surfaceName === 'reference'
+          ? summary.closest<HTMLElement>('[data-component="AssistantRunStatus"]')
+          : summary
+      const spinner = summary.querySelector<HTMLElement>(
+        surfaceName === 'reference' ? '.ti' : '.hc-assistant-run-status__spinner',
+      )
+      if (!host || !spinner) throw new Error(`${surfaceName}: image-routing status is incomplete`)
+      const rect = (element: Element) => {
+        const box = element.getBoundingClientRect()
+        return {
+          x: Number(box.x.toFixed(2)),
+          y: Number(box.y.toFixed(2)),
+          width: Number(box.width.toFixed(2)),
+          height: Number(box.height.toFixed(2)),
+        }
+      }
+      const resolveThemeColor = (token: string) => {
+        const probe = document.createElement('span')
+        probe.style.color = `var(${token})`
+        probe.style.display = 'none'
+        document.body.appendChild(probe)
+        const value = getComputedStyle(probe).color
+        probe.remove()
+        return value
+      }
+      const summaryStyle = getComputedStyle(summary)
+      const hostStyle = getComputedStyle(host)
+      const spinnerStyle = getComputedStyle(spinner)
+      const summaryRect = summary.getBoundingClientRect()
+      const visualChildren = [...summary.children]
+        .map((child) => child.getBoundingClientRect())
+        .filter((box) => box.width > 0 && box.height > 0)
+      const visualRight = visualChildren.reduce(
+        (right, box) => Math.max(right, box.right),
+        summaryRect.left,
+      )
+      return {
+        surface: surfaceName,
+        text: summary.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        host: {
+          role: host.getAttribute('role'),
+          ariaLive: host.getAttribute('aria-live'),
+          ariaAtomic: host.getAttribute('aria-atomic'),
+          component: host.getAttribute('data-component'),
+          rect: rect(host),
+          style: {
+            margin: hostStyle.margin,
+            maxWidth: hostStyle.maxWidth,
+          },
+        },
+        summary: {
+          rect: rect(summary),
+          visualLineRect: {
+            x: Number(summaryRect.x.toFixed(2)),
+            y: Number(summaryRect.y.toFixed(2)),
+            width: Number((visualRight - summaryRect.left).toFixed(2)),
+            height: Number(summaryRect.height.toFixed(2)),
+          },
+          style: {
+            display: summaryStyle.display,
+            alignItems: summaryStyle.alignItems,
+            gap: summaryStyle.gap,
+            padding: summaryStyle.padding,
+            color: summaryStyle.color,
+            fontSize: summaryStyle.fontSize,
+            fontWeight: summaryStyle.fontWeight,
+            lineHeight: summaryStyle.lineHeight,
+            backgroundColor: summaryStyle.backgroundColor,
+            borderWidth: summaryStyle.borderWidth,
+            borderRadius: summaryStyle.borderRadius,
+          },
+        },
+        spinner: {
+          rect: rect(spinner),
+          ariaHidden: spinner.getAttribute('aria-hidden'),
+          style: {
+            borderTopWidth: spinnerStyle.borderTopWidth,
+            borderRightWidth: spinnerStyle.borderRightWidth,
+            borderBottomWidth: spinnerStyle.borderBottomWidth,
+            borderLeftWidth: spinnerStyle.borderLeftWidth,
+            borderTopColor: spinnerStyle.borderTopColor,
+            borderRightColor: spinnerStyle.borderRightColor,
+            borderBottomColor: spinnerStyle.borderBottomColor,
+            borderLeftColor: spinnerStyle.borderLeftColor,
+            borderRadius: spinnerStyle.borderRadius,
+          },
+        },
+        ordinaryTypingDots: document.querySelectorAll('.hc-typing-dots').length,
+        theme: {
+          textSecondary: resolveThemeColor('--hc-text-secondary'),
+          border: resolveThemeColor('--hc-border'),
+          accent: resolveThemeColor('--hc-accent'),
+        },
+      }
+    }, surface)
+}
+
+type ImageRoutingTargetEvidence = Awaited<ReturnType<typeof collectImageRoutingTargetEvidence>>
+
+function validateImageRoutingTargetSide(evidence: ImageRoutingTargetEvidence) {
+  const issues: string[] = []
+  const expectValue = (actual: unknown, expected: unknown, invariant: string) => {
+    if (actual !== expected) {
+      issues.push(
+        `${evidence.surface}: ${invariant} is ${String(actual)}, expected ${String(expected)}`,
+      )
+    }
+  }
+  const expectPixels = (actual: number, expected: number, invariant: string) => {
+    if (Math.abs(actual - expected) > 0.01) {
+      issues.push(`${evidence.surface}: ${invariant} is ${actual}px, expected ${expected}px`)
+    }
+  }
+  expectValue(evidence.text, '正在识别图片内容…', 'status text')
+  expectValue(evidence.host.component, 'AssistantRunStatus', 'component identity')
+  expectValue(evidence.host.role, 'status', 'status role')
+  expectValue(evidence.host.ariaLive, 'polite', 'aria-live')
+  expectValue(evidence.host.ariaAtomic, 'true', 'aria-atomic')
+  expectValue(evidence.host.style.margin, '2px 0px 8px', 'outer margin')
+  expectValue(evidence.host.style.maxWidth, '720px', 'outer max-width')
+  if (!['inline-flex', 'flex'].includes(evidence.summary.style.display)) {
+    issues.push(
+      `${evidence.surface}: summary display is ${evidence.summary.style.display}, expected flex formatting`,
+    )
+  }
+  expectValue(evidence.summary.style.alignItems, 'center', 'summary align-items')
+  expectValue(evidence.summary.style.gap, '7px', 'summary gap')
+  expectValue(evidence.summary.style.padding, '5px 0px', 'summary padding')
+  expectValue(evidence.summary.style.color, evidence.theme.textSecondary, 'summary theme color')
+  expectValue(evidence.summary.style.fontSize, '13px', 'summary font-size')
+  expectValue(evidence.summary.style.fontWeight, '500', 'summary font-weight')
+  expectValue(evidence.summary.style.lineHeight, '19.5px', 'summary line-height')
+  expectValue(evidence.summary.style.backgroundColor, 'rgba(0, 0, 0, 0)', 'summary background')
+  expectValue(evidence.summary.style.borderWidth, '0px', 'summary border width')
+  expectValue(evidence.summary.style.borderRadius, '0px', 'summary border radius')
+  expectPixels(evidence.summary.rect.height, 29.5, 'summary height')
+  expectPixels(evidence.spinner.rect.width, 14, 'spinner width')
+  expectPixels(evidence.spinner.rect.height, 14, 'spinner height')
+  expectValue(evidence.spinner.ariaHidden, 'true', 'spinner aria-hidden')
+  expectValue(evidence.spinner.style.borderRadius, '50%', 'spinner border-radius')
+  expectValue(
+    evidence.spinner.style.borderTopColor,
+    evidence.theme.accent,
+    'spinner top accent color',
+  )
+  for (const side of ['Right', 'Bottom', 'Left'] as const) {
+    expectValue(
+      evidence.spinner.style[`border${side}Color`],
+      evidence.theme.border,
+      `spinner ${side} border color`,
+    )
+  }
+  expectValue(evidence.ordinaryTypingDots, 0, 'ordinary typing dots')
+  return issues
+}
+
+async function compareImageRoutingTarget(
+  referencePage: Page,
+  currentSourcePage: Page,
+  referenceSelector: string,
+  currentSourceSelector: string,
+) {
+  const [reference, currentSource] = await Promise.all([
+    collectImageRoutingTargetEvidence(referencePage, referenceSelector, 'reference'),
+    collectImageRoutingTargetEvidence(currentSourcePage, currentSourceSelector, 'currentSource'),
+  ])
+  const issues = [
+    ...validateImageRoutingTargetSide(reference),
+    ...validateImageRoutingTargetSide(currentSource),
+  ]
+  for (const dimension of ['width', 'height'] as const) {
+    if (
+      Math.abs(
+        reference.summary.visualLineRect[dimension] -
+          currentSource.summary.visualLineRect[dimension],
+      ) > 0.01
+    ) {
+      issues.push(
+        `status-line ${dimension} differs: ${reference.summary.visualLineRect[dimension]} != ${currentSource.summary.visualLineRect[dimension]}`,
+      )
+    }
+    if (Math.abs(reference.host.rect[dimension] - currentSource.host.rect[dimension]) > 0.01) {
+      issues.push(
+        `status host ${dimension} differs: ${reference.host.rect[dimension]} != ${currentSource.host.rect[dimension]}`,
+      )
+    }
+  }
+  for (const key of [
+    'alignItems',
+    'gap',
+    'padding',
+    'color',
+    'fontSize',
+    'fontWeight',
+    'lineHeight',
+    'backgroundColor',
+    'borderWidth',
+    'borderRadius',
+  ] as const) {
+    if (reference.summary.style[key] !== currentSource.summary.style[key]) {
+      issues.push(
+        `status-line ${key} differs: ${reference.summary.style[key]} != ${currentSource.summary.style[key]}`,
+      )
+    }
+  }
+  for (const key of [
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'borderTopColor',
+    'borderRightColor',
+    'borderBottomColor',
+    'borderLeftColor',
+    'borderRadius',
+  ] as const) {
+    if (reference.spinner.style[key] !== currentSource.spinner.style[key]) {
+      issues.push(
+        `spinner ${key} differs: ${reference.spinner.style[key]} != ${currentSource.spinner.style[key]}`,
+      )
+    }
+  }
+  return {
+    classification: 'COMPARABLE_TARGET' as const,
+    normalization: 'status-line-only crop; conversation and business data excluded',
+    reference,
+    currentSource,
+    issues,
+  }
+}
+
+function taskShellFooterSideEvidence(
+  geometry: Record<string, unknown[]>,
+  surface: 'reference' | 'currentSource',
+  expectedToolbarWidth: number,
+) {
+  const selectors =
+    surface === 'reference'
+      ? {
+          footer: '[data-k12-task-shell-footer]:visible',
+          metadata: '[data-k12-task-shell-footer] > .msg-meta:visible',
+          actions: '[data-k12-task-shell-footer] > .msg-actions--assistant:visible',
+        }
+      : {
+          footer: '[data-testid="task-shell-footer"]:visible',
+          metadata:
+            '[data-testid="task-shell-footer"] > [data-testid="task-shell-metadata"]:visible',
+          actions: '[data-testid="task-shell-footer"] > .hc-msg-actions--assistant:visible',
+        }
+  const footer = geometry[selectors.footer]?.[0] as GeometryNode | undefined
+  const metadata = geometry[selectors.metadata]?.[0] as GeometryNode | undefined
+  const actions = geometry[selectors.actions]?.[0] as GeometryNode | undefined
+  const issues: string[] = []
+
+  if (!footer) issues.push(`${surface}: TaskShell footer bbox/computed style missing`)
+  if (!metadata) issues.push(`${surface}: TaskShell metadata bbox/computed style missing`)
+  if (!actions) issues.push(`${surface}: TaskShell actions bbox/computed style missing`)
+
+  const metadataToActionsGap =
+    metadata && actions
+      ? Number((actions.rect.x - (metadata.rect.x + metadata.rect.width)).toFixed(2))
+      : null
+  const actionsTrailingSpace =
+    footer && actions
+      ? Number(
+          (footer.rect.x + footer.rect.width - (actions.rect.x + actions.rect.width)).toFixed(2),
+        )
+      : null
+
+  if (footer && footer.style.display !== 'flex') {
+    issues.push(`${surface}: TaskShell footer display is ${footer.style.display}, expected flex`)
+  }
+  if (footer && footer.style.position !== 'relative') {
+    issues.push(
+      `${surface}: TaskShell footer position is ${footer.style.position}, expected relative`,
+    )
+  }
+  if (footer && Math.abs(footer.rect.height - 24) > 0.01) {
+    issues.push(`${surface}: TaskShell footer height is ${footer.rect.height}px, expected 24px`)
+  }
+  if (footer && footer.style.minHeight !== '24px') {
+    issues.push(
+      `${surface}: TaskShell footer min-height is ${footer.style.minHeight}, expected 24px`,
+    )
+  }
+  if (footer && footer.style.padding !== '0px') {
+    issues.push(`${surface}: TaskShell footer padding is ${footer.style.padding}, expected 0px`)
+  }
+  if (footer && footer.style.marginTop !== '7px') {
+    issues.push(
+      `${surface}: TaskShell footer margin-top is ${footer.style.marginTop}, expected 7px`,
+    )
+  }
+  if (footer && footer.style.gap !== '8px') {
+    issues.push(`${surface}: TaskShell footer computed gap is ${footer.style.gap}, expected 8px`)
+  }
+  if (footer?.style.justifyContent === 'space-between') {
+    issues.push(`${surface}: TaskShell footer must not use space-between`)
+  }
+  if (metadataToActionsGap !== null && Math.abs(metadataToActionsGap - 8) > 0.01) {
+    issues.push(
+      `${surface}: TaskShell actions bbox starts ${metadataToActionsGap}px after metadata, expected 8px`,
+    )
+  }
+  if (actionsTrailingSpace !== null && actionsTrailingSpace <= 0) {
+    issues.push(`${surface}: TaskShell actions are pinned to the footer row end`)
+  }
+  if (
+    actions &&
+    (actions.style.marginLeft === 'auto' || actions.style.marginInlineStart === 'auto')
+  ) {
+    issues.push(`${surface}: TaskShell actions must not use an automatic start margin`)
+  }
+  if (metadata && metadata.style.gap !== '0px') {
+    issues.push(`${surface}: TaskShell metadata gap is ${metadata.style.gap}, expected 0px`)
+  }
+  if (metadata && metadata.style.fontSize !== '11px') {
+    issues.push(
+      `${surface}: TaskShell metadata font-size is ${metadata.style.fontSize}, expected 11px`,
+    )
+  }
+  if (metadata && metadata.style.opacity !== '0.64') {
+    issues.push(
+      `${surface}: TaskShell metadata opacity is ${metadata.style.opacity}, expected 0.64`,
+    )
+  }
+  if (metadata && metadata.style.whiteSpace !== 'nowrap') {
+    issues.push(
+      `${surface}: TaskShell metadata white-space is ${metadata.style.whiteSpace}, expected nowrap`,
+    )
+  }
+  if (actions && Math.abs(actions.rect.width - expectedToolbarWidth) > 0.01) {
+    issues.push(
+      `${surface}: TaskShell toolbar width is ${actions.rect.width}px, expected ${expectedToolbarWidth}px`,
+    )
+  }
+  if (actions && Math.abs(actions.rect.height - 24) > 0.01) {
+    issues.push(`${surface}: TaskShell toolbar height is ${actions.rect.height}px, expected 24px`)
+  }
+  if (actions && actions.style.borderRadius !== '8px') {
+    issues.push(
+      `${surface}: TaskShell toolbar border-radius is ${actions.style.borderRadius}, expected 8px`,
+    )
+  }
+
+  return {
+    footer: footer ? { rect: footer.rect, style: footer.style } : null,
+    metadata: metadata ? { rect: metadata.rect, style: metadata.style } : null,
+    actions: actions ? { rect: actions.rect, style: actions.style } : null,
+    metadataToActionsGap,
+    actionsTrailingSpace,
+    issues,
+  }
+}
+
+function compareTaskShellFooterTarget(
+  stateName: string,
+  referenceGeometry: Record<string, unknown[]>,
+  currentSourceGeometry: Record<string, unknown[]>,
+) {
+  const expectedToolbarWidth = ACTION_TOOLBAR_CONTRACTS[stateName]?.width
+  if (!expectedToolbarWidth) throw new Error(`missing TaskShell toolbar width for ${stateName}`)
+  const reference = taskShellFooterSideEvidence(
+    referenceGeometry,
+    'reference',
+    expectedToolbarWidth,
+  )
+  const currentSource = taskShellFooterSideEvidence(
+    currentSourceGeometry,
+    'currentSource',
+    expectedToolbarWidth,
+  )
+  const issues = [...reference.issues, ...currentSource.issues]
+  return {
+    classification: 'COMPARABLE_TARGET' as const,
+    status: issues.length === 0 ? ('PASS' as const) : ('RED' as const),
+    invariant: 'actions bbox follows metadata by 8px and retains trailing row space',
+    reference,
+    currentSource,
+    issues,
+  }
 }
 
 function compareProcessIssueGeometry(
@@ -2302,6 +3382,10 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
   const geometryPath = path.join(outputDir, 'geometry-style.json')
   const ratioPath = path.join(outputDir, 'ratio.json')
   const statusPath = path.join(outputDir, 'status.json')
+  const targetReferencePath = path.join(outputDir, 'target-reference.png')
+  const targetCurrentSourcePath = path.join(outputDir, 'target-current-source.png')
+  const targetDiffPath = path.join(outputDir, 'target-pixel-diff.png')
+  const targetRatioPath = path.join(outputDir, 'target-ratio.json')
 
   const referencePage = await browser.newPage()
   const currentSourcePage = await browser.newPage()
@@ -2315,6 +3399,9 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
     ReturnType<typeof collectProcessIssueSemanticEvidence>
   > | null = null
   let processIssueGeometryComparison: ReturnType<typeof compareProcessIssueGeometry> | null = null
+  let taskShellFooterTarget: ReturnType<typeof compareTaskShellFooterTarget> | null = null
+  let actionToolbarTarget: Awaited<ReturnType<typeof compareActionToolbarTarget>> | null = null
+  let imageRoutingTarget: Awaited<ReturnType<typeof compareImageRoutingTarget>> | null = null
   let processIssueExternalUiEvidence: ProcessIssueExternalUiEvidence | null = null
   let processIssueTargetCrop: {
     method: 'playwright-live-fractional-common-root-local-intersection'
@@ -2389,6 +3476,59 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
       collectGeometry(referencePage, geometrySelectors.reference),
       collectGeometry(currentSourcePage, geometrySelectors.implementation),
     ])
+
+    if (TASK_SHELL_FOOTER_TARGET_STATES.has(state.name)) {
+      taskShellFooterTarget = compareTaskShellFooterTarget(
+        state.name,
+        referenceGeometry,
+        currentSourceGeometry,
+      )
+    }
+    if (ACTION_TOOLBAR_TARGET_STATES.has(state.name)) {
+      actionToolbarTarget = await compareActionToolbarTarget(
+        state.name,
+        referencePage,
+        currentSourcePage,
+      )
+      const selectors = actionToolbarSelectors(state.name)
+      const expectedWidth = ACTION_TOOLBAR_CONTRACTS[state.name]!.width
+      await Promise.all([
+        captureNormalizedActionToolbar(
+          referencePage,
+          selectors.reference,
+          targetReferencePath,
+          expectedWidth,
+        ),
+        captureNormalizedActionToolbar(
+          currentSourcePage,
+          selectors.currentSource,
+          targetCurrentSourcePath,
+          expectedWidth,
+        ),
+      ])
+    }
+    if (state.name === IMAGE_ROUTING_TARGET_STATE) {
+      imageRoutingTarget = await compareImageRoutingTarget(
+        referencePage,
+        currentSourcePage,
+        state.referenceSelector!,
+        state.implementationSelector!,
+      )
+      await Promise.all([
+        captureNormalizedImageRoutingTarget(
+          referencePage,
+          state.referenceSelector!,
+          'reference',
+          targetReferencePath,
+        ),
+        captureNormalizedImageRoutingTarget(
+          currentSourcePage,
+          state.implementationSelector!,
+          'currentSource',
+          targetCurrentSourcePath,
+        ),
+      ])
+    }
 
     if (state.name === '08b-photo-process-issue') {
       processIssueSemanticEvidence = await collectProcessIssueSemanticEvidence(
@@ -2569,6 +3709,9 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
           reference: referenceGeometry,
           currentSource: currentSourceGeometry,
           processIssueCriticalComparison: processIssueGeometryComparison,
+          taskShellFooterTarget,
+          actionToolbarTarget,
+          imageRoutingTarget,
         },
         null,
         2,
@@ -2602,18 +3745,35 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
 
   let diffReport: PixelDiffReport | null = null
   try {
-    const { stdout } = await execFileAsync('python3', [
-      PIXEL_DIFF_TOOL,
+    diffReport = await createBrowserPixelDiff(
+      browser,
       referencePath,
       currentSourcePath,
       diffPath,
-      String(PIXEL_THRESHOLD),
-    ])
-    diffReport = JSON.parse(stdout.trim()) as PixelDiffReport
+      PIXEL_THRESHOLD,
+    )
     await writeFile(ratioPath, JSON.stringify(diffReport, null, 2))
   } catch (cause) {
     runtimeError ||= cause instanceof Error ? cause.stack || cause.message : String(cause)
     await writeFile(ratioPath, JSON.stringify({ error: runtimeError }, null, 2))
+  }
+
+  let targetDiffReport: PixelDiffReport | null = null
+  if (ACTION_TOOLBAR_TARGET_STATES.has(state.name) || state.name === IMAGE_ROUTING_TARGET_STATE) {
+    try {
+      targetDiffReport = await createBrowserPixelDiff(
+        browser,
+        targetReferencePath,
+        targetCurrentSourcePath,
+        targetDiffPath,
+        PIXEL_THRESHOLD,
+      )
+      await writeFile(targetRatioPath, JSON.stringify(targetDiffReport, null, 2))
+    } catch (cause) {
+      const targetError = cause instanceof Error ? cause.stack || cause.message : String(cause)
+      runtimeError ||= targetError
+      await writeFile(targetRatioPath, JSON.stringify({ error: targetError }, null, 2))
+    }
   }
 
   const missingExpectedSurface =
@@ -2623,14 +3783,21 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
     ...(processIssueSemanticEvidence?.issues ?? []),
     ...(processIssueGeometryComparison?.issues ?? []),
   ]
+  const targetMaterialIssues = [
+    ...(taskShellFooterTarget?.issues ?? []),
+    ...(actionToolbarTarget?.issues ?? []),
+    ...(imageRoutingTarget?.issues ?? []),
+  ]
+  const materialIssues = [...processIssueMaterialIssues, ...targetMaterialIssues]
+  const gatedPixelDiff = state.name === IMAGE_ROUTING_TARGET_STATE ? targetDiffReport : diffReport
   const status =
     runtimeError || missingExpectedSurface
       ? 'BLOCKED'
       : state.classification === 'NOT_COMPARABLE'
         ? 'NOT_COMPARABLE'
-        : diffReport &&
-            diffReport.changed_pixel_ratio <= 0.001 &&
-            processIssueMaterialIssues.length === 0
+        : gatedPixelDiff &&
+            gatedPixelDiff.changed_pixel_ratio <= 0.001 &&
+            materialIssues.length === 0
           ? 'PASS'
           : 'RED'
   await writeFile(
@@ -2653,13 +3820,33 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
         pixelDiffScope:
           state.name === '08b-photo-process-issue'
             ? 'expected-surface-visible-intersection'
-            : 'full-viewport',
+            : state.name === IMAGE_ROUTING_TARGET_STATE
+              ? 'approved-status-line-target; full viewport is evidence-only'
+              : 'full-viewport',
         processIssueTargetCrop,
         processIssueExternalUiEvidence,
         pixelDiff: diffReport,
         semanticEvidence: processIssueSemanticEvidence,
         criticalGeometryIssueCount: processIssueGeometryComparison?.issues.length ?? 0,
-        materialIssues: processIssueMaterialIssues,
+        comparableTargets: {
+          taskShellFooter: taskShellFooterTarget,
+          actionToolbar: actionToolbarTarget
+            ? {
+                ...actionToolbarTarget,
+                pixelDiff: targetDiffReport,
+                pixelDiffGate:
+                  'evidence-only; scoped acceptance is the approved DOM, bbox and computed-style contract',
+              }
+            : null,
+          imageRouting: imageRoutingTarget
+            ? {
+                ...imageRoutingTarget,
+                pixelDiff: targetDiffReport,
+                pixelDiffGate: 'approved status-line target only; business content excluded',
+              }
+            : null,
+        },
+        materialIssues,
         runtimeError: runtimeError || null,
         acceptance: status === 'PASS' ? 'PASS' : 'NOT PASS',
         passClaimAllowed: status === 'PASS',
@@ -2675,6 +3862,19 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
       ['reference-context', referenceContextPath, 'image/png'],
       ['current-source-context', currentSourceContextPath, 'image/png'],
       ['pixel-diff', diffPath, 'image/png'],
+      ['geometry-style', geometryPath, 'application/json'],
+      ['status', statusPath, 'application/json'],
+    ] as const) {
+      const body = await readFile(file).catch(() => null)
+      if (body) await testInfo.attach(`${state.name}-${name}`, { body, contentType })
+    }
+  }
+  if (ACTION_TOOLBAR_TARGET_STATES.has(state.name) || state.name === IMAGE_ROUTING_TARGET_STATE) {
+    for (const [name, file, contentType] of [
+      ['target-reference', targetReferencePath, 'image/png'],
+      ['target-current-source', targetCurrentSourcePath, 'image/png'],
+      ['target-pixel-diff', targetDiffPath, 'image/png'],
+      ['target-ratio', targetRatioPath, 'application/json'],
       ['geometry-style', geometryPath, 'application/json'],
       ['status', statusPath, 'application/json'],
     ] as const) {
@@ -2700,6 +3900,50 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
         `${state.name} approved semantic locks must hold; see ${statusPath}`,
       )
       .toEqual([])
+  }
+  if (TASK_SHELL_FOOTER_TARGET_STATES.has(state.name)) {
+    expect
+      .soft(
+        taskShellFooterTarget?.issues ?? ['TaskShell footer target was not captured'],
+        `${state.name} TaskShell footer must keep actions 8px after metadata and off the row end; see ${statusPath}`,
+      )
+      .toEqual([])
+  }
+  if (ACTION_TOOLBAR_TARGET_STATES.has(state.name)) {
+    expect
+      .soft(
+        targetDiffReport,
+        `${state.name} action toolbar must emit a target pixel diff; see ${targetRatioPath}`,
+      )
+      .not.toBeNull()
+    expect
+      .soft(
+        actionToolbarTarget?.issues ?? ['action toolbar target was not captured'],
+        `${state.name} action toolbar must match the approved DOM/bbox/computed-style contract; see ${statusPath}`,
+      )
+      .toEqual([])
+  }
+  if (state.name === IMAGE_ROUTING_TARGET_STATE) {
+    expect
+      .soft(
+        targetDiffReport,
+        `${state.name} status line must emit a target pixel diff; see ${targetRatioPath}`,
+      )
+      .not.toBeNull()
+    expect
+      .soft(
+        imageRoutingTarget?.issues ?? ['image-routing target was not captured'],
+        `${state.name} status line must match the approved DOM/bbox/computed-style contract; see ${statusPath}`,
+      )
+      .toEqual([])
+    if (targetDiffReport) {
+      expect
+        .soft(
+          targetDiffReport.changed_pixel_ratio,
+          `${state.name} status-line pixels must match the prototype; see ${targetRatioPath}`,
+        )
+        .toBeLessThanOrEqual(0.001)
+    }
   }
   if (state.name === '10-blank-worksheet-parent-guide') {
     type GeometryNode = {
@@ -2754,7 +3998,25 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
     pixelDiff: diffReport,
     semanticEvidence: processIssueSemanticEvidence,
     criticalGeometryIssueCount: processIssueGeometryComparison?.issues.length ?? 0,
-    materialIssues: processIssueMaterialIssues,
+    comparableTargets: {
+      taskShellFooter: taskShellFooterTarget,
+      actionToolbar: actionToolbarTarget
+        ? {
+            ...actionToolbarTarget,
+            pixelDiff: targetDiffReport,
+            pixelDiffGate:
+              'evidence-only; scoped acceptance is the approved DOM, bbox and computed-style contract',
+          }
+        : null,
+      imageRouting: imageRoutingTarget
+        ? {
+            ...imageRoutingTarget,
+            pixelDiff: targetDiffReport,
+            pixelDiffGate: 'approved status-line target only; business content excluded',
+          }
+        : null,
+    },
+    materialIssues,
     runtimeError: runtimeError || null,
     acceptance: status === 'PASS' ? 'PASS' : 'NOT PASS',
     evidenceDir: outputDir,
@@ -2765,7 +4027,10 @@ test.describe('feat/v0.5.0-k12-parent-tutor · K12 chat authoritative state matr
   test('C02 process issue keeps its source task through fixture recovery refresh', async ({
     browser,
   }) => {
-    test.skip(REQUESTED_STATE !== '08b-photo-process-issue', 'runs only for the C02 process fixture')
+    test.skip(
+      REQUESTED_STATE !== '08b-photo-process-issue',
+      'runs only for the C02 process fixture',
+    )
     const page = await browser.newPage()
     const processOverlay = page.locator(
       '[data-testid="photo-grade-overlay"][data-assessment-status="correct_with_process_issue"]',

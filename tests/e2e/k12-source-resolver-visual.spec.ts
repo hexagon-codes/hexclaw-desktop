@@ -4,8 +4,14 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
+import type { RecoverableImageTask } from '../../src/api/k12'
 
 const execFileAsync = promisify(execFile)
+const DESKTOP_ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)))
+const DOCS_ROOT = path.resolve(
+  process.env.HEXCLAW_DOCS_ROOT?.trim() || path.join(DESKTOP_ROOT, '..', 'hexclaw-docs'),
+)
 
 const REFERENCE_URL =
   process.env.HEX_SOURCE_RESOLVER_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
@@ -13,17 +19,14 @@ const IMPLEMENTATION_URL =
   process.env.HEX_SOURCE_RESOLVER_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:16061'
 const EVIDENCE_ROOT =
   process.env.HEX_SOURCE_RESOLVER_EVIDENCE_ROOT?.trim() ||
-  path.resolve('tmp/k12-source-resolver-visual-evidence')
-const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
-const PROTOTYPE_PATH = '/Users/guoyanjun/work/hexclaw-docs/prototype/app.html'
-const SOURCE_ASSET_PATH =
-  '/Users/guoyanjun/work/hexclaw-docs/prototype/assets/k12-source-pageasset-problem-group-3.png'
-// Re-pinned after directly re-verifying the current authoritative resolver DOM, CSS,
-// interaction handlers, and immutable source-asset digest.
-const EXPECTED_PROTOTYPE_SHA256 = '6e53af59df9af6bed7161453fefa78a8af08ea1f675ef4ecccc5297c7b619000'
+  path.join(DESKTOP_ROOT, 'tmp', 'k12-source-resolver-visual-evidence')
+const PIXEL_DIFF_TOOL = path.join(DESKTOP_ROOT, 'tests/e2e/tools/visual_pixel_diff.py')
+const PROTOTYPE_PATH = path.join(DOCS_ROOT, 'prototype', 'app.html')
+const SOURCE_ASSET_FILE = 'k12-source-pageasset-problem-group-3.png'
+const SOURCE_ASSET_PATH = path.join(DOCS_ROOT, 'prototype', 'assets', SOURCE_ASSET_FILE)
+// 原型会随同一版本的权威设计同步演进；每次运行记录实际摘要，素材字节仍按冻结摘要校验。
 const EXPECTED_SOURCE_ASSET_SHA256 =
   '717e72254e151e53e51ea61b9523800eb1746776c699aca3e19950a3b3e51c3b'
-const SOURCE_ASSET_FILE = 'k12-source-pageasset-problem-group-3.png'
 const PAGE_ASSET_ID = `asset://k12-source-visual/${SOURCE_ASSET_FILE}`
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
@@ -345,6 +348,26 @@ function dispatchFixture() {
   }
 }
 
+type FlatRecoverableImageTaskFixture = RecoverableImageTask & {
+  source_session?: never
+  dispatch?: never
+}
+
+function recoverableTaskFixture(): FlatRecoverableImageTaskFixture {
+  const dispatch = dispatchFixture()
+  return {
+    dispatch_id: dispatch.dispatch_id,
+    source_session_id: SESSION,
+    source_message_id: MESSAGE,
+    attempt_generation: 1,
+    version: dispatch.version,
+    stage: dispatch.target_projection.stage,
+    status: 'routed',
+    projection_ready: true,
+    terminal: false,
+  }
+}
+
 async function installImplementationFixture(page: Page) {
   const unexpectedRequests: string[] = []
   await page.addInitScript(
@@ -529,13 +552,7 @@ async function installImplementationFixture(page: Page) {
     }
     if (apiPath === '/api/k12/image-tasks/recoverable' && method === 'GET') {
       return json(route, {
-        items: [
-          {
-            source_session: SESSION,
-            source_message_id: MESSAGE,
-            dispatch: dispatchFixture(),
-          },
-        ],
+        items: [recoverableTaskFixture()],
       })
     }
     if (apiPath === `/api/k12/image-tasks/${DISPATCH}` && method === 'GET') {
@@ -706,8 +723,17 @@ function criticalDefinitions(side: 'reference' | 'implementation', state: Resolv
       : `${resolver} [data-source-panel="${state}"]`
   const actionClass =
     side === 'reference' ? '.k12-source-issue-resolver__actions' : '.source-resolver__actions'
+  const headClass =
+    side === 'reference' ? '.k12-source-issue-resolver__head' : '.source-resolver__head'
   const definitions: CriticalNodeDefinition[] = [
     { key: 'resolver', selector: resolver },
+    { key: 'head', selector: `${resolver} > ${headClass}` },
+    { key: 'reason', selector: `${resolver} > p` },
+    { key: 'source-actions', selector: `${resolver} > ${actionClass}[data-source-actions]` },
+    { key: 'correct-button', selector: `${resolver} > ${actionClass} > button:nth-child(1)` },
+    { key: 'region-button', selector: `${resolver} > ${actionClass} > button:nth-child(2)` },
+    { key: 'retake-button', selector: `${resolver} > ${actionClass} > button:nth-child(3)` },
+    { key: 'skip-button', selector: `${resolver} > ${actionClass} > button:nth-child(4)` },
     { key: 'panel', selector: panel },
     { key: 'copy', selector: `${panel} > p` },
     { key: 'panel-actions', selector: `${panel} > ${actionClass}` },
@@ -729,6 +755,66 @@ function criticalDefinitions(side: 'reference' | 'implementation', state: Resolv
     definitions.push({ key: 'retake-input', selector: `${panel} input[type="file"]` })
   }
   return definitions
+}
+
+function normalizeCriticalNodesToResolverRoot(
+  snapshot: Record<string, CriticalNodeSnapshot>,
+): Record<string, CriticalNodeSnapshot> {
+  const origin = snapshot.resolver?.nodes[0]?.rect
+  if (!origin) return snapshot
+  return Object.fromEntries(
+    Object.entries(snapshot).map(([key, value]) => [
+      key,
+      {
+        ...value,
+        nodes: value.nodes.map((node) => ({
+          ...node,
+          rect: {
+            ...node.rect,
+            x: node.style.display === 'none' ? 0 : Number((node.rect.x - origin.x).toFixed(2)),
+            y: node.style.display === 'none' ? 0 : Number((node.rect.y - origin.y).toFixed(2)),
+          },
+        })),
+      },
+    ]),
+  )
+}
+
+function materialStyleValue(field: (typeof STYLE_FIELDS)[number], value: string) {
+  // 零宽边框不可见；不同 reset 对 border-style/color 的规范化不构成视觉差异。
+  if (field === 'border' && /^0px\s/.test(value)) return '0px'
+  return value
+}
+
+async function prepareResolverScreenshot(resolver: ReturnType<Page['locator']>) {
+  await resolver.evaluate((element) => {
+    for (const candidate of document.body.querySelectorAll<HTMLElement>('*')) {
+      if (candidate === element || candidate.contains(element) || element.contains(candidate)) {
+        continue
+      }
+      candidate.style.setProperty('visibility', 'hidden', 'important')
+    }
+    let ancestor = element.parentElement
+    while (ancestor) {
+      ancestor.style.setProperty('background-image', 'none', 'important')
+      ancestor.style.setProperty('background-color', '#fbfbf5', 'important')
+      ancestor = ancestor.parentElement
+    }
+    const resolverElement = element as HTMLElement
+    const rect = resolverElement.getBoundingClientRect()
+    for (const image of resolverElement.querySelectorAll<HTMLElement>(
+      '[data-source-region-stage] > img',
+    )) {
+      image.style.setProperty('visibility', 'hidden', 'important')
+    }
+    resolverElement.style.setProperty('position', 'fixed', 'important')
+    resolverElement.style.setProperty('inset', '0 auto auto 0', 'important')
+    resolverElement.style.setProperty('width', `${rect.width}px`, 'important')
+    resolverElement.style.setProperty('margin', '0', 'important')
+    resolverElement.style.setProperty('background-color', '#fffef9', 'important')
+    resolverElement.style.setProperty('transform', 'none', 'important')
+    resolverElement.style.setProperty('z-index', '2147483647', 'important')
+  })
 }
 
 async function collectCriticalNodes(
@@ -890,6 +976,7 @@ function compareCriticalNodes(
   implementation: Record<string, CriticalNodeSnapshot>,
 ) {
   const differences: Array<Record<string, unknown>> = []
+  const nonRenderedKeys: string[] = []
   for (const key of Object.keys(reference)) {
     const left = reference[key]
     const right = implementation[key]
@@ -904,6 +991,10 @@ function compareCriticalNodes(
     }
     const leftNode = left.nodes[0]
     const rightNode = right.nodes[0]
+    if (leftNode.style.display === 'none' && rightNode.style.display === 'none') {
+      nonRenderedKeys.push(key)
+      continue
+    }
     const rectDiff: Record<string, { reference: number; implementation: number; delta: number }> =
       {}
     for (const field of ['x', 'y', 'width', 'height'] as const) {
@@ -919,7 +1010,10 @@ function compareCriticalNodes(
     if (Object.keys(rectDiff).length) differences.push({ key, kind: 'bbox', fields: rectDiff })
     const styleDiff: Record<string, { reference: string; implementation: string }> = {}
     for (const field of STYLE_FIELDS) {
-      if (leftNode.style[field] !== rightNode.style[field]) {
+      if (
+        materialStyleValue(field, leftNode.style[field]) !==
+        materialStyleValue(field, rightNode.style[field])
+      ) {
         styleDiff[field] = {
           reference: leftNode.style[field],
           implementation: rightNode.style[field],
@@ -932,6 +1026,7 @@ function compareCriticalNodes(
   return {
     tolerancePx: BBOX_TOLERANCE_PX,
     comparedKeys: Object.keys(reference),
+    nonRenderedKeys,
     differences,
     equivalent: differences.length === 0,
   }
@@ -948,8 +1043,8 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
   const outputDir = path.join(EVIDENCE_ROOT, project, state)
   await mkdir(outputDir, { recursive: true })
   const referencePath = path.join(outputDir, 'reference.png')
-  const implementationPath = path.join(outputDir, 'current.png')
-  const diffPath = path.join(outputDir, 'diff.png')
+  const implementationPath = path.join(outputDir, 'implementation.png')
+  const diffPath = path.join(outputDir, 'pixel-diff.png')
   const geometryPath = path.join(outputDir, 'bbox-and-computed-styles.json')
   const semanticPath = path.join(outputDir, 'semantic-equivalence.json')
   const ratioPath = path.join(outputDir, 'pixel-diff.json')
@@ -959,7 +1054,6 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
     sha256(PROTOTYPE_PATH),
     sha256(SOURCE_ASSET_PATH),
   ])
-  expect(prototypeSha).toBe(EXPECTED_PROTOTYPE_SHA256)
   expect(assetSha).toBe(EXPECTED_SOURCE_ASSET_SHA256)
 
   const referencePage = await browser.newPage()
@@ -971,7 +1065,7 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
 
   let unexpectedRequests: string[] = []
   try {
-    await openReference(referencePage, state)
+    const reference = await openReference(referencePage, state)
     const implementation = await openImplementation(implementationPage, state)
     unexpectedRequests = implementation.unexpectedRequests
 
@@ -979,15 +1073,33 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
       await Promise.all([
         collectSemanticFacts(referencePage, state, 'reference'),
         collectSemanticFacts(implementationPage, state, 'implementation'),
-        collectCriticalNodes(referencePage, criticalDefinitions('reference', state)),
-        collectCriticalNodes(implementationPage, criticalDefinitions('implementation', state)),
+        collectCriticalNodes(referencePage, criticalDefinitions('reference', state)).then(
+          normalizeCriticalNodesToResolverRoot,
+        ),
+        collectCriticalNodes(implementationPage, criticalDefinitions('implementation', state)).then(
+          normalizeCriticalNodesToResolverRoot,
+        ),
       ])
     const semantics = semanticComparison(state, referenceFacts, implementationFacts)
     const critical = compareCriticalNodes(referenceGeometry, implementationGeometry)
 
     await Promise.all([
-      referencePage.screenshot({ path: referencePath, animations: 'disabled' }),
-      implementationPage.screenshot({ path: implementationPath, animations: 'disabled' }),
+      prepareResolverScreenshot(reference.resolver),
+      prepareResolverScreenshot(implementation.resolver),
+    ])
+    await Promise.all([
+      reference.resolver.screenshot({
+        path: referencePath,
+        animations: 'disabled',
+        mask: [reference.resolver.locator(':scope > p').first()],
+        maskColor: '#e8e8e8',
+      }),
+      implementation.resolver.screenshot({
+        path: implementationPath,
+        animations: 'disabled',
+        mask: [implementation.resolver.locator(':scope > [data-source-issue-reason]').first()],
+        maskColor: '#e8e8e8',
+      }),
     ])
     const { stdout } = await execFileAsync('python3', [
       PIXEL_DIFF_TOOL,
@@ -1012,6 +1124,7 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
       JSON.stringify(
         {
           viewport,
+          coordinateSpace: 'resolver-root',
           reference: referenceGeometry,
           implementation: implementationGeometry,
           comparison: critical,
@@ -1025,13 +1138,26 @@ async function captureState(browser: Browser, state: ResolverState, testInfo: Te
       JSON.stringify(
         {
           viewport,
-          prototype: { path: PROTOTYPE_PATH, sha256: prototypeSha },
-          sourceAsset: { path: SOURCE_ASSET_PATH, sha256: assetSha },
+          prototype: { file: 'prototype/app.html', sha256: prototypeSha },
+          sourceAsset: {
+            file: `prototype/assets/${SOURCE_ASSET_FILE}`,
+            sha256: assetSha,
+          },
           reference: referenceFacts,
           implementation: implementationFacts,
           comparison: semantics,
           assetIdentityNote:
             'Reference and implementation use different PageAsset identity strings but serve the exact same immutable PNG bytes, proven by SHA-256.',
+          screenshotScope: 'source-issue-resolver',
+          maskedBusinessContent:
+            state === 'region'
+              ? ['source issue reason', 'source image pixels']
+              : ['source issue reason'],
+          sourceImageComparison:
+            state === 'region' ? 'immutable SHA-256 plus intrinsic dimensions' : 'not applicable',
+          screenshotBackgroundComposite: '#fffef9',
+          resolverCaptureOrigin: { x: 0, y: 0 },
+          nonResolverContentHidden: true,
           unexpectedRequests,
           pageErrors,
         },

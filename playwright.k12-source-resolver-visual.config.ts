@@ -1,6 +1,17 @@
 import { defineConfig, devices } from '@playwright/test'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const runID = `${process.pid}`
+const desktopRoot = path.dirname(fileURLToPath(import.meta.url))
+const docsRoot = path.resolve(
+  process.env.HEXCLAW_DOCS_ROOT?.trim() || path.join(desktopRoot, '..', 'hexclaw-docs'),
+)
+const prototypeRoot = path.join(docsRoot, 'prototype')
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -46,8 +57,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command:
-        'python3 -m http.server 16070 --bind 127.0.0.1 --directory /Users/guoyanjun/work/hexclaw-docs/prototype',
+      command: `python3 -m http.server 16070 --bind 127.0.0.1 --directory ${shellQuote(prototypeRoot)}`,
       url: 'http://127.0.0.1:16070/app.html',
       reuseExistingServer: true,
       timeout: 30_000,

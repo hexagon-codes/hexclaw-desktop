@@ -4,7 +4,7 @@
 // 命中且产物有效（App/Sidecar 存在、版本匹配）才可复用；任何漂移 fail-safe 走全量。
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, mkdirSync, lstatSync } from 'node:fs'
+import { readFileSync, readlinkSync, writeFileSync, mkdirSync, lstatSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +14,15 @@ const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'
 const WORK_ROOT = resolve(DESKTOP_ROOT, '..')
 const REPOS = ['hexclaw-desktop', 'hexclaw', 'ai-core', 'hexagon', 'toolkit']
 const STATE_PATH = join(homedir(), '.cache', 'hexclaw-package', 'build-local-fingerprint.json')
-const APP_BUNDLE = join(DESKTOP_ROOT, 'src-tauri', 'target', 'release', 'bundle', 'macos', 'HexClaw.app')
+const APP_BUNDLE = join(
+  DESKTOP_ROOT,
+  'src-tauri',
+  'target',
+  'release',
+  'bundle',
+  'macos',
+  'HexClaw.app',
+)
 const SIDECAR = join(DESKTOP_ROOT, 'src-tauri', 'binaries', 'hexclaw-x86_64-apple-darwin')
 const INPUT_FILES = [
   'package.json',
@@ -24,11 +32,61 @@ const INPUT_FILES = [
   'src-tauri/tauri.package-local.conf.json',
 ]
 
+function gitOutput(root, args, encoding = 'utf8') {
+  return execFileSync('git', ['-C', root, ...args], {
+    encoding,
+    maxBuffer: 64 * 1024 * 1024,
+  })
+}
+
+function nulPaths(root, args) {
+  return gitOutput(root, [...args, '-z'])
+    .split('\0')
+    .filter(Boolean)
+    .sort()
+}
+
+function pathContentDigest(root, paths) {
+  const hash = createHash('sha256')
+  for (const path of paths) {
+    hash.update(path)
+    hash.update('\0')
+    try {
+      const stat = lstatSync(join(root, path))
+      hash.update(`${stat.mode & 0o7777}:`)
+      if (stat.isSymbolicLink()) {
+        hash.update('symlink:')
+        hash.update(readlinkSync(join(root, path)))
+      } else if (stat.isFile()) {
+        hash.update('file:')
+        hash.update(gitOutput(root, ['hash-object', '--no-filters', '--', path]))
+      } else {
+        hash.update(`special:${stat.size}`)
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      hash.update('missing')
+    }
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
 function repoFingerprint(name) {
   const root = name === 'hexclaw-desktop' ? DESKTOP_ROOT : join(WORK_ROOT, name)
-  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-  const status = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })
-  return `${name}:${head}:${status}`
+  const head = gitOutput(root, ['rev-parse', 'HEAD']).trim()
+  const status = gitOutput(root, ['status', '--porcelain'])
+  const staged = createHash('sha256')
+    .update(
+      gitOutput(root, ['diff', '--cached', '--raw', '--no-abbrev', '--no-renames', '-z'], null),
+    )
+    .digest('hex')
+  const unstaged = pathContentDigest(root, nulPaths(root, ['diff', '--name-only', '--no-renames']))
+  const untracked = pathContentDigest(
+    root,
+    nulPaths(root, ['ls-files', '--others', '--exclude-standard']),
+  )
+  return `${name}:${head}:${status}:${staged}:${unstaged}:${untracked}`
 }
 
 function computeFingerprint() {
@@ -52,7 +110,9 @@ function productValid(fingerprint) {
     if (!app.isFile() || !sidecar.isFile()) return false
     // 产物新鲜度强门禁（BUG-20260816-007 防回归）：dist 内容指纹必须等于当前源码指纹，
     // 且 App 二进制构建时间必须晚于该 manifest 写入（tauri-build 已嵌入该版本 dist）。
-    const manifest = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json'), 'utf8'))
+    const manifest = JSON.parse(
+      readFileSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json'), 'utf8'),
+    )
     if (manifest?.fingerprint !== fingerprint) return false
     return app.mtimeMs >= lstatSync(join(DESKTOP_ROOT, 'dist', 'build-manifest.json')).mtimeMs
   } catch {
@@ -86,5 +146,7 @@ if (previous() === fingerprint && productValid(fingerprint)) {
 }
 console.log('build-local fingerprint miss: sources changed, full build required')
 mkdirSync(join(homedir(), '.cache', 'hexclaw-package'), { recursive: true, mode: 0o700 })
-writeFileSync(STATE_PATH, `${JSON.stringify({ fingerprint, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+writeFileSync(STATE_PATH, `${JSON.stringify({ fingerprint, at: new Date().toISOString() })}\n`, {
+  mode: 0o600,
+})
 process.exit(2)

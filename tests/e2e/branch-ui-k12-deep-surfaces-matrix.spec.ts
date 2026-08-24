@@ -68,7 +68,7 @@ const practice = {
   paper_no: 'P-2630-01',
   finalized_at: 1785081600,
   finalized_via: 'print',
-  delivery_status: '',
+  delivery_status: 'not_sent',
   items: [
     {
       item_id: 'history-item-1',
@@ -561,11 +561,15 @@ async function referenceWork(page: Page, action: 'detail' | 'add' | 'preview' | 
       ? await (async () => {
           const opened = await referenceRecords(page, 4)
           const ok = await page.evaluate(() => {
-            const buttons = [...document.querySelectorAll(
-              '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
-            )]
-            const button = buttons.find((node) => node.closest('article,li,div')?.textContent?.includes('雨后的校园'))
-              ?? buttons[1]
+            const buttons = [
+              ...document.querySelectorAll(
+                '#k12BookPanel4 button[onclick*="openCreativeWorkDetail"]',
+              ),
+            ]
+            const button =
+              buttons.find((node) =>
+                node.closest('article,li,div')?.textContent?.includes('雨后的校园'),
+              ) ?? buttons[1]
             const callable = (window as unknown as Record<string, unknown>).openCreativeWorkDetail
             if (!button || typeof callable !== 'function') return false
             ;(callable as (node: Element) => void)(button)
@@ -1137,56 +1141,59 @@ async function freeze(page: Page) {
 }
 
 async function geometry(page: Page, root?: string, criticalSelectors: Record<string, string> = {}) {
-  return page.evaluate(({ selector, criticalSelectors }) => {
-    const node = selector ? (document.querySelector(selector) as HTMLElement | null) : null
-    const body = document.body
-    const inspect = (element: HTMLElement | null) => {
-      if (!element) return null
-      const rect = element.getBoundingClientRect()
-      const style = getComputedStyle(element)
-      return {
-        tag: element.tagName.toLowerCase(),
-        id: element.id,
-        className: element.className,
-        text: element.innerText.replace(/\s+/g, ' ').trim().slice(0, 600),
-        rect: {
-          x: Number(rect.x.toFixed(2)),
-          y: Number(rect.y.toFixed(2)),
-          width: Number(rect.width.toFixed(2)),
-          height: Number(rect.height.toFixed(2)),
-        },
-        style: {
-          display: style.display,
-          position: style.position,
-          backgroundColor: style.backgroundColor,
-          backgroundImage: style.backgroundImage,
-          color: style.color,
-          borderRadius: style.borderRadius,
-          boxShadow: style.boxShadow,
-          padding: style.padding,
-          gap: style.gap,
-          fontSize: style.fontSize,
-          fontWeight: style.fontWeight,
-          lineHeight: style.lineHeight,
-          overflowX: style.overflowX,
-          overflowY: style.overflowY,
-        },
+  return page.evaluate(
+    ({ selector, criticalSelectors }) => {
+      const node = selector ? (document.querySelector(selector) as HTMLElement | null) : null
+      const body = document.body
+      const inspect = (element: HTMLElement | null) => {
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return {
+          tag: element.tagName.toLowerCase(),
+          id: element.id,
+          className: element.className,
+          text: element.innerText.replace(/\s+/g, ' ').trim().slice(0, 600),
+          rect: {
+            x: Number(rect.x.toFixed(2)),
+            y: Number(rect.y.toFixed(2)),
+            width: Number(rect.width.toFixed(2)),
+            height: Number(rect.height.toFixed(2)),
+          },
+          style: {
+            display: style.display,
+            position: style.position,
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+            color: style.color,
+            borderRadius: style.borderRadius,
+            boxShadow: style.boxShadow,
+            padding: style.padding,
+            gap: style.gap,
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            lineHeight: style.lineHeight,
+            overflowX: style.overflowX,
+            overflowY: style.overflowY,
+          },
+        }
       }
-    }
-    return {
-      url: location.href,
-      rootSelector: selector,
-      root: inspect(node),
-      critical: Object.fromEntries(
-        Object.entries(criticalSelectors).map(([name, criticalSelector]) => [
-          name,
-          inspect(document.querySelector(criticalSelector) as HTMLElement | null),
-        ]),
-      ),
-      body: inspect(body),
-      viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
-    }
-  }, { selector: root, criticalSelectors })
+      return {
+        url: location.href,
+        rootSelector: selector,
+        root: inspect(node),
+        critical: Object.fromEntries(
+          Object.entries(criticalSelectors).map(([name, criticalSelector]) => [
+            name,
+            inspect(document.querySelector(criticalSelector) as HTMLElement | null),
+          ]),
+        ),
+        body: inspect(body),
+        viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+      }
+    },
+    { selector: root, criticalSelectors },
+  )
 }
 
 async function capture(referencePage: Page, sourcePage: Page, state: State, testInfo: TestInfo) {

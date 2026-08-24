@@ -10,6 +10,8 @@ import {
   readdir,
   realpath,
   rm,
+  symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -162,7 +164,10 @@ test('build performance batch 1: clonefile copies, ollama tree cache, fast hdiut
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(moduleURL, 'utf8')
   // P0-1：moveBuiltApp 必须用 APFS clonefile（cp -c）替代全量复制
-  const move = source.slice(source.indexOf('async function moveBuiltAppIntoReleaseGeneration'), source.indexOf('async function verifyAppResources'))
+  const move = source.slice(
+    source.indexOf('async function moveBuiltAppIntoReleaseGeneration'),
+    source.indexOf('async function verifyAppResources'),
+  )
   assert.equal(move.includes('FIXED_TOOLS.cp'), true)
   assert.equal(move.includes("'-c'"), true)
   // P1-1：ollama 解包树进入宿主持久缓存（归档 sha256 决定，跨代复用）
@@ -176,10 +181,223 @@ test('build performance batch 2: fingerprint skip wiring in Makefile and script'
   const { readFile } = await import('node:fs/promises')
   const makefile = await readFile(join(process.cwd(), 'Makefile'), 'utf8')
   assert.equal(makefile.includes('verify-build-local-fingerprint.mjs'), true)
-  const script = await readFile(join(process.cwd(), 'scripts/ci/verify-build-local-fingerprint.mjs'), 'utf8')
+  const script = await readFile(
+    join(process.cwd(), 'scripts/ci/verify-build-local-fingerprint.mjs'),
+    'utf8',
+  )
   assert.equal(script.includes('git', 0) || script.includes("'git'"), true)
   assert.equal(script.includes('build-local-fingerprint.json'), true)
   assert.equal(script.includes('reusing existing app bundle'), true)
+})
+
+test('build fingerprint invalidates every dirty content class without recording source material', async (t) => {
+  const productionScript = await readFile(
+    new URL('../../scripts/ci/verify-build-local-fingerprint.mjs', import.meta.url),
+    'utf8',
+  )
+  const personalPathSentinel = '/Users/private-owner/work/private-source.txt'
+  const sourceSentinels = [
+    'PRIVATE_SOURCE_BODY_REVISION_ONE',
+    'PRIVATE_SOURCE_BODY_REVISION_TWO',
+    `${personalPathSentinel}.revision-one`,
+    `${personalPathSentinel}.revision-two`,
+  ]
+  const scenarios = [
+    {
+      name: 'staged tracked file bytes',
+      prepare: async (desktopRoot) => {
+        const pathname = join(desktopRoot, 'tracked.txt')
+        await writeFile(pathname, `${sourceSentinels[0]}\n${personalPathSentinel}\n`)
+        await execFileAsync('git', ['-C', desktopRoot, 'add', 'tracked.txt'])
+        return async () => {
+          await writeFile(pathname, `${sourceSentinels[1]}\n${personalPathSentinel}\n`)
+          await execFileAsync('git', ['-C', desktopRoot, 'add', 'tracked.txt'])
+        }
+      },
+    },
+    {
+      name: 'unstaged tracked file bytes',
+      prepare: async (desktopRoot) => {
+        const pathname = join(desktopRoot, 'tracked.txt')
+        await writeFile(pathname, `${sourceSentinels[0]}\n${personalPathSentinel}\n`)
+        return () => writeFile(pathname, `${sourceSentinels[1]}\n${personalPathSentinel}\n`)
+      },
+    },
+    {
+      name: 'untracked file bytes',
+      prepare: async (desktopRoot) => {
+        const pathname = join(desktopRoot, 'untracked.txt')
+        await writeFile(pathname, `${sourceSentinels[0]}\n${personalPathSentinel}\n`)
+        return () => writeFile(pathname, `${sourceSentinels[1]}\n${personalPathSentinel}\n`)
+      },
+    },
+    {
+      name: 'tracked symlink target',
+      prepare: async (desktopRoot) => {
+        const pathname = join(desktopRoot, 'tracked-link')
+        await rm(pathname)
+        await symlink(sourceSentinels[2], pathname)
+        return async () => {
+          await rm(pathname)
+          await symlink(sourceSentinels[3], pathname)
+        }
+      },
+    },
+    {
+      name: 'untracked symlink target',
+      prepare: async (desktopRoot) => {
+        const pathname = join(desktopRoot, 'untracked-link')
+        await symlink(sourceSentinels[2], pathname)
+        return async () => {
+          await rm(pathname)
+          await symlink(sourceSentinels[3], pathname)
+        }
+      },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async (t) => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'hexclaw-build-fingerprint-dirty-')))
+      t.after(() => rm(root, { force: true, recursive: true }))
+      const workRoot = join(root, 'work')
+      const desktopRoot = join(workRoot, 'hexclaw-desktop')
+      const home = join(root, 'home')
+      const fingerprintScript = join(
+        desktopRoot,
+        'scripts',
+        'ci',
+        'verify-build-local-fingerprint.mjs',
+      )
+
+      for (const repo of ['hexclaw-desktop', 'hexclaw', 'ai-core', 'hexagon', 'toolkit']) {
+        const repoRoot = join(workRoot, repo)
+        await mkdir(repoRoot, { recursive: true })
+        await execFileAsync('git', ['-C', repoRoot, 'init', '--quiet'])
+        await writeFile(
+          join(repoRoot, '.gitignore'),
+          '/dist/\n/src-tauri/target/\n/src-tauri/binaries/\n',
+        )
+        await writeFile(join(repoRoot, 'tracked.txt'), 'committed\n')
+        if (repo === 'hexclaw-desktop') {
+          await symlink('committed-target', join(repoRoot, 'tracked-link'))
+          await mkdir(dirname(fingerprintScript), { recursive: true })
+          await writeFile(fingerprintScript, productionScript)
+          for (const file of [
+            'package.json',
+            'pnpm-lock.yaml',
+            'src-tauri/Cargo.lock',
+            'src-tauri/tauri.conf.json',
+            'src-tauri/tauri.package-local.conf.json',
+          ]) {
+            const target = join(repoRoot, file)
+            await mkdir(dirname(target), { recursive: true })
+            await writeFile(target, `${file}\n`)
+          }
+        }
+        await execFileAsync('git', ['-C', repoRoot, 'add', '.'])
+        await execFileAsync('git', [
+          '-C',
+          repoRoot,
+          '-c',
+          'user.name=HexClaw Test',
+          '-c',
+          'user.email=test@hexclaw.invalid',
+          'commit',
+          '--quiet',
+          '-m',
+          'fixture',
+        ])
+      }
+
+      await mkdir(home, { recursive: true })
+      const appExecutable = join(
+        desktopRoot,
+        'src-tauri',
+        'target',
+        'release',
+        'bundle',
+        'macos',
+        'HexClaw.app',
+        'Contents',
+        'MacOS',
+        'hexclaw-desktop',
+      )
+      const sidecar = join(desktopRoot, 'src-tauri', 'binaries', 'hexclaw-x86_64-apple-darwin')
+      await mkdir(dirname(appExecutable), { recursive: true })
+      await mkdir(dirname(sidecar), { recursive: true })
+      await mkdir(join(desktopRoot, 'dist'), { recursive: true })
+      await writeFile(appExecutable, 'app bundle\n')
+      await writeFile(sidecar, 'sidecar\n')
+
+      const runFingerprint = async (args = []) => {
+        try {
+          const result = await execFileAsync(process.execPath, [fingerprintScript, ...args], {
+            cwd: desktopRoot,
+            env: { ...process.env, HOME: home },
+          })
+          return { code: 0, stdout: result.stdout }
+        } catch (error) {
+          return { code: error.code, stdout: error.stdout ?? '' }
+        }
+      }
+      const gitStatus = async () =>
+        (await execFileAsync('git', ['-C', desktopRoot, 'status', '--porcelain'])).stdout
+      const statePath = join(home, '.cache', 'hexclaw-package', 'build-local-fingerprint.json')
+      const manifestPath = join(desktopRoot, 'dist', 'build-manifest.json')
+
+      const mutate = await scenario.prepare(desktopRoot)
+      const statusBefore = await gitStatus()
+      assert.notEqual(statusBefore, '')
+
+      const initialMiss = await runFingerprint()
+      assert.equal(initialMiss.code, 2)
+      assert.match(initialMiss.stdout, /fingerprint miss/u)
+      const initialStateText = await readFile(statePath, 'utf8')
+      const manifestWrite = await runFingerprint(['--write-manifest'])
+      assert.equal(manifestWrite.code, 0, manifestWrite.stdout)
+
+      const future = new Date(Date.now() + 10_000)
+      await utimes(appExecutable, future, future)
+      const manifestText = await readFile(manifestPath, 'utf8')
+      const cachedState = JSON.parse(initialStateText)
+      const buildManifest = JSON.parse(manifestText)
+      assert.deepEqual(Object.keys(cachedState).sort(), ['at', 'fingerprint'])
+      assert.deepEqual(Object.keys(buildManifest).sort(), ['builtAt', 'fingerprint'])
+      assert.match(cachedState.fingerprint, /^[a-f0-9]{64}$/u)
+      assert.equal(buildManifest.fingerprint, cachedState.fingerprint)
+
+      const unchangedDirtyTree = await runFingerprint()
+      assert.equal(unchangedDirtyTree.code, 0, unchangedDirtyTree.stdout)
+      assert.match(unchangedDirtyTree.stdout, /fingerprint hit/u)
+
+      // Git porcelain 状态不变时，源码字节或链接目标变化仍必须使旧 App 失效。
+      await mutate()
+      const statusAfter = await gitStatus()
+      assert.equal(statusAfter, statusBefore)
+      const changedDirtyTree = await runFingerprint()
+      assert.equal(changedDirtyTree.code, 2)
+      assert.match(changedDirtyTree.stdout, /fingerprint miss/u)
+
+      const changedStateText = await readFile(statePath, 'utf8')
+      const changedState = JSON.parse(changedStateText)
+      assert.deepEqual(Object.keys(changedState).sort(), ['at', 'fingerprint'])
+      assert.notEqual(changedState.fingerprint, cachedState.fingerprint)
+
+      const persistedAndReported = [
+        initialMiss.stdout,
+        initialStateText,
+        manifestWrite.stdout,
+        manifestText,
+        unchangedDirtyTree.stdout,
+        changedDirtyTree.stdout,
+        changedStateText,
+      ].join('\n')
+      for (const secret of [root, home, desktopRoot, personalPathSentinel, ...sourceSentinels]) {
+        assert.equal(persistedAndReported.includes(secret), false)
+      }
+    })
+  }
 })
 
 test('package-local plan binds one native generation and never consumes shared package outputs', async () => {
@@ -415,10 +633,7 @@ test('dependency provenance binds Go to GOROOT and pnpm to the frozen standalone
   assert.equal(options.pnpm.sha256, 'e'.repeat(64))
   assert.equal(options.pnpm.workerExecutable, '/generation/toolchains/pnpm-package/dist/worker.js')
   assert.equal(options.pnpm.workerSha256, 'f'.repeat(64))
-  assert.equal(
-    options.pnpm.workerNativeExecutable,
-    pnpmWorkerNativePath,
-  )
+  assert.equal(options.pnpm.workerNativeExecutable, pnpmWorkerNativePath)
   assert.equal(options.pnpm.workerNativeSha256, '1'.repeat(64))
   assert.equal(options.pnpm.workerNativeName, pnpmWorkerNativeName)
   assert.equal(options.pnpm.packageExecutable, '/generation/toolchains/pnpm-package/package.json')
