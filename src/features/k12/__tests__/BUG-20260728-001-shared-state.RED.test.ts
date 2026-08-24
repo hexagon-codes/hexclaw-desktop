@@ -11,9 +11,17 @@ describe('BUG-20260728-001 三表面练习集耐久投影', () => {
     expect(practicePanelSource).toMatch(/pendingGenerations[\s\S]*state === 'pending'/s)
   })
 
-  it('候选提交成功和练习集移除后都刷新共享 generation 状态', () => {
+  it('既有按钮只触发共享 generation，练习集移除后继续刷新共享状态', () => {
+    expect(recordsSource).not.toContain('K12PracticeCandidateSelectionModal')
+    expect(recordsSource).not.toContain('commitPracticeCandidateSelection')
+    expect(recordsSource).not.toContain('k12OpenMistakePracticeCandidates')
     expect(recordsSource).toMatch(
-      /async function commitPracticeCandidateSelection[\s\S]*?reloadPracticeGenerationStates\(\)/s,
+      /async function runPracticeGeneration[\s\S]*?k12StartMistakePracticeGeneration[\s\S]*?schedulePracticePoll\(\)/s,
+    )
+    expect(recordsSource).toContain('@click="runPracticeGeneration(item.recordId)"')
+    expect(recordsSource).toContain('@generation-invalidated="onPracticeGenerationInvalidated"')
+    expect(recordsSource).toMatch(
+      /async function onPracticeGenerationInvalidated[\s\S]*?reloadPracticeGenerationStates\(\)/s,
     )
     expect(practicePanelSource).toContain("emit('generation-invalidated'")
   })

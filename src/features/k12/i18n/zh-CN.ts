@@ -60,7 +60,7 @@ export default {
     allMistakes: '全部错题',
     archiveDesc: '题目档案只负责查找与管理；到期行动在“本周该练”，长期保存的题在“练习集”。',
     viewInsights: '查看学情',
-    weeklyHook: '每周五 19:00 自动加入练习集 · 只有验证通过的题目会进入打印版本',
+    weeklyHook: '每周五 19:00 自动整理本周错题 · 同步巩固和口算热身按需准备 · 不自动加入练习集',
     genWorksheet: '生成复习卷',
     dueCountUnit: '道待复习',
     moreWorksheetActions: '更多组卷方式',
@@ -205,7 +205,7 @@ export default {
   practice: {
     title: '练习集',
     basketTitle: '待打印',
-    basketMeta: '每周五 19:00 自动加入 · 也可从错题直接“加入练习集” · 重复加入自动去重',
+    basketMeta: '从错题、本周该练或积累明确加入 · 重复加入自动去重',
     basketHint: '系统打印成功或发送批次创建后才固化；取消系统打印不会清空待打印',
     basketEmpty: '待打印已清空 · 从错题“加入练习集”、本周复习“生成复习卷”里加题。',
     historyTitle: '打印历史',

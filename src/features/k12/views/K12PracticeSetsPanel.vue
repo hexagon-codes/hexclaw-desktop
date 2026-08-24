@@ -245,6 +245,20 @@ const pendingGenerations = computed(() =>
     (generation) => generation.state === 'pending',
   ),
 )
+function practiceGenerationStates(): Array<
+  readonly [string, MistakePracticeGenerationDTO['state']]
+> {
+  return Object.entries(props.practiceGenerationByMistake ?? {})
+    .map(([sourceID, generation]) => [sourceID, generation.state] as const)
+    .sort(([left], [right]) => left.localeCompare(right))
+}
+watch(practiceGenerationStates, (next, previous) => {
+  const previousStates = new Map(previous)
+  const settled = next.some(
+    ([sourceID, state]) => previousStates.get(sourceID) === 'pending' && state !== 'pending',
+  )
+  if (settled) void load()
+})
 function practiceGenerationSourceSummary(generation: MistakePracticeGenerationDTO): string {
   return generation.source_mistake_summary?.trim() ?? ''
 }

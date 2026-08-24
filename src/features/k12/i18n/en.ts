@@ -59,7 +59,7 @@ export default {
       'The archive is for finding and managing; review actions live in "This Week", assembled questions in "Practice Sets".',
     viewInsights: 'View insights',
     weeklyHook:
-      'Auto-added to the practice set every Friday 19:00 · only verified questions enter the printed paper',
+      "Every Friday 19:00, this week's mistakes are organized automatically · consolidation and arithmetic warm-ups are prepared as needed · nothing is added to Practice Sets automatically",
     genWorksheet: 'Generate review paper',
     dueCountUnit: 'due for review',
     moreWorksheetActions: 'More worksheet options',
@@ -203,7 +203,7 @@ export default {
     title: 'Practice Sets',
     basketTitle: 'To Print',
     basketMeta:
-      'Auto-filled every Friday 19:00 · also add directly from mistakes · duplicates deduped',
+      'Add explicitly from mistakes, This Week, or notes · duplicate additions are deduplicated',
     basketHint:
       'The sheet is finalized only after system printing succeeds or a delivery batch is created; cancelling system printing keeps the print queue',
     basketEmpty: 'Print queue is empty · add items from mistakes or "Generate review paper".',

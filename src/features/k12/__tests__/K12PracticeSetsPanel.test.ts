@@ -392,9 +392,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
         },
       },
     })
-    await (w.vm as unknown as { load: () => Promise<void> }).load()
     await flushPromises()
 
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
     expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(0)
     const formalItems = w.findAll('[data-practice-item-id]')
     expect(formalItems).toHaveLength(1)
@@ -409,7 +409,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
   })
 
   it('pending → failed：占位消失且父级可重试失败事实保持不变', async () => {
-    h.listSpy.mockResolvedValue({ items: [] })
+    h.listSpy.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce({ items: [] })
     const w = mount(K12PracticeSetsPanel, {
       props: {
         agentId: 'k12-xiaoming',
@@ -437,6 +437,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     })
     await flushPromises()
 
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
     expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(0)
     expect(w.findAll('[data-practice-item-id]')).toHaveLength(0)
     expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(true)

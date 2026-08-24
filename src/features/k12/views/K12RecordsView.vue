@@ -23,7 +23,6 @@ import K12BookTabs from '../components/K12BookTabs.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
-import K12PracticeCandidateSelectionModal from '../components/K12PracticeCandidateSelectionModal.vue'
 import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
@@ -45,6 +44,7 @@ import {
   k12RefreshWeeklyPracticeTextbookTrack,
   k12PrepareWeeklyPracticeTextbookTrack,
   k12GetMistakePracticeGeneration,
+  k12StartMistakePracticeGeneration,
   k12RetryMistakePracticeGeneration,
   k12ListPracticeSets,
   k12ListCreativeWorks,
@@ -69,14 +69,7 @@ import type {
   K12RecordsTarget,
 } from '../records-navigation'
 import type { ScenarioTextModelRoute } from '@/shell/scenario/registry'
-import {
-  k12CommitPracticeCandidateSelection,
-  k12DeferMistakeThisWeek,
-  k12GeneratePracticeCandidateBatch,
-  k12OpenPracticeCandidateSelection,
-  type PracticeCandidateSelectionDTO,
-  type WeeklyPracticeItemDTO,
-} from '@/api/k12'
+import { k12DeferMistakeThisWeek, type WeeklyPracticeItemDTO } from '@/api/k12'
 
 const props = defineProps<{
   agentId: string
@@ -509,6 +502,45 @@ async function reloadObjectCounts() {
 // 积累对象一次读取全量列表，学科与类型只作为服务端派生的只读元信息。
 const accumulationLoading = ref(true)
 let accumulationLoadRequest = 0
+const accumulationPollIntervalMs = 1_500
+let accumulationPollTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearAccumulationPoll() {
+  if (accumulationPollTimer !== null) clearTimeout(accumulationPollTimer)
+  accumulationPollTimer = null
+}
+
+function accumulationHasPending(): boolean {
+  return store.accumView?.items.some(accumulationDictationPending) ?? false
+}
+
+function accumulationPollingEnabled(): boolean {
+  return props.active !== false
+}
+
+function syncAccumulationDetail() {
+  const current = detail.value
+  if (!current.open || current.kind !== 'accum' || !current.record) return
+  const refreshed = store.accumView?.items.find(
+    (item) => item.recordId === current.record?.recordId,
+  )
+  if (refreshed) detail.value = { ...current, record: refreshed }
+}
+
+function scheduleAccumulationPoll() {
+  clearAccumulationPoll()
+  const agent = props.agentId
+  if (!accumulationPollingEnabled() || !agent || !accumulationHasPending()) return
+  accumulationPollTimer = setTimeout(async () => {
+    accumulationPollTimer = null
+    if (!accumulationPollingEnabled() || props.agentId !== agent) return
+    await reloadAccum()
+    if (accumulationPollingEnabled() && props.agentId === agent && !accumulationHasPending()) {
+      await reloadObjectCounts()
+    }
+  }, accumulationPollIntervalMs)
+}
+
 async function reloadAccum() {
   const request = ++accumulationLoadRequest
   accumulationLoading.value = true
@@ -517,9 +549,13 @@ async function reloadAccum() {
     if (request !== accumulationLoadRequest) return
     if (store.accumView) {
       accumulationTotalCount.value = store.accumView.items.length
+      syncAccumulationDetail()
     }
   } finally {
-    if (request === accumulationLoadRequest) accumulationLoading.value = false
+    if (request === accumulationLoadRequest) {
+      accumulationLoading.value = false
+      scheduleAccumulationPoll()
+    }
   }
 }
 
@@ -556,6 +592,7 @@ watch(
   () => props.agentId,
   () => {
     clearArchiveUndos()
+    clearAccumulationPoll()
     archiveBusy.value = []
     resetPracticeGenerationProjection()
     // 删除确认与被确认对象必须随辅导对象切换一并销毁，避免旧对象的
@@ -575,7 +612,10 @@ watch(
   },
 )
 
-onBeforeUnmount(clearArchiveUndos)
+onBeforeUnmount(() => {
+  clearArchiveUndos()
+  clearAccumulationPoll()
+})
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // 学情相关（本月辅导次数/学期分科/薄弱条/完成率）已随 IA 迁移抽到 K12InsightPanel（顶栏一等 Tab）。
@@ -667,23 +707,8 @@ async function submitMistake() {
   }
 }
 
-// 自定义组卷（DD-027A）：失败时保留请求快照和 idempotency_key；原地重试同一正式命令，
-// 使“服务端已提交、客户端丢响应”能读取同一 committed 回执，不重复装篮。
-// 图 10 一键加入练习集：复用全部错题页的原子候选选择链路（BUG-20260725-010/011）。
 function joinWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
-  const record: RecordItem = {
-    recordId: item.source_ref,
-    agentId: props.agentId,
-    collection: 'mistakes',
-    schemaVersion: 'v1',
-    fields: {
-      question: item.prompt_markdown,
-      subject: item.subject ?? '',
-      knowledge_point: item.knowledge_point ?? '',
-    },
-    version: 1,
-  }
-  void openPracticeCandidateSelection(record)
+  void runPracticeGeneration(item.source_ref)
 }
 
 // 查看新题（原型 openGeneratedPractice 弹层：新题/来源错题/同类依据/参考答案与验算）。
@@ -869,53 +894,28 @@ function undoArchive(undo: ArchiveUndo) {
   void restoreMistakeReview(undo.recordId, undo.version, true)
 }
 
-// ── 错题 → 候选选择 → 原子加入练习集（BUG-20260725-010/011）────────
-const practiceCandidateOpen = ref(false)
-const practiceCandidateRecord = ref<RecordItem | null>(null)
-const practiceCandidateSelection = ref<PracticeCandidateSelectionDTO | null>(null)
-const practiceCandidateLoading = ref(false)
-const practiceCandidateGenerating = ref(false)
-const practiceCandidateCommitting = ref(false)
-const practiceCandidateError = ref('')
 const weeklyDeferBusy = ref(false)
-const practiceCandidateCommandKeys = new Map<string, string>()
+const weeklyDeferCommandKeys = new Map<string, string>()
 
-type PracticeCandidateAction = 'open' | 'batch' | 'commit'
-
-function practiceCandidateCommandTarget(
-  action: PracticeCandidateAction,
-  id: string,
-  operation: string,
-): string {
-  return `${action}:${props.agentId}:${id}:${operation}`
+function weeklyDeferCommandTarget(itemID: string, operation: string): string {
+  return `${props.agentId}:${itemID}:${operation}`
 }
 
-function practiceCandidateKey(
-  action: PracticeCandidateAction,
-  id: string,
-  operation: string,
-): string {
-  const target = practiceCandidateCommandTarget(action, id, operation)
-  const existing = practiceCandidateCommandKeys.get(target)
+function weeklyDeferKey(itemID: string, operation: string): string {
+  const target = weeklyDeferCommandTarget(itemID, operation)
+  const existing = weeklyDeferCommandKeys.get(target)
   if (existing) return existing
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-  const created = `desktop-practice-candidate-${action}:${props.agentId}:${id}:${random}`
-  practiceCandidateCommandKeys.set(target, created)
+  const created = `desktop-weekly-practice-defer:${props.agentId}:${itemID}:${random}`
+  weeklyDeferCommandKeys.set(target, created)
   return created
 }
 
-function finishPracticeCandidateCommand(
-  action: PracticeCandidateAction,
-  id: string,
-  operation: string,
-) {
-  practiceCandidateCommandKeys.delete(practiceCandidateCommandTarget(action, id, operation))
+function finishWeeklyDeferCommand(itemID: string, operation: string) {
+  weeklyDeferCommandKeys.delete(weeklyDeferCommandTarget(itemID, operation))
 }
 
-function practiceCandidateQuestion(record: RecordItem | null): string {
-  return String(record?.fields.question ?? '')
-}
-
+const gradeBoundary = computed(() => props.grade.split('·')[0]?.trim() ?? '')
 const textbookBoundary = computed(() => {
   const explicit = props.textbook?.trim()
   if (explicit) return explicit
@@ -926,81 +926,6 @@ const textbookBoundary = computed(() => {
       .find((segment) => segment.endsWith('版')) ?? ''
   )
 })
-
-async function openPracticeCandidateSelection(record: RecordItem) {
-  const operation = `${record.recordId}:${props.grade}:${textbookBoundary.value}`
-  practiceCandidateRecord.value = record
-  practiceCandidateSelection.value = null
-  practiceCandidateError.value = ''
-  practiceCandidateOpen.value = true
-  practiceCandidateLoading.value = true
-  try {
-    practiceCandidateSelection.value = await k12OpenPracticeCandidateSelection(record.recordId, {
-      agent: props.agentId,
-      idempotency_key: practiceCandidateKey('open', record.recordId, operation),
-      grade: props.grade,
-      textbook: textbookBoundary.value,
-    })
-    finishPracticeCandidateCommand('open', record.recordId, operation)
-  } catch (error) {
-    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    practiceCandidateLoading.value = false
-  }
-}
-
-function retryPracticeCandidateSelection() {
-  const record = practiceCandidateRecord.value
-  if (record) void openPracticeCandidateSelection(record)
-}
-
-async function generatePracticeCandidateBatch() {
-  const selection = practiceCandidateSelection.value
-  if (!selection || practiceCandidateGenerating.value) return
-  const operation = `${selection.selection_id}:${selection.revision}`
-  practiceCandidateGenerating.value = true
-  practiceCandidateError.value = ''
-  try {
-    practiceCandidateSelection.value = await k12GeneratePracticeCandidateBatch(
-      selection.selection_id,
-      {
-        agent: props.agentId,
-        revision: selection.revision,
-        idempotency_key: practiceCandidateKey('batch', selection.selection_id, operation),
-      },
-    )
-    finishPracticeCandidateCommand('batch', selection.selection_id, operation)
-  } catch (error) {
-    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    practiceCandidateGenerating.value = false
-  }
-}
-
-async function commitPracticeCandidateSelection(candidateIds: string[]) {
-  const selection = practiceCandidateSelection.value
-  if (!selection || practiceCandidateCommitting.value || candidateIds.length === 0) return
-  const operation = `${selection.selection_id}:${selection.revision}:${JSON.stringify(candidateIds)}`
-  practiceCandidateCommitting.value = true
-  practiceCandidateError.value = ''
-  try {
-    const result = await k12CommitPracticeCandidateSelection(selection.selection_id, {
-      agent: props.agentId,
-      revision: selection.revision,
-      candidate_ids: candidateIds,
-      idempotency_key: practiceCandidateKey('commit', selection.selection_id, operation),
-    })
-    finishPracticeCandidateCommand('commit', selection.selection_id, operation)
-    practiceCandidateSelection.value = result.selection
-    practiceCandidateOpen.value = false
-    await Promise.all([reloadPracticeGenerationStates(), reloadObjectCounts()])
-    toast.success(`已加入练习集 ${result.added_count} 道`)
-  } catch (error) {
-    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    practiceCandidateCommitting.value = false
-  }
-}
 
 async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
   const plan = weeklyPlan.value
@@ -1028,9 +953,9 @@ async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
       weekly_item_id: item.item_id,
       iso_year: plan.iso_week_year,
       iso_week: plan.iso_week_number,
-      idempotency_key: practiceCandidateKey('commit', `defer:${item.item_id}`, operation),
+      idempotency_key: weeklyDeferKey(item.item_id, operation),
     })
-    finishPracticeCandidateCommand('commit', `defer:${item.item_id}`, operation)
+    finishWeeklyDeferCommand(item.item_id, operation)
     toast.success('本周已暂时移出，后续复习周期仍可重新安排')
     await loadWeeklyPractice()
   } catch (error) {
@@ -1041,7 +966,7 @@ async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
 }
 
 // ── 错题 → 练习集：服务端持久化的一键异步投影 ─────────────────────
-// 产品裁决（2026-07-25）：列表里一次点击完成“生成 → 验证 → 装篮”。桌面端不再保存临时
+// 列表里一次点击完成“生成 → 验证 → 装篮”。桌面端不再保存临时
 // 题答、不再弹第二次加入按钮；切 Tab、切会话或重启后均从服务端恢复六态。
 const practiceGenerationByMistake = ref<Record<string, MistakePracticeGenerationDTO>>({})
 const practiceGenerationBusy = ref<string[]>([])
@@ -1070,16 +995,68 @@ function practiceGenerationIsBusy(recordID: string) {
   return practiceGenerationBusy.value.includes(recordID)
 }
 
-async function retryMistakePracticeGeneration(recordID: string) {
-  if (!props.agentId || practiceGenerationIsBusy(recordID)) return
-  practiceGenerationBusy.value = [...practiceGenerationBusy.value, recordID]
+function setPracticeGenerationBusy(recordID: string, busy: boolean) {
+  practiceGenerationBusy.value = busy
+    ? [...new Set([...practiceGenerationBusy.value, recordID])]
+    : practiceGenerationBusy.value.filter((id) => id !== recordID)
+}
+
+let practiceCommandSequence = 0
+function newPracticeCommandKey(recordID: string): string {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++practiceCommandSequence}`
+  return `desktop-single-practice:${props.agentId}:${recordID}:${nonce}`
+}
+
+async function runPracticeGeneration(recordID: string) {
+  const state = practiceGenerationByMistake.value[recordID]?.state
+  if (
+    !props.agentId ||
+    practiceGenerationIsBusy(recordID) ||
+    !state ||
+    !['available', 're_add', 'failed'].includes(state)
+  ) {
+    return
+  }
+  const agent = props.agentId
+  setPracticeGenerationBusy(recordID, true)
   try {
-    setPracticeProjection(await k12RetryMistakePracticeGeneration(props.agentId, recordID))
+    const next =
+      state === 'failed'
+        ? await k12RetryMistakePracticeGeneration(agent, recordID)
+        : await k12StartMistakePracticeGeneration({
+            agent,
+            record_id: recordID,
+            idempotency_key:
+              practiceCommandKeys.get(recordID) ??
+              (() => {
+                const key = newPracticeCommandKey(recordID)
+                practiceCommandKeys.set(recordID, key)
+                return key
+              })(),
+            ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
+            ...(textbookBoundary.value ? { textbook: textbookBoundary.value } : {}),
+            difficulty: 'same',
+            ...(props.modelRoute
+              ? { provider: props.modelRoute.provider, model: props.modelRoute.model }
+              : {}),
+          })
+    if (props.agentId !== agent) return
+    setPracticeProjection(next)
+    if (next.state === 'joined') void reloadObjectCounts()
     schedulePracticePoll()
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    if (props.agentId !== agent) return
+    try {
+      const recovered = await k12GetMistakePracticeGeneration(agent, recordID)
+      if (props.agentId !== agent) return
+      setPracticeProjection(recovered)
+      if (recovered.state === 'joined') void reloadObjectCounts()
+      schedulePracticePoll()
+    } catch {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
   } finally {
-    practiceGenerationBusy.value = practiceGenerationBusy.value.filter((id) => id !== recordID)
+    setPracticeGenerationBusy(recordID, false)
   }
 }
 
@@ -1694,7 +1671,7 @@ async function doExportMd() {
           @join-practice="joinWeeklyPracticeItem"
           @view-practice="viewWeeklyPracticeItem"
           @suppress-item="suppressWeeklyPracticeItem"
-          @retry-mistake-practice="retryMistakePracticeGeneration"
+          @retry-mistake-practice="runPracticeGeneration"
         >
           <template #toolbar-actions>
             <FinalArtifactActions
@@ -1870,11 +1847,7 @@ async function doExportMd() {
                   class="rl-btn"
                   :data-testid="`mistake-practice-${item.recordId}`"
                   :disabled="practiceGenerationIsBusy(item.recordId)"
-                  @click="
-                    practiceProjection(item.recordId).action === 'retry'
-                      ? retryMistakePracticeGeneration(item.recordId)
-                      : openPracticeCandidateSelection(item)
-                  "
+                  @click="runPracticeGeneration(item.recordId)"
                 >
                   {{ practiceProjection(item.recordId).label }}
                 </button>
@@ -2263,20 +2236,6 @@ async function doExportMd() {
       </div>
     </div>
 
-    <K12PracticeCandidateSelectionModal
-      :open="practiceCandidateOpen"
-      :original-question="practiceCandidateQuestion(practiceCandidateRecord)"
-      :selection="practiceCandidateSelection"
-      :loading="practiceCandidateLoading"
-      :generating="practiceCandidateGenerating"
-      :committing="practiceCandidateCommitting"
-      :error="practiceCandidateError"
-      @close="practiceCandidateOpen = false"
-      @retry="retryPracticeCandidateSelection"
-      @generate="generatePracticeCandidateBatch"
-      @commit="commitPracticeCandidateSelection"
-    />
-
     <!-- UX-3：删除二次确认（复用平台 ConfirmDialog；副文案说明用途=移除记错/重复条目）。 -->
     <ConfirmDialog
       :open="confirmDelete"
@@ -2607,9 +2566,9 @@ async function doExportMd() {
   cursor: pointer;
 }
 @supports (font: -apple-system-body) {
-  /* WebKit 对原型中无显式高度的筛选标签按 27px 排版；只在该引擎收回额外高度。 */
+  /* WebKit 对原型中无显式高度的筛选标签按 26px 排版。 */
   .k12rec__filter {
-    height: 27px;
+    height: 26px;
     font-family: system-ui;
   }
 }
@@ -3153,6 +3112,21 @@ async function doExportMd() {
 .k12mistakes :deep(.rl-row > .rl-btn:last-child) {
   border-color: transparent;
   padding-inline: 8px;
+}
+@supports (font: -apple-system-body) {
+  /* 原型在 WebKit 中由半像素边框和内容自然撑高，避免固定高度多出 1～2px。 */
+  .k12mistakes :deep(.rl-row) {
+    min-height: 50px;
+  }
+  .k12mistakes :deep(.rl-btn) {
+    height: 31px;
+  }
+  .k12mistakes :deep(.rl-row > button) {
+    height: 31px;
+  }
+  .k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
+    height: 35px;
+  }
 }
 @media (max-width: 1040px) {
   .k12rec__body {

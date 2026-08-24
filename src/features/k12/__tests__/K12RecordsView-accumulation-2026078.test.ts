@@ -68,7 +68,7 @@ function i18n() {
 function render() {
   return mount(K12RecordsView, {
     attachTo: document.body,
-    props: { agentId: 'mingming', agentName: '小明的辅导老师', grade: '五年级上' },
+    props: { agentId: 'mingming', agentName: '小明的辅导老师', grade: '五年级上', active: true },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
@@ -397,6 +397,56 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'readd')
     expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'failed')
+  })
+
+  it('持久 pending 会自动轮询到 committed，并同步列表与已打开详情', async () => {
+    vi.useFakeTimers()
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'pending',
+          subject: '语文',
+          entry_type: '好词好句',
+          content: '一寸光阴一寸金',
+          version: 1,
+          dictation_generation: { generation_id: 'g-p', status: 'queued' },
+        },
+      ],
+    })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    await w.get('.k12accum__detail').trigger('click')
+    await flushPromises()
+
+    expect(w.get('[data-testid="accum-list-dictation-pending"]').attributes('aria-busy')).toBe(
+      'true',
+    )
+    expect(w.get('[data-testid="accum-dictation-to-basket"]').attributes('aria-busy')).toBe('true')
+
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'pending',
+          subject: '语文',
+          entry_type: '好词好句',
+          content: '一寸光阴一寸金',
+          version: 1,
+          dictation_generation: {
+            generation_id: 'g-p',
+            status: 'committed',
+            practice_item_id: 'practice-p',
+          },
+        },
+      ],
+    })
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+
+    expect(h.listSpy.mock.calls.length).toBeGreaterThan(1)
+    expect(w.get('[data-testid="accum-list-dictation-pending"]').text()).toBe('已加入练习集')
+    expect(w.get('[data-testid="accum-dictation-to-basket"]').text()).toBe('已加入练习集')
+    w.unmount()
   })
 
   it('积累详情动作 exact-set 为复制、发送、生成默写题、删除，且只有头部 X 关闭', async () => {
