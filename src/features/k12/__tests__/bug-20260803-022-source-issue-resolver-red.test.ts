@@ -1,12 +1,34 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import SourceIssueResolver from '../components/SourceIssueResolver.vue'
 import sourceIssueResolverSource from '../components/SourceIssueResolver.vue?raw'
 
+const { getAssetBlob } = vi.hoisted(() => ({ getAssetBlob: vi.fn() }))
+
+vi.mock('@/api/k12-asset-url', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/k12-asset-url')>()
+  return {
+    ...actual,
+    k12GetAssetBlob: (...args: unknown[]) => getAssetBlob(...args),
+  }
+})
+
 const CURRENT_REGION = { x: 40, y: 30, width: 200, height: 120 }
 const wrappers: VueWrapper[] = []
+const sourceObjectURL = 'blob:http://localhost/source-issue-page-current'
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+const originalImage = globalThis.Image
+
+class SourceIssueImage {
+  src = ''
+  naturalWidth = 400
+  naturalHeight = 300
+
+  async decode(): Promise<void> {}
+}
 
 function renderResolver() {
   const wrapper = mount(SourceIssueResolver, {
@@ -23,8 +45,8 @@ function renderResolver() {
       commandAvailable: true,
       disabled: false,
       skipLabel: '跳过第 3 题组',
+      agentId: 'mingming',
       pageAssetId: 'asset://mingming/page-current.png',
-      sourceImageUrl: '/v1/k12/assets/page-current.png',
       sourceWidth: 400,
       sourceHeight: 300,
       currentSourceRegion: CURRENT_REGION,
@@ -60,9 +82,38 @@ function draftRegion(wrapper: VueWrapper) {
   return JSON.parse(encoded!) as typeof CURRENT_REGION
 }
 
+beforeEach(() => {
+  getAssetBlob.mockReset()
+  getAssetBlob.mockResolvedValue(new Blob(['source image'], { type: 'image/png' }))
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => sourceObjectURL),
+  })
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  })
+  Object.defineProperty(globalThis, 'Image', {
+    configurable: true,
+    value: SourceIssueImage,
+  })
+})
+
 afterEach(() => {
   for (const wrapper of wrappers.splice(0)) wrapper.unmount()
   document.body.innerHTML = ''
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: originalCreateObjectURL,
+  })
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: originalRevokeObjectURL,
+  })
+  Object.defineProperty(globalThis, 'Image', {
+    configurable: true,
+    value: originalImage,
+  })
 })
 
 describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys', () => {
@@ -72,13 +123,13 @@ describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys
 
     ;(opener.element as HTMLButtonElement).focus()
     await opener.trigger('click')
-    await nextTick()
+    await flushPromises()
 
     const panel = wrapper.get('[data-source-panel="region"]')
     expect(panel.text()).toContain('将仅重新读取第 3 题组，原图不会被修改。')
     expect(panel.find('[role="dialog"]').exists()).toBe(false)
     expect(panel.get('img').attributes()).toMatchObject({
-      src: '/v1/k12/assets/page-current.png',
+      src: sourceObjectURL,
       alt: '当前作业原图',
     })
     const editor = panel.get('[data-source-region-editor]')
@@ -128,7 +179,7 @@ describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys
 
     ;(opener.element as HTMLButtonElement).focus()
     await opener.trigger('click')
-    await nextTick()
+    await flushPromises()
     await wrapper.get('[data-source-region-selection]').trigger('keydown', { key: 'ArrowRight' })
     expect(draftRegion(wrapper).x).toBe(41)
     await buttonByName(wrapper, '取消').trigger('click')
@@ -138,7 +189,7 @@ describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys
     expect(document.activeElement).toBe(opener.element)
 
     await opener.trigger('click')
-    await nextTick()
+    await flushPromises()
     expect(draftRegion(wrapper)).toEqual(CURRENT_REGION)
     await wrapper.get('[data-source-region-selection]').trigger('keydown', { key: 'ArrowDown' })
     await wrapper.get('[data-source-region-selection]').trigger('keydown', { key: 'Escape' })
@@ -148,7 +199,7 @@ describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys
     expect(document.activeElement).toBe(opener.element)
 
     await opener.trigger('click')
-    await nextTick()
+    await flushPromises()
     await wrapper.get('[data-source-region-selection]').trigger('keydown', { key: 'ArrowLeft' })
     await buttonByName(wrapper, '重新拍摄').trigger('click')
 
@@ -157,14 +208,14 @@ describe('BUG-20260803-022 · SourceIssueResolver approved source input journeys
     expect(wrapper.emitted('intent')).toBeUndefined()
 
     await opener.trigger('click')
-    await nextTick()
+    await flushPromises()
     expect(draftRegion(wrapper)).toEqual(CURRENT_REGION)
   })
 
   it('PROG-026D retains the open draft and synchronously locks the whole resolver while pending', async () => {
     const wrapper = renderResolver()
     await buttonByName(wrapper, '重新选择区域').trigger('click')
-    await nextTick()
+    await flushPromises()
     await wrapper.get('[data-source-region-selection]').trigger('keydown', { key: 'ArrowRight' })
 
     await wrapper.setProps({ disabled: true })

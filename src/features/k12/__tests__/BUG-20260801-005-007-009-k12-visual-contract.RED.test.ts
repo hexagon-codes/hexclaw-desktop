@@ -30,9 +30,9 @@ function cardAlpha(theme: 'light' | 'dark'): number {
 }
 
 describe('K12 v9 visual contract · BUG-20260801-005/007/009', () => {
-  it('keeps Light and Dark shared card alpha at or above .94', () => {
-    expect(cardAlpha('light')).toBeGreaterThanOrEqual(0.94)
-    expect(cardAlpha('dark')).toBeGreaterThanOrEqual(0.94)
+  it('matches the authoritative Light .90 and Dark .88 shared card alpha', () => {
+    expect(cardAlpha('light')).toBe(0.9)
+    expect(cardAlpha('dark')).toBe(0.88)
   })
 
   it('keeps the existing card surfaces on the shared K12 card token', () => {

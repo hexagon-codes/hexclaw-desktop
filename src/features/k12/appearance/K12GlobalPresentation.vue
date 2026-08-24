@@ -253,7 +253,7 @@ if (
   --hc-bg-sidebar-solid: #faf9f1;
   --hc-bg-main: #fbfbf5;
   --hc-bg-panel: rgba(255, 254, 249, 0.92);
-  --hc-bg-card: rgba(255, 254, 249, 0.94);
+  --hc-bg-card: rgba(255, 254, 249, 0.9);
   --hc-bg-input: rgba(79, 143, 102, 0.075);
   --hc-bg-hover: rgba(79, 143, 102, 0.075);
   --hc-bg-active: rgba(79, 143, 102, 0.14);
@@ -283,7 +283,7 @@ if (
   --hc-bg-sidebar-solid: #05132a;
   --hc-bg-main: #071c32;
   --hc-bg-panel: rgba(7, 24, 44, 0.94);
-  --hc-bg-card: rgba(15, 40, 67, 0.94);
+  --hc-bg-card: rgba(15, 40, 67, 0.88);
   --hc-bg-input: rgba(121, 188, 229, 0.105);
   --hc-bg-hover: rgba(121, 188, 229, 0.1);
   --hc-bg-active: rgba(121, 188, 229, 0.16);

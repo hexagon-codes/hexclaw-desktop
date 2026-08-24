@@ -4,7 +4,7 @@
   打印/发送即家长确认（finalize 一步固化，逐题跳过阻断题）；界面不展示六态时间轴（三态：待打印/待完成/已批改）。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -21,13 +21,13 @@ import {
   k12PreparePracticePrintJob,
   k12RetryPracticePrintJob,
   k12UploadAsset,
-  k12AssetURL,
   type PracticeSetDTO,
   type PracticeItemDTO,
   type PracticePaperResp,
   type PracticeReturnAssetDTO,
   type MistakePracticeGenerationDTO,
 } from '@/api/k12'
+import { k12GetAssetBlob } from '@/api/k12-asset-url'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
 import { printPracticePaper, savePracticePaperPdf } from '../export'
@@ -76,6 +76,77 @@ let focusClearTimer: ReturnType<typeof setTimeout> | null = null
 let regradePollTimer: ReturnType<typeof setTimeout> | null = null
 let printRequestSequence = 0
 
+const practiceAssetURLs = reactive(new Map<string, string>())
+const practiceAssetAborters = new Map<string, AbortController>()
+let practiceAssetGeneration = 0
+
+function releasePracticeAsset(assetID: string) {
+  practiceAssetAborters.get(assetID)?.abort()
+  practiceAssetAborters.delete(assetID)
+  const objectURL = practiceAssetURLs.get(assetID)
+  if (objectURL) URL.revokeObjectURL(objectURL)
+  practiceAssetURLs.delete(assetID)
+}
+
+function releasePracticeAssets() {
+  practiceAssetGeneration += 1
+  const assetIDs = new Set([...practiceAssetURLs.keys(), ...practiceAssetAborters.keys()])
+  for (const assetID of assetIDs) releasePracticeAsset(assetID)
+}
+
+async function loadPracticeAsset(assetID: string) {
+  const id = assetID.trim()
+  const agent = props.agentId.trim()
+  if (!agent || !id.startsWith('asset://')) return
+  if (practiceAssetURLs.has(id) || practiceAssetAborters.has(id)) return
+  const controller = new AbortController()
+  const generation = practiceAssetGeneration
+  practiceAssetAborters.set(id, controller)
+  try {
+    const blob = await k12GetAssetBlob(agent, id, controller.signal)
+    if (
+      controller.signal.aborted ||
+      generation !== practiceAssetGeneration ||
+      agent !== props.agentId.trim() ||
+      practiceAssetAborters.get(id) !== controller ||
+      !blob ||
+      blob.size === 0
+    ) {
+      return
+    }
+    const objectURL = URL.createObjectURL(blob)
+    if (objectURL) practiceAssetURLs.set(id, objectURL)
+  } finally {
+    if (practiceAssetAborters.get(id) === controller) practiceAssetAborters.delete(id)
+  }
+}
+
+const practiceAssetIDs = computed(() => {
+  const ids = new Set<string>()
+  for (const practiceSet of sets.value) {
+    for (const asset of practiceSet.return_assets ?? []) {
+      const sourceID = asset.asset_id?.trim()
+      const annotatedID = asset.annotated_asset_id?.trim()
+      if (sourceID?.startsWith('asset://')) ids.add(sourceID)
+      if (annotatedID?.startsWith('asset://')) ids.add(annotatedID)
+    }
+  }
+  return [...ids].sort()
+})
+
+function syncPracticeAssets() {
+  const desired = new Set(practiceAssetIDs.value)
+  const existing = new Set([...practiceAssetURLs.keys(), ...practiceAssetAborters.keys()])
+  for (const assetID of existing) {
+    if (!desired.has(assetID)) releasePracticeAsset(assetID)
+  }
+  for (const assetID of desired) void loadPracticeAsset(assetID)
+}
+
+function practiceAssetURL(assetID: string | undefined): string {
+  return practiceAssetURLs.get(assetID?.trim() ?? '') ?? ''
+}
+
 function newPrintIdempotencyKey(recordId: string): string {
   const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++printRequestSequence}`
   return `desktop-print:${props.agentId}:${recordId}:${nonce}`
@@ -100,6 +171,7 @@ async function load() {
   try {
     const resp = await k12ListPracticeSets(props.agentId)
     sets.value = resp.items ?? []
+    syncPracticeAssets()
     await focusRequestedItem()
   } catch (e) {
     error.value = (e as Error).message || t('k12.practice.loadError')
@@ -109,7 +181,14 @@ async function load() {
   }
 }
 onMounted(load)
-watch(() => props.agentId, load)
+watch(
+  () => props.agentId,
+  () => {
+    releasePracticeAssets()
+    void load()
+  },
+)
+watch(() => practiceAssetIDs.value.join('\u0000'), syncPracticeAssets, { immediate: true })
 watch(
   () => props.focusTarget?.nonce,
   () => void focusRequestedItem(),
@@ -135,6 +214,7 @@ async function focusRequestedItem() {
 onBeforeUnmount(() => {
   if (focusClearTimer) clearTimeout(focusClearTimer)
   if (regradePollTimer) clearTimeout(regradePollTimer)
+  releasePracticeAssets()
 })
 
 function hasPendingRegrade(): boolean {
@@ -165,6 +245,9 @@ const pendingGenerations = computed(() =>
     (generation) => generation.state === 'pending',
   ),
 )
+function practiceGenerationSourceSummary(generation: MistakePracticeGenerationDTO): string {
+  return generation.source_mistake_summary?.trim() ?? ''
+}
 watch(
   () => basket.value?.record_id,
   (recordId, previous) => {
@@ -762,9 +845,14 @@ async function cancelSet(s: PracticeSetDTO) {
           <div class="k12ps__bhead-copy">
             <h3 class="k12ps__btitle">
               {{ t('k12.practice.basketTitle') }}
-              <span class="k12ps__pill k12ps__pill--todo" data-testid="ps-basket-count">{{
-                t('k12.practice.itemCount', { n: basket?.items.length ?? 0 })
-              }}</span>
+              <span
+                class="k12ps__pill"
+                :class="
+                  (basket?.items.length ?? 0) === 0 ? 'k12ps__pill--muted' : 'k12ps__pill--todo'
+                "
+                data-testid="ps-basket-count"
+                >{{ t('k12.practice.itemCount', { n: basket?.items.length ?? 0 }) }}</span
+              >
             </h3>
             <p class="k12ps__bmeta">{{ t('k12.practice.basketMeta') }}</p>
             <p class="k12ps__bhint">{{ t('k12.practice.basketHint') }}</p>
@@ -801,15 +889,23 @@ async function cancelSet(s: PracticeSetDTO) {
           <div
             v-for="generation in pendingGenerations"
             :key="generation.source_mistake_id"
-            class="k12ps__generation-placeholder"
+            class="k12ps__item k12ps__generation-placeholder"
             data-testid="practice-generation-placeholder"
+            data-practice-pending
+            :data-practice-pending-key="generation.source_mistake_id"
           >
-            正在生成练习题…
+            <i class="k12ps__seq">…</i>
+            <div class="k12ps__qwrap">
+              <b class="k12ps__q">正在生成练习题…</b>
+              <small v-if="practiceGenerationSourceSummary(generation)" class="k12ps__qmeta"
+                >来源错题：{{ practiceGenerationSourceSummary(generation) }}</small
+              >
+            </div>
           </div>
         </div>
 
         <div
-          v-if="!basket || basket.items.length === 0"
+          v-if="(!basket || basket.items.length === 0) && pendingGenerations.length === 0"
           class="k12ps__bempty"
           data-testid="ps-basket-empty"
         >
@@ -935,7 +1031,8 @@ async function cancelSet(s: PracticeSetDTO) {
                 data-testid="ps-return-asset"
               >
                 <img
-                  :src="k12AssetURL(agentId, asset.asset_id)"
+                  v-if="practiceAssetURL(asset.asset_id)"
+                  :src="practiceAssetURL(asset.asset_id)"
                   class="k12ps__return-thumb"
                   :alt="t('k12.practice.returnPhotoAlt', { n: assetIndex + 1 })"
                   loading="lazy"
@@ -1306,10 +1403,14 @@ async function cancelSet(s: PracticeSetDTO) {
           <div class="k12ps__result-workspace">
             <figure class="k12ps__result-figure">
               <img
+                v-if="
+                  practiceAssetURL(
+                    regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id,
+                  )
+                "
                 data-testid="ps-regrade-annotated"
                 :src="
-                  k12AssetURL(
-                    agentId,
+                  practiceAssetURL(
                     regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id || '',
                   )
                 "
@@ -1381,7 +1482,7 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__basket {
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: var(--hc-bg-card);
+  background: rgba(255, 254, 249, 0.9);
   box-shadow: var(--hc-shadow-sm);
   overflow: hidden;
 }
@@ -1389,28 +1490,31 @@ async function cancelSet(s: PracticeSetDTO) {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 15px 18px;
-  border-bottom: 1px solid var(--hc-border);
-  background: linear-gradient(135deg, var(--hc-accent-subtle), var(--hc-bg-card));
+  border-bottom: 1px solid var(--hc-divider);
+  background: linear-gradient(135deg, var(--hc-accent-subtle), rgba(255, 254, 249, 0.9));
+}
+:global([data-theme='dark']) .k12ps__basket {
+  background: rgba(15, 40, 67, 0.88);
+}
+:global([data-theme='dark']) .k12ps__bhead {
+  background: linear-gradient(135deg, var(--hc-accent-subtle), rgba(15, 40, 67, 0.88));
 }
 .k12ps__bhead-copy {
   min-width: 240px;
-  flex: 1;
 }
 .k12ps__btitle {
   font-size: 14px;
+  font-weight: 700;
   margin: 0 0 3px;
   color: var(--hc-text-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .k12ps__bmeta {
   font-size: 11.5px;
   color: var(--hc-text-muted);
   margin: 0;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 .k12ps__bhint {
   font-size: 11.5px;
@@ -1419,9 +1523,25 @@ async function cancelSet(s: PracticeSetDTO) {
 }
 .k12ps__bactions {
   display: flex;
-  gap: 7px;
+  gap: 6px;
   flex-wrap: wrap;
   margin-left: auto;
+}
+.k12ps__bactions .k12ps__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--hc-bg-input);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.k12ps__bactions .k12ps__btn--primary {
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+}
+.k12ps__bactions .k12ps__btn:disabled {
+  box-shadow: none;
 }
 .k12ps__bempty {
   padding: 18px;
@@ -1434,12 +1554,7 @@ async function cancelSet(s: PracticeSetDTO) {
   padding: 12px 14px 0;
 }
 .k12ps__generation-placeholder {
-  padding: 10px 12px;
-  border: 1px dashed var(--hc-border);
-  border-radius: 10px;
-  color: var(--hc-text-muted);
-  background: var(--hc-bg-input);
-  font-size: 11.5px;
+  grid-template-columns: 22px minmax(0, 1fr);
 }
 .k12ps__groups {
   padding: 12px 14px 0;
@@ -1476,7 +1591,6 @@ async function cancelSet(s: PracticeSetDTO) {
   height: 21px;
   display: grid;
   place-items: center;
-  flex-shrink: 0;
   border-radius: 6px;
   background: var(--hc-bg-card);
   color: var(--hc-accent);
@@ -1502,6 +1616,18 @@ async function cancelSet(s: PracticeSetDTO) {
   color: var(--hc-text-muted);
   font-size: 10.5px;
   line-height: 1.55;
+}
+.k12ps__generation-placeholder .k12ps__q {
+  display: inline;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+:global([data-theme='light'] .k12ps__generation-placeholder .k12ps__seq) {
+  background: rgba(255, 254, 249, 0.9);
+}
+.k12ps__generation-placeholder .k12ps__qmeta {
+  font-size: 9.583333px;
 }
 .k12ps__item-actions {
   display: flex;
@@ -1954,6 +2080,15 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__correct-details ol {
   margin: 8px 0 0;
   padding-left: 20px;
+}
+@media (max-width: 1040px) {
+  .k12ps__bhead {
+    flex-wrap: wrap;
+  }
+  .k12ps__bactions {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 @media (max-width: 720px) {
   .k12ps__result-workspace {

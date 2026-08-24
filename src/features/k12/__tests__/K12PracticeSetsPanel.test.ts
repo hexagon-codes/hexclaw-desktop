@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12PracticeSetsPanel from '../views/K12PracticeSetsPanel.vue'
+import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 import type { PracticeSetDTO, PracticeItemDTO } from '@/api/k12'
 
 // 练习集面板（§3.8 购物车两段 · §4.13 呈现物）：待打印篮（学科分组+阻断沉底+移除）+ 打印历史（paper_no+三态）。
@@ -30,6 +31,7 @@ const h = vi.hoisted(() => ({
   uploadSpy: vi.fn(),
   submitSpy: vi.fn(),
   gradeSpy: vi.fn(),
+  getAssetBlob: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
@@ -62,7 +64,6 @@ vi.mock('@/api/k12', () => ({
     id: string,
     results: Array<{ item_id: string; correct: boolean }>,
   ) => h.gradeSpy(a, id, results),
-  k12AssetURL: (agent: string, assetId: string) => `/asset/${agent}/${encodeURIComponent(assetId)}`,
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
@@ -71,6 +72,10 @@ vi.mock('@/composables/useToast', () => ({
     info: h.toastInfo,
     warning: h.toastWarning,
   }),
+}))
+vi.mock('@/api/k12-asset-url', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/k12-asset-url')>()),
+  k12GetAssetBlob: (...args: unknown[]) => h.getAssetBlob(...args),
 }))
 vi.mock('../export', () => ({
   printPracticePaper: (markdown: string, title: string) => h.printSpy(markdown, title),
@@ -253,6 +258,9 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue(historySet({ status: 'submitted', status_label: '已回传' }))
   h.gradeSpy.mockReset().mockResolvedValue(historySet())
+  h.getAssetBlob.mockReset().mockResolvedValue(new Blob(['practice-image'], { type: 'image/png' }))
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:practice-asset')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
   h.toastSuccess.mockReset()
   h.toastError.mockReset()
   h.toastInfo.mockReset()
@@ -266,20 +274,183 @@ afterEach(() => {
 })
 
 describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
-  it('服务端 generation pending 在练习集面板保留正在生成占位，不伪造可加入按钮', async () => {
+  it('服务端 generation pending 复用正式题行 anatomy，保留来源且不生成动作', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
     const w = mount(K12PracticeSetsPanel, {
       props: {
         agentId: 'k12-xiaoming',
         practiceGenerationByMistake: {
-          'mistake-1': { state: 'pending', source_mistake_id: 'mistake-1' },
+          'mistake-1': {
+            state: 'pending',
+            source_mistake_id: 'mistake-1',
+            source_mistake_summary: '苹果和梨的价钱',
+          },
         },
       },
       global: { plugins: [i18n()] },
     })
     await flushPromises()
-    expect(w.find('[data-testid="practice-generation-placeholder"]').text()).toBe('正在生成练习题…')
+
+    const placeholder = w.get('[data-testid="practice-generation-placeholder"]')
+    expect(placeholder.classes()).toContain('k12ps__item')
+    expect(placeholder.attributes('data-practice-pending')).toBeDefined()
+    expect(placeholder.attributes('data-practice-pending-key')).toBe('mistake-1')
+    expect(
+      Array.from(placeholder.element.children).map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        className: element.className,
+      })),
+    ).toEqual([
+      { tag: 'i', className: 'k12ps__seq' },
+      { tag: 'div', className: 'k12ps__qwrap' },
+    ])
+    expect(placeholder.get(':scope > .k12ps__seq').text()).toBe('…')
+    const copy = placeholder.get(':scope > .k12ps__qwrap')
+    expect(
+      Array.from(copy.element.children).map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        className: element.className,
+      })),
+    ).toEqual([
+      { tag: 'b', className: 'k12ps__q' },
+      { tag: 'small', className: 'k12ps__qmeta' },
+    ])
+    expect(copy.get('.k12ps__q').text()).toBe('正在生成练习题…')
+    expect(copy.get('.k12ps__qmeta').text()).toBe('来源错题：苹果和梨的价钱')
+    expect(placeholder.find('button').exists()).toBe(false)
+    expect(placeholder.find('.k12ps__item-actions').exists()).toBe(false)
+  })
+
+  it('pending 占位不与空篮态并存，也不计入可出卷题数', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = mount(K12PracticeSetsPanel, {
+      props: {
+        agentId: 'k12-xiaoming',
+        practiceGenerationByMistake: {
+          'mistake-1': {
+            state: 'pending',
+            source_mistake_id: 'mistake-1',
+            source_mistake_summary: '苹果和梨的价钱',
+          },
+          'mistake-2': {
+            state: 'pending',
+            source_mistake_id: 'mistake-2',
+            source_mistake_summary: '解方程 2x + 15 = 43',
+          },
+        },
+      },
+      global: { plugins: [i18n()] },
+    })
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(2)
+    expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(false)
+    const count = w.get('[data-testid="ps-basket-count"]')
+    expect(count.text()).toBe('0 道')
+    expect(count.classes()).toContain('k12ps__pill--muted')
+    expect(count.classes()).not.toContain('k12ps__pill--todo')
+    expect(w.emitted('count')).toEqual([[0]])
+  })
+
+  it('pending → joined：唯一 ready 正式题替换占位并恢复出卷动作', async () => {
+    const readyItem = item('variant-1', '一盒彩笔 12 元，买 3 盒一共多少元？', '数学', 'verified')
+    h.listSpy
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [basket([readyItem])] })
+    const w = mount(K12PracticeSetsPanel, {
+      props: {
+        agentId: 'k12-xiaoming',
+        practiceGenerationByMistake: {
+          'mistake-1': {
+            state: 'pending',
+            source_mistake_id: 'mistake-1',
+            source_mistake_summary: '三盒彩笔的总价',
+          },
+        },
+      },
+      global: { plugins: [i18n()] },
+    })
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(1)
+    expect(w.findAll('[data-practice-item-id]')).toHaveLength(0)
+    expect(w.get('[data-testid="ps-basket-count"]').text()).toBe('0 道')
+    expect(w.get('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="ps-finalize-send"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(false)
+    expect(w.find('.k12ps__item-actions').exists()).toBe(false)
+
+    await w.setProps({
+      practiceGenerationByMistake: {
+        'mistake-1': {
+          state: 'joined',
+          source_mistake_id: 'mistake-1',
+          source_mistake_summary: '三盒彩笔的总价',
+          practice_set_id: 'basket1',
+          practice_item_id: readyItem.item_id,
+          item: readyItem,
+        },
+      },
+    })
+    await (w.vm as unknown as { load: () => Promise<void> }).load()
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(0)
+    const formalItems = w.findAll('[data-practice-item-id]')
+    expect(formalItems).toHaveLength(1)
+    expect(formalItems[0]?.attributes('data-practice-item-id')).toBe(readyItem.item_id)
+    expect(formalItems[0]?.get('.k12ps__q').text()).toBe(readyItem.question_markdown)
+    expect(formalItems[0]?.find('.k12ps__item-actions').exists()).toBe(true)
+    expect(w.get('[data-testid="ps-basket-count"]').text()).toBe('1 道')
+    expect(w.get('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeUndefined()
+    expect(w.get('[data-testid="ps-finalize-send"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(false)
+    expect(w.emitted('count')).toEqual([[0], [1]])
+  })
+
+  it('pending → failed：占位消失且父级可重试失败事实保持不变', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = mount(K12PracticeSetsPanel, {
+      props: {
+        agentId: 'k12-xiaoming',
+        practiceGenerationByMistake: {
+          'mistake-1': {
+            state: 'pending',
+            source_mistake_id: 'mistake-1',
+            source_mistake_summary: '三盒彩笔的总价',
+          },
+        },
+      },
+      global: { plugins: [i18n()] },
+    })
+    await flushPromises()
+
+    const failedProjection = {
+      state: 'failed' as const,
+      source_mistake_id: 'mistake-1',
+      source_mistake_summary: '三盒彩笔的总价',
+      generation_job_id: 'generation-1',
+      failure_reason: 'provider unavailable',
+    }
+    await w.setProps({
+      practiceGenerationByMistake: { 'mistake-1': failedProjection },
+    })
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="practice-generation-placeholder"]')).toHaveLength(0)
+    expect(w.findAll('[data-practice-item-id]')).toHaveLength(0)
     expect(w.find('[data-testid="ps-basket-empty"]').exists()).toBe(true)
+    expect(w.get('[data-testid="ps-basket-count"]').text()).toBe('0 道')
+    expect(w.get('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="ps-finalize-send"]').attributes('disabled')).toBeDefined()
+    expect(w.find('.k12ps__item-actions').exists()).toBe(false)
+    expect(w.props('practiceGenerationByMistake')?.['mistake-1']).toEqual(failedProjection)
+    expect(projectMistakePracticeGeneration(failedProjection.state)).toEqual({
+      kind: 'action',
+      action: 'retry',
+      label: '出题失败 · 重试',
+    })
+    expect(w.emitted('generation-invalidated')).toBeUndefined()
   })
 
   it('空篮 + 空历史 → 双空态', async () => {
@@ -943,8 +1114,8 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
 
     const modal = w.find('[data-testid="ps-regrade-result-modal"]')
     expect(modal.exists()).toBe(true)
-    expect(modal.find('[data-testid="ps-regrade-annotated"]').attributes('src')).toContain(
-      encodeURIComponent('asset://k12-xiaoming/annotated.png'),
+    expect(modal.find('[data-testid="ps-regrade-annotated"]').attributes('src')).toBe(
+      'blob:practice-asset',
     )
     expect(modal.find('[data-testid="ps-regrade-markdown"]').text()).toContain('家长这样讲')
     expect(modal.text()).toContain('1 题继续复习')

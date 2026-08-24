@@ -318,12 +318,14 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
       K12_IMAGE_TASK_BINDINGS_KEY,
       JSON.stringify({
         version: 2,
-        bindings: [{
-          source_session_id: 'session-1',
-          source_message_id: 'message-1',
-          agent_id: 'mingming',
-          dispatch_id: 'dispatch-1',
-        }],
+        bindings: [
+          {
+            source_session_id: 'session-1',
+            source_message_id: 'message-1',
+            agent_id: 'mingming',
+            dispatch_id: 'dispatch-1',
+          },
+        ],
       }),
     )
     h.getTask
@@ -344,7 +346,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(wrapper.get('[data-testid="task-shell-metadata"]').text()).toContain(
       'HexClaw-GPT·gpt-5.6-sol·小王的辅导助手·五年级下',
     )
-    expect(wrapper.find('[data-testid="message-fork"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="message-fork"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()
@@ -406,9 +408,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     h.createTask.mockResolvedValue({ created: true, ...recognizing })
     h.getTask.mockImplementation(() => new Promise(() => {}))
 
-    const first = mountPanel(
-      fixtureDataURL('k12-test-批改作业.png', homeworkFixtureSHA256),
-    )
+    const first = mountPanel(fixtureDataURL('k12-test-批改作业.png', homeworkFixtureSHA256))
     await flushPromises()
 
     const firstProgress = first.get('[data-testid="recognize-pipeline"]')
@@ -420,9 +420,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     first.unmount()
 
     h.getTask.mockReset()
-    h.getTask
-      .mockResolvedValueOnce(recognizing)
-      .mockImplementation(() => new Promise(() => {}))
+    h.getTask.mockResolvedValueOnce(recognizing).mockImplementation(() => new Promise(() => {}))
     const restored = mountRestoredPanel()
     await flushPromises()
 
@@ -430,11 +428,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(restoredProgress.text()).toContain('已作答作业')
     expect(restoredProgress.text().trim()).not.toBe('')
     expect(h.createTask).toHaveBeenCalledTimes(1)
-    expect(h.getTask).toHaveBeenCalledWith(
-      'mingming',
-      'dispatch-1',
-      expect.any(AbortSignal),
-    )
+    expect(h.getTask).toHaveBeenCalledWith('mingming', 'dispatch-1', expect.any(AbortSignal))
     expect(h.retryTask).not.toHaveBeenCalled()
     expect(h.cancelTask).not.toHaveBeenCalled()
   })

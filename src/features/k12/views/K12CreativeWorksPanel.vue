@@ -387,6 +387,8 @@ async function copyWork(work: CreativeWorkDTO) {
 
 async function sendWork(work: CreativeWorkDTO) {
   await delivery.send(() => k12SendCreativeWork(props.agentId, work.work_id))
+  const batchID = delivery.batch.value?.batch_id
+  if (batchID) replaceWork({ ...work, delivery_batch_id: batchID })
 }
 
 function safePDFName(name: string): string {
@@ -1051,7 +1053,9 @@ defineExpose({ load, openAdd })
 <template>
   <section class="k12cw">
     <div class="k12cw__overview">
-      <p class="k12cw__desc" :title="t('k12.works.desc')">{{ t('k12.works.desc') }}</p>
+      <div class="k12cw__overview-copy">
+        <p class="k12cw__desc" :title="t('k12.works.desc')">{{ t('k12.works.desc') }}</p>
+      </div>
       <button
         v-if="showAddButton"
         type="button"
@@ -1661,9 +1665,15 @@ defineExpose({ load, openAdd })
 </template>
 
 <style scoped>
+.k12cw {
+  /* 作品页字体整形跟随权威原型，避免全局高级字距改变文字像素与换行。 */
+  font-feature-settings: normal;
+  text-rendering: auto;
+}
+
 .k12cw__desc {
-  flex: 1;
   min-width: 0;
+  flex: 0 1 auto;
   margin: 0;
   color: var(--hc-text-muted);
   font-size: 12px;
@@ -1671,6 +1681,11 @@ defineExpose({ load, openAdd })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.k12cw__overview-copy {
+  min-width: 250px;
+  flex: 1;
 }
 
 .k12cw__overview {
@@ -1681,14 +1696,6 @@ defineExpose({ load, openAdd })
   margin-bottom: 12px;
 }
 
-/* WebKit 的作品概览需下移 3px，抵消实现与原型基线的 3px 几何差；不改变集合列与后续内容流。 */
-@supports (font: -apple-system-body) {
-  .k12cw__overview {
-    position: relative;
-    top: 1px;
-  }
-}
-
 .k12cw__overview > .hc-btn {
   order: 3;
   flex-shrink: 0;
@@ -1697,15 +1704,13 @@ defineExpose({ load, openAdd })
 .k12cw__kpis {
   display: flex;
   gap: 6px;
-  margin-left: auto;
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .k12cw__kpi {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  white-space: nowrap;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
   background: rgba(255, 254, 249, 0.9);
@@ -1724,7 +1729,6 @@ defineExpose({ load, openAdd })
 .k12cw__filter {
   display: grid;
   box-sizing: border-box;
-  height: 55px;
   gap: 9px;
   margin-bottom: 12px;
   padding: 12px 14px;
@@ -1769,6 +1773,13 @@ defineExpose({ load, openAdd })
   color: var(--hc-accent);
   font-weight: 400;
   border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
+}
+
+@supports (font: -apple-system-body) {
+  /* WebKit 下原型的原生筛选按钮使用 system-ui，其自然高度为 27px。 */
+  .k12cw__filter button {
+    font-family: system-ui;
+  }
 }
 
 .k12cw__rules {
@@ -1905,7 +1916,9 @@ defineExpose({ load, openAdd })
   border: 2px solid #59636f;
   border-radius: 48% 52% 45% 55%;
   transform: rotate(-11deg);
-  box-shadow: 16px 10px 0 -9px #59636f, -13px 19px 0 -11px #59636f;
+  box-shadow:
+    16px 10px 0 -9px #59636f,
+    -13px 19px 0 -11px #59636f;
 }
 
 .k12cw__preview--writing .k12cw__preview-placeholder::after {
@@ -1934,7 +1947,9 @@ defineExpose({ load, openAdd })
   border: 2px solid #59636f;
   border-radius: 48% 52% 45% 55%;
   transform: rotate(-11deg);
-  box-shadow: 16px 10px 0 -9px #59636f, -13px 19px 0 -11px #59636f;
+  box-shadow:
+    16px 10px 0 -9px #59636f,
+    -13px 19px 0 -11px #59636f;
 }
 
 .k12cw__thumb {
@@ -1961,7 +1976,7 @@ defineExpose({ load, openAdd })
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .k12cw__kind {
@@ -2061,7 +2076,8 @@ defineExpose({ load, openAdd })
 }
 
 .k12cw__detail-toggle {
-  align-self: flex-end;
+  align-self: center;
+  justify-content: normal;
   min-height: 32px;
   margin-top: 0;
   padding: 6px 12px;

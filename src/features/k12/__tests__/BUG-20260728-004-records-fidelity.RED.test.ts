@@ -8,6 +8,22 @@ import zhCNSource from '../i18n/zh-CN.ts?raw'
 import schemaSource from '../schemas.ts?raw'
 import recordListSource from '@/shell/records/RecordList.vue?raw'
 
+function cssBlock(source: string, selector: string): string {
+  const selectorStart = source.indexOf(selector)
+  if (selectorStart < 0) return ''
+  const blockStart = source.indexOf('{', selectorStart + selector.length)
+  if (blockStart < 0) return ''
+
+  let depth = 0
+  for (let index = blockStart; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(blockStart + 1, index)
+  }
+  return ''
+}
+
 describe('BUG-20260728-004 learning-record prototype fidelity', () => {
   it('keeps shared secondary tabs free from page-local visual overrides', () => {
     expect(/\n\.seg\s*\{/.test(recordsSource)).toBe(false)
@@ -22,7 +38,11 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
   })
 
   it('keeps the object toolbar at the prototype 42px track height', () => {
-    expect(recordsSource).toMatch(/\.k12rec__tabs\s*\{[^}]*padding:\s*2px\s+14px\s+3px/s)
+    const toolbar = cssBlock(recordsSource, '.k12rec__tabs')
+    expect(toolbar).toMatch(/height:\s*42px/)
+    expect(toolbar).toMatch(/padding:\s*0\s+14px/)
+    expect(toolbar).toMatch(/background:\s*var\(--hc-bg-panel\)/)
+    expect(toolbar).toMatch(/border-bottom:\s*1px\s+solid\s+var\(--hc-divider\)/)
   })
 
   it('keeps the approved compact weekly layout and lifecycle copy', () => {
@@ -83,9 +103,9 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
     )
     expect(creativeWorksSource).toMatch(/\.k12cw__rules b\s*\{[^}]*margin-bottom:\s*0/s)
     expect(recordsSource).toMatch(
-      /\.k12rec__body:has\(> section\[data-testid=['"]works-section['"]\]\)\s*\{[^}]*padding-top:\s*15px/s,
+      /\.k12rec__body:has\(> section\[data-testid=['"]works-section['"]\]\)\s*\{[^}]*padding-top:\s*16px/s,
     )
-    expect(recordsSource).toMatch(/\.k12rec__body\s*\{[^}]*padding:\s*15px 26px 48px/s)
+    expect(recordsSource).toMatch(/\.k12rec__body\s*\{[^}]*padding:\s*16px 26px 48px/s)
     expect(weeklyPracticeSource).not.toMatch(
       /\.weekly-progress\.rc-week-progress\s*>\s*button\s*\{[^}]*\b(?:height|font-family|line-height):/s,
     )
@@ -117,5 +137,32 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
     expect(schemaSource).toMatch(/key:\s*'entry_source'[\s\S]*role:\s*'source'/)
     expect(recordListSource).toMatch(/fieldsByRole\('source'\)/)
     expect(recordListSource).toMatch(/class="rl-source"/)
+  })
+
+  it('wraps the wrong-question row track at 1040px without clipping actions or changing the desktop baseline', () => {
+    const desktopRow = cssBlock(recordsSource, '.k12mistakes :deep(.rl-row)')
+    const desktopTitle = cssBlock(recordsSource, '.k12mistakes :deep(.rl-title)')
+
+    expect(desktopRow).toMatch(/flex-wrap:\s*nowrap/)
+    expect(desktopTitle).toMatch(/flex:\s*0\s+0\s+250px/)
+
+    const narrow = cssBlock(recordsSource, '@media (max-width: 1040px)')
+    const narrowRow = cssBlock(narrow, '.k12mistakes :deep(.rl-row)')
+    const narrowTitle = cssBlock(narrow, '.k12mistakes :deep(.rl-title)')
+    const narrowBody = cssBlock(narrow, '.k12rec__body')
+    const narrowMeta = cssBlock(narrow, '.k12mistakes :deep(.rl-meta)')
+    const narrowActions = cssBlock(narrow, '.k12mistakes :deep(.rl-row > button)')
+
+    expect.soft(narrowBody).toMatch(/padding-inline:\s*16px/)
+    expect.soft(narrowRow).toMatch(/flex-wrap:\s*wrap/)
+    expect.soft(narrowRow).toMatch(/overflow:\s*hidden/)
+    expect.soft(narrowTitle).toMatch(/flex:\s*1\s+1\s+180px/)
+    expect.soft(narrowTitle).toMatch(/white-space:\s*nowrap/)
+    expect.soft(narrowTitle).toMatch(/text-overflow:\s*ellipsis/)
+    expect.soft(narrowMeta).toMatch(/flex:\s*1\s+1\s+100%/)
+    expect.soft(narrowMeta).toMatch(/order:\s*3/)
+    expect.soft(narrowMeta).toMatch(/white-space:\s*normal/)
+    expect.soft(narrowActions).toMatch(/flex:\s*none/)
+    expect.soft(narrowActions).toMatch(/white-space:\s*nowrap/)
   })
 })

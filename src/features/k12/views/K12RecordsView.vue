@@ -400,6 +400,7 @@ async function onWeeklyProfileSaved() {
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
 const sub = ref<K12RecordsTarget>(props.navigation?.target ?? props.target ?? 'week')
+const recordsBody = ref<HTMLElement | null>(null)
 function selectRecordsTab(key: string) {
   if (
     key === 'week' ||
@@ -411,6 +412,13 @@ function selectRecordsTab(key: string) {
     sub.value = key
   }
 }
+watch(sub, async () => {
+  // 五个档案对象共用内容容器；Tab 控制器只清除横向残留。
+  await nextTick()
+  if (recordsBody.value) {
+    recordsBody.value.scrollLeft = 0
+  }
+})
 const reviewMenuOpen = ref(false)
 watch(
   () => props.target,
@@ -1665,7 +1673,7 @@ async function doExportMd() {
       </div>
     </div>
 
-    <div class="k12rec__body">
+    <div ref="recordsBody" class="k12rec__body">
       <!-- 本周该练：服务端唯一周计划投影。无后端/失败时只显示真实错误，不回退本地错题拼卷。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
         <K12WeeklyPracticePanel
@@ -2366,6 +2374,14 @@ async function doExportMd() {
   max-inline-size: none;
   box-sizing: border-box;
   min-height: 0;
+  /* 学习档案整体字体整形跟随权威原型，五个对象共用同一视觉基线。 */
+  font-feature-settings: normal;
+  text-rendering: auto;
+}
+.k12mistakes {
+  /* 原型未启用高级字距整形；仅收敛错题列表中含中英文与间隔点的行动作宽度。 */
+  font-feature-settings: normal;
+  text-rendering: auto;
 }
 .k12archive-undos {
   position: fixed;
@@ -2409,8 +2425,9 @@ async function doExportMd() {
   flex-wrap: nowrap;
   height: 42px;
   box-sizing: border-box;
-  padding: 2px 14px 3px;
-  border-bottom: 0.5px solid var(--hc-border);
+  padding: 0 14px;
+  background: var(--hc-bg-panel);
+  border-bottom: 1px solid var(--hc-divider);
 }
 .k12rec__sp {
   flex: 1;
@@ -2418,10 +2435,11 @@ async function doExportMd() {
 .k12rec__body {
   flex: 1;
   overflow: auto;
-  padding: 15px 26px 48px;
+  overflow-anchor: none;
+  padding: 16px 26px 48px;
 }
 .k12rec__body:has(> section[data-testid='works-section']) {
-  padding-top: 15px;
+  padding-top: 16px;
 }
 /* DD-019：档案工作区铺满，真实记录内容统一落在原型的 1024px 阅读列。 */
 .k12rec__body > section {
@@ -2637,6 +2655,13 @@ async function doExportMd() {
   font-weight: 400;
   line-height: normal;
   cursor: pointer;
+}
+@supports (font: -apple-system-body) {
+  /* WebKit 对原型中无显式高度的筛选标签按 27px 排版；只在该引擎收回额外高度。 */
+  .k12rec__filter {
+    height: 27px;
+    font-family: system-ui;
+  }
 }
 .k12rec__filter-row--subject .k12rec__filter {
   width: 68px;
@@ -3044,6 +3069,7 @@ async function doExportMd() {
 .k12rec__addbtn {
   display: inline-flex;
   align-items: center;
+  justify-content: normal;
   gap: 5px;
   height: 32px;
   padding: 0 12px;
@@ -3163,6 +3189,10 @@ async function doExportMd() {
   white-space: nowrap;
   gap: 6px;
 }
+.k12mistakes :deep(.rl-row > button) {
+  /* 全部错题的行内动作与权威原型一致，不参与主轴压缩。 */
+  flex: none;
+}
 .k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
   height: 36px;
   padding: 8px 14px;
@@ -3177,6 +3207,29 @@ async function doExportMd() {
 .k12mistakes :deep(.rl-row > .rl-btn:last-child) {
   border-color: transparent;
   padding-inline: 8px;
+}
+@media (max-width: 1040px) {
+  .k12rec__body {
+    padding-inline: 16px;
+  }
+  .k12mistakes :deep(.rl-row) {
+    flex-wrap: wrap;
+    overflow: hidden;
+  }
+  .k12mistakes :deep(.rl-title) {
+    flex: 1 1 180px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .k12mistakes :deep(.rl-meta) {
+    flex: 1 1 100%;
+    order: 3;
+    white-space: normal;
+  }
+  .k12mistakes :deep(.rl-row > button) {
+    flex: none;
+    white-space: nowrap;
+  }
 }
 /* 原型 1193-1212：本周复习用大数字 hero；列表、自动化脚注都收进同一张卡。 */
 :deep(.k12week__hero) {

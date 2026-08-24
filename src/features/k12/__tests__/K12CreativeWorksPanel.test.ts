@@ -321,9 +321,7 @@ describe('K12CreativeWorksPanel current contract', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="cw-image-preview"]').attributes('tabindex')).toBe('-1')
-    expect(document.activeElement).toBe(
-      wrapper.get('[data-testid="cw-image-preview"]').element,
-    )
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="cw-image-preview"]').element)
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
@@ -353,6 +351,32 @@ describe('K12CreativeWorksPanel current contract', () => {
     expect(wrapper.get('[data-testid="cw-delete"]').classes()).toContain('hc-btn-danger-ghost')
     expect(wrapper.find('[data-testid="cw-revision-submit"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="cw-archive"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('首发成功写回批次身份，关闭并重开详情后恢复同一 delivered 批次', async () => {
+    h.list.mockResolvedValue({ items: [work()] })
+    h.sendWork.mockResolvedValue({ batch_id: 'batch-1', status: 'delivered' })
+    h.getDeliveryBatch.mockResolvedValue({ batch_id: 'batch-1', status: 'delivered' })
+    const wrapper = render()
+    await flushPromises()
+    await openOnlyDetail(wrapper)
+
+    await wrapper.get('[data-testid="cw-send"]').trigger('click')
+    await flushPromises()
+    expect(h.sendWork).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="cw-send"]').text()).toBe('发送成功')
+    expect(wrapper.get('[data-testid="cw-send"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="cw-detail-close"]').trigger('click')
+    await flushPromises()
+    await openOnlyDetail(wrapper)
+
+    expect(h.getDeliveryBatch).toHaveBeenCalledTimes(1)
+    expect(h.getDeliveryBatch).toHaveBeenCalledWith('agent-1', 'batch-1')
+    expect(wrapper.get('[data-testid="cw-send"]').text()).toBe('发送成功')
+    expect(wrapper.get('[data-testid="cw-send"]').attributes('disabled')).toBeDefined()
+    expect(h.sendWork).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

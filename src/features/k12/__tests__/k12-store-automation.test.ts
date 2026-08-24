@@ -24,10 +24,6 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12ListAccumulation: vi.fn(),
   k12UploadAsset: (...args: unknown[]) => h.uploadSpy(...args),
-  k12AssetURL: (agent: string, assetId: string) => {
-    const file = assetId.slice(assetId.lastIndexOf('/') + 1)
-    return `http://127.0.0.1:16060/api/k12/assets/${file}?agent=${encodeURIComponent(agent)}`
-  },
   k12CreateImageTask: (...args: unknown[]) => h.createTaskSpy(...args),
   k12GetImageTask: (...args: unknown[]) => h.getTaskSpy(...args),
   k12GetImageTaskResult: (...args: unknown[]) => h.getResultSpy(...args),
@@ -143,7 +139,6 @@ describe('K12 store · 自动化/入站接线', () => {
       expect(h.uploadSpy.mock.calls[0]?.[3]).toBeUndefined()
       expect(onSourceStored).toHaveBeenCalledWith({
         assetId: 'asset://mingming/photo.png',
-        displayUrl: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
       })
       expect(onSourceStored.mock.invocationCallOrder[0]).toBeLessThan(
         h.createTaskSpy.mock.invocationCallOrder[0]!,
@@ -212,7 +207,8 @@ describe('K12 store · 自动化/入站接线', () => {
     }
     const firstKey = (h.createTaskSpy.mock.calls[0]![0] as { source_ref: string }).source_ref
     const replayKey = (h.createTaskSpy.mock.calls[1]![0] as { source_ref: string }).source_ref
-    const newSubmissionKey = (h.createTaskSpy.mock.calls[2]![0] as { source_ref: string }).source_ref
+    const newSubmissionKey = (h.createTaskSpy.mock.calls[2]![0] as { source_ref: string })
+      .source_ref
 
     expect(firstKey).toBe('message-request-a')
     expect(replayKey).toBe(firstKey)
@@ -234,19 +230,39 @@ describe('K12 store · 自动化/入站接线', () => {
   })
 
   it('tutorTurn 透传分阶段响应', async () => {
-    h.tutorTurnSpy.mockResolvedValue({ stage: 3, comfort: false, escalated: true, prompt_hint: 'x', solution: '解：11.4' })
+    h.tutorTurnSpy.mockResolvedValue({
+      stage: 3,
+      comfort: false,
+      escalated: true,
+      prompt_hint: 'x',
+      solution: '解：11.4',
+    })
     const store = useK12Store()
-    const resp = await store.tutorTurn({ agent: 'mingming', prior_stage: 2, parent_message: '直接讲吧' })
+    const resp = await store.tutorTurn({
+      agent: 'mingming',
+      prior_stage: 2,
+      parent_message: '直接讲吧',
+    })
     expect(resp.stage).toBe(3)
     expect(resp.solution).toBe('解：11.4')
   })
 
   it('setupAutomation：有群则先绑定再注册', async () => {
     h.bindSpy.mockResolvedValue({ bound: true })
-    h.provisionSpy.mockResolvedValue({ provisioned: [{ kind: 'weekly-sheet', name: '错题卷', schedule: '0 19 * * 5', job_id: 'j1' }] })
+    h.provisionSpy.mockResolvedValue({
+      provisioned: [{ kind: 'weekly-sheet', name: '错题卷', schedule: '0 19 * * 5', job_id: 'j1' }],
+    })
     const store = useK12Store()
-    const jobs = await store.setupAutomation('mingming', { platform: 'dingtalk', chatId: 'g1', deliver: ['dingtalk'] })
-    expect(h.bindSpy).toHaveBeenCalledWith({ agent: 'mingming', platform: 'dingtalk', chat_id: 'g1' })
+    const jobs = await store.setupAutomation('mingming', {
+      platform: 'dingtalk',
+      chatId: 'g1',
+      deliver: ['dingtalk'],
+    })
+    expect(h.bindSpy).toHaveBeenCalledWith({
+      agent: 'mingming',
+      platform: 'dingtalk',
+      chat_id: 'g1',
+    })
     expect(h.provisionSpy).toHaveBeenCalledOnce()
     expect(jobs).toHaveLength(1)
   })

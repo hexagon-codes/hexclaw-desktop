@@ -205,7 +205,7 @@ export default {
     basketMeta:
       'Auto-filled every Friday 19:00 · also add directly from mistakes · duplicates deduped',
     basketHint:
-      'Printing or sending confirms the sheet · the print queue clears and the sheet moves to history below',
+      'The sheet is finalized only after system printing succeeds or a delivery batch is created; cancelling system printing keeps the print queue',
     basketEmpty: 'Print queue is empty · add items from mistakes or "Generate review paper".',
     historyTitle: 'Print History',
     historyDesc:
@@ -684,6 +684,7 @@ export default {
     pasteHint: 'or paste image data (data:image/…;base64,)',
     run: 'Recognize',
     running: 'Recognizing & splitting…',
+    routing: 'Recognizing image content…',
     empty: "Nothing recognized yet — pick a homework photo and I'll split it for you to confirm.",
     guardTitle: 'This is what I read — right?',
     kpLabel: 'Knowledge points',

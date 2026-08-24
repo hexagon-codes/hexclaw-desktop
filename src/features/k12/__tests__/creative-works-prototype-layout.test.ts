@@ -15,6 +15,15 @@ describe('K12 works prototype layout', () => {
     expect(rules).toBeGreaterThan(filters)
   })
 
+  it('keeps the overview in the shared document flow without a WebKit-only offset', () => {
+    expect(worksSource).not.toMatch(
+      /@supports\s*\(\s*font\s*:\s*-apple-system-body\s*\)\s*\{\s*\.k12cw__overview\s*\{/,
+    )
+    expect(worksSource).not.toMatch(
+      /\.k12cw__overview\s*\{[^}]*\bposition\s*:\s*relative\s*;[^}]*\btop\s*:\s*1px\s*;/,
+    )
+  })
+
   it('uses the approved 420px auto-fill collection, 104px media and 720px detail modal', () => {
     expect(worksSource).toContain('class="k12cw__preview"')
     expect(worksSource).toContain('data-testid="cw-detail-toggle"')
@@ -30,12 +39,15 @@ describe('K12 works prototype layout', () => {
   })
 
   it('matches the prototype card and filter geometry instead of using a custom treatment', () => {
+    const filterStyles = worksSource.match(/\.k12cw__filter\s*\{([^}]*)\}/)?.[1] ?? ''
+
     expect(worksSource).toMatch(
       /\.k12cw__card\s*\{[^}]*grid-template-columns:\s*104px minmax\(0,\s*1fr\)[^}]*min-height:\s*138px[^}]*padding:\s*16px[^}]*gap:\s*14px/,
     )
     expect(worksSource).toMatch(
       /\.k12cw__filter\s*\{[^}]*gap:\s*9px[^}]*padding:\s*12px 14px[^}]*border-radius:\s*14px/,
     )
+    expect(filterStyles).not.toMatch(/^\s*height\s*:/m)
     expect(worksSource).toMatch(/\.k12cw__filter-row\s*\{[^}]*display:\s*flex[^}]*gap:\s*7px/)
     expect(worksSource).toMatch(
       /\.k12cw__filter button\s*\{[^}]*border:\s*0\.5px solid var\(--hc-border\)[^}]*background:\s*var\(--hc-bg-input\)[^}]*border-radius:\s*9px/,

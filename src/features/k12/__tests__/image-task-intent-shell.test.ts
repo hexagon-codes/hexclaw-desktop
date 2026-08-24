@@ -270,7 +270,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(h.confirm).not.toHaveBeenCalled()
   })
 
-  it('BUG-20260725-005 shows the approved existing loading dots while image intent is unresolved', async () => {
+  it('BUG-20260725-005 reuses the shared assistant status while image intent is unresolved', async () => {
     h.create.mockResolvedValue({
       created: true,
       dispatch: {
@@ -291,9 +291,12 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     const wrapper = mountPanel()
     await flushPromises()
 
-    const progress = wrapper.get('[data-testid="image-task-routing-progress"]')
-    expect(progress.attributes('aria-label')).toBe('正在识别')
-    expect(progress.findAll('.hc-typing-dots__dot')).toHaveLength(3)
+    const progress = wrapper.get('[data-component="AssistantRunStatus"]')
+    expect(progress.text()).toBe('正在识别图片内容…')
+    expect(progress.attributes('role')).toBe('status')
+    expect(progress.attributes('aria-live')).toBe('polite')
+    expect(progress.findAll('.hc-assistant-run-status__spinner')).toHaveLength(1)
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
     expect(wrapper.text()).not.toContain('美术作品')
   })
 
@@ -358,9 +361,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
       },
     })
 
-    const wrapper = mountPanel(
-      fixtureDataURL('k12-test-作文.png', writingFixtureSHA256),
-    )
+    const wrapper = mountPanel(fixtureDataURL('k12-test-作文.png', writingFixtureSHA256))
     await flushPromises()
 
     const progress = wrapper.get('[data-testid="writing-feedback-progress"]')
@@ -406,9 +407,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     })
     h.get.mockImplementation(() => new Promise(() => {}))
 
-    const wrapper = mountPanel(
-      fixtureDataURL('k12-test-作文.png', writingFixtureSHA256),
-    )
+    const wrapper = mountPanel(fixtureDataURL('k12-test-作文.png', writingFixtureSHA256))
     await flushPromises()
 
     const titles = wrapper.findAll('.rec-panel__title').filter((item) => item.isVisible())

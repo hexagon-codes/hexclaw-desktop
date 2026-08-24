@@ -75,8 +75,7 @@ vi.mock('@/api/k12', async () => ({
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
   k12GetMistakePracticeGeneration: (...args: unknown[]) => h.getPracticeGenerationSpy(...args),
-  k12RetryMistakePracticeGeneration: (...args: unknown[]) =>
-    h.retryPracticeGenerationSpy(...args),
+  k12RetryMistakePracticeGeneration: (...args: unknown[]) => h.retryPracticeGenerationSpy(...args),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
@@ -296,9 +295,11 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       .mockImplementation((_agent: string, recordID: string) =>
         Promise.resolve({ state: 'available', source_mistake_id: recordID }),
       )
-    h.retryPracticeGenerationSpy.mockReset().mockImplementation((_agent: string, recordID: string) =>
-      Promise.resolve({ state: 'pending', source_mistake_id: recordID }),
-    )
+    h.retryPracticeGenerationSpy
+      .mockReset()
+      .mockImplementation((_agent: string, recordID: string) =>
+        Promise.resolve({ state: 'pending', source_mistake_id: recordID }),
+      )
   })
 
   it('[BUG-20260727-007] failed practice generation projects one retry command in weekly and all mistakes', async () => {
@@ -414,6 +415,26 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.text()).toContain('本周该练')
   })
 
+  it('对象 Tab 切换后只归零共享内容区的横向滚动，保留纵向阅读位置', async () => {
+    const w = render()
+    await flushPromises()
+    await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+
+    const body = w.get('.k12rec__body').element as HTMLElement
+    body.scrollLeft = 84
+    body.scrollTop = 137
+
+    await w.get('[data-testid="subtab-week"]').trigger('click')
+    await flushPromises()
+
+    expect(w.get('.k12rec__body').element).toBe(body)
+    expect(w.get('[data-testid="week-section"]').isVisible()).toBe(true)
+    expect({ scrollLeft: body.scrollLeft, scrollTop: body.scrollTop }).toEqual({
+      scrollLeft: 0,
+      scrollTop: 137,
+    })
+  })
+
   it('从辅导切入学习档案时重新拉取，不能停留在进入会话时的旧缓存', async () => {
     const w = render({ active: false })
     await flushPromises()
@@ -443,9 +464,10 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.get('[data-testid="subtab-practicesets"]').classes()).not.toContain('on')
     expect(w.find('[data-testid="prepare-weekly-output"]').exists()).toBe(false)
     expect(
-      w.get('[data-testid="final-artifact-actions"]').findAll('button').map((button) =>
-        button.text(),
-      ),
+      w
+        .get('[data-testid="final-artifact-actions"]')
+        .findAll('button')
+        .map((button) => button.text()),
     ).toEqual(['打印', '发送到手机'])
     expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
   })
@@ -568,8 +590,9 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     await busyActions.findAll('button')[1]!.trigger('click')
 
     expect(busyActions.get('[role="status"]').text()).toBe('正在处理本周计划…')
-    expect(busyActions.findAll('button').every((button) => button.attributes('disabled') !== undefined))
-      .toBe(true)
+    expect(
+      busyActions.findAll('button').every((button) => button.attributes('disabled') !== undefined),
+    ).toBe(true)
     for (const button of busyActions.findAll('button')) await button.trigger('click')
     expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(1)
     expect(h.sendWeeklySpy).not.toHaveBeenCalled()
@@ -589,20 +612,15 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
         return preparedWeeklyOutput()
       },
     )
-    h.sendWeeklySpy.mockImplementation(
-      async (_agent: string, _snapshot: string, key: string) => {
-        sendKeys.add(key)
-        createdBatchIDs.add('weekly-delivery-1')
-        return { batch_id: 'weekly-delivery-1', status: 'delivered' }
-      },
-    )
+    h.sendWeeklySpy.mockImplementation(async (_agent: string, _snapshot: string, key: string) => {
+      sendKeys.add(key)
+      createdBatchIDs.add('weekly-delivery-1')
+      return { batch_id: 'weekly-delivery-1', status: 'delivered' }
+    })
 
     const first = render()
     await flushPromises()
-    await first
-      .get('[data-testid="final-artifact-actions"]')
-      .findAll('button')[1]!
-      .trigger('click')
+    await first.get('[data-testid="final-artifact-actions"]').findAll('button')[1]!.trigger('click')
     await flushPromises()
     expect(first.get('[data-testid="final-artifact-actions"]').text()).toContain('发送成功')
     first.unmount()
@@ -617,12 +635,8 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
 
     expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(2)
     expect(h.sendWeeklySpy).toHaveBeenCalledTimes(2)
-    expect(prepareKeys).toEqual(
-      new Set(['desktop-weekly-prepare:mingming:weekly-30:1']),
-    )
-    expect(sendKeys).toEqual(
-      new Set(['desktop-weekly-send:mingming:snapshot-30']),
-    )
+    expect(prepareKeys).toEqual(new Set(['desktop-weekly-prepare:mingming:weekly-30:1']))
+    expect(sendKeys).toEqual(new Set(['desktop-weekly-send:mingming:snapshot-30']))
     expect(createdBatchIDs).toEqual(new Set(['weekly-delivery-1']))
     expect(h.queryDeliveryBatchSpy).not.toHaveBeenCalled()
     expect(h.retryDeliveryBatchSpy).not.toHaveBeenCalled()
@@ -683,9 +697,10 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     const w = render()
     await flushPromises()
     expect(
-      w.get('[data-testid="final-artifact-actions"]').findAll('button').map((button) =>
-        button.text(),
-      ),
+      w
+        .get('[data-testid="final-artifact-actions"]')
+        .findAll('button')
+        .map((button) => button.text()),
     ).toEqual(['打印', '发送到手机'])
     expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
     expect(w.find('[data-testid="records-more-trigger"]').exists()).toBe(false)

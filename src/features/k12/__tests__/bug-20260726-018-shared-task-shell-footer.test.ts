@@ -40,4 +40,24 @@ describe('BUG-20260726-018 TaskShell shares the ordinary assistant message foote
       /\.rec-panel__footer::(?:before|after)\s*\{[\s\S]*?(?:border|background|box-shadow)/,
     )
   })
+
+  it('keeps TaskShell actions immediately after metadata on the shared 8px footer rhythm', () => {
+    const taskShell = source('src/features/k12/views/RecognizeGuardPanel.vue')
+    const footerRule = cssRule(taskShell, '.rec-panel__footer')
+
+    expect(footerRule).toMatch(/justify-content:\s*flex-start;/)
+    expect(footerRule).toMatch(/gap:\s*8px;/)
+    expect(footerRule).toMatch(/min-height:\s*24px;/)
+    expect(footerRule).toMatch(/margin-top:\s*7px;/)
+    expect(footerRule).not.toMatch(/padding-top:/)
+    expect(footerRule).not.toMatch(/justify-content:\s*space-between;/)
+    expect(footerRule).not.toMatch(/margin-(?:left|inline-start):\s*auto;/)
+
+    const metadataRule = cssRule(taskShell, '.rec-panel__metadata')
+    expect(metadataRule).toMatch(/gap:\s*0;/)
+    expect(metadataRule).toMatch(/font-size:\s*11px;/)
+    expect(metadataRule).toMatch(/opacity:\s*0\.64;/)
+    expect(taskShell).toContain(':show-fork="false"')
+    expect(taskShell).toContain('retry-mode="task-stage"')
+  })
 })

@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   cancel: vi.fn(),
   tutoringTips: vi.fn(),
   sourceAction: vi.fn(),
+  getAssetBlob: vi.fn(),
 }))
 
 vi.mock('@/api/k12', () => ({
@@ -43,6 +44,10 @@ vi.mock('@/api/k12', () => ({
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn(),
   k12ProvisionCron: vi.fn(),
+}))
+
+vi.mock('@/api/k12-asset-url', () => ({
+  k12GetAssetBlob: (...args: unknown[]) => h.getAssetBlob(...args),
 }))
 
 function i18n() {
@@ -219,6 +224,19 @@ function sourceActionResponse(
 }
 
 const wrappers: VueWrapper[] = []
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+const originalImage = globalThis.Image
+let sourceImageWidth = 430
+let sourceImageHeight = 520
+
+class SourceActionImage {
+  src = ''
+  naturalWidth = sourceImageWidth
+  naturalHeight = sourceImageHeight
+
+  async decode(): Promise<void> {}
+}
 
 async function renderTask(initial = createResponse()) {
   h.upload.mockResolvedValue({ asset_id: 'asset://mingming/photo.png', size: 3 })
@@ -355,11 +373,41 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     Object.values(h).forEach((spy) => spy.mockReset())
+    h.getAssetBlob.mockImplementation((_agent: string, assetId: string) => {
+      const retake = assetId.endsWith('/retake-current.png')
+      sourceImageWidth = retake ? 600 : 430
+      sourceImageHeight = retake ? 800 : 520
+      return Promise.resolve(new Blob(['source image'], { type: 'image/png' }))
+    })
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:http://localhost/source-action-page'),
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
+    Object.defineProperty(globalThis, 'Image', {
+      configurable: true,
+      value: SourceActionImage,
+    })
   })
 
   afterEach(() => {
     for (const wrapper of wrappers.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: originalCreateObjectURL,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    })
+    Object.defineProperty(globalThis, 'Image', {
+      configurable: true,
+      value: originalImage,
+    })
   })
 
   it('PROG-026 sends one strict skip command and synchronously locks every source action while pending', async () => {
@@ -491,7 +539,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     const wrapper = await renderTask()
 
     buttonByName(resolver(wrapper), '重新选择区域')!.click()
-    await nextTick()
+    await flushPromises()
     const selection = wrapper.get('[data-source-region-selection]')
     await selection.trigger('keydown', { key: 'ArrowRight' })
     buttonByName(resolver(wrapper), '使用此区域重新读取')!.click()
@@ -541,7 +589,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     const wrapper = await renderTask()
 
     buttonByName(resolver(wrapper), '重新选择区域')!.click()
-    await nextTick()
+    await flushPromises()
     buttonByName(resolver(wrapper), '使用此区域重新读取')!.click()
     await flushPromises()
 
@@ -561,7 +609,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     const wrapper = await renderTask(groupedCreateResponseWithStaleParentAsset())
 
     buttonByName(resolver(wrapper), '重新选择区域')!.click()
-    await nextTick()
+    await flushPromises()
 
     const editor = wrapper.get('[data-source-region-editor]')
     expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/retake-current.png')
@@ -646,7 +694,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     await picker.trigger('change')
     await flushPromises()
     buttonByName(resolver(wrapper), '重新选择区域')!.click()
-    await nextTick()
+    await flushPromises()
 
     const editor = wrapper.get('[data-source-region-editor]')
     expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/retake-current.png')
@@ -677,7 +725,7 @@ describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
     buttonByName(resolver(wrapper), '保存并重新处理')!.click()
     await flushPromises()
     buttonByName(resolver(wrapper), '重新选择区域')!.click()
-    await nextTick()
+    await flushPromises()
 
     const editor = wrapper.get('[data-source-region-editor]')
     expect(editor.attributes('data-page-asset-id')).toBe('asset://mingming/photo.png')

@@ -18,6 +18,7 @@ import { formatTime } from '@/utils/time'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
@@ -36,7 +37,6 @@ import {
   type SourceRegion,
 } from '../source-issue'
 import { k12GetImageTask, k12SubmitImageTaskProblemSourceAction, k12UploadAsset } from '@/api/k12'
-import { k12AssetURL } from '@/api/k12-asset-url'
 import { projectImageTaskProblemSourceActionSnapshot } from '../source-action-projection'
 import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
@@ -489,7 +489,6 @@ function expectedInputRevision(problems: ImageTaskProblemProgressDTO[]): number 
 
 interface SourceResolverFacts {
   pageAssetId?: string
-  sourceImageUrl?: string
   sourceWidth?: number
   sourceHeight?: number
   currentSourceRegion?: SourceRegion
@@ -557,7 +556,6 @@ function sourceResolverFacts(problems: ImageTaskProblemProgressDTO[]): SourceRes
     : parentSource?.sourceRegion
   return {
     pageAssetId: source.pageAssetId,
-    sourceImageUrl: k12AssetURL(props.agentId, source.pageAssetId),
     sourceWidth: source.sourceWidth,
     sourceHeight: source.sourceHeight,
     ...(currentSourceRegion ? { currentSourceRegion: { ...currentSourceRegion } } : {}),
@@ -2225,17 +2223,15 @@ async function coldStart() {
       {{ t('k12.recognize.err') }}：{{ errMsg }}
     </div>
 
-    <div
+    <AssistantRunStatus
       v-if="recognizing && currentTaskIntent === 'unknown'"
-      class="hc-typing-dots"
-      data-testid="image-task-routing-progress"
-      role="status"
-      aria-label="正在识别"
-    >
-      <span class="hc-typing-dots__dot" />
-      <span class="hc-typing-dots__dot" />
-      <span class="hc-typing-dots__dot" />
-    </div>
+      reasoning-request="off"
+      reasoning-support="unknown"
+      reasoning-execution="unknown"
+      :has-visible-answer="false"
+      :elapsed-seconds="0"
+      :status-label="t('k12.recognize.routing')"
+    />
 
     <p
       v-if="
@@ -2380,6 +2376,7 @@ async function coldStart() {
               :expected-input-revision="expectedInputRevision([item.problem])"
               :skipped="problemIsSkipped(item.problem)"
               :command-available="!resolverDisabled([item.problem])"
+              :agent-id="agentId"
               skip-label="跳过这题"
               v-bind="sourceResolverFacts([item.problem])"
               @intent="applyLocalSourceIntent"
@@ -2421,6 +2418,7 @@ async function coldStart() {
               :expected-input-revision="expectedInputRevision(item.problems)"
               :skipped="item.problems.every(problemIsSkipped)"
               :command-available="!resolverDisabled(item.problems)"
+              :agent-id="agentId"
               :skip-label="`跳过第 ${item.ordinal} 题组`"
               v-bind="sourceResolverFacts(item.problems)"
               @intent="applyLocalSourceIntent"
@@ -2983,6 +2981,8 @@ async function coldStart() {
         role="assistant"
         :content="taskShellTitle"
         :show-retry="showTaskRetry"
+        :show-fork="false"
+        retry-mode="task-stage"
         @retry="retryRecognitionStage"
       />
     </MessageFooter>
@@ -3197,21 +3197,24 @@ async function coldStart() {
   align-items: center;
 }
 .rec-panel__footer {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 24px;
   min-width: 0;
-  padding-top: 7px;
+  margin-top: 7px;
 }
 .rec-panel__metadata {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 5px;
+  gap: 0;
   color: var(--hc-text-muted);
-  font-size: 10.5px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: normal;
+  opacity: 0.64;
   white-space: nowrap;
 }
 .rec-panel__title {

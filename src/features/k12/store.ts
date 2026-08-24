@@ -18,7 +18,6 @@ import {
   k12InsightReport,
   k12ListAccumulation,
   k12UploadAsset,
-  k12AssetURL,
   k12CreateImageTask,
   k12GetImageTask,
   k12GetImageTaskResult,
@@ -589,11 +588,8 @@ export const useK12Store = defineStore('k12', () => {
       const asset = await k12UploadAsset(input.agent, sourceFile, undefined, signal)
       throwIfAborted(signal)
       if (input.onSourceStored) {
-        const displayUrl = k12AssetURL(input.agent, asset.asset_id)
-        if (!displayUrl) throw new Error('desktop image task asset URL is required')
         const persisted = await input.onSourceStored({
           assetId: asset.asset_id,
-          displayUrl,
         })
         if (!persisted) throw new Error('desktop image task source persistence failed')
       }

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import HcClearableField from '@/components/common/HcClearableField.vue'
+import { k12GetAssetBlob } from '@/api/k12-asset-url'
 
 import type { SourceIssueIntent, SourceIssueRetakeFileIntent, SourceRegion } from '../source-issue'
 import SourceRegionSelector from './SourceRegionSelector.vue'
@@ -20,8 +21,8 @@ const props = defineProps<{
   commandAvailable: boolean
   disabled?: boolean
   skipLabel: string
+  agentId: string
   pageAssetId?: string
-  sourceImageUrl?: string
   sourceWidth?: number
   sourceHeight?: number
   currentSourceRegion?: SourceRegion
@@ -37,18 +38,47 @@ const correctedText = ref('')
 const regionDraft = ref<SourceRegion>(initialRegionDraft())
 const regionEditor = ref<InstanceType<typeof SourceRegionSelector> | null>(null)
 const retakeInput = ref<HTMLInputElement | null>(null)
+const sourceImageObjectURL = ref('')
+const loadedSourceIdentity = ref('')
 let activeTrigger: HTMLButtonElement | null = null
+
+interface SourceImageLoad {
+  controller: AbortController
+  objectURL: string
+}
+
+let sourceImageLoad: SourceImageLoad | null = null
 
 const locked = computed(() => props.disabled === true || !props.commandAvailable)
 const affectedCopy = computed(() => props.affectedLabels.join(' 和'))
+const sourceIssueReason = computed(() =>
+  props.scope === 'group'
+    ? '题组题源信息需要核对。只需修正原题事实；系统仍负责判断答案正误。'
+    : '题源信息需要核对。只需修正原题事实；系统仍负责判断答案正误。',
+)
+const currentSourceIdentity = computed(() => {
+  const agentId = (props.agentId ?? '').trim()
+  const pageAssetId = props.pageAssetId?.trim() ?? ''
+  const sourceWidth = props.sourceWidth ?? 0
+  const sourceHeight = props.sourceHeight ?? 0
+  if (
+    activePanel.value !== 'region' ||
+    !agentId ||
+    !pageAssetId ||
+    !Number.isInteger(sourceWidth) ||
+    !Number.isInteger(sourceHeight) ||
+    sourceWidth <= 0 ||
+    sourceHeight <= 0
+  ) {
+    return ''
+  }
+  return JSON.stringify([agentId, pageAssetId, sourceWidth, sourceHeight])
+})
 const sourceEditorAvailable = computed(
   () =>
-    !!props.pageAssetId?.trim() &&
-    !!props.sourceImageUrl?.trim() &&
-    Number.isInteger(props.sourceWidth) &&
-    Number.isInteger(props.sourceHeight) &&
-    (props.sourceWidth ?? 0) > 0 &&
-    (props.sourceHeight ?? 0) > 0,
+    !!currentSourceIdentity.value &&
+    loadedSourceIdentity.value === currentSourceIdentity.value &&
+    !!sourceImageObjectURL.value,
 )
 const regionValid = computed(() => {
   const width = Math.floor(props.sourceWidth ?? 0)
@@ -102,6 +132,109 @@ function resetRegionDraft(): void {
 
 function clearRetakeInput(): void {
   if (retakeInput.value) retakeInput.value.value = ''
+}
+
+function releaseSourceImage(): void {
+  const load = sourceImageLoad
+  sourceImageLoad = null
+  load?.controller.abort()
+  if (load?.objectURL) {
+    URL.revokeObjectURL(load.objectURL)
+    load.objectURL = ''
+  }
+  loadedSourceIdentity.value = ''
+  const objectURL = sourceImageObjectURL.value
+  sourceImageObjectURL.value = ''
+  if (objectURL) URL.revokeObjectURL(objectURL)
+}
+
+async function decodeSourceImage(
+  image: HTMLImageElement,
+  objectURL: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false
+  if (typeof image.decode === 'function') {
+    image.src = objectURL
+    let decodePromise: Promise<void>
+    try {
+      decodePromise = image.decode()
+    } catch {
+      return false
+    }
+    let abortListener: (() => void) | undefined
+    const aborted = new Promise<boolean>((resolve) => {
+      abortListener = () => resolve(false)
+      signal.addEventListener('abort', abortListener, { once: true })
+    })
+    const decoded = decodePromise.then(
+      () => true,
+      () => false,
+    )
+    const result = await Promise.race([decoded, aborted])
+    if (abortListener) signal.removeEventListener('abort', abortListener)
+    return result && !signal.aborted
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    const finish = (result: boolean) => {
+      image.onload = null
+      image.onerror = null
+      signal.removeEventListener('abort', onAbort)
+      resolve(result && !signal.aborted)
+    }
+    const onAbort = () => finish(false)
+    image.onload = () => finish(true)
+    image.onerror = () => finish(false)
+    signal.addEventListener('abort', onAbort, { once: true })
+    image.src = objectURL
+  })
+}
+
+async function loadSourceImage(): Promise<void> {
+  releaseSourceImage()
+  const identity = currentSourceIdentity.value
+  const pageAssetId = props.pageAssetId?.trim() ?? ''
+  if (!identity || !pageAssetId) return
+
+  const controller = new AbortController()
+  const load: SourceImageLoad = { controller, objectURL: '' }
+  sourceImageLoad = load
+  try {
+    const blob = await k12GetAssetBlob((props.agentId ?? '').trim(), pageAssetId, controller.signal)
+    if (
+      !blob ||
+      blob.size < 1 ||
+      controller.signal.aborted ||
+      currentSourceIdentity.value !== identity
+    ) {
+      return
+    }
+    const objectURL = URL.createObjectURL(blob)
+    load.objectURL = objectURL
+    const image = new Image()
+    const decoded = await decodeSourceImage(image, objectURL, controller.signal)
+    if (
+      !decoded ||
+      controller.signal.aborted ||
+      currentSourceIdentity.value !== identity ||
+      image.naturalWidth !== props.sourceWidth ||
+      image.naturalHeight !== props.sourceHeight
+    ) {
+      return
+    }
+    sourceImageObjectURL.value = objectURL
+    loadedSourceIdentity.value = identity
+    load.objectURL = ''
+    void nextTick(() => {
+      if (currentSourceIdentity.value === identity) regionEditor.value?.focus()
+    })
+  } catch {
+    // 认证读取或浏览器解码失败时保持不可操作状态。
+  } finally {
+    if (load.objectURL) URL.revokeObjectURL(load.objectURL)
+    if (sourceImageLoad === load) sourceImageLoad = null
+  }
 }
 
 async function openPanel(panel: SourcePanel, event: Event): Promise<void> {
@@ -190,24 +323,43 @@ watch(
   ],
   () => resetRegionDraft(),
 )
+
+watch(
+  currentSourceIdentity,
+  () => {
+    void loadSourceImage()
+  },
+  { immediate: true, flush: 'sync' },
+)
+
+onBeforeUnmount(releaseSourceImage)
 </script>
 
 <template>
-  <div
+  <section
     class="source-resolver"
     data-source-issue-resolver
     :data-resolver-scope="scope"
+    :aria-label="`${displayLabel}来源处理`"
     :aria-busy="locked ? 'true' : undefined"
     @keydown.esc="closeOnEscape"
   >
-    <button v-if="skipped" type="button" class="hc-btn" :disabled="locked" @click="resume">
-      恢复处理
-    </button>
+    <div class="source-resolver__head">
+      <b>{{ displayLabel }} · 需要你确认</b>
+      <span>其他题继续处理</span>
+    </div>
+    <p data-source-issue-reason>{{ sourceIssueReason }}</p>
+
+    <div v-if="skipped" class="source-resolver__actions" data-source-actions>
+      <button type="button" class="hc-btn hc-btn-ghost" :disabled="locked" @click="resume">
+        恢复处理
+      </button>
+    </div>
     <template v-else>
-      <div class="source-resolver__actions">
+      <div class="source-resolver__actions" data-source-actions>
         <button
           type="button"
-          class="hc-btn"
+          class="hc-btn hc-btn-ghost"
           :disabled="locked"
           @click="openPanel('correction', $event)"
         >
@@ -215,7 +367,7 @@ watch(
         </button>
         <button
           type="button"
-          class="hc-btn"
+          class="hc-btn hc-btn-ghost"
           :disabled="locked"
           @click="openPanel('region', $event)"
         >
@@ -223,13 +375,18 @@ watch(
         </button>
         <button
           type="button"
-          class="hc-btn"
+          class="hc-btn hc-btn-ghost"
           :disabled="locked"
           @click="openPanel('retake', $event)"
         >
           重新拍摄
         </button>
-        <button type="button" class="hc-btn" :disabled="locked" @click="openPanel('skip', $event)">
+        <button
+          type="button"
+          class="hc-btn hc-btn-ghost"
+          :disabled="locked"
+          @click="openPanel('skip', $event)"
+        >
           {{ skipLabel }}
         </button>
       </div>
@@ -278,7 +435,7 @@ watch(
           ref="regionEditor"
           v-model="regionDraft"
           :page-asset-id="pageAssetId!"
-          :source-image-url="sourceImageUrl!"
+          :source-image-url="sourceImageObjectURL"
           :source-width="sourceWidth!"
           :source-height="sourceHeight!"
           :current-region="currentSourceRegion"
@@ -296,6 +453,7 @@ watch(
             取消
           </button>
           <button
+            v-if="sourceEditorAvailable"
             type="button"
             class="hc-btn hc-btn-primary"
             :disabled="locked || !regionValid"
@@ -368,7 +526,7 @@ watch(
         </button>
       </div>
     </template>
-  </div>
+  </section>
 </template>
 
 <style scoped>
@@ -381,6 +539,24 @@ watch(
   border-radius: 11px;
   background: var(--hc-bg-card);
   line-height: 1.6;
+}
+.source-resolver__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hc-text-primary);
+  font-size: 12.5px;
+}
+.source-resolver__head span {
+  margin-left: auto;
+  color: var(--hc-warning);
+  font-size: 11.5px;
+}
+.source-resolver > p {
+  margin: 7px 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
 }
 .source-resolver__actions {
   display: flex;
