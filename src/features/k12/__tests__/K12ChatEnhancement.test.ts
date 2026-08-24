@@ -331,4 +331,57 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
 
     expect(w.emitted('scenarioImageAttempt')).toEqual([[originalAttempt]])
   })
+
+  it('TaskShell 释放事件只透传同一会话执行身份', async () => {
+    const sourceAnchor = document.createElement('div')
+    sourceAnchor.id = 'hc-chat-scenario-inline-message-release'
+    document.body.appendChild(sourceAnchor)
+    const w = mount(K12ChatEnhancement, {
+      props: {
+        agentId: 'ming',
+        agentName: '小明的辅导老师',
+        sessionId: 'session-1',
+        metadata: { 'k12.grade_term': '五年级上' },
+        descriptor: K12_VIEW_DESCRIPTOR,
+        composerImage: {
+          dataUrl: 'data:image/png;base64,Zm9v',
+          attachment: {
+            type: 'image',
+            name: 'homework.png',
+            mime: 'image/png',
+            data: 'Zm9v',
+          },
+          requestId: 'message-release',
+          sourceSessionId: 'session-1',
+        },
+      },
+      global: {
+        plugins: [createPinia(), i18n()],
+        stubs: {
+          MarkdownRenderer: true,
+          RecognizeGuardPanel: {
+            name: 'RecognizeGuardPanel',
+            emits: ['release:executionState'],
+            template: `<button
+              type="button"
+              data-testid="release-execution"
+              @click="$emit('release:executionState', {
+                sessionId: 'session-1',
+                executionId: 'message-release',
+              })"
+            />`,
+          },
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    document.querySelector<HTMLButtonElement>('[data-testid="release-execution"]')!.click()
+    await flushPromises()
+
+    expect(w.emitted('release:sessionExecution')).toEqual([
+      [{ sessionId: 'session-1', executionId: 'message-release' }],
+    ])
+  })
 })

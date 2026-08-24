@@ -1276,6 +1276,13 @@ function handleScenarioSessionExecution(payload: {
     operationDeadlineAt: payload.operationDeadlineAt,
   })
 }
+
+function handleScenarioSessionExecutionRelease(payload: {
+  sessionId: string
+  executionId: string
+}) {
+  chatStore.clearSessionExecution(payload.sessionId, payload.executionId)
+}
 const scenarioCtx = computed(() => {
   const name = chatStore.agentRole
   if (!name) return null
@@ -3181,6 +3188,7 @@ function startSidebarResize(event: MouseEvent) {
         @composer-command="handleScenarioComposerCommand"
         @scenario-image-attempt="handleScenarioImageAttempt"
         @update:session-execution="handleScenarioSessionExecution"
+        @release:session-execution="handleScenarioSessionExecutionRelease"
       />
 
       <!-- Messages -->

@@ -146,6 +146,8 @@ export function createChatSendController(params: {
     attachments?: ChatAttachment[],
     options?: ChatSendOptions,
   ): Promise<ChatMessage | null> {
+    let claimedSessionId: string | null = null
+    let claimedStreamState: import('./chat-stream-helpers').SessionStreamState | undefined
     const directedSessionId = options?.targetSessionId?.trim() || null
     const initialSessionId = directedSessionId ?? currentSessionId.value
     const projectsIntoCurrentSession = !directedSessionId
@@ -217,7 +219,7 @@ export function createChatSendController(params: {
       // upsertStreamState 交棒给 isCurrentStreaming，pending 由收尾逻辑清除，无双清风险。
       // U4：点击瞬间快照采样参数——buildRequestMetadata 在下方 Auto-RAG 之后才读，期间用户
       // 切会话会改共享 ref，快照保证在途请求带的是本次发送时的 agent/model/thinking。
-      upsertStreamState(sessionId, buildSessionStreamState({
+      const streamState = buildSessionStreamState({
         sessionId,
         requestId,
         thinkingEnabled: samplingSnapshot.thinkingEnabled,
@@ -225,14 +227,17 @@ export function createChatSendController(params: {
         requestRoute: samplingSnapshot.chatParams,
         agentDisplayName: samplingSnapshot.agentDisplayName,
         recipientDisplayName: samplingSnapshot.recipientDisplayName,
-      }))
+      })
+      upsertStreamState(sessionId, streamState)
+      claimedSessionId = sessionId
+      claimedStreamState = streamState
       setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
       const backendText =
         (typeof options?.backendText === 'function'
           ? await options.backendText()
           : options?.backendText) ?? text
-      return deliveryController.deliverMessage({
+      const result = await deliveryController.deliverMessage({
         backendText,
         sessionId,
         attachments,
@@ -243,6 +248,18 @@ export function createChatSendController(params: {
         documents: options?.documents, // BUG-20260626：透传文档卡片给后端持久化（否则重载丢失退化纯文本）
         samplingSnapshot, // U4：点击瞬间快照，防 Auto-RAG 期间切会话带错 agent/model/thinking
       })
+      return result
+    } catch (sendError) {
+      // claim 建立后的异常统一进入既有错误投影，以同一请求身份终结并释放发送状态。
+      if (claimedSessionId && claimedStreamState) {
+        handleSendError(
+          sendError,
+          claimedSessionId,
+          activeStreams.value[claimedSessionId] ?? claimedStreamState,
+        )
+        return null
+      }
+      throw sendError
     } finally {
       draftSending.value = false
       refreshSendingState(sending, draftSending)

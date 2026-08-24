@@ -330,6 +330,8 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
+const mountedChatViews = new Set<{ exists: () => boolean; unmount: () => void }>()
+
 function mountChatView(options?: {
   setup?: () => void
   attachTo?: HTMLElement
@@ -340,7 +342,7 @@ function mountChatView(options?: {
   options?.setup?.()
   const i18n = createTestI18n(options?.locale)
 
-  return mount(ChatView, {
+  const wrapper = mount(ChatView, {
     attachTo: options?.attachTo,
     global: {
       plugins: [pinia, i18n],
@@ -359,6 +361,8 @@ function mountChatView(options?: {
       },
     },
   })
+  mountedChatViews.add(wrapper)
+  return wrapper
 }
 
 function chatEditor(wrapper: ReturnType<typeof mountChatView>) {
@@ -510,6 +514,10 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   afterEach(() => {
+    for (const wrapper of mountedChatViews) {
+      if (wrapper.exists()) wrapper.unmount()
+    }
+    mountedChatViews.clear()
     delete (globalThis as Record<string, unknown>).isTauri
   })
 

@@ -132,6 +132,13 @@ const emit = defineEmits<{
       operationDeadlineAt?: number
     },
   ): void
+  (
+    e: 'release:executionState',
+    payload: {
+      sessionId: string
+      executionId: string
+    },
+  ): void
 }>()
 
 const { t } = useI18n()
@@ -264,6 +271,7 @@ const currentDispatchId = ref('')
 const currentDispatchVersion = ref(0)
 
 const executionId = computed(() => props.sourceMessageId?.trim() || effectiveRequestId.value)
+let executionProjectionPublished = false
 const elapsedSeconds = computed(() =>
   automaticStartedAt.value === undefined
     ? 0
@@ -291,6 +299,7 @@ function syncExecutionState(state: string): void {
   const sessionId = props.sessionId?.trim()
   const normalizedExecutionId = executionId.value.trim()
   if (!sessionId || !normalizedExecutionId) return
+  executionProjectionPublished = true
   emit('update:executionState', {
     sessionId,
     executionId: normalizedExecutionId,
@@ -299,6 +308,19 @@ function syncExecutionState(state: string): void {
     automaticStartedAt: automaticStartedAt.value,
     automaticDeadlineAt: automaticDeadlineAt.value,
     operationDeadlineAt: operationDeadlineAt.value,
+  })
+}
+
+// 组件只归还自己发布的会话执行投影；不把 UI 卸载伪装成服务端任务终态或恢复态。
+function releaseExecutionState(): void {
+  if (!executionProjectionPublished) return
+  const sessionId = props.sessionId?.trim()
+  const normalizedExecutionId = executionId.value.trim()
+  executionProjectionPublished = false
+  if (!sessionId || !normalizedExecutionId) return
+  emit('release:executionState', {
+    sessionId,
+    executionId: normalizedExecutionId,
   })
 }
 
@@ -1422,6 +1444,7 @@ function onFile(e: Event) {
 watch(
   () => props.agentId,
   () => {
+    releaseExecutionState()
     agentGeneration += 1
     recognitionGeneration += 1
     for (const controller of sourceActionControllers) controller.abort()
@@ -1959,6 +1982,7 @@ function truncateProblem(problem: string): string {
 }
 
 onBeforeUnmount(() => {
+  releaseExecutionState()
   if (runtimeClock) {
     clearInterval(runtimeClock)
     runtimeClock = null

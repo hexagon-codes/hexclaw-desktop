@@ -70,6 +70,26 @@ function completedPracticeSet(): PracticeSetDTO {
   }
 }
 
+function completedPracticeSetWithAssets(
+  recordID: string,
+  sourceAssetID: string,
+  annotatedAssetID: string,
+): PracticeSetDTO {
+  const base = completedPracticeSet()
+  return {
+    ...base,
+    record_id: recordID,
+    return_assets: [
+      {
+        ...base.return_assets![0]!,
+        return_id: `${recordID}-return`,
+        asset_id: sourceAssetID,
+        annotated_asset_id: annotatedAssetID,
+      },
+    ],
+  }
+}
+
 function render() {
   return shallowMount(K12PracticeSetsPanel, {
     props: { agentId: 'k12-xiaoming' },
@@ -190,5 +210,78 @@ describe('BUG-20260824 · 练习集受保护图片认证读取', () => {
 
     wrapper.unmount()
     expect(nextIdentitySignals.every((signal) => signal.aborted)).toBe(true)
+  })
+
+  it('同 Agent 记录与资产身份变化会释放旧 URL、中止旧请求并拒绝晚到旧图', async () => {
+    const oldSourceID = 'asset://k12-xiaoming/answer-old.png'
+    const oldAnnotatedID = 'asset://k12-xiaoming/annotated-old.png'
+    const nextSourceID = 'asset://k12-xiaoming/answer-next.png'
+    const nextAnnotatedID = 'asset://k12-xiaoming/annotated-next.png'
+    const oldSourceBlob = new Blob(['old-source'], { type: 'image/png' })
+    const lateOldAnnotatedBlob = new Blob(['late-old-annotated'], { type: 'image/png' })
+    const nextSourceBlob = new Blob(['next-source'], { type: 'image/png' })
+    let resolveOldAnnotated!: (blob: Blob | null) => void
+    const oldAnnotatedPending = new Promise<Blob | null>((resolve) => {
+      resolveOldAnnotated = resolve
+    })
+    let oldAnnotatedSignal: AbortSignal | undefined
+    const createdObjectSources: unknown[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      createdObjectSources.push(blob)
+      if (blob === oldSourceBlob) return 'blob:practice-old-source'
+      if (blob === lateOldAnnotatedBlob) return 'blob:practice-late-old-annotated'
+      if (blob === nextSourceBlob) return 'blob:practice-next-source'
+      return 'blob:practice-unexpected'
+    })
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    h.listPracticeSets
+      .mockResolvedValueOnce({
+        items: [completedPracticeSetWithAssets('practice-old-assets', oldSourceID, oldAnnotatedID)],
+      })
+      .mockResolvedValueOnce({
+        items: [
+          completedPracticeSetWithAssets('practice-next-assets', nextSourceID, nextAnnotatedID),
+        ],
+      })
+    h.getAssetBlob.mockImplementation((_agent: string, assetID: string, signal?: AbortSignal) => {
+      if (assetID === oldSourceID) return Promise.resolve(oldSourceBlob)
+      if (assetID === oldAnnotatedID) {
+        oldAnnotatedSignal = signal
+        return oldAnnotatedPending
+      }
+      if (assetID === nextSourceID) return Promise.resolve(nextSourceBlob)
+      return Promise.resolve(null)
+    })
+
+    const wrapper = render()
+    await flushPromises()
+    expect
+      .soft(wrapper.get('.k12ps__return-thumb').attributes('src'))
+      .toBe('blob:practice-old-source')
+    expect.soft(oldAnnotatedSignal?.aborted).toBe(false)
+
+    await (wrapper.vm as unknown as { load: () => Promise<void> }).load()
+    await flushPromises()
+
+    expect.soft(oldAnnotatedSignal?.aborted).toBe(true)
+    expect.soft(revokeObjectURL).toHaveBeenCalledWith('blob:practice-old-source')
+    expect
+      .soft(wrapper.get('.k12ps__return-thumb').attributes('src'))
+      .toBe('blob:practice-next-source')
+
+    resolveOldAnnotated(lateOldAnnotatedBlob)
+    await flushPromises()
+
+    expect.soft(createdObjectSources).not.toContain(lateOldAnnotatedBlob)
+    expect
+      .soft(
+        wrapper
+          .findAll('img')
+          .map((image) => image.attributes('src') ?? '')
+          .filter((src) => src.includes('old')),
+      )
+      .toEqual([])
+    wrapper.unmount()
+    expect.soft(revokeObjectURL).toHaveBeenCalledWith('blob:practice-next-source')
   })
 })

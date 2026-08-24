@@ -107,6 +107,13 @@ const emit = defineEmits<{
       operationDeadlineAt?: number
     },
   ): void
+  (
+    e: 'release:sessionExecution',
+    payload: {
+      sessionId: string
+      executionId: string
+    },
+  ): void
 }>()
 
 const { t } = useI18n()
@@ -547,6 +554,7 @@ watch(
               @final-artifact-action="runFinalArtifactAction"
               @content-updated="emit('contentUpdated', $event)"
               @update:execution-state="emit('update:sessionExecution', $event)"
+              @release:execution-state="emit('release:sessionExecution', $event)"
             />
           </div>
         </div>
