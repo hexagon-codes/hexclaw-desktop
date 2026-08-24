@@ -33,11 +33,49 @@ describe('knowledge semantic-index policy API', () => {
       catalog_version: 9,
     })
 
-    await getKnowledgeEmbeddingPolicy('default')
+    const projection = await getKnowledgeEmbeddingPolicy('default')
 
     expect(apiGet).toHaveBeenCalledWith('/api/v1/knowledge/corpora/default/embedding-policy', {
       user_id: 'desktop-user',
     })
+    expect(projection.active_revision).toBeUndefined()
+  })
+
+  it('preserves the active revision profile configuration identity', async () => {
+    apiGet.mockResolvedValueOnce({
+      policy_version: 4,
+      selection: { kind: 'profile', profile_id: 'embedding-local-1' },
+      active_revision: {
+        revision_id: 'revision-math-1',
+        state: 'ready',
+        profile_config_hash: '7'.repeat(64),
+        profile: {
+          profile_id: 'embedding-local-1',
+          model_name: 'qwen3-embedding',
+          provider_id: 'ollama',
+          provider_name: 'Ollama',
+          location: 'local',
+          capability: 'embedding',
+          dimension: 1024,
+          availability: 'installed',
+          display_order: 1,
+        },
+      },
+      desired_revision: null,
+      indexing_activity: {
+        state: 'idle',
+        processing_documents: 0,
+        chunks_done: null,
+        chunks_total: null,
+      },
+      available_profiles: [],
+      recommendation: null,
+      catalog_version: 9,
+    })
+
+    const projection = await getKnowledgeEmbeddingPolicy('default')
+
+    expect(projection.active_revision?.profile_config_hash).toBe('7'.repeat(64))
   })
 
   it('applies only the strict tagged union and expected policy version', async () => {

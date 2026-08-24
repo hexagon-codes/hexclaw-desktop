@@ -37,7 +37,7 @@ const expectedTestsBySpec = {
   ],
   'grounding-pdf.spec.ts': [
     '§1.2 tracked PDF manifest and verifier match both immutable sources',
-    'real K12 grounding PDF lifecycle › 131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval',
+    'real K12 grounding PDF lifecycle › 131-page text PDF enters through the visible chooser with vector retrieval and page/citation oracle',
     'real K12 grounding PDF lifecycle › 122-page scanned PDF exposes OCR progress and a persisted cancel/resume boundary',
   ],
   'practice-integrity.spec.ts': [

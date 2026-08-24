@@ -97,6 +97,7 @@ function baseProjection(): KnowledgeEmbeddingPolicyProjection {
     ],
     active_revision: {
       revision_id: 'rev-cloud',
+      profile_config_hash: 'profile-hash-cloud-active',
       state: 'ready',
       profile: structuredClone(cloudProfile),
       chunks_done: 225,
@@ -140,6 +141,7 @@ function withDesiredLocal(
   }
   next.desired_revision = {
     revision_id: `rev-${profileId}`,
+    profile_config_hash: `profile-hash-${profileId}`,
     job_id: jobId,
     state: 'building',
     profile: structuredClone(profile),

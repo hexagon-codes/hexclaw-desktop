@@ -103,6 +103,26 @@ const EVIDENCE_TYPES = new Set([
   'verbatim',
   'none',
 ])
+const GROUNDING_EVIDENCE_RECEIPT_FIELDS = [
+  'textbook_binding_id',
+  'textbook_manifest_id',
+  'document_id',
+  'document_generation',
+  'vector_revision_id',
+  'query_digest',
+  'chunk_id',
+  'logical_page',
+  'pdf_page',
+  'source_digest',
+  'citation_digest',
+] as const
+const PROBLEM_GROUNDING_RECEIPT_FIELDS = [
+  'problem_id',
+  'operation',
+  'identity_digest',
+  ...GROUNDING_EVIDENCE_RECEIPT_FIELDS,
+] as const
+const GROUNDING_OPERATIONS = new Set(['solve', 'grade'])
 
 function fail(path: string, expected: string): never {
   throw new Error(`${path}: expected ${expected}`)
@@ -174,6 +194,142 @@ function stringArray(
 
 function optionalString(value: unknown, path: string): void {
   if (value !== undefined) stringValue(value, path, true)
+}
+
+type ValidatedGroundingEvidenceReceipt = {
+  raw: WireRecord
+  evidenceKey: string
+}
+
+type ValidatedProblemGroundingReceipt = ValidatedGroundingEvidenceReceipt & {
+  problemID: string
+  operation: string
+  identityDigest: string
+}
+
+function digestValue(value: unknown, path: string, prefixed = false): string {
+  const digest = stringValue(value, path)
+  const pattern = prefixed ? /^sha256:[0-9a-f]{64}$/ : /^[0-9a-f]{64}$/
+  if (!pattern.test(digest)) fail(path, prefixed ? 'sha256 digest' : 'lowercase SHA-256 digest')
+  return digest
+}
+
+function validateGroundingEvidenceReceiptFields(
+  receipt: WireRecord,
+  path: string,
+): ValidatedGroundingEvidenceReceipt {
+  for (const key of [
+    'textbook_binding_id',
+    'textbook_manifest_id',
+    'document_id',
+    'vector_revision_id',
+    'chunk_id',
+  ] as const) {
+    const identity = stringValue(receipt[key], `${path}.${key}`)
+    if (identity.trim() !== identity) fail(`${path}.${key}`, 'trimmed durable identity')
+  }
+  for (const key of ['document_generation', 'logical_page', 'pdf_page'] as const) {
+    const value = numberValue(receipt[key], `${path}.${key}`, true)
+    if (value < 1) fail(`${path}.${key}`, 'positive integer')
+  }
+  digestValue(receipt.query_digest, `${path}.query_digest`, true)
+  digestValue(receipt.source_digest, `${path}.source_digest`)
+  digestValue(receipt.citation_digest, `${path}.citation_digest`)
+  return {
+    raw: receipt,
+    evidenceKey: JSON.stringify(
+      GROUNDING_EVIDENCE_RECEIPT_FIELDS.map((field) => receipt[field]),
+    ),
+  }
+}
+
+function validateGroundingEvidenceReceipts(value: unknown, path: string): WireRecord[] {
+  const seen = new Set<string>()
+  return arrayValue(value, path).map((item, index) => {
+    const itemPath = `${path}[${index}]`
+    const receipt = record(item, itemPath)
+    exact(receipt, GROUNDING_EVIDENCE_RECEIPT_FIELDS, itemPath)
+    required(receipt, GROUNDING_EVIDENCE_RECEIPT_FIELDS, itemPath)
+    const validated = validateGroundingEvidenceReceiptFields(receipt, itemPath)
+    if (seen.has(validated.evidenceKey)) fail(itemPath, 'unique evidence receipt')
+    seen.add(validated.evidenceKey)
+    return validated.raw
+  })
+}
+
+function validateProblemGroundingReceipts(
+  value: unknown,
+  path: string,
+): ValidatedProblemGroundingReceipt[] {
+  const seen = new Set<string>()
+  return arrayValue(value, path).map((item, index) => {
+    const itemPath = `${path}[${index}]`
+    const receipt = record(item, itemPath)
+    exact(receipt, PROBLEM_GROUNDING_RECEIPT_FIELDS, itemPath)
+    required(receipt, PROBLEM_GROUNDING_RECEIPT_FIELDS, itemPath)
+    const problemID = stringValue(receipt.problem_id, `${itemPath}.problem_id`)
+    if (problemID.trim() !== problemID) fail(`${itemPath}.problem_id`, 'trimmed public problem id')
+    const operation = enumValue(receipt.operation, GROUNDING_OPERATIONS, `${itemPath}.operation`)
+    const identityDigest = digestValue(receipt.identity_digest, `${itemPath}.identity_digest`, true)
+    const evidence = validateGroundingEvidenceReceiptFields(receipt, itemPath)
+    const key = JSON.stringify([problemID, operation, identityDigest, evidence.evidenceKey])
+    if (seen.has(key)) fail(itemPath, 'unique problem grounding receipt')
+    seen.add(key)
+    return { ...evidence, problemID, operation, identityDigest }
+  })
+}
+
+function expectedGroundingOperations(status: string): readonly string[] {
+  if (['correct', 'correct_with_process_issue', 'wrong', 'untrusted'].includes(status)) {
+    return ['solve', 'grade']
+  }
+  if (['blank_solved', 'out_of_scope'].includes(status)) return ['solve']
+  return []
+}
+
+function validateProblemGroundingExactSet(
+  receipts: ValidatedProblemGroundingReceipt[],
+  statusByProblem: Map<string, string>,
+  path: string,
+  hasGrounding: boolean,
+): void {
+  const grouped = new Map<string, ValidatedProblemGroundingReceipt[]>()
+  for (const receipt of receipts) {
+    if (!statusByProblem.has(receipt.problemID)) {
+      fail(path, 'receipts bound to current public problems')
+    }
+    const current = grouped.get(receipt.problemID) ?? []
+    current.push(receipt)
+    grouped.set(receipt.problemID, current)
+  }
+  if (!hasGrounding) return
+  for (const [problemID, status] of statusByProblem) {
+    const problemReceipts = grouped.get(problemID) ?? []
+    const expected = [...expectedGroundingOperations(status)].sort()
+    const operations = [...new Set(problemReceipts.map((receipt) => receipt.operation))].sort()
+    if (JSON.stringify(operations) !== JSON.stringify(expected)) {
+      fail(path, `operation exact-set for problem ${problemID}`)
+    }
+    if (
+      expected.length > 0 &&
+      new Set(problemReceipts.map((receipt) => receipt.identityDigest)).size !== 1
+    ) {
+      fail(path, `one grounding identity for problem ${problemID}`)
+    }
+    if (expected.length === 2) {
+      const solve = problemReceipts
+        .filter((receipt) => receipt.operation === 'solve')
+        .map((receipt) => receipt.evidenceKey)
+        .sort()
+      const grade = problemReceipts
+        .filter((receipt) => receipt.operation === 'grade')
+        .map((receipt) => receipt.evidenceKey)
+        .sort()
+      if (JSON.stringify(solve) !== JSON.stringify(grade)) {
+        fail(path, `shared receipt exact-set for problem ${problemID}`)
+      }
+    }
+  }
 }
 
 function validateQuestion(value: unknown, path: string): WireRecord {
@@ -627,10 +783,24 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
       'recognition',
       'progressive',
       'final_artifact',
+      'grounding_evidence_receipts',
+      'problem_grounding_receipts',
     ],
     path,
   )
-  required(projection, ['kind', 'stage', 'confirmation_state', 'anchor_state', 'progressive'], path)
+  required(
+    projection,
+    [
+      'kind',
+      'stage',
+      'confirmation_state',
+      'anchor_state',
+      'progressive',
+      'grounding_evidence_receipts',
+      'problem_grounding_receipts',
+    ],
+    path,
+  )
   if (projection.kind !== 'homework') fail(`${path}.kind`, 'homework')
   enumValue(projection.stage, HOMEWORK_STAGES, `${path}.stage`)
   if (!['pending', 'confirmed'].includes(String(projection.confirmation_state))) {
@@ -694,6 +864,28 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
     )
   })
 
+  const groundingEvidenceReceipts = validateGroundingEvidenceReceipts(
+    projection.grounding_evidence_receipts,
+    `${path}.grounding_evidence_receipts`,
+  )
+  const problemGroundingReceipts = validateProblemGroundingReceipts(
+    projection.problem_grounding_receipts,
+    `${path}.problem_grounding_receipts`,
+  )
+  validateProblemGroundingExactSet(
+    problemGroundingReceipts,
+    new Map(
+      arrayValue(progressive.problem_progress, `${path}.progressive.problem_progress`).map(
+        (value, index) => {
+          const problem = record(value, `${path}.progressive.problem_progress[${index}]`)
+          return [String(problem.problem_id), String(problem.status)]
+        },
+      ),
+    ),
+    `${path}.problem_grounding_receipts`,
+    groundingEvidenceReceipts.length > 0 || problemGroundingReceipts.length > 0,
+  )
+
   const coverage = normalizeProblemSourceCoverage(
     progressive.coverage,
     `${path}.progressive.coverage`,
@@ -717,6 +909,8 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
     problems,
     coverage: coverage.view,
     projection_revision: coverage.raw.projection_revision,
+    grounding_evidence_receipts: groundingEvidenceReceipts,
+    problem_grounding_receipts: problemGroundingReceipts.map((receipt) => receipt.raw),
   }
   if (projection.final_artifact !== undefined && projection.final_artifact !== null) {
     normalized.final_artifact = normalizeFinalArtifact(
@@ -1034,7 +1228,7 @@ function validatePhotoPayload(
   value: unknown,
   kind: 'completed_homework' | 'blank_worksheet',
   path: string,
-): void {
+): Map<string, string> {
   const payload = record(value, path)
   exact(
     payload,
@@ -1066,13 +1260,20 @@ function validatePhotoPayload(
   }
   stringValue(payload.markdown, `${path}.markdown`, true)
   stringValue(payload.image_warning, `${path}.image_warning`, true)
+  const statusByProblem = new Map<string, string>()
   arrayValue(payload.items, `${path}.items`).forEach((value, index) => {
     const itemPath = `${path}.items[${index}]`
     const item = record(value, itemPath)
     exact(item, ['question', 'status', 'warning', 'grade', 'result_kind', 'parent_guide'], itemPath)
     required(item, ['question', 'status', 'result_kind'], itemPath)
-    validateQuestion(item.question, `${itemPath}.question`)
+    const question = validateQuestion(item.question, `${itemPath}.question`)
     const status = enumValue(item.status, PHOTO_STATUSES, `${itemPath}.status`)
+    if (typeof question.problem_id === 'string') {
+      if (statusByProblem.has(question.problem_id)) {
+        fail(`${itemPath}.question.problem_id`, 'unique public problem id')
+      }
+      statusByProblem.set(question.problem_id, status)
+    }
     const resultKind = enumValue(item.result_kind, PHOTO_RESULT_KINDS, `${itemPath}.result_kind`)
     optionalString(item.warning, `${itemPath}.warning`)
     const grade =
@@ -1121,6 +1322,7 @@ function validatePhotoPayload(
   } else if (kind === 'completed_homework') {
     fail(`${path}.annotated_image`, 'completed-homework artifact')
   }
+  return statusByProblem
 }
 
 function validateStructuredFeedback(value: unknown, path: string): WireRecord {
@@ -1335,6 +1537,8 @@ export function assertImageTaskResultSemantics(value: unknown): void {
       'source_digest',
       'source_attachments',
       'operation_receipts',
+      'grounding_evidence_receipts',
+      'problem_grounding_receipts',
     ],
     '$',
   )
@@ -1343,6 +1547,35 @@ export function assertImageTaskResultSemantics(value: unknown): void {
   const intent = enumValue(response.task_intent, IMAGE_TASK_INTENTS, '$.task_intent')
   enumValue(response.status, IMAGE_TASK_STATUSES, '$.status')
   validateAuditEnvelope(response)
+  const hasAuditEnvelope = Object.prototype.hasOwnProperty.call(response, 'source_digest')
+  const groundingFields = [
+    'grounding_evidence_receipts',
+    'problem_grounding_receipts',
+  ] as const
+  const presentGroundingFields = groundingFields.filter((field) =>
+    Object.prototype.hasOwnProperty.call(response, field),
+  )
+  const isHomework = intent === 'completed_homework' || intent === 'blank_worksheet'
+  if (isHomework && hasAuditEnvelope && presentGroundingFields.length !== groundingFields.length) {
+    fail('$', 'complete homework grounding receipt envelope')
+  }
+  if ((!isHomework || !hasAuditEnvelope) && presentGroundingFields.length !== 0) {
+    fail('$', 'grounding receipts only on current homework results')
+  }
+  const groundingEvidenceReceipts =
+    presentGroundingFields.length === groundingFields.length
+      ? validateGroundingEvidenceReceipts(
+          response.grounding_evidence_receipts,
+          '$.grounding_evidence_receipts',
+        )
+      : []
+  const problemGroundingReceipts =
+    presentGroundingFields.length === groundingFields.length
+      ? validateProblemGroundingReceipts(
+          response.problem_grounding_receipts,
+          '$.problem_grounding_receipts',
+        )
+      : []
   if (response.result === null) return
   const result = record(response.result, '$.result')
   exact(result, ['kind', 'payload'], '$.result')
@@ -1355,7 +1588,13 @@ export function assertImageTaskResultSemantics(value: unknown): void {
     fail('$.result.kind', 'result discriminator matching task intent')
   }
   if (kind === 'completed_homework' || kind === 'blank_worksheet') {
-    validatePhotoPayload(result.payload, kind, '$.result.payload')
+    const statusByProblem = validatePhotoPayload(result.payload, kind, '$.result.payload')
+    validateProblemGroundingExactSet(
+      problemGroundingReceipts,
+      statusByProblem,
+      '$.problem_grounding_receipts',
+      groundingEvidenceReceipts.length > 0 || problemGroundingReceipts.length > 0,
+    )
   } else {
     validateCreativePayload(result.payload, '$.result.payload')
   }

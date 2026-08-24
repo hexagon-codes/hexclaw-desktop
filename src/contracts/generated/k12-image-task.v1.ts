@@ -90,6 +90,20 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "$ref": "#/$defs/target"
         },
         "target_projection": {
+          "properties": {
+            "grounding_evidence_receipts": {
+              "items": {
+                "$ref": "#/$defs/groundingEvidenceReceipt"
+              },
+              "type": "array"
+            },
+            "problem_grounding_receipts": {
+              "items": {
+                "$ref": "#/$defs/problemGroundingReceipt"
+              },
+              "type": "array"
+            }
+          },
           "type": "object"
         },
         "task_intent": {
@@ -131,6 +145,149 @@ export const K12_IMAGE_TASK_SCHEMA = {
       },
       "required": [
         "dispatch"
+      ],
+      "type": "object"
+    },
+    "groundingEvidenceReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "citation_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "document_generation": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "document_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "logical_page": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pdf_page": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "textbook_binding_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "textbook_manifest_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "vector_revision_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "textbook_binding_id",
+        "textbook_manifest_id",
+        "document_id",
+        "document_generation",
+        "vector_revision_id",
+        "query_digest",
+        "chunk_id",
+        "logical_page",
+        "pdf_page",
+        "source_digest",
+        "citation_digest"
+      ],
+      "type": "object"
+    },
+    "problemGroundingReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "citation_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "document_generation": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "document_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "identity_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "logical_page": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation": {
+          "enum": [
+            "solve",
+            "grade"
+          ]
+        },
+        "pdf_page": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "problem_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "query_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "textbook_binding_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "textbook_manifest_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "vector_revision_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "problem_id",
+        "operation",
+        "identity_digest",
+        "textbook_binding_id",
+        "textbook_manifest_id",
+        "document_id",
+        "document_generation",
+        "vector_revision_id",
+        "query_digest",
+        "chunk_id",
+        "logical_page",
+        "pdf_page",
+        "source_digest",
+        "citation_digest"
       ],
       "type": "object"
     },
@@ -385,9 +542,21 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minLength": 1,
           "type": "string"
         },
+        "grounding_evidence_receipts": {
+          "items": {
+            "$ref": "#/$defs/groundingEvidenceReceipt"
+          },
+          "type": "array"
+        },
         "operation_receipts": {
           "items": {
             "type": "object"
+          },
+          "type": "array"
+        },
+        "problem_grounding_receipts": {
+          "items": {
+            "$ref": "#/$defs/problemGroundingReceipt"
           },
           "type": "array"
         },

@@ -77,11 +77,32 @@ export interface KnowledgeSearchResult {
   content: string
   score: number
   doc_id?: string
+  document_generation?: number
+  revision_id?: string
   doc_title?: string
   source?: string
   chunk_id?: string
   chunk_index?: number
   chunk_count?: number
+  page_start?: number
+  page_end?: number
+  source_digest?: string
+  citation_digest?: string
+  source_offset_start?: number
+  source_offset_end?: number
   created_at?: string
   metadata?: Record<string, unknown>
+}
+
+export interface KnowledgeQueryEmbeddingReceipt {
+  operation: string
+  status: string
+  provider_id: string
+  provider_name?: string
+  model: string
+  profile_id: string
+  profile_config_hash: string
+  dimension: number
+  revision_id: string
+  query_digest: string
 }

@@ -16,9 +16,14 @@ import {
   KNOWLEDGE_UNSUPPORTED_FORMAT_KEYWORDS,
   KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE,
 } from '@/config/knowledge-errors'
-import type { KnowledgeDoc, KnowledgeSearchResult, KnowledgeStructuredProjection } from '@/types'
+import type {
+  KnowledgeDoc,
+  KnowledgeSearchResult,
+  KnowledgeStructuredProjection,
+} from '@/types'
+import type { KnowledgeQueryEmbeddingReceipt } from '@/types/knowledge'
 
-export type { KnowledgeDoc, KnowledgeSearchResult }
+export type { KnowledgeDoc, KnowledgeQueryEmbeddingReceipt, KnowledgeSearchResult }
 
 const KNOWLEDGE_UPLOAD_PATH = `/api/v1/knowledge/documents?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`
 
@@ -544,11 +549,28 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
           content: typeof result.content === 'string' ? result.content : '',
           score: typeof result.score === 'number' ? result.score : 0,
           doc_id: typeof result.doc_id === 'string' ? result.doc_id : undefined,
+          document_generation:
+            typeof result.document_generation === 'number'
+              ? result.document_generation
+              : undefined,
+          revision_id: typeof result.revision_id === 'string' ? result.revision_id : undefined,
           doc_title: typeof result.doc_title === 'string' ? result.doc_title : undefined,
           source: typeof result.source === 'string' ? result.source : undefined,
           chunk_id: typeof result.chunk_id === 'string' ? result.chunk_id : undefined,
           chunk_index: typeof result.chunk_index === 'number' ? result.chunk_index : undefined,
           chunk_count: typeof result.chunk_count === 'number' ? result.chunk_count : undefined,
+          page_start: typeof result.page_start === 'number' ? result.page_start : undefined,
+          page_end: typeof result.page_end === 'number' ? result.page_end : undefined,
+          source_digest:
+            typeof result.source_digest === 'string' ? result.source_digest : undefined,
+          citation_digest:
+            typeof result.citation_digest === 'string' ? result.citation_digest : undefined,
+          source_offset_start:
+            typeof result.source_offset_start === 'number'
+              ? result.source_offset_start
+              : undefined,
+          source_offset_end:
+            typeof result.source_offset_end === 'number' ? result.source_offset_end : undefined,
           created_at: typeof result.created_at === 'string' ? result.created_at : undefined,
           metadata: result.metadata,
         }
@@ -567,6 +589,47 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
   }
 
   return []
+}
+
+function normalizeKnowledgeQueryReceipts(payload: unknown): KnowledgeQueryEmbeddingReceipt[] {
+  if (payload === undefined) return []
+  if (!Array.isArray(payload)) throw new Error('Invalid response')
+  return payload.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Invalid response')
+    }
+    const receipt = item as Partial<KnowledgeQueryEmbeddingReceipt>
+    for (const field of [
+      'operation',
+      'status',
+      'provider_id',
+      'model',
+      'profile_id',
+      'profile_config_hash',
+      'revision_id',
+      'query_digest',
+    ] as const) {
+      if (typeof receipt[field] !== 'string') throw new Error('Invalid response')
+    }
+    if (typeof receipt.dimension !== 'number' || !Number.isInteger(receipt.dimension)) {
+      throw new Error('Invalid response')
+    }
+    if (receipt.provider_name !== undefined && typeof receipt.provider_name !== 'string') {
+      throw new Error('Invalid response')
+    }
+    return {
+      operation: receipt.operation as string,
+      status: receipt.status as string,
+      provider_id: receipt.provider_id as string,
+      ...(receipt.provider_name !== undefined ? { provider_name: receipt.provider_name } : {}),
+      model: receipt.model as string,
+      profile_id: receipt.profile_id as string,
+      profile_config_hash: receipt.profile_config_hash as string,
+      dimension: receipt.dimension,
+      revision_id: receipt.revision_id as string,
+      query_digest: receipt.query_digest as string,
+    }
+  })
 }
 
 /** 知识库检索的元数据过滤（可选）：维度间 AND、维度内 OR、留空=不过滤 */
@@ -596,12 +659,14 @@ export async function searchKnowledge(
   const response = await apiPost<{
     result?: KnowledgeSearchResult[] | string
     results?: KnowledgeSearchResult[] | string
+    query_receipts?: KnowledgeQueryEmbeddingReceipt[]
   }>('/api/v1/knowledge/search', body).catch((error) => {
     throw normalizeKnowledgeEndpointError(error)
   })
 
   return {
     result: normalizeKnowledgeSearchResults(response.result ?? response.results),
+    query_receipts: normalizeKnowledgeQueryReceipts(response.query_receipts),
   }
 }
 

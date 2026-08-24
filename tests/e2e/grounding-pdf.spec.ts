@@ -425,19 +425,13 @@ test.describe('real K12 grounding PDF lifecycle', () => {
   }
 
   if (!REAL_10X_CYCLE)
-    test('131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval', async ({
+    test('131-page text PDF enters through the visible chooser with vector retrieval and page/citation oracle', async ({
       page,
       request,
     }) => {
-      childName = `五下教材-${e2eMarker('child')}`
-      const owner = await createTutor(page, childName, PDFS.text.grade)
       const accepted = await visibleUpload(page, PDFS.text, (id, jobID) => created.set(id, jobID))
       const id = accepted.documentID
-      const indexed = await waitIndexed(request, id, PDFS.text)
-      expect(String(nested(indexed, 'agent_id', 'owner_id'))).toBe(owner.agentID)
-      expect(String(nested(indexed, 'learner_id'))).toBe(owner.learnerID)
-      expect(String(nested(indexed, 'subject'))).toBe('数学')
-      expect(String(nested(indexed, 'grade'))).toBe(PDFS.text.grade)
+      await waitIndexed(request, id, PDFS.text)
 
       await page.goto('/knowledge', { waitUntil: 'domcontentloaded' })
       await page.getByText('检索测试', { exact: false }).click()

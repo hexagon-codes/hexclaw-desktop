@@ -81,6 +81,7 @@ function readyAutoProjection(version = 10): KnowledgeEmbeddingPolicyProjection {
     available_profiles: [siliconFlowProfile, openAIProfile],
     active_revision: {
       revision_id: 'revision-siliconflow-active',
+      profile_config_hash: 'profile-hash-siliconflow-active',
       state: 'ready',
       profile: siliconFlowProfile,
       chunks_done: 320,
@@ -101,6 +102,7 @@ function readyOpenAIProjection(version = 20): KnowledgeEmbeddingPolicyProjection
     },
     active_revision: {
       revision_id: 'revision-openai-active',
+      profile_config_hash: 'profile-hash-openai-active',
       state: 'ready',
       profile: openAIProfile,
       chunks_done: 320,
@@ -126,6 +128,7 @@ function desiredOpenAIProjection(
     },
     desired_revision: {
       revision_id: 'revision-openai-desired',
+      profile_config_hash: 'profile-hash-openai-desired',
       job_id: 'job-cloud-openai',
       state,
       profile: openAIProfile,
@@ -148,6 +151,7 @@ function desiredAutoProjection(version = 21): KnowledgeEmbeddingPolicyProjection
     },
     desired_revision: {
       revision_id: 'revision-auto-desired',
+      profile_config_hash: 'profile-hash-auto-desired',
       job_id: 'job-cloud-auto',
       state: 'pending',
       profile: siliconFlowProfile,

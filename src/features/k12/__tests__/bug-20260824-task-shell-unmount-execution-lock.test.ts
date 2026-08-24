@@ -61,6 +61,8 @@ function dispatchSnapshot(stage: 'recognizing' | 'assessing' | 'recovering' | 'o
       confirmation_state: 'confirmed',
       anchor_state: 'pending',
       recognition: { questions: [], subject: '数学' },
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
     },
     provider_display_name: 'HexClaw-GPT',
     model_id: 'gpt-5.6-sol',

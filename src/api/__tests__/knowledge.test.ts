@@ -93,6 +93,74 @@ describe('knowledge API', () => {
     expect(result[0]!.content).toBe('hit1')
   })
 
+  it('preserves textbook lineage fields and query embedding receipts', async () => {
+    apiPost.mockResolvedValueOnce({
+      results: [
+        {
+          content: '5 m 红绸带平均分给 6 名女生',
+          score: 0.98,
+          doc_id: 'document-math-1',
+          document_generation: 3,
+          revision_id: 'revision-math-1',
+          doc_title: '义务教育教科书·数学五年级下册',
+          source: 'upload',
+          chunk_id: 'chunk-math-1',
+          chunk_index: 8,
+          chunk_count: 120,
+          page_start: 54,
+          page_end: 57,
+          source_digest: '5'.repeat(64),
+          citation_digest: '6'.repeat(64),
+          source_offset_start: 1024,
+          source_offset_end: 1096,
+        },
+      ],
+      query_receipts: [
+        {
+          operation: 'query_embedding',
+          status: 'succeeded',
+          provider_id: 'ollama',
+          provider_name: 'Ollama',
+          model: 'qwen3-embedding',
+          profile_id: 'embedding-local-1',
+          profile_config_hash: '7'.repeat(64),
+          dimension: 1024,
+          revision_id: 'revision-math-1',
+          query_digest: `sha256:${'8'.repeat(64)}`,
+        },
+      ],
+    })
+
+    const response = await searchKnowledge('红绸带平均分', 3)
+
+    expect(response.result[0]).toMatchObject({
+      document_generation: 3,
+      revision_id: 'revision-math-1',
+      page_start: 54,
+      page_end: 57,
+      source_digest: '5'.repeat(64),
+      citation_digest: '6'.repeat(64),
+      source_offset_start: 1024,
+      source_offset_end: 1096,
+    })
+    expect(response.query_receipts).toEqual([
+      expect.objectContaining({
+        operation: 'query_embedding',
+        profile_config_hash: '7'.repeat(64),
+        revision_id: 'revision-math-1',
+      }),
+    ])
+  })
+
+  it('keeps legacy search responses compatible with an empty receipt exact-set', async () => {
+    apiPost.mockResolvedValueOnce({ results: [{ content: 'legacy hit', score: 0.5 }] })
+
+    await expect(searchKnowledge('legacy query')).resolves.toMatchObject({
+      result: [{ content: 'legacy hit', score: 0.5 }],
+      query_receipts: [],
+    })
+  })
+
   it('normalizes string result into single-item array', async () => {
     apiPost.mockResolvedValueOnce({ result: 'plain text result' })
     const { result } = await searchKnowledge('query')

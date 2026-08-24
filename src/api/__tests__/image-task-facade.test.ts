@@ -103,6 +103,29 @@ const wrongGrade = {
   solve_only: false,
 }
 
+const groundingEvidenceReceipt = {
+  textbook_binding_id: 'binding-math-1',
+  textbook_manifest_id: 'manifest-math-1',
+  document_id: 'document-math-1',
+  document_generation: 3,
+  vector_revision_id: 'revision-math-1',
+  query_digest: `sha256:${'4'.repeat(64)}`,
+  chunk_id: 'chunk-math-1',
+  logical_page: 54,
+  pdf_page: 57,
+  source_digest: '5'.repeat(64),
+  citation_digest: '6'.repeat(64),
+}
+
+function problemGroundingReceipts(problemId = 'problem-1') {
+  return ['solve', 'grade'].map((operation) => ({
+    problem_id: problemId,
+    operation,
+    identity_digest: `sha256:${'7'.repeat(64)}`,
+    ...groundingEvidenceReceipt,
+  }))
+}
+
 function homeworkResult(
   intent: 'completed_homework' | 'blank_worksheet',
   item: Record<string, unknown>,
@@ -194,6 +217,8 @@ function completedHomeworkDispatch() {
             projection_revision: 1,
           },
         },
+        grounding_evidence_receipts: [],
+        problem_grounding_receipts: [],
         final_artifact: {
           artifact_id: 'artifact-1',
           agent_name: 'tutor/小明',
@@ -286,6 +311,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
           stage: 'queued',
           confirmation_state: 'pending',
           anchor_state: 'pending',
+          grounding_evidence_receipts: [],
+          problem_grounding_receipts: [],
           progressive: {
             structure_version: 0,
             snapshot_revision: 0,
@@ -327,6 +354,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
         skipped: 0,
       },
       projection_revision: 0,
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
     })
   })
 
@@ -356,6 +385,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
           stage: 'assessing',
           confirmation_state: 'confirmed',
           anchor_state: 'located',
+          grounding_evidence_receipts: [],
+          problem_grounding_receipts: [],
           progressive: {
             structure_version: 1,
             snapshot_revision: 1,
@@ -452,6 +483,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
         skipped: 0,
       },
       projection_revision: 1,
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
       final_artifact: {
         artifact_id: 'artifact-1',
         artifact_digest: '0123456789abcdef',
@@ -679,6 +712,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
           },
         },
       ],
+      grounding_evidence_receipts: [groundingEvidenceReceipt],
+      problem_grounding_receipts: problemGroundingReceipts(),
     })
 
     await expect(
@@ -693,8 +728,140 @@ describe('K12 ImageTaskDispatch public facade', () => {
           request_policy: { reasoning_effort: 'none' },
         },
       ],
+      grounding_evidence_receipts: [groundingEvidenceReceipt],
+      problem_grounding_receipts: problemGroundingReceipts(),
       result: { kind: 'completed_homework' },
     })
+  })
+
+  it('preserves the complete grounding receipt exact-set from the dispatch handler wire', async () => {
+    const response = completedHomeworkDispatch()
+    const projection = response.dispatch.target_projection as Record<string, unknown>
+    const completeProblemReceipts = [
+      ...problemGroundingReceipts('problem-1'),
+      ...problemGroundingReceipts('problem-2'),
+    ]
+    projection.grounding_evidence_receipts = [groundingEvidenceReceipt]
+    projection.problem_grounding_receipts = completeProblemReceipts
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(k12Api.k12GetImageTask('mingming', 'dispatch-homework')).resolves.toMatchObject({
+      dispatch: {
+        target_projection: {
+          grounding_evidence_receipts: [groundingEvidenceReceipt],
+          problem_grounding_receipts: completeProblemReceipts,
+        },
+      },
+    })
+  })
+
+  it('rejects a completed projection whose grounding receipts omit an expected public problem', async () => {
+    const response = completedHomeworkDispatch()
+    const projection = response.dispatch.target_projection as Record<string, unknown>
+    projection.grounding_evidence_receipts = [groundingEvidenceReceipt]
+    projection.problem_grounding_receipts = []
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(
+      k12Api.k12GetImageTask('mingming', 'dispatch-homework'),
+    ).rejects.toThrow(/invalid image task dispatch response/i)
+  })
+
+  it.each([
+    ['an unprefixed digest', '7'.repeat(64)],
+    ['an uppercase prefix', `SHA256:${'7'.repeat(64)}`],
+    ['uppercase hex', `sha256:${'A'.repeat(64)}`],
+    ['a truncated digest', `sha256:${'7'.repeat(63)}`],
+  ])('rejects %s as a problem grounding identity', async (_case, identityDigest) => {
+    client.apiGet.mockResolvedValue({
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: 'sha256:source-image',
+      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      operation_receipts: [],
+      grounding_evidence_receipts: [groundingEvidenceReceipt],
+      problem_grounding_receipts: problemGroundingReceipts().map((receipt) => ({
+        ...receipt,
+        identity_digest: identityDigest,
+      })),
+    })
+
+    await expect(
+      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
+    ).rejects.toThrow(/invalid image task result response/i)
+  })
+
+  it('keeps the no-active-binding result compatible when both grounding arrays are empty', async () => {
+    client.apiGet.mockResolvedValue({
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: 'sha256:source-image',
+      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      operation_receipts: [],
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
+    })
+
+    await expect(
+      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
+    ).resolves.toMatchObject({
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
+    })
+  })
+
+  it('rejects an incomplete solve-only grounding operation set for a gradable result', async () => {
+    client.apiGet.mockResolvedValue({
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: 'sha256:source-image',
+      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      operation_receipts: [],
+      grounding_evidence_receipts: [groundingEvidenceReceipt],
+      problem_grounding_receipts: problemGroundingReceipts().slice(0, 1),
+    })
+
+    await expect(
+      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
+    ).rejects.toThrow(/invalid image task result response/i)
+  })
+
+  it('rejects an internal field added to a public grounding receipt exact-set', async () => {
+    client.apiGet.mockResolvedValue({
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: 'sha256:source-image',
+      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      operation_receipts: [],
+      grounding_evidence_receipts: [
+        { ...groundingEvidenceReceipt, retrieval_score: 0.99 },
+      ],
+      problem_grounding_receipts: problemGroundingReceipts(),
+    })
+
+    await expect(
+      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
+    ).rejects.toThrow(/invalid image task result response/i)
   })
 
   it.each([

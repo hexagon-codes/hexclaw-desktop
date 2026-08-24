@@ -38,6 +38,7 @@ export type EmbeddingProfile = KnowledgeEmbeddingProfile
 /** Immutable execution projection for the active or staged index revision. */
 export interface KnowledgeEmbeddingRevisionProjection {
   revision_id: string
+  profile_config_hash: string
   /** Persistent rebuild job, when this is the staged desired revision. */
   job_id?: string | null
   state: 'disabled' | 'pending' | 'building' | 'retry_wait' | 'ready' | 'failed' | 'cancelled'

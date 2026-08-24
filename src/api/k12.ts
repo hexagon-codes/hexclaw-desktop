@@ -1835,6 +1835,27 @@ export type ImageTaskProgressDTO =
       state: CreativeWorkIntakeStatus | ImageTaskCreativeFeedbackState
     }
 
+export interface ImageTaskGroundingEvidenceReceiptDTO {
+  textbook_binding_id: string
+  textbook_manifest_id: string
+  document_id: string
+  document_generation: number
+  vector_revision_id: string
+  query_digest: string
+  chunk_id: string
+  logical_page: number
+  pdf_page: number
+  source_digest: string
+  citation_digest: string
+}
+
+export interface ImageTaskProblemGroundingReceiptDTO
+  extends ImageTaskGroundingEvidenceReceiptDTO {
+  problem_id: string
+  operation: 'solve' | 'grade'
+  identity_digest: string
+}
+
 export interface ImageTaskHomeworkProjectionDTO {
   kind: 'homework'
   stage: ImageTaskHomeworkStage
@@ -1846,6 +1867,8 @@ export interface ImageTaskHomeworkProjectionDTO {
   coverage?: ImageTaskCoverageDTO
   projection_revision?: number
   final_artifact?: GradingFinalArtifactDTO | null
+  grounding_evidence_receipts: ImageTaskGroundingEvidenceReceiptDTO[]
+  problem_grounding_receipts: ImageTaskProblemGroundingReceiptDTO[]
 }
 
 export interface GradingFinalArtifactDTO {
@@ -2155,6 +2178,12 @@ interface ImageTaskResultRespBase {
   result: ImageTaskResultProjection | null
 }
 
+interface ImageTaskResultAuditEnvelope {
+  source_digest: string
+  source_attachments: ImageTaskSourceAttachmentReceipt[]
+  operation_receipts: ImageTaskOperationReceipt[]
+}
+
 /**
  * Current Sidecars expose the audit envelope. A legacy installed Sidecar may
  * expose no audit fields at all; partial audit envelopes are rejected at the
@@ -2162,11 +2191,16 @@ interface ImageTaskResultRespBase {
  */
 export type ImageTaskResultResp =
   | ImageTaskResultRespBase
-  | (ImageTaskResultRespBase & {
-      source_digest: string
-      source_attachments: ImageTaskSourceAttachmentReceipt[]
-      operation_receipts: ImageTaskOperationReceipt[]
-    })
+  | (ImageTaskResultRespBase &
+      ImageTaskResultAuditEnvelope & {
+        task_intent: 'completed_homework' | 'blank_worksheet'
+        grounding_evidence_receipts: ImageTaskGroundingEvidenceReceiptDTO[]
+        problem_grounding_receipts: ImageTaskProblemGroundingReceiptDTO[]
+      })
+  | (ImageTaskResultRespBase &
+      ImageTaskResultAuditEnvelope & {
+        task_intent: 'writing' | 'artwork' | 'unknown'
+      })
 
 export async function k12CreateImageTask(req: CreateImageTaskReq, signal?: AbortSignal) {
   const response = await apiPost<unknown>(`${BASE}/image-tasks`, req, {
