@@ -400,36 +400,32 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     expect(wrapper.find('.weekly-hero').exists()).toBe(true)
   })
 
-  it('积累分科筛选为空不等于积累对象全空，不误显示 FTUE', async () => {
+  it('积累对象不设置二级筛选，读取全量列表且不误显示 FTUE', async () => {
     h.listMistakes.mockReset().mockResolvedValue({ items: [] })
     h.reviewQueue.mockReset().mockResolvedValue({ items: [] })
-    h.listAccumulation.mockReset().mockImplementation((_agent: string, subject?: string) =>
-      Promise.resolve({
-        items:
-          subject === '英语'
-            ? []
-            : [
-                {
-                  record_id: 'a1',
-                  subject: '语文',
-                  entry_type: '好词好句',
-                  content: '春风又绿江南岸',
-                  status: '已积累',
-                },
-              ],
-      }),
-    )
+    h.listAccumulation.mockReset().mockResolvedValue({
+      items: [
+        {
+          record_id: 'a1',
+          subject: '语文',
+          entry_type: '好词好句',
+          content: '春风又绿江南岸',
+          status: '已积累',
+        },
+      ],
+    })
     h.listPracticeSets.mockReset().mockResolvedValue({ items: [] })
     h.listCreativeWorks.mockReset().mockResolvedValue({ items: [] })
 
     const wrapper = renderRecords()
     await flushPromises()
     await wrapper.get('[data-testid="subtab-accumulation"]').trigger('click')
-    await wrapper.get('[data-testid="accum-filter-english"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="accum-empty-card"]').exists()).toBe(true)
+    expect(wrapper.find('.k12accum__filters').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accum-empty-card"]').exists()).toBe(false)
+    expect(h.listAccumulation.mock.calls.every((call) => call[1] === undefined)).toBe(true)
   })
 
   it('学习档案溢出菜单支持完整菜单语义、键盘导航、外点关闭与焦点恢复', async () => {

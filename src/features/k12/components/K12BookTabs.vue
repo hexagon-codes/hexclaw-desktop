@@ -69,6 +69,9 @@ const emit = defineEmits<{
 .k12-week-view-tabs {
   display: block;
 }
+.k12-book-tabs.seg button {
+  position: relative;
+}
 .k12-book-tabs button {
   appearance: none;
   display: inline-flex;

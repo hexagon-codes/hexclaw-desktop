@@ -120,38 +120,23 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(recordsSource).toMatch(/ACCUMULATION_DICTATION_STATUSES[\s\S]*'re_add'/)
   })
 
-  it('#5 分科过滤：点「语文」chip → 以 subject=语文 重新拉取积累本', async () => {
+  it('积累对象不显示二级筛选或列表来源槽', async () => {
     const w = render()
     await flushPromises()
     await gotoAccum(w)
-    h.listSpy.mockClear()
 
-    const group = w.get('.k12accum__filters')
-    expect(group.attributes('role')).toBe('group')
-    const chip = w.find('[data-testid="accum-filter-chinese"]')
-    expect(chip.exists()).toBe(true)
-    await chip.trigger('click')
-    await flushPromises()
-
-    expect(chip.attributes('aria-pressed')).toBe('true')
-    expect(h.listSpy).toHaveBeenCalled()
-    const lastCall = h.listSpy.mock.calls[h.listSpy.mock.calls.length - 1]!
-    expect(lastCall[1]).toBe('语文')
+    expect(w.find('.k12accum__filters').exists()).toBe(false)
+    expect(w.find('[data-testid="accum-filter-chinese"]').exists()).toBe(false)
+    expect(w.find('.k12accum__source').exists()).toBe(false)
   })
 
-  it('#5 分科过滤：点「全部」→ 不带 subject 拉全量', async () => {
+  it('积累列表始终读取全量，不提交 subject 过滤', async () => {
     const w = render()
     await flushPromises()
     await gotoAccum(w)
-    // 先切语文再切全部
-    await w.find('[data-testid="accum-filter-chinese"]').trigger('click')
-    await flushPromises()
-    h.listSpy.mockClear()
-    await w.find('[data-testid="accum-filter-all"]').trigger('click')
-    await flushPromises()
 
-    const lastCall = h.listSpy.mock.calls[h.listSpy.mock.calls.length - 1]!
-    expect(lastCall[1]).toBeUndefined()
+    expect(h.listSpy).toHaveBeenCalled()
+    expect(h.listSpy.mock.calls.every((call) => call[1] === undefined)).toBe(true)
   })
 
   it('#4 手动记录：表单只显示内容，提交 DTO 也只含 content', async () => {

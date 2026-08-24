@@ -506,27 +506,21 @@ async function reloadObjectCounts() {
   objectCountsLoading.value = false
 }
 
-// 积累本分科过滤（#5）：''=全部 / '语文' / '英语'，触达后端 GET /accumulation?subject=（BUG-3）。
-const accumSubject = ref('')
+// 积累对象一次读取全量列表，学科与类型只作为服务端派生的只读元信息。
 const accumulationLoading = ref(true)
 let accumulationLoadRequest = 0
 async function reloadAccum() {
   const request = ++accumulationLoadRequest
   accumulationLoading.value = true
   try {
-    await store.loadAccumulation(props.agentId, accumSubject.value || undefined)
+    await store.loadAccumulation(props.agentId)
     if (request !== accumulationLoadRequest) return
-    if (!accumSubject.value && store.accumView) {
+    if (store.accumView) {
       accumulationTotalCount.value = store.accumView.items.length
     }
   } finally {
     if (request === accumulationLoadRequest) accumulationLoading.value = false
   }
-}
-function setAccumSubject(s: string) {
-  if (accumSubject.value === s) return
-  accumSubject.value = s
-  reloadAccum()
 }
 
 const mistakesLoading = ref(true)
@@ -567,7 +561,6 @@ watch(
     // 删除确认与被确认对象必须随辅导对象切换一并销毁，避免旧对象的
     // 冷却计时器、焦点恢复或迟到响应污染新对象。
     closeDetail()
-    accumSubject.value = ''
     mistakeSubject.value = ''
     mistakeStatus.value = 'all'
     accumAddOpen.value = false
@@ -1230,10 +1223,6 @@ function accumField(
   key: 'subject' | 'entry_type' | 'content' | 'source',
 ): string {
   return String(item.fields[key] ?? '')
-}
-function accumSourceLabel(item: RecordItem): string {
-  const source = accumField(item, 'source')
-  return source ? `${t('k12.accumulationFields.source')}：${source}` : ''
 }
 const detailStatus = computed(() => {
   if (detail.value.kind === 'accum') return ''
@@ -1937,44 +1926,8 @@ async function doExportMd() {
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
       <section v-else-if="sub === 'accumulation'" class="k12accum" data-testid="accum-prototype">
-        <!-- 原型 rc1（app.html:1618）：积累 tab 带 cxsec 标题 + 说明（错题 tab 无标题——顶栏已声明身份；
-             积累 / 学情 tab 各有 h2 标题，与学情 tab reporthead 同款）。 -->
-        <div class="k12rec__reporthead">
-          <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
-          <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
-          <div class="k12accum__filters" role="group" :aria-label="t('k12.accum.subject')">
-            <button
-              type="button"
-              class="chip"
-              :class="{ on: accumSubject === '' }"
-              :aria-pressed="accumSubject === ''"
-              data-testid="accum-filter-all"
-              @click="setAccumSubject('')"
-            >
-              {{ t('k12.accum.filterAll') }}
-            </button>
-            <button
-              type="button"
-              class="chip"
-              :class="{ on: accumSubject === '语文' }"
-              :aria-pressed="accumSubject === '语文'"
-              data-testid="accum-filter-chinese"
-              @click="setAccumSubject('语文')"
-            >
-              {{ t('k12.accum.filterChinese') }}
-            </button>
-            <button
-              type="button"
-              class="chip"
-              :class="{ on: accumSubject === '英语' }"
-              :aria-pressed="accumSubject === '英语'"
-              data-testid="accum-filter-english"
-              @click="setAccumSubject('英语')"
-            >
-              {{ t('k12.accum.filterEnglish') }}
-            </button>
-          </div>
-        </div>
+        <!-- 积累对象不设置二级筛选和重复标题；来源信息只在详情中展示。 -->
+        <p class="k12accum__description">{{ t('k12.accum.desc') }}</p>
         <div
           v-if="accumulationLoading"
           class="k12rec__loading"
@@ -2007,9 +1960,6 @@ async function doExportMd() {
             }}</b>
             <span class="k12accum__subject">{{ accumField(item, 'subject') }}</span>
             <span class="k12accum__type">{{ accumField(item, 'entry_type') }}</span>
-            <span class="k12accum__source" :title="accumSourceLabel(item)">{{
-              accumSourceLabel(item)
-            }}</span>
             <span v-if="accumDate(item)" class="k12accum__date" data-testid="accum-date">{{
               accumDate(item)
             }}</span>
@@ -2724,11 +2674,11 @@ async function doExportMd() {
   flex-wrap: wrap;
   margin-bottom: 12px;
 }
-.k12accum__filters {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
+.k12accum__description {
+  margin: 0;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .k12rec__tiles {
   display: grid;
@@ -2833,15 +2783,11 @@ async function doExportMd() {
   font-size: 10.5px;
   font-weight: 650;
 }
-.k12accum__source {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.k12accum__row > .btn {
+  justify-content: normal;
 }
 .k12accum__detail {
-  flex: none;
+  flex: 0 1 auto;
 }
 /* 20260718 原型定案（引文列表）：引文衬线置首 + 引号压角，量度 62ch；meta 行随 flex-wrap 落第二行 */
 .k12accum__row--quote {

@@ -174,7 +174,8 @@ const visibleTracks = computed<WeeklyPracticeTrackDTO[]>(() => {
 const verifiedItems = (track: WeeklyPracticeTrackDTO) =>
   track.items
     .filter(
-      (item) => item.verification.status === 'verified' && practiceProjection(item).kind !== 'hidden',
+      (item) =>
+        item.verification.status === 'verified' && practiceProjection(item).kind !== 'hidden',
     )
     .sort((left, right) => left.position - right.position)
 
@@ -774,7 +775,8 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                   </button>
                   <template
                     v-if="
-                      track.plan_section === 'due_review' && practiceProjection(item).kind === 'joined'
+                      track.plan_section === 'due_review' &&
+                      practiceProjection(item).kind === 'joined'
                     "
                   >
                     <span
@@ -833,15 +835,21 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
       </template>
 
       <section v-else class="weekly-history" role="tabpanel" aria-label="历史周练">
-        <article v-for="item in history" :key="item.snapshot_id" class="weekly-history__card">
-          <div>
+        <div class="weekly-history__list resource-list">
+          <article
+            v-for="item in history"
+            :key="item.snapshot_id"
+            class="weekly-history__card resource-row k12-week-history-card"
+          >
             <b>{{ archiveDateLabel(item) }}</b>
-            <span>{{ archiveWeekLabel(item) }}</span>
-            <p>{{ archiveResultLabel(item) }}</p>
-          </div>
-          <span>已归档</span>
-          <button type="button" class="btn" @click="openHistory(item)">查看周练</button>
-        </article>
+            <span class="weekly-history__origin rc-practice-origin">
+              <b>{{ archiveWeekLabel(item) }}</b>
+              <small>{{ archiveResultLabel(item) }}</small>
+            </span>
+            <span class="stpill got">已归档</span>
+            <button type="button" class="btn" @click="openHistory(item)">查看周练</button>
+          </article>
+        </div>
         <div v-if="!history.length" class="weekly-track__empty">暂无历史周练</div>
       </section>
 
@@ -1165,30 +1173,45 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   margin: 0;
 }
 .weekly-history {
-  display: grid;
-  gap: 10px;
+  display: block;
+}
+.weekly-history__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .weekly-history__card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
   border: 0.5px solid var(--hc-border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--hc-bg-card);
-}
-.weekly-history__card > div {
-  display: grid;
-  gap: 3px;
-}
-.weekly-history__card p {
-  margin: 2px 0 0;
   color: var(--hc-text-secondary);
-}
-.weekly-history__card span {
-  color: var(--hc-text-muted);
   font-size: 12px;
+  line-height: 18px;
+}
+.weekly-history__card > b {
+  min-width: 0;
+  color: var(--hc-text-primary);
+}
+.weekly-history__origin {
+  display: grid;
+  gap: 1px;
+  min-width: 160px;
+}
+.weekly-history__origin b {
+  color: var(--hc-text-secondary);
+  font-size: 11px;
+}
+.weekly-history__origin small {
+  overflow: hidden;
+  color: var(--hc-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .weekly-history-dialog__overlay {
   position: fixed;
@@ -1237,15 +1260,12 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
     align-items: flex-start;
     flex-direction: column;
   }
-  .weekly-history__card {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* Approved learning-record fidelity contract: period tabs, artifact actions and
    generated tracks share one compact weekly workspace. */
 .weekly {
-  display: grid;
+  display: block;
   gap: 0;
 }
 
@@ -1415,7 +1435,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-hero.rc-week-hero {
   display: block;
   overflow: visible;
-  margin: 0 0 14px;
+  margin: 2px 0 14px;
   padding: 18px 18px 13px;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
@@ -1538,6 +1558,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-item.resource-row,
 .weekly-manual.resource-row {
   display: flex;
+  grid-template-columns: none;
   align-items: center;
   gap: 8px;
   min-width: 0;

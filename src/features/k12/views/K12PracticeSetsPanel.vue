@@ -1462,7 +1462,7 @@ async function cancelSet(s: PracticeSetDTO) {
 <style scoped>
 .k12ps {
   display: grid;
-  gap: 16px;
+  gap: 0;
 }
 .k12ps__err {
   color: var(--hc-error);
@@ -1563,9 +1563,10 @@ async function cancelSet(s: PracticeSetDTO) {
 }
 .k12ps__group {
   font-size: 10.5px;
-  font-weight: 750;
-  color: var(--hc-text-secondary);
-  margin-top: 5px;
+  font-weight: 700;
+  color: var(--hc-text-muted);
+  letter-spacing: 0.05em;
+  margin: 4px 0 -2px;
 }
 .k12ps__group--blocked {
   color: var(--hc-text-muted);
@@ -1614,7 +1615,7 @@ async function cancelSet(s: PracticeSetDTO) {
   display: block;
   margin-top: 3px;
   color: var(--hc-text-muted);
-  font-size: 10.5px;
+  font-size: 9.583333px;
   line-height: 1.55;
 }
 .k12ps__generation-placeholder .k12ps__q {
@@ -1652,7 +1653,9 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__rm {
   font: inherit;
   font-size: 10.5px;
-  border: none;
+  font-weight: 500;
+  line-height: 18px;
+  border: 0.5px solid transparent;
   background: transparent;
   color: var(--hc-text-secondary);
   padding: 2px 8px;
@@ -1671,6 +1674,9 @@ async function cancelSet(s: PracticeSetDTO) {
 }
 
 /* 打印历史 */
+.k12ps__history {
+  margin-top: 16px;
+}
 .k12ps__hhead {
   display: flex;
   align-items: baseline;
@@ -1698,13 +1704,14 @@ async function cancelSet(s: PracticeSetDTO) {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 330px));
-  gap: 10px;
+  gap: 9px;
 }
 .k12ps__hcard {
+  display: block;
   border: 0.5px solid var(--hc-border);
   border-radius: 14px;
   background: var(--hc-bg-card);
-  box-shadow: var(--hc-shadow-sm);
+  box-shadow: none;
   padding: 12px 13px;
 }
 .k12ps__hcard--cancelled {

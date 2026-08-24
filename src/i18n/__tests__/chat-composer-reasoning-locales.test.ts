@@ -97,8 +97,8 @@ const EXPECTED = {
       },
     },
     assistantRun: {
-      generating: '正在生成回答…',
-      preparing: '正在准备回答…',
+      generating: '正在回复…',
+      preparing: '正在回复…',
       thinking: '正在深度思考 · {duration}',
       thought: '思考了 {duration}',
       ignored: '深度思考未生效，已按普通模式回答',
@@ -151,8 +151,8 @@ const EXPECTED = {
       },
     },
     assistantRun: {
-      generating: 'Generating answer…',
-      preparing: 'Preparing answer…',
+      generating: 'Responding…',
+      preparing: 'Responding…',
       thinking: 'Deep thinking · {duration}',
       thought: 'Thought for {duration}',
       ignored: 'Deep Think was not applied; answered in normal mode.',

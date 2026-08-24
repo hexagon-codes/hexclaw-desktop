@@ -76,6 +76,8 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     expect(section.exists()).toBe(true)
     expect(section.find('.rl-filters').exists()).toBe(false)
     expect(section.find('.k12accum__bar').exists()).toBe(false)
+    expect(section.find('.k12accum__filters').exists()).toBe(false)
+    expect(section.find('.k12rec__reporthead').exists()).toBe(false)
     expect(w.find('.k12rec__tabs [data-testid="accum-add-open"]').exists()).toBe(true)
 
     const row = section.find('.k12accum__row')
@@ -83,7 +85,7 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     expect(row.find('.k12accum__subject').text()).toBe('语文')
     expect(row.find('.k12accum__title').text()).toContain('时间像海绵里的水')
     expect(row.find('.k12accum__type').text()).toBe('好词好句')
-    expect(row.find('.k12accum__source').text()).toBe('出处：课外阅读 · 主动收藏')
+    expect(row.find('.k12accum__source').exists()).toBe(false)
     expect(row.find('.k12accum__status').exists()).toBe(false)
 
     // 当前合同：引文置首，meta 只读；无 mastery/status，行末固定生成主动作 + 查看详情。
@@ -93,7 +95,6 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
       'k12accum__title',
       'k12accum__subject',
       'k12accum__type',
-      'k12accum__source',
       'btn',
       'btn btn-ghost k12accum__detail',
     ])
@@ -108,5 +109,11 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     expect(recordsSource).not.toContain('class="k12accum__form-row"')
     expect(recordsSource).not.toContain('data-testid="accum-add-subject"')
     expect(recordsSource).not.toContain('data-testid="accum-add-type"')
+  })
+
+  it('列表动作沿用原型普通 flex item 的对齐语义', () => {
+    expect(recordsSource).toMatch(
+      /\.k12accum__row\s*>\s*\.btn\s*\{[^}]*justify-content:\s*normal;/s,
+    )
   })
 })

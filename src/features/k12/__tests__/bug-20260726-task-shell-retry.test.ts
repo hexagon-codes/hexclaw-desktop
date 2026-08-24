@@ -50,10 +50,10 @@ function i18n() {
   })
 }
 
-  function dispatch(
-    stage: 'failed_retryable' | 'failed_terminal' | 'recovering' | 'outcome_unknown',
-    retryable: boolean,
-  ) {
+function dispatch(
+  stage: 'failed_retryable' | 'failed_terminal' | 'recovering' | 'outcome_unknown',
+  retryable: boolean,
+) {
   return {
     created: true,
     dispatch: {
@@ -117,6 +117,7 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-task-stage-retry"]').exists()).toBe(false)
     expect(wrapper.find('[role="status"], [role="alert"]').exists()).toBe(true)
     expect(h.retryTask).not.toHaveBeenCalled()
     expect(h.createTask).toHaveBeenCalledTimes(1)
@@ -125,9 +126,10 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
   it('failed_retryable + retryable=true 点击立即反馈，双击只提交一次', async () => {
     let resolveRetry!: (value: unknown) => void
     h.retryTask.mockImplementation(
-      () => new Promise((resolve) => {
-        resolveRetry = resolve
-      }),
+      () =>
+        new Promise((resolve) => {
+          resolveRetry = resolve
+        }),
     )
     const wrapper = render('failed_retryable', true)
     await flushPromises()
@@ -145,7 +147,7 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
     expect(metadata.text()).toContain('小王的辅导助手')
     expect(metadata.text()).toContain('五年级下')
 
-    const retry = wrapper.get('[data-testid="message-regenerate"]')
+    const retry = wrapper.get('[data-testid="message-task-stage-retry"]')
     await Promise.all([retry.trigger('click'), retry.trigger('click')])
 
     expect(h.retryTask).toHaveBeenCalledTimes(1)
@@ -153,6 +155,6 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
 
     resolveRetry(dispatch('recovering', false))
     await flushPromises()
-    expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-task-stage-retry"]').exists()).toBe(false)
   })
 })
