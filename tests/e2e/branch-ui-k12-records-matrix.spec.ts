@@ -901,6 +901,56 @@ async function openImplementationRecords(page: Page, testID: string) {
   return issues
 }
 
+const PRACTICE_HEADER_VISUAL_FIXTURE = {
+  title: '待打印',
+  count: '2 道',
+  meta: '从错题、本周该练或积累明确加入 · 重复加入自动去重',
+  hint: '系统打印成功或发送批次创建后才固化；取消系统打印不会清空待打印',
+}
+
+async function normalizePracticeHeaderVisualFixture(page: Page, side: Side): Promise<string[]> {
+  return page.evaluate(
+    ({ currentSide, fixture }) => {
+      const selectors =
+        currentSide === 'reference'
+          ? {
+              title: '.practice-basket .practice-detail__head h3',
+              count: '#practiceBasketCount',
+              meta: '#practiceBasketMeta',
+              hint: '.practice-basket .practice-detail__head p:nth-of-type(2)',
+            }
+          : {
+              title: '[data-testid="ps-basket"] .k12ps__btitle',
+              count: '[data-testid="ps-basket-count"]',
+              meta: '[data-testid="ps-basket"] .k12ps__bmeta',
+              hint: '[data-testid="ps-basket"] .k12ps__bhint',
+            }
+      const nodes = Object.fromEntries(
+        Object.entries(selectors).map(([name, selector]) => [
+          name,
+          document.querySelector<HTMLElement>(selector),
+        ]),
+      ) as Record<keyof typeof selectors, HTMLElement | null>
+      const issues = Object.entries(nodes).flatMap(([name, node]) =>
+        node ? [] : [`blocked: ${currentSide} practice header ${name} is missing`],
+      )
+      const titleText = nodes.title
+        ? [...nodes.title.childNodes].find((node) => node.nodeType === Node.TEXT_NODE)
+        : null
+      if (!titleText) {
+        issues.push(`blocked: ${currentSide} practice header title text node is missing`)
+      } else {
+        titleText.nodeValue = `${fixture.title} `
+      }
+      if (nodes.count) nodes.count.textContent = fixture.count
+      if (nodes.meta) nodes.meta.textContent = fixture.meta
+      if (nodes.hint) nodes.hint.textContent = fixture.hint
+      return issues
+    },
+    { currentSide: side, fixture: PRACTICE_HEADER_VISUAL_FIXTURE },
+  )
+}
+
 async function seedSharedContentScroll(
   page: Page,
   selector: string,
@@ -1774,8 +1824,16 @@ const states: StateDefinition[] = [
     fullPagePixelComparable: false,
     fullPagePixelReason:
       '侧栏会话、对象计数和题目正文属于业务夹具差异；保留全页差异图，仅判定待打印与历史列表目标几何、样式与溢出。',
-    openReference: async (page) => openReferenceRecords(page, 2),
-    openImplementation: async (page) => openImplementationRecords(page, 'subtab-practicesets'),
+    openReference: async (page) => {
+      const issues = await openReferenceRecords(page, 2)
+      issues.push(...(await normalizePracticeHeaderVisualFixture(page, 'reference')))
+      return issues
+    },
+    openImplementation: async (page) => {
+      const issues = await openImplementationRecords(page, 'subtab-practicesets')
+      issues.push(...(await normalizePracticeHeaderVisualFixture(page, 'implementation')))
+      return issues
+    },
     referenceTargets: [
       ...practiceTargets.referenceTargets,
       {

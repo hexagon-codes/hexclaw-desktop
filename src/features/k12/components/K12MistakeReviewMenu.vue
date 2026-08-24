@@ -161,8 +161,11 @@ function confirmSuppress() {
   white-space: nowrap;
 }
 .mistake-more__trigger {
-  min-width: 30px;
-  font-size: 18px;
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
 }
 .mistake-more__menu {
   position: fixed;

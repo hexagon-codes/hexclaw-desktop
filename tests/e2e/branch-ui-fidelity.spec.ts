@@ -702,6 +702,8 @@ const surfaces: Surface[] = [
     openImplementation: async (page) => openImplementationRecords(page, 'week'),
     referenceGeometry: [
       { name: 'object-tabs', selector: '#k12BookTabs' },
+      { name: 'records-scroll', selector: '#k12ViewRecords > .content' },
+      { name: 'records-panel', selector: '#k12BookPanel0' },
       { name: 'period-tabs', selector: '#k12BookPanel0 .k12-week-view-tabs' },
       { name: 'period-toolbar', selector: '#k12BookPanel0 .k12-secondary-toolbar' },
       { name: 'progress', selector: '#k12BookPanel0 .rc-week-progress' },
@@ -746,6 +748,11 @@ const surfaces: Surface[] = [
     ],
     implementationGeometry: [
       { name: 'object-tabs', selector: '.k12rec__tabs .k12-book-tabs' },
+      { name: 'records-scroll', selector: '.k12rec__body' },
+      { name: 'chat-main', selector: '.hc-chat__main' },
+      { name: 'records-owner', selector: '#k12-enh-view-records' },
+      { name: 'records-root', selector: '.k12rec' },
+      { name: 'records-panel', selector: '.k12rec__body > section[data-testid="week-section"]' },
       { name: 'period-tabs', selector: '.weekly-toolbar .k12-book-tabs' },
       { name: 'period-toolbar', selector: '.weekly-toolbar' },
       { name: 'progress', selector: '.weekly-progress' },
@@ -883,6 +890,20 @@ async function geometry(page: Page, targets: GeometryTarget[]) {
           const node = element as HTMLElement
           const rect = node.getBoundingClientRect()
           const style = getComputedStyle(node)
+          const overflowDescendants = Array.from(node.querySelectorAll<HTMLElement>('*'))
+            .map((descendant) => {
+              const descendantRect = descendant.getBoundingClientRect()
+              return {
+                tag: descendant.tagName.toLowerCase(),
+                className: descendant.className,
+                testId: descendant.dataset.testid || '',
+                right: Number(descendantRect.right.toFixed(2)),
+                overflowRight: Number((descendantRect.right - rect.right).toFixed(2)),
+              }
+            })
+            .filter((candidate) => candidate.overflowRight > 0)
+            .sort((left, right) => right.overflowRight - left.overflowRight)
+            .slice(0, 12)
           return {
             tag: node.tagName.toLowerCase(),
             className: node.className,
@@ -893,6 +914,15 @@ async function geometry(page: Page, targets: GeometryTarget[]) {
               width: Number(rect.width.toFixed(2)),
               height: Number(rect.height.toFixed(2)),
             },
+            scroll: {
+              clientWidth: node.clientWidth,
+              scrollWidth: node.scrollWidth,
+              clientHeight: node.clientHeight,
+              scrollHeight: node.scrollHeight,
+              scrollLeft: node.scrollLeft,
+              scrollTop: node.scrollTop,
+            },
+            overflowDescendants,
             style: {
               display: style.display,
               position: style.position,

@@ -1693,6 +1693,18 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   line-height: 21px;
 }
 
+@supports (font: -apple-system-body) {
+  /* WebKit 使用同引擎原型的自然高度，Chromium 已通过的几何保持不变。 */
+  .weekly-progress.rc-week-progress {
+    height: 50px;
+    min-height: 50px;
+  }
+
+  .weekly-item.resource-row {
+    min-height: 53.5px;
+  }
+}
+
 @media (max-width: 1040px) {
   .weekly-item.resource-row {
     flex-wrap: wrap;

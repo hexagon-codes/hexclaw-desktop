@@ -176,4 +176,11 @@ function step(delta: number) {
 .manual-count--invalid input {
   border-color: var(--hc-error);
 }
+
+@supports (font: -apple-system-body) {
+  /* WebKit 的半像素边框按同引擎原型收敛为 105px 总宽。 */
+  .manual-count__stepper {
+    width: 105px;
+  }
+}
 </style>
