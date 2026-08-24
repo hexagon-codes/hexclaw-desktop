@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "scanned_textbook_pdf",
+  "fixture": {
+    "sha256": "65bd80bd35be524bf68f66f9b67820a97176e1487db81810cb268e04e44dd8b2",
+    "bytes": 57313616,
+    "physicalPages": 122,
+    "sourceKind": "image-only-scanned-pdf",
+    "redistributable": false
+  },
+  "evidenceMethod": {
+    "renderer": "pdftoppm",
+    "rendererVersion": "Poppler 26.08.0",
+    "renderDpi": 180,
+    "ocrEngine": "Apple Vision VNRecognizeTextRequest",
+    "ocrPlatform": "macOS 26.6.2",
+    "recognitionLevel": "accurate",
+    "recognitionLanguages": [
+      "zh-Hans",
+      "en-US"
+    ],
+    "queryNormalization": "NFKC; remove all Unicode whitespace; remove 。！？；，、：,.!?;:",
+    "visuallyVerifiedAgainstRenderedPage": true
+  },
+  "oracles": [
+    {
+      "id": "front-coordinate-position",
+      "region": "front",
+      "physicalPage": 5,
+      "printedPage": 2,
+      "query": "照样子写出下图中字母的位置。",
+      "normalizedQuery": "照样子写出下图中字母的位置",
+      "querySha256": "6d98bce4803d96192497ce7449914c83dea1301ca7f78fef66cd8d56118c5258",
+      "ocrEvidenceFragment": "照样子写出下图中字母的位置",
+      "renderedPageSha256": "a5b479c202b01ba991d9df6bc90b6179282bffb45f33a5e67360966ed7983b44",
+      "retrievalOracle": {
+        "topK": 3,
+        "expectedPhysicalPages": [
+          5
+        ],
+        "expectedPageMatch": "exact-set"
+      }
+    },
+    {
+      "id": "middle-circle-circumference",
+      "region": "middle",
+      "physicalPage": 61,
+      "printedPage": 58,
+      "query": "一个圆形喷水池的半径是5 m",
+      "normalizedQuery": "一个圆形喷水池的半径是5m",
+      "querySha256": "182291d26ffacbec35c3d81abb4b3dbe50e382a7cb9d6b36be2795d206db5382",
+      "ocrEvidenceFragment": "一个圆形喷水池的半径是5m",
+      "renderedPageSha256": "3f0cbe9277f96a67e3e6d793becd8ed7e7d9a3a456042e45a54775142ac6fbec",
+      "retrievalOracle": {
+        "topK": 3,
+        "expectedPhysicalPages": [
+          61
+        ],
+        "expectedPageMatch": "exact-set"
+      }
+    },
+    {
+      "id": "tail-pigeonhole-parity",
+      "region": "tail",
+      "physicalPage": 120,
+      "printedPage": 117,
+      "query": "任意给出3个不同的自然数",
+      "normalizedQuery": "任意给出3个不同的自然数",
+      "querySha256": "ca18148a2ab80fbe12a2c0a15a2257ae9a1cd42c79367a17f3849b6806bdb719",
+      "ocrEvidenceFragment": "任意给出3个不同的自然数",
+      "renderedPageSha256": "945454b13ba73d5ae6cbee4590fba92dffa0585d4f9ec4b45b07228b8a17b111",
+      "retrievalOracle": {
+        "topK": 3,
+        "expectedPhysicalPages": [
+          120
+        ],
+        "expectedPageMatch": "exact-set"
+      }
+    }
+  ]
+}

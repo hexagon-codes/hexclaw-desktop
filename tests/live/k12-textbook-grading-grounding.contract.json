@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "bug_id": "BUG-K12-TEXTBOOK-PDF-GROUNDING-REAL-CLOSURE",
+  "route": {
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "fallback_allowed": false
+  },
+  "embedding": {
+    "model": "qwen3-embedding:8b",
+    "purpose": "ollama_embeddings",
+    "dimension": 4096,
+    "preserve_owner_profile": true
+  },
+  "phase_timeout": {
+    "default_ms": 1440000,
+    "hard_max_ms": 1740000,
+    "automatic_extension": false,
+    "pending_exit_code": 3
+  },
+  "transport": {
+    "product_operations": "public_http_api_only",
+    "http_driver": "playwright_api_request_context",
+    "sqlite_seed_or_write": false,
+    "direct_store_read": false
+  },
+  "knowledge_identity": {
+    "success_multipart_fields": ["corpus_id", "file"],
+    "forged_fields": ["agent_id", "learner_id", "subject", "grade"],
+    "forged_fields_must_not_prebind": true,
+    "binding_authority": "profile_bundle_cas_only"
+  },
+  "artifact_receipt_binding": {
+    "projection": "image_task_target_plus_result",
+    "final_artifact_embeds_grounding": false,
+    "required_fields": ["artifact_id", "artifact_digest", "summary_invocation_id"],
+    "summary_operation": "projecting",
+    "same_dispatch": true
+  },
+  "validate_side_effects": {
+    "sidecar_starts": 0,
+    "uploads": 0,
+    "model_calls": 0,
+    "im_sends": 0
+  },
+  "fixtures": {
+    "text": {
+      "relative_path": "test/义务教育教科书·数学五年级下册.pdf",
+      "sha256": "657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83",
+      "size_bytes": 14621452,
+      "pages": 131,
+      "allow_nonfatal_warnings": true,
+      "require_real_ocr_receipt": false,
+      "oracles": [
+        {
+          "physical_page": 54,
+          "query": "分数与除法有什么关系？你能用字母表示出分数与除法的关系吗？"
+        },
+        {
+          "physical_page": 57,
+          "query": "五（1）班获奖作品占全班参赛作品的几分之几？"
+        }
+      ]
+    },
+    "scan": {
+      "relative_path": "test/人教版·小学六年级上册.pdf",
+      "sha256": "65bd80bd35be524bf68f66f9b67820a97176e1487db81810cb268e04e44dd8b2",
+      "size_bytes": 57313616,
+      "pages": 122,
+      "allow_nonfatal_warnings": true,
+      "require_real_ocr_receipt": true,
+      "oracle_source": {
+        "relative_path": "tests/fixtures/local/k12-textbook-scan-ocr-oracle.v1.json",
+        "sha256": "5d4af483e7acd7266338e2b9335976e96a328ae630168a00ade286929acd2adb",
+        "schema_version": 1,
+        "fixture_id": "scanned_textbook_pdf"
+      },
+      "oracles": [
+        {
+          "physical_page": 5,
+          "query": "照样子写出下图中字母的位置。",
+          "query_sha256": "6d98bce4803d96192497ce7449914c83dea1301ca7f78fef66cd8d56118c5258",
+          "top_k": 3,
+          "expected_physical_pages": [5],
+          "expected_page_match": "exact-set"
+        },
+        {
+          "physical_page": 61,
+          "query": "一个圆形喷水池的半径是5 m",
+          "query_sha256": "182291d26ffacbec35c3d81abb4b3dbe50e382a7cb9d6b36be2795d206db5382",
+          "top_k": 3,
+          "expected_physical_pages": [61],
+          "expected_page_match": "exact-set"
+        },
+        {
+          "physical_page": 120,
+          "query": "任意给出3个不同的自然数",
+          "query_sha256": "ca18148a2ab80fbe12a2c0a15a2257ae9a1cd42c79367a17f3849b6806bdb719",
+          "top_k": 3,
+          "expected_physical_pages": [120],
+          "expected_page_match": "exact-set"
+        }
+      ]
+    },
+    "homework": {
+      "relative_path": "test/k12-test-批改作业.png",
+      "sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
+      "size_bytes": 2178059
+    }
+  },
+  "agents": {
+    "text": {
+      "name": "k12-textbook-text-grounding-real",
+      "grade_term": "五年级下",
+      "child_name": "教材检索验收",
+      "edition": "人教版",
+      "volume": "下册"
+    },
+    "scan": {
+      "name": "k12-textbook-scan-grounding-real",
+      "grade_term": "六年级上",
+      "child_name": "扫描教材验收",
+      "edition": "人教版",
+      "volume": "上册"
+    }
+  },
+  "public_api": {
+    "version": "/api/v1/version",
+    "llm_config": "/api/v1/config/llm",
+    "agents": "/api/v1/agents",
+    "embedding_status": "/api/v1/knowledge/embedding-status",
+    "embedding_policy": "/api/v1/knowledge/corpora/default/embedding-policy",
+    "documents": "/api/v1/knowledge/documents",
+    "document": "/api/v1/knowledge/documents/{document_id}",
+    "job": "/api/v1/knowledge/jobs/{job_id}",
+    "search": "/api/v1/knowledge/search",
+    "binding_options": "/api/k12/textbook-binding-options",
+    "profile_bundle": "/api/k12/profile-bundle",
+    "curriculum_progress": "/api/k12/curriculum-progress",
+    "curriculum_catalog": "/api/k12/curriculum-catalog",
+    "assets": "/api/k12/assets",
+    "image_tasks": "/api/k12/image-tasks",
+    "image_task": "/api/k12/image-tasks/{dispatch_id}",
+    "image_task_confirm": "/api/k12/image-tasks/{dispatch_id}/confirm",
+    "image_task_result": "/api/k12/image-tasks/{dispatch_id}/result"
+  },
+  "required_receipts": {
+    "ocr": [
+      "page_number",
+      "pages_total",
+      "operation",
+      "status",
+      "provider",
+      "model",
+      "source_digest",
+      "content_digest",
+      "fake"
+    ],
+    "query": [
+      "operation",
+      "status",
+      "provider_id",
+      "model",
+      "profile_id",
+      "profile_config_hash",
+      "dimension",
+      "revision_id",
+      "query_digest"
+    ],
+    "grounding": [
+      "textbook_binding_id",
+      "textbook_manifest_id",
+      "document_id",
+      "document_generation",
+      "vector_revision_id",
+      "query_digest",
+      "chunk_id",
+      "logical_page",
+      "pdf_page",
+      "source_digest",
+      "citation_digest"
+    ],
+    "active_revision": [
+      "revision_id",
+      "state",
+      "profile_config_hash",
+      "profile",
+      "chunks_done",
+      "chunks_total"
+    ],
+    "problem_grounding": [
+      "problem_id",
+      "operation",
+      "identity_digest",
+      "textbook_binding_id",
+      "textbook_manifest_id",
+      "document_id",
+      "document_generation",
+      "vector_revision_id",
+      "query_digest",
+      "chunk_id",
+      "logical_page",
+      "pdf_page",
+      "source_digest",
+      "citation_digest"
+    ]
+  },
+  "restart_exact_set": [
+    "documents",
+    "ingest_jobs",
+    "vector_jobs",
+    "active_revision",
+    "ocr_receipts",
+    "textbook_bindings",
+    "curriculum_progress",
+    "final_artifact",
+    "operation_receipts",
+    "grounding_evidence_receipts",
+    "problem_grounding_receipts"
+  ]
+}
