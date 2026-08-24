@@ -432,6 +432,25 @@ function expectVisibleTextOnce(wrapper: ReturnType<typeof mountChatView>, text: 
   expect(wrapper.text().split(text).length - 1).toBe(1)
 }
 
+function nativeScenarioPreviewFixture(id: string) {
+  const previewUrl = `hexclaw-preview://localhost/${id}`
+  const release = vi.fn()
+  return {
+    release,
+    payload: {
+      file: new File([], `${id}.png`, { type: 'image/png' }),
+      previewUrl,
+      previewOwnership: { url: previewUrl, release },
+      attachment: {
+        type: 'image' as const,
+        name: `${id}.png`,
+        mime: 'image/png',
+        data: previewUrl,
+      },
+    },
+  }
+}
+
 function expectNeutralAssistantRunStatus(
   wrapper: ReturnType<typeof mountChatView>,
   expected: { kind: 'generating' | 'preparing'; text: string },
@@ -533,6 +552,24 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(wrapper.find('[data-testid="chat-voice-start"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="chat-send"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('binds native attachment preview ownership to the active session', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        useChatStore().currentSessionId = 'session-preview-owner-a'
+      },
+    })
+    await flushPromises()
+
+    const input = wrapper.getComponent({ name: 'ChatInput' })
+    expect(input.props('draftScopeKey')).toBe('session-preview-owner-a')
+
+    useChatStore().currentSessionId = 'session-preview-owner-b'
+    await flushPromises()
+
+    expect(input.props('draftScopeKey')).toBe('session-preview-owner-b')
     wrapper.unmount()
   })
 
@@ -1918,6 +1955,18 @@ describe('ChatView — E2E 关键路径', () => {
       expect.soft(pendingImageSrc).not.toMatch(/^https?:/)
       expect.soft(revokeObjectURL).not.toHaveBeenCalledWith('blob:scenario-local-photo')
 
+      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      expect
+        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
+        .toBe('blob:scenario-local-photo')
+      const previewAtRevoke: Array<{ url: string; preview: string }> = []
+      revokeObjectURL.mockImplementation((url) => {
+        previewAtRevoke.push({
+          url,
+          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+        })
+      })
+
       resolveAssetBlob(authenticatedBlob)
       await stored
       await flushPromises()
@@ -1927,6 +1976,18 @@ describe('ChatView — E2E 关键路径', () => {
         .soft(wrapper.get('[data-testid="chat-message-user"] img').attributes('src'))
         .toBe('blob:k12-authenticated-photo')
       expect
+        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
+        .toBe('blob:k12-authenticated-photo')
+      expect.soft(wrapper.findAll('[src="blob:scenario-local-photo"]')).toHaveLength(0)
+      expect
+        .soft(previewAtRevoke.filter(({ url }) => url === 'blob:scenario-local-photo'))
+        .toEqual([
+          {
+            url: 'blob:scenario-local-photo',
+            preview: 'blob:k12-authenticated-photo',
+          },
+        ])
+      expect
         .soft(revokeObjectURL.mock.calls.filter(([url]) => url === 'blob:scenario-local-photo'))
         .toHaveLength(1)
     } finally {
@@ -1935,6 +1996,224 @@ describe('ChatView — E2E 关键路径', () => {
       createObjectURL.mockRestore()
       revokeObjectURL.mockRestore()
     }
+  })
+
+  it('native opaque preview 在认证资产替换后安全转移放大层并只释放一次', async () => {
+    const authenticatedBlob = new Blob(['native-authenticated-image'], { type: 'image/png' })
+    let resolveAssetBlob!: (blob: Blob | null) => void
+    mockK12GetAssetBlob.mockReturnValueOnce(
+      new Promise<Blob | null>((resolve) => {
+        resolveAssetBlob = resolve
+      }),
+    )
+    const createObjectURL = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:k12-native-authenticated')
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture('native-auth-replace')
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'native-auth-replace-session'
+      store.agentRole = 'mingming'
+      wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+
+      const vm = wrapper.vm as unknown as {
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+      await vi.waitFor(() => {
+        expect(vm.scenarioComposerImage).toMatchObject({
+          previewUrl: payload.previewUrl,
+          previewOwnership: payload.previewOwnership,
+        })
+      })
+      const stored = (vm.scenarioComposerImage as ScenarioComposerImagePayload).onSourceStored!({
+        assetId: 'asset://mingming/native-auth-replace.png',
+      })
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-message-user"] img').attributes('src')).toBe(
+        payload.previewUrl,
+      )
+      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      expect(wrapper.get('.hc-img-preview__img').attributes('src')).toBe(payload.previewUrl)
+      expect(release).not.toHaveBeenCalled()
+
+      resolveAssetBlob(authenticatedBlob)
+      await stored
+      await flushPromises()
+
+      expect(createObjectURL).toHaveBeenCalledWith(authenticatedBlob)
+      expect(wrapper.get('[data-testid="chat-message-user"] img').attributes('src')).toBe(
+        'blob:k12-native-authenticated',
+      )
+      expect(wrapper.get('.hc-img-preview__img').attributes('src')).toBe(
+        'blob:k12-native-authenticated',
+      )
+      expect(release).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+      expect(release).toHaveBeenCalledTimes(1)
+    } finally {
+      resolveAssetBlob(authenticatedBlob)
+      wrapper.unmount()
+      createObjectURL.mockRestore()
+    }
+  })
+
+  it('native preview 在资产阶段失败时按 execution identity 只释放一次', async () => {
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture('native-asset-failed')
+
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = 'native-asset-failed-session'
+    store.agentRole = 'mingming'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+
+    const vm = wrapper.vm as unknown as {
+      scenarioComposerImage: ScenarioComposerImagePayload | ''
+    }
+    await vi.waitFor(() => expect(vm.scenarioComposerImage).not.toBe(''))
+    const routed = vm.scenarioComposerImage as ScenarioComposerImagePayload
+    ;(
+      wrapper.vm as unknown as {
+        handleScenarioSessionExecution: (payload: {
+          sessionId: string
+          executionId: string
+          state: string
+        }) => void
+      }
+    ).handleScenarioSessionExecution({
+      sessionId: 'native-asset-failed-session',
+      executionId: routed.requestId!,
+      state: 'failed_retryable',
+    })
+    await flushPromises()
+
+    expect(release).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { event: 'terminal' as const, expected: '终态收敛' },
+    { event: 'release' as const, expected: '执行锁清除' },
+  ])('native preview 释放抛错时仍完成$expected', async ({ event }) => {
+    const sessionId = `native-release-throws-${event}-session`
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture(`native-release-throws-${event}`)
+    release.mockImplementation(() => {
+      throw new Error('preview release failed')
+    })
+
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = sessionId
+    store.agentRole = 'mingming'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+
+    const vm = wrapper.vm as unknown as {
+      scenarioComposerImage: ScenarioComposerImagePayload | ''
+      handleScenarioSessionExecution: (payload: {
+        sessionId: string
+        executionId: string
+        state: string
+      }) => void
+      handleScenarioSessionExecutionRelease: (payload: {
+        sessionId: string
+        executionId: string
+      }) => void
+    }
+    await vi.waitFor(() => expect(vm.scenarioComposerImage).not.toBe(''))
+    const executionId = (vm.scenarioComposerImage as ScenarioComposerImagePayload).requestId!
+    expect(store.isSessionExecuting(sessionId)).toBe(true)
+
+    expect(() => {
+      if (event === 'terminal') {
+        vm.handleScenarioSessionExecution({
+          sessionId,
+          executionId,
+          state: 'failed_retryable',
+        })
+      } else {
+        vm.handleScenarioSessionExecutionRelease({ sessionId, executionId })
+      }
+    }).not.toThrow()
+
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(store.isSessionExecuting(sessionId)).toBe(false)
+    wrapper.unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('切换会话会释放 native pending preview 且不重复释放', async () => {
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture('native-session-switch')
+
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = 'native-preview-owner-a'
+    store.agentRole = 'mingming'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+    await vi.waitFor(() => {
+      expect(
+        (wrapper.vm as unknown as { scenarioComposerImage: ScenarioComposerImagePayload | '' })
+          .scenarioComposerImage,
+      ).not.toBe('')
+    })
+
+    store.currentSessionId = 'native-preview-owner-b'
+    await flushPromises()
+
+    expect(release).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('移除 pending 图片消息会释放 native preview 且不重复释放', async () => {
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture('native-message-remove')
+
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = 'native-message-remove-session'
+    store.agentRole = 'mingming'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+    const vm = wrapper.vm as unknown as {
+      scenarioComposerImage: ScenarioComposerImagePayload | ''
+    }
+    await vi.waitFor(() => expect(vm.scenarioComposerImage).not.toBe(''))
+    const requestId = (vm.scenarioComposerImage as ScenarioComposerImagePayload).requestId
+
+    store.messages = store.messages.filter((message) => message.id !== requestId)
+    await flushPromises()
+
+    expect(release).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('卸载会话 shell 会释放 native pending preview 且不重复释放', async () => {
+    const wrapper = mountChatView()
+    const { payload, release } = nativeScenarioPreviewFixture('native-shell-unmount')
+
+    await flushPromises()
+    const store = useChatStore()
+    store.currentSessionId = 'native-shell-unmount-session'
+    store.agentRole = 'mingming'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+    await vi.waitFor(() => {
+      expect(
+        (wrapper.vm as unknown as { scenarioComposerImage: ScenarioComposerImagePayload | '' })
+          .scenarioComposerImage,
+      ).not.toBe('')
+    })
+
+    wrapper.unmount()
+    await flushPromises()
+
+    expect(release).toHaveBeenCalledTimes(1)
   })
 
   it('重载历史 asset 附件经认证客户端恢复 object URL，并释放或中止离场资源', async () => {
@@ -1987,6 +2266,18 @@ describe('ChatView — E2E 关键路径', () => {
       expect.soft(restoredSrc).toBe('blob:k12-history-photo')
       expect.soft(restoredSrc).not.toMatch(/^https?:/)
 
+      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      expect
+        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
+        .toBe('blob:k12-history-photo')
+      const previewAtRevoke: Array<{ url: string; preview: string }> = []
+      revokeObjectURL.mockImplementation((url) => {
+        previewAtRevoke.push({
+          url,
+          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+        })
+      })
+
       store.messages = [
         {
           id: 'pending-history-image-message',
@@ -2007,6 +2298,11 @@ describe('ChatView — E2E 关键路径', () => {
       ]
       await flushPromises()
 
+      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect.soft(wrapper.findAll('[src="blob:k12-history-photo"]')).toHaveLength(0)
+      expect
+        .soft(previewAtRevoke.filter(({ url }) => url === 'blob:k12-history-photo'))
+        .toEqual([{ url: 'blob:k12-history-photo', preview: '' }])
       expect
         .soft(revokeObjectURL.mock.calls.filter(([url]) => url === 'blob:k12-history-photo'))
         .toHaveLength(1)
@@ -2019,6 +2315,105 @@ describe('ChatView — E2E 关键路径', () => {
       expect.soft(pendingSignal?.aborted).toBe(true)
     } finally {
       if (wrapper.exists()) wrapper.unmount()
+      createObjectURL.mockRestore()
+      revokeObjectURL.mockRestore()
+    }
+  })
+
+  it('切换会话先关闭鉴权图片放大层再释放 URL，且不跨 owner 回填', async () => {
+    const ownerABlob = new Blob(['owner-a'], { type: 'image/png' })
+    const ownerBBlob = new Blob(['owner-b'], { type: 'image/png' })
+    mockK12GetAssetBlob.mockImplementation((_agent: string, assetId: string) => {
+      if (assetId === 'asset://owner-a/a.png') return Promise.resolve(ownerABlob)
+      if (assetId === 'asset://owner-b/b.png') return Promise.resolve(ownerBBlob)
+      return Promise.resolve(null)
+    })
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      if (blob === ownerABlob) return 'blob:owner-a'
+      if (blob === ownerBBlob) return 'blob:owner-b'
+      return 'blob:unexpected-owner'
+    })
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const wrapper = mountChatView()
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'owner-a-session'
+      store.messages = [
+        {
+          id: 'owner-a-message',
+          role: 'user',
+          content: '',
+          timestamp: '2026-08-23T00:00:00Z',
+          metadata: {
+            attachments: [
+              {
+                type: 'image',
+                name: 'a.png',
+                mime: 'image/png',
+                data: 'asset://owner-a/a.png',
+              },
+            ],
+          },
+        },
+      ]
+      await flushPromises()
+      await flushPromises()
+
+      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      expect.soft(wrapper.get('.hc-img-preview__img').attributes('src')).toBe('blob:owner-a')
+      const previewAtRevoke: Array<{ url: string; preview: string }> = []
+      revokeObjectURL.mockImplementation((url) => {
+        previewAtRevoke.push({
+          url,
+          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+        })
+      })
+
+      store.currentSessionId = 'owner-b-session'
+      await flushPromises()
+
+      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect
+        .soft(previewAtRevoke.filter(({ url }) => url === 'blob:owner-a'))
+        .toEqual([{ url: 'blob:owner-a', preview: '' }])
+      expect
+        .soft(revokeObjectURL.mock.calls.filter(([url]) => url === 'blob:owner-a'))
+        .toHaveLength(1)
+
+      store.messages = [
+        {
+          id: 'owner-b-message',
+          role: 'user',
+          content: '',
+          timestamp: '2026-08-23T00:01:00Z',
+          metadata: {
+            attachments: [
+              {
+                type: 'image',
+                name: 'b.png',
+                mime: 'image/png',
+                data: 'asset://owner-b/b.png',
+              },
+            ],
+          },
+        },
+      ]
+      await flushPromises()
+      await flushPromises()
+
+      expect
+        .soft(mockK12GetAssetBlob)
+        .toHaveBeenCalledWith('owner-b', 'asset://owner-b/b.png', expect.any(AbortSignal))
+      expect
+        .soft(wrapper.get('[data-testid="chat-message-user"] img').attributes('src'))
+        .toBe('blob:owner-b')
+      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect.soft(wrapper.html()).not.toContain('blob:owner-a')
+      expect.soft(wrapper.html()).not.toContain('asset://owner-a')
+    } finally {
+      wrapper.unmount()
       createObjectURL.mockRestore()
       revokeObjectURL.mockRestore()
     }
@@ -2970,6 +3365,40 @@ describe('ChatView — E2E 关键路径', () => {
     ).toBe(payload.dataUrl)
 
     wrapper.unmount()
+  })
+
+  it('新会话首个 native preview 在 session 身份分配后仍由场景持有', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    expect(store.currentSessionId).toBeNull()
+    let releaseSession!: () => void
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve
+    })
+    vi.spyOn(store, 'ensureSession').mockImplementation(async () => {
+      await sessionGate
+      store.currentSessionId = 'fresh-native-preview-session'
+      return 'fresh-native-preview-session'
+    })
+    const { payload, release } = nativeScenarioPreviewFixture('fresh-native-preview')
+
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+    await flushPromises()
+    expect(release).not.toHaveBeenCalled()
+
+    releaseSession()
+    await vi.waitFor(() => {
+      expect(
+        (wrapper.vm as unknown as { scenarioComposerImage: ScenarioComposerImagePayload | '' })
+          .scenarioComposerImage,
+      ).toMatchObject({ previewOwnership: payload.previewOwnership })
+    })
+    expect(release).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    expect(release).toHaveBeenCalledTimes(1)
   })
 
   it('BUG-20260820-007 深度思考保留已绑定 Agent 的模型决策，但 Composer 只显示模型', async () => {

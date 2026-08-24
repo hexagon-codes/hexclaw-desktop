@@ -1532,6 +1532,14 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contract
     expect(assetRequests.filter((request) => request.resourceType === 'fetch')).toHaveLength(2)
     expect(assetRequests.every((request) => !request.url.startsWith('asset://'))).toBe(true)
 
+    const openedAuthenticatedSrc = await authenticatedImages.first().getAttribute('src')
+    expect(openedAuthenticatedSrc).toMatch(/^blob:/)
+    await authenticatedImages.first().click()
+    await expect(page.locator('.hc-img-preview__img')).toHaveAttribute(
+      'src',
+      openedAuthenticatedSrc!,
+    )
+
     assetMode = 'unauthorized'
     await replaceSourceMessages(page, [
       {
@@ -1580,6 +1588,19 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contract
     await expect(page.locator('.hc-msg__attachment-img')).toHaveCount(0)
     await expect(page.locator('.hc-msg__media-download')).toHaveCount(0)
     await expect(page.locator('.hc-img-preview__backdrop')).toHaveCount(0)
+    await expect(page.locator(`[src="${openedAuthenticatedSrc}"]`)).toHaveCount(0)
+    await expect
+      .poll(async () =>
+        page.evaluate(async (src) => {
+          try {
+            await fetch(src)
+            return true
+          } catch {
+            return false
+          }
+        }, openedAuthenticatedSrc!),
+      )
+      .toBe(false)
     expect(assetRequests.filter((request) => request.resourceType === 'image')).toHaveLength(0)
 
     const failedUser = page.getByTestId('chat-message-user')

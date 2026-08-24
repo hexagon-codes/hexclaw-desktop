@@ -136,8 +136,7 @@ fn bug_20260726_033_orderly_exit_stops_background_engines_before_app_exit() {
         .expect("request_app_exit must remain the orderly exit adapter");
 
     assert!(
-        shutdown.contains("ollama::stop_ollama()")
-            && shutdown.contains("sidecar::stop_sidecar()"),
+        shutdown.contains("ollama::stop_ollama()") && shutdown.contains("sidecar::stop_sidecar()"),
         "the shared shutdown must stop both managed engines"
     );
     assert_eq!(

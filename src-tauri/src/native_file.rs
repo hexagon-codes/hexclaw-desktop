@@ -7,13 +7,15 @@
 
 use crate::sidecar_client::{read_bounded, SidecarClient};
 use futures_util::StreamExt;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    io::{BufReader, Cursor},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -29,6 +31,12 @@ const MAX_KNOWLEDGE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ACTIVE_FILE_GRANTS: usize = 64;
 const MAX_ACTIVE_FILE_TRANSFERS: usize = 16;
+const MAX_ACTIVE_IMAGE_PREVIEW_LEASES: usize = MAX_ACTIVE_FILE_GRANTS;
+const MAX_IMAGE_PREVIEW_EDGE: u32 = 1024;
+const MAX_IMAGE_PREVIEW_DIMENSION: u32 = 16_384;
+const MAX_IMAGE_PREVIEW_DECODE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_IMAGE_PREVIEW_ENCODED_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ACTIVE_IMAGE_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +100,50 @@ struct FileGrant {
 #[derive(Default)]
 pub struct NativeFileGrantRegistry {
     grants: Mutex<HashMap<String, FileGrant>>,
+    image_previews: Arc<Mutex<NativeImagePreviewLeaseState>>,
+}
+
+struct NativeImagePreviewLease {
+    upload_grant_id: String,
+    window_label: String,
+    operation_id: String,
+    scope: Option<NativeImagePreviewScope>,
+    source_identity: FileIdentity,
+    source_sha256: String,
+    created_at: SystemTime,
+    expires_at: Instant,
+    expires_at_system: SystemTime,
+    revoked_at: Option<SystemTime>,
+    png: Arc<[u8]>,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeImagePreviewScope {
+    owner_id: String,
+    session_id: String,
+    attachment_id: String,
+}
+
+#[derive(Default)]
+struct NativeImagePreviewWindowScope {
+    owner_id: String,
+    session_id: String,
+    attachment_ids: HashSet<String>,
+}
+
+#[derive(Default)]
+struct NativeImagePreviewLeaseState {
+    leases: HashMap<String, NativeImagePreviewLease>,
+    window_scopes: HashMap<String, NativeImagePreviewWindowScope>,
+    total_bytes: usize,
+}
+
+struct DerivedNativeImagePreview {
+    png: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Default, Clone)]
@@ -121,6 +173,27 @@ pub struct FileGrantDescriptor {
     mime: String,
     size: u64,
     source_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_lease: Option<NativeImagePreviewLeaseDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeImagePreviewLeaseDescriptor {
+    lease_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    mime: String,
+    width: u32,
+    height: u32,
+    created_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,6 +322,392 @@ where
 }
 
 impl NativeFileGrantRegistry {
+    fn purge_expired_image_previews_locked(state: &mut NativeImagePreviewLeaseState) {
+        let now = Instant::now();
+        let expired = state
+            .leases
+            .iter()
+            .filter(|(_, lease)| lease.expires_at <= now)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in expired {
+            Self::remove_image_preview_locked(state, &id, SystemTime::now());
+        }
+    }
+
+    fn remove_image_preview_locked(
+        state: &mut NativeImagePreviewLeaseState,
+        id: &str,
+        revoked_at: SystemTime,
+    ) -> bool {
+        let Some(mut lease) = state.leases.remove(id) else {
+            return false;
+        };
+        lease.revoked_at = Some(revoked_at);
+        state.total_bytes = state.total_bytes.saturating_sub(lease.png.len());
+        if let Some(scope) = lease.scope.as_ref() {
+            if let Some(active) = state.window_scopes.get_mut(&lease.window_label) {
+                if active.owner_id == scope.owner_id && active.session_id == scope.session_id {
+                    active.attachment_ids.remove(&scope.attachment_id);
+                }
+            }
+        }
+        true
+    }
+
+    fn image_preview_descriptor(
+        lease_id: &str,
+        lease: &NativeImagePreviewLease,
+    ) -> NativeImagePreviewLeaseDescriptor {
+        let scope = lease.scope.as_ref();
+        NativeImagePreviewLeaseDescriptor {
+            lease_id: lease_id.to_owned(),
+            url: scope.map(|_| native_image_preview_url(lease_id)),
+            mime: "image/png".into(),
+            width: lease.width,
+            height: lease.height,
+            created_at_unix_ms: unix_millis(lease.created_at),
+            expires_at_unix_ms: unix_millis(lease.expires_at_system),
+            owner_id: scope.map(|value| value.owner_id.clone()),
+            session_id: scope.map(|value| value.session_id.clone()),
+            attachment_id: scope.map(|value| value.attachment_id.clone()),
+        }
+    }
+
+    fn insert_image_preview(
+        &self,
+        upload_grant_id: &str,
+        grant: &FileGrant,
+        preview: DerivedNativeImagePreview,
+    ) -> Result<NativeImagePreviewLeaseDescriptor, String> {
+        let source_identity = grant
+            .identity
+            .clone()
+            .ok_or("native image preview source identity is missing")?;
+        let source_sha256 = grant
+            .source_sha256
+            .as_deref()
+            .ok_or("native image preview source digest is missing")?;
+        if grant.purpose != GrantPurpose::AttachmentUpload
+            || source_sha256.len() != 64
+            || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || preview.png.is_empty()
+            || preview.png.len() > MAX_IMAGE_PREVIEW_ENCODED_BYTES
+            || preview.width == 0
+            || preview.height == 0
+            || preview.width > MAX_IMAGE_PREVIEW_EDGE
+            || preview.height > MAX_IMAGE_PREVIEW_EDGE
+        {
+            return Err("native image preview contract is invalid".into());
+        }
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        if state.leases.len() >= MAX_ACTIVE_IMAGE_PREVIEW_LEASES
+            || state.total_bytes.saturating_add(preview.png.len()) > MAX_ACTIVE_IMAGE_PREVIEW_BYTES
+        {
+            return Err("Too many active native image previews".into());
+        }
+
+        let lease_id = Uuid::new_v4().to_string();
+        let created_at = SystemTime::now();
+        let expires_at_system = created_at + GRANT_TTL;
+        state.total_bytes = state.total_bytes.saturating_add(preview.png.len());
+        state.leases.insert(
+            lease_id.clone(),
+            NativeImagePreviewLease {
+                upload_grant_id: upload_grant_id.to_owned(),
+                window_label: grant.window_label.clone(),
+                operation_id: grant.operation_id.clone(),
+                scope: None,
+                source_identity,
+                source_sha256: source_sha256.to_owned(),
+                created_at,
+                expires_at: Instant::now() + GRANT_TTL,
+                expires_at_system,
+                revoked_at: None,
+                png: Arc::from(preview.png),
+                width: preview.width,
+                height: preview.height,
+            },
+        );
+        let descriptor = Self::image_preview_descriptor(
+            &lease_id,
+            state
+                .leases
+                .get(&lease_id)
+                .expect("new native image preview lease"),
+        );
+        drop(state);
+
+        // TTL 到点主动释放派生预览；读取路径仍会同步清理，避免调度延迟扩大能力窗口。
+        let image_previews = Arc::clone(&self.image_previews);
+        let expiring_lease_id = descriptor.lease_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(GRANT_TTL).await;
+            if let Ok(mut state) = image_previews.lock() {
+                if state
+                    .leases
+                    .get(&expiring_lease_id)
+                    .is_some_and(|lease| lease.expires_at <= Instant::now())
+                {
+                    NativeFileGrantRegistry::remove_image_preview_locked(
+                        &mut state,
+                        &expiring_lease_id,
+                        SystemTime::now(),
+                    );
+                }
+            }
+        });
+        Ok(descriptor)
+    }
+
+    fn sync_image_preview_scope(
+        &self,
+        window_label: &str,
+        owner_id: Option<&str>,
+        session_id: Option<&str>,
+        attachment_ids: &[String],
+    ) -> Result<(), String> {
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        match (owner_id, session_id) {
+            (None, None) if attachment_ids.is_empty() => {
+                state.window_scopes.remove(window_label);
+                Ok(())
+            }
+            (Some(owner_id), Some(session_id)) => {
+                let owner_id = validate_preview_identity(owner_id, "owner")?;
+                let session_id = validate_preview_identity(session_id, "session")?;
+                if attachment_ids.len() > MAX_ACTIVE_IMAGE_PREVIEW_LEASES {
+                    return Err("native image preview attachment scope is invalid".into());
+                }
+                let mut active_attachments = HashSet::with_capacity(attachment_ids.len());
+                for attachment_id in attachment_ids {
+                    active_attachments
+                        .insert(validate_preview_identity(attachment_id, "attachment")?);
+                }
+                state.window_scopes.insert(
+                    window_label.to_owned(),
+                    NativeImagePreviewWindowScope {
+                        owner_id,
+                        session_id,
+                        attachment_ids: active_attachments,
+                    },
+                );
+                Ok(())
+            }
+            _ => Err("native image preview window scope is invalid".into()),
+        }
+    }
+
+    fn bind_image_preview(
+        &self,
+        lease_id: &str,
+        window_label: &str,
+        operation_id: &str,
+        upload_grant_id: &str,
+        scope: &NativeImagePreviewScope,
+    ) -> Result<NativeImagePreviewLeaseDescriptor, String> {
+        Uuid::parse_str(lease_id).map_err(|_| "native image preview lease id is invalid")?;
+        Uuid::parse_str(upload_grant_id)
+            .map_err(|_| "native image preview upload grant id is invalid")?;
+        let operation_id = validate_operation_id(operation_id)?;
+        let scope = NativeImagePreviewScope {
+            owner_id: validate_preview_identity(&scope.owner_id, "owner")?,
+            session_id: validate_preview_identity(&scope.session_id, "session")?,
+            attachment_id: validate_preview_identity(&scope.attachment_id, "attachment")?,
+        };
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        let active = state
+            .window_scopes
+            .get(window_label)
+            .ok_or("native image preview window scope is missing")?;
+        if active.owner_id != scope.owner_id || active.session_id != scope.session_id {
+            return Err("native image preview window scope mismatch".into());
+        }
+        let lease = state
+            .leases
+            .get(lease_id)
+            .ok_or("native image preview lease expired or unknown")?;
+        if lease.window_label != window_label
+            || lease.operation_id != operation_id
+            || lease.upload_grant_id != upload_grant_id
+        {
+            return Err("native image preview lease scope mismatch".into());
+        }
+        if lease
+            .scope
+            .as_ref()
+            .is_some_and(|bound_scope| bound_scope != &scope)
+        {
+            return Err("native image preview lease scope mismatch".into());
+        }
+        state
+            .leases
+            .get_mut(lease_id)
+            .expect("validated native image preview lease")
+            .scope = Some(scope.clone());
+        state
+            .window_scopes
+            .get_mut(window_label)
+            .expect("validated native image preview window scope")
+            .attachment_ids
+            .insert(scope.attachment_id);
+        Ok(Self::image_preview_descriptor(
+            lease_id,
+            state
+                .leases
+                .get(lease_id)
+                .expect("bound native image preview lease"),
+        ))
+    }
+
+    fn inspect_image_preview(
+        &self,
+        lease_id: &str,
+        window_label: &str,
+    ) -> Result<(Arc<[u8]>, u32, u32), String> {
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        let window_or_integrity_mismatch = state.leases.get(lease_id).is_some_and(|lease| {
+            lease.window_label != window_label
+                || lease.revoked_at.is_some()
+                || lease.source_identity.size == 0
+                || !lease.source_identity.canonical_path.is_absolute()
+                || lease.source_sha256.len() != 64
+                || !lease
+                    .source_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || lease
+                    .expires_at_system
+                    .duration_since(lease.created_at)
+                    .ok()
+                    != Some(GRANT_TTL)
+        });
+        if window_or_integrity_mismatch {
+            Self::remove_image_preview_locked(&mut state, lease_id, SystemTime::now());
+            return Err("native image preview lease scope mismatch".into());
+        }
+        let lease = state
+            .leases
+            .get(lease_id)
+            .ok_or("native image preview lease expired or unknown")?;
+        let scope = lease
+            .scope
+            .as_ref()
+            .ok_or("native image preview lease is not bound")?;
+        let active = state
+            .window_scopes
+            .get(window_label)
+            .ok_or("native image preview window scope is missing")?;
+        if active.owner_id != scope.owner_id
+            || active.session_id != scope.session_id
+            || !active.attachment_ids.contains(&scope.attachment_id)
+        {
+            return Err("native image preview lease business scope mismatch".into());
+        }
+        Ok((lease.png.clone(), lease.width, lease.height))
+    }
+
+    fn revoke_image_preview(
+        &self,
+        lease_id: &str,
+        window_label: &str,
+        operation_id: &str,
+        upload_grant_id: &str,
+        scope: &NativeImagePreviewScope,
+    ) -> Result<(), String> {
+        Uuid::parse_str(lease_id).map_err(|_| "native image preview lease id is invalid")?;
+        Uuid::parse_str(upload_grant_id)
+            .map_err(|_| "native image preview upload grant id is invalid")?;
+        let operation_id = validate_operation_id(operation_id)?;
+        let scope = NativeImagePreviewScope {
+            owner_id: validate_preview_identity(&scope.owner_id, "owner")?,
+            session_id: validate_preview_identity(&scope.session_id, "session")?,
+            attachment_id: validate_preview_identity(&scope.attachment_id, "attachment")?,
+        };
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        let Some(lease) = state.leases.get(lease_id) else {
+            return Ok(());
+        };
+        if lease.scope.as_ref() != Some(&scope) {
+            return Err("native image preview lease business scope mismatch".into());
+        }
+        let native_scope_matches = lease.window_label == window_label
+            && lease.operation_id == operation_id
+            && lease.upload_grant_id == upload_grant_id;
+        Self::remove_image_preview_locked(&mut state, lease_id, SystemTime::now());
+        if native_scope_matches {
+            Ok(())
+        } else {
+            Err("native image preview lease scope mismatch".into())
+        }
+    }
+
+    fn revoke_image_previews_for_upload_grant(&self, upload_grant_id: &str) -> Result<(), String> {
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        let ids = state
+            .leases
+            .iter()
+            .filter(|(_, lease)| lease.upload_grant_id == upload_grant_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            Self::remove_image_preview_locked(&mut state, &id, SystemTime::now());
+        }
+        Ok(())
+    }
+
+    fn revoke_image_previews_for_window(&self, window_label: &str) -> Result<(), String> {
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        let ids = state
+            .leases
+            .iter()
+            .filter(|(_, lease)| lease.window_label == window_label)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            Self::remove_image_preview_locked(&mut state, &id, SystemTime::now());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn active_image_preview_count(&self) -> Result<usize, String> {
+        let mut state = self
+            .image_previews
+            .lock()
+            .map_err(|_| "native image preview registry poisoned")?;
+        Self::purge_expired_image_previews_locked(&mut state);
+        Ok(state.leases.len())
+    }
+
     fn purge_expired(&self) -> Result<(), String> {
         let expired = {
             let mut grants = self
@@ -385,6 +844,7 @@ impl NativeFileGrantRegistry {
         purpose: GrantPurpose,
     ) -> Result<(), String> {
         let grant = self.consume(id, window_label, operation_id, purpose)?;
+        let _ = self.revoke_image_previews_for_upload_grant(id);
         if grant.cleanup_source {
             match std::fs::remove_file(&grant.path) {
                 Ok(()) => {}
@@ -470,6 +930,14 @@ fn validate_operation_id(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
         return Err("file operation id is invalid".into());
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_preview_identity(value: &str, kind: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+        return Err(format!("native image preview {kind} identity is invalid"));
     }
     Ok(value.to_owned())
 }
@@ -661,6 +1129,139 @@ async fn sha256_file(path: &Path) -> Result<String, String> {
     sha256_open_file(&mut file).await
 }
 
+fn unix_millis(value: SystemTime) -> u64 {
+    value
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn native_image_preview_url(lease_id: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("http://hexclaw-preview.localhost/{lease_id}")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!("hexclaw-preview://localhost/{lease_id}")
+    }
+}
+
+fn native_image_preview_origin_is_valid(uri: &tauri::http::Uri) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        uri.scheme_str() == Some("http")
+            && uri.authority().map(|value| value.as_str()) == Some("hexclaw-preview.localhost")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        uri.scheme_str() == Some("hexclaw-preview")
+            && uri.authority().map(|value| value.as_str()) == Some("localhost")
+    }
+}
+
+fn native_image_preview_format(mime: &str) -> Option<ImageFormat> {
+    match mime {
+        "image/png" => Some(ImageFormat::Png),
+        "image/jpeg" => Some(ImageFormat::Jpeg),
+        _ => None,
+    }
+}
+
+fn derive_bounded_native_image_preview(
+    file: std::fs::File,
+    format: ImageFormat,
+) -> Result<DerivedNativeImagePreview, String> {
+    let mut reader = ImageReader::with_format(BufReader::new(file), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_PREVIEW_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_PREVIEW_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_PREVIEW_DECODE_BYTES);
+    reader.limits(limits);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| format!("decode native image preview: {error}"))?;
+    if decoder.total_bytes() > MAX_IMAGE_PREVIEW_DECODE_BYTES {
+        return Err("native image preview exceeds decode limit".into());
+    }
+    let orientation = decoder
+        .orientation()
+        .map_err(|error| format!("read native image preview orientation: {error}"))?;
+    let mut image = DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("decode native image preview: {error}"))?;
+    image.apply_orientation(orientation);
+    let image = image.thumbnail(MAX_IMAGE_PREVIEW_EDGE, MAX_IMAGE_PREVIEW_EDGE);
+    let width = image.width();
+    let height = image.height();
+    let mut encoded = Cursor::new(Vec::new());
+    image
+        .write_to(&mut encoded, ImageFormat::Png)
+        .map_err(|error| format!("encode native image preview: {error}"))?;
+    let png = encoded.into_inner();
+    if png.is_empty() || png.len() > MAX_IMAGE_PREVIEW_ENCODED_BYTES {
+        return Err("native image preview exceeds encoded limit".into());
+    }
+    Ok(DerivedNativeImagePreview { png, width, height })
+}
+
+async fn derive_native_image_preview(
+    grant: &FileGrant,
+) -> Result<Option<DerivedNativeImagePreview>, String> {
+    let Some(format) = native_image_preview_format(&grant.mime) else {
+        return Ok(None);
+    };
+    let file = open_verified_read_grant(grant).await?;
+    let file = file.into_std().await;
+    tokio::task::spawn_blocking(move || derive_bounded_native_image_preview(file, format))
+        .await
+        .map_err(|_| "native image preview worker failed".to_string())?
+        .map(Some)
+}
+
+fn native_image_preview_error_response(
+    status: tauri::http::StatusCode,
+) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .header(tauri::http::header::CACHE_CONTROL, "no-store")
+        .header(tauri::http::header::CONTENT_LENGTH, "0")
+        .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Vec::new())
+        .expect("constant native image preview error response")
+}
+
+pub fn native_image_preview_response(
+    registry: &NativeFileGrantRegistry,
+    window_label: &str,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    if request.method() != tauri::http::Method::GET || !request.body().is_empty() {
+        return native_image_preview_error_response(tauri::http::StatusCode::METHOD_NOT_ALLOWED);
+    }
+    if !native_image_preview_origin_is_valid(request.uri()) || request.uri().query().is_some() {
+        return native_image_preview_error_response(tauri::http::StatusCode::NOT_FOUND);
+    }
+    let lease_id = request.uri().path().trim_matches('/');
+    if lease_id.contains('/') || Uuid::parse_str(lease_id).is_err() {
+        return native_image_preview_error_response(tauri::http::StatusCode::NOT_FOUND);
+    }
+    let Ok((png, _, _)) = registry.inspect_image_preview(lease_id, window_label) else {
+        return native_image_preview_error_response(tauri::http::StatusCode::NOT_FOUND);
+    };
+    tauri::http::Response::builder()
+        .status(tauri::http::StatusCode::OK)
+        .header(tauri::http::header::CONTENT_TYPE, "image/png")
+        .header(tauri::http::header::CACHE_CONTROL, "no-store, max-age=0")
+        .header(tauri::http::header::PRAGMA, "no-cache")
+        .header(tauri::http::header::CONTENT_LENGTH, png.len().to_string())
+        .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(tauri::http::header::CONTENT_DISPOSITION, "inline")
+        .header("Referrer-Policy", "no-referrer")
+        .body(png.as_ref().to_vec())
+        .expect("constant native image preview response")
+}
+
 async fn issue_read_grant(
     registry: &NativeFileGrantRegistry,
     window_label: &str,
@@ -680,7 +1281,7 @@ async fn issue_read_grant(
     let mime = validate_mime(&name, mime_for_name(&name))?;
     let size = source_identity.size;
     let source_sha256 = sha256_file(&source_identity.canonical_path).await?;
-    let grant_id = registry.insert(FileGrant {
+    let grant = FileGrant {
         path: source_identity.canonical_path.clone(),
         name: name.clone(),
         mime: mime.clone(),
@@ -694,7 +1295,20 @@ async fn issue_read_grant(
         source_sha256: Some(source_sha256.clone()),
         expires_at: Instant::now() + GRANT_TTL,
         io_lock: Arc::new(tokio::sync::Mutex::new(())),
-    })?;
+    };
+    // 预览从同一文件身份与摘要已验证的句柄派生；失败只关闭预览能力，
+    // 不放宽或替换原有一次性上传授权。
+    let preview = if purpose == GrantPurpose::AttachmentUpload {
+        derive_native_image_preview(&grant).await.ok().flatten()
+    } else {
+        None
+    };
+    let grant_id = registry.insert(grant.clone())?;
+    let preview_lease = preview.and_then(|preview| {
+        registry
+            .insert_image_preview(&grant_id, &grant, preview)
+            .ok()
+    });
     Ok(FileGrantDescriptor {
         grant_id,
         operation_id,
@@ -703,6 +1317,7 @@ async fn issue_read_grant(
         mime,
         size,
         source_sha256: Some(source_sha256),
+        preview_lease,
     })
 }
 
@@ -760,6 +1375,7 @@ async fn issue_save_grant(
         mime,
         size: 0,
         source_sha256: None,
+        preview_lease: None,
     })
 }
 
@@ -905,6 +1521,7 @@ pub async fn create_staging_file_grant(
         mime,
         size,
         source_sha256: None,
+        preview_lease: None,
     })
 }
 
@@ -991,6 +1608,7 @@ pub async fn seal_file_grant(
         mime: grant.mime,
         size: metadata.len(),
         source_sha256: Some(source_sha256),
+        preview_lease: None,
     })
 }
 
@@ -1003,6 +1621,79 @@ pub fn discard_file_grant(
     registry: State<'_, NativeFileGrantRegistry>,
 ) -> Result<(), String> {
     registry.discard(&grant_id, window.label(), &operation_id, purpose)
+}
+
+#[tauri::command]
+pub fn sync_native_image_preview_scope(
+    window: WebviewWindow,
+    owner_id: Option<String>,
+    session_id: Option<String>,
+    attachment_ids: Vec<String>,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<(), String> {
+    registry.sync_image_preview_scope(
+        window.label(),
+        owner_id.as_deref(),
+        session_id.as_deref(),
+        &attachment_ids,
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn bind_native_image_preview_lease(
+    window: WebviewWindow,
+    lease_id: String,
+    operation_id: String,
+    upload_grant_id: String,
+    owner_id: String,
+    session_id: String,
+    attachment_id: String,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<NativeImagePreviewLeaseDescriptor, String> {
+    registry.bind_image_preview(
+        &lease_id,
+        window.label(),
+        &operation_id,
+        &upload_grant_id,
+        &NativeImagePreviewScope {
+            owner_id,
+            session_id,
+            attachment_id,
+        },
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn revoke_native_image_preview_lease(
+    window: WebviewWindow,
+    lease_id: String,
+    operation_id: String,
+    upload_grant_id: String,
+    owner_id: String,
+    session_id: String,
+    attachment_id: String,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<(), String> {
+    registry.revoke_image_preview(
+        &lease_id,
+        window.label(),
+        &operation_id,
+        &upload_grant_id,
+        &NativeImagePreviewScope {
+            owner_id,
+            session_id,
+            attachment_id,
+        },
+    )
+}
+
+pub fn revoke_native_image_preview_leases_for_window(
+    registry: &NativeFileGrantRegistry,
+    window_label: &str,
+) -> Result<(), String> {
+    registry.revoke_image_previews_for_window(window_label)
 }
 
 #[tauri::command]
@@ -1361,6 +2052,54 @@ mod tests {
         }
     }
 
+    fn preview_request(
+        method: tauri::http::Method,
+        preview_url: &str,
+    ) -> tauri::http::Request<Vec<u8>> {
+        tauri::http::Request::builder()
+            .method(method)
+            .uri(preview_url)
+            .body(Vec::new())
+            .expect("build native image preview request")
+    }
+
+    fn preview_scope(session_id: &str, attachment_id: &str) -> NativeImagePreviewScope {
+        NativeImagePreviewScope {
+            owner_id: "desktop-user".into(),
+            session_id: session_id.into(),
+            attachment_id: attachment_id.into(),
+        }
+    }
+
+    fn bind_preview(
+        registry: &NativeFileGrantRegistry,
+        descriptor: &FileGrantDescriptor,
+        window_label: &str,
+        scope: &NativeImagePreviewScope,
+    ) -> NativeImagePreviewLeaseDescriptor {
+        let preview = descriptor
+            .preview_lease
+            .as_ref()
+            .expect("native image preview descriptor");
+        registry
+            .sync_image_preview_scope(
+                window_label,
+                Some(&scope.owner_id),
+                Some(&scope.session_id),
+                std::slice::from_ref(&scope.attachment_id),
+            )
+            .expect("synchronize active native preview scope");
+        registry
+            .bind_image_preview(
+                &preview.lease_id,
+                window_label,
+                &descriptor.operation_id,
+                &descriptor.grant_id,
+                scope,
+            )
+            .expect("bind native image preview")
+    }
+
     #[test]
     fn capability_is_single_use_and_scope_bound() {
         let registry = NativeFileGrantRegistry::default();
@@ -1431,6 +2170,10 @@ mod tests {
         .await
         .expect("exact 200 MiB attachment must receive a grant");
         assert_eq!(descriptor.size, MAX_ATTACHMENT_BYTES);
+        assert!(
+            descriptor.preview_lease.is_none(),
+            "invalid image bytes must not weaken the unchanged upload grant"
+        );
 
         let error = issue_read_grant(
             &registry,
@@ -1444,6 +2187,723 @@ mod tests {
         assert_eq!(error, "selected file exceeds operation limit");
 
         std::fs::remove_dir_all(root).expect("clean attachment-limit fixture root");
+    }
+
+    #[tokio::test]
+    async fn legal_native_image_grant_issues_independent_preview_lease_without_consuming_upload_grant(
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "hexclaw-native-image-preview-{}.png",
+            Uuid::new_v4()
+        ));
+        tokio::fs::write(&path, include_bytes!("../icons/32x32.png"))
+            .await
+            .expect("write image fixture");
+        let registry = NativeFileGrantRegistry::default();
+
+        let descriptor = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-session",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue native image grant");
+        let serialized = serde_json::to_value(&descriptor).expect("serialize grant descriptor");
+        let preview = serialized
+            .get("previewLease")
+            .and_then(serde_json::Value::as_object)
+            .expect("legal native image must include an opaque preview lease");
+        assert_eq!(
+            preview.get("mime").and_then(serde_json::Value::as_str),
+            Some("image/png")
+        );
+        for required in [
+            "leaseId",
+            "mime",
+            "width",
+            "height",
+            "createdAtUnixMs",
+            "expiresAtUnixMs",
+        ] {
+            assert!(preview.contains_key(required));
+        }
+        assert_eq!(preview.len(), 6);
+        for forbidden in [
+            "url",
+            "ownerId",
+            "sessionId",
+            "attachmentId",
+            "path",
+            "bytes",
+            "base64",
+            "data",
+        ] {
+            assert!(!preview.contains_key(forbidden));
+        }
+        let unbound_preview = descriptor
+            .preview_lease
+            .clone()
+            .expect("native image preview descriptor");
+        assert!(unbound_preview.expires_at_unix_ms > unbound_preview.created_at_unix_ms);
+        assert!(unbound_preview.url.is_none());
+        assert!(unbound_preview.owner_id.is_none());
+        assert!(unbound_preview.session_id.is_none());
+        assert!(unbound_preview.attachment_id.is_none());
+        {
+            let state = registry
+                .image_previews
+                .lock()
+                .expect("lock image preview registry");
+            let lease = state
+                .leases
+                .get(&unbound_preview.lease_id)
+                .expect("stored image preview lease");
+            assert_eq!(lease.upload_grant_id, descriptor.grant_id);
+            assert_eq!(lease.window_label, "main");
+            assert_eq!(lease.operation_id, "native-preview-session");
+            assert_eq!(lease.source_identity.size, descriptor.size);
+            assert_eq!(
+                Some(lease.source_sha256.as_str()),
+                descriptor.source_sha256.as_deref()
+            );
+            assert!(lease.scope.is_none());
+        }
+        assert!(
+            registry
+                .consume(
+                    &unbound_preview.lease_id,
+                    "main",
+                    "native-preview-session",
+                    GrantPurpose::AttachmentUpload,
+                )
+                .is_err(),
+            "preview lease must not be redeemable as an upload grant"
+        );
+
+        let scope = preview_scope("chat-session-a", "attachment-a");
+        let preview_lease = bind_preview(&registry, &descriptor, "main", &scope);
+        let serialized = serde_json::to_value(&preview_lease).expect("serialize bound lease");
+        let preview = serialized
+            .as_object()
+            .expect("serialize bound native image preview lease as object");
+        for required in [
+            "leaseId",
+            "url",
+            "mime",
+            "width",
+            "height",
+            "createdAtUnixMs",
+            "expiresAtUnixMs",
+            "ownerId",
+            "sessionId",
+            "attachmentId",
+        ] {
+            assert!(preview.contains_key(required));
+        }
+        assert_eq!(preview.len(), 10);
+        let preview_url = preview_lease.url.as_deref().expect("bound preview URL");
+        assert_eq!(
+            preview_url,
+            native_image_preview_url(&preview_lease.lease_id)
+        );
+        assert!(!preview_url.contains(&scope.owner_id));
+        assert!(!preview_url.contains(&scope.session_id));
+        assert!(!preview_url.contains(&scope.attachment_id));
+
+        let grant = registry
+            .consume(
+                &descriptor.grant_id,
+                "main",
+                "native-preview-session",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("preview issuance must not consume upload grant");
+        open_verified_read_grant(&grant)
+            .await
+            .expect("upload grant remains bound to the original image");
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("count image previews"),
+            1,
+            "consuming the upload grant must not consume its independent preview lease"
+        );
+        registry
+            .revoke_image_preview(
+                &preview_lease.lease_id,
+                "main",
+                "native-preview-session",
+                &descriptor.grant_id,
+                &scope,
+            )
+            .expect("explicitly revoke preview lease");
+        registry
+            .revoke_image_preview(
+                &preview_lease.lease_id,
+                "main",
+                "native-preview-session",
+                &descriptor.grant_id,
+                &scope,
+            )
+            .expect("duplicate preview revoke is idempotent");
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("count image previews after revoke"),
+            0
+        );
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn native_image_preview_protocol_returns_only_bounded_derived_png_without_cors() {
+        let path = std::env::temp_dir().join(format!(
+            "hexclaw-native-image-preview-{}.jpg",
+            Uuid::new_v4()
+        ));
+        let source = DynamicImage::new_rgb8(2048, 1024);
+        let mut encoded = Cursor::new(Vec::new());
+        source
+            .write_to(&mut encoded, ImageFormat::Jpeg)
+            .expect("encode JPEG fixture");
+        let original = encoded.into_inner();
+        tokio::fs::write(&path, &original)
+            .await
+            .expect("write JPEG fixture");
+        let registry = NativeFileGrantRegistry::default();
+        let descriptor = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-protocol",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue JPEG upload grant");
+        let scope = preview_scope("chat-session-protocol", "attachment-protocol");
+        let preview = bind_preview(&registry, &descriptor, "main", &scope);
+        assert_eq!((preview.width, preview.height), (1024, 512));
+        let preview_url = preview.url.as_deref().expect("bound preview URL");
+
+        let wrong_host = tauri::http::Request::builder()
+            .method(tauri::http::Method::GET)
+            .uri(format!("hexclaw-preview://other/{}", preview.lease_id))
+            .body(Vec::new())
+            .expect("build wrong-host preview request");
+        assert_eq!(
+            native_image_preview_response(&registry, "main", wrong_host).status(),
+            tauri::http::StatusCode::NOT_FOUND
+        );
+        let query = tauri::http::Request::builder()
+            .method(tauri::http::Method::GET)
+            .uri(format!("{preview_url}?download=1"))
+            .body(Vec::new())
+            .expect("build query preview request");
+        assert_eq!(
+            native_image_preview_response(&registry, "main", query).status(),
+            tauri::http::StatusCode::NOT_FOUND
+        );
+
+        let response = native_image_preview_response(
+            &registry,
+            "main",
+            preview_request(tauri::http::Method::GET, preview_url),
+        );
+        assert_eq!(response.status(), tauri::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(tauri::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("image/png")
+        );
+        assert!(response
+            .headers()
+            .get(tauri::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("no-store")));
+        assert!(response
+            .headers()
+            .get(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+        assert!(response.body().starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_ne!(response.body().as_slice(), original.as_slice());
+
+        let second_get = native_image_preview_response(
+            &registry,
+            "main",
+            preview_request(tauri::http::Method::GET, preview_url),
+        );
+        assert_eq!(
+            second_get.status(),
+            tauri::http::StatusCode::OK,
+            "render reads do not consume the lease"
+        );
+        let rejected_post = native_image_preview_response(
+            &registry,
+            "main",
+            preview_request(tauri::http::Method::POST, preview_url),
+        );
+        assert_eq!(
+            rejected_post.status(),
+            tauri::http::StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert!(rejected_post.body().is_empty());
+        assert!(rejected_post
+            .headers()
+            .get(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+
+        let wrong_window = native_image_preview_response(
+            &registry,
+            "other",
+            preview_request(tauri::http::Method::GET, preview_url),
+        );
+        assert_eq!(wrong_window.status(), tauri::http::StatusCode::NOT_FOUND);
+        let revoked_after_scope_failure = native_image_preview_response(
+            &registry,
+            "main",
+            preview_request(tauri::http::Method::GET, preview_url),
+        );
+        assert_eq!(
+            revoked_after_scope_failure.status(),
+            tauri::http::StatusCode::NOT_FOUND
+        );
+
+        let grant = registry
+            .consume(
+                &descriptor.grant_id,
+                "main",
+                "native-preview-protocol",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("preview scope rejection must not consume upload grant");
+        open_verified_read_grant(&grant)
+            .await
+            .expect("upload grant remains usable");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn native_image_preview_scope_mismatch_does_not_consume_the_legal_lease_or_upload_grant()
+    {
+        let path = std::env::temp_dir().join(format!(
+            "hexclaw-native-image-preview-scope-{}.png",
+            Uuid::new_v4()
+        ));
+        tokio::fs::write(&path, include_bytes!("../icons/32x32.png"))
+            .await
+            .expect("write image fixture");
+        let registry = NativeFileGrantRegistry::default();
+        let descriptor = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-scope",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue scoped native image preview");
+        let unbound = descriptor
+            .preview_lease
+            .as_ref()
+            .expect("native image preview descriptor");
+        assert!(unbound.url.is_none(), "bind 前不得暴露可读 lease URL");
+        let unbound_url = native_image_preview_url(&unbound.lease_id);
+        assert_eq!(
+            native_image_preview_response(
+                &registry,
+                "main",
+                preview_request(tauri::http::Method::GET, &unbound_url),
+            )
+            .status(),
+            tauri::http::StatusCode::NOT_FOUND,
+            "未绑定真实业务身份的 lease 不可读取"
+        );
+
+        let legal_scope = preview_scope("chat-session-a", "attachment-a");
+        let preview = bind_preview(&registry, &descriptor, "main", &legal_scope);
+        let preview_url = preview.url.as_deref().expect("bound preview URL");
+
+        for wrong_scope in [
+            NativeImagePreviewScope {
+                owner_id: "other-owner".into(),
+                ..legal_scope.clone()
+            },
+            NativeImagePreviewScope {
+                session_id: "chat-session-b".into(),
+                ..legal_scope.clone()
+            },
+            NativeImagePreviewScope {
+                attachment_id: "attachment-b".into(),
+                ..legal_scope.clone()
+            },
+        ] {
+            assert!(registry
+                .bind_image_preview(
+                    &preview.lease_id,
+                    "main",
+                    &descriptor.operation_id,
+                    &descriptor.grant_id,
+                    &wrong_scope,
+                )
+                .is_err());
+            assert_eq!(
+                registry
+                    .active_image_preview_count()
+                    .expect("count immutable scoped preview lease"),
+                1,
+                "conflicting rebind must not consume the legal lease"
+            );
+        }
+
+        // Tauri scheme 请求只携带 opaque URL 与 window；同 window 的业务所有权由
+        // ChatInput 同步的当前 owner/session/attachment active exact-set 提供。
+        // 原 attachment 不再 active 时，即使复制同一个 bearer URL 到错误 attachment 也必须拒绝。
+        for (owner, session, attachments, label) in [
+            (
+                "other-owner",
+                legal_scope.session_id.as_str(),
+                vec![legal_scope.attachment_id.clone()],
+                "wrong owner",
+            ),
+            (
+                legal_scope.owner_id.as_str(),
+                "chat-session-b",
+                vec![legal_scope.attachment_id.clone()],
+                "wrong session",
+            ),
+            (
+                legal_scope.owner_id.as_str(),
+                legal_scope.session_id.as_str(),
+                vec!["attachment-b".into()],
+                "wrong attachment",
+            ),
+        ] {
+            registry
+                .sync_image_preview_scope("main", Some(owner), Some(session), &attachments)
+                .expect("synchronize wrong active scope");
+            assert_eq!(
+                native_image_preview_response(
+                    &registry,
+                    "main",
+                    preview_request(tauri::http::Method::GET, preview_url),
+                )
+                .status(),
+                tauri::http::StatusCode::NOT_FOUND,
+                "{label} must fail closed"
+            );
+            assert_eq!(
+                registry
+                    .active_image_preview_count()
+                    .expect("count native preview leases"),
+                1,
+                "{label} must not consume the legal lease"
+            );
+            registry
+                .sync_image_preview_scope(
+                    "main",
+                    Some(&legal_scope.owner_id),
+                    Some(&legal_scope.session_id),
+                    std::slice::from_ref(&legal_scope.attachment_id),
+                )
+                .expect("restore legal active scope");
+            assert_eq!(
+                native_image_preview_response(
+                    &registry,
+                    "main",
+                    preview_request(tauri::http::Method::GET, preview_url),
+                )
+                .status(),
+                tauri::http::StatusCode::OK,
+                "legal lease must remain readable after {label}"
+            );
+        }
+
+        for wrong_scope in [
+            NativeImagePreviewScope {
+                owner_id: "other-owner".into(),
+                ..legal_scope.clone()
+            },
+            NativeImagePreviewScope {
+                session_id: "chat-session-b".into(),
+                ..legal_scope.clone()
+            },
+            NativeImagePreviewScope {
+                attachment_id: "attachment-b".into(),
+                ..legal_scope.clone()
+            },
+        ] {
+            assert!(registry
+                .revoke_image_preview(
+                    &preview.lease_id,
+                    "main",
+                    &descriptor.operation_id,
+                    &descriptor.grant_id,
+                    &wrong_scope,
+                )
+                .is_err());
+            assert_eq!(
+                native_image_preview_response(
+                    &registry,
+                    "main",
+                    preview_request(tauri::http::Method::GET, preview_url),
+                )
+                .status(),
+                tauri::http::StatusCode::OK,
+                "cross-scope revoke must not consume the legal lease"
+            );
+        }
+
+        registry
+            .revoke_image_preview(
+                &preview.lease_id,
+                "main",
+                &descriptor.operation_id,
+                &descriptor.grant_id,
+                &legal_scope,
+            )
+            .expect("revoke legal scoped preview lease");
+        assert_eq!(
+            native_image_preview_response(
+                &registry,
+                "main",
+                preview_request(tauri::http::Method::GET, preview_url),
+            )
+            .status(),
+            tauri::http::StatusCode::NOT_FOUND
+        );
+        registry
+            .consume(
+                &descriptor.grant_id,
+                "main",
+                &descriptor.operation_id,
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("preview scope checks must not consume the one-use upload grant");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn native_image_preview_lifecycle_revokes_on_expiry_discard_and_window_destroy() {
+        let path = std::env::temp_dir().join(format!(
+            "hexclaw-native-image-lifecycle-{}.png",
+            Uuid::new_v4()
+        ));
+        tokio::fs::write(&path, include_bytes!("../icons/32x32.png"))
+            .await
+            .expect("write image fixture");
+        let registry = NativeFileGrantRegistry::default();
+
+        let wrong_operation = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-operation-scope",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue operation-scoped preview");
+        let wrong_upload_grant = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-upload-grant-scope",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue upload-grant-scoped preview");
+        let wrong_operation_scope = preview_scope("operation-session", "operation-attachment");
+        let wrong_upload_grant_scope =
+            preview_scope("upload-grant-session", "upload-grant-attachment");
+        let wrong_operation_preview =
+            bind_preview(&registry, &wrong_operation, "main", &wrong_operation_scope);
+        let wrong_upload_grant_preview = bind_preview(
+            &registry,
+            &wrong_upload_grant,
+            "main",
+            &wrong_upload_grant_scope,
+        );
+        assert!(registry
+            .revoke_image_preview(
+                &wrong_operation_preview.lease_id,
+                "main",
+                "wrong-operation",
+                &wrong_operation.grant_id,
+                &wrong_operation_scope,
+            )
+            .is_err());
+        assert!(registry
+            .revoke_image_preview(
+                &wrong_upload_grant_preview.lease_id,
+                "main",
+                "native-preview-upload-grant-scope",
+                &wrong_operation.grant_id,
+                &wrong_upload_grant_scope,
+            )
+            .is_err());
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("operation/upload-grant failures consume only preview leases"),
+            0
+        );
+        registry
+            .consume(
+                &wrong_operation.grant_id,
+                "main",
+                "native-preview-operation-scope",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("wrong operation revoke must not consume upload grant");
+        registry
+            .consume(
+                &wrong_upload_grant.grant_id,
+                "main",
+                "native-preview-upload-grant-scope",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("wrong upload grant revoke must not consume upload grant");
+
+        let expired = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-expiry",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue expiring preview");
+        let expired_lease_id = expired
+            .preview_lease
+            .as_ref()
+            .expect("expiring preview lease")
+            .lease_id
+            .clone();
+        {
+            let mut state = registry
+                .image_previews
+                .lock()
+                .expect("lock image preview registry");
+            state
+                .leases
+                .get_mut(&expired_lease_id)
+                .expect("stored preview lease")
+                .expires_at = Instant::now() - Duration::from_millis(1);
+        }
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("purge expired preview"),
+            0
+        );
+        registry
+            .consume(
+                &expired.grant_id,
+                "main",
+                "native-preview-expiry",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("preview expiry must not consume upload grant");
+
+        let discarded = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-discard",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue discard preview");
+        registry
+            .discard(
+                &discarded.grant_id,
+                "main",
+                "native-preview-discard",
+                GrantPurpose::AttachmentUpload,
+            )
+            .expect("discard upload grant");
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("discard revokes preview"),
+            0
+        );
+
+        let main = issue_read_grant(
+            &registry,
+            "main",
+            "native-preview-main-window",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue main-window preview");
+        let auxiliary = issue_read_grant(
+            &registry,
+            "auxiliary",
+            "native-preview-other-window",
+            path.clone(),
+            GrantPurpose::AttachmentUpload,
+        )
+        .await
+        .expect("issue auxiliary-window preview");
+        let main_scope = preview_scope("main-window-session", "main-window-attachment");
+        let auxiliary_scope =
+            preview_scope("auxiliary-window-session", "auxiliary-window-attachment");
+        let main_preview = bind_preview(&registry, &main, "main", &main_scope);
+        let auxiliary_preview = bind_preview(&registry, &auxiliary, "auxiliary", &auxiliary_scope);
+        registry
+            .revoke_image_previews_for_window("main")
+            .expect("revoke destroyed window previews");
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("only auxiliary preview remains"),
+            1
+        );
+        assert_eq!(
+            native_image_preview_response(
+                &registry,
+                "main",
+                preview_request(
+                    tauri::http::Method::GET,
+                    main_preview.url.as_deref().expect("main preview URL"),
+                ),
+            )
+            .status(),
+            tauri::http::StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            native_image_preview_response(
+                &registry,
+                "auxiliary",
+                preview_request(
+                    tauri::http::Method::GET,
+                    auxiliary_preview
+                        .url
+                        .as_deref()
+                        .expect("auxiliary preview URL"),
+                ),
+            )
+            .status(),
+            tauri::http::StatusCode::OK
+        );
+        registry
+            .revoke_image_previews_for_window("auxiliary")
+            .expect("revoke auxiliary previews");
+        assert_eq!(
+            registry
+                .active_image_preview_count()
+                .expect("all previews revoked"),
+            0
+        );
+
+        let _ = tokio::fs::remove_file(path).await;
     }
 
     #[test]

@@ -597,12 +597,17 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
 
 // K12 图片的消息数据只保存 asset:// 稳定身份。可见地址由认证客户端读取后在当前
 // WebView 内生成，并由这里统一持有，避免把鉴权端点直接交给 <img> 或泄漏 object URL。
+const previewImageSrc = ref('')
 const k12AssetDisplayURLs = ref(new Map<string, string>())
 const k12AssetBlobs = new Map<string, Blob>()
 const k12AssetAborters = new Map<string, AbortController>()
 const k12AssetLoads = new Map<string, Promise<Blob | null>>()
 const scenarioResubmitAborters = new Set<AbortController>()
-const scenarioPendingPreviewURLs = new Set<string>()
+type ScenarioImagePreviewOwnership = NonNullable<
+  ScenarioComposerImagePayload['previewOwnership']
+>
+const k12AssetPreviewOwnerships = new Map<string, ScenarioImagePreviewOwnership>()
+const scenarioPendingPreviewOwnerships = new Map<string, ScenarioImagePreviewOwnership>()
 
 function k12AssetIdentity(attachment: ChatAttachment): string {
   const raw = attachment.data.trim()
@@ -637,8 +642,56 @@ function activeK12AssetIDs(): Set<string> {
   return active
 }
 
-function revokeK12ObjectURL(url: string | undefined) {
-  if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+function revokeK12ObjectURL(url: string | undefined, replacement = '') {
+  if (!url?.startsWith('blob:')) return
+  if (previewImageSrc.value === url) previewImageSrc.value = replacement
+  URL.revokeObjectURL(url)
+}
+
+function releaseScenarioImagePreview(
+  ownership: ScenarioImagePreviewOwnership,
+  replacement = '',
+) {
+  if (previewImageSrc.value === ownership.url) previewImageSrc.value = replacement
+  try {
+    ownership.release()
+  } catch (errorValue) {
+    logger.warn('[ChatView] scenario image preview release failed', errorValue)
+  }
+}
+
+function releasePendingScenarioImagePreview(messageId: string, replacement = ''): boolean {
+  const ownership = scenarioPendingPreviewOwnerships.get(messageId)
+  if (!ownership) return false
+  scenarioPendingPreviewOwnerships.delete(messageId)
+  releaseScenarioImagePreview(ownership, replacement)
+  return true
+}
+
+function takePendingScenarioImagePreview(
+  messageId: string,
+): ScenarioImagePreviewOwnership | undefined {
+  const ownership = scenarioPendingPreviewOwnerships.get(messageId)
+  if (ownership) scenarioPendingPreviewOwnerships.delete(messageId)
+  return ownership
+}
+
+function scenarioImagePreviewOwnership(
+  payload: ScenarioComposerImagePayload,
+): ScenarioImagePreviewOwnership | undefined {
+  const previewUrl = payload.previewUrl?.trim() ?? ''
+  if (!previewUrl) return undefined
+  if (payload.previewOwnership?.url === previewUrl) return payload.previewOwnership
+  if (!previewUrl.startsWith('blob:')) return undefined
+  let released = false
+  return {
+    url: previewUrl,
+    release: () => {
+      if (released) return
+      released = true
+      URL.revokeObjectURL(previewUrl)
+    },
+  }
 }
 
 function releaseK12Asset(assetId: string) {
@@ -648,7 +701,14 @@ function releaseK12Asset(assetId: string) {
   k12AssetBlobs.delete(assetId)
   const displayURL = k12AssetDisplayURLs.value.get(assetId)
   k12AssetDisplayURLs.value.delete(assetId)
-  revokeK12ObjectURL(displayURL)
+  const previewOwnership = k12AssetPreviewOwnerships.get(assetId)
+  k12AssetPreviewOwnerships.delete(assetId)
+  if (previewOwnership) {
+    releaseScenarioImagePreview(previewOwnership)
+    if (displayURL !== previewOwnership.url) revokeK12ObjectURL(displayURL)
+  } else {
+    revokeK12ObjectURL(displayURL)
+  }
 }
 
 function clearK12AssetViews() {
@@ -656,23 +716,32 @@ function clearK12AssetViews() {
     ...k12AssetDisplayURLs.value.keys(),
     ...k12AssetAborters.keys(),
     ...k12AssetBlobs.keys(),
+    ...k12AssetPreviewOwnerships.keys(),
   ])
   for (const assetId of identities) releaseK12Asset(assetId)
-  for (const previewURL of scenarioPendingPreviewURLs) revokeK12ObjectURL(previewURL)
-  scenarioPendingPreviewURLs.clear()
+  for (const messageId of [...scenarioPendingPreviewOwnerships.keys()]) {
+    releasePendingScenarioImagePreview(messageId)
+  }
   for (const controller of scenarioResubmitAborters) controller.abort()
   scenarioResubmitAborters.clear()
 }
 
-function seedK12AssetPreview(assetId: string, previewURL: string | undefined) {
-  if (!previewURL?.startsWith('blob:')) return
+function seedK12AssetPreview(assetId: string, ownership: ScenarioImagePreviewOwnership) {
+  const previewURL = ownership.url
   k12AssetAborters.get(assetId)?.abort()
   k12AssetAborters.delete(assetId)
   k12AssetLoads.delete(assetId)
   k12AssetBlobs.delete(assetId)
   const previousURL = k12AssetDisplayURLs.value.get(assetId)
+  const previousOwnership = k12AssetPreviewOwnerships.get(assetId)
   k12AssetDisplayURLs.value.set(assetId, previewURL)
-  if (previousURL !== previewURL) revokeK12ObjectURL(previousURL)
+  k12AssetPreviewOwnerships.set(assetId, ownership)
+  if (previousOwnership && previousOwnership !== ownership) {
+    releaseScenarioImagePreview(previousOwnership, previewURL)
+    if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL, previewURL)
+  } else if (previousURL !== previewURL) {
+    revokeK12ObjectURL(previousURL, previewURL)
+  }
 }
 
 function ensureK12AssetBlob(assetId: string): Promise<Blob | null> {
@@ -690,9 +759,16 @@ function ensureK12AssetBlob(assetId: string): Promise<Blob | null> {
     if (!blob || controller.signal.aborted || !activeK12AssetIDs().has(assetId)) return null
     const nextURL = URL.createObjectURL(blob)
     const previousURL = k12AssetDisplayURLs.value.get(assetId)
+    const previousOwnership = k12AssetPreviewOwnerships.get(assetId)
     k12AssetBlobs.set(assetId, blob)
     k12AssetDisplayURLs.value.set(assetId, nextURL)
-    if (previousURL !== nextURL) revokeK12ObjectURL(previousURL)
+    k12AssetPreviewOwnerships.delete(assetId)
+    if (previousOwnership) {
+      releaseScenarioImagePreview(previousOwnership, nextURL)
+      if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL, nextURL)
+    } else if (previousURL !== nextURL) {
+      revokeK12ObjectURL(previousURL, nextURL)
+    }
     return blob
   })().finally(() => {
     if (k12AssetAborters.get(assetId) === controller) k12AssetAborters.delete(assetId)
@@ -708,6 +784,7 @@ function reconcileK12AssetViews(assetIds: string[]) {
     ...k12AssetDisplayURLs.value.keys(),
     ...k12AssetAborters.keys(),
     ...k12AssetBlobs.keys(),
+    ...k12AssetPreviewOwnerships.keys(),
   ])
   for (const assetId of known) {
     if (!active.has(assetId)) releaseK12Asset(assetId)
@@ -730,6 +807,16 @@ watch(
     ),
   reconcileK12AssetViews,
   { immediate: true },
+)
+
+watch(
+  () => chatStore.messages.map((message) => message.id),
+  (messageIds) => {
+    const active = new Set(messageIds)
+    for (const messageId of [...scenarioPendingPreviewOwnerships.keys()]) {
+      if (!active.has(messageId)) releasePendingScenarioImagePreview(messageId)
+    }
+  },
 )
 
 onUnmounted(() => {
@@ -1012,8 +1099,8 @@ function handleScenarioComposerCommand(command: ScenarioComposerCommand) {
   if (command.type === 'focus') composer.focus()
   if (command.type === 'set-input') composer.setInput(command.text, command.focus !== false)
 }
-// 场景会话下 composer 拦截的图片：ChatInput 产出 original File/grant + session-local blob
-// preview；shell 负责形成一次可见用户消息，并在场景资产 receipt 后持久同一消息、冻结
+// 场景会话下 composer 拦截的图片：ChatInput 产出 original File/grant + 会话内受控预览；
+// shell 负责形成一次可见用户消息，并在场景资产 receipt 后持久同一消息、冻结
 // 该次提交的 request_id + 实际会话路由。
 const scenarioComposerImage = ref<ScenarioComposerImagePayload | ''>('')
 interface PendingScenarioImageProjection {
@@ -1117,7 +1204,9 @@ async function handleScenarioImage(
   frozenRoute?: ScenarioImageModelRoute | null,
 ): Promise<boolean> {
   const intendedSessionId = targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
+  const previewOwnership = scenarioImagePreviewOwnership(payload)
   if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
+    if (previewOwnership) releaseScenarioImagePreview(previewOwnership)
     return false
   }
   const message: ChatMessage = {
@@ -1127,6 +1216,7 @@ async function handleScenarioImage(
     timestamp: new Date().toISOString(),
     metadata: { attachments: [payload.attachment] },
   }
+  if (previewOwnership) scenarioPendingPreviewOwnerships.set(message.id, previewOwnership)
   // request_id 与可见/持久消息使用同一身份；模型选择也在用户动作发生时冻结，
   // 不能在 await 创建会话期间被后续 UI 操作改写。
   // undefined = ordinary composer submission resolves the current route now;
@@ -1139,26 +1229,35 @@ async function handleScenarioImage(
   }
   // 新会话首图必须先建立稳定 session，再启动场景；否则 source_session 为空，
   // 随后的会话 watcher 还会重建并清掉刚启动的识题面板。
-  const sessionId = directedSessionId || (await chatStore.ensureSession())
+  let sessionId = directedSessionId
+  try {
+    sessionId ||= await chatStore.ensureSession()
+  } catch (errorValue) {
+    releasePendingScenarioImagePreview(message.id)
+    const messageIndex = chatStore.messages.findIndex((candidate) => candidate.id === message.id)
+    if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
+    throw errorValue
+  }
   const routedPayload: ScenarioComposerImagePayload = {
     attachment: payload.attachment,
     ...(payload.file ? { file: payload.file } : {}),
     ...(payload.previewUrl ? { previewUrl: payload.previewUrl } : {}),
+    ...(previewOwnership ? { previewOwnership } : {}),
     ...(payload.dataUrl ? { dataUrl: payload.dataUrl } : {}),
     ...(payload.contextText !== undefined ? { contextText: payload.contextText } : {}),
     requestId: message.id,
     sourceSessionId: sessionId,
     ...(route ? { route } : {}),
   }
-  if (payload.file && payload.previewUrl?.startsWith('blob:')) {
-    scenarioPendingPreviewURLs.add(payload.previewUrl)
-  }
   // 新选图片必须先由场景侧拿到 immutable asset receipt。持久层只写 asset:// 身份；
   // 当前本地预览在认证读取完成前继续显示，回调失败则阻止建任务并撤掉未持久消息。
   if (payload.file) {
     routedPayload.onSourceStored = async (receipt) => {
       const assetId = receipt.assetId.trim()
-      if (!assetId.startsWith('asset://')) return false
+      if (!assetId.startsWith('asset://')) {
+        releasePendingScenarioImagePreview(message.id)
+        return false
+      }
       const persistentAttachment: ChatAttachment = {
         ...routedPayload.attachment,
         data: assetId,
@@ -1172,9 +1271,7 @@ async function handleScenarioImage(
       }
       const persisted = await persistScenarioImageMessage(persistentMessage, sessionId)
       if (!persisted) {
-        if (payload.previewUrl && scenarioPendingPreviewURLs.delete(payload.previewUrl)) {
-          revokeK12ObjectURL(payload.previewUrl)
-        }
+        releasePendingScenarioImagePreview(message.id)
         if (chatStore.currentSessionId === sessionId) {
           const messageIndex = chatStore.messages.findIndex(
             (candidate) => candidate.id === message.id,
@@ -1186,11 +1283,12 @@ async function handleScenarioImage(
       }
 
       const currentMessage = chatStore.messages.find((candidate) => candidate.id === message.id)
-      const pendingPreviewOwned = payload.previewUrl
-        ? scenarioPendingPreviewURLs.delete(payload.previewUrl)
-        : false
-      if (currentMessage && pendingPreviewOwned) seedK12AssetPreview(assetId, payload.previewUrl)
-      else if (pendingPreviewOwned) revokeK12ObjectURL(payload.previewUrl)
+      const pendingPreviewOwnership = takePendingScenarioImagePreview(message.id)
+      if (currentMessage && pendingPreviewOwnership) {
+        seedK12AssetPreview(assetId, pendingPreviewOwnership)
+      } else if (pendingPreviewOwnership) {
+        releaseScenarioImagePreview(pendingPreviewOwnership)
+      }
       routedPayload.attachment = persistentAttachment
       message.metadata = persistentMessage.metadata
       if (currentMessage) {
@@ -1267,6 +1365,9 @@ function handleScenarioSessionExecution(payload: {
   automaticDeadlineAt?: number
   operationDeadlineAt?: number
 }) {
+  if (['failed_retryable', 'failed_terminal', 'feedback_failed'].includes(payload.state)) {
+    releasePendingScenarioImagePreview(payload.executionId)
+  }
   chatStore.setSessionExecution(payload.sessionId, {
     executionId: payload.executionId,
     state: payload.state,
@@ -1281,6 +1382,7 @@ function handleScenarioSessionExecutionRelease(payload: {
   sessionId: string
   executionId: string
 }) {
+  releasePendingScenarioImagePreview(payload.executionId)
   chatStore.clearSessionExecution(payload.sessionId, payload.executionId)
 }
 const scenarioCtx = computed(() => {
@@ -1538,7 +1640,6 @@ const isVoiceChatModel = computed(() => selectedModelKind.value === 'voice_chat'
 // 后端注册的生成模型集合 — 不在这里面的生成模型选了会失败，UI 灰掉。
 // onMounted 时通过 /api/v1/{images,videos,voicechat}/status 一次性拉取。
 /** 当前预览图（in-app modal）— Tauri WKWebView 不支持 window.open，必须走内嵌 */
-const previewImageSrc = ref('')
 function openImagePreview(src: string) {
   previewImageSrc.value = src
 }
@@ -2560,9 +2661,13 @@ watch(
 // 使随后整体替换的消息落地走「瞬时到底」，且不被上一会话遗留的 userScrolledUp 卡住。
 watch(
   () => chatStore.currentSessionId,
-  (newId) => {
-    // object URL 与认证请求只属于离开前的会话；消息异步重载后会按新历史重新申请。
-    clearK12AssetViews()
+  (newId, previousId) => {
+    // 离开已有会话时释放其预览与认证请求；首图创建首个会话 ID 时，预览已经属于新会话，
+    // 不能被 null → session 的身份分配误判为会话切换。
+    if (previousId && previousId !== newId) {
+      clearK12AssetViews()
+      pendingScenarioImageProjections.delete(previousId)
+    }
     // 任何会话切换/新建：重置上滚态 + 下翻箭头。新空会话不产生 scroll 事件、handleMessagesScroll
     // 不触发，若不在此重置，上个会话遗留的 showScrollToBottom=true 会残留到新会话（BUG-20260628）。
     userScrolledUp.value = false
@@ -3961,6 +4066,7 @@ function startSidebarResize(event: MouseEvent) {
             :allow-image="supportsVision"
             :allow-video="supportsVideo"
             :recipient-name="agentRoleDisplay || t('chat.defaultAgent', '小蟹')"
+            :draft-scope-key="chatStore.currentSessionId ?? ''"
             :preset-chips="scenarioCtx ? scenarioComposerChips : []"
             :scenario-placeholder="scenarioComposerPlaceholder"
             :scenario-hint="scenarioComposerHint"

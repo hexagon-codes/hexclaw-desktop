@@ -65,10 +65,16 @@ export interface ScenarioComposerImageAssetReceipt {
   assetId: string
 }
 
+/** 当前 WebView 内的图片预览所有权；只在运行时转交，禁止序列化或持久化。 */
+export interface ScenarioComposerImagePreviewOwnership {
+  url: string
+  release: () => void
+}
+
 /**
  * 通用 composer 拦截图片后交给场景包的完整事实。
  *
- * 新选图片只携带原始 File（可能绑定 native grant）和本会话 blob 预览；不能在 WebView
+ * 新选图片只携带原始 File（可能绑定 native grant）和本会话受控预览；不能在 WebView
  * 编码为 data URL。dataUrl 仅保留给历史消息或显式重提的兼容输入，不能由新的选择/拖入路径写入。
  * attachment 是同一图片在会话消息中的投影；requestId/route/sourceSessionId 只由拥有消息身份
  * 与会话状态的 shell 注入，输入组件不猜测。
@@ -79,6 +85,8 @@ export interface ScenarioComposerImagePayload {
   file?: File
   /** 仅当前 WebView 会话可用的预览 URL；持久化前绝不能替代资产回执。 */
   previewUrl?: string
+  /** 预览的幂等释放权；只在输入组件与 shell 间转交，不进入消息、场景状态或持久层。 */
+  previewOwnership?: ScenarioComposerImagePreviewOwnership
   /** 历史 data URL / 显式重提兼容输入；新选择/拖入路径禁止赋值。 */
   dataUrl?: string
   /**

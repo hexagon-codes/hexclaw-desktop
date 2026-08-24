@@ -276,8 +276,8 @@ pub fn setup_close_behavior(app: &tauri::App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        consume_app_exit_request, stop_background_engines, LifecycleController,
-        LifecycleDecision, LifecycleSource, ALLOW_APP_EXIT,
+        consume_app_exit_request, stop_background_engines, LifecycleController, LifecycleDecision,
+        LifecycleSource, ALLOW_APP_EXIT,
     };
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};

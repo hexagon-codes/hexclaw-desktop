@@ -3,7 +3,14 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useI18n } from 'vue-i18n'
 import { fileFromNativeGrant } from '@/api/desktop'
-import type { NativeFileGrant } from '@/api/native-files'
+import {
+  bindNativeImagePreviewLease,
+  nativeGrantFromFile,
+  revokeNativeImagePreviewLease,
+  syncNativeImagePreviewScope,
+  type NativeFileGrant,
+} from '@/api/native-files'
+import { DESKTOP_USER_ID } from '@/constants'
 import {
   ArrowUp,
   AudioLines,
@@ -43,6 +50,7 @@ import { normalizeMathMarkdown } from '@/utils/math-content'
 import type {
   ScenarioComposerChip,
   ScenarioComposerImagePayload,
+  ScenarioComposerImagePreviewOwnership,
 } from '@/shell/scenario/registry'
 
 /** `@` 召唤选中项（MentionPopup 抛出）。 */
@@ -107,6 +115,8 @@ const props = defineProps<{
   allowImage?: boolean
   allowVideo?: boolean
   recipientName?: string
+  /** 附件草稿的会话作用域；作用域变化时回收当前附件预览能力。 */
+  draftScopeKey?: string
   /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip）。
    *  string 保留后端旧契约兼容；结构化项只把 actionId 向父级派发，本组件不解释领域语义。 */
   presetChips?: Array<string | ScenarioComposerChip>
@@ -266,8 +276,8 @@ const voiceFinalizing = ref(false)
 const voiceElapsedSeconds = ref(0)
 const voiceCancelRef = ref<HTMLButtonElement>()
 const VOICE_WAVE_LEVELS = [
-  0.34, 0.52, 0.7, 0.46, 0.82, 0.58, 0.96, 0.62, 0.76, 0.44, 0.9, 0.66, 0.5, 0.78,
-  0.38, 0.62, 0.86, 0.52, 0.72, 0.96, 0.6, 0.8, 0.46, 0.68, 0.88, 0.56, 0.74, 0.42,
+  0.34, 0.52, 0.7, 0.46, 0.82, 0.58, 0.96, 0.62, 0.76, 0.44, 0.9, 0.66, 0.5, 0.78, 0.38, 0.62, 0.86,
+  0.52, 0.72, 0.96, 0.6, 0.8, 0.46, 0.68, 0.88, 0.56, 0.74, 0.42,
 ]
 let voiceTimer: ReturnType<typeof setInterval> | null = null
 
@@ -364,12 +374,134 @@ const templateRef = ref<InstanceType<typeof TemplatePopup>>()
 const generating = ref(false)
 let videoAbort: AbortController | null = null
 
-const attachedFiles = ref<{ file: File; previewUrl?: string }[]>([])
+interface AttachedFile {
+  file: File
+  previewUrl?: string
+  previewGrant?: NativeFileGrant
+}
+
+const attachedFiles = ref<AttachedFile[]>([])
+const activeNativePreviewAttachmentIds = new Set<string>()
+let nativePreviewLifecycle: Promise<void> = Promise.resolve()
+let nativePreviewScopeGeneration = 0
+let chatInputUnmounted = false
+let nativePreviewRuntimeUsed = false
+
+function enqueueNativePreviewLifecycle<T>(task: () => Promise<T>): Promise<T> {
+  const result = nativePreviewLifecycle.then(task, task)
+  nativePreviewLifecycle = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
+function currentDraftSessionId(): string | undefined {
+  const sessionId = props.draftScopeKey?.trim()
+  return sessionId || undefined
+}
+
+function synchronizeNativePreviewScope(sessionId = currentDraftSessionId()): Promise<void> {
+  return syncNativeImagePreviewScope(
+    sessionId
+      ? {
+          ownerId: DESKTOP_USER_ID,
+          sessionId,
+          attachmentIds: [...activeNativePreviewAttachmentIds],
+        }
+      : undefined,
+  )
+}
+
+function newNativePreviewAttachmentId(): string {
+  const attachmentId = globalThis.crypto?.randomUUID?.()
+  if (!attachmentId) throw new Error('Native image preview attachment identity is unavailable')
+  return attachmentId
+}
+
+function releaseNativePreviewGrant(grant: NativeFileGrant) {
+  const attachmentId = grant.previewLease?.attachmentId
+  if (attachmentId) activeNativePreviewAttachmentIds.delete(attachmentId)
+  void enqueueNativePreviewLifecycle(async () => {
+    await synchronizeNativePreviewScope()
+    await revokeNativeImagePreviewLease(grant)
+  }).catch(() => {
+    logger.warn('[ChatInput] Native image preview revoke failed')
+  })
+}
+
+function releaseAttachmentPreview(item: AttachedFile) {
+  const previewUrl = item.previewUrl
+  const previewGrant = item.previewGrant
+  item.previewUrl = undefined
+  item.previewGrant = undefined
+  if (previewGrant) {
+    releaseNativePreviewGrant(previewGrant)
+  } else if (previewUrl) {
+    URL.revokeObjectURL(previewUrl)
+  }
+}
+
+function clearAttachedFiles() {
+  const files = attachedFiles.value
+  attachedFiles.value = []
+  files.forEach(releaseAttachmentPreview)
+}
+
+function createScenarioImagePreviewOwnership(file: File): ScenarioComposerImagePreviewOwnership {
+  const nativeGrant = nativeGrantFromFile(file)
+  const nativePreviewUrl = nativeGrant?.previewLease?.url
+  let released = false
+  if (nativeGrant) {
+    if (!nativePreviewUrl) throw new Error('Native image preview lease is not bound')
+    return {
+      url: nativePreviewUrl,
+      release: () => {
+        if (released) return
+        released = true
+        releaseNativePreviewGrant(nativeGrant)
+      },
+    }
+  }
+
+  const url = URL.createObjectURL(file)
+  return {
+    url,
+    release: () => {
+      if (released) return
+      released = true
+      URL.revokeObjectURL(url)
+    },
+  }
+}
+
+watch(
+  () => props.draftScopeKey,
+  (scopeKey, previousScopeKey) => {
+    nativePreviewScopeGeneration++
+    // 首次分配会话 ID 仍属于同一份发送中的草稿；只有离开已有会话作用域才回收附件预览。
+    if (previousScopeKey === scopeKey) return
+    if (!previousScopeKey) {
+      if (nativePreviewRuntimeUsed) {
+        void enqueueNativePreviewLifecycle(() => synchronizeNativePreviewScope()).catch(() => {
+          logger.warn('[ChatInput] Native image preview scope sync failed')
+        })
+      }
+      return
+    }
+    activeNativePreviewAttachmentIds.clear()
+    if (nativePreviewRuntimeUsed) {
+      void enqueueNativePreviewLifecycle(() =>
+        synchronizeNativePreviewScope(scopeKey?.trim()),
+      ).catch(() => {
+        logger.warn('[ChatInput] Native image preview scope sync failed')
+      })
+    }
+    clearAttachedFiles()
+  },
+)
 const isScenarioComposer = computed(
-  () =>
-    !!props.scenarioImageIntercept ||
-    !!props.scenarioPlaceholder ||
-    !!props.scenarioHint,
+  () => !!props.scenarioImageIntercept || !!props.scenarioPlaceholder || !!props.scenarioHint,
 )
 
 // 场景 Composer 继续使用原有听写语义：识别文本直接回填编辑区。
@@ -456,10 +588,7 @@ const fileAccept = computed(() => {
 
 function clearDraft() {
   inputText.value = ''
-  attachedFiles.value.forEach((a) => {
-    if (a.previewUrl) URL.revokeObjectURL(a.previewUrl)
-  })
-  attachedFiles.value = []
+  clearAttachedFiles()
   mountedSkills.value = []
   contextChips.value = []
   closePopups()
@@ -601,10 +730,12 @@ function editorElement(): HTMLElement | null {
 }
 
 function editorSelection(): { start: number; end: number } {
-  return mathEditorRef.value?.getSelectionOffsets() ?? {
-    start: inputText.value.length,
-    end: inputText.value.length,
-  }
+  return (
+    mathEditorRef.value?.getSelectionOffsets() ?? {
+      start: inputText.value.length,
+      end: inputText.value.length,
+    }
+  )
 }
 
 function handleContentUpdate(content: string) {
@@ -810,9 +941,61 @@ function handleDrop(e: DragEvent) {
 // 必须监听原生 onDragDropEvent（浏览器 dev 模式下导入失败，自动回退到上面的 HTML @drop）。
 let unlistenNativeDrop: (() => void) | null = null
 let unlistenNativeGrantDrop: (() => void) | null = null
-function handleNativeGrantDrop(grants: NativeFileGrant[]) {
+async function handleNativeGrantDrop(grants: NativeFileGrant[]) {
+  const sessionId = currentDraftSessionId()
   if (!canAcceptFiles() || !grants?.length) return
-  addFiles(grants.map(fileFromNativeGrant))
+  nativePreviewRuntimeUsed = true
+  if (!sessionId) {
+    addFiles(grants.filter((grant) => !grant.previewLease).map(fileFromNativeGrant))
+    return
+  }
+  const generation = nativePreviewScopeGeneration
+  await enqueueNativePreviewLifecycle(async () => {
+    await synchronizeNativePreviewScope(sessionId)
+    if (
+      chatInputUnmounted ||
+      generation !== nativePreviewScopeGeneration ||
+      currentDraftSessionId() !== sessionId ||
+      !canAcceptFiles()
+    ) {
+      return
+    }
+
+    const acceptedGrants: NativeFileGrant[] = []
+    const newlyBound: NativeFileGrant[] = []
+    for (const grant of grants) {
+      let acceptedGrant = grant
+      if (grant.mime.startsWith('image/') && grant.previewLease) {
+        try {
+          acceptedGrant = await bindNativeImagePreviewLease(grant, {
+            ownerId: DESKTOP_USER_ID,
+            sessionId,
+            attachmentId: newNativePreviewAttachmentId(),
+          })
+          newlyBound.push(acceptedGrant)
+        } catch {
+          logger.warn('[ChatInput] Native image preview bind failed')
+          continue
+        }
+      }
+      acceptedGrants.push(acceptedGrant)
+    }
+
+    if (
+      chatInputUnmounted ||
+      generation !== nativePreviewScopeGeneration ||
+      currentDraftSessionId() !== sessionId ||
+      !canAcceptFiles()
+    ) {
+      await Promise.allSettled(newlyBound.map(revokeNativeImagePreviewLease))
+      return
+    }
+    for (const grant of newlyBound) {
+      const attachmentId = grant.previewLease?.attachmentId
+      if (attachmentId) activeNativePreviewAttachmentIds.add(attachmentId)
+    }
+    addFiles(acceptedGrants.map(fileFromNativeGrant))
+  })
 }
 onMounted(() => {
   // 浏览器 dev 模式下 getCurrentWindow().onDragDropEvent 不可用 → try/catch 回退到 HTML @drop
@@ -836,7 +1019,9 @@ onMounted(() => {
       })
     getCurrentWindow()
       .listen<NativeFileGrant[]>('native-file-drop-grants', (event) => {
-        handleNativeGrantDrop(event.payload)
+        void handleNativeGrantDrop(event.payload).catch(() => {
+          logger.warn('[ChatInput] Native image preview drop failed')
+        })
       })
       .then((unlisten) => {
         unlistenNativeGrantDrop = unlisten
@@ -849,7 +1034,16 @@ onMounted(() => {
   }
 })
 onUnmounted(() => {
+  chatInputUnmounted = true
+  nativePreviewScopeGeneration++
   stopVoiceTimer()
+  clearAttachedFiles()
+  activeNativePreviewAttachmentIds.clear()
+  if (nativePreviewRuntimeUsed) {
+    void enqueueNativePreviewLifecycle(() => syncNativeImagePreviewScope()).catch(() => {
+      logger.warn('[ChatInput] Native image preview scope sync failed')
+    })
+  }
   unlistenNativeDrop?.()
   unlistenNativeGrantDrop?.()
 })
@@ -858,27 +1052,35 @@ function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
     // 场景图片改道（BUG-20260709）：场景会话下图片不进附件（否则走 chat vision 被普通聊天吞掉）。
-    // 新选图片只保留原始 File（含可能的 native grant）和 session-local blob 预览；不读 dataURL/Base64。
+    // 新选图片只保留原始 File（含可能的 native grant）和会话内受控预览；不读 dataURL/Base64。
     // K12 资产层直接消费该 File/grant，得到 receipt 后才持久化同一消息投影。非图片文件不受影响。
     if (isImage && props.scenarioImageIntercept) {
-      const previewUrl = URL.createObjectURL(file)
+      const previewOwnership = createScenarioImagePreviewOwnership(file)
+      const previewUrl = previewOwnership.url
       const attachment: ChatAttachment = {
         type: 'image',
         name: file.name,
         mime: file.type,
         data: previewUrl,
       }
-      emit('scenario-image', { file, previewUrl, attachment })
+      emit('scenario-image', { file, previewUrl, previewOwnership, attachment })
       continue
     }
-    attachedFiles.value.push({ file, previewUrl: isImage ? URL.createObjectURL(file) : undefined })
+    const nativeGrant = nativeGrantFromFile(file)
+    const previewGrant = isImage && nativeGrant?.previewLease ? nativeGrant : undefined
+    attachedFiles.value.push({
+      file,
+      previewUrl: isImage
+        ? (previewGrant?.previewLease?.url ?? (nativeGrant ? undefined : URL.createObjectURL(file)))
+        : undefined,
+      previewGrant,
+    })
   }
 }
 
 function removeFile(index: number) {
-  const item = attachedFiles.value[index]
-  if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
-  attachedFiles.value.splice(index, 1)
+  const [item] = attachedFiles.value.splice(index, 1)
+  if (item) releaseAttachmentPreview(item)
 }
 
 function formatFileSize(bytes: number): string {

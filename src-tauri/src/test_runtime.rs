@@ -479,7 +479,11 @@ fn validate_preseeded_owner_yaml(ctx: &TestRunContext, path: &Path) -> Result<()
             ));
         }
     }
-    if std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0) == 0 {
+    if std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+        == 0
+    {
         return Err(format!(
             "preseeded owner YAML must not be empty: {}",
             path.display()
@@ -712,8 +716,7 @@ mod tests {
         std::fs::set_permissions(&config_dir, std::fs::Permissions::from_mode(0o700))
             .expect("protect isolated owner config directory");
         let config_path = config_dir.join("hexclaw.yaml");
-        std::fs::write(&config_path, "llm:\n  providers: {}\n")
-            .expect("seed isolated owner YAML");
+        std::fs::write(&config_path, "llm:\n  providers: {}\n").expect("seed isolated owner YAML");
         std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644))
             .expect("prepare unsafe YAML permissions");
 

@@ -55,6 +55,28 @@ test('DESKTOP-BOUNDARY-FILE-001/004 has only native-issued, one-shot purpose-bou
   assert.doesNotMatch(nativeApi, /grantLocalPath\(path|grantSavePath\(path/)
 })
 
+test('DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-001 registers only an opaque image protocol and revoke command', () => {
+  const nativeFile = read('src-tauri/src/native_file.rs')
+  const lib = read('src-tauri/src/lib.rs')
+  const tauriConfig = JSON.parse(read('src-tauri/tauri.conf.json'))
+  const mockConfig = JSON.parse(read('src-tauri/tauri.mock.conf.json'))
+
+  assert.match(nativeFile, /NativeImagePreviewLease/)
+  assert.match(nativeFile, /revoke_native_image_preview_lease/)
+  assert.doesNotMatch(nativeFile, /read_native_image_preview|preview.*(?:path|base64|raw_bytes)/i)
+  assert.match(lib, /register_uri_scheme_protocol\(\s*["']hexclaw-preview["']/)
+  assert.match(lib, /native_file::revoke_native_image_preview_lease/)
+
+  for (const config of [tauriConfig, mockConfig]) {
+    const csp = config.app.security.csp
+    const imgSrc = csp.match(/img-src\s+([^;]+)/)?.[1] ?? ''
+    const connectSrc = csp.match(/connect-src\s+([^;]+)/)?.[1] ?? ''
+    assert.match(imgSrc, /hexclaw-preview:/)
+    assert.match(imgSrc, /http:\/\/hexclaw-preview\.localhost/)
+    assert.doesNotMatch(connectSrc, /hexclaw-preview/)
+  }
+})
+
 test('DESKTOP-BOUNDARY-SCHEMA-001..005 keeps ImageTask wire validation generated and fresh', () => {
   const pkg = read('package.json')
   const api = read('src/api/k12.ts')

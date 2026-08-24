@@ -65,6 +65,12 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("hexclaw-preview", |context, request| {
+            let registry = context
+                .app_handle()
+                .state::<native_file::NativeFileGrantRegistry>();
+            native_file::native_image_preview_response(&registry, context.webview_label(), request)
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 已有实例运行时，聚焦主窗口
             crate::window::show_main_window(app);
@@ -185,6 +191,9 @@ pub fn run() {
             native_file::append_file_grant_chunk,
             native_file::seal_file_grant,
             native_file::discard_file_grant,
+            native_file::sync_native_image_preview_scope,
+            native_file::bind_native_image_preview_lease,
+            native_file::revoke_native_image_preview_lease,
             native_file::upload_file_grant,
             native_file::cancel_file_transfer,
             native_file::download_file_grant,
@@ -211,8 +220,19 @@ pub fn run() {
                     }
                 });
             }
-            tauri::WindowEvent::Destroyed if window.label() == "main" => {
-                window::stop_background_engines();
+            tauri::WindowEvent::Destroyed => {
+                let registry = window
+                    .app_handle()
+                    .state::<native_file::NativeFileGrantRegistry>();
+                if let Err(error) = native_file::revoke_native_image_preview_leases_for_window(
+                    &registry,
+                    window.label(),
+                ) {
+                    log::warn!("native image preview cleanup failed: {}", error);
+                }
+                if window.label() == "main" {
+                    window::stop_background_engines();
+                }
             }
             _ => {}
         })

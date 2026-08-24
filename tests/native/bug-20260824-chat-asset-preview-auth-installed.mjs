@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * K12-ASSET-PREVIEW-AUTH-001 / DESKTOP-BOUNDARY-FILE-010 原生诊断层 A。
+ * K12-ASSET-PREVIEW-AUTH-001 / DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-001/002 /
+ * DESKTOP-BOUNDARY-FILE-010 原生诊断层 A。
  *
  * 运行态只使用临时 Test Home、独占回环端口、当前候选源码构建的 Test.app 与真实 Finder
- * 物理拖放。fixture 仅向临时前端副本注入生命周期审计，不伪造 Tauri drop/grant、资产上传、
+ * 物理拖放。fixture 仅向临时前端副本注入 opaque preview lease 生命周期审计，不伪造
+ * Tauri drop/grant、资产上传、
  * 会话持久化或系统 Save 面板。模型、IM 与外部网络必须保持零调用。由于前端字节被注入，
  * 本层只能输出 DIAGNOSTIC_ONLY；必须另由直接运行最终安装包精确字节的 B 层通过后，整体才可 PASS。
  *
@@ -49,7 +51,8 @@ const bundleIdentifier = 'com.hexclaw.desktop.chat-asset-preview-auth'
 const syntheticCredential = 'chat-asset-preview-loopback-only'
 const runTimeoutMs = 6 * 60 * 1000
 const commandTimeoutMs = 14 * 60 * 1000
-const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
+const sleep = (milliseconds) =>
+  new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -220,6 +223,26 @@ function attachmentIdentities(row) {
     .filter(Boolean)
 }
 
+function sensitivePersistedKinds(value) {
+  const text = String(value || '')
+  const kinds = new Set()
+  if (/\b(?:blob:|hexclaw-preview:|https?:\/\/hexclaw-preview\.localhost\/)/i.test(text)) {
+    kinds.add('ephemeral_preview_url')
+  }
+  if (/\/api\/k12\/assets\//.test(text)) kinds.add('protected_asset_endpoint')
+  if (/\bdata:[^,;]+;base64,/i.test(text)) kinds.add('base64_data_url')
+  if (
+    /\bfile:\/\//i.test(text) ||
+    /\/Users\/|\/private\/var\/|\/var\/folders\/|[A-Za-z]:\\/.test(text)
+  ) {
+    kinds.add('local_path')
+  }
+  if (/(?:^|[^A-Za-z0-9+/])[A-Za-z0-9+/]{256,}={0,2}(?:$|[^A-Za-z0-9+/])/.test(text)) {
+    kinds.add('base64_payload')
+  }
+  return [...kinds]
+}
+
 function snapshotDatabase(databasePath) {
   const tables = new Set(sqliteTableNames(databasePath))
   if (!tables.has('messages')) return { ready: false, error: 'messages table is absent' }
@@ -231,10 +254,17 @@ function snapshotDatabase(databasePath) {
     databasePath,
     `SELECT id,session_id,content,metadata,${attachmentsColumn} FROM messages WHERE role='user' ORDER BY created_at,id;`,
   )
-  const stableAssetIDs = messages.flatMap(attachmentIdentities).filter((value) => value.startsWith('asset://'))
-  const forbiddenPersisted = messages
+  const stableAssetIDs = messages
     .flatMap(attachmentIdentities)
-    .filter((value) => value.startsWith('blob:') || /\/api\/k12\/assets\//.test(value))
+    .filter((value) => value.startsWith('asset://'))
+  const forbiddenPersisted = messages.flatMap((row) =>
+    [row.content, row.metadata, row.attachments].flatMap((value) =>
+      sensitivePersistedKinds(value).map((kind) => ({
+        kind,
+        fingerprint: sha256(`${row.id}:${kind}`),
+      })),
+    ),
+  )
   const count = (table) =>
     tables.has(table)
       ? Number(sqliteRows(databasePath, `SELECT COUNT(*) AS total FROM "${table}";`)[0]?.total || 0)
@@ -259,6 +289,24 @@ function publicSnapshot(snapshot) {
     ...snapshot,
     stableAssetIDs: snapshot.stableAssetIDs?.map((value) => `sha256:${sha256(value)}`),
   }
+}
+
+function sqliteFileSensitiveKinds(databasePath, sourceBytes) {
+  const kinds = new Set()
+  const sourcePathBytes = Buffer.from(imagePath, 'utf8')
+  const sourceBase64Prefix = Buffer.from(sourceBytes.toString('base64').slice(0, 512), 'utf8')
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (!existsSync(path)) continue
+    const bytes = readFileSync(path)
+    if (sourceBytes.length > 0 && bytes.indexOf(sourceBytes) >= 0) kinds.add('raw_source_bytes')
+    if (bytes.indexOf(sourcePathBytes) >= 0) kinds.add('source_path')
+    if (sourceBase64Prefix.length === 512 && bytes.indexOf(sourceBase64Prefix) >= 0) {
+      kinds.add('base64_source_bytes')
+    }
+    if (bytes.indexOf(Buffer.from('hexclaw-preview:', 'utf8')) >= 0) kinds.add('opaque_preview_url')
+    if (bytes.indexOf(Buffer.from('data:image/', 'utf8')) >= 0) kinds.add('image_data_url')
+  }
+  return [...kinds]
 }
 
 async function readBody(request, maxBytes = 1024 * 1024) {
@@ -317,7 +365,10 @@ async function startFixtureServer(databasePath) {
       }
       if (request.method === 'POST' && url.pathname === '/__chat_asset/phase') {
         const body = safeJSON((await readBody(request)).toString('utf8'), {})
-        assert.ok(['refresh', 'lifecycle', 'failure'].includes(body.phase), 'Unknown fixture phase')
+        assert.ok(
+          ['refresh', 'remove', 'switch', 'unmount', 'lifecycle', 'failure'].includes(body.phase),
+          'Unknown fixture phase',
+        )
         state.phase = body.phase
         sendJSON(response, 200, { accepted: true })
         return
@@ -389,7 +440,10 @@ async function startFixtureServer(databasePath) {
         return await Promise.race([
           reportDeferred.promise,
           new Promise((_, rejectTimeout) => {
-            timer = setTimeout(() => rejectTimeout(new Error('WebView report timed out')), timeoutMs)
+            timer = setTimeout(
+              () => rejectTimeout(new Error('WebView report timed out')),
+              timeoutMs,
+            )
           }),
         ])
       } finally {
@@ -415,9 +469,25 @@ function installedWebViewFixture() {
   const originalCreateObjectURL = URL.createObjectURL.bind(URL)
   const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL)
   const originalAbort = AbortController.prototype.abort
+  const originalDefineProperty = Object.defineProperty.bind(Object)
+  const originalDefineProperties = Object.defineProperties.bind(Object)
+  const tauriInternals = globalThis.__TAURI_INTERNALS__
+  const originalTauriInvoke = tauriInternals?.invoke?.bind(tauriInternals)
+  const originalTransformCallback = tauriInternals?.transformCallback?.bind(tauriInternals)
   const audit = {
     created: [],
     revoked: [],
+    nativeCarriers: [],
+    nativeDrops: [],
+    nativeCommands: [],
+    nativeCarrierObjectURLAttempts: 0,
+    previewImageAssignments: 0,
+    previewImages: new Set(),
+    previewUsageViolations: [],
+    previewFetchAttempts: 0,
+    previewReadProbes: 0,
+    previewReadRejections: 0,
+    wireViolations: [],
     aborts: 0,
     heldAssetReads: [],
     assetReadStarts: 0,
@@ -431,8 +501,12 @@ function installedWebViewFixture() {
   }
   globalThis.__CHAT_ASSET_PREVIEW_AUDIT__ = audit
 
-  const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
-  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim()
+  const sleep = (milliseconds) =>
+    new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
+  const clean = (value) =>
+    String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
   const invariant = (condition, message) => {
     if (!condition) throw new Error(message)
   }
@@ -440,18 +514,219 @@ function installedWebViewFixture() {
     new URL(input instanceof Request ? input.url : String(input), location.href)
   const requestMethod = (input, init) =>
     String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase()
-  const requestSignal = (input, init) => init?.signal || (input instanceof Request ? input.signal : null)
+  const requestSignal = (input, init) =>
+    init?.signal || (input instanceof Request ? input.signal : null)
   const apiPath = (input) => requestURL(input).pathname.replace(/^\/_hexclaw/, '')
 
+  function previewLeaseId(value) {
+    try {
+      const parsed = new URL(String(value || ''), location.href)
+      const accepted =
+        (parsed.protocol === 'hexclaw-preview:' && parsed.hostname === 'localhost') ||
+        (parsed.protocol === 'http:' && parsed.hostname === 'hexclaw-preview.localhost')
+      if (!accepted || parsed.username || parsed.password || parsed.search || parsed.hash) return ''
+      const segments = parsed.pathname.split('/').filter(Boolean)
+      return segments.length === 1 ? decodeURIComponent(segments[0]) : ''
+    } catch {
+      return ''
+    }
+  }
+
+  function sensitiveWireKinds(value, seen = new WeakSet()) {
+    const kinds = new Set()
+    const visit = (candidate) => {
+      if (typeof candidate === 'string') {
+        if (/\bdata:[^,;]+;base64,/i.test(candidate)) kinds.add('base64_data_url')
+        if (
+          /\bfile:\/\//i.test(candidate) ||
+          /\/Users\/|\/private\/var\/|\/var\/folders\/|[A-Za-z]:\\/.test(candidate)
+        ) {
+          kinds.add('local_path')
+        }
+        if (/(?:^|[^A-Za-z0-9+/])[A-Za-z0-9+/]{256,}={0,2}(?:$|[^A-Za-z0-9+/])/.test(candidate)) {
+          kinds.add('base64_payload')
+        }
+        return
+      }
+      if (!candidate || typeof candidate !== 'object') return
+      if (
+        candidate instanceof Blob ||
+        candidate instanceof ArrayBuffer ||
+        ArrayBuffer.isView(candidate)
+      ) {
+        kinds.add('raw_bytes')
+        return
+      }
+      if (seen.has(candidate)) return
+      seen.add(candidate)
+      if (Array.isArray(candidate)) {
+        candidate.forEach(visit)
+        return
+      }
+      for (const entry of Object.values(candidate)) visit(entry)
+    }
+    visit(value)
+    return [...kinds]
+  }
+
+  function recordWireContract(surface, value) {
+    const kinds = sensitiveWireKinds(value)
+    if (kinds.length) audit.wireViolations.push({ surface, kinds })
+  }
+
+  function inspectNativeDropEvent(event) {
+    if (event?.event !== 'native-file-drop-grants' || !Array.isArray(event.payload)) return
+    recordWireContract('native-file-drop-grants', event.payload)
+    for (const grant of event.payload) {
+      const lease = grant?.previewLease
+      const leaseId = String(lease?.leaseId || '')
+      invariant(
+        grant?.purpose === 'attachment_upload',
+        'Native image drop used the wrong grant purpose',
+      )
+      invariant(
+        typeof grant?.grantId === 'string' && grant.grantId,
+        'Native upload grant is missing',
+      )
+      invariant(
+        typeof grant?.operationId === 'string' && grant.operationId,
+        'Native operation identity is missing',
+      )
+      invariant(Number(grant?.size) === config.imageBytes, 'Native source byte length changed')
+      invariant(leaseId, 'Native image drop is missing its unbound preview lease identity')
+      invariant(
+        !Object.prototype.hasOwnProperty.call(lease, 'url'),
+        'Native drop preview lease must not expose a bound URL',
+      )
+      invariant(
+        !Object.prototype.hasOwnProperty.call(lease, 'ownerId') &&
+          !Object.prototype.hasOwnProperty.call(lease, 'sessionId') &&
+          !Object.prototype.hasOwnProperty.call(lease, 'attachmentId'),
+        'Native drop preview lease must not expose bound ownership',
+      )
+      invariant(leaseId !== grant.grantId, 'Preview lease reused the upload grant identity')
+      invariant(lease?.mime === 'image/png', 'Native preview is not a bounded PNG derivative')
+      invariant(
+        Number(lease?.width) > 0 && Number(lease?.height) > 0,
+        'Native preview dimensions are invalid',
+      )
+      audit.nativeDrops.push({
+        grantId: grant.grantId,
+        operationId: grant.operationId,
+        leaseId,
+        unbound: true,
+      })
+    }
+  }
+
+  invariant(
+    typeof originalTauriInvoke === 'function' && typeof originalTransformCallback === 'function',
+    'Tauri native bridge is unavailable before the application bundle',
+  )
+  tauriInternals.transformCallback = function transformAuditedCallback(callback, once) {
+    return originalTransformCallback((payload) => {
+      inspectNativeDropEvent(payload)
+      return callback(payload)
+    }, once)
+  }
+  tauriInternals.invoke = async function invokeAuditedCommand(command, args, options) {
+    const nativeBoundary = new Set([
+      'create_staging_file_grant',
+      'append_file_grant_chunk',
+      'seal_file_grant',
+      'upload_file_grant',
+      'discard_file_grant',
+      'sync_native_image_preview_scope',
+      'bind_native_image_preview_lease',
+      'revoke_native_image_preview_lease',
+    ])
+    let nativeCommand = null
+    if (nativeBoundary.has(command)) {
+      recordWireContract(command, args)
+      nativeCommand = {
+        command,
+        grantId: String(args?.grantId || args?.uploadGrantId || ''),
+        leaseId: String(args?.leaseId || ''),
+        operationId: String(args?.operationId || ''),
+        ownerId: args?.ownerId == null ? null : String(args.ownerId),
+        sessionId: args?.sessionId == null ? null : String(args.sessionId),
+        attachmentId: String(args?.attachmentId || ''),
+        attachmentIds: Array.isArray(args?.attachmentIds)
+          ? args.attachmentIds.map((value) => String(value))
+          : [],
+        response: null,
+        status: 'pending',
+      }
+      audit.nativeCommands.push(nativeCommand)
+    }
+    try {
+      const result = await originalTauriInvoke(command, args, options)
+      if (nativeCommand) {
+        if (command === 'bind_native_image_preview_lease') {
+          recordWireContract(`${command}:response`, result)
+          const boundLeaseId = previewLeaseId(result?.url)
+          invariant(
+            boundLeaseId === nativeCommand.leaseId &&
+              result?.leaseId === nativeCommand.leaseId &&
+              result?.ownerId === nativeCommand.ownerId &&
+              result?.sessionId === nativeCommand.sessionId &&
+              result?.attachmentId === nativeCommand.attachmentId,
+            'Native preview binding response does not match its lease scope',
+          )
+          nativeCommand.response = {
+            leaseId: result.leaseId,
+            url: result.url,
+            ownerId: result.ownerId,
+            sessionId: result.sessionId,
+            attachmentId: result.attachmentId,
+          }
+        }
+        nativeCommand.status = 'resolved'
+      }
+      return result
+    } catch (error) {
+      if (nativeCommand) nativeCommand.status = 'rejected'
+      throw error
+    }
+  }
+
+  function recordNativeCarrier(target, descriptor) {
+    if (!(target instanceof File)) return
+    const grant = descriptor?.value
+    audit.nativeCarriers.push({
+      size: target.size,
+      grantId: String(grant?.grantId || ''),
+      operationId: String(grant?.operationId || ''),
+      leaseId: String(grant?.previewLease?.leaseId || ''),
+      url: String(grant?.previewLease?.url || ''),
+      ownerId: String(grant?.previewLease?.ownerId || ''),
+      sessionId: String(grant?.previewLease?.sessionId || ''),
+      attachmentId: String(grant?.previewLease?.attachmentId || ''),
+    })
+  }
+
+  Object.defineProperty = function defineAuditedProperty(target, property, descriptor) {
+    if (property === 'nativeFileGrant') recordNativeCarrier(target, descriptor)
+    return originalDefineProperty(target, property, descriptor)
+  }
+  Object.defineProperties = function defineAuditedProperties(target, descriptors) {
+    if (descriptors && Object.prototype.hasOwnProperty.call(descriptors, 'nativeFileGrant')) {
+      recordNativeCarrier(target, descriptors.nativeFileGrant)
+    }
+    return originalDefineProperties(target, descriptors)
+  }
+
   URL.createObjectURL = function createAuditedObjectURL(blob) {
+    const nativeGrant = blob && Object.prototype.hasOwnProperty.call(blob, 'nativeFileGrant')
+    if (nativeGrant) {
+      audit.nativeCarrierObjectURLAttempts += 1
+      throw new Error('zero-byte native carrier reached URL.createObjectURL')
+    }
     const url = originalCreateObjectURL(blob)
     audit.created.push({
       url,
       size: Number(blob?.size || 0),
       type: String(blob?.type || ''),
-      nativeGrant: Boolean(blob && Object.prototype.hasOwnProperty.call(blob, 'nativeFileGrant')),
-      nativeSize: Number(blob?.nativeSize || 0),
-      nativeSourceSha256: typeof blob?.nativeSourceSha256 === 'string',
     })
     return url
   }
@@ -478,10 +753,26 @@ function installedWebViewFixture() {
       const raw = image.getAttribute('src') || ''
       if (protectedAssetURL(raw)) audit.protectedImageAssignments.push(raw)
     }
+    for (const element of document.querySelectorAll('*')) {
+      for (const attribute of element.attributes) {
+        const leaseId = previewLeaseId(attribute.value)
+        if (!leaseId) continue
+        if (element instanceof HTMLImageElement && attribute.name === 'src') {
+          if (!audit.previewImages.has(attribute.value)) {
+            audit.previewImages.add(attribute.value)
+            audit.previewImageAssignments += 1
+          }
+        } else {
+          audit.previewUsageViolations.push({
+            element: element.tagName.toLowerCase(),
+            attribute: attribute.name,
+          })
+        }
+      }
+    }
   }
   new MutationObserver(inspectImages).observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['src'],
     childList: true,
     subtree: true,
   })
@@ -489,15 +780,23 @@ function installedWebViewFixture() {
   globalThis.fetch = async function auditedFetch(input, init) {
     const url = requestURL(input)
     if (url.origin === fixtureOrigin) return originalFetch(input, init)
+    if (previewLeaseId(url.href)) {
+      audit.previewFetchAttempts += 1
+      audit.previewUsageViolations.push({ element: 'script', attribute: 'fetch' })
+    }
+    if (init?.body !== undefined) recordWireContract(`fetch:${url.pathname}`, init.body)
     const path = apiPath(input)
     const method = requestMethod(input, init)
     if (method === 'POST' && path === '/api/k12/image-tasks') {
       audit.taskCreateAttempts += 1
       audit.taskCreateBlocked += 1
-      return new Response(JSON.stringify({ error: 'ImageTask disabled by native boundary fixture' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      return new Response(
+        JSON.stringify({ error: 'ImageTask disabled by native boundary fixture' }),
+        {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
     }
     if (
       method === 'POST' &&
@@ -608,15 +907,22 @@ function installedWebViewFixture() {
     const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), 'value')
     invariant(typeof descriptor?.set === 'function', 'Native value setter is unavailable')
     descriptor.set.call(control, value)
-    control.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+    control.dispatchEvent(
+      new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }),
+    )
     control.dispatchEvent(new Event('change', { bubbles: true }))
   }
 
   function setEditable(control, value) {
-    invariant(control instanceof HTMLElement && control.isContentEditable, 'Expected contenteditable')
+    invariant(
+      control instanceof HTMLElement && control.isContentEditable,
+      'Expected contenteditable',
+    )
     control.focus()
     control.textContent = value
-    control.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+    control.dispatchEvent(
+      new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }),
+    )
   }
 
   async function nav(id, readySelector) {
@@ -665,10 +971,7 @@ function installedWebViewFixture() {
       'second semester option',
     )
     semester.click()
-    const create = await waitFor(
-      () => enabledButton(form, /^创建$|^Create$/i),
-      'K12 create button',
-    )
+    const create = await waitFor(() => enabledButton(form, /^创建$|^Create$/i), 'K12 create button')
     create.click()
     await waitFor(() => !document.querySelector('.k12pf'), 'K12 profile form close')
     const mine = await waitFor(
@@ -699,8 +1002,49 @@ function installedWebViewFixture() {
     return waitFor(() => document.querySelector('.k12enh-seg'), 'restored K12 chat')
   }
 
+  async function ensureOrdinarySessionFixtures() {
+    for (const [id, title] of [
+      [config.ordinarySessionA, config.ordinarySessionTitleA],
+      [config.ordinarySessionB, config.ordinarySessionTitleB],
+    ]) {
+      const response = await globalThis.fetch(
+        `${config.apiBase}/api/v1/sessions?user_id=desktop-user`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, title, user_id: 'desktop-user' }),
+        },
+      )
+      invariant(
+        response.status === 201 || response.status === 409,
+        'Ordinary lifecycle session fixture failed',
+      )
+    }
+  }
+
+  async function selectOrdinarySession(id) {
+    await nav('chat', '.hc-chat')
+    const item = await waitFor(
+      () => document.querySelector(`.hc-sessions__item[data-session-id="${id}"]`),
+      `ordinary session ${id}`,
+    )
+    item.click()
+    await waitFor(
+      () =>
+        document
+          .querySelector(`.hc-sessions__item[data-session-id="${id}"]`)
+          ?.classList.contains('hc-sessions__item--active') &&
+        !document.querySelector('.k12enh-seg'),
+      `ordinary session ${id} active`,
+    )
+    return waitFor(() => document.querySelector('.hc-composer'), 'ordinary composer')
+  }
+
   async function requestPhysicalDrop(label) {
-    const composer = await waitFor(() => document.querySelector('.hc-composer'), 'composer drop target')
+    const composer = await waitFor(
+      () => document.querySelector('.hc-composer'),
+      'composer drop target',
+    )
     const rect = composer.getBoundingClientRect()
     invariant(rect.width > 200 && rect.height > 60, 'Composer drop target is not measurable')
     await progress(label, {
@@ -726,11 +1070,179 @@ function installedWebViewFixture() {
     return message?.querySelector('.hc-msg__attachment-img') || null
   }
 
-  async function waitForDecodedImage(message, label) {
+  async function waitForDecodedImage(message, label, sourceKind = 'blob') {
     return waitFor(() => {
       const image = userImage(message)
-      return image?.src?.startsWith('blob:') && image.complete && image.naturalWidth > 0 ? image : null
+      const sourceMatches =
+        sourceKind === 'opaque-preview'
+          ? Boolean(previewLeaseId(image?.src))
+          : image?.src?.startsWith('blob:')
+      return sourceMatches && image.complete && image.naturalWidth > 0 ? image : null
     }, label)
+  }
+
+  async function waitForDecodedComposerPreview(label) {
+    return waitFor(() => {
+      const image = document.querySelector('.hc-composer__file-img')
+      return image instanceof HTMLImageElement &&
+        previewLeaseId(image.src) &&
+        image.complete &&
+        image.naturalWidth > 0
+        ? image
+        : null
+    }, label)
+  }
+
+  function nativeDropForPreview(url) {
+    const leaseId = previewLeaseId(url)
+    invariant(leaseId, 'Image did not use an opaque native preview URL')
+    const drop = audit.nativeDrops.find((entry) => entry.leaseId === leaseId)
+    invariant(drop, 'Opaque preview URL does not belong to the physical Finder drop')
+    return boundPreviewForDrop(drop, url)
+  }
+
+  function boundPreviewForDrop(drop, expectedURL = '') {
+    invariant(drop?.unbound === true, 'Physical Finder drop was not captured as unbound metadata')
+    const bindings = nativeCommands('bind_native_image_preview_lease', drop.leaseId, 'leaseId')
+    invariant(bindings.length === 1, 'Physical Finder drop was not bound exactly once')
+    const binding = bindings[0]
+    invariant(binding.status === 'resolved', 'Native preview binding command was rejected')
+    invariant(
+      binding.grantId === drop.grantId && binding.operationId === drop.operationId,
+      'Native preview binding changed the upload grant identity',
+    )
+    invariant(
+      binding.ownerId && binding.sessionId && binding.attachmentId,
+      'Native preview binding omitted its owner, session, or attachment identity',
+    )
+    invariant(
+      binding.response?.leaseId === drop.leaseId &&
+        binding.response?.url &&
+        binding.response?.ownerId === binding.ownerId &&
+        binding.response?.sessionId === binding.sessionId &&
+        binding.response?.attachmentId === binding.attachmentId,
+      'Native preview binding response does not match its lease scope',
+    )
+    if (expectedURL) {
+      invariant(
+        binding.response.url === expectedURL,
+        'Rendered preview did not use the bound lease URL',
+      )
+    }
+    const bindingIndex = audit.nativeCommands.indexOf(binding)
+    const priorScopeSync = audit.nativeCommands
+      .slice(0, bindingIndex)
+      .reverse()
+      .find(
+        (entry) =>
+          entry.command === 'sync_native_image_preview_scope' &&
+          entry.status === 'resolved' &&
+          entry.ownerId === binding.ownerId &&
+          entry.sessionId === binding.sessionId,
+      )
+    invariant(priorScopeSync, 'Native preview scope was not synchronized before lease binding')
+    invariant(
+      !priorScopeSync.attachmentIds.includes(binding.attachmentId),
+      'Unbound attachment identity was active before lease binding',
+    )
+    const carrier = audit.nativeCarriers.find(
+      (entry) => entry.grantId === drop.grantId && entry.leaseId === drop.leaseId,
+    )
+    invariant(carrier?.size === 0, 'Native upload-grant carrier exposed source bytes to WebView')
+    invariant(
+      carrier.url === binding.response.url &&
+        carrier.ownerId === binding.ownerId &&
+        carrier.sessionId === binding.sessionId &&
+        carrier.attachmentId === binding.attachmentId,
+      'Native carrier did not retain the bound preview ownership',
+    )
+    invariant(
+      audit.nativeCarrierObjectURLAttempts === 0,
+      'zero-byte native carrier reached URL.createObjectURL',
+    )
+    invariant(
+      nativeCommands('upload_file_grant', drop.leaseId).length === 0 &&
+        nativeCommands('discard_file_grant', drop.leaseId).length === 0,
+      'Opaque preview lease was redeemed as an upload grant',
+    )
+    return {
+      ...drop,
+      url: binding.response.url,
+      ownerId: binding.ownerId,
+      sessionId: binding.sessionId,
+      attachmentId: binding.attachmentId,
+    }
+  }
+
+  function nativeCommands(command, identity, key = 'grantId') {
+    return audit.nativeCommands.filter(
+      (entry) => entry.command === command && entry[key] === identity,
+    )
+  }
+
+  async function assertOpaquePreviewIsNotScriptReadable(url) {
+    audit.previewReadProbes += 1
+    let rejected = false
+    try {
+      const response = await originalFetch(url, { cache: 'no-store' })
+      try {
+        await response.arrayBuffer()
+      } catch {
+        rejected = true
+      }
+    } catch {
+      rejected = true
+    }
+    invariant(rejected, 'Opaque native preview URL exposed readable bytes to JS')
+    audit.previewReadRejections += 1
+  }
+
+  async function assertExactOncePreviewRevoke(drop, label) {
+    const boundDrop = drop?.ownerId ? drop : boundPreviewForDrop(drop)
+    await waitFor(
+      () =>
+        nativeCommands('revoke_native_image_preview_lease', boundDrop.leaseId, 'leaseId').some(
+          (entry) => entry.status !== 'pending',
+        ),
+      `${label} native preview revoke`,
+    )
+    await sleep(750)
+    const revokes = nativeCommands(
+      'revoke_native_image_preview_lease',
+      boundDrop.leaseId,
+      'leaseId',
+    )
+    invariant(revokes.length === 1, `${label} did not revoke the native preview exactly once`)
+    invariant(revokes[0].status === 'resolved', `${label} native preview revoke was rejected`)
+    invariant(
+      revokes[0].grantId === boundDrop.grantId,
+      `${label} rebound the preview to another upload grant`,
+    )
+    invariant(
+      revokes[0].ownerId === boundDrop.ownerId &&
+        revokes[0].sessionId === boundDrop.sessionId &&
+        revokes[0].attachmentId === boundDrop.attachmentId,
+      `${label} revoked the preview under a different scope`,
+    )
+    invariant(
+      nativeCommands('discard_file_grant', boundDrop.grantId).length === 0,
+      `${label} consumed the upload grant while revoking the preview lease`,
+    )
+  }
+
+  function assertBrowserBoundaryClean() {
+    invariant(
+      audit.previewUsageViolations.length === 0,
+      'Opaque preview URL escaped the img element',
+    )
+    invariant(
+      audit.previewFetchAttempts === 0,
+      'Application script attempted to fetch an opaque preview URL',
+    )
+    invariant(
+      audit.wireViolations.length === 0,
+      'Native/WebView wire exposed a path, Base64, or raw bytes',
+    )
   }
 
   async function releaseHeldAssetReads() {
@@ -742,13 +1254,28 @@ function installedWebViewFixture() {
 
   function assertSnapshot(snapshot, expectedMessages) {
     invariant(snapshot.ready, snapshot.error || 'SQLite snapshot is unavailable')
-    invariant(snapshot.userMessageCount === expectedMessages, 'Unexpected persisted user message count')
-    invariant(snapshot.stableAssetIDs.length === expectedMessages, 'Every persisted image needs one asset identity')
-    invariant(new Set(snapshot.stableAssetIDs).size === 1, 'Edited resend changed the immutable asset identity')
+    invariant(
+      snapshot.userMessageCount === expectedMessages,
+      'Unexpected persisted user message count',
+    )
+    invariant(
+      snapshot.stableAssetIDs.length === expectedMessages,
+      'Every persisted image needs one asset identity',
+    )
+    invariant(
+      new Set(snapshot.stableAssetIDs).size === 1,
+      'Edited resend changed the immutable asset identity',
+    )
     invariant(snapshot.forbiddenPersisted.length === 0, 'Temporary or protected URL was persisted')
     invariant(snapshot.imageTaskCount === 0, 'ImageTask was created by the no-model boundary')
-    invariant(snapshot.imageTaskInvocationCount === 0, 'ImageTask Provider invocation was persisted')
-    invariant(snapshot.deliveryCounts.every((entry) => entry.total === 0), 'IM delivery state was created')
+    invariant(
+      snapshot.imageTaskInvocationCount === 0,
+      'ImageTask Provider invocation was persisted',
+    )
+    invariant(
+      snapshot.deliveryCounts.every((entry) => entry.total === 0),
+      'IM delivery state was created',
+    )
   }
 
   async function initialRun() {
@@ -760,14 +1287,22 @@ function installedWebViewFixture() {
       'native-dropped user message',
       90_000,
     )
-    const pendingImage = await waitForDecodedImage(message, 'decodable pending local Blob preview')
-    const pendingURL = pendingImage.src
-    const nativePreview = audit.created.find(
-      (entry) => entry.nativeGrant && entry.size === config.imageBytes,
+    const pendingImage = await waitForDecodedImage(
+      message,
+      'decodable opaque native preview after physical Finder drop',
+      'opaque-preview',
     )
-    invariant(nativePreview, 'Native grant did not produce the real local Blob preview bytes')
-    invariant(audit.heldAssetReads.some((entry) => !entry.released), 'Authenticated asset read was not delayed')
-    invariant(audit.protectedImageAssignments.length === 0, 'Protected asset URL reached an img element')
+    const pendingURL = pendingImage.src
+    const nativeDrop = nativeDropForPreview(pendingURL)
+    await assertOpaquePreviewIsNotScriptReadable(pendingURL)
+    invariant(
+      audit.heldAssetReads.some((entry) => !entry.released),
+      'Authenticated asset read was not delayed',
+    )
+    invariant(
+      audit.protectedImageAssignments.length === 0,
+      'Protected asset URL reached an img element',
+    )
     await releaseHeldAssetReads()
     const authenticatedImage = await waitFor(() => {
       const image = userImage(message)
@@ -775,10 +1310,30 @@ function installedWebViewFixture() {
         ? image
         : null
     }, 'authenticated Object URL replacement')
-    invariant(audit.revoked.includes(pendingURL), 'Replaced local preview URL was not revoked')
+    await assertExactOncePreviewRevoke(nativeDrop, 'Successful send replacement')
+    const uploads = nativeCommands('upload_file_grant', nativeDrop.grantId)
+    invariant(uploads.length === 1, 'Successful send did not consume the upload grant exactly once')
+    invariant(uploads[0].status === 'resolved', 'Successful send upload-grant command was rejected')
+    invariant(
+      audit.nativeCommands.indexOf(uploads[0]) <
+        audit.nativeCommands.indexOf(
+          nativeCommands('revoke_native_image_preview_lease', nativeDrop.leaseId, 'leaseId')[0],
+        ),
+      'Preview revoke happened before the upload grant completed its send path',
+    )
+    assertBrowserBoundaryClean()
+    await progress('preview-send-success-pass', {
+      decoded: true,
+      fetchAndArrayBufferRejected: true,
+      revokeCalls: 1,
+      zeroByteCarrier: true,
+    })
     authenticatedImage.click()
     const zoom = await waitFor(() => document.querySelector('.hc-img-preview__img'), 'zoom preview')
-    invariant(zoom.src === authenticatedImage.src, 'Zoom did not reuse the authenticated Object URL')
+    invariant(
+      zoom.src === authenticatedImage.src,
+      'Zoom did not reuse the authenticated Object URL',
+    )
     document.querySelector('.hc-img-preview__close')?.click()
     await waitFor(() => !document.querySelector('.hc-img-preview__backdrop'), 'zoom close')
 
@@ -791,7 +1346,10 @@ function installedWebViewFixture() {
     await progress('download-dialog-opening')
     download.click()
     await waitFor(
-      () => [...document.querySelectorAll('[role="status"],.hc-toast')].some((node) => /已保存到|Saved to/i.test(clean(node.textContent))),
+      () =>
+        [...document.querySelectorAll('[role="status"],.hc-toast')].some((node) =>
+          /已保存到|Saved to/i.test(clean(node.textContent)),
+        ),
       'native download success receipt',
       60_000,
     )
@@ -813,9 +1371,15 @@ function installedWebViewFixture() {
       'edit message action',
     )
     edit.click()
-    const editImage = await waitFor(() => first.querySelector('.hc-msg__edit-att-img'), 'edit image')
+    const editImage = await waitFor(
+      () => first.querySelector('.hc-msg__edit-att-img'),
+      'edit image',
+    )
     invariant(editImage.src === firstImage.src, 'Edit did not reuse the authenticated Object URL')
-    const editor = await waitFor(() => first.querySelector('[contenteditable="true"]'), 'edit composer')
+    const editor = await waitFor(
+      () => first.querySelector('[contenteditable="true"]'),
+      'edit composer',
+    )
     setEditable(editor, config.editMarker)
     const send = await waitFor(
       () => first.querySelector('.hc-msg__edit-btn--send:not(:disabled)'),
@@ -837,6 +1401,85 @@ function installedWebViewFixture() {
       () => activeURLs.every((url) => audit.revoked.includes(url)),
       'Object URL revocation on route removal',
     )
+    await ensureOrdinarySessionFixtures()
+    await phase('remove')
+    location.reload()
+  }
+
+  async function removeRun() {
+    await selectOrdinarySession(config.ordinarySessionA)
+    await requestPhysicalDrop('native-drop-remove-ready')
+    const image = await waitForDecodedComposerPreview('decodable ordinary attachment preview')
+    const drop = nativeDropForPreview(image.src)
+    await assertOpaquePreviewIsNotScriptReadable(image.src)
+    const remove = await waitFor(
+      () => document.querySelector('.hc-composer__file-remove'),
+      'ordinary attachment remove action',
+    )
+    remove.click()
+    await waitFor(() => !document.querySelector('.hc-composer__file-img'), 'attachment removal')
+    await assertExactOncePreviewRevoke(drop, 'Attachment removal')
+    invariant(
+      nativeCommands('upload_file_grant', drop.grantId).length === 0,
+      'Attachment removal redeemed the upload grant',
+    )
+    assertBrowserBoundaryClean()
+    await progress('preview-remove-pass', {
+      decoded: true,
+      fetchAndArrayBufferRejected: true,
+      revokeCalls: 1,
+      zeroByteCarrier: true,
+    })
+    await phase('switch')
+    location.reload()
+  }
+
+  async function switchRun() {
+    await selectOrdinarySession(config.ordinarySessionA)
+    await requestPhysicalDrop('native-drop-switch-ready')
+    const image = await waitForDecodedComposerPreview('session-switch attachment preview')
+    const drop = nativeDropForPreview(image.src)
+    await assertOpaquePreviewIsNotScriptReadable(image.src)
+    await selectOrdinarySession(config.ordinarySessionB)
+    await waitFor(
+      () => !document.querySelector('.hc-composer__file-img'),
+      'session-switch draft cleanup',
+    )
+    await assertExactOncePreviewRevoke(drop, 'Session switch')
+    invariant(
+      nativeCommands('upload_file_grant', drop.grantId).length === 0,
+      'Session switch redeemed the upload grant',
+    )
+    assertBrowserBoundaryClean()
+    await progress('preview-session-switch-pass', {
+      decoded: true,
+      fetchAndArrayBufferRejected: true,
+      revokeCalls: 1,
+      zeroByteCarrier: true,
+    })
+    await phase('unmount')
+    location.reload()
+  }
+
+  async function unmountRun() {
+    await selectOrdinarySession(config.ordinarySessionA)
+    await requestPhysicalDrop('native-drop-unmount-ready')
+    const image = await waitForDecodedComposerPreview('unmount attachment preview')
+    const drop = nativeDropForPreview(image.src)
+    await assertOpaquePreviewIsNotScriptReadable(image.src)
+    await nav('agents', '.hc-agents__content')
+    await assertExactOncePreviewRevoke(drop, 'Chat composer unmount')
+    invariant(
+      nativeCommands('upload_file_grant', drop.grantId).length === 0,
+      'Chat composer unmount redeemed the upload grant',
+    )
+    assertBrowserBoundaryClean()
+    await progress('preview-unmount-pass', {
+      decoded: true,
+      fetchAndArrayBufferRejected: true,
+      revokeCalls: 1,
+      zeroByteCarrier: true,
+    })
     await phase('lifecycle')
     location.reload()
   }
@@ -851,7 +1494,10 @@ function installedWebViewFixture() {
     const abortsBefore = audit.aborts
     await nav('agents', '.hc-agents__content')
     await waitFor(() => audit.aborts > abortsBefore, 'asset read abort on route removal')
-    invariant(audit.protectedImageAssignments.length === 0, 'Lifecycle path exposed a protected asset URL')
+    invariant(
+      audit.protectedImageAssignments.length === 0,
+      'Lifecycle path exposed a protected asset URL',
+    )
     await phase('failure')
     location.reload()
   }
@@ -859,29 +1505,86 @@ function installedWebViewFixture() {
   async function failureRun() {
     audit.holdAssetReads = false
     await ensureK12Chat()
-    await waitForDecodedImage(await waitFor(() => userMessages()[0], 'restored first image'), 'restored first image decode')
-    await waitForDecodedImage(await waitFor(() => userMessages()[1], 'restored second image'), 'restored second image decode')
+    await waitForDecodedImage(
+      await waitFor(() => userMessages()[0], 'restored first image'),
+      'restored first image decode',
+    )
+    await waitForDecodedImage(
+      await waitFor(() => userMessages()[1], 'restored second image'),
+      'restored second image decode',
+    )
     const before = await json('/__chat_asset/snapshot')
     assertSnapshot(before, 2)
     const taskAttemptsBefore = audit.taskCreateAttempts
     const persistsBefore = audit.persistFailures
+    const nativeDropsBefore = audit.nativeDrops.length
     audit.failNextPersist = true
     await requestPhysicalDrop('native-drop-persist-failure-ready')
-    await waitFor(() => audit.persistFailures === persistsBefore + 1, 'deterministic persistence failure', 90_000)
+    await waitFor(
+      () => audit.persistFailures === persistsBefore + 1,
+      'deterministic persistence failure',
+      90_000,
+    )
+    const failedDrop = await waitFor(
+      () => (audit.nativeDrops.length === nativeDropsBefore + 1 ? audit.nativeDrops.at(-1) : null),
+      'failed native drop descriptor',
+    )
+    await assertExactOncePreviewRevoke(failedDrop, 'Persistence failure cleanup')
     await sleep(800)
     const after = await json('/__chat_asset/snapshot')
     assertSnapshot(after, 2)
-    invariant(after.assetCount === before.assetCount, 'Idempotent failed resend duplicated the asset')
-    invariant(audit.taskCreateAttempts === taskAttemptsBefore, 'Persistence failure attempted ImageTask creation')
+    invariant(
+      after.assetCount === before.assetCount,
+      'Idempotent failed resend duplicated the asset',
+    )
+    invariant(
+      audit.taskCreateAttempts === taskAttemptsBefore,
+      'Persistence failure attempted ImageTask creation',
+    )
     invariant(userMessages().length === 2, 'Failed optimistic image message remained visible')
-    invariant(audit.protectedImageAssignments.length === 0, 'Failure path exposed a protected asset URL')
+    invariant(
+      audit.protectedImageAssignments.length === 0,
+      'Failure path exposed a protected asset URL',
+    )
+    assertBrowserBoundaryClean()
     await complete({
       status: 'DIAGNOSTIC_ONLY',
-      acceptance: ['K12-ASSET-PREVIEW-AUTH-001', 'DESKTOP-BOUNDARY-FILE-010'],
-      nativeGrantObserved: audit.created.some((entry) => entry.nativeGrant),
-      pendingBlobBytesObserved: audit.created.some(
-        (entry) => entry.nativeGrant && entry.size === config.imageBytes,
+      acceptance: [
+        'K12-ASSET-PREVIEW-AUTH-001',
+        'DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-001',
+        'DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-002',
+        'DESKTOP-BOUNDARY-FILE-010',
+      ],
+      nativeGrantObserved: audit.nativeDrops.length > 0,
+      unboundNativeDropObserved:
+        audit.nativeDrops.length > 0 && audit.nativeDrops.every((entry) => entry.unbound),
+      nativePreviewScopeSyncObserved: audit.nativeCommands.some(
+        (entry) =>
+          entry.command === 'sync_native_image_preview_scope' && entry.status === 'resolved',
       ),
+      opaquePreviewLeaseObserved: audit.nativeCommands.some(
+        (entry) =>
+          entry.command === 'bind_native_image_preview_lease' &&
+          entry.status === 'resolved' &&
+          Boolean(entry.response?.url),
+      ),
+      boundPreviewScopes: audit.nativeCommands
+        .filter(
+          (entry) =>
+            entry.command === 'bind_native_image_preview_lease' && entry.status === 'resolved',
+        )
+        .map((entry) => ({
+          ownerId: entry.ownerId,
+          sessionId: entry.sessionId,
+          attachmentId: entry.attachmentId,
+          boundURLObserved: Boolean(entry.response?.url),
+        })),
+      zeroByteCarrierObserved: audit.nativeCarriers.some((entry) => entry.size === 0),
+      nativeCarrierObjectURLAttempts: audit.nativeCarrierObjectURLAttempts,
+      previewReadProbes: audit.previewReadProbes,
+      previewReadRejections: audit.previewReadRejections,
+      previewUsageViolations: audit.previewUsageViolations.length,
+      wireViolations: audit.wireViolations.length,
       authenticatedReads: audit.assetReadCompletions,
       objectURLsCreated: audit.created.length,
       objectURLsRevoked: new Set(audit.revoked).size,
@@ -901,6 +1604,9 @@ function installedWebViewFixture() {
     const state = await json('/__chat_asset/state')
     if (state.phase === 'initial') return initialRun()
     if (state.phase === 'refresh') return refreshRun()
+    if (state.phase === 'remove') return removeRun()
+    if (state.phase === 'switch') return switchRun()
+    if (state.phase === 'unmount') return unmountRun()
     if (state.phase === 'lifecycle') return lifecycleRun()
     if (state.phase === 'failure') return failureRun()
     throw new Error(`Unknown native boundary phase: ${state.phase}`)
@@ -1163,7 +1869,7 @@ do {
 `
 }
 
-function renderConfig(sandbox, sidecarPort, fixtureOrigin) {
+function renderConfig(sandbox, sidecarPort) {
   return `server:
   host: 127.0.0.1
   port: ${sidecarPort}
@@ -1224,19 +1930,31 @@ observe:
 `
 }
 
-async function prepareFrontend(sandbox, fixtureOrigin, imageBytes) {
+async function prepareFrontend(sandbox, fixtureOrigin, imageBytes, sidecarPort) {
   const frontend = join(sandbox, 'frontend')
   await runCommand('pnpm', ['exec', 'vite', 'build', '--outDir', frontend, '--emptyOutDir'], {
-    env: { ...process.env, PNPM_CONFIG_OFFLINE: 'true', npm_config_offline: 'true' },
+    env: {
+      ...process.env,
+      VITE_API_BASE: `http://localhost:${sidecarPort}`,
+      VITE_WS_BASE: `ws://localhost:${sidecarPort}`,
+      PNPM_CONFIG_OFFLINE: 'true',
+      npm_config_offline: 'true',
+    },
   })
   const indexPath = join(frontend, 'index.html')
   assert.ok(existsSync(indexPath), 'Current-source frontend build is missing')
   const fixturePath = join(frontend, 'chat-asset-preview-auth-fixture.js')
+  const fixtureNonce = Date.now().toString(36)
   const config = {
     fixtureOrigin,
+    apiBase: `http://localhost:${sidecarPort}`,
     imageBytes,
-    childName: `NativeAsset-${Date.now().toString(36)}`,
-    editMarker: `native-edit-${Date.now().toString(36)}`,
+    childName: `NativeAsset-${fixtureNonce}`,
+    editMarker: `native-edit-${fixtureNonce}`,
+    ordinarySessionA: `native-preview-a-${fixtureNonce}`,
+    ordinarySessionB: `native-preview-b-${fixtureNonce}`,
+    ordinarySessionTitleA: `Native Preview A ${fixtureNonce}`,
+    ordinarySessionTitleB: `Native Preview B ${fixtureNonce}`,
   }
   writeFileSync(
     fixturePath,
@@ -1247,10 +1965,7 @@ async function prepareFrontend(sandbox, fixtureOrigin, imageBytes) {
   assert.match(index, /<head>/, 'Frontend index has no head element')
   writeFileSync(
     indexPath,
-    index.replace(
-      '<head>',
-      '<head>\n<script src="./chat-asset-preview-auth-fixture.js"></script>',
-    ),
+    index.replace('<head>', '<head>\n<script src="./chat-asset-preview-auth-fixture.js"></script>'),
     { mode: 0o600 },
   )
   return { frontend, fixturePath, indexPath }
@@ -1263,7 +1978,7 @@ function writeOverlay(sandbox, frontend, sidecarPort, fixtureOrigin) {
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "style-src-attr 'unsafe-inline'",
-    `img-src 'self' data: blob: http://localhost:${sidecarPort} http://127.0.0.1:${sidecarPort}`,
+    `img-src 'self' data: blob: hexclaw-preview: http://hexclaw-preview.localhost http://localhost:${sidecarPort} http://127.0.0.1:${sidecarPort}`,
     `media-src 'self' data: blob: http://localhost:${sidecarPort} http://127.0.0.1:${sidecarPort}`,
     `connect-src 'self' http://localhost:${sidecarPort} ws://localhost:${sidecarPort} http://127.0.0.1:${sidecarPort} ws://127.0.0.1:${sidecarPort} ${fixtureOrigin}`,
     "font-src 'self'",
@@ -1361,8 +2076,8 @@ end run`
     '/usr/bin/osascript',
     ['-e', script, '--', sourcePath, String(appPID)],
     {
-    encoding: 'utf8',
-    timeout: 20_000,
+      encoding: 'utf8',
+      timeout: 20_000,
     },
   ).trim()
   assert.match(result, /^\d+$/, 'Owned Finder window ID is invalid')
@@ -1469,6 +2184,22 @@ function sanitizeLog(raw, sandbox) {
     .replaceAll(process.env.HOME || '<no-home>', '<user-home>')
 }
 
+function sensitiveLogKinds(raw, sourceBytes) {
+  const kinds = new Set()
+  if (raw.includes(imagePath) || raw.includes(`file://${imagePath}`)) kinds.add('source_path')
+  if (/\bdata:[^,;]+;base64,/i.test(raw)) kinds.add('base64_data_url')
+  if (/(?:^|[^A-Za-z0-9+/])[A-Za-z0-9+/]{256,}={0,2}(?:$|[^A-Za-z0-9+/])/.test(raw)) {
+    kinds.add('base64_payload')
+  }
+  const rawBytes = Buffer.from(raw, 'utf8')
+  if (sourceBytes.length > 0 && rawBytes.indexOf(sourceBytes) >= 0) kinds.add('raw_source_bytes')
+  const sourceBase64Prefix = sourceBytes.toString('base64').slice(0, 512)
+  if (sourceBase64Prefix.length === 512 && raw.includes(sourceBase64Prefix)) {
+    kinds.add('base64_source_bytes')
+  }
+  return [...kinds]
+}
+
 async function runInstalledSidecarAPIPartial() {
   assert.equal(process.platform, 'darwin', 'Installed Sidecar API boundary is macOS-only')
   assert.ok(existsSync(imagePath), 'Selected K12 image fixture is missing')
@@ -1485,11 +2216,9 @@ async function runInstalledSidecarAPIPartial() {
   }
   const databasePath = join(configDir, 'data.db')
   const sidecarPort = await reserveLoopbackPort()
-  writeFileSync(
-    join(configDir, 'hexclaw.yaml'),
-    renderConfig(sandbox, sidecarPort, 'http://127.0.0.1:1'),
-    { mode: 0o600 },
-  )
+  writeFileSync(join(configDir, 'hexclaw.yaml'), renderConfig(sandbox, sidecarPort), {
+    mode: 0o600,
+  })
   const rawLogPath = join(sandbox, 'sidecar.log')
   const rawLog = createWriteStream(rawLogPath, { flags: 'wx', mode: 0o600 })
   let sidecar = null
@@ -1513,7 +2242,9 @@ async function runInstalledSidecarAPIPartial() {
     })
     const bytes = Buffer.from(await response.arrayBuffer())
     if (!response.ok) {
-      throw new Error(`${init.method || 'GET'} ${path}: ${response.status} ${bytes.toString('utf8')}`)
+      throw new Error(
+        `${init.method || 'GET'} ${path}: ${response.status} ${bytes.toString('utf8')}`,
+      )
     }
     return { response, bytes }
   }
@@ -1549,12 +2280,20 @@ async function runInstalledSidecarAPIPartial() {
     const first = await upload()
     const second = await upload()
     assert.match(first.asset_id, /^asset:\/\//, 'Asset upload returned no stable asset identity')
-    assert.equal(second.asset_id, first.asset_id, 'Same bytes did not return the same asset identity')
+    assert.equal(
+      second.asset_id,
+      first.asset_id,
+      'Same bytes did not return the same asset identity',
+    )
     const file = first.asset_id.slice(first.asset_id.lastIndexOf('/') + 1)
     const initialRead = await api(
       `/api/k12/assets/${encodeURIComponent(file)}?agent=${encodeURIComponent(agent)}`,
     )
-    assert.equal(sha256(initialRead.bytes), sha256(imageBytes), 'Authenticated asset read changed bytes')
+    assert.equal(
+      sha256(initialRead.bytes),
+      sha256(imageBytes),
+      'Authenticated asset read changed bytes',
+    )
 
     await stopProcess(sidecar)
     sidecar = await start()
@@ -1567,7 +2306,10 @@ async function runInstalledSidecarAPIPartial() {
     assert.equal(database.assetCount, 1, 'Idempotent upload created multiple asset rows')
     assert.equal(database.imageTaskCount, 0, 'API-only asset verification created an ImageTask')
     assert.equal(database.imageTaskInvocationCount, 0, 'API-only verification invoked a model')
-    assert.ok(database.deliveryCounts.every((entry) => entry.total === 0), 'API-only verification created IM state')
+    assert.ok(
+      database.deliveryCounts.every((entry) => entry.total === 0),
+      'API-only verification created IM state',
+    )
     writeFileSync(
       join(runDir, 'api-partial.json'),
       `${JSON.stringify(
@@ -1582,7 +2324,7 @@ async function runInstalledSidecarAPIPartial() {
           ],
           notProven: [
             'Installed Desktop exact executable bytes were not launched.',
-            'Finder physical drag, native grant, pending Blob preview, zoom, download, edit/resend, abort, and revoke were not exercised.',
+            'Finder physical drag, native grant, opaque preview lease, zoom, download, edit/resend, abort, and revoke were not exercised.',
           ],
           candidate: {
             installedDesktopSha256: sha256File(installedDesktopExecutable),
@@ -1618,9 +2360,13 @@ async function runInstalledSidecarAPIPartial() {
     await stopProcess(sidecar)
     await new Promise((resolveClose) => rawLog.end(resolveClose))
     if (existsSync(rawLogPath)) {
-      writeFileSync(join(runDir, 'api-sidecar.log'), sanitizeLog(readFileSync(rawLogPath, 'utf8'), sandbox), {
-        mode: 0o600,
-      })
+      writeFileSync(
+        join(runDir, 'api-sidecar.log'),
+        sanitizeLog(readFileSync(rawLogPath, 'utf8'), sandbox),
+        {
+          mode: 0o600,
+        },
+      )
     }
     const cleanup = {
       status: failure ? 'FAIL' : 'PARTIAL_PASS',
@@ -1638,10 +2384,17 @@ async function runInstalledSidecarAPIPartial() {
 
 async function main() {
   assert.equal(process.platform, 'darwin', 'Native installed boundary is macOS-only')
-  assert.equal(process.env.HEXCLAW_CHAT_ASSET_NATIVE_RUN, '1', 'Explicit native run opt-in is required')
+  assert.equal(
+    process.env.HEXCLAW_CHAT_ASSET_NATIVE_RUN,
+    '1',
+    'Explicit native run opt-in is required',
+  )
   assert.ok(existsSync(imagePath), 'K12 image fixture is missing')
   assert.ok(existsSync(join(sidecarRoot, 'cmd/hexclaw')), 'Sidecar source root is missing')
-  assert.ok(existsSync(installedDesktopExecutable), 'Installed candidate Desktop executable is missing')
+  assert.ok(
+    existsSync(installedDesktopExecutable),
+    'Installed candidate Desktop executable is missing',
+  )
   assert.ok(existsSync(installedSidecarExecutable), 'Installed candidate Sidecar is missing')
 
   mkdirSync(evidenceRoot, { recursive: true })
@@ -1670,18 +2423,28 @@ async function main() {
   let report = null
   let failure = null
   let finalStatus = 'FAIL'
+  let appLogLeakKinds = []
   const physicalDropReceipts = []
   const appRawLog = join(sandbox, 'app.log')
-  const cleanup = { portReleased: false, fixtureClosed: false, sandboxRemoved: false, unexpectedPortOwners: [] }
+  const cleanup = {
+    portReleased: false,
+    fixtureClosed: false,
+    sandboxRemoved: false,
+    unexpectedPortOwners: [],
+  }
+  const sourceImageBytes = readFileSync(imagePath)
 
   try {
     fixture = await startFixtureServer(databasePath)
-    writeFileSync(
-      join(configDir, 'hexclaw.yaml'),
-      renderConfig(sandbox, sidecarPort, fixture.origin),
-      { mode: 0o600 },
+    writeFileSync(join(configDir, 'hexclaw.yaml'), renderConfig(sandbox, sidecarPort), {
+      mode: 0o600,
+    })
+    const frontend = await prepareFrontend(
+      sandbox,
+      fixture.origin,
+      sourceImageBytes.length,
+      sidecarPort,
     )
-    const frontend = await prepareFrontend(sandbox, fixture.origin, readFileSync(imagePath).length)
     const overlay = writeOverlay(sandbox, frontend.frontend, sidecarPort, fixture.origin)
     const offlineEnv = {
       ...process.env,
@@ -1728,6 +2491,19 @@ async function main() {
     await fixture.waitForStage('download-dialog-opening')
     const downloadPath = join(downloadDir, basename(imagePath))
     automateSaveDialog(appProcess.pid, downloadPath)
+    for (const lifecycleDropStage of [
+      'native-drop-remove-ready',
+      'native-drop-switch-ready',
+      'native-drop-unmount-ready',
+    ]) {
+      const stage = await fixture.waitForStage(lifecycleDropStage)
+      physicalDropReceipts.push(performPhysicalFinderDrop(finderDriver, appProcess.pid, stage))
+      writeFileSync(
+        join(runDir, 'physical-drops.json'),
+        `${JSON.stringify(physicalDropReceipts, null, 2)}\n`,
+        { mode: 0o600 },
+      )
+    }
     const failedDrop = await fixture.waitForStage('native-drop-persist-failure-ready')
     const failedDropReceipt = performPhysicalFinderDrop(finderDriver, appProcess.pid, failedDrop)
     physicalDropReceipts.push(failedDropReceipt)
@@ -1742,24 +2518,96 @@ async function main() {
       'DIAGNOSTIC_ONLY',
       report.error || 'WebView diagnostic boundary failed',
     )
+    const lifecycleStages = [
+      'preview-send-success-pass',
+      'preview-remove-pass',
+      'preview-session-switch-pass',
+      'preview-unmount-pass',
+    ].map((stage) => {
+      const receipt = fixture.state.stages.find((entry) => entry.stage === stage)
+      assert.ok(receipt, `Native preview lifecycle receipt is missing: ${stage}`)
+      assert.equal(receipt.decoded, true, `${stage} did not prove img decode`)
+      assert.equal(
+        receipt.fetchAndArrayBufferRejected,
+        true,
+        `${stage} did not prove JS fetch/arrayBuffer rejection`,
+      )
+      assert.equal(receipt.revokeCalls, 1, `${stage} did not prove exact-once revoke`)
+      assert.equal(receipt.zeroByteCarrier, true, `${stage} did not prove a zero-byte carrier`)
+      return { stage, decoded: true, fetchAndArrayBufferRejected: true, revokeCalls: 1 }
+    })
+    assert.equal(
+      report.nativeCarrierObjectURLAttempts,
+      0,
+      'Zero-byte carrier reached createObjectURL',
+    )
+    assert.equal(
+      report.unboundNativeDropObserved,
+      true,
+      'Finder drop exposed a bound preview lease',
+    )
+    assert.equal(
+      report.nativePreviewScopeSyncObserved,
+      true,
+      'Native preview scope synchronization was not observed',
+    )
+    assert.equal(report.opaquePreviewLeaseObserved, true, 'Native preview binding was not observed')
+    assert.ok(
+      report.boundPreviewScopes.every(
+        (scope) => scope.ownerId && scope.sessionId && scope.attachmentId && scope.boundURLObserved,
+      ),
+      'Bound preview scope evidence is incomplete',
+    )
+    assert.equal(report.previewUsageViolations, 0, 'Opaque preview URL escaped img usage')
+    assert.equal(report.wireViolations, 0, 'Native/WebView wire exposed sensitive material')
+    const fixtureWireEvidence = JSON.stringify(fixture.state)
+    assert.deepEqual(
+      sensitiveLogKinds(fixtureWireEvidence, sourceImageBytes),
+      [],
+      'Fixture wire exposed a source path, Base64, or raw image bytes',
+    )
+    assert.doesNotMatch(
+      fixtureWireEvidence,
+      /hexclaw-preview:/,
+      'Fixture report wire exposed an opaque preview URL',
+    )
     assert.ok(existsSync(downloadPath), 'Native image download output is missing')
     assert.equal(sha256File(downloadPath), sha256File(imagePath), 'Downloaded image bytes changed')
     assert.equal(fixture.state.providerCalls, 0, 'Model Provider was called')
     assert.deepEqual(fixture.state.externalTargets, [], 'External network target was observed')
     assert.deepEqual(fixture.state.unexpectedPaths, [], 'Unexpected fixture request was observed')
     const database = snapshotDatabase(databasePath)
+    assert.deepEqual(
+      database.forbiddenPersisted,
+      [],
+      'SQLite persisted a path, Base64, or ephemeral preview URL',
+    )
+    assert.deepEqual(
+      sqliteFileSensitiveKinds(databasePath, sourceImageBytes),
+      [],
+      'SQLite/WAL persisted a source path, Base64, raw image bytes, or opaque preview URL',
+    )
     assert.equal(database.imageTaskCount, 0, 'ImageTask rows must remain zero')
     assert.equal(database.imageTaskInvocationCount, 0, 'ImageTask invocation rows must remain zero')
-    assert.ok(database.deliveryCounts.every((entry) => entry.total === 0), 'IM delivery rows must remain zero')
+    assert.ok(
+      database.deliveryCounts.every((entry) => entry.total === 0),
+      'IM delivery rows must remain zero',
+    )
 
     const evidence = {
       status: 'DIAGNOSTIC_ONLY',
       overallInstalledGate: 'NOT_PASS',
       installedExactBytesBoundary: {
         status: 'NOT_RUN',
-        reason: 'The injected Test.app cannot prove the exact installed Desktop executable boundary.',
+        reason:
+          'The injected Test.app cannot prove the exact installed Desktop executable boundary.',
       },
-      acceptance: ['K12-ASSET-PREVIEW-AUTH-001', 'DESKTOP-BOUNDARY-FILE-010'],
+      acceptance: [
+        'K12-ASSET-PREVIEW-AUTH-001',
+        'DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-001',
+        'DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-002',
+        'DESKTOP-BOUNDARY-FILE-010',
+      ],
       isolation: {
         testHome: '<ephemeral-0700>',
         userHomeReadOrWritten: false,
@@ -1781,16 +2629,24 @@ async function main() {
         inputFixtureSha256: sha256File(imagePath),
       },
       native: {
-        finderPhysicalDrops: [firstDropReceipt, failedDropReceipt],
+        finderPhysicalDrops: physicalDropReceipts,
         realTauriGrantObserved: report.nativeGrantObserved,
-        nativePendingBlobBytesObserved: report.pendingBlobBytesObserved,
+        unboundNativeDropObserved: report.unboundNativeDropObserved,
+        nativePreviewScopeSyncObserved: report.nativePreviewScopeSyncObserved,
+        opaquePreviewLeaseObserved: report.opaquePreviewLeaseObserved,
+        boundPreviewScopes: report.boundPreviewScopes,
+        zeroByteCarrierObserved: report.zeroByteCarrierObserved,
+        nativeCarrierObjectURLAttempts: report.nativeCarrierObjectURLAttempts,
+        lifecycleStages,
         nativeSystemSavePanel: true,
         downloadedSha256: sha256File(downloadPath),
       },
       webView: report,
       database: publicSnapshot(database),
     }
-    writeFileSync(join(runDir, 'report.json'), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 })
+    writeFileSync(join(runDir, 'report.json'), `${JSON.stringify(evidence, null, 2)}\n`, {
+      mode: 0o600,
+    })
     finalStatus = 'DIAGNOSTIC_ONLY'
     process.stdout.write(
       `Native chat asset preview auth diagnostic only (installed gate NOT PASS): ${relative(repoRoot, join(runDir, 'report.json'))}\n`,
@@ -1828,7 +2684,9 @@ async function main() {
       cleanup.fixtureClosed = true
     }
     if (existsSync(appRawLog)) {
-      writeFileSync(join(runDir, 'app.log'), sanitizeLog(readFileSync(appRawLog, 'utf8'), sandbox), {
+      const rawAppLog = readFileSync(appRawLog, 'utf8')
+      appLogLeakKinds = sensitiveLogKinds(rawAppLog, sourceImageBytes)
+      writeFileSync(join(runDir, 'app.log'), sanitizeLog(rawAppLog, sandbox), {
         mode: 0o600,
       })
     }
@@ -1836,52 +2694,200 @@ async function main() {
     cleanup.sandboxRemoved = !existsSync(sandbox)
     writeFileSync(
       join(runDir, 'cleanup.json'),
-      `${JSON.stringify({ status: finalStatus, error: failure, ...cleanup }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          status: finalStatus,
+          error: failure,
+          logSensitiveMaterialKinds: appLogLeakKinds,
+          ...cleanup,
+        },
+        null,
+        2,
+      )}\n`,
       { mode: 0o600 },
     )
     assert.equal(cleanup.portReleased, true, 'Dedicated Sidecar port was not released')
     assert.deepEqual(cleanup.unexpectedPortOwners, [], 'Dedicated port had an unexpected owner')
+    assert.deepEqual(
+      appLogLeakKinds,
+      [],
+      'Desktop/Sidecar log exposed a source path, Base64, or raw image bytes',
+    )
   }
 }
 
 function validateHarness() {
   const entrySource = readFileSync(fileURLToPath(import.meta.url), 'utf8')
   assert.doesNotMatch(entrySource, /\/Users\//, 'Harness must not contain a personal absolute path')
-  assert.doesNotMatch(entrySource, /\bdws\b|devops\.aliyun\.com/, 'Harness must not call an external IM tool')
+  assert.doesNotMatch(
+    entrySource,
+    /\bdws\b|devops\.aliyun\.com/,
+    'Harness must not call an external IM tool',
+  )
   assert.match(entrySource, /HEXCLAW_TEST_MODE: '1'/, 'Test mode guard is missing')
   assert.match(entrySource, /HEXCLAW_TEST_HOME: sandbox/, 'Isolated Test Home is missing')
-  assert.match(entrySource, /native-drop-success-ready/, 'Successful physical drop phase is missing')
-  assert.match(entrySource, /native-drop-persist-failure-ready/, 'Persistence failure phase is missing')
+  assert.match(
+    entrySource,
+    /native-drop-success-ready/,
+    'Successful physical drop phase is missing',
+  )
+  assert.match(
+    entrySource,
+    /native-drop-remove-ready/,
+    'Attachment removal physical drop phase is missing',
+  )
+  assert.match(
+    entrySource,
+    /native-drop-switch-ready/,
+    'Session switch physical drop phase is missing',
+  )
+  assert.match(entrySource, /native-drop-unmount-ready/, 'Unmount physical drop phase is missing')
+  assert.match(
+    entrySource,
+    /native-drop-persist-failure-ready/,
+    'Persistence failure phase is missing',
+  )
   assert.match(entrySource, /CGEvent\.leftMouseDragged/, 'Physical Finder drag receipt is missing')
-  assert.match(entrySource, /Authenticated user image has no download action/, 'Download gate is missing')
-  assert.match(entrySource, /Edited resend changed the immutable asset identity/, 'Stable asset resend gate is missing')
-  assert.match(entrySource, /Persistence failure attempted ImageTask creation/, 'Failure zero-task gate is missing')
-  assert.match(entrySource, /Object URL revocation on route removal/, 'Object URL revoke gate is missing')
+  for (const marker of [
+    ['Native grant did not produce the real local', 'Blob preview bytes'].join(' '),
+    ['pending', 'BlobBytesObserved'].join(''),
+  ]) {
+    assert.equal(
+      entrySource.includes(marker),
+      false,
+      'Unsafe native-carrier Blob byte oracle is still present',
+    )
+  }
+  for (const [marker, message] of [
+    [
+      ['Native drop preview lease must not expose', 'a bound URL'].join(' '),
+      'Unbound native drop metadata oracle is missing',
+    ],
+    [
+      ['Native drop preview lease must not expose', 'bound ownership'].join(' '),
+      'Unbound native drop ownership oracle is missing',
+    ],
+    [
+      ['sync_native_image', 'preview_scope'].join('_'),
+      'Native preview scope synchronization command audit is missing',
+    ],
+    [
+      ['bind_native_image', 'preview_lease'].join('_'),
+      'Native preview lease binding command audit is missing',
+    ],
+    [
+      ['Native preview binding response does not match', 'its lease scope'].join(' '),
+      'Bound preview URL and ownership response oracle is missing',
+    ],
+    [
+      ['Object.defineProperties = function', 'defineAuditedProperties'].join(' '),
+      'Native carrier audit does not cover Object.defineProperties',
+    ],
+  ]) {
+    assert.equal(entrySource.includes(marker), true, message)
+  }
+  assert.match(
+    entrySource,
+    /zero-byte native carrier reached URL\.createObjectURL/,
+    'Zero-byte native carrier createObjectURL rejection is missing',
+  )
+  assert.match(
+    entrySource,
+    /Opaque native preview URL exposed readable bytes to JS/,
+    'Opaque preview fetch\/arrayBuffer rejection oracle is missing',
+  )
+  for (const stage of [
+    'preview-send-success-pass',
+    'preview-remove-pass',
+    'preview-session-switch-pass',
+    'preview-unmount-pass',
+  ]) {
+    assert.match(entrySource, new RegExp(stage), `Exact-once lifecycle stage is missing: ${stage}`)
+  }
+  const imgSourceCSP = entrySource.match(/`img-src[^\n]+/)?.[0] || ''
+  const connectSourceCSP = entrySource.match(/`connect-src[^\n]+/)?.[0] || ''
+  const mediaSourceCSP = entrySource.match(/`media-src[^\n]+/)?.[0] || ''
+  assert.match(imgSourceCSP, /hexclaw-preview:/, 'Opaque preview scheme is absent from img-src')
+  assert.doesNotMatch(
+    connectSourceCSP,
+    /hexclaw-preview/,
+    'Opaque preview scheme leaked into connect-src',
+  )
+  assert.doesNotMatch(
+    mediaSourceCSP,
+    /hexclaw-preview/,
+    'Opaque preview scheme leaked into media-src',
+  )
+  assert.match(
+    entrySource,
+    /wire exposed a path, Base64, or raw bytes/,
+    'Wire leak oracle is missing',
+  )
+  assert.match(
+    entrySource,
+    /SQLite persisted a path, Base64, or ephemeral preview URL/,
+    'SQLite leak oracle is missing',
+  )
+  assert.match(
+    entrySource,
+    /log exposed a source path, Base64, or raw image bytes/,
+    'Log leak oracle is missing',
+  )
+  assert.match(
+    entrySource,
+    /DESKTOP-NATIVE-IMAGE-PREVIEW-LEASE-001/,
+    'Opaque preview acceptance identity is missing',
+  )
+  assert.match(
+    entrySource,
+    /Authenticated user image has no download action/,
+    'Download gate is missing',
+  )
+  assert.match(
+    entrySource,
+    /Edited resend changed the immutable asset identity/,
+    'Stable asset resend gate is missing',
+  )
+  assert.match(
+    entrySource,
+    /Persistence failure attempted ImageTask creation/,
+    'Failure zero-task gate is missing',
+  )
+  assert.match(
+    entrySource,
+    /Object URL revocation on route removal/,
+    'Object URL revoke gate is missing',
+  )
   assert.match(entrySource, /asset read abort on route removal/, 'Abort lifecycle gate is missing')
   assert.match(entrySource, /providerCalls, 0/, 'Zero-model assertion is missing')
   assert.match(entrySource, /deliveryCounts\.every/, 'Zero-IM receipt assertion is missing')
   assert.ok(existsSync(imagePath), 'Selected K12 image fixture is missing')
-  assert.ok(existsSync(installedDesktopExecutable), 'Installed candidate Desktop executable is missing')
-  assert.ok(existsSync(installedSidecarExecutable), 'Installed candidate Sidecar is missing')
-  assert.ok(existsSync(join(repoRoot, 'src-tauri/src/native_file.rs')), 'Native grant implementation is missing')
+  assert.ok(
+    existsSync(join(repoRoot, 'src-tauri/src/native_file.rs')),
+    'Native grant implementation is missing',
+  )
   const swift = spawnSync('/usr/bin/xcrun', ['swiftc', '-typecheck', '-'], {
     input: nativeFinderDragSwift(),
     encoding: 'utf8',
     timeout: 60_000,
   })
   assert.equal(swift.status, 0, swift.stderr || 'Embedded Finder driver failed Swift typecheck')
-  assert.match(renderConfig('/tmp/isolated-test-home', 23456, 'http://127.0.0.1:34567'), /enabled: false/)
+  assert.match(renderConfig('/tmp/isolated-test-home', 23456), /enabled: false/)
   process.stdout.write('Native chat asset preview auth harness static validation PASS\n')
 }
 
 if (process.argv.includes('--api-only')) {
   runInstalledSidecarAPIPartial().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`)
+    process.stderr.write(
+      `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    )
     process.exitCode = 1
   })
 } else if (process.argv.includes('--run')) {
   main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`)
+    process.stderr.write(
+      `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    )
     process.exitCode = 1
   })
 } else {
