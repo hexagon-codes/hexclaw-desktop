@@ -36,6 +36,15 @@ type ReferenceAction =
   | 'template-prompts'
 type SourceAction = ReferenceAction
 
+type RegenerateOutcome = 'completed' | 'cancelled' | 'failed'
+
+interface RegenerateCallEvidence {
+  outcome: RegenerateOutcome
+  text: string
+  attachmentCount: number
+  attachmentIds: string[]
+}
+
 interface GeometryTarget {
   name: string
   selector: string
@@ -929,6 +938,223 @@ async function openSource(page: Page, state: MatrixState): Promise<OpenEvidence>
   }
 }
 
+async function openSourceFixture(page: Page, action: SourceAction = 'image-preview') {
+  await installSourceFixture(page, action)
+  await page.goto(`${SOURCE_URL}/chat`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 12_000,
+  })
+  await page.locator('.hc-chat').waitFor({ state: 'visible', timeout: 8_000 })
+  await page.locator('.hc-msg').first().waitFor({ state: 'visible', timeout: 8_000 })
+}
+
+async function replaceSourceMessages(page: Page, messages: unknown[]) {
+  await page.evaluate(async (nextMessages) => {
+    const dynamicImport = new Function('path', 'return import(path)') as (
+      modulePath: string,
+    ) => Promise<{ useChatStore: () => unknown }>
+    const module = await dynamicImport('/src/stores/chat.ts')
+    const store = module.useChatStore() as { messages: unknown[] }
+    store.messages.splice(0, store.messages.length, ...nextMessages)
+  }, messages)
+}
+
+async function installRegenerateStreamFixture(page: Page, outcomes: RegenerateOutcome[]) {
+  await page.evaluate(async (fixtureOutcomes) => {
+    type FixtureAttachment = {
+      type: string
+      name: string
+      mime: string
+      data: string
+      attachmentId?: string
+    }
+    type FixtureMessage = {
+      id: string
+      role: 'user' | 'assistant'
+      content: string
+      timestamp: string
+      metadata?: Record<string, unknown>
+    }
+    type FixtureStream = Record<string, unknown>
+    type FixtureStore = {
+      currentSessionId: string | null
+      messages: FixtureMessage[]
+      activeStreams: Record<string, FixtureStream>
+      streaming: boolean
+      streamingSessionId: string | null
+      sending: boolean
+      sendMessage: (
+        text: string,
+        attachments?: FixtureAttachment[],
+      ) => Promise<FixtureMessage | null>
+      stopStreaming: () => void
+    }
+    type FixtureState = {
+      calls: RegenerateCallEvidence[]
+      outcomes: RegenerateOutcome[]
+      pendingCancel: (() => void) | null
+    }
+
+    const dynamicImport = new Function('path', 'return import(path)') as (
+      modulePath: string,
+    ) => Promise<{ useChatStore: () => unknown }>
+    const module = await dynamicImport('/src/stores/chat.ts')
+    const store = module.useChatStore() as FixtureStore
+    const host = window as typeof window & { __HC_REGENERATE_FIXTURE__?: FixtureState }
+    const fixture: FixtureState = {
+      calls: [],
+      outcomes: [...fixtureOutcomes],
+      pendingCancel: null,
+    }
+    host.__HC_REGENERATE_FIXTURE__ = fixture
+
+    store.stopStreaming = () => {
+      const cancel = fixture.pendingCancel
+      fixture.pendingCancel = null
+      cancel?.()
+    }
+
+    store.sendMessage = async (text, attachments = []) => {
+      const callIndex = fixture.calls.length
+      const outcome = fixture.outcomes[callIndex] ?? 'failed'
+      fixture.calls.push({
+        outcome,
+        text,
+        attachmentCount: attachments.length,
+        attachmentIds: attachments.map((attachment) => attachment.attachmentId ?? ''),
+      })
+
+      const sessionId = store.currentSessionId || 'chat-interactions-matrix'
+      const requestId = `browser-regenerate-${callIndex + 1}`
+      const assistantId = `${requestId}:assistant`
+      store.messages.push({
+        id: requestId,
+        role: 'user',
+        content: text,
+        timestamp: new Date().toISOString(),
+        metadata: attachments.length > 0 ? { attachments } : undefined,
+      })
+      store.activeStreams = {
+        ...store.activeStreams,
+        [sessionId]: {
+          sessionId,
+          requestId,
+          assistantMessageId: assistantId,
+          assistantMessageAliases: [],
+          lastSequence: 0,
+          runtimeEvents: [],
+          acceptedRuntimeFrames: {},
+          thinkingEnabled: false,
+          startedAt: Date.now(),
+          state: 'running',
+          visibility: 'not_exposed',
+          rawContent: '',
+          content: '',
+          explicitReasoning: '',
+          reasoning: '',
+          reasoningStartTime: 0,
+          reasoningEndTime: 0,
+        },
+      }
+      store.streaming = true
+      store.streamingSessionId = sessionId
+      // 流已被接受，发送握手结束；此时输入区必须暴露可点击的停止动作。
+      store.sending = false
+
+      return await new Promise<FixtureMessage>((resolve) => {
+        const finish = () => {
+          const content =
+            outcome === 'completed'
+              ? `浏览器重试完成 #${callIndex + 1}`
+              : outcome === 'cancelled'
+                ? `浏览器重试已取消 #${callIndex + 1}`
+                : `浏览器重试失败 #${callIndex + 1}`
+          const assistant: FixtureMessage = {
+            id: assistantId,
+            role: 'assistant',
+            content,
+            timestamp: new Date().toISOString(),
+            metadata: {
+              provider: 'openai',
+              model: 'gpt-5.6-sol',
+              thinking_state: outcome,
+            },
+          }
+          store.messages.push(assistant)
+          const remainingStreams = { ...store.activeStreams }
+          delete remainingStreams[sessionId]
+          store.activeStreams = remainingStreams
+          store.streaming = false
+          store.streamingSessionId = null
+          store.sending = false
+          resolve(assistant)
+        }
+
+        if (outcome === 'cancelled') fixture.pendingCancel = finish
+        else window.setTimeout(finish, 90)
+      })
+    }
+  }, outcomes)
+}
+
+async function expectRegenerateActionBetweenCopyAndSpeak(page: Page) {
+  const retry = page.getByTestId('chat-message-assistant').last().getByTestId('message-regenerate')
+  await expect(retry).toBeVisible()
+  const neighbors = await retry.evaluate((button) => ({
+    previous: button.previousElementSibling?.getAttribute('aria-label') ?? '',
+    next: button.nextElementSibling?.getAttribute('aria-label') ?? '',
+  }))
+  expect(neighbors).toEqual({ previous: '复制', next: '朗读' })
+}
+
+async function expectRegenerateTerminal(
+  page: Page,
+  expectedReply: string,
+  expectedCallCount: number,
+) {
+  await expect(page.getByTestId('chat-message-assistant')).toHaveCount(1)
+  await expect(page.getByTestId('chat-message-assistant')).toContainText(expectedReply)
+  await expect(page.getByTestId('chat-message-user')).toHaveCount(1)
+  await expect(
+    page.getByTestId('chat-message-user').locator('.hc-msg__attachment-img'),
+  ).toHaveCount(1)
+  await expect(page.locator('.hc-composer__send--stop')).toHaveCount(0)
+  await expect(page.getByTestId('chat-input')).toHaveAttribute('contenteditable', 'true')
+  await expect(page.getByTestId('chat-input')).not.toHaveAttribute('aria-disabled', 'true')
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const host = window as typeof window & {
+            __HC_REGENERATE_FIXTURE__?: { calls: RegenerateCallEvidence[] }
+          }
+          return host.__HC_REGENERATE_FIXTURE__?.calls.length ?? 0
+        }),
+      { message: 'regenerate fixture should observe the expected browser click count' },
+    )
+    .toBe(expectedCallCount)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const dynamicImport = new Function('path', 'return import(path)') as (
+          modulePath: string,
+        ) => Promise<{ useChatStore: () => unknown }>
+        const module = await dynamicImport('/src/stores/chat.ts')
+        const store = module.useChatStore() as {
+          isCurrentStreaming: boolean
+          streaming: boolean
+          activeStreams: Record<string, unknown>
+        }
+        return {
+          isCurrentStreaming: store.isCurrentStreaming,
+          streaming: store.streaming,
+          activeStreamCount: Object.keys(store.activeStreams).length,
+        }
+      }),
+    )
+    .toEqual({ isCurrentStreaming: false, streaming: false, activeStreamCount: 0 })
+}
+
 async function captureGeometry(page: Page, targets: GeometryTarget[]) {
   return page.evaluate((items) => {
     const styleKeys = [
@@ -1223,4 +1449,219 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat interaction visual matrix',
       await exerciseState(browser, state, testInfo)
     })
   }
+})
+
+test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contracts', () => {
+  test('browser-contract: K12 asset history only renders authenticated blob URLs and hides failed image actions', async ({
+    page,
+  }) => {
+    await installSourceFixture(page, 'image-preview')
+
+    let assetMode: 'success' | 'unauthorized' = 'success'
+    const assetRequests: Array<{ resourceType: string; url: string; mode: string }> = []
+    await page.route('**/_hexclaw/api/k12/assets/**', async (route) => {
+      const request = route.request()
+      assetRequests.push({
+        resourceType: request.resourceType(),
+        url: request.url(),
+        mode: assetMode,
+      })
+      if (request.resourceType() === 'image' || assetMode === 'unauthorized') {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'unauthorized fixture' }),
+        })
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: Buffer.from(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="#1677ff"/></svg>',
+        ),
+      })
+    })
+
+    await page.goto(`${SOURCE_URL}/chat`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
+    await page.locator('.hc-chat').waitFor({ state: 'visible', timeout: 8_000 })
+    await replaceSourceMessages(page, [
+      {
+        id: 'asset-history-user-success',
+        role: 'user',
+        content: '请点评这张历史作品。',
+        timestamp: NOW,
+        metadata: {
+          attachments: [
+            {
+              type: 'image',
+              name: 'history-user.svg',
+              mime: 'image/svg+xml',
+              data: 'asset://k12-agent/history-user.svg',
+            },
+          ],
+        },
+      },
+      {
+        id: 'asset-history-assistant-success',
+        role: 'assistant',
+        content: '我已看到这张历史作品。',
+        timestamp: NOW,
+        metadata: {
+          attachments: [
+            {
+              type: 'image',
+              name: 'history-assistant.svg',
+              mime: 'image/svg+xml',
+              data: 'asset://k12-agent/history-assistant.svg',
+            },
+          ],
+        },
+      },
+    ])
+
+    const authenticatedImages = page.locator('.hc-msg__attachment-img')
+    await expect(authenticatedImages).toHaveCount(2)
+    for (let index = 0; index < 2; index += 1) {
+      await expect(authenticatedImages.nth(index)).toHaveAttribute('src', /^blob:/)
+    }
+    expect(assetRequests.filter((request) => request.resourceType === 'image')).toHaveLength(0)
+    expect(assetRequests.filter((request) => request.resourceType === 'fetch')).toHaveLength(2)
+    expect(assetRequests.every((request) => !request.url.startsWith('asset://'))).toBe(true)
+
+    assetMode = 'unauthorized'
+    await replaceSourceMessages(page, [
+      {
+        id: 'asset-history-user-failed',
+        role: 'user',
+        content: '请点评另一张历史作品。',
+        timestamp: NOW,
+        metadata: {
+          attachments: [
+            {
+              type: 'image',
+              name: 'failed-user.svg',
+              mime: 'image/svg+xml',
+              data: 'asset://k12-agent/failed-user.svg',
+            },
+          ],
+        },
+      },
+      {
+        id: 'asset-history-assistant-failed',
+        role: 'assistant',
+        content: '这条历史图片当前不可读取。',
+        timestamp: NOW,
+        metadata: {
+          attachments: [
+            {
+              type: 'image',
+              name: 'failed-assistant.svg',
+              mime: 'image/svg+xml',
+              data: 'asset://k12-agent/failed-assistant.svg',
+            },
+          ],
+        },
+      },
+    ])
+
+    await expect
+      .poll(
+        () =>
+          assetRequests.filter(
+            (request) => request.resourceType === 'fetch' && request.mode === 'unauthorized',
+          ).length,
+        { message: 'both failed assets must pass through the authenticated fetch boundary' },
+      )
+      .toBe(2)
+    await expect(page.locator('.hc-msg__attachment-img')).toHaveCount(0)
+    await expect(page.locator('.hc-msg__media-download')).toHaveCount(0)
+    await expect(page.locator('.hc-img-preview__backdrop')).toHaveCount(0)
+    expect(assetRequests.filter((request) => request.resourceType === 'image')).toHaveLength(0)
+
+    const failedUser = page.getByTestId('chat-message-user')
+    await failedUser.hover()
+    await failedUser.locator('.hc-msg-actions--user button[title="编辑消息"]').click()
+    await expect(failedUser.locator('.hc-msg__edit-card')).toBeVisible()
+    await expect(failedUser.locator('.hc-msg__edit-att-img')).toHaveCount(0)
+    await expect(page.locator('.hc-msg__media-download')).toHaveCount(0)
+    await expect(page.locator('.hc-img-preview__backdrop')).toHaveCount(0)
+  })
+
+  test('browser-contract: ordinary regenerate replaces one round and releases every terminal state', async ({
+    page,
+  }) => {
+    await openSourceFixture(page)
+    await replaceSourceMessages(page, [
+      {
+        id: 'regenerate-original-user',
+        role: 'user',
+        content: '请解释 57+38，并保留原题图片。',
+        timestamp: NOW,
+        metadata: {
+          attachments: [
+            {
+              type: 'image',
+              name: 'math-question.svg',
+              mime: 'image/svg+xml',
+              data: previewImage,
+              attachmentId: 'fixture-math-question-receipt',
+            },
+          ],
+        },
+      },
+      {
+        id: 'regenerate-original-assistant',
+        role: 'assistant',
+        content: '旧助手回复：57+38=95。',
+        timestamp: NOW,
+        metadata: { provider: 'openai', model: 'gpt-5.6-sol' },
+      },
+    ])
+    await installRegenerateStreamFixture(page, ['completed', 'failed', 'cancelled', 'failed'])
+
+    await expectRegenerateActionBetweenCopyAndSpeak(page)
+    await page.getByTestId('message-regenerate').click()
+    await expectRegenerateTerminal(page, '浏览器重试完成 #1', 1)
+    await expect(page.getByText('旧助手回复：57+38=95。')).toHaveCount(0)
+
+    await page.getByTestId('message-regenerate').click()
+    await expectRegenerateTerminal(page, '浏览器重试失败 #2', 2)
+    await expectRegenerateActionBetweenCopyAndSpeak(page)
+
+    await page.getByTestId('message-regenerate').click()
+    const stop = page.locator('.hc-composer__send--stop')
+    await expect(stop).toBeVisible()
+    await expect(stop).toBeEnabled()
+    await stop.click()
+    await expectRegenerateTerminal(page, '浏览器重试已取消 #3', 3)
+
+    await page.getByTestId('message-regenerate').click()
+    await expectRegenerateTerminal(page, '浏览器重试失败 #4', 4)
+    await expectRegenerateActionBetweenCopyAndSpeak(page)
+
+    const callEvidence = await page.evaluate(() => {
+      const host = window as typeof window & {
+        __HC_REGENERATE_FIXTURE__?: { calls: RegenerateCallEvidence[] }
+      }
+      return host.__HC_REGENERATE_FIXTURE__?.calls ?? []
+    })
+    expect(callEvidence).toHaveLength(4)
+    expect(callEvidence.map((call) => call.outcome)).toEqual([
+      'completed',
+      'failed',
+      'cancelled',
+      'failed',
+    ])
+    for (const call of callEvidence) {
+      expect(call.text).toBe('请解释 57+38，并保留原题图片。')
+      expect(call.attachmentCount).toBe(1)
+      expect(call.attachmentIds).toEqual(['fixture-math-question-receipt'])
+    }
+    await expect(page.getByTestId('chat-message-user')).toHaveCount(1)
+    await expect(page.getByTestId('chat-message-assistant')).toHaveCount(1)
+  })
 })

@@ -119,6 +119,7 @@ import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { appendSessionMessage, appendSessionMessagesBatch } from '@/api/chat'
+import { k12GetAssetBlob } from '@/api/k12-asset-url'
 import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
 import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
@@ -594,6 +595,147 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
 }
 
+// K12 图片的消息数据只保存 asset:// 稳定身份。可见地址由认证客户端读取后在当前
+// WebView 内生成，并由这里统一持有，避免把鉴权端点直接交给 <img> 或泄漏 object URL。
+const k12AssetDisplayURLs = ref(new Map<string, string>())
+const k12AssetBlobs = new Map<string, Blob>()
+const k12AssetAborters = new Map<string, AbortController>()
+const k12AssetLoads = new Map<string, Promise<Blob | null>>()
+const scenarioResubmitAborters = new Set<AbortController>()
+const scenarioPendingPreviewURLs = new Set<string>()
+
+function k12AssetIdentity(attachment: ChatAttachment): string {
+  const raw = attachment.data.trim()
+  if (raw.startsWith('asset://')) return raw
+  // 旧消息可能已经持久化过裸 K12 URL；读取时收敛回同一个稳定身份，不再裸连。
+  if (!/^https?:\/\//i.test(raw)) return ''
+  try {
+    const parsed = new URL(raw)
+    const match = parsed.pathname.match(/\/api\/k12\/assets\/([^/]+)$/)
+    const agent = parsed.searchParams.get('agent')?.trim() ?? ''
+    const file = match?.[1] ? decodeURIComponent(match[1]) : ''
+    return agent && file ? `asset://${agent}/${file}` : ''
+  } catch {
+    return ''
+  }
+}
+
+function k12AssetAgent(assetId: string): string {
+  if (!assetId.startsWith('asset://')) return ''
+  return assetId.slice('asset://'.length).split('/', 1)[0]?.trim() ?? ''
+}
+
+function activeK12AssetIDs(): Set<string> {
+  const active = new Set<string>()
+  for (const message of chatStore.messages) {
+    for (const attachment of getMessageAttachments(message)) {
+      if (attachment.type !== 'image') continue
+      const assetId = k12AssetIdentity(attachment)
+      if (assetId) active.add(assetId)
+    }
+  }
+  return active
+}
+
+function revokeK12ObjectURL(url: string | undefined) {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+}
+
+function releaseK12Asset(assetId: string) {
+  k12AssetAborters.get(assetId)?.abort()
+  k12AssetAborters.delete(assetId)
+  k12AssetLoads.delete(assetId)
+  k12AssetBlobs.delete(assetId)
+  const displayURL = k12AssetDisplayURLs.value.get(assetId)
+  k12AssetDisplayURLs.value.delete(assetId)
+  revokeK12ObjectURL(displayURL)
+}
+
+function clearK12AssetViews() {
+  const identities = new Set([
+    ...k12AssetDisplayURLs.value.keys(),
+    ...k12AssetAborters.keys(),
+    ...k12AssetBlobs.keys(),
+  ])
+  for (const assetId of identities) releaseK12Asset(assetId)
+  for (const previewURL of scenarioPendingPreviewURLs) revokeK12ObjectURL(previewURL)
+  scenarioPendingPreviewURLs.clear()
+  for (const controller of scenarioResubmitAborters) controller.abort()
+  scenarioResubmitAborters.clear()
+}
+
+function seedK12AssetPreview(assetId: string, previewURL: string | undefined) {
+  if (!previewURL?.startsWith('blob:')) return
+  k12AssetAborters.get(assetId)?.abort()
+  k12AssetAborters.delete(assetId)
+  k12AssetLoads.delete(assetId)
+  k12AssetBlobs.delete(assetId)
+  const previousURL = k12AssetDisplayURLs.value.get(assetId)
+  k12AssetDisplayURLs.value.set(assetId, previewURL)
+  if (previousURL !== previewURL) revokeK12ObjectURL(previousURL)
+}
+
+function ensureK12AssetBlob(assetId: string): Promise<Blob | null> {
+  const cached = k12AssetBlobs.get(assetId)
+  if (cached) return Promise.resolve(cached)
+  const pending = k12AssetLoads.get(assetId)
+  if (pending) return pending
+  const agent = k12AssetAgent(assetId)
+  if (!agent) return Promise.resolve(null)
+
+  const controller = new AbortController()
+  k12AssetAborters.set(assetId, controller)
+  const load: Promise<Blob | null> = (async () => {
+    const blob = await k12GetAssetBlob(agent, assetId, controller.signal)
+    if (!blob || controller.signal.aborted || !activeK12AssetIDs().has(assetId)) return null
+    const nextURL = URL.createObjectURL(blob)
+    const previousURL = k12AssetDisplayURLs.value.get(assetId)
+    k12AssetBlobs.set(assetId, blob)
+    k12AssetDisplayURLs.value.set(assetId, nextURL)
+    if (previousURL !== nextURL) revokeK12ObjectURL(previousURL)
+    return blob
+  })().finally(() => {
+    if (k12AssetAborters.get(assetId) === controller) k12AssetAborters.delete(assetId)
+    if (k12AssetLoads.get(assetId) === load) k12AssetLoads.delete(assetId)
+  })
+  k12AssetLoads.set(assetId, load)
+  return load
+}
+
+function reconcileK12AssetViews(assetIds: string[]) {
+  const active = new Set(assetIds)
+  const known = new Set([
+    ...k12AssetDisplayURLs.value.keys(),
+    ...k12AssetAborters.keys(),
+    ...k12AssetBlobs.keys(),
+  ])
+  for (const assetId of known) {
+    if (!active.has(assetId)) releaseK12Asset(assetId)
+  }
+  for (const assetId of active) void ensureK12AssetBlob(assetId)
+}
+
+function messageImageSrc(attachment: ChatAttachment): string {
+  const assetId = k12AssetIdentity(attachment)
+  return assetId ? (k12AssetDisplayURLs.value.get(assetId) ?? '') : imageSrc(attachment)
+}
+
+watch(
+  () =>
+    chatStore.messages.flatMap((message) =>
+      getMessageAttachments(message)
+        .filter((attachment) => attachment.type === 'image')
+        .map(k12AssetIdentity)
+        .filter(Boolean),
+    ),
+  reconcileK12AssetViews,
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  clearK12AssetViews()
+})
+
 // ─── 子 Agent 协作面板（orchestrate/spawn 工具结果尾部的 hexclaw-subagents 哨兵块）───
 // 一次性按消息 id 建 reports 映射（避免模板里逐帧重复 JSON.parse）；消息流变化时重算。
 const subAgentReportsByMsg = computed(() => {
@@ -1008,30 +1150,31 @@ async function handleScenarioImage(
     sourceSessionId: sessionId,
     ...(route ? { route } : {}),
   }
-  // 新选图片必须先由场景侧拿到 immutable asset receipt。此处只把同一条本地消息替换成
-  // 稳定资产 URL 后持久化；回调失败会阻止 ImageTask 创建并撤掉这条未持久消息。
+  if (payload.file && payload.previewUrl?.startsWith('blob:')) {
+    scenarioPendingPreviewURLs.add(payload.previewUrl)
+  }
+  // 新选图片必须先由场景侧拿到 immutable asset receipt。持久层只写 asset:// 身份；
+  // 当前本地预览在认证读取完成前继续显示，回调失败则阻止建任务并撤掉未持久消息。
   if (payload.file) {
     routedPayload.onSourceStored = async (receipt) => {
-      const displayUrl = receipt.displayUrl.trim()
-      if (!displayUrl) return false
+      const assetId = receipt.assetId.trim()
+      if (!assetId.startsWith('asset://')) return false
       const persistentAttachment: ChatAttachment = {
         ...routedPayload.attachment,
-        data: displayUrl,
+        data: assetId,
       }
-      routedPayload.attachment = persistentAttachment
-      const currentMessage = chatStore.messages.find((candidate) => candidate.id === message.id)
-      if (currentMessage) {
-        currentMessage.metadata = {
-          ...currentMessage.metadata,
+      const persistentMessage: ChatMessage = {
+        ...message,
+        metadata: {
+          ...message.metadata,
           attachments: [persistentAttachment],
-        }
+        },
       }
-      message.metadata = {
-        ...message.metadata,
-        attachments: [persistentAttachment],
-      }
-      const persisted = await persistScenarioImageMessage(message, sessionId)
+      const persisted = await persistScenarioImageMessage(persistentMessage, sessionId)
       if (!persisted) {
+        if (payload.previewUrl && scenarioPendingPreviewURLs.delete(payload.previewUrl)) {
+          revokeK12ObjectURL(payload.previewUrl)
+        }
         if (chatStore.currentSessionId === sessionId) {
           const messageIndex = chatStore.messages.findIndex(
             (candidate) => candidate.id === message.id,
@@ -1039,8 +1182,25 @@ async function handleScenarioImage(
           if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
         }
         chatStore.clearSessionExecution(sessionId, message.id)
+        return false
       }
-      return persisted
+
+      const currentMessage = chatStore.messages.find((candidate) => candidate.id === message.id)
+      const pendingPreviewOwned = payload.previewUrl
+        ? scenarioPendingPreviewURLs.delete(payload.previewUrl)
+        : false
+      if (currentMessage && pendingPreviewOwned) seedK12AssetPreview(assetId, payload.previewUrl)
+      else if (pendingPreviewOwned) revokeK12ObjectURL(payload.previewUrl)
+      routedPayload.attachment = persistentAttachment
+      message.metadata = persistentMessage.metadata
+      if (currentMessage) {
+        currentMessage.metadata = {
+          ...currentMessage.metadata,
+          attachments: [persistentAttachment],
+        }
+      }
+      if (currentMessage) void ensureK12AssetBlob(assetId)
+      return true
     }
   } else if (!(await persistScenarioImageMessage(message, sessionId))) {
     if (chatStore.currentSessionId === sessionId) {
@@ -2252,6 +2412,49 @@ function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
   })
 }
 
+async function resubmitK12AssetMessage(
+  assetId: string,
+  attachment: ChatAttachment,
+  submission: EditedMessageSubmission,
+): Promise<boolean> {
+  const agent = k12AssetAgent(assetId)
+  if (!agent) return false
+  const controller = new AbortController()
+  scenarioResubmitAborters.add(controller)
+  let previewURL = ''
+  let previewTransferred = false
+  try {
+    // 原消息可能已经从可见数组删除，重提必须按稳定身份重新认证读取，不能把 asset://
+    // 交给 base64 兼容分支。新 File 继续走既有上传与资产回执管道。
+    const blob = await k12GetAssetBlob(agent, assetId, controller.signal)
+    if (!blob || controller.signal.aborted) return false
+    previewURL = URL.createObjectURL(blob)
+    const accepted = await handleScenarioImage(
+      {
+        file: new File([blob], attachment.name, {
+          type: attachment.mime || blob.type || 'application/octet-stream',
+        }),
+        previewUrl: previewURL,
+        attachment: {
+          ...attachment,
+          data: previewURL,
+        },
+        contextText: submission.content,
+      },
+      submission.targetSessionId,
+      scenarioImageRoute(
+        submission.routeSnapshot?.chatParams.provider,
+        submission.routeSnapshot?.chatParams.model,
+      ) ?? null,
+    )
+    previewTransferred = accepted
+    return accepted
+  } finally {
+    if (previewURL && !previewTransferred) revokeK12ObjectURL(previewURL)
+    scenarioResubmitAborters.delete(controller)
+  }
+}
+
 async function submitEditedMessage(submission: EditedMessageSubmission): Promise<boolean> {
   const attachments = submission.carry?.attachments ?? []
   // 场景会话的单图消息（含可选说明文字）必须回到与 composer 上传/粘贴相同的图片入口；
@@ -2263,6 +2466,8 @@ async function submitEditedMessage(submission: EditedMessageSubmission): Promise
     attachments[0]?.type === 'image'
   ) {
     const attachment = attachments[0]
+    const assetId = k12AssetIdentity(attachment)
+    if (assetId) return resubmitK12AssetMessage(assetId, attachment, submission)
     return handleScenarioImage(
       {
         dataUrl: imageSrc(attachment),
@@ -2349,6 +2554,8 @@ watch(
 watch(
   () => chatStore.currentSessionId,
   (newId) => {
+    // object URL 与认证请求只属于离开前的会话；消息异步重载后会按新历史重新申请。
+    clearK12AssetViews()
     // 任何会话切换/新建：重置上滚态 + 下翻箭头。新空会话不产生 scroll 事件、handleMessagesScroll
     // 不触发，若不在此重置，上个会话遗留的 showScrollToBottom=true 会残留到新会话（BUG-20260628）。
     userScrolledUp.value = false
@@ -3148,21 +3355,23 @@ function startSidebarResize(event: MouseEvent) {
                         <!-- 图像 / 视频 / 音频附件 -->
                         <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                           <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
-                            <span v-if="att.type === 'image'" class="hc-msg__img-wrap">
-                              <img
-                                class="hc-msg__attachment-img"
-                                :src="imageSrc(att)"
-                                :alt="att.name"
-                                @click="openImagePreview(imageSrc(att))"
-                              />
-                              <button
-                                class="hc-msg__media-download"
-                                :title="t('chat.downloadImage', '下载图片')"
-                                @click.stop="downloadImage(imageSrc(att), att.name)"
-                              >
-                                ⬇
-                              </button>
-                            </span>
+                            <template v-if="att.type === 'image'">
+                              <span v-if="messageImageSrc(att)" class="hc-msg__img-wrap">
+                                <img
+                                  class="hc-msg__attachment-img"
+                                  :src="messageImageSrc(att)"
+                                  :alt="att.name"
+                                  @click="openImagePreview(messageImageSrc(att))"
+                                />
+                                <button
+                                  class="hc-msg__media-download"
+                                  :title="t('chat.downloadImage', '下载图片')"
+                                  @click.stop="downloadImage(messageImageSrc(att), att.name)"
+                                >
+                                  ⬇
+                                </button>
+                              </span>
+                            </template>
                             <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
                               <!-- poster=后端持久化封面（BUG-20260712-J：数据一直在，此前未绑定→黑矩形）；
                                  无封面回退 #t=0.1 强制 WebKit 渲染首帧 -->
@@ -3432,13 +3641,15 @@ function startSidebarResize(event: MouseEvent) {
                       <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                         <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
                           <!-- BUG-20260709：CSS zoom-in 承诺可放大，与助手气泡同走 openImagePreview -->
-                          <img
-                            v-if="att.type === 'image'"
-                            class="hc-msg__attachment-img"
-                            :src="imageSrc(att)"
-                            :alt="att.name"
-                            @click="openImagePreview(imageSrc(att))"
-                          />
+                          <template v-if="att.type === 'image'">
+                            <img
+                              v-if="messageImageSrc(att)"
+                              class="hc-msg__attachment-img"
+                              :src="messageImageSrc(att)"
+                              :alt="att.name"
+                              @click="openImagePreview(messageImageSrc(att))"
+                            />
+                          </template>
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
@@ -3520,13 +3731,14 @@ function startSidebarResize(event: MouseEvent) {
                     <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
                       <!-- 编辑时图片缩略图常驻顶部（编辑文字不丢图，BUG-20260625） -->
                       <div v-if="editingImages(msg).length" class="hc-msg__edit-attachments">
-                        <img
-                          v-for="(att, ai) in editingImages(msg)"
-                          :key="ai"
-                          class="hc-msg__edit-att-img"
-                          :src="imageSrc(att)"
-                          :alt="att.name"
-                        />
+                        <template v-for="(att, ai) in editingImages(msg)" :key="ai">
+                          <img
+                            v-if="messageImageSrc(att)"
+                            class="hc-msg__edit-att-img"
+                            :src="messageImageSrc(att)"
+                            :alt="att.name"
+                          />
+                        </template>
                       </div>
                       <!-- 编辑时挂载的 skill 同样常驻（编辑文字不丢技能，confirmEdit 已带回 carry）。 -->
                       <div v-if="getMessageSkills(msg).length" class="hc-msg__edit-skills">

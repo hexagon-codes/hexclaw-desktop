@@ -5,14 +5,28 @@ import { createPinia, setActivePinia } from 'pinia'
 import QuickChatView from '../QuickChatView.vue'
 import quickChatSource from '../QuickChatView.vue?raw'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import en from '@/i18n/locales/en'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 import { sendChat } from '@/api/chat'
 
 const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
   let sidecarReadyHandler: (() => Promise<void> | void) | null = null
-  let chunkHandler: ((payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => void) | null = null
-  let replyHandler: ((payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => void) | null = null
+  let chunkHandler:
+    | ((payload: {
+        content: string
+        done?: boolean
+        reasoning?: string
+        metadata?: Record<string, unknown>
+      }) => void)
+    | null = null
+  let replyHandler:
+    | ((payload: {
+        content: string
+        reasoning?: string
+        metadata?: Record<string, unknown>
+      }) => void)
+    | null = null
   let errorHandler: ((error: string) => void) | null = null
   return {
     mockGetLLMConfig: vi.fn(),
@@ -34,14 +48,31 @@ const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
         replyHandler = null
         errorHandler = null
       }),
-      onChunk: vi.fn((callback: (payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => void) => {
-        chunkHandler = callback
-        return vi.fn()
-      }),
-      onReply: vi.fn((callback: (payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => void) => {
-        replyHandler = callback
-        return vi.fn()
-      }),
+      onChunk: vi.fn(
+        (
+          callback: (payload: {
+            content: string
+            done?: boolean
+            reasoning?: string
+            metadata?: Record<string, unknown>
+          }) => void,
+        ) => {
+          chunkHandler = callback
+          return vi.fn()
+        },
+      ),
+      onReply: vi.fn(
+        (
+          callback: (payload: {
+            content: string
+            reasoning?: string
+            metadata?: Record<string, unknown>
+          }) => void,
+        ) => {
+          replyHandler = callback
+          return vi.fn()
+        },
+      ),
       onError: vi.fn((callback: (error: string) => void) => {
         errorHandler = callback
         return vi.fn()
@@ -51,10 +82,19 @@ const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
       emitSidecarReady: async () => {
         await sidecarReadyHandler?.()
       },
-      emitChunk: (payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => {
+      emitChunk: (payload: {
+        content: string
+        done?: boolean
+        reasoning?: string
+        metadata?: Record<string, unknown>
+      }) => {
         chunkHandler?.(payload)
       },
-      emitReply: (payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => {
+      emitReply: (payload: {
+        content: string
+        reasoning?: string
+        metadata?: Record<string, unknown>
+      }) => {
         replyHandler?.(payload)
       },
       emitError: (error: string) => {
@@ -99,16 +139,18 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { LazyStore: MockLazyStore }
 })
 
-function createTestI18n() {
+type TestedLocale = 'zh-CN' | 'en'
+
+function createTestI18n(locale: TestedLocale = 'zh-CN') {
   return createI18n({
     legacy: false,
-    locale: 'zh-CN',
+    locale,
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN, zh: zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN, en },
   })
 }
 
-async function mountReasoningStatusQuickChat() {
+async function mountReasoningStatusQuickChat(locale: TestedLocale = 'zh-CN') {
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = useSettingsStore()
@@ -138,7 +180,7 @@ async function mountReasoningStatusQuickChat() {
       rate_limit_rpm: 60,
     },
     general: {
-      language: 'zh-CN',
+      language: locale,
       log_level: 'info',
       data_dir: '',
       auto_start: false,
@@ -157,7 +199,7 @@ async function mountReasoningStatusQuickChat() {
 
   const wrapper = mount(QuickChatView, {
     global: {
-      plugins: [pinia, createTestI18n()],
+      plugins: [pinia, createTestI18n(locale)],
       stubs: {
         MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' },
       },
@@ -394,7 +436,10 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
+    const sendButton = () => {
+      const btns = wrapper.findAll('button')
+      return btns[btns.length - 1]!
+    }
 
     await textarea.setValue('第一条')
     await sendButton().trigger('click')
@@ -481,7 +526,10 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
+    const sendButton = () => {
+      const btns = wrapper.findAll('button')
+      return btns[btns.length - 1]!
+    }
 
     await textarea.setValue('需要停止')
     await sendButton().trigger('click')
@@ -604,7 +652,10 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
+    const sendButton = () => {
+      const btns = wrapper.findAll('button')
+      return btns[btns.length - 1]!
+    }
 
     await textarea.setValue('需要清空')
     await sendButton().trigger('click')
@@ -696,7 +747,10 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
+    const sendButton = () => {
+      const btns = wrapper.findAll('button')
+      return btns[btns.length - 1]!
+    }
 
     await textarea.setValue('HTTP 请求')
     await sendButton().trigger('click')
@@ -864,22 +918,46 @@ describe('QuickChatView', () => {
     const store = useSettingsStore()
     store.config = {
       llm: {
-        providers: [{
-          id: 'openai', backendKey: 'openai', name: 'OpenAI', type: 'openai',
-          enabled: true, apiKey: '', baseUrl: 'https://api.openai.com/v1',
-          models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
-        }],
-        defaultModel: 'gpt-4o', defaultProviderId: 'openai',
+        providers: [
+          {
+            id: 'openai',
+            backendKey: 'openai',
+            name: 'OpenAI',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1',
+            models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+          },
+        ],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'openai',
       },
-      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: 'assistant' },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: 'assistant',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
     store.runtimeProviders = store.config.llm.providers
 
     const wrapper = mount(QuickChatView, {
-      global: { plugins: [pinia, createTestI18n()], stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } } },
+      global: {
+        plugins: [pinia, createTestI18n()],
+        stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } },
+      },
     })
     await flushPromises()
 
@@ -900,15 +978,36 @@ describe('QuickChatView', () => {
     const store = useSettingsStore()
     store.config = {
       llm: {
-        providers: [{
-          id: 'openai', backendKey: 'openai', name: 'OpenAI', type: 'openai',
-          enabled: true, apiKey: '', baseUrl: 'https://api.openai.com/v1',
-          models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
-        }],
-        defaultModel: 'gpt-4o', defaultProviderId: 'openai',
+        providers: [
+          {
+            id: 'openai',
+            backendKey: 'openai',
+            name: 'OpenAI',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1',
+            models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+          },
+        ],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'openai',
       },
-      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: 'assistant' },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: 'assistant',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -918,7 +1017,10 @@ describe('QuickChatView', () => {
     vi.mocked(sendChat).mockResolvedValueOnce({ reply: 'ok' } as never)
 
     const wrapper = mount(QuickChatView, {
-      global: { plugins: [pinia, createTestI18n()], stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } } },
+      global: {
+        plugins: [pinia, createTestI18n()],
+        stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } },
+      },
     })
     await flushPromises()
 
@@ -934,25 +1036,42 @@ describe('QuickChatView', () => {
   })
 
   describe('reasoning status contract (RED)', () => {
-    it('uses one shared generating status before the first answer token and removes it afterwards', async () => {
-      const wrapper = await mountReasoningStatusQuickChat()
-      await sendReasoningStatusFixture(wrapper)
+    it.each([
+      { locale: 'zh-CN' as const, expected: '正在回复…' },
+      { locale: 'en' as const, expected: 'Responding…' },
+    ])(
+      'CHAT-ASSISTANT-RUN-STATUS-UNIFIED-001 Quick Chat $locale 首正文前显示统一中性状态，首正文后移除',
+      async ({ locale, expected }) => {
+        const wrapper = await mountReasoningStatusQuickChat(locale)
+        await sendReasoningStatusFixture(wrapper)
 
-      const pendingStatuses = wrapper.findAll(
-        '[data-component="AssistantRunStatus"][role="status"]',
-      )
-      expect.soft(wrapper.findAll('[role="status"]')).toHaveLength(1)
-      expect.soft(pendingStatuses).toHaveLength(1)
-      expect.soft(pendingStatuses[0]?.text()).toBe('正在生成回答…')
-      expect.soft(wrapper.findAll('.animate-bounce')).toHaveLength(0)
+        const pendingStatuses = wrapper.findAll(
+          '[data-component="AssistantRunStatus"][role="status"]',
+        )
+        expect.soft(wrapper.findAll('[role="status"]')).toHaveLength(1)
+        expect.soft(pendingStatuses).toHaveLength(1)
+        const status = pendingStatuses[0]
+        expect(status).toBeDefined()
+        expect.soft(status!.text()).toBe(expected)
+        expect.soft(status!.attributes('data-run-kind')).toBe('generating')
+        expect.soft(status!.attributes('aria-live')).toBe('polite')
+        expect.soft(status!.attributes('aria-atomic')).toBe('true')
+        expect
+          .soft(status!.get('.hc-assistant-run-status__spinner').attributes('aria-hidden'))
+          .toBe('true')
+        expect.soft(wrapper.findAll('.animate-bounce')).toHaveLength(0)
+        expect.soft(wrapper.text()).not.toContain('正在生成回答')
+        expect.soft(wrapper.text()).not.toContain('Generating answer')
 
-      wsMock.emitChunk({ content: '这是首个正文 token' })
-      await flushPromises()
+        wsMock.emitChunk({ content: 'first visible answer' })
+        await flushPromises()
 
-      expect(wrapper.findAll('[role="status"]')).toHaveLength(0)
-      expect(wrapper.findAll('.animate-bounce')).toHaveLength(0)
-      expect(wrapper.text()).toContain('这是首个正文 token')
-    })
+        expect(wrapper.findAll('[role="status"]')).toHaveLength(0)
+        expect(wrapper.findAll('.animate-bounce')).toHaveLength(0)
+        expect(wrapper.text()).toContain('first visible answer')
+        wrapper.unmount()
+      },
+    )
 
     it('fails closed when a receipt tries to rewrite Quick Chat request=off to on', async () => {
       const wrapper = await mountReasoningStatusQuickChat()
@@ -975,7 +1094,7 @@ describe('QuickChatView', () => {
       expect(status.attributes('data-reasoning-request')).toBe('off')
       expect(status.attributes('data-reasoning-support')).toBe('unknown')
       expect(status.attributes('data-reasoning-execution')).toBe('unknown')
-      expect(status.text()).toContain('正在生成回答…')
+      expect(status.text()).toContain('正在回复…')
       expect(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
     })
 

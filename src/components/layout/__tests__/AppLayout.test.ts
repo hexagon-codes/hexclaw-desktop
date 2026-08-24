@@ -149,8 +149,9 @@ describe('AppLayout — 冷启动 sidecar 就绪补载会话列表', () => {
 
     // 不派发 native event，模拟其在 renderer 注册前已经丢失；health fallback 仍必须解锁首屏。
     appStore.sidecarReady = true
-    await vi.waitFor(() =>
-      expect(document.getElementById('splash-screen')?.classList.contains('fade-out')).toBe(true),
+    await vi.waitFor(
+      () =>
+        expect(document.getElementById('splash-screen')?.classList.contains('fade-out')).toBe(true),
       { timeout: 1500 },
     )
 
@@ -161,7 +162,10 @@ describe('AppLayout — 冷启动 sidecar 就绪补载会话列表', () => {
 
   it('[BUG-20260725-008] reloads the delayed sidecar configuration and returns the temporary welcome route to chat', async () => {
     delayedReadyRecovery.loadConfig.mockImplementation(async () => {
-      delayedReadyRecovery.config = { llm: { providers: [{ id: 'fixture' }] } }
+      delayedReadyRecovery.config = {
+        llm: { providers: [{ id: 'fixture' }] },
+        general: { welcomeCompleted: false },
+      }
     })
     const { useAppStore } = await import('@/stores/app')
     const AppLayout = (await import('../AppLayout.vue')).default

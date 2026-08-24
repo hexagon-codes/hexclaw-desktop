@@ -3,7 +3,9 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
+import en from '@/i18n/locales/en'
 import zhCN from '@/i18n/locales/zh-CN'
+import k12En from '@/features/k12/i18n/en'
 import k12ZhCN from '@/features/k12/i18n/zh-CN'
 import { K12_VIEW_DESCRIPTOR } from '@/features/k12/descriptor'
 import { useSettingsStore } from '@/stores/settings'
@@ -75,6 +77,10 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRouterReplace: vi.fn(),
 }))
 
+const { mockK12GetAssetBlob } = vi.hoisted(() => ({
+  mockK12GetAssetBlob: vi.fn(),
+}))
+
 // ─── Mock API 模块 ──────────────────────────────────────
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
@@ -85,6 +91,14 @@ vi.mock('@/api/chat', () => ({
   forkSession: mockForkSession,
   deleteSession: mockDeleteSession,
 }))
+
+vi.mock('@/api/k12-asset-url', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/k12-asset-url')>()
+  return {
+    ...actual,
+    k12GetAssetBlob: (...args: unknown[]) => mockK12GetAssetBlob(...args),
+  }
+})
 
 vi.mock('@/services/messageService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/messageService')>()
@@ -292,14 +306,17 @@ vi.mock('markdown-it', () => ({
 /**
  * 创建测试用 i18n 实例
  */
-function createTestI18n() {
+type TestedLocale = 'zh-CN' | 'en'
+
+function createTestI18n(locale: TestedLocale = 'zh-CN') {
   return createI18n({
     legacy: false,
-    locale: 'zh-CN',
+    locale,
     fallbackLocale: 'zh-CN',
     messages: {
       'zh-CN': { ...zhCN, k12: k12ZhCN },
       zh: { ...zhCN, k12: k12ZhCN },
+      en: { ...en, k12: k12En },
     },
   })
 }
@@ -313,11 +330,15 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
-function mountChatView(options?: { setup?: () => void; attachTo?: HTMLElement }) {
+function mountChatView(options?: {
+  setup?: () => void
+  attachTo?: HTMLElement
+  locale?: TestedLocale
+}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   options?.setup?.()
-  const i18n = createTestI18n()
+  const i18n = createTestI18n(options?.locale)
 
   return mount(ChatView, {
     attachTo: options?.attachTo,
@@ -407,6 +428,23 @@ function expectVisibleTextOnce(wrapper: ReturnType<typeof mountChatView>, text: 
   expect(wrapper.text().split(text).length - 1).toBe(1)
 }
 
+function expectNeutralAssistantRunStatus(
+  wrapper: ReturnType<typeof mountChatView>,
+  expected: { kind: 'generating' | 'preparing'; text: string },
+) {
+  const statuses = wrapper.findAll('[data-component="AssistantRunStatus"][role="status"]')
+  expect.soft(statuses).toHaveLength(1)
+  const status = statuses[0]
+  expect(status).toBeDefined()
+  expect.soft(status!.text()).toBe(expected.text)
+  expect.soft(status!.attributes('data-run-kind')).toBe(expected.kind)
+  expect.soft(status!.attributes('aria-live')).toBe('polite')
+  expect.soft(status!.attributes('aria-atomic')).toBe('true')
+  expect
+    .soft(status!.get('.hc-assistant-run-status__spinner').attributes('aria-hidden'))
+    .toBe('true')
+}
+
 // jsdom 不提供 scrollIntoView 和 matchMedia，需要手动补齐
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
@@ -465,6 +503,8 @@ describe('ChatView — E2E 关键路径', () => {
       ids: [],
       session_id: 'scenario-session',
     })
+    mockK12GetAssetBlob.mockReset()
+    mockK12GetAssetBlob.mockResolvedValue(new Blob(['k12-asset'], { type: 'image/png' }))
     mockRemoveMessage.mockReset()
     mockRemoveMessage.mockResolvedValue({ message: 'ok' })
   })
@@ -485,10 +525,11 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(wrapper.find('[data-testid="chat-voice-start"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="chat-send"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('keeps regular chat on Xiaoxie default persona even if an old default role is stored', async () => {
-    mountChatView({
+    const wrapper = mountChatView({
       setup: () => {
         const settingsStore = useSettingsStore()
         settingsStore.config = {
@@ -528,6 +569,7 @@ describe('ChatView — E2E 关键路径', () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
     expect(store.agentRole).toBe('')
+    wrapper.unmount()
   })
 
   // ────────────────────────────────────────────────────
@@ -539,6 +581,7 @@ describe('ChatView — E2E 关键路径', () => {
 
     // EmptyState 中包含 "开始对话" 文字
     expect(wrapper.text()).toContain('开始对话')
+    wrapper.unmount()
   })
 
   it('[bug] distinguishes connection-directory failure from a successful empty list', async () => {
@@ -553,6 +596,7 @@ describe('ChatView — E2E 关键路径', () => {
     expect(mockGetConnections).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('shows a distinct empty state after the connection directory loads successfully', async () => {
@@ -561,6 +605,7 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('[BUG-20260725-008] captures sidecar-ready emitted as the initial directory load begins', async () => {
@@ -621,13 +666,18 @@ describe('ChatView — E2E 关键路径', () => {
       .mockResolvedValueOnce({ connections: [], error: 'sidecar cold start' })
       .mockResolvedValueOnce({ connections: [] })
 
-    const wrapper = mountChatView()
+    let appStore!: ReturnType<typeof useAppStore>
+    const wrapper = mountChatView({
+      setup: () => {
+        appStore = useAppStore()
+      },
+    })
     await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1))
     expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(true)
 
     // 模拟 native sidecar-ready 在 ChatView listener 注册前丢失，只保留 AppLayout health fallback。
     expect(tauriEventMock.sidecarReady).toBeTypeOf('function')
-    useAppStore().sidecarReady = true
+    appStore.sidecarReady = true
 
     await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(2))
     expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
@@ -638,8 +688,12 @@ describe('ChatView — E2E 关键路径', () => {
   it('[BUG-20260725-008] reloads the connection directory after every sidecar restart generation', async () => {
     mockGetConnectionsResult.mockReset().mockResolvedValue({ connections: [] })
 
-    const wrapper = mountChatView()
-    const appStore = useAppStore()
+    let appStore!: ReturnType<typeof useAppStore>
+    const wrapper = mountChatView({
+      setup: () => {
+        appStore = useAppStore()
+      },
+    })
 
     await vi.waitFor(() => expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1))
 
@@ -903,45 +957,70 @@ describe('ChatView — E2E 关键路径', () => {
     expect(typingIndicator.exists() || stopBtn.exists()).toBe(true)
   })
 
-  it('REG-CHAT-REASONING-STATUS-001 thinking off 首正文前只显示正在生成回答且无三点气泡', async () => {
-    const wrapper = mountChatView()
-    await flushPromises()
-
-    const store = useChatStore()
-    installReasoningStatusFixture(store, {
-      sessionId: 'reasoning-off-pending',
+  it.each([
+    {
+      locale: 'zh-CN' as const,
+      kind: 'generating' as const,
+      text: '正在回复…',
       thinkingEnabled: false,
-      reasoningSupport: 'supported',
-      reasoningExecution: 'unknown',
-    })
-    await flushPromises()
-
-    expectVisibleTextOnce(wrapper, '正在生成回答…')
-    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
-    expect(wrapper.findAll('.hc-thinking')).toHaveLength(0)
-
-    wrapper.unmount()
-  })
-
-  it('REG-CHAT-REASONING-STATUS-002 thinking on 且能力未知时只显示正在准备回答', async () => {
-    const wrapper = mountChatView()
-    await flushPromises()
-
-    installReasoningStatusFixture(useChatStore(), {
-      sessionId: 'reasoning-unknown-pending',
+      reasoningSupport: 'supported' as const,
+    },
+    {
+      locale: 'zh-CN' as const,
+      kind: 'preparing' as const,
+      text: '正在回复…',
       thinkingEnabled: true,
-      reasoningSupport: 'unknown',
-      reasoningExecution: 'unknown',
-    })
-    await flushPromises()
+      reasoningSupport: 'unknown' as const,
+    },
+    {
+      locale: 'en' as const,
+      kind: 'generating' as const,
+      text: 'Responding…',
+      thinkingEnabled: false,
+      reasoningSupport: 'supported' as const,
+    },
+    {
+      locale: 'en' as const,
+      kind: 'preparing' as const,
+      text: 'Responding…',
+      thinkingEnabled: true,
+      reasoningSupport: 'unknown' as const,
+    },
+  ])(
+    'CHAT-ASSISTANT-RUN-STATUS-UNIFIED-001 Main Chat $locale $kind 首正文前显示统一中性状态，首正文后移除',
+    async ({ locale, kind, text, thinkingEnabled, reasoningSupport }) => {
+      const wrapper = mountChatView({ locale })
+      await flushPromises()
 
-    expectVisibleTextOnce(wrapper, '正在准备回答…')
-    expect(wrapper.text()).not.toContain('正在深度思考')
-    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
-    expect(wrapper.findAll('.hc-thinking')).toHaveLength(0)
+      const store = useChatStore()
+      const sessionId = `neutral-${locale}-${kind}`
+      installReasoningStatusFixture(store, {
+        sessionId,
+        thinkingEnabled,
+        reasoningSupport,
+        reasoningExecution: 'unknown',
+      })
+      await flushPromises()
 
-    wrapper.unmount()
-  })
+      expectNeutralAssistantRunStatus(wrapper, { kind, text })
+      expect.soft(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+      expect.soft(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
+      expect.soft(wrapper.text()).not.toContain('正在生成回答')
+      expect.soft(wrapper.text()).not.toContain('正在准备回答')
+      expect.soft(wrapper.text()).not.toContain('Generating answer')
+      expect.soft(wrapper.text()).not.toContain('Preparing answer')
+
+      const stream = store.activeStreams[sessionId]!
+      stream.rawContent = 'first visible answer'
+      stream.content = 'first visible answer'
+      await flushPromises()
+
+      expect(wrapper.findAll('[data-component="AssistantRunStatus"]')).toHaveLength(0)
+      expect(wrapper.text()).toContain('first visible answer')
+
+      wrapper.unmount()
+    },
+  )
 
   it('REG-CHAT-REASONING-STATUS-003 applied 首正文前只有一个运行中思考状态', async () => {
     const wrapper = mountChatView()
@@ -1699,7 +1778,7 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
-  it('新选场景图片只在资产回执后持久化同一条稳定消息', async () => {
+  it('新选场景图片只在资产回执后持久化同一条 asset 身份消息', async () => {
     const wrapper = mountChatView()
     await flushPromises()
 
@@ -1741,7 +1820,6 @@ describe('ChatView — E2E 关键路径', () => {
     const sourceStored = routedPayload.onSourceStored!
     const persisted = await sourceStored({
       assetId: 'asset://mingming/photo.png',
-      displayUrl: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
     })
 
     expect(persisted).toBe(true)
@@ -1755,7 +1833,7 @@ describe('ChatView — E2E 关键路径', () => {
         metadata: {
           attachments: [
             expect.objectContaining({
-              data: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+              data: 'asset://mingming/photo.png',
             }),
           ],
         },
@@ -1765,11 +1843,280 @@ describe('ChatView — E2E 关键路径', () => {
       store.messages.find((message) => message.id === imageMessage?.id)?.metadata?.attachments,
     ).toEqual([
       expect.objectContaining({
-        data: 'http://127.0.0.1:16060/api/k12/assets/photo.png?agent=mingming',
+        data: 'asset://mingming/photo.png',
       }),
     ])
+    const persistedMetadata = mockAppendSessionMessage.mock.calls[0]?.[1]?.metadata
+    expect(JSON.stringify(persistedMetadata)).not.toContain('blob:scenario-homework-preview')
+    expect(JSON.stringify(persistedMetadata)).not.toContain('http://127.0.0.1:16060')
 
     wrapper.unmount()
+  })
+
+  it('资产认证读取完成前持续显示本地 blob，完成后原位切换且不裸连 HTTP', async () => {
+    const authenticatedBlob = new Blob(['authenticated-image'], { type: 'image/png' })
+    let resolveAssetBlob!: (blob: Blob | null) => void
+    const pendingAssetBlob = new Promise<Blob | null>((resolve) => {
+      resolveAssetBlob = resolve
+    })
+    mockK12GetAssetBlob.mockReturnValueOnce(pendingAssetBlob)
+    const createObjectURL = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:k12-authenticated-photo')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const wrapper = mountChatView()
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'scenario-preview-session'
+      store.agentRole = 'mingming'
+      const sourceFile = new File(['image'], 'photo.png', { type: 'image/png' })
+      const payload = {
+        file: sourceFile,
+        previewUrl: 'blob:scenario-local-photo',
+        attachment: {
+          type: 'image' as const,
+          name: 'photo.png',
+          mime: 'image/png',
+          data: 'blob:scenario-local-photo',
+        },
+      }
+
+      wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+      const vm = wrapper.vm as unknown as {
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+      await vi.waitFor(() => {
+        expect(vm.scenarioComposerImage).toMatchObject({
+          previewUrl: payload.previewUrl,
+          attachment: payload.attachment,
+        })
+      })
+      expect(wrapper.get('[data-testid="chat-message-user"] img').attributes('src')).toBe(
+        'blob:scenario-local-photo',
+      )
+
+      const stored = (vm.scenarioComposerImage as ScenarioComposerImagePayload).onSourceStored!({
+        assetId: 'asset://mingming/photo.png',
+      })
+      await flushPromises()
+
+      const pendingImageSrc = wrapper.get('[data-testid="chat-message-user"] img').attributes('src')
+      expect
+        .soft(mockK12GetAssetBlob)
+        .toHaveBeenCalledWith('mingming', 'asset://mingming/photo.png', expect.any(AbortSignal))
+      expect.soft(pendingImageSrc).toBe('blob:scenario-local-photo')
+      expect.soft(pendingImageSrc).not.toMatch(/^https?:/)
+      expect.soft(revokeObjectURL).not.toHaveBeenCalledWith('blob:scenario-local-photo')
+
+      resolveAssetBlob(authenticatedBlob)
+      await stored
+      await flushPromises()
+
+      expect.soft(createObjectURL).toHaveBeenCalledWith(authenticatedBlob)
+      expect
+        .soft(wrapper.get('[data-testid="chat-message-user"] img').attributes('src'))
+        .toBe('blob:k12-authenticated-photo')
+      expect
+        .soft(revokeObjectURL.mock.calls.filter(([url]) => url === 'blob:scenario-local-photo'))
+        .toHaveLength(1)
+    } finally {
+      resolveAssetBlob(authenticatedBlob)
+      wrapper.unmount()
+      createObjectURL.mockRestore()
+      revokeObjectURL.mockRestore()
+    }
+  })
+
+  it('重载历史 asset 附件经认证客户端恢复 object URL，并释放或中止离场资源', async () => {
+    const firstBlob = new Blob(['history-image'], { type: 'image/png' })
+    let pendingSignal: AbortSignal | undefined
+    mockK12GetAssetBlob.mockImplementation(
+      (_agent: string, assetId: string, signal?: AbortSignal) => {
+        if (assetId === 'asset://mingming/history.png') return Promise.resolve(firstBlob)
+        pendingSignal = signal
+        return new Promise<Blob | null>(() => {})
+      },
+    )
+    const createObjectURL = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:k12-history-photo')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const wrapper = mountChatView()
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'scenario-history-session'
+      store.agentRole = 'mingming'
+      store.messages = [
+        {
+          id: 'history-image-message',
+          role: 'user',
+          content: '',
+          timestamp: '2026-08-23T00:00:00Z',
+          metadata: {
+            attachments: [
+              {
+                type: 'image',
+                name: 'history.png',
+                mime: 'image/png',
+                data: 'asset://mingming/history.png',
+              },
+            ],
+          },
+        },
+      ]
+      await flushPromises()
+      await flushPromises()
+
+      const restoredSrc = wrapper.get('[data-testid="chat-message-user"] img').attributes('src')
+      expect
+        .soft(mockK12GetAssetBlob)
+        .toHaveBeenCalledWith('mingming', 'asset://mingming/history.png', expect.any(AbortSignal))
+      expect.soft(createObjectURL).toHaveBeenCalledWith(firstBlob)
+      expect.soft(restoredSrc).toBe('blob:k12-history-photo')
+      expect.soft(restoredSrc).not.toMatch(/^https?:/)
+
+      store.messages = [
+        {
+          id: 'pending-history-image-message',
+          role: 'user',
+          content: '',
+          timestamp: '2026-08-23T00:01:00Z',
+          metadata: {
+            attachments: [
+              {
+                type: 'image',
+                name: 'pending.png',
+                mime: 'image/png',
+                data: 'asset://mingming/pending.png',
+              },
+            ],
+          },
+        },
+      ]
+      await flushPromises()
+
+      expect
+        .soft(revokeObjectURL.mock.calls.filter(([url]) => url === 'blob:k12-history-photo'))
+        .toHaveLength(1)
+      expect
+        .soft(mockK12GetAssetBlob)
+        .toHaveBeenCalledWith('mingming', 'asset://mingming/pending.png', expect.any(AbortSignal))
+
+      wrapper.unmount()
+      expect.soft(pendingSignal).toBeInstanceOf(AbortSignal)
+      expect.soft(pendingSignal?.aborted).toBe(true)
+    } finally {
+      if (wrapper.exists()) wrapper.unmount()
+      createObjectURL.mockRestore()
+      revokeObjectURL.mockRestore()
+    }
+  })
+
+  it('编辑重提 asset 图片先认证读取为 File，不进入 base64 兼容分支', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.reset()
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'asset-edit-test' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'AssetEditScenarioStub',
+      template: '<div />',
+    })
+    const authenticatedBlob = new Blob(['edit-image'], { type: 'image/png' })
+    mockK12GetAssetBlob.mockResolvedValueOnce(authenticatedBlob)
+    const createObjectURL = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:k12-edit-resubmit')
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'mingming',
+            display_name: '图片场景',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'asset-edit-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'asset-edit-session'
+      store.agentRole = 'mingming'
+      store.chatMode = 'agent'
+      await flushPromises()
+      const attachment = {
+        type: 'image' as const,
+        name: 'history.png',
+        mime: 'image/png',
+        data: 'asset://mingming/history.png',
+      }
+      const vm = wrapper.vm as unknown as {
+        submitEditedMessage: (submission: {
+          sourceMessage: {
+            id: string
+            role: 'user'
+            content: string
+            timestamp: string
+            metadata: { attachments: Array<typeof attachment> }
+          }
+          targetSessionId: string
+          content: string
+          carry: { attachments: Array<typeof attachment> }
+        }) => Promise<boolean>
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+
+      const accepted = await vm.submitEditedMessage({
+        sourceMessage: {
+          id: 'history-source',
+          role: 'user',
+          content: '原说明',
+          timestamp: '2026-08-23T00:00:00Z',
+          metadata: { attachments: [attachment] },
+        },
+        targetSessionId: 'asset-edit-session',
+        content: '新说明',
+        carry: { attachments: [attachment] },
+      })
+      await flushPromises()
+
+      expect.soft(accepted).toBe(true)
+      expect
+        .soft(mockK12GetAssetBlob)
+        .toHaveBeenCalledWith('mingming', 'asset://mingming/history.png', expect.any(AbortSignal))
+      expect.soft(createObjectURL).toHaveBeenCalledWith(authenticatedBlob)
+      expect.soft(vm.scenarioComposerImage).toMatchObject({
+        file: expect.any(File),
+        previewUrl: 'blob:k12-edit-resubmit',
+        attachment: {
+          ...attachment,
+          data: 'blob:k12-edit-resubmit',
+        },
+        contextText: '新说明',
+      })
+      expect
+        .soft((vm.scenarioComposerImage as ScenarioComposerImagePayload).dataUrl)
+        .toBeUndefined()
+    } finally {
+      wrapper.unmount()
+      createObjectURL.mockRestore()
+      scenarioRegistry.reset()
+    }
   })
 
   it('BUG-20260724-010 编辑纯图片消息在本会话删除原消息与尾部后重新进入既有场景图片管道', async () => {
@@ -2325,11 +2672,14 @@ describe('ChatView — E2E 关键路径', () => {
   })
 
   it('BUG-20260724-003 未手动选模时冻结智能体绑定路由而非全局默认路由', async () => {
+    const sessionId = 'agent-route-session'
+    const agentId = 'k12-tutor-mingming'
+    bindSessionAgent(sessionId, agentId)
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
           {
-            name: 'k12-tutor-mingming',
+            name: agentId,
             display_name: '小明的辅导助手',
             provider: 'hexclaw-gpt',
             model: 'gpt-5.6-sol',
@@ -2337,44 +2687,50 @@ describe('ChatView — E2E 关键路径', () => {
         ]
       },
     })
-    await flushPromises()
 
-    const store = useChatStore()
-    store.currentSessionId = 'agent-route-session'
-    store.agentRole = 'k12-tutor-mingming'
-    store.chatMode = 'agent'
-    await flushPromises()
-    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', {
-      dataUrl: 'data:image/png;base64,YWdlbnQ=',
-      attachment: {
-        type: 'image',
-        name: 'agent.png',
-        mime: 'image/png',
-        data: 'YWdlbnQ=',
-      },
-    })
+    try {
+      await flushPromises()
 
-    await vi.waitFor(() => {
-      expect(
-        (
-          wrapper.vm as unknown as {
-            scenarioComposerImage: {
-              requestId?: string
-              route?: { provider: string; model: string; capability: string }
-            }
-          }
-        ).scenarioComposerImage.route,
-      ).toEqual({
-        provider: 'hexclaw-gpt',
-        model: 'gpt-5.6-sol',
-        capability: 'vision',
+      const store = useChatStore()
+      store.currentSessionId = sessionId
+      store.agentRole = agentId
+      store.chatMode = 'agent'
+      await flushPromises()
+      wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', {
+        dataUrl: 'data:image/png;base64,YWdlbnQ=',
+        attachment: {
+          type: 'image',
+          name: 'agent.png',
+          mime: 'image/png',
+          data: 'YWdlbnQ=',
+        },
       })
-    })
 
-    wrapper.unmount()
+      await vi.waitFor(() => {
+        expect(
+          (
+            wrapper.vm as unknown as {
+              scenarioComposerImage: {
+                requestId?: string
+                route?: { provider: string; model: string; capability: string }
+              }
+            }
+          ).scenarioComposerImage.route,
+        ).toEqual({
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        })
+      })
+    } finally {
+      wrapper.unmount()
+      clearSessionAgent(sessionId)
+    }
   })
 
   it('BUG-20260724-003 旧失败图片显式重试会用新消息身份和点击时当前路由创建唯一新 attempt', async () => {
+    const sessionId = 'attempt-retry-session'
+    const agentId = 'attempt-retry-agent'
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -2392,12 +2748,13 @@ describe('ChatView — E2E 关键路径', () => {
       emits: ['scenarioImageAttempt', 'update:composerImage'],
       template: '<button data-testid="retry-attempt" />',
     })
+    bindSessionAgent(sessionId, agentId)
 
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
           {
-            name: 'attempt-retry-agent',
+            name: agentId,
             display_name: '重试模型助手',
             provider: 'hexclaw-gpt',
             model: 'gpt-5.3-codex-spark',
@@ -2411,9 +2768,11 @@ describe('ChatView — E2E 关键路径', () => {
       await flushPromises()
       const store = useChatStore()
       const agents = useAgentsStore()
-      store.currentSessionId = 'attempt-retry-session'
-      store.agentRole = 'attempt-retry-agent'
+      store.currentSessionId = sessionId
+      store.agentRole = agentId
       store.chatMode = 'agent'
+      await flushPromises()
+      const enhancement = wrapper.getComponent({ name: 'AttemptRetryScenarioStub' })
       const original = {
         dataUrl: 'data:image/png;base64,cmV0cnk=',
         attachment: {
@@ -2428,7 +2787,6 @@ describe('ChatView — E2E 关键路径', () => {
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
       })
-      const enhancement = wrapper.getComponent({ name: 'AttemptRetryScenarioStub' })
       const frozenOldAttempt = enhancement.props('composerImage') as {
         requestId: string
         route: { provider: string; model: string; capability: string }
@@ -2480,11 +2838,14 @@ describe('ChatView — E2E 关键路径', () => {
       })
     } finally {
       wrapper.unmount()
+      clearSessionAgent(sessionId)
       scenarioRegistry.reset()
     }
   })
 
   it('BUG-20260725-009 场景文本任务获得界面所示的 Agent 绑定模型快照', async () => {
+    const sessionId = 'text-route-session'
+    const agentId = 'text-route-agent'
     const descriptor = {
       schemaVersion: '1',
       headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
@@ -2501,12 +2862,13 @@ describe('ChatView — E2E 关键路径', () => {
       props: ['modelRoute'],
       template: '<div data-testid="text-route-scenario" />',
     })
+    bindSessionAgent(sessionId, agentId)
 
     const wrapper = mountChatView({
       setup: () => {
         useAgentsStore().registeredAgents = [
           {
-            name: 'text-route-agent',
+            name: agentId,
             display_name: '文本任务助手',
             provider: 'hexclaw-gpt',
             model: 'gpt-5.6-sol',
@@ -2519,8 +2881,8 @@ describe('ChatView — E2E 关键路径', () => {
     try {
       await flushPromises()
       const store = useChatStore()
-      store.currentSessionId = 'text-route-session'
-      store.agentRole = 'text-route-agent'
+      store.currentSessionId = sessionId
+      store.agentRole = agentId
       store.chatMode = 'agent'
       await flushPromises()
 
@@ -2531,6 +2893,7 @@ describe('ChatView — E2E 关键路径', () => {
       })
     } finally {
       wrapper.unmount()
+      clearSessionAgent(sessionId)
       scenarioRegistry.reset()
     }
   })

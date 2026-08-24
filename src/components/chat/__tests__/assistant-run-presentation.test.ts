@@ -41,8 +41,8 @@ const baseInput: PresentationInput = {
 }
 
 const zhLabels: AssistantRunPresentationLabels = {
-  generating: '正在生成回答…',
-  preparing: '正在准备回答…',
+  generating: '正在回复…',
+  preparing: '正在回复…',
   thinking: (duration) => `正在深度思考 · ${duration}`,
   thought: (duration) => `思考了 ${duration}`,
   ignored: '深度思考未生效，已按普通模式回答',
@@ -71,7 +71,7 @@ describe('assistant run presentation', () => {
       input: { reasoningSupport: 'supported', reasoningRequest: 'off' },
       expected: {
         kind: 'generating',
-        text: '正在生成回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -81,7 +81,7 @@ describe('assistant run presentation', () => {
       input: { reasoningSupport: 'unsupported', reasoningRequest: 'off' },
       expected: {
         kind: 'generating',
-        text: '正在生成回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -91,7 +91,7 @@ describe('assistant run presentation', () => {
       input: { reasoningSupport: 'unknown', reasoningRequest: 'off' },
       expected: {
         kind: 'generating',
-        text: '正在生成回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -101,7 +101,7 @@ describe('assistant run presentation', () => {
       input: { reasoningSupport: 'supported', reasoningRequest: 'on' },
       expected: {
         kind: 'preparing',
-        text: '正在准备回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -111,7 +111,7 @@ describe('assistant run presentation', () => {
       input: { reasoningSupport: 'unknown', reasoningRequest: 'on' },
       expected: {
         kind: 'preparing',
-        text: '正在准备回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -165,7 +165,7 @@ describe('assistant run presentation', () => {
       execution: 'unknown',
       expected: {
         kind: 'preparing',
-        text: '正在准备回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },
@@ -347,7 +347,7 @@ describe('assistant run presentation', () => {
           }),
         ).toEqual({
           kind: 'generating',
-          text: '正在生成回答…',
+          text: '正在回复…',
           animated: true,
           timerActive: false,
         })
@@ -388,7 +388,7 @@ describe('assistant run presentation', () => {
       },
       unknown: {
         kind: 'preparing',
-        text: '正在准备回答…',
+        text: '正在回复…',
         animated: true,
         timerActive: false,
       },

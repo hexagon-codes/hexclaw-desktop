@@ -10,7 +10,7 @@ const { speakMock, stopMock, toastError, voiceError, isSpeaking } = vi.hoisted((
   stopMock: vi.fn(),
   toastError: vi.fn(),
   voiceError: { value: null as string | null },
-  isSpeaking: { value: false },
+  isSpeaking: { __v_isRef: true, value: false },
 }))
 
 vi.mock('@/composables/useVoice', () => ({
@@ -56,6 +56,25 @@ function mountMessageActions(feedback: 'like' | 'dislike' | null) {
   })
 }
 
+function mountTaskStageActions() {
+  const i18n = createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': zhCN, zh: zhCN },
+  })
+
+  return mount(MessageActions, {
+    props: {
+      role: 'assistant',
+      content: '图片任务',
+      retryMode: 'task-stage',
+      showFork: false,
+    },
+    global: { plugins: [i18n] },
+  })
+}
+
 function mountUserMessageActions() {
   const i18n = createI18n({
     legacy: false,
@@ -90,15 +109,74 @@ describe('MessageActions', () => {
     expect(buttons[1]?.classes()).toContain('hc-msg-actions__btn--active-bad')
   })
 
+  it('keeps the approved assistant action exact-set and order', () => {
+    const wrapper = mountMessageActions(null)
+
+    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual([
+      zhCN.chat.liked,
+      zhCN.chat.disliked,
+      zhCN.common.copy,
+      zhCN.chat.regenerate,
+      zhCN.chat.speakMessage,
+      zhCN.chat.createBranch,
+    ])
+  })
+
+  it('places task-stage retry after speak with its own semantic label and test hook', async () => {
+    const wrapper = mountTaskStageActions()
+
+    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual([
+      zhCN.chat.liked,
+      zhCN.chat.disliked,
+      zhCN.common.copy,
+      zhCN.chat.speakMessage,
+      zhCN.chat.retryCurrentStage,
+    ])
+    expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
+    expect(
+      wrapper
+        .findAll('button')
+        .map((button) => button.findAll('path').map((path) => path.attributes('d'))),
+    ).toEqual([
+      [
+        'M7 10v12H3V10h4Z',
+        'M7 20h10.4a2 2 0 0 0 1.9-1.4l2.4-7A2 2 0 0 0 19.8 9H15l.7-3.4A3 3 0 0 0 12.8 2L7 10',
+      ],
+      [
+        'M7 14V2H3v12h4Z',
+        'M7 4h10.4a2 2 0 0 1 1.9 1.4l2.4 7a2 2 0 0 1-1.9 2.6H15l.7 3.4a3 3 0 0 1-2.9 3.6L7 14',
+      ],
+      ['M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4'],
+      ['M11 5 6 9H2v6h4l5 4V5Z', 'M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13'],
+      ['M3 12a9 9 0 1 0 3-6.7L3 8', 'M3 3v5h5'],
+    ])
+    const retry = wrapper.get('[data-testid="message-task-stage-retry"]')
+    expect(retry.attributes('title')).toBe(zhCN.chat.retryCurrentStage)
+    await retry.trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
+  })
+
+  it('labels the shared toolbar and keeps prototype button geometry interactions', () => {
+    const wrapper = mountMessageActions(null)
+
+    expect(wrapper.attributes('aria-label')).toBe(zhCN.chat.messageActions)
+    expect(wrapper.get('.hc-msg-actions__divider').attributes('aria-hidden')).toBe('true')
+    expect(messageActionsSource).toMatch(/\.hc-msg-actions__btn\s*\{[\s\S]*?border-radius:\s*7px;/)
+    expect(messageActionsSource).toMatch(
+      /\.hc-msg-actions__btn:active\s*\{[\s\S]*?transform:\s*scale\(0\.9\);/,
+    )
+    expect(messageActionsSource).toMatch(
+      /\.hc-msg-actions__btn svg\s*\{[\s\S]*?fill:\s*none;[\s\S]*?stroke:\s*currentColor;[\s\S]*?stroke-linecap:\s*round;[\s\S]*?stroke-linejoin:\s*round;/,
+    )
+  })
+
   // Bug 复现(2026-06-25): 喇叭点了没反应 —— speak() 把后端错误(如 TTS 未配置)静默吞掉、零反馈。
   it('surfaces TTS failure via toast when speak fails', async () => {
     speakMock.mockImplementation(async () => {
       voiceError.value = 'TTS 服务未配置'
     })
     const wrapper = mountMessageActions(null)
-    // 顺序: like(0) dislike(1) copy(2) speak(3) retry(4)
-    const speakBtn = wrapper.findAll('button')[3]
-    await speakBtn?.trigger('click')
+    await wrapper.get(`[aria-label="${zhCN.chat.speakMessage}"]`).trigger('click')
     await flushPromises()
     expect(speakMock).toHaveBeenCalled()
     expect(toastError).toHaveBeenCalled()
@@ -109,19 +187,18 @@ describe('MessageActions', () => {
       /* success: no error set */
     })
     const wrapper = mountMessageActions(null)
-    await wrapper.findAll('button')[3]?.trigger('click')
+    await wrapper.get(`[aria-label="${zhCN.chat.speakMessage}"]`).trigger('click')
     await flushPromises()
     expect(speakMock).toHaveBeenCalled()
     expect(toastError).not.toHaveBeenCalled()
   })
 
   // 重新生成（retry）按钮：对齐 ChatGPT/Claude/豆包/DeepSeek 的「重新生成」。
-  // 顺序: like(0) dislike(1) copy(2) speak(3) retry(4)
   it('renders the regenerate (retry) button for assistant messages and emits retry', async () => {
     const wrapper = mountMessageActions(null)
-    const retryBtn = wrapper.findAll('button')[4]
-    expect(retryBtn?.attributes('title')).toBe(zhCN.chat.regenerate)
-    await retryBtn?.trigger('click')
+    const retryBtn = wrapper.get('[data-testid="message-regenerate"]')
+    expect(retryBtn.attributes('title')).toBe(zhCN.chat.regenerate)
+    await retryBtn.trigger('click')
     expect(wrapper.emitted('retry')).toHaveLength(1)
   })
 

@@ -20,6 +20,7 @@ const props = withDefaults(
     reasoningExecution: AssistantReasoningExecution
     hasVisibleAnswer: boolean
     elapsedSeconds: number
+    statusLabel?: string
     reasoning?: string
     visibility?: ReasoningVisibility
     runtimeEvents?: RuntimeEvent[]
@@ -28,6 +29,7 @@ const props = withDefaults(
   }>(),
   {
     reasoning: '',
+    statusLabel: undefined,
     visibility: 'not_exposed',
     runtimeEvents: () => [],
     defaultOpen: false,
@@ -110,7 +112,7 @@ const usesThinkingProgress = computed(
       class="hc-assistant-run-status__spinner"
       aria-hidden="true"
     />
-    <span>{{ presentation.text }}</span>
+    <span>{{ statusLabel || presentation.text }}</span>
   </div>
 </template>
 
