@@ -32,7 +32,14 @@ import {
   classifyOperationReceiptPoll,
 } from './k12-operation-receipt-poll'
 import { installDiagnosticBrowserSidecarBridge } from './k12-diagnostic-browser-sidecar-transport'
-import { summarizePhotoAnnotationCoverage } from './k12-photo-annotation-coverage'
+import {
+  analyzePhotoAnnotationGeometry,
+  summarizePhotoAnnotationCoverage,
+  type PhotoAnnotationExpectedCounts,
+  type PhotoAnnotationExpectedItem,
+  type PhotoAnnotationOracleStatus,
+  type PhotoAnnotationPixelDelta,
+} from './k12-photo-annotation-coverage'
 import { writeRecognitionV2TargetClaim } from '../../scripts/ci/k12-recognition-v2-target-claim.mjs'
 
 type Json = Record<string, unknown>
@@ -87,6 +94,12 @@ const blockers = [
 ]
 const real10xCycle = envValue('HEX_K12_REAL_10X_CYCLE_ID')
 const recognitionOnlyV2 = envValue('HEX_K12_LIVE_DIAGNOSTIC_MODE') === 'recognition-only-v2'
+const CLEAR_HOMEWORK_ANNOTATION_COUNTS: PhotoAnnotationExpectedCounts = {
+  green: 14,
+  purple: 2,
+  red: 0,
+  no_mark: 0,
+}
 
 /**
  * The canonical release lane serves the frozen UI and its Sidecar on :16060.
@@ -1329,12 +1342,30 @@ async function assertPhotoAnnotationCoverage(
   return coverage
 }
 
+function annotationGeometryItems(payload: Json): PhotoAnnotationExpectedItem[] {
+  return array(payload.items, 'annotation geometry items').map((value, index) => {
+    const item = record(value, `annotation geometry item ${index + 1}`)
+    const question = record(item.question, `annotation geometry question ${index + 1}`)
+    const problemID = String(question.problem_id ?? '').trim()
+    const attemptID = String(question.attempt_id ?? '').trim()
+    expect(problemID, `annotation geometry item ${index + 1} problem identity`).not.toBe('')
+    expect(attemptID, `annotation geometry item ${index + 1} attempt identity`).not.toBe('')
+    return {
+      identity: `problem:${problemID}\u0000attempt:${attemptID}`,
+      status: String(item.status ?? '') as PhotoAnnotationOracleStatus,
+      bbox: question.bbox as PhotoAnnotationExpectedItem['bbox'],
+    }
+  })
+}
+
 async function assertImmutableAnnotationArtifactPixels(
   page: Page,
   payload: Json,
   source: Buffer,
   sourceDigest: string,
+  sourceMime: string,
   coverage: ReturnType<typeof summarizePhotoAnnotationCoverage>,
+  expectedCounts: PhotoAnnotationExpectedCounts,
   testInfo: TestInfo,
   evidenceName: string,
 ): Promise<void> {
@@ -1342,10 +1373,10 @@ async function assertImmutableAnnotationArtifactPixels(
   const annotated = record(payload.annotated_image, 'annotated homework image')
   const encoded = String(annotated.data_base64 ?? '').replace(/\s/g, '')
   const facts = await page.evaluate(
-    async ({ sourceBase64, annotatedBase64 }) => {
-      const decode = async (base64: string) => {
+    async ({ sourceBase64, sourceMime, annotatedBase64, annotatedMime }) => {
+      const decode = async (base64: string, mime: string) => {
         const image = new Image()
-        image.src = `data:image/png;base64,${base64}`
+        image.src = `data:${mime};base64,${base64}`
         await image.decode()
         const canvas = document.createElement('canvas')
         canvas.width = image.naturalWidth
@@ -1359,18 +1390,18 @@ async function assertImmutableAnnotationArtifactPixels(
           pixels: context.getImageData(0, 0, canvas.width, canvas.height).data,
         }
       }
-      const source = await decode(sourceBase64)
-      const annotated = await decode(annotatedBase64)
+      const source = await decode(sourceBase64, sourceMime)
+      const annotated = await decode(annotatedBase64, annotatedMime)
       if (source.width !== annotated.width || source.height !== annotated.height) {
         return {
           source_width: source.width,
           source_height: source.height,
           annotated_width: annotated.width,
           annotated_height: annotated.height,
-          changed_pixels: -1,
+          pixel_deltas: [] as PhotoAnnotationPixelDelta[],
         }
       }
-      let changedPixels = 0
+      const pixelDeltas: PhotoAnnotationPixelDelta[] = []
       for (let index = 0; index < source.pixels.length; index += 4) {
         if (
           source.pixels[index] !== annotated.pixels[index] ||
@@ -1378,7 +1409,23 @@ async function assertImmutableAnnotationArtifactPixels(
           source.pixels[index + 2] !== annotated.pixels[index + 2] ||
           source.pixels[index + 3] !== annotated.pixels[index + 3]
         ) {
-          changedPixels += 1
+          const pixelIndex = index / 4
+          pixelDeltas.push({
+            x: pixelIndex % source.width,
+            y: Math.floor(pixelIndex / source.width),
+            source: [
+              source.pixels[index]!,
+              source.pixels[index + 1]!,
+              source.pixels[index + 2]!,
+              source.pixels[index + 3]!,
+            ],
+            annotated: [
+              annotated.pixels[index]!,
+              annotated.pixels[index + 1]!,
+              annotated.pixels[index + 2]!,
+              annotated.pixels[index + 3]!,
+            ],
+          })
         }
       }
       return {
@@ -1386,28 +1433,30 @@ async function assertImmutableAnnotationArtifactPixels(
         source_height: source.height,
         annotated_width: annotated.width,
         annotated_height: annotated.height,
-        changed_pixels: changedPixels,
+        pixel_deltas: pixelDeltas,
       }
     },
-    { sourceBase64: source.toString('base64'), annotatedBase64: encoded },
+    {
+      sourceBase64: source.toString('base64'),
+      sourceMime,
+      annotatedBase64: encoded,
+      annotatedMime: String(annotated.mime ?? ''),
+    },
   )
   expect(
     { width: facts.annotated_width, height: facts.annotated_height },
     'immutable annotation artifact must retain the original photo geometry',
   ).toEqual({ width: facts.source_width, height: facts.source_height })
-  expect(
-    facts.changed_pixels,
-    'trusted artifact coverage requires a visible pixel difference from the original photo',
-  ).toBeGreaterThan(0)
-  await attachJSON(testInfo, evidenceName, {
-    source_digest: sourceDigest,
-    annotated_digest: normalizedDigest(annotated.digest),
-    source_width: facts.source_width,
-    source_height: facts.source_height,
-    annotated_width: facts.annotated_width,
-    annotated_height: facts.annotated_height,
-    changed_pixels: facts.changed_pixels,
+  const geometryReport = analyzePhotoAnnotationGeometry({
+    width: facts.source_width,
+    height: facts.source_height,
+    sourceDigest,
+    annotatedDigest: normalizedDigest(annotated.digest),
+    changedPixels: facts.pixel_deltas,
+    items: annotationGeometryItems(payload),
+    expectedCounts,
   })
+  await attachJSON(testInfo, evidenceName, geometryReport)
 }
 
 if (!real10xCycle) {
@@ -1807,7 +1856,9 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         homeworkPayload,
         verifyFixture('homework'),
         contract.fixtures.homework.sha256,
+        'image/png',
         annotationCoverage,
+        CLEAR_HOMEWORK_ANNOTATION_COUNTS,
         testInfo,
         'k12-real-10x-C02-annotation-pixel-diff',
       )
@@ -2108,7 +2159,9 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
         homeworkPayload,
         verifyFixture('homework'),
         contract.fixtures.homework.sha256,
+        'image/png',
         annotationCoverage,
+        CLEAR_HOMEWORK_ANNOTATION_COUNTS,
         testInfo,
         'current-bug-real-matrix-annotation-pixel-diff',
       )

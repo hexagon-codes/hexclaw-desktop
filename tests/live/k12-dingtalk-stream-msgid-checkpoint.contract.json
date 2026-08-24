@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "scenario": "k12_dingtalk_stream_native_msgid_durability",
+  "phases": ["validate", "verify-current", "verify-restart", "status"],
+  "source": {
+    "required_transport": "dingtalk_stream_sdk_go",
+    "callback_model": "BotCallbackDataModel",
+    "callback_entrypoint": "DingtalkAdapter.onChatBotMessage",
+    "bound_application_instance": true,
+    "provider_message_id_origin": "BotCallbackDataModel.MsgId"
+  },
+  "observations": {
+    "required_roles": ["original", "redelivery", "independent_same_bytes"],
+    "same_msgid_replay": {
+      "same_identity": true,
+      "same_image_digest": true,
+      "same_receipt_id": true,
+      "same_asset_id": true,
+      "same_dispatch_id": true,
+      "same_command_digest": true
+    },
+    "different_msgid_same_bytes": {
+      "different_provider_message_id": true,
+      "same_image_digest": true,
+      "different_receipt_id": true,
+      "different_asset_id": true,
+      "different_dispatch_id": true
+    },
+    "ack_order": ["callback_entered", "v88_admission_committed", "sdk_ack_returned"],
+    "ack_success_required": true
+  },
+  "checkpoint_input": {
+    "file_mode": "0600",
+    "required_top_level_fields": ["schema_version", "source", "agent_name", "observations"],
+    "required_source_fields": [
+      "transport",
+      "callback_model",
+      "callback_entrypoint",
+      "bound_application_instance",
+      "signed_http_webhook_used",
+      "direct_dingtalk_api_used",
+      "dws_cli_used"
+    ],
+    "required_observation_fields": [
+      "role",
+      "stream_observation_id",
+      "provider_message_id_origin",
+      "identity",
+      "image_digest",
+      "admission",
+      "ordering"
+    ],
+    "required_identity_fields": ["platform", "instance_id", "chat_id", "provider_message_id"],
+    "required_admission_fields": [
+      "receipt_id",
+      "asset_id",
+      "dispatch_id",
+      "command_digest",
+      "asset_digest"
+    ],
+    "required_ordering_fields": [
+      "callback_entered_seq",
+      "v88_admission_committed_seq",
+      "sdk_ack_returned_seq",
+      "ack_success"
+    ]
+  },
+  "public_query": {
+    "method": "GET",
+    "path": "/api/k12/dingtalk-inbound",
+    "identity_fields": ["platform", "instance_id", "chat_id", "provider_message_id"],
+    "agent_query_required": true,
+    "process_capability_required": true,
+    "loopback_only": true
+  },
+  "stable_projection": {
+    "processing_status": "final_artifact_ready",
+    "reply_status": "delivered"
+  },
+  "restart_exact_set": [
+    "receipt.identity",
+    "receipt.agent_name",
+    "receipt.receipt_id",
+    "receipt.binding_id",
+    "receipt.command_digest",
+    "asset.asset_id",
+    "asset.receipt_id",
+    "asset.mime",
+    "asset.size",
+    "asset.digest",
+    "dispatch.receipt_id",
+    "dispatch.dispatch_id",
+    "dispatch.processing_status",
+    "dispatch.routing_decision",
+    "dispatch.confirmation_status",
+    "dispatch.reply_status",
+    "dispatch.version",
+    "dispatch.image_task_id",
+    "dispatch.final_artifact_id",
+    "dispatch.delivery_batch_id"
+  ],
+  "forbidden_actions": [
+    "signed_http_webhook",
+    "callback_injection",
+    "direct_dingtalk_api",
+    "dws_cli",
+    "outbound_send",
+    "direct_store_read_or_write"
+  ],
+  "evidence": {
+    "checkpoint_mode": "0600",
+    "baseline_mode": "0600",
+    "raw_identity_in_public_evidence": false,
+    "raw_callback_in_evidence": false,
+    "credentials_in_evidence": false,
+    "hash_algorithm": "sha256"
+  },
+  "phase_policy": {
+    "default_timeout_ms": 120000,
+    "hard_timeout_ms": 1740000,
+    "pending_exit_code": 3,
+    "baseline_suffix": ".restart-baseline.json"
+  }
+}

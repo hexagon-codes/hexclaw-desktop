@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "scenario": "k12_real_dingtalk_creative_images",
+  "route": {
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "fallback_allowed": false
+  },
+  "transport": {
+    "product_operations": "hexclaw_public_http_api_only",
+    "http_driver": "playwright_api_request_context",
+    "bound_instance_only": true,
+    "dws_cli": false,
+    "direct_dingtalk_http": false,
+    "direct_store_read": false,
+    "sqlite_seed_or_write": false
+  },
+  "public_api": {
+    "version": "/api/v1/version",
+    "agents": "/api/v1/agents",
+    "llm_config": "/api/v1/config/llm",
+    "instances": "/api/v1/platforms/instances",
+    "asset_upload": "/api/k12/assets?agent={agent_name}",
+    "asset_get": "/api/k12/assets/{asset_file}?agent={agent_name}",
+    "image_task_create": "/api/k12/image-tasks",
+    "image_task_get": "/api/k12/image-tasks/{dispatch_id}?agent={agent_name}",
+    "image_task_confirm": "/api/k12/image-tasks/{dispatch_id}/confirm",
+    "creative_work": "/api/k12/creative-works/{work_id}?agent={agent_name}",
+    "creative_send": "/api/k12/creative-works/{work_id}/send",
+    "delivery_batch": "/api/k12/delivery-batches/{batch_id}?agent={agent_name}",
+    "delivery_query": "/api/k12/delivery-batches/{batch_id}/query"
+  },
+  "fixtures": {
+    "art": {
+      "docs_relative_path": "test/k12-test-美术.png",
+      "work_type": "art",
+      "task_intent": "artwork",
+      "mime": "image/png",
+      "sha256": "7eb16fdbe398236cdf2ce31ea6d2fac5e4787ea3004b96ab74a3eebd540f1d93",
+      "size_bytes": 2713090,
+      "width": 1254,
+      "height": 1254
+    },
+    "writing": {
+      "docs_relative_path": "test/k12-test-作文.png",
+      "work_type": "writing",
+      "task_intent": "writing",
+      "mime": "image/png",
+      "sha256": "3b238c46e0ae4515f7b35a28bcfd37081ba1d59a9dfa2b30bf17784aaf3e9157",
+      "size_bytes": 2509035,
+      "width": 1086,
+      "height": 1448
+    }
+  },
+  "creative_entry": {
+    "kind": "new_work",
+    "promotion_policy": "explicit_commit",
+    "writing_ocr_must_freeze_before_commit": true,
+    "feedback_terminal_status": "succeeded",
+    "source_asset_required": true,
+    "source_asset_public_exact_bytes": true
+  },
+  "delivery": {
+    "object_kind": "creative_work",
+    "target_mode": "all_effective_bound_physical_targets",
+    "target_count": "all_deduplicated_bound_targets",
+    "physical_target_key": ["platform", "instance_id", "chat_id"],
+    "parts_per_target": 2,
+    "parts": [
+      {
+        "ordinal": 1,
+        "kind": "markdown",
+        "mime": "",
+        "language": "zh-CN"
+      },
+      {
+        "ordinal": 2,
+        "kind": "artifact",
+        "mime": "image/png",
+        "artifact": "frozen_original_source_asset"
+      }
+    ],
+    "external_message_id_required": true,
+    "distinct_external_message_ids": true,
+    "terminal_status": "delivered"
+  },
+  "frozen_replay": {
+    "replay_lookup_before_source_open": true,
+    "asset_open_failure_rechecks_frozen_batch": true,
+    "restart_action": "query_only",
+    "duplicate_send_returns_same_batch": true,
+    "same_delivery_ids": true,
+    "same_external_message_ids": true,
+    "same_attempts": true,
+    "new_provider_send_count": 0,
+    "new_mutable_source_read_on_duplicate_send": 0
+  },
+  "client_checkpoint": {
+    "required_before_pass": true,
+    "one_observation_per_target": true,
+    "work_marker_required": true,
+    "markdown_digest_required": true,
+    "image_digest_required": true,
+    "marker_and_image_same_chat": true,
+    "raw_target_identity_allowed": false,
+    "raw_external_message_id_allowed": false
+  },
+  "validate_side_effects": {
+    "sidecar_starts": 0,
+    "asset_uploads": 0,
+    "image_task_posts": 0,
+    "model_calls": 0,
+    "im_sends": 0,
+    "provider_queries": 0
+  },
+  "phase_policy": {
+    "default_timeout_ms": 1440000,
+    "hard_timeout_ms": 1740000,
+    "pending_exit_code": 3,
+    "checkpoint_file": "state.json",
+    "evidence_file": "evidence.json"
+  },
+  "evidence": {
+    "directory_mode": "0700",
+    "file_mode": "0600",
+    "raw_identity_allowed": false,
+    "raw_provider_message_id_allowed": false,
+    "credentials_allowed": false,
+    "payload_json_allowed": false,
+    "raw_model_output_allowed": false,
+    "hash_algorithm": "sha256"
+  }
+}

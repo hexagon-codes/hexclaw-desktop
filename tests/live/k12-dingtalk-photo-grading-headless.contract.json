@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "scenario": "k12_real_dingtalk_photo_grading",
+  "route": {
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "fallback_allowed": false
+  },
+  "transport": {
+    "product_operations": "hexclaw_public_http_api_only",
+    "http_driver": "playwright_api_request_context",
+    "bound_instance_only": true,
+    "dws_cli": false,
+    "direct_dingtalk_http": false,
+    "direct_store_read": false,
+    "sqlite_seed_or_write": false
+  },
+  "public_api": {
+    "version": "/api/v1/version",
+    "agents": "/api/v1/agents",
+    "llm_config": "/api/v1/config/llm",
+    "instances": "/api/v1/platforms/instances",
+    "callback": "/api/v1/platforms/hooks/dingtalk/{instance_id}",
+    "inbound_identity_query": "/api/k12/dingtalk-inbound",
+    "image_task": "/api/k12/image-tasks/{image_task_id}?agent={agent_name}",
+    "image_task_result": "/api/k12/image-tasks/{image_task_id}/result?agent={agent_name}",
+    "delivery_batch": "/api/k12/delivery-batches/{batch_id}?agent={agent_name}",
+    "delivery_query": "/api/k12/delivery-batches/{batch_id}/query"
+  },
+  "inbound_identity": {
+    "exact_fields": ["platform", "instance_id", "chat_id", "provider_message_id"],
+    "agent_name_is_identity": false,
+    "public_projection_forbidden_fields": ["owner_scope", "command_json", "bytes", "asset_bytes"]
+  },
+  "human_source_oracle": {
+    "Q1": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 1,
+      "system_display_label": "第 1 题（系统序号）"
+    },
+    "Q2": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 2,
+      "system_display_label": "第 2 题（系统序号）"
+    },
+    "Q3": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 3,
+      "system_display_label": "第 3 题（系统序号）"
+    },
+    "Q4": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 4,
+      "system_display_label": "第 4 题（系统序号）"
+    },
+    "Q5": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 5,
+      "system_display_label": "第 5 题（系统序号）"
+    },
+    "Q6": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 6,
+      "system_display_label": "第 6 题（系统序号）"
+    },
+    "Q7": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 7,
+      "system_display_label": "第 7 题（系统序号）"
+    },
+    "Q8": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 8,
+      "system_display_label": "第 8 题（系统序号）"
+    },
+    "Q9": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["一"],
+      "source_section_label": "一、直接写得数",
+      "system_section_ordinal": 9,
+      "system_display_label": "第 9 题（系统序号）"
+    },
+    "Q10": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["二"],
+      "source_section_label": "二、计算下面各题，能简算的要简算",
+      "system_section_ordinal": 1,
+      "system_display_label": "第 1 题（系统序号）"
+    },
+    "Q11": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["二"],
+      "source_section_label": "二、计算下面各题，能简算的要简算",
+      "system_section_ordinal": 2,
+      "system_display_label": "第 2 题（系统序号）"
+    },
+    "Q12": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["二"],
+      "source_section_label": "二、计算下面各题，能简算的要简算",
+      "system_section_ordinal": 3,
+      "system_display_label": "第 3 题（系统序号）"
+    },
+    "Q13": {
+      "source_number_path": ["三", "1"],
+      "display_label": "三、1",
+      "source_section_path": ["三"],
+      "source_section_label": "三、列式计算",
+      "system_section_ordinal": 0,
+      "system_display_label": ""
+    },
+    "Q14": {
+      "source_number_path": ["三", "2"],
+      "display_label": "三、2",
+      "source_section_path": ["三"],
+      "source_section_label": "三、列式计算",
+      "system_section_ordinal": 0,
+      "system_display_label": ""
+    },
+    "Q15": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["四"],
+      "source_section_label": "四、应用题",
+      "system_section_ordinal": 1,
+      "system_display_label": "第 1 题（系统序号）"
+    },
+    "Q16": {
+      "source_number_path": [],
+      "display_label": "",
+      "source_section_path": ["五"],
+      "source_section_label": "五、思维题",
+      "system_section_ordinal": 1,
+      "system_display_label": "第 1 题（系统序号）"
+    }
+  },
+  "human_question_regions": {
+    "Q1": { "x": 0.07, "y": 0.15, "w": 0.16, "h": 0.05 },
+    "Q2": { "x": 0.24, "y": 0.15, "w": 0.17, "h": 0.05 },
+    "Q3": { "x": 0.41, "y": 0.15, "w": 0.17, "h": 0.05 },
+    "Q4": { "x": 0.58, "y": 0.15, "w": 0.17, "h": 0.05 },
+    "Q5": { "x": 0.75, "y": 0.15, "w": 0.17, "h": 0.05 },
+    "Q6": { "x": 0.21, "y": 0.2, "w": 0.2, "h": 0.07 },
+    "Q7": { "x": 0.4, "y": 0.2, "w": 0.19, "h": 0.07 },
+    "Q8": { "x": 0.58, "y": 0.2, "w": 0.18, "h": 0.07 },
+    "Q9": { "x": 0.75, "y": 0.2, "w": 0.17, "h": 0.07 },
+    "Q10": { "x": 0.07, "y": 0.29, "w": 0.28, "h": 0.16 },
+    "Q11": { "x": 0.36, "y": 0.29, "w": 0.27, "h": 0.16 },
+    "Q12": { "x": 0.65, "y": 0.29, "w": 0.27, "h": 0.16 },
+    "Q13": { "x": 0.06, "y": 0.46, "w": 0.43, "h": 0.16 },
+    "Q14": { "x": 0.06, "y": 0.62, "w": 0.43, "h": 0.15 },
+    "Q15": { "x": 0.05, "y": 0.76, "w": 0.44, "h": 0.2 },
+    "Q16": { "x": 0.5, "y": 0.76, "w": 0.44, "h": 0.2 }
+  },
+  "fixtures": {
+    "clear": {
+      "docs_relative_path": "test/k12-test-批改作业.png",
+      "mime": "image/png",
+      "sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
+      "size_bytes": 2178059,
+      "width": 1086,
+      "height": 1448,
+      "expected_counts": {
+        "green": 14,
+        "purple": 2,
+        "red": 0,
+        "no_mark": 0
+      },
+      "expected_items": {
+        "Q1": "correct",
+        "Q2": "correct",
+        "Q3": "correct",
+        "Q4": "correct",
+        "Q5": "correct",
+        "Q6": "correct",
+        "Q7": "correct",
+        "Q8": "correct",
+        "Q9": "correct",
+        "Q10": "correct",
+        "Q11": "correct",
+        "Q12": "correct",
+        "Q13": "correct",
+        "Q14": "correct",
+        "Q15": "correct_with_process_issue",
+        "Q16": "correct_with_process_issue"
+      }
+    },
+    "messy": {
+      "docs_relative_path": "test/k12-test-批改（答题比较乱的）.jpg",
+      "mime": "image/jpeg",
+      "sha256": "78cf3a1b5c52e12ca17ca13aa71c7a9439baed244e88b438aa2f1f70cd782fb5",
+      "size_bytes": 191048,
+      "width": 1280,
+      "height": 1707,
+      "expected_counts": {
+        "green": 12,
+        "purple": 0,
+        "red": 3,
+        "no_mark": 1
+      },
+      "expected_items": {
+        "Q1": "correct",
+        "Q2": "correct",
+        "Q3": "correct",
+        "Q4": "correct",
+        "Q5": "correct",
+        "Q6": "correct",
+        "Q7": "correct",
+        "Q8": "wrong",
+        "Q9": "correct",
+        "Q10": "wrong",
+        "Q11": "correct",
+        "Q12": "correct",
+        "Q13": "correct",
+        "Q14": "correct",
+        "Q15": "wrong",
+        "Q16": "unanswered"
+      }
+    },
+    "exif6": {
+      "derived_from": "tests/live/k12-photo-exif6-fixture.go",
+      "derivation": {
+        "tool": "go",
+        "fixture_source": "tests/live/k12-photo-exif6-fixture.go",
+        "jpeg_quality": 94,
+        "exif_orientation": 6
+      },
+      "mime": "image/jpeg",
+      "sha256": "d55c49dbb39bf2db4ced0816db10deb1f4f2df4ec95eae7b105a4d91f240da84",
+      "size_bytes": 1773,
+      "encoded_width": 120,
+      "encoded_height": 80,
+      "display_width": 80,
+      "display_height": 120,
+      "canonical": {
+        "mime": "image/png",
+        "sha256": "87a884386ab33e5386175973aa1ce9b865daef08288465dd2dd7923c98523fd1",
+        "aggregate_sha256": "c06dd2f88a810704dc941b74f267815985949a642ac3e952d1661bddc3a93737",
+        "size_bytes": 5944,
+        "width": 80,
+        "height": 120,
+        "corner_samples": {
+          "top_left": [20, 189, 88, 255],
+          "top_right": [21, 29, 40, 255],
+          "bottom_left": [190, 189, 160, 255],
+          "bottom_right": [188, 31, 110, 255]
+        },
+        "corner_mapping": [
+          {
+            "encoded": "top_left",
+            "encoded_xy": [0, 0],
+            "canonical": "top_right",
+            "canonical_xy": [79, 0]
+          },
+          {
+            "encoded": "top_right",
+            "encoded_xy": [119, 0],
+            "canonical": "bottom_right",
+            "canonical_xy": [79, 119]
+          },
+          {
+            "encoded": "bottom_right",
+            "encoded_xy": [119, 79],
+            "canonical": "bottom_left",
+            "canonical_xy": [0, 119]
+          },
+          {
+            "encoded": "bottom_left",
+            "encoded_xy": [0, 79],
+            "canonical": "top_left",
+            "canonical_xy": [0, 0]
+          }
+        ]
+      },
+      "expected_items_from": "clear",
+      "expected_counts": {
+        "green": 14,
+        "purple": 2,
+        "red": 0,
+        "no_mark": 0
+      }
+    }
+  },
+  "annotation_oracle": {
+    "module": "tests/live/k12-photo-annotation-coverage.ts",
+    "export": "analyzePhotoAnnotationGeometry",
+    "require_status": "PASS",
+    "require_final_immutable_asset": true,
+    "max_ignored_changed_pixel_ratio": 0
+  },
+  "canonical_source": {
+    "aggregate_projection": "image_task_result.source_digest",
+    "attachment_projection": "image_task_result.source_attachments[0]",
+    "require_single_attachment": true,
+    "raw_admission_digest_is_separate": true,
+    "restart_immutable": true
+  },
+  "delivery": {
+    "object_kind": "dingtalk_photo_grading_reply",
+    "object_id_prefix": "photo-reply-",
+    "object_id_hash_fields": ["inbound_receipt_id", "final_artifact_id", "final_artifact_digest"],
+    "object_id_equals_final_artifact_id": false,
+    "target_mode": "inbound_callback_direct_target",
+    "target_count": 1,
+    "physical_target_key": ["platform", "instance_id", "chat_id"],
+    "parts_per_target": 2,
+    "parts": [
+      {
+        "ordinal": 1,
+        "kind": "markdown",
+        "mime": "",
+        "language": "zh-CN"
+      },
+      {
+        "ordinal": 2,
+        "kind": "artifact",
+        "mime_prefix": "image/",
+        "artifact": "final_immutable_annotated_asset"
+      }
+    ],
+    "external_message_id_required": true,
+    "distinct_external_message_ids": true,
+    "terminal_status": "delivered",
+    "retry_after_response_loss": false,
+    "outcome_unknown_action": "query_once_then_wait",
+    "retry_endpoint_allowed": false,
+    "restart_action": "query_only"
+  },
+  "callback_replay": {
+    "same_full_identity": true,
+    "same_receipt_id": true,
+    "same_dispatch_id": true,
+    "same_image_task_id": true,
+    "same_final_artifact_id": true,
+    "same_delivery_batch_id": true,
+    "same_delivery_ids": true,
+    "same_external_message_ids": true,
+    "same_attempts": true,
+    "new_provider_send_count": 0
+  },
+  "restart_checkpoints": {
+    "case": "exif6",
+    "admission": {
+      "phase": "restart-admission",
+      "processing_status": "admitted",
+      "reply_status": "pending",
+      "fence_required": true
+    },
+    "grading": {
+      "phase": "restart-grading",
+      "processing_status": "image_task_submitted",
+      "reply_status": "pending",
+      "fence_required": true
+    },
+    "before_send": {
+      "phase": "restart-before-send",
+      "processing_status": "final_artifact_ready",
+      "reply_status": "ready",
+      "fence_required": true
+    },
+    "after_send": {
+      "phase": "restart-after-send",
+      "processing_status": "final_artifact_ready",
+      "reply_status": "delivered",
+      "fence_required": true
+    }
+  },
+  "validate_side_effects": {
+    "sidecar_starts": 0,
+    "callback_posts": 0,
+    "model_calls": 0,
+    "im_sends": 0,
+    "provider_queries": 0
+  },
+  "phase_policy": {
+    "default_timeout_ms": 1440000,
+    "hard_timeout_ms": 1740000,
+    "pending_exit_code": 3,
+    "checkpoint_file": "state.json",
+    "evidence_file": "evidence.json"
+  },
+  "evidence": {
+    "directory_mode": "0700",
+    "file_mode": "0600",
+    "raw_identity_allowed": false,
+    "raw_callback_allowed": false,
+    "credentials_allowed": false,
+    "raw_model_output_allowed": false,
+    "hash_algorithm": "sha256"
+  }
+}
