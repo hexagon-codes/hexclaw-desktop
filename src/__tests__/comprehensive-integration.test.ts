@@ -846,6 +846,7 @@ describe('Scenario 7: Tool approval chain', () => {
       risk: 'high',
       reason: 'The tool wants to run arbitrary code',
       sessionId: 'session-A',
+      deadlineAt: '2026-07-29T05:00:00.000Z',
       respondApproval: approvalResponder,
     }
 
@@ -896,6 +897,7 @@ describe('Scenario 7: Tool approval chain', () => {
         risk: 'sensitive',
         reason: 'Writing to disk',
         sessionId: 's1',
+        deadlineAt: '2026-07-29T05:00:00.000Z',
         respondApproval: approvalResponder,
       }),
     )

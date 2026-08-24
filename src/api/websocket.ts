@@ -479,13 +479,15 @@ class HexClawWS {
         this.lastPongTime = Date.now()
         break
       case 'tool_approval_request':
-      case 'tool_permission_request':
+      case 'tool_permission_request': {
+        const approvalRequest = parseToolApprovalRequest(msg)
+        if (!approvalRequest) break
         if (isToolApprovalWireMessage(msg)) {
           this.approvalWireCallbacks.forEach((cb) => cb(msg))
         }
-        const approvalRequest = parseToolApprovalRequest(msg)
-        if (approvalRequest) this.approvalCallbacks.forEach((cb) => cb(approvalRequest))
+        this.approvalCallbacks.forEach((cb) => cb(approvalRequest))
         break
+      }
       case 'tool_approval_ack':
       case 'tool_approval_terminal':
         if (isToolApprovalWireMessage(msg)) {

@@ -964,38 +964,56 @@ describe('websocket.ts', () => {
       )
     })
 
-    it('审批身份缺失时 fail closed，完整 canonical 事件仅回调一次', async () => {
+    it('审批必需字段缺失时在 raw wire 前 fail closed，canonical 事件仅分发一次', async () => {
       await connectAndCapture()
 
       const approvalCb = vi.fn()
+      const approvalWireCb = vi.fn()
       hexclawWS.onApprovalRequest(approvalCb)
+      hexclawWS.onApprovalWire(approvalWireCb)
 
-      capturedWs.simulateMessage(
-        JSON.stringify({
-          type: 'tool_approval_request',
-          content: 'Approve file write?',
-        }),
-      )
+      const canonicalApproval: Record<string, unknown> = {
+        type: 'tool_approval_request',
+        request_id: 'approval-request-1',
+        session_id: 'session-1',
+        owner_id: 'desktop-user',
+        invocation_id: 'invocation-1',
+        tool_name: 'file_edit',
+        arguments: { path: '/workspace/report.md' },
+        arguments_digest: 'a'.repeat(64),
+        security_scope_digest: 'b'.repeat(64),
+        scope_schema_version: 1,
+        deadline_at: '2026-07-29T05:00:00.000Z',
+        content: 'Approve file write?',
+        metadata: { risk: 'sensitive' },
+      }
+      const requiredFields = [
+        'request_id',
+        'session_id',
+        'owner_id',
+        'invocation_id',
+        'tool_name',
+        'arguments_digest',
+        'security_scope_digest',
+        'scope_schema_version',
+        'deadline_at',
+      ] as const
+
+      for (const field of requiredFields) {
+        const malformedApproval = { ...canonicalApproval }
+        delete malformedApproval[field]
+        capturedWs.simulateMessage(JSON.stringify(malformedApproval))
+      }
+
+      expect(approvalWireCb).not.toHaveBeenCalled()
       expect(approvalCb).not.toHaveBeenCalled()
+      // 没有审批事件和出站帧，下游审批卡、回应、工具执行与回执均无入口。
+      expect(capturedWs.sent).toHaveLength(0)
 
-      capturedWs.simulateMessage(
-        JSON.stringify({
-          type: 'tool_approval_request',
-          request_id: 'approval-request-1',
-          session_id: 'session-1',
-          owner_id: 'desktop-user',
-          invocation_id: 'invocation-1',
-          tool_name: 'file_edit',
-          arguments: { path: '/workspace/report.md' },
-          arguments_digest: 'a'.repeat(64),
-          security_scope_digest: 'b'.repeat(64),
-          scope_schema_version: 1,
-          deadline_at: '2026-07-29T05:00:00.000Z',
-          content: 'Approve file write?',
-          metadata: { risk: 'sensitive' },
-        }),
-      )
+      capturedWs.simulateMessage(JSON.stringify(canonicalApproval))
 
+      expect(approvalWireCb).toHaveBeenCalledTimes(1)
+      expect(approvalWireCb).toHaveBeenCalledWith(canonicalApproval)
       expect(approvalCb).toHaveBeenCalledTimes(1)
       expect(approvalCb).toHaveBeenCalledWith({
         requestId: 'approval-request-1',
