@@ -45,6 +45,8 @@ describe('BUG-20260726-027/028 · persisted ImageTask execution facts', () => {
               projection_revision: 0,
             },
           },
+          grounding_evidence_receipts: [],
+          problem_grounding_receipts: [],
         },
         progress: { operation: 'homework', state: 'locating' },
         version: 7,

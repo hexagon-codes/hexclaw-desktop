@@ -1827,7 +1827,7 @@ export type ImageTaskCreativeFeedbackState =
   | 'recovering'
 
 export type ImageTaskProgressDTO =
-  | { operation: 'classification'; state: ImageTaskDispatchStatus }
+  | { operation: 'classification'; state: ImageTaskDispatchStatus | 'recovering' }
   | { operation: 'homework'; state: ImageTaskHomeworkStage }
   | { operation: 'writing_ocr'; state: CreativeWorkIntakeStatus }
   | {
@@ -1849,8 +1849,7 @@ export interface ImageTaskGroundingEvidenceReceiptDTO {
   citation_digest: string
 }
 
-export interface ImageTaskProblemGroundingReceiptDTO
-  extends ImageTaskGroundingEvidenceReceiptDTO {
+export interface ImageTaskProblemGroundingReceiptDTO extends ImageTaskGroundingEvidenceReceiptDTO {
   problem_id: string
   operation: 'solve' | 'grade'
   identity_digest: string
@@ -2002,6 +2001,8 @@ export interface ImageTaskDispatchDTO {
   model_id?: string | null
   /** 服务端权威动作能力；缺失按 false 处理，客户端不得自行推断为可重试。 */
   retryable?: boolean
+  /** 明确失败态的结构化英文诊断类别；内部结果未知恢复态必须省略。 */
+  failure_kind?: string
   automatic_budget_seconds?: number
   automatic_started_at?: number
   automatic_deadline_at?: number
@@ -2159,8 +2160,9 @@ export interface ImageTaskRequestPolicyReceipt {
 export interface ImageTaskOperationReceipt {
   invocation_id: string
   operation: string
-  provider: string
-  model: string
+  canonical_input_digest: string
+  provider?: string
+  model?: string
   status: string
   attempt: number
   /** Empty only when the durable terminal operation has no provider result. */
@@ -2175,6 +2177,8 @@ interface ImageTaskResultRespBase {
   dispatch_id: string
   task_intent: ImageTaskIntent
   status: ImageTaskDispatchStatus
+  /** 明确失败态的结构化英文诊断类别；内部结果未知恢复态必须省略。 */
+  failure_kind?: string
   result: ImageTaskResultProjection | null
 }
 

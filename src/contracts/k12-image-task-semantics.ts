@@ -196,6 +196,27 @@ function optionalString(value: unknown, path: string): void {
   if (value !== undefined) stringValue(value, path, true)
 }
 
+function validateFailureKind(
+  recordValue: WireRecord,
+  status: string,
+  path: string,
+  requiredOnFailed = true,
+): void {
+  const failureKind = recordValue.failure_kind
+  if (status !== 'failed') {
+    if (failureKind !== undefined) fail(`${path}.failure_kind`, 'omitted outside failed status')
+    return
+  }
+  if (failureKind === undefined && !requiredOnFailed) return
+  const value = stringValue(failureKind, `${path}.failure_kind`)
+  if (!/^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$/.test(value)) {
+    fail(`${path}.failure_kind`, 'structured lowercase failure kind')
+  }
+  if (value.includes('outcome_unknown')) {
+    fail(`${path}.failure_kind`, 'omitted for internal outcome-unknown state')
+  }
+}
+
 type ValidatedGroundingEvidenceReceipt = {
   raw: WireRecord
   evidenceKey: string
@@ -237,9 +258,7 @@ function validateGroundingEvidenceReceiptFields(
   digestValue(receipt.citation_digest, `${path}.citation_digest`)
   return {
     raw: receipt,
-    evidenceKey: JSON.stringify(
-      GROUNDING_EVIDENCE_RECEIPT_FIELDS.map((field) => receipt[field]),
-    ),
+    evidenceKey: JSON.stringify(GROUNDING_EVIDENCE_RECEIPT_FIELDS.map((field) => receipt[field])),
   }
 }
 
@@ -1024,7 +1043,7 @@ function validateProgress(value: unknown, path: string): void {
   const operation = stringValue(progress.operation, `${path}.operation`)
   const state = stringValue(progress.state, `${path}.state`)
   if (operation === 'classification') {
-    enumValue(state, IMAGE_TASK_STATUSES, `${path}.state`)
+    if (state !== 'recovering') enumValue(state, IMAGE_TASK_STATUSES, `${path}.state`)
   } else if (operation === 'homework') {
     enumValue(state, HOMEWORK_STAGES, `${path}.state`)
   } else if (operation === 'writing_ocr') {
@@ -1049,6 +1068,7 @@ function normalizeDispatch(value: unknown, path: string): WireRecord {
       'provider_display_name',
       'model_id',
       'retryable',
+      'failure_kind',
       'intent_evidence',
       'intent_confidence',
       'confirmation_candidates',
@@ -1084,7 +1104,7 @@ function normalizeDispatch(value: unknown, path: string): WireRecord {
   )
   stringValue(dispatch.dispatch_id, `${path}.dispatch_id`)
   const intent = enumValue(dispatch.task_intent, IMAGE_TASK_INTENTS, `${path}.task_intent`)
-  enumValue(dispatch.status, IMAGE_TASK_STATUSES, `${path}.status`)
+  const status = enumValue(dispatch.status, IMAGE_TASK_STATUSES, `${path}.status`)
   stringArray(dispatch.intent_evidence, `${path}.intent_evidence`)
   const confidence = numberValue(dispatch.intent_confidence, `${path}.intent_confidence`)
   if (confidence < 0 || confidence > 1) fail(`${path}.intent_confidence`, '0..1')
@@ -1093,6 +1113,12 @@ function normalizeDispatch(value: unknown, path: string): WireRecord {
       enumValue(candidate, IMAGE_TASK_INTENTS, `${path}.confirmation_candidates[${index}]`),
   )
   validateProgress(dispatch.progress, `${path}.progress`)
+  const progress = record(dispatch.progress, `${path}.progress`)
+  const recovering = progress.state === 'recovering'
+  if (recovering && dispatch.failure_kind !== undefined) {
+    fail(`${path}.failure_kind`, 'omitted for recovering progress')
+  }
+  validateFailureKind(dispatch, status, path, !recovering)
   for (const key of ['version', 'created_at', 'updated_at']) {
     numberValue(dispatch[key], `${path}.${key}`, true)
   }
@@ -1427,14 +1453,20 @@ function validateCreativePayload(value: unknown, path: string): void {
   }
 }
 
-function validateAuditEnvelope(response: WireRecord): void {
+type ValidatedImageTaskAuditEnvelope = {
+  sourceDigest: string
+  annotationResultDigests: string[]
+}
+
+function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnvelope | undefined {
   const keys = ['source_digest', 'source_attachments', 'operation_receipts'] as const
   const present = keys.filter((key) => Object.prototype.hasOwnProperty.call(response, key))
   if (present.length !== 0 && present.length !== keys.length) {
     fail('$', 'complete audit envelope or no audit envelope')
   }
-  if (present.length === 0) return
-  stringValue(response.source_digest, '$.source_digest')
+  if (present.length === 0) return undefined
+  const sourceDigest = digestValue(response.source_digest, '$.source_digest', true)
+  const annotationResultDigests: string[] = []
   const attachments = arrayValue(response.source_attachments, '$.source_attachments')
   if (attachments.length === 0) fail('$.source_attachments', 'at least one receipt')
   attachments.forEach((value, index) => {
@@ -1442,7 +1474,7 @@ function validateAuditEnvelope(response: WireRecord): void {
     const attachment = record(value, path)
     exact(attachment, ['digest', 'size_bytes'], path)
     required(attachment, ['digest', 'size_bytes'], path)
-    stringValue(attachment.digest, `${path}.digest`)
+    digestValue(attachment.digest, `${path}.digest`, true)
     const size = numberValue(attachment.size_bytes, `${path}.size_bytes`, true)
     if (size < 0) fail(`${path}.size_bytes`, 'non-negative integer')
   })
@@ -1456,6 +1488,7 @@ function validateAuditEnvelope(response: WireRecord): void {
         'parent_invocation_id',
         'physical_unit',
         'operation',
+        'canonical_input_digest',
         'provider',
         'model',
         'status',
@@ -1468,19 +1501,38 @@ function validateAuditEnvelope(response: WireRecord): void {
     )
     required(
       receipt,
-      ['invocation_id', 'operation', 'provider', 'model', 'status', 'attempt', 'result_digest'],
+      [
+        'invocation_id',
+        'operation',
+        'canonical_input_digest',
+        'status',
+        'attempt',
+        'result_digest',
+      ],
       path,
     )
-    for (const key of [
-      'invocation_id',
-      'operation',
-      'provider',
-      'model',
-      'status',
-      'result_digest',
-    ]) {
-      stringValue(receipt[key], `${path}.${key}`, key === 'result_digest')
+    stringValue(receipt.invocation_id, `${path}.invocation_id`)
+    const operation = stringValue(receipt.operation, `${path}.operation`)
+    const canonicalInputDigest = digestValue(
+      receipt.canonical_input_digest,
+      `${path}.canonical_input_digest`,
+      true,
+    )
+    if (canonicalInputDigest !== sourceDigest) {
+      fail(`${path}.canonical_input_digest`, 'equal to $.source_digest')
     }
+    const status = stringValue(receipt.status, `${path}.status`)
+    const resultDigest = stringValue(receipt.result_digest, `${path}.result_digest`, true)
+    if (resultDigest !== '') digestValue(resultDigest, `${path}.result_digest`, true)
+    if (operation === 'annotation' && status === 'succeeded') {
+      if (resultDigest === '') fail(`${path}.result_digest`, 'annotated image SHA-256 digest')
+      annotationResultDigests.push(resultDigest)
+    }
+    if (receipt.operation !== 'annotation') {
+      required(receipt, ['provider', 'model'], path)
+    }
+    optionalString(receipt.provider, `${path}.provider`)
+    optionalString(receipt.model, `${path}.model`)
     optionalString(receipt.parent_invocation_id, `${path}.parent_invocation_id`)
     optionalString(receipt.physical_unit, `${path}.physical_unit`)
     numberValue(receipt.attempt, `${path}.attempt`, true)
@@ -1505,6 +1557,7 @@ function validateAuditEnvelope(response: WireRecord): void {
       }
     }
   })
+  return { sourceDigest, annotationResultDigests }
 }
 
 export function assertCurrentImageTaskCreativeEntrySemantics(value: unknown): void {
@@ -1533,6 +1586,7 @@ export function assertImageTaskResultSemantics(value: unknown): void {
       'dispatch_id',
       'task_intent',
       'status',
+      'failure_kind',
       'result',
       'source_digest',
       'source_attachments',
@@ -1545,13 +1599,11 @@ export function assertImageTaskResultSemantics(value: unknown): void {
   required(response, ['dispatch_id', 'task_intent', 'status', 'result'], '$')
   stringValue(response.dispatch_id, '$.dispatch_id')
   const intent = enumValue(response.task_intent, IMAGE_TASK_INTENTS, '$.task_intent')
-  enumValue(response.status, IMAGE_TASK_STATUSES, '$.status')
-  validateAuditEnvelope(response)
+  const status = enumValue(response.status, IMAGE_TASK_STATUSES, '$.status')
+  validateFailureKind(response, status, '$', false)
+  const auditEnvelope = validateAuditEnvelope(response)
   const hasAuditEnvelope = Object.prototype.hasOwnProperty.call(response, 'source_digest')
-  const groundingFields = [
-    'grounding_evidence_receipts',
-    'problem_grounding_receipts',
-  ] as const
+  const groundingFields = ['grounding_evidence_receipts', 'problem_grounding_receipts'] as const
   const presentGroundingFields = groundingFields.filter((field) =>
     Object.prototype.hasOwnProperty.call(response, field),
   )
@@ -1589,6 +1641,20 @@ export function assertImageTaskResultSemantics(value: unknown): void {
   }
   if (kind === 'completed_homework' || kind === 'blank_worksheet') {
     const statusByProblem = validatePhotoPayload(result.payload, kind, '$.result.payload')
+    if (kind === 'completed_homework' && auditEnvelope?.annotationResultDigests.length) {
+      const payload = record(result.payload, '$.result.payload')
+      const image = record(payload.annotated_image, '$.result.payload.annotated_image')
+      const annotatedDigest = digestValue(
+        image.digest,
+        '$.result.payload.annotated_image.digest',
+        true,
+      )
+      for (const digest of auditEnvelope.annotationResultDigests) {
+        if (digest !== annotatedDigest) {
+          fail('$.operation_receipts', 'annotation result digest bound to annotated image')
+        }
+      }
+    }
     validateProblemGroundingExactSet(
       problemGroundingReceipts,
       statusByProblem,

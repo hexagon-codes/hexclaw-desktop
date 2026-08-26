@@ -47,6 +47,11 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minLength": 1,
           "type": "string"
         },
+        "failure_kind": {
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$",
+          "type": "string"
+        },
         "intent_confidence": {
           "type": "number"
         },
@@ -208,6 +213,114 @@ export const K12_IMAGE_TASK_SCHEMA = {
         "pdf_page",
         "source_digest",
         "citation_digest"
+      ],
+      "type": "object"
+    },
+    "operationReceipt": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "not": {
+                  "const": "annotation"
+                }
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "required": [
+              "provider",
+              "model"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "canonical_input_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "invocation_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "parent_invocation_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "physical_unit": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "request_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "policy_version": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "reasoning_effort": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "stage": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "thinking": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "policy_version",
+            "stage",
+            "thinking",
+            "reasoning_effort"
+          ],
+          "type": "object"
+        },
+        "request_policy_digest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "result_digest": {
+          "pattern": "^(|sha256:[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "status": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_id",
+        "operation",
+        "canonical_input_digest",
+        "status",
+        "attempt",
+        "result_digest"
       ],
       "type": "object"
     },
@@ -542,6 +655,11 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minLength": 1,
           "type": "string"
         },
+        "failure_kind": {
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$",
+          "type": "string"
+        },
         "grounding_evidence_receipts": {
           "items": {
             "$ref": "#/$defs/groundingEvidenceReceipt"
@@ -550,7 +668,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
         },
         "operation_receipts": {
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/operationReceipt"
           },
           "type": "array"
         },
@@ -595,7 +713,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "type": "array"
         },
         "source_digest": {
-          "minLength": 1,
+          "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
         },
         "status": {
@@ -697,6 +815,7 @@ export interface K12ImageTaskDispatch {
   dispatch_id: string
   task_intent: string
   status: string
+  failure_kind?: string
   progress: { operation: string; state: string }
   version: number
   [key: string]: unknown
@@ -710,6 +829,7 @@ export interface K12ImageTaskDispatchResponse {
   dispatch: K12ImageTaskDispatch & Record<string, unknown>
 }
 export interface K12ImageTaskResultResponse extends Record<string, unknown> {
+  failure_kind?: string
   result: Record<string, unknown>
 }
 export type K12ImageTaskProblemSourceAction = 'correct_text' | 'select_region' | 'retake' | 'skip' | 'resume'

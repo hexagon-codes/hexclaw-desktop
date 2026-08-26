@@ -13,6 +13,12 @@ const client = vi.hoisted(() => ({
 
 vi.mock('../client', () => client)
 
+const sourceImageDigest = `sha256:${'1'.repeat(64)}`
+const annotatedImageDigest = `sha256:${'2'.repeat(64)}`
+const assessingResultDigest = `sha256:${'3'.repeat(64)}`
+const recognizingResultDigest = `sha256:${'4'.repeat(64)}`
+const recognizingPolicyDigest = `sha256:${'5'.repeat(64)}`
+
 function dispatch(overrides: Record<string, unknown> = {}) {
   return {
     dispatch_id: 'dispatch / 1',
@@ -149,7 +155,7 @@ function homeworkResult(
               annotated_image: {
                 mime: 'image/png',
                 data_base64: 'QU5OT1RBVEVE',
-                digest: 'sha256:annotated',
+                digest: annotatedImageDigest,
               },
             }
           : {}),
@@ -661,6 +667,123 @@ describe('K12 ImageTaskDispatch public facade', () => {
     )
   })
 
+  it('accepts one structured failure kind on failed dispatch and result projections', async () => {
+    const failure_kind = 'classification_provider_failed'
+    client.apiGet
+      .mockResolvedValueOnce({
+        dispatch: dispatch({
+          status: 'failed',
+          failure_kind,
+          progress: { operation: 'classification', state: 'failed' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        dispatch_id: 'dispatch-1',
+        task_intent: 'unknown',
+        status: 'failed',
+        failure_kind,
+        result: null,
+      })
+
+    await expect(k12Api.k12GetImageTask('mingming', 'dispatch-1')).resolves.toMatchObject({
+      dispatch: { status: 'failed', failure_kind },
+    })
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-1')).resolves.toMatchObject({
+      status: 'failed',
+      failure_kind,
+    })
+  })
+
+  it('accepts recovering failed projections only when the internal outcome-unknown kind is omitted', async () => {
+    client.apiGet
+      .mockResolvedValueOnce({
+        dispatch: dispatch({
+          status: 'failed',
+          progress: { operation: 'classification', state: 'recovering' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        dispatch_id: 'dispatch-1',
+        task_intent: 'unknown',
+        status: 'failed',
+        result: null,
+      })
+
+    await expect(k12Api.k12GetImageTask('mingming', 'dispatch-1')).resolves.toMatchObject({
+      dispatch: {
+        status: 'failed',
+        progress: { operation: 'classification', state: 'recovering' },
+      },
+    })
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-1')).resolves.toMatchObject({
+      status: 'failed',
+      result: null,
+    })
+  })
+
+  it.each([
+    ['failed dispatch without failure kind', 'dispatch', { status: 'failed' }],
+    [
+      'failed dispatch with error detail',
+      'dispatch',
+      { status: 'failed', failure_kind: 'Provider failed!' },
+    ],
+    [
+      'recovering dispatch with internal outcome unknown kind',
+      'dispatch',
+      {
+        status: 'failed',
+        failure_kind: 'classification_outcome_unknown',
+        progress: { operation: 'classification', state: 'recovering' },
+      },
+    ],
+    [
+      'routed dispatch with stale failure kind',
+      'dispatch',
+      { status: 'routed', failure_kind: 'stale_failure' },
+    ],
+    [
+      'failed result with error detail',
+      'result',
+      { status: 'failed', failure_kind: 'Provider failed!' },
+    ],
+    [
+      'failed result with internal outcome unknown kind',
+      'result',
+      { status: 'failed', failure_kind: 'classification_outcome_unknown' },
+    ],
+    [
+      'routed result with stale failure kind',
+      'result',
+      { status: 'routed', failure_kind: 'stale_failure' },
+    ],
+  ])('rejects %s', async (_case, endpoint, override) => {
+    client.apiGet.mockResolvedValue(
+      endpoint === 'dispatch'
+        ? {
+            dispatch: dispatch({
+              progress: {
+                operation: 'classification',
+                state: override.status,
+              },
+              ...override,
+            }),
+          }
+        : {
+            dispatch_id: 'dispatch-1',
+            task_intent: 'unknown',
+            result: null,
+            ...override,
+          },
+    )
+
+    const call =
+      endpoint === 'dispatch'
+        ? k12Api.k12GetImageTask('mingming', 'dispatch-1')
+        : k12Api.k12GetImageTaskResult('mingming', 'dispatch-1')
+    await expect(call).rejects.toThrow(/invalid image task (dispatch|result) response/i)
+  })
+
   it('fails visibly on the legacy result envelope instead of guessing its intent', async () => {
     client.apiGet.mockResolvedValue({
       kind: 'creative',
@@ -681,35 +804,45 @@ describe('K12 ImageTaskDispatch public facade', () => {
         grade: wrongGrade,
         parent_guide: parentGuide,
       }),
-      source_digest: 'sha256:source-image',
-      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
       operation_receipts: [
         {
           invocation_id: 'inv-assessing',
           operation: 'assessing',
+          canonical_input_digest: sourceImageDigest,
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
           status: 'succeeded',
           attempt: 1,
-          result_digest: 'sha256:assessing-result',
+          result_digest: assessingResultDigest,
         },
         {
           invocation_id: 'physical-recognizing-whole-page',
           parent_invocation_id: 'inv-recognizing',
           physical_unit: 'whole_page',
           operation: 'recognizing',
+          canonical_input_digest: sourceImageDigest,
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
           status: 'succeeded',
           attempt: 1,
-          result_digest: 'sha256:recognizing-result',
-          request_policy_digest: 'sha256:recognizing-policy',
+          result_digest: recognizingResultDigest,
+          request_policy_digest: recognizingPolicyDigest,
           request_policy: {
             policy_version: 'dd036-recognizing-v1',
             stage: 'recognizing',
             thinking: 'off',
             reasoning_effort: 'none',
           },
+        },
+        {
+          invocation_id: 'annotation:artifact-1',
+          operation: 'annotation',
+          canonical_input_digest: sourceImageDigest,
+          status: 'succeeded',
+          attempt: 1,
+          result_digest: annotatedImageDigest,
         },
       ],
       grounding_evidence_receipts: [groundingEvidenceReceipt],
@@ -719,7 +852,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
     await expect(
       k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
     ).resolves.toMatchObject({
-      source_digest: 'sha256:source-image',
+      source_digest: sourceImageDigest,
       operation_receipts: [
         { invocation_id: 'inv-assessing' },
         {
@@ -727,11 +860,79 @@ describe('K12 ImageTaskDispatch public facade', () => {
           parent_invocation_id: 'inv-recognizing',
           request_policy: { reasoning_effort: 'none' },
         },
+        {
+          invocation_id: 'annotation:artifact-1',
+          canonical_input_digest: sourceImageDigest,
+        },
       ],
       grounding_evidence_receipts: [groundingEvidenceReceipt],
       problem_grounding_receipts: problemGroundingReceipts(),
       result: { kind: 'completed_homework' },
     })
+  })
+
+  it('rejects an operation receipt whose canonical input digest drifts from the source', async () => {
+    const response = {
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
+      operation_receipts: [
+        {
+          invocation_id: 'inv-recognizing',
+          operation: 'recognizing',
+          canonical_input_digest: `sha256:${'9'.repeat(64)}`,
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          status: 'succeeded',
+          attempt: 1,
+          result_digest: recognizingResultDigest,
+        },
+      ],
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
+    }
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
+  })
+
+  it('rejects an annotation receipt not bound to the annotated image digest', async () => {
+    const response = {
+      ...homeworkResult('completed_homework', {
+        question: recognizedQuestion,
+        status: 'wrong',
+        result_kind: 'assessment',
+        grade: wrongGrade,
+        parent_guide: parentGuide,
+      }),
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
+      operation_receipts: [
+        {
+          invocation_id: 'annotation:artifact-1',
+          operation: 'annotation',
+          canonical_input_digest: sourceImageDigest,
+          status: 'succeeded',
+          attempt: 1,
+          result_digest: `sha256:${'9'.repeat(64)}`,
+        },
+      ],
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
+    }
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
   })
 
   it('preserves the complete grounding receipt exact-set from the dispatch handler wire', async () => {
@@ -762,9 +963,9 @@ describe('K12 ImageTaskDispatch public facade', () => {
     projection.problem_grounding_receipts = []
     client.apiGet.mockResolvedValue(response)
 
-    await expect(
-      k12Api.k12GetImageTask('mingming', 'dispatch-homework'),
-    ).rejects.toThrow(/invalid image task dispatch response/i)
+    await expect(k12Api.k12GetImageTask('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task dispatch response/i,
+    )
   })
 
   it.each([
@@ -781,8 +982,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
         grade: wrongGrade,
         parent_guide: parentGuide,
       }),
-      source_digest: 'sha256:source-image',
-      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
       operation_receipts: [],
       grounding_evidence_receipts: [groundingEvidenceReceipt],
       problem_grounding_receipts: problemGroundingReceipts().map((receipt) => ({
@@ -791,9 +992,9 @@ describe('K12 ImageTaskDispatch public facade', () => {
       })),
     })
 
-    await expect(
-      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
-    ).rejects.toThrow(/invalid image task result response/i)
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
   })
 
   it('keeps the no-active-binding result compatible when both grounding arrays are empty', async () => {
@@ -805,8 +1006,8 @@ describe('K12 ImageTaskDispatch public facade', () => {
         grade: wrongGrade,
         parent_guide: parentGuide,
       }),
-      source_digest: 'sha256:source-image',
-      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
       operation_receipts: [],
       grounding_evidence_receipts: [],
       problem_grounding_receipts: [],
@@ -829,16 +1030,16 @@ describe('K12 ImageTaskDispatch public facade', () => {
         grade: wrongGrade,
         parent_guide: parentGuide,
       }),
-      source_digest: 'sha256:source-image',
-      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
       operation_receipts: [],
       grounding_evidence_receipts: [groundingEvidenceReceipt],
       problem_grounding_receipts: problemGroundingReceipts().slice(0, 1),
     })
 
-    await expect(
-      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
-    ).rejects.toThrow(/invalid image task result response/i)
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
   })
 
   it('rejects an internal field added to a public grounding receipt exact-set', async () => {
@@ -850,18 +1051,16 @@ describe('K12 ImageTaskDispatch public facade', () => {
         grade: wrongGrade,
         parent_guide: parentGuide,
       }),
-      source_digest: 'sha256:source-image',
-      source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+      source_digest: sourceImageDigest,
+      source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
       operation_receipts: [],
-      grounding_evidence_receipts: [
-        { ...groundingEvidenceReceipt, retrieval_score: 0.99 },
-      ],
+      grounding_evidence_receipts: [{ ...groundingEvidenceReceipt, retrieval_score: 0.99 }],
       problem_grounding_receipts: problemGroundingReceipts(),
     })
 
-    await expect(
-      k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework'),
-    ).rejects.toThrow(/invalid image task result response/i)
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
   })
 
   it.each([
@@ -875,7 +1074,32 @@ describe('K12 ImageTaskDispatch public facade', () => {
           grade: wrongGrade,
           parent_guide: parentGuide,
         }),
-        source_digest: 'sha256:source-image',
+        source_digest: sourceImageDigest,
+      },
+    ],
+    [
+      'a receipt without its canonical input digest',
+      {
+        ...homeworkResult('completed_homework', {
+          question: recognizedQuestion,
+          status: 'wrong',
+          result_kind: 'assessment',
+          grade: wrongGrade,
+          parent_guide: parentGuide,
+        }),
+        source_digest: sourceImageDigest,
+        source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
+        operation_receipts: [
+          {
+            invocation_id: 'inv-recognizing',
+            operation: 'recognizing',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            status: 'succeeded',
+            attempt: 1,
+            result_digest: recognizingResultDigest,
+          },
+        ],
       },
     ],
     [
@@ -888,17 +1112,18 @@ describe('K12 ImageTaskDispatch public facade', () => {
           grade: wrongGrade,
           parent_guide: parentGuide,
         }),
-        source_digest: 'sha256:source-image',
-        source_attachments: [{ digest: 'sha256:source-image', size_bytes: 15777 }],
+        source_digest: sourceImageDigest,
+        source_attachments: [{ digest: sourceImageDigest, size_bytes: 15777 }],
         operation_receipts: [
           {
             invocation_id: 'inv-recognizing',
             operation: 'recognizing',
+            canonical_input_digest: sourceImageDigest,
             provider: 'hexclaw-gpt',
             model: 'gpt-5.6-sol',
             status: 'succeeded',
             attempt: 1,
-            result_digest: 'sha256:recognizing-result',
+            result_digest: recognizingResultDigest,
             external_request_id: 'must-not-cross-public-api',
           },
         ],
