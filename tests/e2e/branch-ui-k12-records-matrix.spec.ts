@@ -30,7 +30,27 @@ interface Target {
   all?: boolean
   required?: boolean
   ignoreText?: boolean
+  compareCount?: boolean
   ignoreBusinessGeometryFields?: Array<'x' | 'y' | 'width' | 'height'>
+}
+
+type CompactRowMode = 'wide' | 'default' | 'narrow'
+
+interface CompactRowSideSelectors {
+  container: string
+  rows: string
+  primary: string
+  context: string
+  actions: string
+}
+
+interface CompactRowInvariant {
+  mode: CompactRowMode
+  reference: CompactRowSideSelectors
+  implementation: CompactRowSideSelectors
+  defaultRowHeight: { min: number; max: number }
+  expectedActionSuffix?: string[]
+  forbiddenActionTexts?: string[]
 }
 
 interface StateDefinition {
@@ -47,6 +67,15 @@ interface StateDefinition {
   pixelComparisonTargets?: string[]
   horizontalOverflowTargets?: string[]
   allowedReferenceHorizontalOverflowTargets?: string[]
+  horizontalBoundsInvariant?: {
+    containerTarget: string
+    childTargets: string[]
+  }
+  twoColumnGridInvariant?: {
+    gridTarget: string
+    cardTarget: string
+  }
+  compactRowInvariant?: CompactRowInvariant
   absentTargets?: string[]
   horizontalScrollResetTargets?: string[]
   containmentTargets?: string[]
@@ -106,11 +135,42 @@ interface TargetEvidence {
     {
       selector: string
       ignoreText: boolean
+      compareCount: boolean
       ignoreBusinessGeometryFields: Array<'x' | 'y' | 'width' | 'height'>
       matches: CapturedTarget[]
     }
   >
   requiredMissing: string[]
+}
+
+interface CompactRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface CompactRowSnapshot {
+  row: CompactRect
+  primary: CompactRect | null
+  context: CompactRect | null
+  actions: CompactRect | null
+  rowStyle: Record<string, string>
+  actionsStyle: Record<string, string>
+  primaryItemCenters: number[]
+  contextItemCenters: number[]
+  actionItemCenters: number[]
+  actionItemWhiteSpace: string[]
+  actionTexts: string[]
+  actionOrder: string[]
+  outsideActionTexts: string[]
+}
+
+interface CompactRowEvidence {
+  mode: CompactRowMode
+  containerWidth: number | null
+  rows: CompactRowSnapshot[]
+  issues: string[]
 }
 
 interface PixelDiffEvidence {
@@ -171,6 +231,17 @@ function weeklyItem(
   prompt: string,
   evidence: string,
 ) {
+  const metadataBySource: Record<
+    string,
+    { subject: string; knowledge_point: string; mastery_status?: string }
+  > = {
+    'mistake-apple': { subject: '数学', knowledge_point: '小数乘法', mastery_status: 'new' },
+    'mistake-equation': { subject: '数学', knowledge_point: '简易方程' },
+    'mistake-believe': { subject: '英语', knowledge_point: '错词' },
+    'mistake-poem': { subject: '语文', knowledge_point: '默写' },
+    'mistake-fraction': { subject: '科学', knowledge_point: '简单电路', mastery_status: 'new' },
+    'mistake-decimal': { subject: '信息科技', knowledge_point: '图形化编程' },
+  }
   return {
     item_id: itemID,
     position,
@@ -180,6 +251,7 @@ function weeklyItem(
     source_ref: sourceRef,
     verification: { status: 'verified', evidence_refs: [evidence] },
     prompt_markdown: prompt,
+    ...metadataBySource[sourceRef],
   }
 }
 
@@ -901,6 +973,32 @@ async function openImplementationRecords(page: Page, testID: string) {
   return issues
 }
 
+async function normalizeWeeklyCompactRowBackdrop(page: Page, side: Side): Promise<string[]> {
+  return page.evaluate((currentSide) => {
+    const selector = currentSide === 'reference' ? '#k12BookPanel0 .rc-week-hero' : '.weekly-hero'
+    const hero = document.querySelector<HTMLElement>(selector)
+    if (!hero) return [`blocked: ${currentSide} weekly hero is missing`]
+
+    // 两侧业务轨道总高度可以不同；半透明渐变会因此以不同高度重采样，污染目标行像素。
+    // 目标截图只冻结共同底色，渐变合同仍由全页截图与 computed-style 证据校验。
+    hero.style.setProperty('background-image', 'none', 'important')
+    return []
+  }, side)
+}
+
+async function normalizeReferenceMistakeLearnerFixture(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#k12MistakeList')
+    if (!list) return ['blocked: reference mistake list is missing']
+
+    // 原型同时保存多个孩子的演示数据；视觉门只保留当前孩子，避免把业务条数差异当成布局漂移。
+    list
+      .querySelectorAll<HTMLElement>(':scope > .resource-row:not([data-learner-id="ming"])')
+      .forEach((row) => row.remove())
+    return []
+  })
+}
+
 const PRACTICE_HEADER_VISUAL_FIXTURE = {
   title: '待打印',
   count: '2 道',
@@ -1420,14 +1518,29 @@ const worksTargets = recordsTargets(4, '[data-testid="works-section"]')
 const states: StateDefinition[] = [
   {
     name: 'weekly-current',
-    fixture: '小明 / 2026-W30 / 6 到期复习 + 2 个手动轨道建议 / current',
+    fixture: '小明 / 1280×820 完整三栏 / 6 到期复习 + 2 个手动轨道建议 / current',
+    viewport: { width: 1280, height: 820 },
     fullPagePixelComparable: false,
     fullPagePixelReason:
       '侧栏会话、对象计数和题目正文属于业务夹具差异；保留全页差异图，仅判定周练目标几何、样式与溢出。',
-    openReference: async (page) => openReferenceRecords(page, 0),
-    openImplementation: async (page) => openImplementationRecords(page, 'subtab-week'),
+    openReference: async (page) => {
+      const issues = await openReferenceRecords(page, 0)
+      issues.push(...(await normalizeWeeklyCompactRowBackdrop(page, 'reference')))
+      return issues
+    },
+    openImplementation: async (page) => {
+      const issues = await openImplementationRecords(page, 'subtab-week')
+      issues.push(...(await normalizeWeeklyCompactRowBackdrop(page, 'implementation')))
+      return issues
+    },
     referenceTargets: [
       ...weeklyTargets.referenceTargets,
+      {
+        name: 'content-container',
+        selector: '#k12ViewRecords > .content',
+        required: true,
+        ignoreText: true,
+      },
       { name: 'period-tabs', selector: '#k12BookPanel0 .k12-week-view-tabs', required: true },
       {
         name: 'period-tab-buttons',
@@ -1440,23 +1553,62 @@ const states: StateDefinition[] = [
         selector: '#k12BookPanel0 .rc-week-progress',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
       {
         name: 'hero',
         selector: '#k12BookPanel0 .rc-week-hero',
         required: true,
         ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
       },
       {
         name: 'weekly-items',
-        selector: '#k12BookPanel0 .rc-week-hero .resource-row',
+        selector: '[data-weekly-due-list] > .k12-compact-row--weekly',
         all: true,
         required: true,
         ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '[data-weekly-due-list]',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'compact-primary',
+        selector: '[data-weekly-due-list] .k12-compact-row__primary',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-context',
+        selector: '[data-weekly-due-list] .k12-compact-row__meta',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-actions',
+        selector: '[data-weekly-due-list] .k12-compact-row__actions',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
       },
     ],
     implementationTargets: [
       ...weeklyTargets.implementationTargets,
+      {
+        name: 'content-container',
+        selector: '.k12rec__body',
+        required: true,
+        ignoreText: true,
+      },
       { name: 'period-tabs', selector: '.weekly-toolbar .k12-book-tabs', required: true },
       {
         name: 'period-tab-buttons',
@@ -1464,21 +1616,103 @@ const states: StateDefinition[] = [
         all: true,
         required: true,
       },
-      { name: 'progress', selector: '.weekly-progress', required: true, ignoreText: true },
-      { name: 'hero', selector: '.weekly-hero', required: true, ignoreText: true },
+      {
+        name: 'progress',
+        selector: '.weekly-progress',
+        required: true,
+        ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
+      },
+      {
+        name: 'hero',
+        selector: '.weekly-hero',
+        required: true,
+        ignoreText: true,
+        ignoreBusinessGeometryFields: ['y', 'height'],
+      },
       { name: 'weekly-tracks', selector: '.weekly-track', all: true, required: true },
       {
         name: 'weekly-items',
-        selector: '.weekly-item',
+        selector: '.weekly-track[data-track="due_review"] .weekly-item.k12-compact-row--weekly',
         all: true,
         required: true,
         ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '.weekly-track[data-track="due_review"] .weekly-resource-list',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'compact-primary',
+        selector: '.weekly-track[data-track="due_review"] .k12-compact-row__primary',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-context',
+        selector: '.weekly-track[data-track="due_review"] .k12-compact-row__meta',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-actions',
+        selector: '.weekly-track[data-track="due_review"] .k12-compact-row__actions',
+        all: true,
+        required: true,
+        ignoreText: true,
+        compareCount: true,
       },
     ],
-    comparisonTargets: ['period-tab-buttons', 'progress', 'hero', 'weekly-items'],
-    pixelComparisonTargets: ['period-tab-buttons', 'progress'],
-    horizontalOverflowTargets: ['hero', 'weekly-items'],
-    allowedReferenceHorizontalOverflowTargets: ['hero', 'weekly-items'],
+    comparisonTargets: [
+      'period-tab-buttons',
+      'progress',
+      'hero',
+      'weekly-items',
+      'compact-container',
+    ],
+    pixelComparisonTargets: ['weekly-items'],
+    horizontalOverflowTargets: ['content-container', 'hero', 'weekly-items'],
+    horizontalBoundsInvariant: {
+      containerTarget: 'content-container',
+      childTargets: ['hero', 'weekly-items'],
+    },
+    compactRowInvariant: {
+      mode: 'default',
+      reference: {
+        container: '[data-weekly-due-list]',
+        rows: '[data-weekly-due-list] > .k12-compact-row--weekly',
+        primary: ':scope > .k12-compact-row__primary',
+        context: ':scope > .k12-compact-row__meta',
+        actions: ':scope > .k12-compact-row__actions',
+      },
+      implementation: {
+        container: '.weekly-track[data-track="due_review"] .weekly-resource-list',
+        rows: '.weekly-track[data-track="due_review"] .weekly-item.k12-compact-row--weekly',
+        primary: ':scope > .k12-compact-row__primary',
+        context: ':scope > .k12-compact-row__meta',
+        actions: ':scope > .k12-compact-row__actions',
+      },
+      defaultRowHeight: { min: 58, max: 64 },
+      expectedActionSuffix: ['本周先不练', '不再复习'],
+      forbiddenActionTexts: ['…'],
+    },
+    referencePixelMaskSelectors: [
+      '[data-weekly-due-list] .k12-compact-row__title',
+      '[data-weekly-due-list] .rc-practice-origin',
+      '[data-weekly-due-list] .k12-compact-row__meta',
+    ],
+    implementationPixelMaskSelectors: [
+      '.weekly-track[data-track="due_review"] .weekly-item__prompt',
+      '.weekly-track[data-track="due_review"] .weekly-item__origin',
+      '.weekly-track[data-track="due_review"] .k12-compact-row__meta',
+    ],
   },
   {
     name: 'weekly-history',
@@ -1567,47 +1801,111 @@ const states: StateDefinition[] = [
   },
   {
     name: 'mistakes',
-    fixture: '小明 / 全学科 + 全状态 / 与原型相同的 7 条代表性错题及动作状态',
+    fixture: '小明 / 1280×820 完整三栏 / 全学科 + 全状态 / 7 条代表性错题',
+    viewport: { width: 1280, height: 820 },
     fullPagePixelComparable: false,
     fullPagePixelReason:
       '侧栏会话与对象计数属于业务夹具差异；保留全页差异图，仅判定错题行、动作、几何、样式与溢出。',
-    openReference: async (page) => openReferenceRecords(page, 1),
+    openReference: async (page) => {
+      const issues = await openReferenceRecords(page, 1)
+      issues.push(...(await normalizeReferenceMistakeLearnerFixture(page)))
+      return issues
+    },
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-mistakes'),
     referenceTargets: [
       ...mistakeTargets.referenceTargets,
+      {
+        name: 'content-container',
+        selector: '#k12ViewRecords > .content',
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'mistake-rows',
         selector: '#k12MistakeList .resource-row',
         all: true,
         required: true,
         ignoreText: true,
+        compareCount: true,
       },
       {
         name: 'mistake-actions',
-        selector: '#k12MistakeList .resource-row > button',
+        selector: '#k12MistakeList .k12-compact-row__actions > *',
         all: true,
         required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '#k12MistakeList',
+        required: true,
+        ignoreText: true,
       },
     ],
     implementationTargets: [
       ...mistakeTargets.implementationTargets,
+      {
+        name: 'content-container',
+        selector: '.k12rec__body',
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'mistake-rows',
         selector: '.k12mistakes .rl-row',
         all: true,
         required: true,
         ignoreText: true,
+        compareCount: true,
       },
       {
         name: 'mistake-actions',
-        selector: '.k12mistakes .rl-row > button',
+        selector: '.k12mistakes .rl-actions > *',
         all: true,
         required: true,
+        ignoreText: true,
+        compareCount: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '.k12mistakes .rl-rows',
+        required: true,
+        ignoreText: true,
       },
     ],
-    comparisonTargets: ['mistake-rows', 'mistake-actions'],
-    horizontalOverflowTargets: ['mistake-rows', 'mistake-actions'],
+    comparisonTargets: ['compact-container', 'mistake-rows'],
+    // 题目正文与背景资产是业务夹具；保留成对全页截图和可见差异图，几何与样式由结构化门禁判定。
+    pixelComparisonTargets: ['mistake-rows'],
+    horizontalOverflowTargets: ['content-container', 'mistake-rows', 'mistake-actions'],
+    horizontalBoundsInvariant: {
+      containerTarget: 'content-container',
+      childTargets: ['mistake-rows', 'mistake-actions'],
+    },
     containmentTargets: ['mistake-actions'],
+    compactRowInvariant: {
+      mode: 'default',
+      reference: {
+        container: '#k12MistakeList',
+        rows: '#k12MistakeList > .k12-compact-row--mistake',
+        primary: ':scope > .k12-compact-row__primary',
+        context: ':scope > .k12-compact-row__meta',
+        actions: ':scope > .k12-compact-row__actions',
+      },
+      implementation: {
+        container: '.k12mistakes .rl-rows',
+        rows: '.k12mistakes .rl-row',
+        primary: ':scope > .rl-primary',
+        context: ':scope > .rl-context',
+        actions: ':scope > .rl-actions',
+      },
+      defaultRowHeight: { min: 60, max: 64 },
+    },
+    referencePixelMaskSelectors: [
+      '#k12MistakeList .k12-compact-row__primary',
+      '#k12MistakeList .k12-compact-row__meta',
+    ],
+    implementationPixelMaskSelectors: ['.k12mistakes .rl-primary', '.k12mistakes .rl-context'],
   },
   {
     name: 'mistakes-narrow',
@@ -1616,7 +1914,11 @@ const states: StateDefinition[] = [
     fullPagePixelComparable: false,
     fullPagePixelReason:
       '侧栏会话与计数属于业务夹具差异；保留全页差异图，仅判定错题目标几何、样式与溢出。',
-    openReference: async (page) => openReferenceRecords(page, 1),
+    openReference: async (page) => {
+      const issues = await openReferenceRecords(page, 1)
+      issues.push(...(await normalizeReferenceMistakeLearnerFixture(page)))
+      return issues
+    },
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-mistakes'),
     referenceTargets: [
       ...mistakeTargets.referenceTargets,
@@ -1648,21 +1950,27 @@ const states: StateDefinition[] = [
       },
       {
         name: 'mistake-question',
-        selector: '#k12MistakeList .resource-row > b',
+        selector: '#k12MistakeList .k12-compact-row__primary .k12-compact-row__title',
         all: true,
         required: true,
       },
       {
         name: 'mistake-description',
-        selector: '#k12MistakeList .resource-row > .sp',
+        selector: '#k12MistakeList .k12-compact-row__primary .k12-compact-row__detail > .sp',
         all: true,
         required: true,
       },
       {
         name: 'mistake-actions',
-        selector: '#k12MistakeList .resource-row > button',
+        selector: '#k12MistakeList .k12-compact-row__actions > *',
         all: true,
         required: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '#k12MistakeList',
+        required: true,
+        ignoreText: true,
       },
     ],
     implementationTargets: [
@@ -1691,21 +1999,27 @@ const states: StateDefinition[] = [
       },
       {
         name: 'mistake-question',
-        selector: '.k12mistakes .rl-row > .rl-title',
+        selector: '.k12mistakes .rl-primary .rl-title',
         all: true,
         required: true,
       },
       {
         name: 'mistake-description',
-        selector: '.k12mistakes .rl-row > .rl-meta',
+        selector: '.k12mistakes .rl-primary .rl-meta',
         all: true,
         required: true,
       },
       {
         name: 'mistake-actions',
-        selector: '.k12mistakes .rl-row > button',
+        selector: '.k12mistakes .rl-actions > *',
         all: true,
         required: true,
+      },
+      {
+        name: 'compact-container',
+        selector: '.k12mistakes .rl-rows',
+        required: true,
+        ignoreText: true,
       },
     ],
     comparisonTargets: [
@@ -1717,10 +2031,29 @@ const states: StateDefinition[] = [
       'mistake-question',
       'mistake-description',
       'mistake-actions',
+      'compact-container',
     ],
     horizontalOverflowTargets: ['content-container', 'mistake-rows'],
     containmentTargets: ['mistake-question', 'mistake-description', 'mistake-actions'],
     clipTargets: ['mistake-rows'],
+    compactRowInvariant: {
+      mode: 'narrow',
+      reference: {
+        container: '#k12MistakeList',
+        rows: '#k12MistakeList > .k12-compact-row--mistake',
+        primary: ':scope > .k12-compact-row__primary',
+        context: ':scope > .k12-compact-row__meta',
+        actions: ':scope > .k12-compact-row__actions',
+      },
+      implementation: {
+        container: '.k12mistakes .rl-rows',
+        rows: '.k12mistakes .rl-row',
+        primary: ':scope > .rl-primary',
+        context: ':scope > .rl-context',
+        actions: ':scope > .rl-actions',
+      },
+      defaultRowHeight: { min: 60, max: 64 },
+    },
   },
   {
     name: 'week-after-mistakes-horizontal-scroll',
@@ -2188,8 +2521,8 @@ const states: StateDefinition[] = [
   },
   {
     name: 'works',
-    fixture: '小明 / 作品 3 条 / 写作成功 + 美术成功 + 美术失败',
-    viewport: { width: 1226, height: 900 },
+    fixture: '小明 / 1280×820 完整三栏 / 作品固定两列 / 写作成功 + 美术成功 + 美术失败',
+    viewport: { width: 1280, height: 820 },
     fullPagePixelComparable: false,
     fullPagePixelReason:
       '侧栏会话、作品标题与点评正文属于业务夹具差异；保留全页差异图，仅判定作品目标几何和样式。',
@@ -2197,6 +2530,12 @@ const states: StateDefinition[] = [
     openImplementation: async (page) => openImplementationRecords(page, 'subtab-works'),
     referenceTargets: [
       ...worksTargets.referenceTargets,
+      {
+        name: 'content-container',
+        selector: '#k12ViewRecords > .content',
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'description',
         selector: '#k12BookPanel4 .practice-overview__copy > p',
@@ -2212,10 +2551,17 @@ const states: StateDefinition[] = [
       },
       { name: 'add-button', selector: '#k12BookToolbar .rc-4', required: true },
       {
+        name: 'work-grid',
+        selector: '#k12CreativeWorkList',
+        required: true,
+        ignoreText: true,
+      },
+      {
         name: 'card',
         selector: '#k12CreativeWorkList .creative-work-card',
         all: true,
         required: true,
+        ignoreText: true,
       },
       {
         name: 'card-preview',
@@ -2240,12 +2586,30 @@ const states: StateDefinition[] = [
     ],
     implementationTargets: [
       ...worksTargets.implementationTargets,
+      {
+        name: 'content-container',
+        selector: '.k12rec__body',
+        required: true,
+        ignoreText: true,
+      },
       { name: 'description', selector: '.k12cw__desc', required: true },
       { name: 'overview', selector: '.k12cw__overview', required: true },
       { name: 'kpis', selector: '.k12cw__kpis', required: true },
       { name: 'kpi', selector: '.k12cw__kpi', all: true, required: true },
       { name: 'add-button', selector: '[data-testid="cw-add-open"]', required: true },
-      { name: 'card', selector: '.k12cw__card', all: true, required: true },
+      {
+        name: 'work-grid',
+        selector: '.k12cw__list',
+        required: true,
+        ignoreText: true,
+      },
+      {
+        name: 'card',
+        selector: '.k12cw__card',
+        all: true,
+        required: true,
+        ignoreText: true,
+      },
       {
         name: 'card-preview',
         selector: '.k12cw__preview',
@@ -2278,6 +2642,15 @@ const states: StateDefinition[] = [
     // 学习档案其他对象的计数是动态业务数据；全页截图保留原值，只在作品目标像素裁剪中屏蔽计数文本。
     referencePixelMaskSelectors: ['#k12BookTabs .k12-tab-count'],
     implementationPixelMaskSelectors: ['.k12rec__tabs .k12-tab-count'],
+    horizontalOverflowTargets: ['content-container', 'work-grid', 'card'],
+    horizontalBoundsInvariant: {
+      containerTarget: 'content-container',
+      childTargets: ['work-grid', 'card'],
+    },
+    twoColumnGridInvariant: {
+      gridTarget: 'work-grid',
+      cardTarget: 'card',
+    },
   },
   {
     name: 'insights',
@@ -2439,6 +2812,22 @@ const states: StateDefinition[] = [
   },
 ]
 
+const weeklyCurrentState = states.find((state) => state.name === 'weekly-current')
+if (!weeklyCurrentState?.compactRowInvariant) {
+  throw new Error('weekly-current compact row invariant is missing')
+}
+const weeklyHistoryIndex = states.findIndex((state) => state.name === 'weekly-history')
+states.splice(weeklyHistoryIndex, 0, {
+  ...weeklyCurrentState,
+  name: 'weekly-narrow',
+  fixture: '小明 / 1024×900 完整三栏 / 本周该练动作组整体下移且右对齐',
+  viewport: { width: 1024, height: 900 },
+  compactRowInvariant: {
+    ...weeklyCurrentState.compactRowInvariant,
+    mode: 'narrow',
+  },
+})
+
 async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvidence> {
   const result: TargetEvidence['targets'] = {}
   const requiredMissing: string[] = []
@@ -2579,6 +2968,7 @@ async function targetEvidence(page: Page, targets: Target[]): Promise<TargetEvid
     result[target.name] = {
       selector: target.selector,
       ignoreText: target.ignoreText === true,
+      compareCount: target.compareCount === true,
       ignoreBusinessGeometryFields: target.ignoreBusinessGeometryFields ?? [],
       matches: value,
     }
@@ -2634,6 +3024,17 @@ function compareTargetEvidence(
     }
     const ignoreText =
       referenceTarget?.ignoreText === true && implementationTarget?.ignoreText === true
+    if (referenceTarget?.compareCount !== implementationTarget?.compareCount) {
+      add(
+        target,
+        null,
+        'config.compareCount',
+        referenceTarget?.compareCount ?? false,
+        implementationTarget?.compareCount ?? false,
+      )
+    }
+    const compareCount =
+      referenceTarget?.compareCount === true && implementationTarget?.compareCount === true
     const referenceIgnoredGeometry = referenceTarget?.ignoreBusinessGeometryFields ?? []
     const implementationIgnoredGeometry = implementationTarget?.ignoreBusinessGeometryFields ?? []
     if (referenceIgnoredGeometry.join(',') !== implementationIgnoredGeometry.join(',')) {
@@ -2650,7 +3051,7 @@ function compareTargetEvidence(
     )
     // ignoreText 用于业务数据可变的容器/列表：正文、条数及正文派生属性不参与 UI 对齐，
     // 仍逐项比较共同样本的几何、样式与交互属性，避免业务内容差异制造视觉假红。
-    if (!ignoreText && referenceMatches.length !== implementationMatches.length) {
+    if ((!ignoreText || compareCount) && referenceMatches.length !== implementationMatches.length) {
       add(target, null, 'count', referenceMatches.length, implementationMatches.length)
     }
     const pairCount = Math.min(referenceMatches.length, implementationMatches.length)
@@ -2692,7 +3093,7 @@ function compareTargetEvidence(
       }
       for (const field of ['x', 'y', 'width', 'height'] as const) {
         // 业务条数和可选回传资产会改变纵向位置与高度；只屏蔽目标明确声明的派生字段。
-        if (ignoreText && ignoredGeometryFields.has(field)) continue
+        if (ignoredGeometryFields.has(field)) continue
         const delta = Math.abs(referenceMatch.rect[field] - implementationMatch.rect[field])
         if (delta > GEOMETRY_TOLERANCE) {
           add(
@@ -2758,6 +3159,434 @@ function horizontalOverflowViolations(evidence: TargetEvidence, targetNames: str
         : [],
     ),
   )
+}
+
+function horizontalBoundsViolations(
+  evidence: TargetEvidence,
+  invariant: StateDefinition['horizontalBoundsInvariant'],
+) {
+  if (!invariant) return []
+  const containers = (evidence.targets[invariant.containerTarget]?.matches ?? []).filter(
+    (match) => match.visible,
+  )
+  if (containers.length !== 1) {
+    return [
+      {
+        target: invariant.containerTarget,
+        reason: 'expected exactly one visible horizontal bounds container',
+        count: containers.length,
+      },
+    ]
+  }
+  const container = containers[0]!
+  const containerLeft = container.rect.x
+  const containerRight = container.rect.x + container.rect.width
+  return invariant.childTargets.flatMap((target) =>
+    (evidence.targets[target]?.matches ?? []).flatMap((match, index) => {
+      const childLeft = match.rect.x
+      const childRight = match.rect.x + match.rect.width
+      return childLeft >= containerLeft - GEOMETRY_TOLERANCE &&
+        childRight <= containerRight + GEOMETRY_TOLERANCE
+        ? []
+        : [
+            {
+              target,
+              index,
+              childLeft,
+              childRight,
+              containerTarget: invariant.containerTarget,
+              containerLeft,
+              containerRight,
+            },
+          ]
+    }),
+  )
+}
+
+function cssGridTracks(value: string) {
+  const tracks: string[] = []
+  let current = ''
+  let depth = 0
+  for (const character of value.trim()) {
+    if (character === '(') depth += 1
+    if (character === ')') depth = Math.max(0, depth - 1)
+    if (/\s/.test(character) && depth === 0) {
+      if (current) tracks.push(current)
+      current = ''
+      continue
+    }
+    current += character
+  }
+  if (current) tracks.push(current)
+  return tracks
+}
+
+function twoColumnGridViolations(
+  evidence: TargetEvidence,
+  invariant: StateDefinition['twoColumnGridInvariant'],
+) {
+  if (!invariant) return []
+  const grids = (evidence.targets[invariant.gridTarget]?.matches ?? []).filter(
+    (match) => match.visible,
+  )
+  const cards = (evidence.targets[invariant.cardTarget]?.matches ?? []).filter(
+    (match) => match.visible,
+  )
+  const violations: Array<Record<string, unknown>> = []
+  if (grids.length !== 1) {
+    violations.push({
+      target: invariant.gridTarget,
+      reason: 'expected exactly one visible work grid',
+      count: grids.length,
+    })
+  } else {
+    const template = grids[0]!.style.gridTemplateColumns
+    const tracks = cssGridTracks(template)
+    if (tracks.length !== 2) {
+      violations.push({
+        target: invariant.gridTarget,
+        reason: 'computed grid must contain exactly two tracks',
+        gridTemplateColumns: template,
+        tracks,
+      })
+    }
+  }
+  if (cards.length < 2) {
+    violations.push({
+      target: invariant.cardTarget,
+      reason: 'at least two visible work cards are required',
+      count: cards.length,
+    })
+  } else {
+    const [first, second] = cards
+    if (Math.abs(first!.rect.y - second!.rect.y) > GEOMETRY_TOLERANCE) {
+      violations.push({
+        target: invariant.cardTarget,
+        reason: 'the first two work cards must share one row',
+        firstY: first!.rect.y,
+        secondY: second!.rect.y,
+      })
+    }
+    if (second!.rect.x <= first!.rect.x + GEOMETRY_TOLERANCE) {
+      violations.push({
+        target: invariant.cardTarget,
+        reason: 'the second work card must occupy the second column',
+        firstX: first!.rect.x,
+        secondX: second!.rect.x,
+      })
+    }
+  }
+  return violations
+}
+
+async function captureCompactRowEvidence(
+  page: Page,
+  mode: CompactRowMode,
+  selectors: CompactRowSideSelectors,
+): Promise<CompactRowEvidence> {
+  return page.evaluate(
+    ({ currentMode, currentSelectors }) => {
+      const issues: string[] = []
+      const container = document.querySelector<HTMLElement>(currentSelectors.container)
+      if (!container) issues.push(`compact row container is missing: ${currentSelectors.container}`)
+
+      const round = (value: number) => Number(value.toFixed(2))
+      const rectOf = (rect: DOMRect): CompactRect => ({
+        x: round(rect.x),
+        y: round(rect.y),
+        width: round(rect.width),
+        height: round(rect.height),
+      })
+      const visible = (node: Element) => {
+        const style = getComputedStyle(node)
+        const rect = node.getBoundingClientRect()
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          Number(style.opacity || '1') > 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        )
+      }
+      // display:contents 的语义分组没有自己的盒子；用其可见直属子项并集保留分组几何证据。
+      const visualRect = (node: HTMLElement): CompactRect | null => {
+        const own = node.getBoundingClientRect()
+        if (own.width > 0 && own.height > 0) return rectOf(own)
+        const children = [...node.children]
+          .filter(visible)
+          .map((child) => child.getBoundingClientRect())
+        if (!children.length) return null
+        const left = Math.min(...children.map((rect) => rect.left))
+        const top = Math.min(...children.map((rect) => rect.top))
+        const right = Math.max(...children.map((rect) => rect.right))
+        const bottom = Math.max(...children.map((rect) => rect.bottom))
+        return {
+          x: round(left),
+          y: round(top),
+          width: round(right - left),
+          height: round(bottom - top),
+        }
+      }
+      const center = (rect: DOMRect | CompactRect) => round(rect.y + rect.height / 2)
+      const directVisibleChildren = (node: HTMLElement) =>
+        [...node.children].filter(
+          (child): child is HTMLElement => child instanceof HTMLElement && visible(child),
+        )
+      const textOf = (node: Element) => (node.textContent ?? '').replace(/\s+/g, ' ').trim()
+      const actionKind = (node: HTMLElement) => {
+        const text = textOf(node)
+        if (text === '本周先不练') return 'defer'
+        if (text === '不再复习') return 'suppress'
+        if (text === '详情') return 'detail'
+        if (text === '查看新题') return 'view'
+        if (
+          node.matches(
+            '[data-practice-action], [data-practice-status], [data-testid^="weekly-practice-"], [data-testid^="mistake-practice-"]',
+          ) ||
+          /练习集|出题失败/.test(text)
+        ) {
+          return 'practice'
+        }
+        return `other:${text}`
+      }
+      const styleSnapshot = (node: HTMLElement) => {
+        const style = getComputedStyle(node)
+        return {
+          display: style.display,
+          gridTemplateColumns: style.gridTemplateColumns,
+          gridTemplateAreas: style.gridTemplateAreas,
+          gridArea: style.gridArea,
+          alignItems: style.alignItems,
+          justifyContent: style.justifyContent,
+          columnGap: style.columnGap,
+          rowGap: style.rowGap,
+          flexWrap: style.flexWrap,
+          whiteSpace: style.whiteSpace,
+          overflowX: style.overflowX,
+        }
+      }
+
+      const rows = [...document.querySelectorAll<HTMLElement>(currentSelectors.rows)]
+        .filter(visible)
+        .map((row, index): CompactRowSnapshot => {
+          const primary = row.querySelector<HTMLElement>(currentSelectors.primary)
+          const context = row.querySelector<HTMLElement>(currentSelectors.context)
+          const actions = row.querySelector<HTMLElement>(currentSelectors.actions)
+          if (!primary) issues.push(`row ${index}: primary group is missing`)
+          if (!context) issues.push(`row ${index}: context group is missing`)
+          if (!actions) issues.push(`row ${index}: actions group is missing`)
+
+          const actionItems = actions ? directVisibleChildren(actions) : []
+          const actionCandidates = [
+            ...row.querySelectorAll<HTMLElement>(
+              'button, [data-practice-status], [data-testid^="weekly-practice-"], [data-testid^="mistake-practice-"]',
+            ),
+          ].filter(visible)
+          const outsideActionTexts = actionCandidates
+            .filter((candidate) => !actions?.contains(candidate))
+            .map(textOf)
+          const itemCenters = (group: HTMLElement | null) =>
+            group
+              ? directVisibleChildren(group).map((item) => center(item.getBoundingClientRect()))
+              : []
+
+          return {
+            row: rectOf(row.getBoundingClientRect()),
+            primary: primary ? visualRect(primary) : null,
+            context: context ? visualRect(context) : null,
+            actions: actions ? visualRect(actions) : null,
+            rowStyle: styleSnapshot(row),
+            actionsStyle: actions ? styleSnapshot(actions) : {},
+            primaryItemCenters: itemCenters(primary),
+            contextItemCenters: itemCenters(context),
+            actionItemCenters: actionItems.map((item) => center(item.getBoundingClientRect())),
+            actionItemWhiteSpace: actionItems.map((item) => getComputedStyle(item).whiteSpace),
+            actionTexts: actionItems.map(textOf),
+            actionOrder: actionItems.map(actionKind),
+            outsideActionTexts,
+          }
+        })
+
+      if (!rows.length) issues.push(`compact rows are missing: ${currentSelectors.rows}`)
+      return {
+        mode: currentMode,
+        containerWidth: container ? round(container.getBoundingClientRect().width) : null,
+        rows,
+        issues,
+      }
+    },
+    { currentMode: mode, currentSelectors: selectors },
+  )
+}
+
+function compactRowViolations(evidence: CompactRowEvidence | null, invariant: CompactRowInvariant) {
+  if (!evidence) return [{ reason: 'compact row evidence is missing' }]
+  const violations: Array<Record<string, unknown>> = evidence.issues.map((reason) => ({ reason }))
+  const width = evidence.containerWidth
+  if (width === null) {
+    violations.push({ reason: 'compact row container width is missing' })
+  } else if (invariant.mode === 'wide' && width < 1000 - GEOMETRY_TOLERANCE) {
+    violations.push({ reason: 'wide mode requires container width >= 1000px', width })
+  } else if (
+    invariant.mode === 'default' &&
+    (width < 620 - GEOMETRY_TOLERANCE || width >= 1000 + GEOMETRY_TOLERANCE)
+  ) {
+    violations.push({ reason: 'default mode requires 620px <= container width < 1000px', width })
+  } else if (invariant.mode === 'narrow' && width >= 620 + GEOMETRY_TOLERANCE) {
+    violations.push({ reason: 'narrow mode requires container width < 620px', width })
+  }
+
+  for (const [index, row] of evidence.rows.entries()) {
+    if (invariant.mode === 'default') {
+      const { min, max } = invariant.defaultRowHeight
+      if (row.row.height < min - GEOMETRY_TOLERANCE || row.row.height > max + GEOMETRY_TOLERANCE) {
+        violations.push({
+          row: index,
+          reason: `default compact row height must be ${min}-${max}px`,
+          height: row.row.height,
+        })
+      }
+    }
+    if (!row.primary || !row.context || !row.actions) continue
+
+    const actionCenterSpread =
+      row.actionItemCenters.length > 1
+        ? Math.max(...row.actionItemCenters) - Math.min(...row.actionItemCenters)
+        : 0
+    if (actionCenterSpread > GEOMETRY_TOLERANCE) {
+      violations.push({
+        row: index,
+        reason: 'all action children must share one center line',
+        centers: row.actionItemCenters,
+        delta: actionCenterSpread,
+      })
+    }
+    if (row.actionsStyle.whiteSpace !== 'nowrap') {
+      violations.push({
+        row: index,
+        reason: 'the action group must not wrap text',
+        whiteSpace: row.actionsStyle.whiteSpace,
+      })
+    }
+    const wrappingItems = row.actionItemWhiteSpace.flatMap((whiteSpace, item) =>
+      ['normal', 'pre-wrap', 'pre-line', 'break-spaces'].includes(whiteSpace)
+        ? [{ item, whiteSpace }]
+        : [],
+    )
+    if (wrappingItems.length) {
+      violations.push({ row: index, reason: 'action child text may wrap', items: wrappingItems })
+    }
+    const rightGap = row.row.x + row.row.width - (row.actions.x + row.actions.width)
+    if (rightGap < -GEOMETRY_TOLERANCE || rightGap > 14 + GEOMETRY_TOLERANCE) {
+      violations.push({
+        row: index,
+        reason: 'action rail must remain pinned to the row right edge',
+        rightGap,
+      })
+    }
+    if (row.outsideActionTexts.length) {
+      violations.push({
+        row: index,
+        reason: 'action controls exist outside the canonical action group',
+        outsideActionTexts: row.outsideActionTexts,
+      })
+    }
+    const forbidden = (invariant.forbiddenActionTexts ?? []).filter((text) =>
+      row.actionTexts.includes(text),
+    )
+    if (forbidden.length) {
+      violations.push({ row: index, reason: 'forbidden action is visible', forbidden })
+    }
+    if (invariant.expectedActionSuffix?.length) {
+      const actualSuffix = row.actionTexts.slice(-invariant.expectedActionSuffix.length)
+      if (JSON.stringify(actualSuffix) !== JSON.stringify(invariant.expectedActionSuffix)) {
+        violations.push({
+          row: index,
+          reason: 'action suffix order is incorrect',
+          expected: invariant.expectedActionSuffix,
+          actual: actualSuffix,
+        })
+      }
+    }
+
+    if (invariant.mode === 'narrow') {
+      const upperBottom = Math.max(
+        row.primary.y + row.primary.height,
+        row.context.y + row.context.height,
+      )
+      if (row.actions.y < upperBottom - GEOMETRY_TOLERANCE) {
+        violations.push({
+          row: index,
+          reason: 'narrow mode must move the complete action group below the content domains',
+          actionsTop: row.actions.y,
+          upperBottom,
+        })
+      }
+    } else if (invariant.mode === 'default') {
+      const rowCenter = row.row.y + row.row.height / 2
+      const actionCenter = row.actions.y + row.actions.height / 2
+      if (Math.abs(rowCenter - actionCenter) > 2) {
+        violations.push({
+          row: index,
+          reason: 'default action rail must stay vertically centered in the compact row',
+          rowCenter,
+          actionCenter,
+        })
+      }
+    } else {
+      const singleLineCenters = [
+        ...row.primaryItemCenters,
+        ...row.contextItemCenters,
+        ...row.actionItemCenters,
+      ]
+      const spread =
+        singleLineCenters.length > 1
+          ? Math.max(...singleLineCenters) - Math.min(...singleLineCenters)
+          : 0
+      if (spread > GEOMETRY_TOLERANCE) {
+        violations.push({
+          row: index,
+          reason: 'wide mode must preserve the flat single-line row',
+          centers: singleLineCenters,
+          delta: spread,
+        })
+      }
+    }
+  }
+  return violations
+}
+
+function compareCompactRowEvidence(
+  reference: CompactRowEvidence | null,
+  implementation: CompactRowEvidence | null,
+) {
+  if (!reference || !implementation) {
+    return [{ reason: 'reference or implementation compact row evidence is missing' }]
+  }
+  const differences: Array<Record<string, unknown>> = []
+  if (reference.rows.length !== implementation.rows.length) {
+    differences.push({
+      reason: 'compact row count differs',
+      reference: reference.rows.length,
+      implementation: implementation.rows.length,
+    })
+  }
+  const pairCount = Math.min(reference.rows.length, implementation.rows.length)
+  for (let index = 0; index < pairCount; index += 1) {
+    const referenceRow = reference.rows[index]!
+    const implementationRow = implementation.rows[index]!
+    if (
+      JSON.stringify(referenceRow.actionOrder) !== JSON.stringify(implementationRow.actionOrder)
+    ) {
+      differences.push({
+        row: index,
+        reason: 'semantic action order differs from the authoritative prototype',
+        reference: referenceRow.actionOrder,
+        implementation: implementationRow.actionOrder,
+      })
+    }
+  }
+  return differences
 }
 
 function containmentViolations(evidence: TargetEvidence, targetNames: string[]) {
@@ -2985,13 +3814,33 @@ async function captureState(
     scale: 'css',
   })
 
-  const [referenceTargets, implementationTargets, referenceRoots, implementationRoots] =
-    await Promise.all([
-      targetEvidence(referencePage, state.referenceTargets),
-      targetEvidence(implementationPage, state.implementationTargets),
-      rootEvidence(referencePage, 'reference'),
-      rootEvidence(implementationPage, 'implementation'),
-    ])
+  const [
+    referenceTargets,
+    implementationTargets,
+    referenceRoots,
+    implementationRoots,
+    referenceCompactRows,
+    implementationCompactRows,
+  ] = await Promise.all([
+    targetEvidence(referencePage, state.referenceTargets),
+    targetEvidence(implementationPage, state.implementationTargets),
+    rootEvidence(referencePage, 'reference'),
+    rootEvidence(implementationPage, 'implementation'),
+    state.compactRowInvariant
+      ? captureCompactRowEvidence(
+          referencePage,
+          state.compactRowInvariant.mode,
+          state.compactRowInvariant.reference,
+        )
+      : Promise.resolve(null),
+    state.compactRowInvariant
+      ? captureCompactRowEvidence(
+          implementationPage,
+          state.compactRowInvariant.mode,
+          state.compactRowInvariant.implementation,
+        )
+      : Promise.resolve(null),
+  ])
 
   referenceIssues.push(
     ...referenceTargets.requiredMissing.map(
@@ -3023,6 +3872,31 @@ async function captureState(
   const unexpectedReferenceHorizontalOverflow = referenceHorizontalOverflow.filter(
     ({ target }) => !allowedReferenceHorizontalOverflowTargets.has(target),
   )
+  const referenceHorizontalBounds = horizontalBoundsViolations(
+    referenceTargets,
+    state.horizontalBoundsInvariant,
+  )
+  const implementationHorizontalBounds = horizontalBoundsViolations(
+    implementationTargets,
+    state.horizontalBoundsInvariant,
+  )
+  const referenceTwoColumnGrid = twoColumnGridViolations(
+    referenceTargets,
+    state.twoColumnGridInvariant,
+  )
+  const implementationTwoColumnGrid = twoColumnGridViolations(
+    implementationTargets,
+    state.twoColumnGridInvariant,
+  )
+  const referenceCompactRowViolations = state.compactRowInvariant
+    ? compactRowViolations(referenceCompactRows, state.compactRowInvariant)
+    : []
+  const implementationCompactRowViolations = state.compactRowInvariant
+    ? compactRowViolations(implementationCompactRows, state.compactRowInvariant)
+    : []
+  const compactRowComparison = state.compactRowInvariant
+    ? compareCompactRowEvidence(referenceCompactRows, implementationCompactRows)
+    : []
   const referenceContainment = containmentViolations(
     referenceTargets,
     state.containmentTargets ?? [],
@@ -3082,6 +3956,13 @@ async function captureState(
   const stateInvariantFailureCount =
     unexpectedReferenceHorizontalOverflow.length +
     implementationHorizontalOverflow.length +
+    referenceHorizontalBounds.length +
+    implementationHorizontalBounds.length +
+    referenceTwoColumnGrid.length +
+    implementationTwoColumnGrid.length +
+    referenceCompactRowViolations.length +
+    implementationCompactRowViolations.length +
+    compactRowComparison.length +
     referenceContainment.length +
     implementationContainment.length +
     referenceClip.length +
@@ -3199,6 +4080,9 @@ async function captureState(
             allowedReferenceHorizontalOverflowTargets: [
               ...allowedReferenceHorizontalOverflowTargets,
             ],
+            horizontalBoundsInvariant: state.horizontalBoundsInvariant ?? null,
+            twoColumnGridInvariant: state.twoColumnGridInvariant ?? null,
+            compactRowInvariant: state.compactRowInvariant ?? null,
             absentTargets: state.absentTargets ?? [],
             horizontalScrollResetTargets: state.horizontalScrollResetTargets ?? [],
             containmentTargets: state.containmentTargets ?? [],
@@ -3208,6 +4092,10 @@ async function captureState(
             reference: {
               horizontalOverflow: referenceHorizontalOverflow,
               unexpectedHorizontalOverflow: unexpectedReferenceHorizontalOverflow,
+              horizontalBounds: referenceHorizontalBounds,
+              twoColumnGrid: referenceTwoColumnGrid,
+              compactRows: referenceCompactRows,
+              compactRowViolations: referenceCompactRowViolations,
               containment: referenceContainment,
               clip: referenceClip,
               exactText: referenceExactText,
@@ -3218,6 +4106,10 @@ async function captureState(
             },
             implementation: {
               horizontalOverflow: implementationHorizontalOverflow,
+              horizontalBounds: implementationHorizontalBounds,
+              twoColumnGrid: implementationTwoColumnGrid,
+              compactRows: implementationCompactRows,
+              compactRowViolations: implementationCompactRowViolations,
               containment: implementationContainment,
               clip: implementationClip,
               exactText: implementationExactText,
@@ -3227,6 +4119,7 @@ async function captureState(
               scrollSequence: implementationScrollSequence,
             },
             scrollSequenceComparison,
+            compactRowComparison,
           },
         },
         null,
@@ -3317,6 +4210,13 @@ async function captureState(
           allowedReferenceHorizontalOverflowTargets: [...allowedReferenceHorizontalOverflowTargets],
           unexpectedReferenceHorizontalOverflow,
           implementationHorizontalOverflow,
+          referenceHorizontalBounds,
+          implementationHorizontalBounds,
+          referenceTwoColumnGrid,
+          implementationTwoColumnGrid,
+          referenceCompactRowViolations,
+          implementationCompactRowViolations,
+          compactRowComparison,
           referenceContainment,
           implementationContainment,
           referenceClip,
@@ -3400,6 +4300,48 @@ async function captureState(
     .soft(
       implementationHorizontalOverflow,
       `${state.name} implementation has horizontal overflow; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceHorizontalBounds,
+      `${state.name} reference target escapes the shared records body; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationHorizontalBounds,
+      `${state.name} implementation target escapes the shared records body; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceTwoColumnGrid,
+      `${state.name} reference work grid is not exactly two columns; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationTwoColumnGrid,
+      `${state.name} implementation work grid is not exactly two columns; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      referenceCompactRowViolations,
+      `${state.name} reference compact row invariant failed; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      implementationCompactRowViolations,
+      `${state.name} implementation compact row invariant failed; evidence=${geometryPath}`,
+    )
+    .toEqual([])
+  expect
+    .soft(
+      compactRowComparison,
+      `${state.name} compact row action order differs from prototype; evidence=${geometryPath}`,
     )
     .toEqual([])
   expect

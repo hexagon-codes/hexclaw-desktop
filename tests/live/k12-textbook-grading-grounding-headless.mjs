@@ -165,6 +165,25 @@ const EXPECTED_RESTART_EXACT_SET = Object.freeze([
   'problem_grounding_receipts',
 ])
 
+const EXPECTED_TEXT_RETRIEVAL_ORACLES = Object.freeze([
+  Object.freeze({
+    physical_page: 54,
+    query: '分数与除法有什么关系？你能用字母表示出分数与除法的关系吗？',
+    query_sha256: 'b083c377bd89d1eb11fa99c27a539a602d28ab99aa957e6da4e571a35bb34283',
+    top_k: 3,
+    expected_physical_pages: Object.freeze([54]),
+    expected_page_match: 'contains',
+  }),
+  Object.freeze({
+    physical_page: 57,
+    query: '老师买了 5 m 的红绸带，平均分给表演节目的 6 名女生。每人分得几米？',
+    query_sha256: 'eece23497d25e57b02d52521788ea2ac26e3d0edc9aebb016cee91675d254853',
+    top_k: 3,
+    expected_physical_pages: Object.freeze([57]),
+    expected_page_match: 'contains',
+  }),
+])
+
 const EXPECTED_SCAN_RETRIEVAL_ORACLES = Object.freeze([
   Object.freeze({
     physical_page: 5,
@@ -382,7 +401,11 @@ function projectBasicOracle(oracle, pages) {
   }
 }
 
-function projectScanRetrievalOracle(oracle, pages = Number.MAX_SAFE_INTEGER) {
+function projectScanRetrievalOracle(
+  oracle,
+  pages = Number.MAX_SAFE_INTEGER,
+  expectedPageMatch = 'exact-set',
+) {
   const value = object(oracle, 'TEXTBOOK_ORACLE_CONTRACT_INVALID')
   const expectedKeys = [
     'expected_page_match',
@@ -403,7 +426,7 @@ function projectScanRetrievalOracle(oracle, pages = Number.MAX_SAFE_INTEGER) {
   const canonicalPages = [...new Set(expectedPages)].sort((left, right) => left - right)
   if (
     value.top_k !== 3 ||
-    value.expected_page_match !== 'exact-set' ||
+    value.expected_page_match !== expectedPageMatch ||
     canonicalPages.some((page) => page > pages) ||
     canonicalJSON(expectedPages) !== canonicalJSON(canonicalPages) ||
     canonicalJSON(canonicalPages) !== canonicalJSON([projected.physical_page]) ||
@@ -421,7 +444,7 @@ function projectScanRetrievalOracle(oracle, pages = Number.MAX_SAFE_INTEGER) {
   }
 }
 
-function fixtureProjection(fixture) {
+function fixtureProjection(fixture, expectedPageMatch = 'exact-set') {
   const value = object(fixture, 'FIXTURE_CONTRACT_INVALID')
   if (!SHA256.test(value.sha256) || !Number.isInteger(value.size_bytes) || value.size_bytes < 1) {
     throw new HarnessError('FIXTURE_CONTRACT_INVALID')
@@ -429,7 +452,7 @@ function fixtureProjection(fixture) {
   const pages = positiveInteger(value.pages, 'FIXTURE_PAGE_COUNT_INVALID')
   const oracles = array(value.oracles, 'FIXTURE_ORACLE_INVALID').map((oracle) =>
     Object.prototype.hasOwnProperty.call(oracle ?? {}, 'top_k')
-      ? projectScanRetrievalOracle(oracle, pages)
+      ? projectScanRetrievalOracle(oracle, pages, expectedPageMatch)
       : projectBasicOracle(oracle, pages),
   )
   return {
@@ -526,7 +549,7 @@ export function validateContract(contract) {
     throw new HarnessError('ARTIFACT_RECEIPT_CONTRACT_INVALID')
   }
   const fixtures = object(root.fixtures, 'FIXTURE_CONTRACT_INVALID')
-  const text = fixtureProjection(fixtures.text)
+  const text = fixtureProjection(fixtures.text, 'contains')
   const scan = fixtureProjection(fixtures.scan)
   const scanOracleSource = object(
     fixtures.scan?.oracle_source,
@@ -535,6 +558,7 @@ export function validateContract(contract) {
   if (
     text.pages !== 131 ||
     canonicalJSON(text.oracle_pages) !== canonicalJSON([54, 57]) ||
+    canonicalJSON(text.oracles) !== canonicalJSON(EXPECTED_TEXT_RETRIEVAL_ORACLES) ||
     scan.pages !== 122 ||
     canonicalJSON(scan.oracle_pages) !== canonicalJSON([5, 61, 120]) ||
     canonicalJSON(scan.oracles) !== canonicalJSON(EXPECTED_SCAN_RETRIEVAL_ORACLES) ||
@@ -2223,13 +2247,23 @@ function projectSearchHit(hit, saved, receipt) {
   }
 }
 
-export function retrievalRequestForOracle(oracle) {
-  const projected = projectScanRetrievalOracle(oracle)
+export function retrievalRequestForOracle(oracle, expectedPageMatch = 'exact-set') {
+  const projected = projectScanRetrievalOracle(
+    oracle,
+    Number.MAX_SAFE_INTEGER,
+    expectedPageMatch,
+  )
   return { query: projected.query, top_k: projected.top_k }
 }
 
-export function assertOracleSearchExactSet(results, oracle, saved, receipt) {
-  const projectedOracle = projectScanRetrievalOracle(oracle, saved?.pages)
+export function assertOracleSearchExactSet(
+  results,
+  oracle,
+  saved,
+  receipt,
+  expectedPageMatch = 'exact-set',
+) {
+  const projectedOracle = projectScanRetrievalOracle(oracle, saved?.pages, expectedPageMatch)
   const source = array(results, 'SEARCH_RESULTS_INVALID')
   if (source.length > projectedOracle.top_k) {
     throw new HarnessError('ORACLE_PHYSICAL_PAGE_EXACT_SET_INVALID')
@@ -2240,7 +2274,11 @@ export function assertOracleSearchExactSet(results, oracle, saved, receipt) {
     for (let page = hit.page_start; page <= hit.page_end; page += 1) actualPages.add(page)
   }
   const pages = [...actualPages].sort((left, right) => left - right)
-  if (canonicalJSON(pages) !== canonicalJSON(projectedOracle.expected_physical_pages)) {
+  const pageMatch =
+    expectedPageMatch === 'contains'
+      ? projectedOracle.expected_physical_pages.every((page) => actualPages.has(page))
+      : canonicalJSON(pages) === canonicalJSON(projectedOracle.expected_physical_pages)
+  if (!pageMatch) {
     throw new HarnessError('ORACLE_PHYSICAL_PAGE_EXACT_SET_INVALID')
   }
   return hits
@@ -2256,8 +2294,8 @@ async function retrieveDocumentPhase(paths, contract, env, deadline, kind) {
   const observed = []
   await withSidecar(paths, state, env, deadline, async (api) => {
     for (const oracle of contract.fixtures[key].oracles) {
-      const request =
-        key === 'scan' ? retrievalRequestForOracle(oracle) : { query: oracle.query, top_k: 20 }
+      const expectedPageMatch = key === 'scan' ? 'exact-set' : 'contains'
+      const request = retrievalRequestForOracle(oracle, expectedPageMatch)
       const payload = await apiJSON(api, 'POST', '/api/v1/knowledge/search', {
         data: request,
         timeout: remaining(deadline, 3 * 60_000, 'SEARCH_PENDING'),
@@ -2269,17 +2307,13 @@ async function retrieveDocumentPhase(paths, contract, env, deadline, kind) {
         state,
         saved.active_revision.revision_id,
       )
-      const hits =
-        key === 'scan'
-          ? assertOracleSearchExactSet(payload?.results, oracle, saved, receipt)
-          : array(payload?.results, 'SEARCH_RESULTS_INVALID')
-              .filter(
-                (hit) =>
-                  hit?.doc_id === saved.document_id &&
-                  hit?.page_start <= oracle.physical_page &&
-                  hit?.page_end >= oracle.physical_page,
-              )
-              .map((hit) => projectSearchHit(hit, saved, receipt))
+      const hits = assertOracleSearchExactSet(
+        payload?.results,
+        oracle,
+        saved,
+        receipt,
+        expectedPageMatch,
+      )
       if (hits.length === 0) throw new HarnessError('ORACLE_PHYSICAL_PAGE_NOT_RETRIEVED')
       observed.push({ physical_page: oracle.physical_page, query_receipt: receipt, hits })
     }

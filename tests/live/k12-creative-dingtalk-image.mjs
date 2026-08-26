@@ -2,7 +2,7 @@ import { request as playwrightRequest } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { chmod, lstat, mkdir, open, readFile, realpath, rename } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const LIVE_ROOT = dirname(fileURLToPath(import.meta.url))
@@ -20,6 +20,43 @@ export const HARD_PHASE_MAX_MS = 29 * 60_000
 const PREFIXED_SHA256 = /^sha256:[a-f0-9]{64}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
 const ASSET_ID = /^asset:\/\/([^/]+)\/([a-f0-9]{64})\.(png|jpg|jpeg|gif|webp)$/u
+const APPROVED_CREATIVE_H2_ORDER = Object.freeze([
+  '可见证据',
+  '先这样肯定',
+  '家长可以这样问或讲',
+  '下一次只试一个点',
+])
+const APPROVED_CREATIVE_MARKDOWN_POLICY = Object.freeze({
+  h2_exact_order: APPROVED_CREATIVE_H2_ORDER,
+  body_language: 'zh-CN',
+  each_section_contains_han: true,
+  parent_question: {
+    required: true,
+    question_mark_required: true,
+    minimum_han_characters: 6,
+  },
+  next_step: { required: true, minimum_han_characters: 6 },
+  limitation: {
+    optional: true,
+    prefix: '说明：',
+    must_follow_sections: true,
+    must_be_final: true,
+    h2_forbidden: true,
+  },
+  prohibited_feedback_semantics: ['scoring', 'ranking', 'ghostwriting'],
+  forbidden_visible_references: [
+    'asset_scheme',
+    'file_scheme',
+    'blob_scheme',
+    'data_scheme',
+    'protected_asset_api',
+    'posix_absolute_path',
+    'windows_absolute_path',
+    'internal_asset_id',
+  ],
+})
+const DINGTALK_REFERENCE_BOUNDARY = new Set([...`\"'([{<=:，。；、：`])
+const DINGTALK_INTERNAL_ASSET_ID = /(?:^|[^a-f0-9])(?:inline:|sha256:)?[a-f0-9]{64}(?:\.(?:png|jpe?g|gif|webp))?(?=$|[^a-f0-9])/iu
 
 export const PHASES = Object.freeze([
   'validate',
@@ -72,6 +109,13 @@ function nonEmpty(value, code) {
 
 function positiveInteger(value, code) {
   if (!Number.isInteger(value) || value < 1) throw new HarnessError(code)
+  return value
+}
+
+export function imageTaskVersion(value) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new HarnessError('IMAGE_TASK_VERSION_INVALID')
+  }
   return value
 }
 
@@ -231,6 +275,7 @@ export function validateContract(contract) {
     creative_send: '/api/k12/creative-works/{work_id}/send',
     delivery_batch: '/api/k12/delivery-batches/{batch_id}?agent={agent_name}',
     delivery_query: '/api/k12/delivery-batches/{batch_id}/query',
+    delivery_retry: '/api/k12/delivery-batches/{batch_id}/retry',
   }
   if (canonicalJSON(publicAPI) !== canonicalJSON(requiredPaths)) {
     throw new HarnessError('CONTRACT_PUBLIC_API_INVALID')
@@ -263,8 +308,11 @@ export function validateContract(contract) {
     canonicalJSON(delivery.physical_target_key) !==
       canonicalJSON(['platform', 'instance_id', 'chat_id']) ||
     delivery.parts_per_target !== 2 ||
+    delivery.physical_messages_per_target !== 1 ||
+    delivery.initial_product_send_posts_per_work !== 1 ||
+    delivery.component_rows_share_external_message_id !== true ||
+    delivery.physical_external_message_ids_distinct_across_targets !== true ||
     delivery.external_message_id_required !== true ||
-    delivery.distinct_external_message_ids !== true ||
     delivery.terminal_status !== 'delivered'
   ) {
     throw new HarnessError('CONTRACT_DELIVERY_INVALID')
@@ -284,15 +332,23 @@ export function validateContract(contract) {
   ) {
     throw new HarnessError('CONTRACT_DELIVERY_INVALID')
   }
+  const markdownPolicy = object(delivery.markdown_policy, 'CONTRACT_MARKDOWN_POLICY_INVALID')
+  if (canonicalJSON(markdownPolicy) !== canonicalJSON(APPROVED_CREATIVE_MARKDOWN_POLICY)) {
+    throw new HarnessError('CONTRACT_MARKDOWN_POLICY_INVALID')
+  }
   const replay = object(value.frozen_replay, 'CONTRACT_REPLAY_INVALID')
   if (
     replay.replay_lookup_before_source_open !== true ||
     replay.asset_open_failure_rechecks_frozen_batch !== true ||
     replay.restart_action !== 'query_only' ||
+    replay.duplicate_product_send_posts_per_work !== 1 ||
     replay.duplicate_send_returns_same_batch !== true ||
     replay.same_delivery_ids !== true ||
     replay.same_external_message_ids !== true ||
     replay.same_attempts !== true ||
+    replay.new_delivery_receipts_per_work !== 0 ||
+    replay.new_external_message_ids_per_work !== 0 ||
+    replay.new_physical_messages_per_work !== 0 ||
     replay.new_provider_send_count !== 0 ||
     replay.new_mutable_source_read_on_duplicate_send !== 0
   ) {
@@ -301,11 +357,18 @@ export function validateContract(contract) {
   const checkpoint = object(value.client_checkpoint, 'CONTRACT_CHECKPOINT_INVALID')
   if (
     checkpoint.required_before_pass !== true ||
+    checkpoint.source !== 'dingtalk-real-client-observer' ||
+    canonicalJSON(checkpoint.allowed_clients) !== canonicalJSON(['ios', 'android', 'desktop']) ||
+    checkpoint.observed_at_required !== true ||
     checkpoint.one_observation_per_target !== true ||
     checkpoint.work_marker_required !== true ||
     checkpoint.markdown_digest_required !== true ||
     checkpoint.image_digest_required !== true ||
-    checkpoint.marker_and_image_same_chat !== true ||
+    checkpoint.marker_and_image_same_card !== true ||
+    checkpoint.screenshot_bytes_required !== true ||
+    checkpoint.screenshot_within_checkpoint_directory !== true ||
+    checkpoint.observed_physical_messages_per_target !== 1 ||
+    checkpoint.duplicate_physical_messages_per_target !== 0 ||
     checkpoint.raw_target_identity_allowed !== false ||
     checkpoint.raw_external_message_id_allowed !== false
   ) {
@@ -342,7 +405,11 @@ export function validateContract(contract) {
     fixtureKeys,
     fixtures: normalizedFixtures,
     creative_entry: { ...creative },
-    delivery: { ...delivery, parts: parts.map((part) => ({ ...part })) },
+    delivery: {
+      ...delivery,
+      parts: parts.map((part) => ({ ...part })),
+      markdown_policy: canonicalValue(markdownPolicy),
+    },
     frozen_replay: { ...replay },
     client_checkpoint: { ...checkpoint },
     validate_side_effects: { ...validateSideEffects },
@@ -486,9 +553,155 @@ function assetIdentity(assetID, expectedAgent, expectedDigest, expectedMIME, cod
   return { agent: match[1], digest: match[2], extension: match[3], file: `${match[2]}.${match[3]}` }
 }
 
-function canonicalCreativeMarkdown(work) {
+function dingTalkReferenceBoundary(value) {
+  return value === undefined || /\s/u.test(value) || DINGTALK_REFERENCE_BOUNDARY.has(value)
+}
+
+function containsDingTalkLocalPath(content) {
+  const runes = Array.from(String(content ?? ''))
+  for (let index = 0; index < runes.length; index += 1) {
+    const value = runes[index]
+    const boundary = dingTalkReferenceBoundary(runes[index - 1])
+    if (
+      boundary &&
+      value === '\\' &&
+      runes[index + 1] === '\\' &&
+      runes[index + 2] !== undefined &&
+      !/\s/u.test(runes[index + 2])
+    ) {
+      return true
+    }
+    if (
+      boundary &&
+      value === '/' &&
+      runes[index + 1] !== undefined &&
+      runes[index + 1] !== '/' &&
+      !/\s/u.test(runes[index + 1])
+    ) {
+      return true
+    }
+    if (
+      boundary &&
+      /^[a-z]$/iu.test(value) &&
+      runes[index + 1] === ':' &&
+      (runes[index + 2] === '\\' || runes[index + 2] === '/')
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+export function assertDingTalkVisibleContentSafe(
+  content,
+  code = 'DINGTALK_VISIBLE_CONTENT_INVALID',
+) {
+  const text = nonEmpty(content, code)
+  const lower = text.toLowerCase()
+  if (
+    ['asset://', 'file://', 'blob:', 'data:', '/api/k12/assets/'].some((marker) =>
+      lower.includes(marker),
+    ) ||
+    containsDingTalkLocalPath(text) ||
+    DINGTALK_INTERNAL_ASSET_ID.test(text)
+  ) {
+    throw new HarnessError(code)
+  }
+  return true
+}
+
+function hanCharacterCount(value) {
+  return String(value ?? '').match(/\p{Script=Han}/gu)?.length ?? 0
+}
+
+export function assertCreativeMarkdownContent(
+  markdown,
+  code = 'CREATIVE_MARKDOWN_INVALID',
+) {
+  const text = nonEmpty(markdown, code).replace(/\r\n?/gu, '\n')
+  assertDingTalkVisibleContentSafe(text, `${code}_VISIBLE_CONTENT`)
+  const lines = text.split('\n')
+  const headings = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^##[ \t]+(.+?)[ \t]*$/u.exec(lines[index])
+    if (match) headings.push({ index, title: match[1] })
+  }
+  if (
+    canonicalJSON(headings.map(({ title }) => title)) !== canonicalJSON(APPROVED_CREATIVE_H2_ORDER)
+  ) {
+    throw new HarnessError(`${code}_H2_EXACT_SET`)
+  }
+
+  const limitationIndexes = lines
+    .map((line, index) => ({ index, text: line.trim() }))
+    .filter(({ text: line }) => line.startsWith('说明：'))
+  if (limitationIndexes.length > 1) throw new HarnessError(`${code}_LIMITATION_POSITION`)
+  const limitationIndex = limitationIndexes[0]?.index
+  if (limitationIndex !== undefined) {
+    const lastNonEmptyIndex = lines.reduce(
+      (latest, line, index) => (line.trim() ? index : latest),
+      -1,
+    )
+    if (
+      limitationIndex <= headings.at(-1).index ||
+      limitationIndex !== lastNonEmptyIndex ||
+      hanCharacterCount(lines[limitationIndex].trim().slice('说明：'.length)) === 0
+    ) {
+      throw new HarnessError(`${code}_LIMITATION_POSITION`)
+    }
+  }
+
+  const sections = headings.map((heading, index) => {
+    const nextHeadingIndex = headings[index + 1]?.index ?? lines.length
+    const end =
+      limitationIndex !== undefined && limitationIndex < nextHeadingIndex
+        ? limitationIndex
+        : nextHeadingIndex
+    return lines.slice(heading.index + 1, end).join('\n').trim()
+  })
+  if (sections.some((section) => hanCharacterCount(section) === 0)) {
+    throw new HarnessError(`${code}_CHINESE_BODY_REQUIRED`)
+  }
+
+  const parentQuestion = sections[2]
+  if (
+    !/[?？]/u.test(parentQuestion) ||
+    hanCharacterCount(parentQuestion) <
+      APPROVED_CREATIVE_MARKDOWN_POLICY.parent_question.minimum_han_characters
+  ) {
+    throw new HarnessError(`${code}_PARENT_QUESTION_REQUIRED`)
+  }
+  const nextStep = sections[3]
+  if (
+    hanCharacterCount(nextStep) <
+    APPROVED_CREATIVE_MARKDOWN_POLICY.next_step.minimum_han_characters
+  ) {
+    throw new HarnessError(`${code}_NEXT_STEP_REQUIRED`)
+  }
+
+  const feedbackBody = sections.join('\n')
+  if (/(?:\d{1,3}\s*分(?!钟)|\d{1,3}\s*\/\s*100|(?:得分|评分)\s*(?:为|[:：])?\s*\d+)/u.test(feedbackBody)) {
+    throw new HarnessError(`${code}_SCORING_FORBIDDEN`)
+  }
+  if (/(?:排名\s*(?:第\s*)?\d+|第\s*\d+\s*名|超过\s*\d+(?:\.\d+)?%\s*(?:的)?同学)/u.test(feedbackBody)) {
+    throw new HarnessError(`${code}_RANKING_FORBIDDEN`)
+  }
+  if (/(?:范文如下|全文如下|改写全文|重写全文|替(?:你|孩子)写|帮(?:你|孩子)写|代写)/u.test(feedbackBody)) {
+    throw new HarnessError(`${code}_GHOSTWRITING_FORBIDDEN`)
+  }
+  return {
+    h2_order: [...APPROVED_CREATIVE_H2_ORDER],
+    chinese_section_count: sections.length,
+    parent_question_present: true,
+    next_step_present: true,
+    light_limitation_present: limitationIndex !== undefined,
+  }
+}
+
+export function canonicalCreativeMarkdown(work) {
   const feedback = work?.latest_feedback?.feedback?.projection_markdown
-  return [work?.display_name, work?.work_title, work?.content_markdown, feedback]
+  const workTitle = work?.work_title === work?.display_name ? '' : work?.work_title
+  return [work?.display_name, workTitle, work?.content_markdown, feedback]
     .map((part) => String(part ?? '').trim())
     .filter(Boolean)
     .join('\n\n')
@@ -508,6 +721,10 @@ export function assertPublicCreativeArtifact(work, sourceBytes, expected) {
   const expectedAgent = nonEmpty(expected?.agent_name, 'CREATIVE_ARTIFACT_OWNER_INVALID')
   const expectedWorkID = nonEmpty(expected?.work_id, 'CREATIVE_ARTIFACT_INVALID')
   const marker = nonEmpty(expected?.marker, 'CREATIVE_ARTIFACT_MARKER_INVALID')
+  const feedbackMarkdown = nonEmpty(
+    value.latest_feedback?.feedback?.projection_markdown,
+    'CREATIVE_ARTIFACT_FEEDBACK_INVALID',
+  )
   if (
     digest !== expectedDigest ||
     value.work_id !== expectedWorkID ||
@@ -518,13 +735,14 @@ export function assertPublicCreativeArtifact(work, sourceBytes, expected) {
     value.row_version < 1 ||
     value.latest_feedback?.status !== 'succeeded' ||
     !nonEmpty(value.latest_feedback?.generation_id, 'CREATIVE_ARTIFACT_FEEDBACK_INVALID') ||
-    !nonEmpty(
-      value.latest_feedback?.feedback?.projection_markdown,
-      'CREATIVE_ARTIFACT_FEEDBACK_INVALID',
-    )
+    !feedbackMarkdown
   ) {
     throw new HarnessError('CREATIVE_ARTIFACT_INVALID')
   }
+  const feedbackContract = assertCreativeMarkdownContent(
+    feedbackMarkdown,
+    'CREATIVE_ARTIFACT_MARKDOWN_INVALID',
+  )
   const identity = assetIdentity(
     value.source_asset_id,
     expectedAgent,
@@ -556,6 +774,72 @@ export function assertPublicCreativeArtifact(work, sourceBytes, expected) {
     canonical_markdown: markdown,
     markdown_digest: sha256Text(markdown),
     marker,
+    feedback_contract: feedbackContract,
+  }
+}
+
+function canonicalModelOperationReceipts(result, code) {
+  const receipts = array(object(result, code).operation_receipts, code)
+    .map((receipt) => object(receipt, code))
+    .filter(
+      (receipt) => String(receipt.provider ?? '').trim() || String(receipt.model ?? '').trim(),
+    )
+    .map((receipt) => {
+      if (!String(receipt.provider ?? '').trim() || !String(receipt.model ?? '').trim()) {
+        throw new HarnessError(code)
+      }
+      return canonicalValue(receipt)
+    })
+    .sort((left, right) => canonicalJSON(left).localeCompare(canonicalJSON(right)))
+  if (new Set(receipts.map(canonicalJSON)).size !== receipts.length) {
+    throw new HarnessError(code)
+  }
+  return receipts
+}
+
+export function assertExactWorkFeedbackReceipt(result) {
+  const receipts = canonicalModelOperationReceipts(
+    result,
+    'WORK_FEEDBACK_RECEIPT_EXACT_SET_INVALID',
+  ).filter((receipt) => receipt.operation === 'work_feedback')
+  if (receipts.length !== 1) {
+    throw new HarnessError('WORK_FEEDBACK_RECEIPT_EXACT_SET_INVALID')
+  }
+  const receipt = receipts[0]
+  const invocationID = nonEmpty(receipt.invocation_id, 'WORK_FEEDBACK_RECEIPT_INVALID')
+  const resultDigest = normalizedDigest(receipt.result_digest, 'WORK_FEEDBACK_RECEIPT_INVALID')
+  if (
+    receipt.provider !== EXPECTED_PROVIDER ||
+    receipt.model !== EXPECTED_MODEL ||
+    receipt.status !== 'succeeded' ||
+    receipt.attempt !== 1
+  ) {
+    throw new HarnessError('WORK_FEEDBACK_RECEIPT_INVALID')
+  }
+  return {
+    provider: receipt.provider,
+    model: receipt.model,
+    status: receipt.status,
+    attempt: receipt.attempt,
+    invocation_id_sha256: sha256Text(invocationID),
+    result_digest: `sha256:${resultDigest}`,
+    receipt_sha256: sha256Text(canonicalJSON(receipt)),
+  }
+}
+
+export function assertModelOperationReceiptsUnchanged(before, after) {
+  const beforeReceipts = canonicalModelOperationReceipts(before, 'MODEL_OPERATION_RECEIPTS_INVALID')
+  const afterReceipts = canonicalModelOperationReceipts(after, 'MODEL_OPERATION_RECEIPTS_INVALID')
+  const beforeJSON = canonicalJSON(beforeReceipts)
+  const afterJSON = canonicalJSON(afterReceipts)
+  if (beforeJSON !== afterJSON) {
+    throw new HarnessError('MODEL_OPERATION_RECEIPTS_CHANGED')
+  }
+  return {
+    receipt_count: beforeReceipts.length,
+    new_model_calls: 0,
+    before_sha256: sha256Text(beforeJSON),
+    after_sha256: sha256Text(afterJSON),
   }
 }
 
@@ -598,6 +882,9 @@ function assertCanonicalPartEvidence(payload, receipt, expected, code) {
   ) {
     throw new HarnessError(code)
   }
+  assertCreativeMarkdownContent(content.markdown, `${code}_MARKDOWN`)
+  assertDingTalkVisibleContentSafe(attachmentRefs[0]?.name, `${code}_ATTACHMENT_NAME`)
+  assertDingTalkVisibleContentSafe(renderParts[1]?.alt_text, `${code}_ALT_TEXT`)
   let frozenManifest
   try {
     frozenManifest = JSON.parse(nonEmpty(receipt.render_manifest_json, code))
@@ -609,6 +896,7 @@ function assertCanonicalPartEvidence(payload, receipt, expected, code) {
 
 function assertMarkdownPart(receipt, expected) {
   const payload = deliveryPayload(receipt, 'DELIVERY_MARKDOWN_INVALID')
+  assertCreativeMarkdownContent(payload.text, 'DELIVERY_MARKDOWN_INVALID')
   if (
     payload.kind !== 'markdown' ||
     payload.ordinal !== 1 ||
@@ -637,6 +925,7 @@ function assertArtifactPart(receipt, expected) {
     attachmentField(attachment, 'Data', 'data'),
     'DELIVERY_ARTIFACT_INVALID',
   )
+  assertDingTalkVisibleContentSafe(name, 'DELIVERY_ARTIFACT_INVALID')
   if (
     payload.kind !== 'artifact' ||
     payload.ordinal !== 2 ||
@@ -646,8 +935,7 @@ function assertArtifactPart(receipt, expected) {
     normalizedDigest(payload.digest, 'DELIVERY_ARTIFACT_INVALID') !== expected.source_digest ||
     normalizedDigest(receipt.part_digest, 'DELIVERY_ARTIFACT_INVALID') !== expected.source_digest ||
     sha256Bytes(bytes) !== expected.source_digest ||
-    !bytes.equals(expected.source_bytes) ||
-    /asset:\/\/|file:\/\/|\/Users\/|[A-Za-z]:\\/u.test(receipt.payload_json)
+    !bytes.equals(expected.source_bytes)
   ) {
     throw new HarnessError('DELIVERY_ARTIFACT_INVALID')
   }
@@ -698,6 +986,7 @@ export function assertDeliveryExactSet(batch, expected) {
   const sourceMIME = nonEmpty(expected?.source_mime, 'DELIVERY_ARTIFACT_INVALID')
   const canonicalMarkdown = nonEmpty(expected?.canonical_markdown, 'DELIVERY_MARKDOWN_INVALID')
   const marker = nonEmpty(expected?.marker, 'DELIVERY_MARKDOWN_INVALID')
+  assertCreativeMarkdownContent(canonicalMarkdown, 'DELIVERY_MARKDOWN_INVALID')
   if (
     !Buffer.isBuffer(sourceBytes) ||
     sha256Bytes(sourceBytes) !== sourceDigest ||
@@ -722,7 +1011,7 @@ export function assertDeliveryExactSet(batch, expected) {
   const expectedTargetKeys = new Set(targets.map(physicalTargetKey))
   const byTarget = new Map()
   const batchOrdinals = new Set()
-  const externalIDs = new Set()
+  const physicalExternalIDs = new Set()
   for (const receipt of receipts) {
     const target = physicalTarget(receipt?.target)
     const key = physicalTargetKey(target)
@@ -750,10 +1039,6 @@ export function assertDeliveryExactSet(batch, expected) {
       throw new HarnessError('DELIVERY_RECEIPT_INVALID')
     }
     batchOrdinals.add(receipt.batch_ordinal)
-    if (externalIDs.has(receipt.external_message_id)) {
-      throw new HarnessError('DELIVERY_EXTERNAL_ID_DUPLICATE')
-    }
-    externalIDs.add(receipt.external_message_id)
   }
   const ordinalProjection = [...batchOrdinals].sort((left, right) => left - right)
   const expectedOrdinals = Array.from({ length: receipts.length }, (_, index) => index + 1)
@@ -779,6 +1064,21 @@ export function assertDeliveryExactSet(batch, expected) {
     ) {
       throw new HarnessError('DELIVERY_ARTIFACT_INVALID')
     }
+    const physicalExternalID = nonEmpty(
+      markdown.external_message_id,
+      'DELIVERY_EXTERNAL_ID_REQUIRED',
+    )
+    if (
+      image.external_message_id !== physicalExternalID ||
+      image.attempt !== markdown.attempt ||
+      image.status !== markdown.status
+    ) {
+      throw new HarnessError('DELIVERY_COMPOSITE_GROUP_DRIFT')
+    }
+    if (physicalExternalIDs.has(physicalExternalID)) {
+      throw new HarnessError('DELIVERY_PHYSICAL_EXTERNAL_ID_DUPLICATE')
+    }
+    physicalExternalIDs.add(physicalExternalID)
     assertMarkdownPart(markdown, {
       canonical_markdown: canonicalMarkdown,
       marker,
@@ -798,8 +1098,10 @@ export function assertDeliveryExactSet(batch, expected) {
     batch_id_sha256: sha256Text(value.batch_id),
     target_count: targets.length,
     receipt_count: receipts.length,
+    component_row_count: receipts.length,
+    physical_message_count: physicalExternalIDs.size,
     target_hashes: targets.map((target) => sha256Text(physicalTargetKey(target))).sort(),
-    external_message_id_hashes: [...externalIDs].map(sha256Text).sort(),
+    physical_external_message_id_hashes: [...physicalExternalIDs].map(sha256Text).sort(),
     markdown_digest: sha256Text(canonicalMarkdown),
     image_digest: sourceDigest,
   }
@@ -868,11 +1170,12 @@ export function checkpointExpectationFromDelivery(batch, expected) {
     const parts = receipts.filter((receipt) => physicalTargetKey(receipt.target) === key)
     const markdown = parts.find((receipt) => receipt.part_kind === 'markdown')
     const image = parts.find((receipt) => receipt.part_kind === 'artifact')
-    if (!markdown || !image) throw new HarnessError('CLIENT_CHECKPOINT_DELIVERY_INVALID')
+    if (!markdown || !image || markdown.external_message_id !== image.external_message_id) {
+      throw new HarnessError('CLIENT_CHECKPOINT_DELIVERY_INVALID')
+    }
     targets.push({
       target_sha256: sha256Text(key),
-      markdown_external_message_id_sha256: sha256Text(markdown.external_message_id),
-      image_external_message_id_sha256: sha256Text(image.external_message_id),
+      physical_external_message_id_sha256: sha256Text(markdown.external_message_id),
     })
   }
   return {
@@ -883,12 +1186,61 @@ export function checkpointExpectationFromDelivery(batch, expected) {
   }
 }
 
-export function assertClientCheckpoint(checkpoint, expected) {
+async function safeEvidenceFile(pathname, evidenceRoot, wantDigest, code) {
+  try {
+    const linkInfo = await lstat(pathname)
+    if (linkInfo.isSymbolicLink()) throw new HarnessError(`${code}_UNSAFE`)
+    const root = await realpath(evidenceRoot)
+    const candidate = await realpath(pathname)
+    const rel = relative(root, candidate)
+    if (rel === '' || rel.startsWith('..') || resolve(root, rel) !== candidate) {
+      throw new HarnessError(`${code}_OUTSIDE_ROOT`)
+    }
+    const info = await lstat(candidate)
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      (info.mode & 0o077) !== 0 ||
+      info.size < 1_024 ||
+      info.size > 25 * 1024 * 1024
+    ) {
+      throw new HarnessError(`${code}_UNSAFE`)
+    }
+    const bytes = await readFile(candidate)
+    if (
+      !bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) &&
+      !(
+        bytes[0] === 0xff &&
+        bytes[1] === 0xd8 &&
+        bytes[bytes.length - 2] === 0xff &&
+        bytes.at(-1) === 0xd9
+      )
+    ) {
+      throw new HarnessError(`${code}_FORMAT_INVALID`)
+    }
+    const got = sha256Bytes(bytes)
+    if (got !== normalizedDigest(wantDigest, `${code}_DIGEST_INVALID`)) {
+      throw new HarnessError(`${code}_DIGEST_DRIFT`)
+    }
+    return got
+  } catch (error) {
+    if (error instanceof HarnessError) throw error
+    throw new HarnessError(`${code}_UNSAFE`)
+  }
+}
+
+export async function assertClientCheckpoint(checkpoint, expected) {
   const value = object(checkpoint, 'CLIENT_CHECKPOINT_INVALID')
   const targetExpectations = array(expected?.targets, 'CLIENT_CHECKPOINT_INVALID')
+  const client = nonEmpty(value.client, 'CLIENT_CHECKPOINT_INVALID')
+  const observedAt = nonEmpty(value.observed_at, 'CLIENT_CHECKPOINT_INVALID')
+  const evidenceRoot = nonEmpty(expected?.evidence_root, 'CLIENT_SCREENSHOT_ROOT_REQUIRED')
   if (
     value.schema_version !== 1 ||
     value.scenario !== 'k12_real_dingtalk_creative_images' ||
+    value.source !== 'dingtalk-real-client-observer' ||
+    !['ios', 'android', 'desktop'].includes(client) ||
+    !Number.isFinite(Date.parse(observedAt)) ||
     value.work_marker !== expected.marker ||
     normalizedDigest(value.markdown_digest, 'CLIENT_CHECKPOINT_DIGEST_INVALID') !==
       expected.markdown_digest ||
@@ -902,9 +1254,19 @@ export function assertClientCheckpoint(checkpoint, expected) {
     throw new HarnessError('CLIENT_CHECKPOINT_EXACT_SET_INVALID')
   }
   const expectedByTarget = new Map(
-    targetExpectations.map((target) => [target.target_sha256, target]),
+    targetExpectations.map((target) => [
+      normalizedDigest(target.target_sha256, 'CLIENT_CHECKPOINT_INVALID'),
+      {
+        ...target,
+        physical_external_message_id_sha256: normalizedDigest(
+          target.physical_external_message_id_sha256,
+          'CLIENT_CHECKPOINT_INVALID',
+        ),
+      },
+    ]),
   )
   const seen = new Set()
+  const screenshotDigests = []
   for (const observation of observations) {
     const item = object(observation, 'CLIENT_CHECKPOINT_OBSERVATION_INVALID')
     if (
@@ -915,17 +1277,25 @@ export function assertClientCheckpoint(checkpoint, expected) {
     ) {
       throw new HarnessError('CLIENT_CHECKPOINT_RAW_IDENTITY')
     }
-    const targetHash = nonEmpty(item.target_sha256, 'CLIENT_CHECKPOINT_OBSERVATION_INVALID')
+    const targetHash = normalizedDigest(
+      item.target_sha256,
+      'CLIENT_CHECKPOINT_OBSERVATION_INVALID',
+    )
     const wanted = expectedByTarget.get(targetHash)
     if (
       !wanted ||
       seen.has(targetHash) ||
-      item.markdown_external_message_id_sha256 !== wanted.markdown_external_message_id_sha256 ||
-      item.image_external_message_id_sha256 !== wanted.image_external_message_id_sha256 ||
+      normalizedDigest(
+        item.physical_external_message_id_sha256,
+        'CLIENT_CHECKPOINT_OBSERVATION_INVALID',
+      ) !==
+        wanted.physical_external_message_id_sha256 ||
       item.marker_visible !== true ||
       item.markdown_rendered !== true ||
       item.image_visible !== true ||
-      item.marker_and_image_same_chat !== true ||
+      item.marker_and_image_same_card !== true ||
+      item.observed_physical_message_count !== 1 ||
+      item.duplicate_physical_message_count !== 0 ||
       normalizedDigest(item.observed_markdown_digest, 'CLIENT_CHECKPOINT_DIGEST_INVALID') !==
         expected.markdown_digest ||
       normalizedDigest(item.observed_image_digest, 'CLIENT_CHECKPOINT_DIGEST_INVALID') !==
@@ -933,6 +1303,14 @@ export function assertClientCheckpoint(checkpoint, expected) {
     ) {
       throw new HarnessError('CLIENT_CHECKPOINT_OBSERVATION_INVALID')
     }
+    screenshotDigests.push(
+      await safeEvidenceFile(
+        nonEmpty(item.screenshot_path, 'CLIENT_SCREENSHOT_REQUIRED'),
+        evidenceRoot,
+        item.screenshot_sha256,
+        'CLIENT_SCREENSHOT',
+      ),
+    )
     seen.add(targetHash)
   }
   if (seen.size !== expectedByTarget.size)
@@ -943,6 +1321,10 @@ export function assertClientCheckpoint(checkpoint, expected) {
     image_digest: expected.image_digest,
     observation_count: observations.length,
     target_hashes: [...seen].sort(),
+    source: value.source,
+    client,
+    observed_at: observedAt,
+    screenshot_sha256s: screenshotDigests.sort(),
   }
 }
 
@@ -1300,10 +1682,36 @@ export function maskedInstanceConfig(config) {
       return false
     }
   }
+  const isCredentialKey = (key) => {
+    const compact = String(key).toLowerCase().trim().replaceAll('-', '_').replaceAll('_', '')
+    if (
+      new Set([
+        'password',
+        'passwd',
+        'pwd',
+        'secret',
+        'token',
+        'apikey',
+        'authorization',
+        'credential',
+        'credentials',
+        'aeskey',
+        'encryptionkey',
+        'privatekey',
+        'accesskey',
+        'secretkey',
+      ]).has(compact)
+    ) {
+      return true
+    }
+    return ['password', 'secret', 'token', 'apikey', 'privatekey', 'credential'].some((suffix) =>
+      compact.endsWith(suffix),
+    )
+  }
   const visit = (node, key = '') => {
     if (Array.isArray(node)) return node.every((child) => visit(child, key))
     if (!node || typeof node !== 'object') {
-      if (!/(secret|token|key|credential|password)/iu.test(key)) return true
+      if (!isCredentialKey(key)) return true
       const text = String(node ?? '').trim()
       return (
         text === '' ||
@@ -1318,12 +1726,36 @@ export function maskedInstanceConfig(config) {
   return visit(value)
 }
 
-function assertPreparedPublicProjection(runtime, llm, instances, agents) {
+export async function waitForBoundInstancesProjection(
+  runtime,
+  fetchProjection,
+  deadline,
+  intervalMilliseconds = 250,
+) {
+  const expectedInstances = new Set(runtime.expectedTargets.map((target) => target.instance_id))
+  const until = Math.min(deadline, Date.now() + START_TIMEOUT_MS)
+  while (Date.now() < until) {
+    const projection = await fetchProjection()
+    const matchingInstances = array(projection?.instances, 'INSTANCE_PROJECTION_INVALID').filter(
+      (instance) => instance?.provider === 'dingtalk' && expectedInstances.has(instance?.id),
+    )
+    if (
+      matchingInstances.length === expectedInstances.size &&
+      matchingInstances.every(
+        (instance) => instance.enabled === true && instance.status === 'running',
+      )
+    ) {
+      return projection
+    }
+    await sleep(intervalMilliseconds)
+  }
+  throw new HarnessError('BOUND_INSTANCE_PROJECTION_INVALID')
+}
+
+export function assertPreparedPublicProjection(runtime, llm, instances, agents) {
   const providers = object(llm?.providers, 'REAL_ROUTE_PROJECTION_INVALID')
   const provider = object(providers[EXPECTED_PROVIDER], 'REAL_ROUTE_PROJECTION_INVALID')
   if (
-    llm.default !== EXPECTED_PROVIDER ||
-    provider.model !== EXPECTED_MODEL ||
     !array(provider.models, 'REAL_ROUTE_PROJECTION_INVALID').includes(EXPECTED_MODEL) ||
     provider.credential_present !== true
   ) {
@@ -1331,7 +1763,7 @@ function assertPreparedPublicProjection(runtime, llm, instances, agents) {
   }
   const expectedInstances = new Set(runtime.expectedTargets.map((target) => target.instance_id))
   const matchingInstances = array(instances?.instances, 'INSTANCE_PROJECTION_INVALID').filter(
-    (instance) => instance?.provider === 'dingtalk' && expectedInstances.has(instance?.name),
+    (instance) => instance?.provider === 'dingtalk' && expectedInstances.has(instance?.id),
   )
   if (
     matchingInstances.length !== expectedInstances.size ||
@@ -1435,15 +1867,22 @@ async function preparePhase(env, deadline) {
   await withSidecar(runtime, env, deadline, async (api) => {
     const [llm, instances, agents] = await Promise.all([
       apiRequest(api, 'GET', '/api/v1/config/llm', { code: 'LLM_PROJECTION_FAILED' }),
-      apiRequest(api, 'GET', '/api/v1/platforms/instances', {
-        code: 'INSTANCE_PROJECTION_FAILED',
-      }),
+      waitForBoundInstancesProjection(
+        runtime,
+        async () =>
+          (
+            await apiRequest(api, 'GET', '/api/v1/platforms/instances', {
+              code: 'INSTANCE_PROJECTION_FAILED',
+            })
+          ).value,
+        deadline,
+      ),
       apiRequest(api, 'GET', '/api/v1/agents', { code: 'AGENT_PROJECTION_FAILED' }),
     ])
     state.public_projection = assertPreparedPublicProjection(
       runtime,
       llm.value,
-      instances.value,
+      instances,
       agents.value,
     )
   })
@@ -1543,6 +1982,18 @@ async function getImageTask(api, state, dispatchID) {
     { code: 'IMAGE_TASK_GET_FAILED' },
   )
   return object(response.value?.dispatch, 'IMAGE_TASK_GET_INVALID')
+}
+
+async function getImageTaskResult(api, state, dispatchID) {
+  const response = await apiRequest(
+    api,
+    'GET',
+    `/api/k12/image-tasks/${encodeURIComponent(dispatchID)}/result?agent=${encodeURIComponent(
+      state.agent_name,
+    )}`,
+    { code: 'IMAGE_TASK_RESULT_FAILED' },
+  )
+  return object(response.value, 'IMAGE_TASK_RESULT_INVALID')
 }
 
 async function createImageTask(api, state, key, assetID) {
@@ -1700,32 +2151,23 @@ function expectedForCase(state, key, sourceBytes, work) {
   }
 }
 
-function assertDispatchRoute(dispatch) {
-  if (
-    dispatch.model_id !== EXPECTED_MODEL ||
-    !nonEmpty(dispatch.provider_display_name, 'IMAGE_TASK_ROUTE_INVALID')
-  ) {
-    throw new HarnessError('IMAGE_TASK_ROUTE_INVALID')
-  }
-  return {
-    provider_display_name_sha256: sha256Text(dispatch.provider_display_name),
-    model: dispatch.model_id,
-    fallback_used: false,
-  }
-}
-
 async function createCreativeCasePhase(env, deadline, requestedKey) {
   const key = caseKey(requestedKey)
   const runtime = liveRuntime(env)
   const contract = await loadContract()
   const state = await loadState(runtime.runRoot)
-  if (state.cases[key]?.stage === 'created') {
+  if (
+    state.cases[key]?.stage === 'created' &&
+    state.cases[key]?.work_feedback_receipt?.provider === EXPECTED_PROVIDER &&
+    state.cases[key]?.work_feedback_receipt?.model === EXPECTED_MODEL
+  ) {
     return {
       status: 'already_created',
       phase: `create-${key}`,
       work_id_sha256: sha256Text(state.cases[key].work_id),
       source_digest: state.cases[key].source_digest,
       markdown_digest: state.cases[key].markdown_digest,
+      model_execution: state.cases[key].work_feedback_receipt,
     }
   }
   const fixture = await fixtureBytes(runtime, contract, key)
@@ -1757,7 +2199,7 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
           state,
           caseState.dispatch_id,
           {
-            version: positiveInteger(dispatch.version, 'IMAGE_TASK_VERSION_INVALID'),
+            version: imageTaskVersion(dispatch.version),
             creative: {
               action: 'commit',
               work_title: caseState.marker,
@@ -1792,7 +2234,7 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
           state,
           caseState.dispatch_id,
           {
-            version: positiveInteger(dispatch.version, 'IMAGE_TASK_VERSION_INVALID'),
+            version: imageTaskVersion(dispatch.version),
             creative: {
               action: 'freeze_ocr',
               canonical_version: confirmation.canonical_version,
@@ -1812,7 +2254,7 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
           state,
           caseState.dispatch_id,
           {
-            version: positiveInteger(dispatch.version, 'IMAGE_TASK_VERSION_INVALID'),
+            version: imageTaskVersion(dispatch.version),
             creative: {
               action: 'commit',
               work_title: caseState.marker,
@@ -1839,7 +2281,9 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
     const expected = expectedForCase(state, key, fixture.bytes, work)
     const publicBytes = await getPublicAsset(api, state, work.source_asset_id, expected)
     proof = assertPublicCreativeArtifact(work, publicBytes, expected)
-    const route = assertDispatchRoute(await getImageTask(api, state, caseState.dispatch_id))
+    const workFeedbackReceipt = assertExactWorkFeedbackReceipt(
+      await getImageTaskResult(api, state, caseState.dispatch_id),
+    )
     caseState.stage = 'created'
     caseState.work = work
     caseState.work_id = work.work_id
@@ -1848,7 +2292,8 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
     caseState.source_size = proof.source_size
     caseState.source_mime = proof.source_mime
     caseState.markdown_digest = proof.markdown_digest
-    caseState.route = route
+    caseState.work_feedback_receipt = workFeedbackReceipt
+    delete caseState.route
     await saveState(runtime.runRoot, state)
   })
   state.last_process_log = runtime.lastProcessLog
@@ -1864,7 +2309,7 @@ async function createCreativeCasePhase(env, deadline, requestedKey) {
     source_size: caseState.source_size,
     markdown_digest: caseState.markdown_digest,
     marker_sha256: sha256Text(caseState.marker),
-    route: caseState.route,
+    model_execution: caseState.work_feedback_receipt,
     sidecar_stopped: true,
   }
   await recordEvidence(runtime.runRoot, `create-${key}`, projection)
@@ -1898,6 +2343,55 @@ async function queryBatchUntilDelivered(api, state, batch, deadline) {
   return current
 }
 
+export function creativeDeliveryResumeAction(work, batch) {
+  const value = object(work, 'CREATIVE_WORK_INVALID')
+  const batchID = String(value.delivery_batch_id ?? '').trim()
+  if (!batchID) return 'send'
+  const current = object(batch, 'DELIVERY_BATCH_GET_INVALID')
+  if (nonEmpty(current.batch_id, 'DELIVERY_BATCH_GET_INVALID') !== batchID) {
+    throw new HarnessError('DELIVERY_BATCH_ID_DRIFT')
+  }
+  switch (current.status) {
+    case 'delivered':
+      return 'delivered'
+    case 'pending':
+    case 'sending':
+    case 'outcome_unknown':
+      return 'query'
+    case 'failed':
+    case 'partial_failed':
+      return 'retry'
+    default:
+      throw new HarnessError('DELIVERY_BATCH_STATUS_INVALID')
+  }
+}
+
+export async function resumeCreativeDelivery(api, state, work, workID) {
+  const batchID = String(work?.delivery_batch_id ?? '').trim()
+  const batch = batchID ? await getDeliveryBatch(api, state, batchID) : null
+  const action = creativeDeliveryResumeAction(work, batch)
+  if (action === 'send') {
+    const sent = await apiRequest(api, 'POST', creativeSendPath(workID), {
+      data: { agent: state.agent_name },
+      code: 'CREATIVE_SEND_FAILED',
+    })
+    return object(sent.value, 'DELIVERY_BATCH_INVALID')
+  }
+  if (action === 'retry') {
+    const retried = await apiRequest(
+      api,
+      'POST',
+      `/api/k12/delivery-batches/${encodeURIComponent(batchID)}/retry`,
+      {
+        data: { agent: state.agent_name },
+        code: 'DELIVERY_RETRY_FAILED',
+      },
+    )
+    return object(retried.value, 'DELIVERY_BATCH_INVALID')
+  }
+  return batch
+}
+
 async function sendCreativeCasePhase(env, deadline, requestedKey) {
   const key = caseKey(requestedKey)
   const runtime = liveRuntime(env)
@@ -1905,30 +2399,43 @@ async function sendCreativeCasePhase(env, deadline, requestedKey) {
   const state = await loadState(runtime.runRoot)
   const caseState = object(state.cases[key], 'CREATIVE_CASE_NOT_CREATED')
   if (caseState.stage === 'sent') {
+    if (caseState.send_model_receipts?.new_model_calls !== 0) {
+      throw new HarnessError('SEND_MODEL_RECEIPT_GATE_REQUIRED')
+    }
     return {
       status: 'already_sent',
       phase: `send-${key}`,
       batch_id_sha256: sha256Text(caseState.batch.batch_id),
       receipt_count: caseState.batch.receipts.length,
+      component_row_count: caseState.batch.receipts.length,
+      physical_message_count: state.expected_targets.length,
       target_count: state.expected_targets.length,
+      model_receipts: caseState.send_model_receipts,
     }
   }
   if (caseState.stage !== 'created') throw new HarnessError('CREATIVE_CASE_NOT_CREATED')
   const fixture = await fixtureBytes(runtime, contract, key)
   let deliveryProof
+  let modelReceiptProof
   await withSidecar(runtime, env, deadline, async (api) => {
     let work = await getCreativeWork(api, state, caseState.work_id)
     let expected = expectedForCase(state, key, fixture.bytes, work)
     const sourceBytes = await getPublicAsset(api, state, work.source_asset_id, expected)
     assertPublicCreativeArtifact(work, sourceBytes, expected)
-    const sent = await apiRequest(api, 'POST', creativeSendPath(caseState.work_id), {
-      data: { agent: state.agent_name },
-      code: 'CREATIVE_SEND_FAILED',
-    })
-    const batch = await queryBatchUntilDelivered(api, state, sent.value, deadline)
+    const beforeResult = await getImageTaskResult(api, state, caseState.dispatch_id)
+    const beforeWorkFeedback = assertExactWorkFeedbackReceipt(beforeResult)
+    const resumed = await resumeCreativeDelivery(api, state, work, caseState.work_id)
+    const batch = await queryBatchUntilDelivered(api, state, resumed, deadline)
     work = await getCreativeWork(api, state, caseState.work_id)
     expected = expectedForCase(state, key, fixture.bytes, work)
     deliveryProof = assertDeliveryExactSet(batch, expected)
+    const afterResult = await getImageTaskResult(api, state, caseState.dispatch_id)
+    const afterWorkFeedback = assertExactWorkFeedbackReceipt(afterResult)
+    modelReceiptProof = assertModelOperationReceiptsUnchanged(beforeResult, afterResult)
+    if (beforeWorkFeedback.receipt_sha256 !== afterWorkFeedback.receipt_sha256) {
+      throw new HarnessError('WORK_FEEDBACK_RECEIPT_CHANGED_DURING_SEND')
+    }
+    modelReceiptProof.work_feedback_receipt_sha256 = beforeWorkFeedback.receipt_sha256
     if (work.delivery_batch_id !== batch.batch_id) {
       throw new HarnessError('CREATIVE_DELIVERY_BATCH_PROJECTION_DRIFT')
     }
@@ -1938,6 +2445,7 @@ async function sendCreativeCasePhase(env, deadline, requestedKey) {
     caseState.source_digest = expected.source_digest
     caseState.markdown_digest = deliveryProof.markdown_digest
     caseState.checkpoint_expectation = checkpointExpectationFromDelivery(batch, expected)
+    caseState.send_model_receipts = modelReceiptProof
     await saveState(runtime.runRoot, state)
   })
   state.last_process_log = runtime.lastProcessLog
@@ -1949,11 +2457,15 @@ async function sendCreativeCasePhase(env, deadline, requestedKey) {
     batch_id_sha256: sha256Text(caseState.batch.batch_id),
     target_count: deliveryProof.target_count,
     receipt_count: deliveryProof.receipt_count,
+    component_row_count: deliveryProof.component_row_count,
+    physical_message_count: deliveryProof.physical_message_count,
     target_hashes: deliveryProof.target_hashes,
-    external_message_id_hashes: deliveryProof.external_message_id_hashes,
+    physical_external_message_id_hashes:
+      deliveryProof.physical_external_message_id_hashes,
     markdown_digest: deliveryProof.markdown_digest,
     image_digest: deliveryProof.image_digest,
     original_image_exact_bytes: true,
+    model_receipts: modelReceiptProof,
     sidecar_stopped: true,
   }
   await recordEvidence(runtime.runRoot, `send-${key}`, projection)
@@ -2003,6 +2515,8 @@ async function restartPhase(env, deadline) {
         source_digest: artifact.source_digest,
         markdown_digest: delivery.markdown_digest,
         receipt_count: delivery.receipt_count,
+        component_row_count: delivery.component_row_count,
+        physical_message_count: delivery.physical_message_count,
       }
     }
   })
@@ -2055,7 +2569,10 @@ async function replayPhase(env, deadline) {
         work_id_sha256: sha256Text(caseState.work_id),
         batch_id_sha256: sha256Text(batch.batch_id),
         receipt_count: delivery.receipt_count,
-        external_message_id_hashes: delivery.external_message_id_hashes,
+        component_row_count: delivery.component_row_count,
+        physical_message_count: delivery.physical_message_count,
+        physical_external_message_id_hashes:
+          delivery.physical_external_message_id_hashes,
       }
     }
   })
@@ -2110,7 +2627,10 @@ async function checkpointPhase(env) {
       throw new HarnessError('CLIENT_CHECKPOINT_REPLAY_GATE_REQUIRED')
     }
     const checkpoint = await loadClientCheckpoint(runtime, key)
-    proofs[key] = assertClientCheckpoint(checkpoint, caseState.checkpoint_expectation)
+    proofs[key] = await assertClientCheckpoint(checkpoint, {
+      ...caseState.checkpoint_expectation,
+      evidence_root: runtime.checkpointDirectory,
+    })
     caseState.client_checkpoint_verified = true
   }
   await saveState(runtime.runRoot, state)
@@ -2165,6 +2685,8 @@ async function statusPhase(env) {
     target_count: state.expected_targets.length,
     work_count: 2,
     receipt_count: state.expected_targets.length * 2 * 2,
+    component_row_count: state.expected_targets.length * 2 * 2,
+    physical_message_count: state.expected_targets.length * 2,
     real_dingtalk_client_checkpoint: true,
     restart_exact: true,
     duplicate_send_exact: true,

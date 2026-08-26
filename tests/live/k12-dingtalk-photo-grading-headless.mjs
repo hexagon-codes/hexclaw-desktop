@@ -45,6 +45,17 @@ const PENDING_EXIT_CODE = 3
 const SHA256 = /^[a-f0-9]{64}$/u
 const PREFIXED_SHA256 = /^sha256:[a-f0-9]{64}$/u
 const HAN = /[\u3400-\u9fff\uf900-\ufaff]/u
+const RESTART_FENCE_ENABLE_ENV = 'HEXCLAW_K12_DINGTALK_PHOTO_TEST_FENCE'
+const RESTART_FENCE_STAGE_ENV = 'HEXCLAW_K12_DINGTALK_PHOTO_TEST_FENCE_STAGE'
+const RESTART_FENCE_IDENTITY_ENV = 'HEXCLAW_K12_DINGTALK_PHOTO_TEST_FENCE_IDENTITY_SHA256'
+const RESTART_FENCE_RECEIPT_ENV = 'HEXCLAW_K12_DINGTALK_PHOTO_TEST_FENCE_RECEIPT'
+
+const RESTART_FENCE_PRODUCT_STAGE = Object.freeze({
+  admission: 'admission_committed',
+  grading: 'grading_model_completed',
+  before_send: 'before_delivery_send',
+  after_send: 'after_delivery_send',
+})
 
 export const PHASES = Object.freeze([
   'validate',
@@ -326,10 +337,18 @@ function fixtureProjection(value, key, expectedItems) {
       derivation.fixture_source !== 'tests/live/k12-photo-exif6-fixture.go' ||
       derivation.jpeg_quality !== 94 ||
       derivation.exif_orientation !== 6 ||
-      fixture.encoded_width !== 120 ||
-      fixture.encoded_height !== 80 ||
-      fixture.display_width !== 80 ||
-      fixture.display_height !== 120 ||
+      derivation.source_fixture !== 'clear' ||
+      !SHA256.test(derivation.source_sha256 ?? '') ||
+      !Number.isInteger(derivation.source_size_bytes) ||
+      derivation.source_size_bytes < 1 ||
+      !Number.isInteger(derivation.source_width) ||
+      derivation.source_width < 1 ||
+      !Number.isInteger(derivation.source_height) ||
+      derivation.source_height < 1 ||
+      fixture.encoded_width !== derivation.source_height ||
+      fixture.encoded_height !== derivation.source_width ||
+      fixture.display_width !== derivation.source_width ||
+      fixture.display_height !== derivation.source_height ||
       canonical.mime !== 'image/png' ||
       !SHA256.test(canonical.sha256 ?? '') ||
       !SHA256.test(canonical.aggregate_sha256 ?? '') ||
@@ -353,6 +372,11 @@ function fixtureProjection(value, key, expectedItems) {
       sha256: fixture.sha256,
       size_bytes: fixture.size_bytes,
       orientation: derivation.exif_orientation,
+      source_fixture: derivation.source_fixture,
+      source_sha256: derivation.source_sha256,
+      source_size_bytes: derivation.source_size_bytes,
+      source_width: derivation.source_width,
+      source_height: derivation.source_height,
       encoded_width: fixture.encoded_width,
       encoded_height: fixture.encoded_height,
       display_width: fixture.display_width,
@@ -435,6 +459,19 @@ export function validateContract(contract) {
     root.human_source_oracle,
     root.human_question_regions,
   )
+  const exifDerivation = object(
+    fixtureValues.exif6?.derivation,
+    'EXIF_DERIVATION_CONTRACT_INVALID',
+  )
+  if (
+    exifDerivation.source_fixture !== 'clear' ||
+    exifDerivation.source_sha256 !== fixtureValues.clear?.sha256 ||
+    exifDerivation.source_size_bytes !== fixtureValues.clear?.size_bytes ||
+    exifDerivation.source_width !== fixtureValues.clear?.width ||
+    exifDerivation.source_height !== fixtureValues.clear?.height
+  ) {
+    throw new HarnessError('EXIF_DERIVATION_CONTRACT_INVALID')
+  }
   if (fixtureValues.exif6?.expected_items_from !== 'clear') {
     throw new HarnessError('FIXTURE_ORACLE_INVALID')
   }
@@ -449,6 +486,7 @@ export function validateContract(contract) {
     oracle.export !== 'analyzePhotoAnnotationGeometry' ||
     oracle.require_status !== 'PASS' ||
     oracle.require_final_immutable_asset !== true ||
+    oracle.exif6_pixel_baseline !== 'independent_canonical_png' ||
     oracle.max_ignored_changed_pixel_ratio !== 0
   )
     throw new HarnessError('ANNOTATION_ORACLE_CONTRACT_INVALID')
@@ -559,6 +597,7 @@ export function validateContract(contract) {
     fixtureKeys: frozenFixtureKeys,
     fixtures,
     annotation_oracle: {
+      exif6_pixel_baseline: oracle.exif6_pixel_baseline,
       max_ignored_changed_pixel_ratio: oracle.max_ignored_changed_pixel_ratio,
     },
     restart_checkpoints: restartCheckpoints,
@@ -895,6 +934,42 @@ export function assertDeliveryExactSet(batch, expected) {
   }
 }
 
+function operationReceiptInvariant(value) {
+  const receipts = array(value, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+  if (receipts.length === 0) throw new HarnessError('INVARIANT_MODEL_RECEIPTS_INVALID')
+  return receipts
+    .map((candidate) => {
+      const receipt = object(candidate, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+      const invocationID = nonEmpty(receipt.invocation_id, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+      const operation = nonEmpty(receipt.operation, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+      const status = nonEmpty(receipt.status, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+      if (!Number.isInteger(receipt.attempt) || receipt.attempt < 1) {
+        throw new HarnessError('INVARIANT_MODEL_RECEIPTS_INVALID')
+      }
+      return {
+        invocation_id: invocationID,
+        parent_invocation_id: String(receipt.parent_invocation_id ?? ''),
+        physical_unit: String(receipt.physical_unit ?? ''),
+        operation,
+        canonical_input_digest: normalizedDigest(
+          receipt.canonical_input_digest,
+          'INVARIANT_MODEL_RECEIPTS_INVALID',
+        ),
+        provider: String(receipt.provider ?? ''),
+        model: String(receipt.model ?? ''),
+        status,
+        attempt: receipt.attempt,
+        result_digest: receipt.result_digest
+          ? normalizedDigest(receipt.result_digest, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+          : '',
+        request_policy_digest: receipt.request_policy_digest
+          ? normalizedDigest(receipt.request_policy_digest, 'INVARIANT_MODEL_RECEIPTS_INVALID')
+          : '',
+      }
+    })
+    .sort((left, right) => canonicalJSON(left).localeCompare(canonicalJSON(right)))
+}
+
 function invariantSnapshot(value) {
   const root = object(value, 'INVARIANT_SNAPSHOT_INVALID')
   const inbound = object(root.inbound, 'INVARIANT_INBOUND_INVALID')
@@ -931,6 +1006,7 @@ function invariantSnapshot(value) {
       mime: annotated.mime,
       digest: annotated.digest,
     },
+    operation_receipts: operationReceiptInvariant(root.operation_receipts),
     batch: {
       batch_id: batch.batch_id,
       agent_name: batch.agent_name,
@@ -959,6 +1035,7 @@ function invariantSnapshot(value) {
 }
 
 const RESTART_CHECKPOINT_STATUS = Object.freeze({
+  admission: { processing_status: 'admitted', reply_status: 'pending' },
   grading: { processing_status: 'image_task_submitted', reply_status: 'pending' },
   before_send: { processing_status: 'final_artifact_ready', reply_status: 'ready' },
   after_send: { processing_status: 'final_artifact_ready', reply_status: 'delivered' },
@@ -972,7 +1049,8 @@ function restartCheckpointInvariant(value, stage, enforceStage) {
   const receipt = object(inbound.receipt, 'RESTART_CHECKPOINT_INVALID')
   const asset = object(inbound.asset, 'RESTART_CHECKPOINT_INVALID')
   const dispatch = object(inbound.dispatch, 'RESTART_CHECKPOINT_INVALID')
-  const canonicalSource = object(root.canonical_source, 'RESTART_CHECKPOINT_INVALID')
+  const canonicalSource =
+    stage === 'admission' ? null : object(root.canonical_source, 'RESTART_CHECKPOINT_INVALID')
   if (
     enforceStage &&
     (dispatch.processing_status !== expected.processing_status ||
@@ -986,9 +1064,16 @@ function restartCheckpointInvariant(value, stage, enforceStage) {
     !nonEmpty(asset.asset_id, 'RESTART_CHECKPOINT_INVALID') ||
     !nonEmpty(asset.digest, 'RESTART_CHECKPOINT_INVALID') ||
     !nonEmpty(dispatch.dispatch_id, 'RESTART_CHECKPOINT_INVALID') ||
-    !nonEmpty(dispatch.image_task_id, 'RESTART_CHECKPOINT_INVALID')
+    (stage !== 'admission' && !nonEmpty(dispatch.image_task_id, 'RESTART_CHECKPOINT_INVALID'))
   ) {
     throw new HarnessError('RESTART_CHECKPOINT_INVALID')
+  }
+  if (
+    enforceStage &&
+    stage === 'admission' &&
+    (dispatch.image_task_id || dispatch.final_artifact_id || dispatch.delivery_batch_id)
+  ) {
+    throw new HarnessError('RESTART_CHECKPOINT_STAGE_NOT_OBSERVED')
   }
   if (
     enforceStage &&
@@ -1013,9 +1098,11 @@ function restartCheckpointInvariant(value, stage, enforceStage) {
       asset_id: asset.asset_id,
       asset_digest: asset.digest,
       dispatch_id: dispatch.dispatch_id,
-      image_task_id: dispatch.image_task_id,
     },
-    canonical_source: {
+  }
+  if (stage !== 'admission') projection.inbound.image_task_id = dispatch.image_task_id
+  if (canonicalSource) {
+    projection.canonical_source = {
       aggregate_digest: normalizedDigest(
         canonicalSource.aggregate_digest,
         'RESTART_CHECKPOINT_INVALID',
@@ -1025,9 +1112,9 @@ function restartCheckpointInvariant(value, stage, enforceStage) {
         'RESTART_CHECKPOINT_INVALID',
       ),
       attachment_size: canonicalSource.attachment_size,
-    },
+    }
   }
-  if (stage !== 'grading') {
+  if (stage !== 'admission') {
     const artifact = object(root.final_artifact, 'RESTART_CHECKPOINT_INVALID')
     const annotated = object(root.annotated, 'RESTART_CHECKPOINT_INVALID')
     projection.final_artifact = {
@@ -1038,6 +1125,7 @@ function restartCheckpointInvariant(value, stage, enforceStage) {
       mime: nonEmpty(annotated.mime, 'RESTART_CHECKPOINT_INVALID'),
       digest: normalizedDigest(annotated.digest, 'RESTART_CHECKPOINT_INVALID'),
     }
+    projection.operation_receipts = operationReceiptInvariant(root.operation_receipts)
   }
   if (stage === 'after_send') {
     projection.batch = invariantSnapshot(root).batch
@@ -1049,9 +1137,21 @@ export function assertRestartCheckpoint(stage, before, after) {
   if (!['admission', 'grading', 'before_send', 'after_send'].includes(stage)) {
     throw new HarnessError('RESTART_CHECKPOINT_STAGE_INVALID')
   }
-  object(before, 'RESTART_CHECKPOINT_INVALID')
-  object(after, 'RESTART_CHECKPOINT_INVALID')
-  throw new HarnessError('RESTART_DETERMINISTIC_FENCE_UNAVAILABLE')
+  const beforeProjection = restartCheckpointInvariant(before, stage, true)
+  const afterProjection = restartCheckpointInvariant(after, stage, false)
+  if (canonicalJSON(beforeProjection) !== canonicalJSON(afterProjection)) {
+    throw new HarnessError('RESTART_CHECKPOINT_IDENTITY_DRIFT')
+  }
+  const beforeVersion = object(before.inbound?.dispatch, 'RESTART_CHECKPOINT_INVALID').version
+  const afterVersion = object(after.inbound?.dispatch, 'RESTART_CHECKPOINT_INVALID').version
+  if (
+    !Number.isInteger(beforeVersion) ||
+    !Number.isInteger(afterVersion) ||
+    afterVersion < beforeVersion
+  ) {
+    throw new HarnessError('RESTART_CHECKPOINT_VERSION_DRIFT')
+  }
+  return after
 }
 
 export function assertRestartInvariant(before, after) {
@@ -1066,6 +1166,18 @@ export function assertDuplicateCallbackInvariant(before, after) {
     throw new HarnessError('CALLBACK_REPLAY_CHANGED_DELIVERY')
   }
   return before
+}
+
+function deliveryAttemptCount(value) {
+  const root = object(value, 'DELIVERY_ATTEMPT_EVIDENCE_INVALID')
+  const batch = object(root.batch, 'DELIVERY_ATTEMPT_EVIDENCE_INVALID')
+  return array(batch.receipts, 'DELIVERY_ATTEMPT_EVIDENCE_INVALID').reduce((total, candidate) => {
+    const receipt = object(candidate, 'DELIVERY_ATTEMPT_EVIDENCE_INVALID')
+    if (!Number.isInteger(receipt.attempt) || receipt.attempt < 1) {
+      throw new HarnessError('DELIVERY_ATTEMPT_EVIDENCE_INVALID')
+    }
+    return total + receipt.attempt
+  }, 0)
 }
 
 const SENSITIVE_EVIDENCE_KEYS = new Set([
@@ -1196,7 +1308,7 @@ function exifOrientation6Segment() {
   ])
 }
 
-async function deriveExif6Fixture(_source, output, fixture) {
+async function deriveExif6Fixture(source, output, fixture) {
   const canonicalOutput = `${output}.canonical.png`
   const helper = resolve(DESKTOP_ROOT, fixture.derivation.fixture_source)
   await requireRegularFile(helper, 'EXIF_FIXTURE_GENERATOR_UNAVAILABLE')
@@ -1212,7 +1324,7 @@ async function deriveExif6Fixture(_source, output, fixture) {
   try {
     const executed = await execFile(
       fixture.derivation.tool,
-      ['run', helper, '--raw', output, '--canonical', canonicalOutput],
+      ['run', helper, '--source', source, '--raw', output, '--canonical', canonicalOutput],
       {
         cwd: DESKTOP_ROOT,
         env: commandEnvironment,
@@ -1237,6 +1349,10 @@ async function deriveExif6Fixture(_source, output, fixture) {
     sha256Bytes(canonicalBytes) !== canonical.sha256 ||
     manifest.raw_sha256 !== fixture.sha256 ||
     manifest.raw_size_bytes !== fixture.size_bytes ||
+    manifest.source_sha256 !== fixture.derivation.source_sha256 ||
+    manifest.source_size_bytes !== fixture.derivation.source_size_bytes ||
+    manifest.source_width !== fixture.derivation.source_width ||
+    manifest.source_height !== fixture.derivation.source_height ||
     manifest.encoded_width !== fixture.encoded_width ||
     manifest.encoded_height !== fixture.encoded_height ||
     manifest.canonical_sha256 !== canonical.sha256 ||
@@ -1247,7 +1363,6 @@ async function deriveExif6Fixture(_source, output, fixture) {
     canonicalJSON(manifest.corner_samples) !== canonicalJSON(canonical.corner_samples)
   )
     throw new HarnessError('EXIF_FIXTURE_DIGEST_DRIFT')
-  await rm(canonicalOutput, { force: true })
   return {
     sha256: fixture.sha256,
     size_bytes: fixture.size_bytes,
@@ -1415,6 +1530,89 @@ function sidecarEnvironment(env, runtime, capability) {
   return output
 }
 
+function restartFenceIdentityDigest(identity) {
+  return sha256Text(
+    [
+      String(identity?.platform ?? '')
+        .toLowerCase()
+        .trim(),
+      String(identity?.instance_id ?? '').trim(),
+      String(identity?.chat_id ?? '').trim(),
+      String(identity?.provider_message_id ?? '').trim(),
+    ].join('\0'),
+  )
+}
+
+function restartFenceRuntime(env, runtime, identity, stage) {
+  const productStage = RESTART_FENCE_PRODUCT_STAGE[stage]
+  if (!productStage) throw new HarnessError('RESTART_CHECKPOINT_STAGE_INVALID')
+  const receiptPath = join(
+    runtime.runRoot,
+    `.restart-fence-${stage}-${randomBytes(8).toString('hex')}.json`,
+  )
+  return {
+    env: {
+      ...env,
+      [RESTART_FENCE_ENABLE_ENV]: '1',
+      [RESTART_FENCE_STAGE_ENV]: productStage,
+      [RESTART_FENCE_IDENTITY_ENV]: restartFenceIdentityDigest(identity),
+      [RESTART_FENCE_RECEIPT_ENV]: receiptPath,
+    },
+    receiptPath,
+    productStage,
+    identityDigest: restartFenceIdentityDigest(identity),
+  }
+}
+
+async function waitForRestartFenceReceipt(fence, identity, stage, deadline) {
+  const expected = RESTART_CHECKPOINT_STATUS[stage]
+  if (!expected) throw new HarnessError('RESTART_CHECKPOINT_STAGE_INVALID')
+  while (Date.now() < deadline - 5_000) {
+    try {
+      const info = await lstat(fence.receiptPath)
+      if (!info.isFile() || (info.mode & 0o777) !== PRIVATE_FILE_MODE) {
+        throw new HarnessError('RESTART_CHECKPOINT_RECEIPT_UNSAFE')
+      }
+      const bytes = await readFile(fence.receiptPath)
+      const text = bytes.toString('utf8')
+      const receipt = object(JSON.parse(text), 'RESTART_CHECKPOINT_RECEIPT_INVALID')
+      if (
+        receipt.schema_version !== 1 ||
+        receipt.stage !== fence.productStage ||
+        receipt.identity_sha256 !== fence.identityDigest ||
+        receipt.processing_status !== expected.processing_status ||
+        receipt.reply_status !== expected.reply_status ||
+        !Number.isInteger(receipt.dispatch_version) ||
+        receipt.dispatch_version < 0
+      ) {
+        throw new HarnessError('RESTART_CHECKPOINT_RECEIPT_INVALID')
+      }
+      for (const raw of [
+        identity.platform,
+        identity.instance_id,
+        identity.chat_id,
+        identity.provider_message_id,
+      ]) {
+        if (String(raw ?? '').trim() && text.includes(String(raw))) {
+          throw new HarnessError('RESTART_CHECKPOINT_RECEIPT_LEAKED_IDENTITY')
+        }
+      }
+      return {
+        stage: fence.productStage,
+        identity_sha256: fence.identityDigest,
+        receipt_sha256: sha256Bytes(bytes),
+        processing_status: receipt.processing_status,
+        reply_status: receipt.reply_status,
+        dispatch_version: receipt.dispatch_version,
+      }
+    } catch (error) {
+      if (error instanceof HarnessError) throw error
+      await sleep(100)
+    }
+  }
+  throw new HarnessError('RESTART_CHECKPOINT_NOT_REACHED')
+}
+
 function startSidecar(runtime, env, capability) {
   const hash = createHash('sha256')
   let bytes = 0
@@ -1423,6 +1621,7 @@ function startSidecar(runtime, env, capability) {
     env: sidecarEnvironment(env, runtime, capability),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  runtime.lastProcessPID = child.pid
   for (const stream of [child.stdout, child.stderr]) {
     stream.on('data', (chunk) => {
       bytes += chunk.length
@@ -1538,10 +1737,36 @@ export function maskedInstanceConfig(config) {
       return false
     }
   }
+  const isCredentialKey = (key) => {
+    const compact = String(key).toLowerCase().trim().replaceAll('-', '_').replaceAll('_', '')
+    if (
+      new Set([
+        'password',
+        'passwd',
+        'pwd',
+        'secret',
+        'token',
+        'apikey',
+        'authorization',
+        'credential',
+        'credentials',
+        'aeskey',
+        'encryptionkey',
+        'privatekey',
+        'accesskey',
+        'secretkey',
+      ]).has(compact)
+    ) {
+      return true
+    }
+    return ['password', 'secret', 'token', 'apikey', 'privatekey', 'credential'].some((suffix) =>
+      compact.endsWith(suffix),
+    )
+  }
   const visit = (node, key = '') => {
     if (Array.isArray(node)) return node.every((child) => visit(child, key))
     if (!node || typeof node !== 'object') {
-      if (!/(secret|token|key|credential|password)/iu.test(key)) return true
+      if (!isCredentialKey(key)) return true
       const text = String(node ?? '').trim()
       return (
         text === '' ||
@@ -1554,6 +1779,30 @@ export function maskedInstanceConfig(config) {
     return Object.entries(node).every(([childKey, child]) => visit(child, childKey))
   }
   return visit(value)
+}
+
+export async function waitForBoundInstanceProjection(
+  runtime,
+  fetchProjection,
+  deadline,
+  intervalMilliseconds = 250,
+) {
+  const until = Math.min(deadline, Date.now() + START_TIMEOUT_MS)
+  while (Date.now() < until) {
+    const projection = await fetchProjection()
+    const matchingInstances = array(projection?.instances, 'INSTANCE_PROJECTION_INVALID').filter(
+      (instance) => instance?.provider === 'dingtalk' && instance?.name === runtime.instanceID,
+    )
+    if (
+      matchingInstances.length === 1 &&
+      matchingInstances[0].enabled === true &&
+      matchingInstances[0].status === 'running'
+    ) {
+      return projection
+    }
+    await sleep(intervalMilliseconds)
+  }
+  throw new HarnessError('BOUND_INSTANCE_PROJECTION_INVALID')
 }
 
 export function assertPreparedPublicProjection(runtime, llm, instances, agents) {
@@ -1660,15 +1909,24 @@ async function preparePhase(env, deadline) {
     cases: {},
   }
   await withSidecar(runtime, env, deadline, async (api) => {
-    const [llmResponse, instanceResponse, agentResponse] = await Promise.all([
+    const [llmResponse, instances, agentResponse] = await Promise.all([
       apiFetch(api, 'GET', '/api/v1/config/llm', { code: 'LLM_PROJECTION_FAILED' }),
-      apiFetch(api, 'GET', '/api/v1/platforms/instances', { code: 'INSTANCE_PROJECTION_FAILED' }),
+      waitForBoundInstanceProjection(
+        runtime,
+        async () =>
+          (
+            await apiFetch(api, 'GET', '/api/v1/platforms/instances', {
+              code: 'INSTANCE_PROJECTION_FAILED',
+            })
+          ).value,
+        deadline,
+      ),
       apiFetch(api, 'GET', '/api/v1/agents', { code: 'AGENT_PROJECTION_FAILED' }),
     ])
     state.public_projection = assertPreparedPublicProjection(
       runtime,
       llmResponse.value,
-      instanceResponse.value,
+      instances,
       agentResponse.value,
     )
   })
@@ -1805,10 +2063,21 @@ async function admitPhase(env, deadline, rawKey) {
   const fixture = contract.fixtures[key]
   await validateFixture(caseFixturePath(runtime, state, contract, env, key), fixture)
   const envelope = await loadCallbackEnvelope(runtime, key)
+  const admissionFence =
+    key === 'exif6' ? restartFenceRuntime(env, runtime, envelope.identity, 'admission') : null
   let first
   let replayed
-  await withSidecar(runtime, env, deadline, async (api) => {
+  let fenceReceipt
+  await withSidecar(runtime, admissionFence?.env ?? env, deadline, async (api) => {
     await postCallback(api, runtime, envelope)
+    if (admissionFence) {
+      fenceReceipt = await waitForRestartFenceReceipt(
+        admissionFence,
+        envelope.identity,
+        'admission',
+        deadline,
+      )
+    }
     const until = Math.min(deadline - 5_000, Date.now() + 90_000)
     while (Date.now() < until) {
       first = await queryInbound(api, runtime, state, envelope.identity, true)
@@ -1825,6 +2094,9 @@ async function admitPhase(env, deadline, rawKey) {
     await postCallback(api, runtime, envelope)
     replayed = await queryInbound(api, runtime, state, envelope.identity)
     assertAdmissionReplay(first, replayed)
+    if (admissionFence) {
+      restartCheckpointInvariant({ inbound: replayed }, 'admission', true)
+    }
   })
   const admissionEvidence = assertInboundBundle(replayed, {
     identity: envelope.identity,
@@ -1842,6 +2114,16 @@ async function admitPhase(env, deadline, rawKey) {
     admission_bundle: replayed,
     admission_evidence: admissionEvidence,
   }
+  if (admissionFence) {
+    state.restart_checkpoints ??= {}
+    state.restart_checkpoints.admission = {
+      reached: true,
+      verified: false,
+      snapshot: { inbound: replayed },
+      receipt: fenceReceipt,
+      process_pid: runtime.lastProcessPID,
+    }
+  }
   await saveState(runtime.runRoot, state)
   const projection = {
     status: 'admitted',
@@ -1850,6 +2132,7 @@ async function admitPhase(env, deadline, rawKey) {
     fixture_sha256: fixture.sha256,
     ...admissionEvidence,
   }
+  if (admissionFence) projection.restart_checkpoint = fenceReceipt
   await recordEvidence(runtime.runRoot, `admit-${key}`, projection)
   return projection
 }
@@ -1978,8 +2261,60 @@ function assertFinalArtifact(artifact, inbound, payload) {
 }
 
 export function assertStageDigestChain(value) {
-  object(value, 'PHOTO_DIGEST_CHAIN_INVALID')
-  throw new HarnessError('PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE')
+  const chain = object(value, 'PHOTO_DIGEST_CHAIN_INVALID')
+  const expectedRaw = normalizedDigest(chain.expected_raw_digest, 'PHOTO_DIGEST_CHAIN_INVALID')
+  const admissionRaw = normalizedDigest(chain.admission_raw_digest, 'PHOTO_DIGEST_CHAIN_INVALID')
+  const canonicalInput = normalizedDigest(
+    chain.canonical_aggregate_digest,
+    'PHOTO_DIGEST_CHAIN_INVALID',
+  )
+  normalizedDigest(chain.canonical_attachment_digest, 'PHOTO_DIGEST_CHAIN_INVALID')
+  normalizedDigest(chain.final_artifact_digest, 'PHOTO_DIGEST_CHAIN_INVALID')
+  const finalAnnotated = normalizedDigest(
+    chain.final_annotated_digest,
+    'PHOTO_DIGEST_CHAIN_INVALID',
+  )
+  const deliveredAnnotated = normalizedDigest(
+    chain.delivered_annotated_digest,
+    'PHOTO_DIGEST_CHAIN_INVALID',
+  )
+  if (expectedRaw !== admissionRaw || finalAnnotated !== deliveredAnnotated) {
+    throw new HarnessError('PHOTO_STAGE_DIGEST_DRIFT')
+  }
+
+  const receipts = array(chain.operation_receipts, 'PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE')
+  const stages = [
+    ['classification', new Set(['classification'])],
+    ['recognition', new Set(['recognition', 'recognizing'])],
+    ['anchor', new Set(['anchor', 'locating'])],
+    ['solve', new Set(['solve', 'solve_generate', 'solve_verify'])],
+    ['grade', new Set(['grade'])],
+    ['annotation', new Set(['annotation'])],
+  ]
+  for (const [stage, operations] of stages) {
+    const stageReceipts = receipts.filter((receipt) =>
+      operations.has(String(object(receipt, 'PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE').operation)),
+    )
+    if (stageReceipts.length === 0) {
+      throw new HarnessError('PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE')
+    }
+    for (const receipt of stageReceipts) {
+      const receiptObject = object(receipt, 'PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE')
+      const digest = normalizedDigest(
+        receiptObject.canonical_input_digest,
+        'PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE',
+      )
+      if (digest !== canonicalInput) throw new HarnessError('PHOTO_STAGE_DIGEST_DRIFT')
+      if (
+        stage === 'annotation' &&
+        normalizedDigest(receiptObject.result_digest, 'PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE') !==
+          finalAnnotated
+      ) {
+        throw new HarnessError('PHOTO_STAGE_DIGEST_DRIFT')
+      }
+    }
+  }
+  return { canonical_input_digest: canonicalInput, stage_count: stages.length }
 }
 
 export function buildTrustedGeometryItems(payload, fixture) {
@@ -2110,16 +2445,47 @@ async function analyzeGeometry(input) {
   }
 }
 
-async function assertAnnotationGeometry(sourcePath, fixture, payload, artifact, annotatedBytes) {
-  const sourceBytes = await readFile(sourcePath)
+export function annotationGeometryBaseline(sourcePath, fixture, key) {
+  if (key === 'exif6') {
+    const canonical = object(fixture.canonical, 'EXIF_CANONICAL_CONTRACT_INVALID')
+    return {
+      path: `${sourcePath}.canonical.png`,
+      mime: nonEmpty(canonical.mime, 'EXIF_CANONICAL_CONTRACT_INVALID'),
+      sha256: nonEmpty(canonical.sha256, 'EXIF_CANONICAL_CONTRACT_INVALID'),
+      size_bytes: canonical.size_bytes,
+      width: canonical.width,
+      height: canonical.height,
+    }
+  }
+  return {
+    path: sourcePath,
+    mime: nonEmpty(fixture.mime, 'FIXTURE_CONTRACT_INVALID'),
+    sha256: nonEmpty(fixture.sha256, 'FIXTURE_CONTRACT_INVALID'),
+    size_bytes: fixture.size_bytes,
+    width: fixture.width,
+    height: fixture.height,
+  }
+}
+
+async function assertAnnotationGeometry(
+  sourcePath,
+  fixture,
+  key,
+  payload,
+  artifact,
+  annotatedBytes,
+) {
+  const baseline = annotationGeometryBaseline(sourcePath, fixture, key)
+  await validateFixture(baseline.path, baseline)
+  const sourceBytes = await readFile(baseline.path)
   const facts = await imagePixelDeltas(
     sourceBytes,
-    fixture.mime,
+    baseline.mime,
     annotatedBytes,
     artifact.annotated_mime,
   )
-  const expectedWidth = fixture.display_width ?? fixture.width
-  const expectedHeight = fixture.display_height ?? fixture.height
+  const expectedWidth = baseline.width
+  const expectedHeight = baseline.height
   if (
     facts.source_width !== expectedWidth ||
     facts.source_height !== expectedHeight ||
@@ -2270,6 +2636,7 @@ async function fetchCaseSnapshot(api, runtime, state, saved, contract, env, key,
   const geometry = await assertAnnotationGeometry(
     sourcePath,
     fixture,
+    key,
     payload,
     {
       original_source_digest: canonicalSource.attachment_digest,
@@ -2286,6 +2653,7 @@ async function fetchCaseSnapshot(api, runtime, state, saved, contract, env, key,
     final_artifact_digest: final.artifact.artifact_digest,
     final_annotated_digest: final.annotated_digest,
     delivered_annotated_digest: delivery.annotated_digest,
+    operation_receipts: taskResult.operation_receipts,
   })
   return {
     snapshot: {
@@ -2294,6 +2662,7 @@ async function fetchCaseSnapshot(api, runtime, state, saved, contract, env, key,
       final_artifact: final.artifact,
       canonical_source: canonicalSource,
       annotated: { mime: final.annotated_mime, digest: final.annotated_digest },
+      operation_receipts: taskResult.operation_receipts,
     },
     proof: {
       inbound: inboundEvidence,
@@ -2354,6 +2723,11 @@ async function fetchRestartCheckpointSnapshot(
     agent_name: state.agent_name,
     expected_asset_digest: `sha256:${saved.fixture_sha256}`,
   })
+  if (stage === 'admission') {
+    const snapshot = { inbound }
+    restartCheckpointInvariant(snapshot, stage, enforceStage)
+    return snapshot
+  }
   if (!inbound.dispatch?.image_task_id) {
     throw new HarnessError('RESTART_CHECKPOINT_STAGE_NOT_OBSERVED')
   }
@@ -2365,7 +2739,23 @@ async function fetchRestartCheckpointSnapshot(
     })
   ).value
   const canonicalSource = assertCanonicalSource(taskResult, contract.fixtures.exif6, 'exif6')
-  const snapshot = { inbound, canonical_source: canonicalSource }
+  const snapshot = {
+    inbound,
+    canonical_source: canonicalSource,
+    operation_receipts: taskResult.operation_receipts,
+  }
+  if (stage === 'grading') {
+    const artifact = object(taskResult?.result?.final_artifact, 'FINAL_ARTIFACT_NOT_PUBLIC')
+    const payload = object(taskResult?.result?.payload, 'PHOTO_RESULT_INVALID')
+    const artifactInbound = structuredClone(inbound)
+    artifactInbound.dispatch.final_artifact_id = nonEmpty(
+      artifact.artifact_id,
+      'FINAL_ARTIFACT_NOT_PUBLIC',
+    )
+    const final = assertFinalArtifact(artifact, artifactInbound, payload)
+    snapshot.final_artifact = final.artifact
+    snapshot.annotated = { mime: final.annotated_mime, digest: final.annotated_digest }
+  }
   if (stage === 'before_send') {
     const task = (
       await apiFetch(api, 'GET', `/api/k12/image-tasks/${taskID}?agent=${agent}`, {
@@ -2384,12 +2774,88 @@ async function fetchRestartCheckpointSnapshot(
 }
 
 async function restartCheckpointPhase(env, deadline, stage) {
-  void env
-  void deadline
   if (!['admission', 'grading', 'before_send', 'after_send'].includes(stage)) {
     throw new HarnessError('RESTART_CHECKPOINT_STAGE_INVALID')
   }
-  throw new HarnessError('RESTART_DETERMINISTIC_FENCE_UNAVAILABLE')
+  const contract = await loadContract()
+  const runtime = liveRuntime(env)
+  const state = await loadState(runtime.runRoot)
+  const saved = state.cases.exif6
+  if (!saved?.admitted) throw new HarnessError('CASE_ADMISSION_REQUIRED')
+  const previous = state.restart_checkpoints?.[stage]
+  if (!previous?.reached || !previous.snapshot || !Number.isInteger(previous.process_pid)) {
+    throw new HarnessError('RESTART_CHECKPOINT_PREREQUISITE_MISSING')
+  }
+  if (previous.verified === true) {
+    return {
+      status: 'already_verified',
+      phase: `restart-${stage.replaceAll('_', '-')}`,
+      checkpoint: stage,
+    }
+  }
+
+  const nextStage = {
+    admission: 'grading',
+    grading: 'before_send',
+    before_send: 'after_send',
+    after_send: null,
+  }[stage]
+  let current
+  let fenceReceipt
+  let fence
+  if (nextStage) {
+    fence = restartFenceRuntime(env, runtime, saved.identity, nextStage)
+  }
+  await withSidecar(runtime, fence?.env ?? env, deadline, async (api) => {
+    if (fence) {
+      fenceReceipt = await waitForRestartFenceReceipt(fence, saved.identity, nextStage, deadline)
+    }
+    current = await fetchRestartCheckpointSnapshot(
+      api,
+      runtime,
+      state,
+      saved,
+      contract,
+      env,
+      nextStage ?? 'after_send',
+      true,
+    )
+  })
+  if (
+    !Number.isInteger(runtime.lastProcessPID) ||
+    runtime.lastProcessPID === previous.process_pid
+  ) {
+    throw new HarnessError('RESTART_PROCESS_DID_NOT_CHANGE')
+  }
+  assertRestartCheckpoint(stage, previous.snapshot, current)
+  previous.verified = true
+  previous.after = current
+  previous.restart_process_pid = runtime.lastProcessPID
+  if (nextStage) {
+    state.restart_checkpoints[nextStage] = {
+      reached: true,
+      verified: false,
+      snapshot: current,
+      receipt: fenceReceipt,
+      process_pid: runtime.lastProcessPID,
+    }
+  }
+  state.last_process_log = runtime.lastProcessLog
+  await saveState(runtime.runRoot, state)
+  const projection = {
+    status: 'verified',
+    phase: `restart-${stage.replaceAll('_', '-')}`,
+    checkpoint: stage,
+    process_changed: true,
+    invariant_sha256: sha256Text(
+      canonicalJSON(restartCheckpointInvariant(previous.snapshot, stage, true)),
+    ),
+    next_checkpoint: nextStage,
+    next_fence: fenceReceipt,
+    sidecar_stopped: true,
+  }
+  await recordEvidence(runtime.runRoot, `restart-${stage}`, projection)
+  return projection
 }
 
 async function verifyPhase(env, deadline, rawKey) {
@@ -2465,9 +2931,15 @@ async function replayPhase(env, deadline) {
       }
       const current = await fetchCaseSnapshot(api, runtime, state, saved, contract, env, key, false)
       assertDuplicateCallbackInvariant(saved.snapshot, current.snapshot)
+      const newProviderSendCount =
+        deliveryAttemptCount(current.snapshot) - deliveryAttemptCount(saved.snapshot)
+      if (newProviderSendCount !== 0) {
+        throw new HarnessError('CALLBACK_REPLAY_CHANGED_DELIVERY')
+      }
       proofs[key] = {
         callback_posts: saved.callback_posts,
-        new_provider_send_count: 0,
+        new_provider_send_count: newProviderSendCount,
+        provider_send_evidence: 'durable_delivery_receipt_attempt_delta',
         invariant_sha256: sha256Text(canonicalJSON(invariantSnapshot(current.snapshot))),
       }
     }

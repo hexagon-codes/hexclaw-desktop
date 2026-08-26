@@ -495,7 +495,13 @@ async function compileReadonlyProbe(runtime, deadline) {
   return destination
 }
 
-async function runReadonlyProbe(runtime, probe, command, args = [], code = 'READONLY_PROBE_FAILED') {
+async function runReadonlyProbe(
+  runtime,
+  probe,
+  command,
+  args = [],
+  code = 'READONLY_PROBE_FAILED',
+) {
   const result = await runCommand(
     probe,
     [command, ...args.map(String)],
@@ -511,12 +517,11 @@ async function runReadonlyProbe(runtime, probe, command, args = [], code = 'READ
 
 async function listenerPIDs(port) {
   try {
-    const result = await execFile('/usr/sbin/lsof', [
-      '-nP',
-      `-iTCP:${port}`,
-      '-sTCP:LISTEN',
-      '-t',
-    ], { encoding: 'utf8', timeout: 5_000 })
+    const result = await execFile(
+      '/usr/sbin/lsof',
+      ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'],
+      { encoding: 'utf8', timeout: 5_000 },
+    )
     return result.stdout
       .split(/\s+/u)
       .filter(Boolean)
@@ -762,9 +767,8 @@ async function waitForInstalledUISnapshot(runtime, probe, desktopState, expectRe
 }
 
 async function evidenceDirectory(env) {
-  const configured = typeof env.HEXCLAW_EVIDENCE_DIR === 'string'
-    ? env.HEXCLAW_EVIDENCE_DIR.trim()
-    : ''
+  const configured =
+    typeof env.HEXCLAW_EVIDENCE_DIR === 'string' ? env.HEXCLAW_EVIDENCE_DIR.trim() : ''
   if (configured !== '') {
     const directory = resolve(configured)
     await mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
@@ -952,7 +956,8 @@ async function prepareRuntime(env, deadline) {
   await requireFile(helper, 'PROFILE_HELPER_BUILD_INVALID', { executable: true })
   const sidecarPort = await reservePort()
   let providerPort = await reservePort()
-  if (providerPort === sidecarPort || providerPort === sidecarPort + 1) providerPort = await reservePort()
+  if (providerPort === sidecarPort || providerPort === sidecarPort + 1)
+    providerPort = await reservePort()
   const endpoint = `http://127.0.0.1:${providerPort}/v1`
   const prepared = await runCommand(
     helper,
@@ -1042,18 +1047,12 @@ async function seedPublicInputs(runtime, capability) {
     status: 200,
     code: 'AGENT_CREATE_FAILED',
   })
-  await apiRequest(
-    runtime,
-    'initial',
-    'POST',
-    '/api/v1/sessions?user_id=desktop-user',
-    {
-      capability,
-      json: { id: session, title: SESSION_TITLE, user_id: 'desktop-user' },
-      status: 201,
-      code: 'SESSION_CREATE_FAILED',
-    },
-  )
+  await apiRequest(runtime, 'initial', 'POST', '/api/v1/sessions?user_id=desktop-user', {
+    capability,
+    json: { id: session, title: SESSION_TITLE, user_id: 'desktop-user' },
+    status: 201,
+    code: 'SESSION_CREATE_FAILED',
+  })
   await apiRequest(
     runtime,
     'initial',
@@ -1110,11 +1109,7 @@ async function createPublicImageTask(runtime, capability, identity) {
 }
 
 async function createPublicState(runtime, capability) {
-  return createPublicImageTask(
-    runtime,
-    capability,
-    await seedPublicInputs(runtime, capability),
-  )
+  return createPublicImageTask(runtime, capability, await seedPublicInputs(runtime, capability))
 }
 
 async function primeVisionCapabilityReceipt(runtime, capability) {
@@ -1173,6 +1168,21 @@ async function waitRecovering(runtime, phase, capability, identity) {
     }
     await sleep(200)
   }
+  if (process.env.HEXCLAW_LIVE_DEBUG === '1') {
+    const dispatch = latest?.dispatch
+    process.stderr.write(
+      `${JSON.stringify({
+        recovering_dto_debug: {
+          status: dispatch?.status ?? null,
+          retryable: dispatch?.retryable ?? null,
+          failure_kind: dispatch?.failure_kind ?? null,
+          progress_operation: dispatch?.progress?.operation ?? null,
+          progress_state: dispatch?.progress?.state ?? null,
+          version: dispatch?.version ?? null,
+        },
+      })}\n`,
+    )
+  }
   fail('PUBLIC_RECOVERING_DTO_TIMEOUT', sha256(JSON.stringify(latest ?? {})))
 }
 
@@ -1194,9 +1204,8 @@ function redactedIdentity(identity) {
 }
 
 async function writeEvidence(env, evidence) {
-  const configured = typeof env.HEXCLAW_EVIDENCE_DIR === 'string'
-    ? env.HEXCLAW_EVIDENCE_DIR.trim()
-    : ''
+  const configured =
+    typeof env.HEXCLAW_EVIDENCE_DIR === 'string' ? env.HEXCLAW_EVIDENCE_DIR.trim() : ''
   if (configured === '') return null
   const directory = resolve(configured)
   await mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
@@ -1340,13 +1349,7 @@ export async function runLayerA(env = process.env) {
   }
 }
 
-async function runInstalledUIPhase({
-  runtime,
-  desktop,
-  probe,
-  expectRecovering,
-  screenshotPath,
-}) {
+async function runInstalledUIPhase({ runtime, desktop, probe, expectRecovering, screenshotPath }) {
   if ((await installedDesktopPIDs(desktop)).length !== 0) {
     fail('INSTALLED_DESKTOP_ALREADY_RUNNING')
   }
@@ -1356,12 +1359,7 @@ async function runInstalledUIPhase({
   let processLog
   try {
     await waitForInstalledDesktop(runtime, desktopState)
-    snapshot = await waitForInstalledUISnapshot(
-      runtime,
-      probe,
-      desktopState,
-      expectRecovering,
-    )
+    snapshot = await waitForInstalledUISnapshot(runtime, probe, desktopState, expectRecovering)
     screenshot = await captureInstalledWindow(runtime, probe, desktopState, screenshotPath)
   } finally {
     processLog = await stopInstalledDesktop(desktopState)
@@ -1666,7 +1664,8 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 
-const invoked = process.argv[1] && isAbsolute(resolve(process.argv[1]))
-  ? pathToFileURL(resolve(process.argv[1])).href
-  : ''
+const invoked =
+  process.argv[1] && isAbsolute(resolve(process.argv[1]))
+    ? pathToFileURL(resolve(process.argv[1])).href
+    : ''
 if (invoked === import.meta.url) await main()

@@ -28,7 +28,8 @@
     "creative_work": "/api/k12/creative-works/{work_id}?agent={agent_name}",
     "creative_send": "/api/k12/creative-works/{work_id}/send",
     "delivery_batch": "/api/k12/delivery-batches/{batch_id}?agent={agent_name}",
-    "delivery_query": "/api/k12/delivery-batches/{batch_id}/query"
+    "delivery_query": "/api/k12/delivery-batches/{batch_id}/query",
+    "delivery_retry": "/api/k12/delivery-batches/{batch_id}/retry"
   },
   "fixtures": {
     "art": {
@@ -66,6 +67,10 @@
     "target_count": "all_deduplicated_bound_targets",
     "physical_target_key": ["platform", "instance_id", "chat_id"],
     "parts_per_target": 2,
+    "physical_messages_per_target": 1,
+    "initial_product_send_posts_per_work": 1,
+    "component_rows_share_external_message_id": true,
+    "physical_external_message_ids_distinct_across_targets": true,
     "parts": [
       {
         "ordinal": 1,
@@ -80,28 +85,79 @@
         "artifact": "frozen_original_source_asset"
       }
     ],
+    "markdown_policy": {
+      "h2_exact_order": [
+        "可见证据",
+        "先这样肯定",
+        "家长可以这样问或讲",
+        "下一次只试一个点"
+      ],
+      "body_language": "zh-CN",
+      "each_section_contains_han": true,
+      "parent_question": {
+        "required": true,
+        "question_mark_required": true,
+        "minimum_han_characters": 6
+      },
+      "next_step": {
+        "required": true,
+        "minimum_han_characters": 6
+      },
+      "limitation": {
+        "optional": true,
+        "prefix": "说明：",
+        "must_follow_sections": true,
+        "must_be_final": true,
+        "h2_forbidden": true
+      },
+      "prohibited_feedback_semantics": [
+        "scoring",
+        "ranking",
+        "ghostwriting"
+      ],
+      "forbidden_visible_references": [
+        "asset_scheme",
+        "file_scheme",
+        "blob_scheme",
+        "data_scheme",
+        "protected_asset_api",
+        "posix_absolute_path",
+        "windows_absolute_path",
+        "internal_asset_id"
+      ]
+    },
     "external_message_id_required": true,
-    "distinct_external_message_ids": true,
     "terminal_status": "delivered"
   },
   "frozen_replay": {
     "replay_lookup_before_source_open": true,
     "asset_open_failure_rechecks_frozen_batch": true,
     "restart_action": "query_only",
+    "duplicate_product_send_posts_per_work": 1,
     "duplicate_send_returns_same_batch": true,
     "same_delivery_ids": true,
     "same_external_message_ids": true,
     "same_attempts": true,
+    "new_delivery_receipts_per_work": 0,
+    "new_external_message_ids_per_work": 0,
+    "new_physical_messages_per_work": 0,
     "new_provider_send_count": 0,
     "new_mutable_source_read_on_duplicate_send": 0
   },
   "client_checkpoint": {
     "required_before_pass": true,
+    "source": "dingtalk-real-client-observer",
+    "allowed_clients": ["ios", "android", "desktop"],
+    "observed_at_required": true,
     "one_observation_per_target": true,
     "work_marker_required": true,
     "markdown_digest_required": true,
     "image_digest_required": true,
-    "marker_and_image_same_chat": true,
+    "marker_and_image_same_card": true,
+    "screenshot_bytes_required": true,
+    "screenshot_within_checkpoint_directory": true,
+    "observed_physical_messages_per_target": 1,
+    "duplicate_physical_messages_per_target": 0,
     "raw_target_identity_allowed": false,
     "raw_external_message_id_allowed": false
   },

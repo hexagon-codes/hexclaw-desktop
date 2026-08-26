@@ -192,6 +192,24 @@ function deliveryExpectation(expectedTargets) {
   }
 }
 
+function modelOperationReceipts() {
+  return [
+    {
+      invocation_id: 'invocation-grade-1',
+      parent_invocation_id: '',
+      physical_unit: 'grade',
+      operation: 'grade',
+      canonical_input_digest: `sha256:${'9'.repeat(64)}`,
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      status: 'succeeded',
+      attempt: 1,
+      result_digest: `sha256:${'8'.repeat(64)}`,
+      request_policy_digest: `sha256:${'7'.repeat(64)}`,
+    },
+  ]
+}
+
 function restartCheckpointSnapshot(stage) {
   const inbound = inboundBundle()
   const dispatch = inbound.dispatch
@@ -202,13 +220,22 @@ function restartCheckpointSnapshot(stage) {
       attachment_digest: 'a'.repeat(64),
       attachment_size: 1024,
     },
+    operation_receipts: modelOperationReceipts(),
+  }
+  if (stage === 'admission') {
+    dispatch.processing_status = 'admitted'
+    dispatch.reply_status = 'pending'
+    delete dispatch.image_task_id
+    delete dispatch.final_artifact_id
+    delete dispatch.delivery_batch_id
+    delete snapshot.canonical_source
+    return snapshot
   }
   if (stage === 'grading') {
     dispatch.processing_status = 'image_task_submitted'
     dispatch.reply_status = 'pending'
     delete dispatch.final_artifact_id
     delete dispatch.delivery_batch_id
-    return snapshot
   }
   snapshot.final_artifact = {
     artifact_id: 'artifact-1',
@@ -313,23 +340,31 @@ test('contract freezes real model, real bound-app transport, fixtures, EXIF6 and
     FROZEN_SOURCES,
   )
   assert.equal(projection.fixtures.exif6.orientation, 6)
+  assert.equal(projection.fixtures.exif6.source_fixture, 'clear')
+  assert.equal(
+    projection.fixtures.exif6.source_sha256,
+    projection.fixtures.clear.sha256,
+  )
+  assert.equal(projection.fixtures.exif6.source_size_bytes, projection.fixtures.clear.size_bytes)
+  assert.equal(projection.fixtures.exif6.source_width, projection.fixtures.clear.width)
+  assert.equal(projection.fixtures.exif6.source_height, projection.fixtures.clear.height)
   assert.equal(
     projection.fixtures.exif6.sha256,
-    'd55c49dbb39bf2db4ced0816db10deb1f4f2df4ec95eae7b105a4d91f240da84',
+    '04f518b246b262adb8cf2fe1cff1d6ff65c5c6a2cd38054b9a0f07fa3ea03ee1',
   )
-  assert.equal(projection.fixtures.exif6.encoded_width, 120)
-  assert.equal(projection.fixtures.exif6.encoded_height, 80)
-  assert.equal(projection.fixtures.exif6.display_width, 80)
-  assert.equal(projection.fixtures.exif6.display_height, 120)
+  assert.equal(projection.fixtures.exif6.encoded_width, 1448)
+  assert.equal(projection.fixtures.exif6.encoded_height, 1086)
+  assert.equal(projection.fixtures.exif6.display_width, 1086)
+  assert.equal(projection.fixtures.exif6.display_height, 1448)
   assert.equal(
     projection.fixtures.exif6.canonical_sha256,
-    '87a884386ab33e5386175973aa1ce9b865daef08288465dd2dd7923c98523fd1',
+    '43c6d2f3266ff98b341c060acd80e130dafbf824cb8e6f6cae770853b09e7654',
   )
   assert.equal(
     projection.fixtures.exif6.canonical_aggregate_sha256,
-    'c06dd2f88a810704dc941b74f267815985949a642ac3e952d1661bddc3a93737',
+    'c2e58c080093481f50c66b2786f9b634d0645a2e7a1c2b2d411c827a27113fe2',
   )
-  assert.equal(projection.fixtures.exif6.canonical_size_bytes, 5944)
+  assert.equal(projection.fixtures.exif6.canonical_size_bytes, 1454456)
   assert.deepEqual(Object.keys(projection.fixtures.exif6.corner_samples).sort(), [
     'bottom_left',
     'bottom_right',
@@ -341,28 +376,31 @@ test('contract freezes real model, real bound-app transport, fixtures, EXIF6 and
       encoded: 'top_left',
       encoded_xy: [0, 0],
       canonical: 'top_right',
-      canonical_xy: [79, 0],
+      canonical_xy: [1085, 0],
     },
     {
       encoded: 'top_right',
-      encoded_xy: [119, 0],
+      encoded_xy: [1447, 0],
       canonical: 'bottom_right',
-      canonical_xy: [79, 119],
+      canonical_xy: [1085, 1447],
     },
     {
       encoded: 'bottom_right',
-      encoded_xy: [119, 79],
+      encoded_xy: [1447, 1085],
       canonical: 'bottom_left',
-      canonical_xy: [0, 119],
+      canonical_xy: [0, 1447],
     },
     {
       encoded: 'bottom_left',
-      encoded_xy: [0, 79],
+      encoded_xy: [0, 1085],
       canonical: 'top_left',
       canonical_xy: [0, 0],
     },
   ])
-  assert.equal(projection.annotation_oracle.max_ignored_changed_pixel_ratio, 0)
+  assert.deepEqual(projection.annotation_oracle, {
+    exif6_pixel_baseline: 'independent_canonical_png',
+    max_ignored_changed_pixel_ratio: 0,
+  })
   assert.deepEqual(projection.restart_checkpoints, {
     admission: {
       phase: 'restart-admission',
@@ -446,30 +484,30 @@ test('manual Q1-Q16 oracle binds by frozen source identity and rejects model sta
   )
 })
 
-test('EXIF6 freezes exact 120x80 to 80x120 geometry and samples asymmetric canonical bytes', async () => {
+test('EXIF6 freezes exact clear-sheet rotation geometry and samples asymmetric canonical bytes', async () => {
   const { exif6CornerMapping } = await modulePromise
-  assert.deepEqual(exif6CornerMapping(120, 80), [
+  assert.deepEqual(exif6CornerMapping(1448, 1086), [
     {
       encoded: 'top_left',
       encoded_xy: [0, 0],
       canonical: 'top_right',
-      canonical_xy: [79, 0],
+      canonical_xy: [1085, 0],
     },
     {
       encoded: 'top_right',
-      encoded_xy: [119, 0],
+      encoded_xy: [1447, 0],
       canonical: 'bottom_right',
-      canonical_xy: [79, 119],
+      canonical_xy: [1085, 1447],
     },
     {
       encoded: 'bottom_right',
-      encoded_xy: [119, 79],
+      encoded_xy: [1447, 1085],
       canonical: 'bottom_left',
-      canonical_xy: [0, 119],
+      canonical_xy: [0, 1447],
     },
     {
       encoded: 'bottom_left',
-      encoded_xy: [0, 79],
+      encoded_xy: [0, 1085],
       canonical: 'top_left',
       canonical_xy: [0, 0],
     },
@@ -517,31 +555,60 @@ test('outcome_unknown is queried once through batch query and never resent', asy
   )
 })
 
-test('restart checkpoints fail closed until the public product boundary exposes a deterministic fence', async () => {
+test('restart checkpoints preserve every identity already frozen at the exact product fence', async () => {
   const { assertRestartCheckpoint } = await modulePromise
   for (const stage of ['admission', 'grading', 'before_send', 'after_send']) {
     const before = restartCheckpointSnapshot(stage)
     const after = structuredClone(before)
     after.inbound.dispatch.version += 1
-    assert.throws(
-      () => assertRestartCheckpoint(stage, before, after),
-      /RESTART_DETERMINISTIC_FENCE_UNAVAILABLE/u,
-    )
+    assert.equal(assertRestartCheckpoint(stage, before, after), after)
+    if (stage !== 'admission') {
+      const repeatedModel = structuredClone(after)
+      repeatedModel.operation_receipts[0].attempt = 2
+      assert.throws(
+        () => assertRestartCheckpoint(stage, before, repeatedModel),
+        /RESTART_CHECKPOINT_IDENTITY_DRIFT/u,
+      )
+    }
   }
 })
 
-test('six-stage canonical digest audit fails closed because the public DTO exposes no stage input digest', async () => {
+test('six-stage canonical digest audit accepts one frozen canonical root and rejects stage drift', async () => {
   const { assertStageDigestChain } = await modulePromise
+  const canonicalDigest = '2'.repeat(64)
   const chain = {
     expected_raw_digest: '1'.repeat(64),
     admission_raw_digest: `sha256:${'1'.repeat(64)}`,
-    canonical_aggregate_digest: '2'.repeat(64),
+    canonical_aggregate_digest: canonicalDigest,
     canonical_attachment_digest: '3'.repeat(64),
     final_artifact_digest: '4'.repeat(64),
     final_annotated_digest: '5'.repeat(64),
     delivered_annotated_digest: `sha256:${'5'.repeat(64)}`,
+    operation_receipts: [
+      'classification',
+      'recognizing',
+      'locating',
+      'solve',
+      'grade',
+      'annotation',
+    ].map((operation, index) => ({
+      invocation_id: `invocation-${index + 1}`,
+      operation,
+      canonical_input_digest: `sha256:${canonicalDigest}`,
+      result_digest:
+        operation === 'annotation' ? `sha256:${'5'.repeat(64)}` : `sha256:${'7'.repeat(64)}`,
+    })),
   }
-  assert.throws(() => assertStageDigestChain(chain), /PHOTO_STAGE_DIGEST_EVIDENCE_UNAVAILABLE/u)
+  assert.deepEqual(assertStageDigestChain(chain), {
+    canonical_input_digest: canonicalDigest,
+    stage_count: 6,
+  })
+  chain.operation_receipts[4].canonical_input_digest = `sha256:${'6'.repeat(64)}`
+  assert.throws(() => assertStageDigestChain(chain), /PHOTO_STAGE_DIGEST_DRIFT/u)
+
+  chain.operation_receipts[4].canonical_input_digest = `sha256:${canonicalDigest}`
+  chain.operation_receipts[5].result_digest = `sha256:${'9'.repeat(64)}`
+  assert.throws(() => assertStageDigestChain(chain), /PHOTO_STAGE_DIGEST_DRIFT/u)
 })
 
 test('EXIF parser recognizes the fixed orientation-6 APP1 segment', async () => {
@@ -558,6 +625,10 @@ test('EXIF parser recognizes the fixed orientation-6 APP1 segment', async () => 
 
 test('bound-instance projection accepts only the sidecar credential mask shapes', async () => {
   const { maskedInstanceConfig } = await modulePromise
+  assert.equal(
+    maskedInstanceConfig({ app_key: 'ding-public-app-id', app_secret: '****' }),
+    true,
+  )
   assert.equal(maskedInstanceConfig({ app_key: '****1234', app_secret: '****' }), true)
   assert.equal(maskedInstanceConfig(JSON.stringify({ access_token: '••••••••' })), true)
   assert.equal(maskedInstanceConfig({ app_secret: '[REDACTED]' }), true)
@@ -727,6 +798,34 @@ test('prepared projection accepts extra Agent bindings while freezing one callba
   assert.equal(projection.target_hashes.length, 1)
 })
 
+test('prepare waits for the bound DingTalk instance to reach running after HTTP readiness', async () => {
+  const { waitForBoundInstanceProjection } = await modulePromise
+  const runtime = { instanceID: '钉钉' }
+  let calls = 0
+  const projection = await waitForBoundInstanceProjection(
+    runtime,
+    async () => {
+      calls += 1
+      return {
+        instances: [
+          {
+            provider: 'dingtalk',
+            name: '钉钉',
+            enabled: true,
+            status: calls === 1 ? 'stopped' : 'running',
+            config: { app_key: '****' },
+          },
+        ],
+      }
+    },
+    Date.now() + 1_000,
+    0,
+  )
+
+  assert.equal(calls, 2)
+  assert.equal(projection.instances[0].status, 'running')
+})
+
 test('restart is query-only and duplicate callback cannot change identities, attempts or external sends', async () => {
   const { assertDuplicateCallbackInvariant, assertRestartInvariant } = await modulePromise
   const before = {
@@ -742,6 +841,7 @@ test('restart is query-only and duplicate callback cannot change identities, att
       attachment_size: 1024,
     },
     annotated: { mime: 'image/png', digest: digest(ANNOTATED_BYTES) },
+    operation_receipts: modelOperationReceipts(),
   }
   const after = structuredClone(before)
   assert.deepEqual(assertRestartInvariant(before, after), before)
@@ -792,7 +892,11 @@ test('harness source uses canonical geometry oracle and never bypasses HexClaw f
   assert.match(source, /\/api\/v1\/platforms\/hooks\/dingtalk/u)
   assert.match(source, /\/api\/k12\/delivery-batches/u)
   assert.match(source, /\/api\/k12\/image-tasks/u)
+  assert.match(source, /HEXCLAW_K12_DINGTALK_PHOTO_TEST_FENCE_STAGE/u)
+  assert.match(source, /RESTART_PROCESS_DID_NOT_CHANGE/u)
   assert.doesNotMatch(source, /\/api\/k12\/delivery-batches\/[^'"`]*\/retry/u)
+  assert.doesNotMatch(source, /RESTART_DETERMINISTIC_FENCE_UNAVAILABLE/u)
+  assert.doesNotMatch(source, /new_provider_send_count:\s*0/u)
   assert.doesNotMatch(source, /\bdws\b|DingTalk CLI/iu)
   assert.doesNotMatch(source, /\bcurl\b|openapi\.dingtalk|api\.dingtalk|oapi\.dingtalk/iu)
   assert.doesNotMatch(source, /sqlite3|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM/iu)

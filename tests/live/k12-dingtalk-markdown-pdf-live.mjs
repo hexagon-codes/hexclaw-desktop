@@ -615,13 +615,12 @@ export function assertBatchExactSet(rawBatch, expected) {
     }
     const attachment = object(filePayload.attachment, 'PDF_ATTACHMENT_REQUIRED')
     if (
-      attachment.mime !== 'application/pdf' ||
-      Object.hasOwn(attachment, 'url') ||
-      Object.hasOwn(attachment, 'path')
+      !sameExactSet(Object.keys(attachment).sort(), ['Data', 'MIME', 'Name']) ||
+      attachment.MIME !== 'application/pdf'
     ) {
       throw new HarnessError('PDF_ATTACHMENT_INVALID')
     }
-    const pdfBytes = decodeCanonicalBase64(attachment.data, 'PDF_ATTACHMENT_BYTES_INVALID')
+    const pdfBytes = decodeCanonicalBase64(attachment.Data, 'PDF_ATTACHMENT_BYTES_INVALID')
     if (
       sha256Bytes(pdfBytes) !== expected.pdf_sha256 ||
       !pdfBytes.subarray(0, 5).equals(Buffer.from('%PDF-')) ||
@@ -629,7 +628,7 @@ export function assertBatchExactSet(rawBatch, expected) {
     ) {
       throw new HarnessError('PDF_BYTES_DRIFT')
     }
-    const filename = ensureSafePDFName(attachment.name)
+    const filename = ensureSafePDFName(attachment.Name)
     ensureNoLocalReference(filename)
     if (filename !== content.attachments[0].name) throw new HarnessError('PDF_FILENAME_DRIFT')
     if (canonicalSourceDigest && canonicalSourceDigest !== content.source_digest) {

@@ -16,6 +16,10 @@ import (
 )
 
 type fixtureManifest struct {
+	SourceSHA256          string               `json:"source_sha256"`
+	SourceSizeBytes       int                  `json:"source_size_bytes"`
+	SourceWidth           int                  `json:"source_width"`
+	SourceHeight          int                  `json:"source_height"`
 	RawSHA256             string               `json:"raw_sha256"`
 	RawSizeBytes          int                  `json:"raw_size_bytes"`
 	EncodedWidth          int                  `json:"encoded_width"`
@@ -29,14 +33,20 @@ type fixtureManifest struct {
 }
 
 func main() {
+	sourcePath := flag.String("source", "", "upright worksheet source")
 	rawPath := flag.String("raw", "", "raw EXIF-6 JPEG output")
 	canonicalPath := flag.String("canonical", "", "orientation-normalized PNG output")
 	flag.Parse()
-	if *rawPath == "" || *canonicalPath == "" {
-		fmt.Fprintln(os.Stderr, "raw and canonical outputs are required")
+	if *sourcePath == "" || *rawPath == "" || *canonicalPath == "" {
+		fmt.Fprintln(os.Stderr, "source, raw and canonical outputs are required")
 		os.Exit(2)
 	}
-	raw, canonical, manifest, err := buildFixture()
+	source, err := os.ReadFile(*sourcePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	raw, canonical, manifest, err := buildFixture(source)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -55,21 +65,24 @@ func main() {
 	}
 }
 
-func buildFixture() ([]byte, []byte, fixtureManifest, error) {
-	const width, height = 120, 80
-	source := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			source.SetRGBA(x, y, color.RGBA{
-				R: uint8(20 + x*170/(width-1)),
-				G: uint8(30 + y*160/(height-1)),
-				B: uint8(40 + (x+y)*120/(width+height-2)),
-				A: 0xff,
-			})
+func buildFixture(sourceBytes []byte) ([]byte, []byte, fixtureManifest, error) {
+	source, _, err := image.Decode(bytes.NewReader(sourceBytes))
+	if err != nil {
+		return nil, nil, fixtureManifest{}, err
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, nil, fixtureManifest{}, fmt.Errorf("source image dimensions are invalid")
+	}
+	stored := image.NewNRGBA(image.Rect(0, 0, height, width))
+	for y := 0; y < width; y++ {
+		for x := 0; x < height; x++ {
+			stored.Set(x, y, source.At(bounds.Min.X+width-1-y, bounds.Min.Y+x))
 		}
 	}
 	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 94}); err != nil {
+	if err := jpeg.Encode(&encoded, stored, &jpeg.Options{Quality: 94}); err != nil {
 		return nil, nil, fixtureManifest{}, err
 	}
 	raw := injectOrientation6(encoded.Bytes())
@@ -77,10 +90,10 @@ func buildFixture() ([]byte, []byte, fixtureManifest, error) {
 	if err != nil {
 		return nil, nil, fixtureManifest{}, err
 	}
-	canonicalImage := image.NewNRGBA(image.Rect(0, 0, height, width))
-	for y := 0; y < width; y++ {
-		for x := 0; x < height; x++ {
-			canonicalImage.Set(x, y, decoded.At(y, height-1-x))
+	canonicalImage := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			canonicalImage.Set(x, y, decoded.At(y, width-1-x))
 		}
 	}
 	var canonicalBuffer bytes.Buffer
@@ -93,6 +106,7 @@ func buildFixture() ([]byte, []byte, fixtureManifest, error) {
 		return nil, nil, fixtureManifest{}, err
 	}
 	rawDigest := sha256.Sum256(raw)
+	sourceDigest := sha256.Sum256(sourceBytes)
 	canonicalDigest := sha256.Sum256(canonical)
 	aggregate := sha256.New()
 	var length [8]byte
@@ -100,20 +114,24 @@ func buildFixture() ([]byte, []byte, fixtureManifest, error) {
 	_, _ = aggregate.Write(length[:])
 	_, _ = aggregate.Write(canonical)
 	manifest := fixtureManifest{
+		SourceSHA256:          hex.EncodeToString(sourceDigest[:]),
+		SourceSizeBytes:       len(sourceBytes),
+		SourceWidth:           width,
+		SourceHeight:          height,
 		RawSHA256:             hex.EncodeToString(rawDigest[:]),
 		RawSizeBytes:          len(raw),
-		EncodedWidth:          width,
-		EncodedHeight:         height,
+		EncodedWidth:          height,
+		EncodedHeight:         width,
 		CanonicalSHA256:       hex.EncodeToString(canonicalDigest[:]),
 		CanonicalAggregateSHA: hex.EncodeToString(aggregate.Sum(nil)),
 		CanonicalSizeBytes:    len(canonical),
-		CanonicalWidth:        height,
-		CanonicalHeight:       width,
+		CanonicalWidth:        width,
+		CanonicalHeight:       height,
 		CornerSamples: map[string][4]uint32{
 			"top_left":     rgba(canonicalDecoded.At(0, 0)),
-			"top_right":    rgba(canonicalDecoded.At(height-1, 0)),
-			"bottom_left":  rgba(canonicalDecoded.At(0, width-1)),
-			"bottom_right": rgba(canonicalDecoded.At(height-1, width-1)),
+			"top_right":    rgba(canonicalDecoded.At(width-1, 0)),
+			"bottom_left":  rgba(canonicalDecoded.At(0, height-1)),
+			"bottom_right": rgba(canonicalDecoded.At(width-1, height-1)),
 		},
 	}
 	return raw, canonical, manifest, nil

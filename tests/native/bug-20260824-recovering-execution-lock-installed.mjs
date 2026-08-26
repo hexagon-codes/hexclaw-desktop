@@ -3,11 +3,11 @@
 /**
  * K12 recovering 会话执行锁最终安装包门禁。
  *
- * `validate` 只做源码、脚本与安装包身份的静态校验，不启动应用。`run` 直接执行
- * `/Applications/HexClaw.app/Contents/MacOS/hexclaw-desktop` 的精确字节，使用隔离
+ * `validate` 只做源码、脚本与安装包身份的静态校验，不启动应用。`run` 通过 macOS
+ * LaunchServices 启动 `/Applications/HexClaw.app`，并校验实际进程仍执行安装包内的精确字节，使用隔离
  * Test Home、离线持久夹具、正常只读 API、只读 AX 与窗口截图验证 recovering 不占用
- * SessionExecutionRegistry 的用户可见投影。脚本不注入 WebView，不执行点击、键盘、剪贴板、
- * 模型或 IM 操作。
+ * SessionExecutionRegistry 的用户可见投影。脚本只按已启动进程 PID 将其窗口置前，不注入
+ * WebView，不执行点击、键盘、剪贴板、模型或 IM 操作。
  */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -16,16 +16,17 @@ import {
   chmodSync,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,20 +34,41 @@ const nativeDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(nativeDir, '../..')
 const hexclawRoot = resolve(repoRoot, '../hexclaw')
 const docsRoot = resolve(repoRoot, '../hexclaw-docs')
+const fixtureGoRoot = resolve(
+  process.env.GOROOT?.trim() ||
+    execFileSync('go', ['env', 'GOROOT'], { encoding: 'utf8', env: process.env }).trim(),
+)
+const fixtureGoExecutable = join(fixtureGoRoot, 'bin/go')
 const evidenceRoot = resolve(
   process.env.HEXCLAW_RECOVERING_LOCK_EVIDENCE ||
     join(docsRoot, 'test/evidence/bug-k12-recovering-execution-lock-20260824'),
 )
-const installedBundle = '/Applications/HexClaw.app'
+const installedCandidateEnv = 'HEXCLAW_RECOVERING_LOCK_INSTALLED_CANDIDATE'
+const requestedInstalledBundle = resolve(
+  process.env[installedCandidateEnv]?.trim() || '/Applications/HexClaw.app',
+)
+assert.equal(
+  dirname(requestedInstalledBundle),
+  '/Applications',
+  'installed candidate must be rooted in /Applications',
+)
+assert.ok(
+  lstatSync(requestedInstalledBundle).isDirectory() &&
+    !lstatSync(requestedInstalledBundle).isSymbolicLink(),
+  'installed candidate must be a physical application bundle',
+)
+const installedBundle = realpathSync(requestedInstalledBundle)
+assert.equal(
+  installedBundle,
+  requestedInstalledBundle,
+  'installed candidate must not resolve through a symlink',
+)
 const installedExecutable = join(installedBundle, 'Contents/MacOS/hexclaw-desktop')
 const installedSidecar = join(installedBundle, 'Contents/MacOS/hexclaw')
 const installedInfoPlist = join(installedBundle, 'Contents/Info.plist')
-const expectedInstalledDesktopSHA256 =
-  '6e00622437fe09bd13aaeccbcd50ec96145dbbc226f823a3fd4d6cdd70a7a147'
-const expectedInstalledSidecarSHA256 =
-  '9d66400f9ddc83f1ab9847947b98fc3cd47f79cc1156d5a78f6b24282b1a7ea2'
 const runOptIn = 'HEXCLAW_RUN_RECOVERING_LOCK_INSTALLED'
 const foregroundOptIn = 'HEXCLAW_ALLOW_FOREGROUND_NATIVE_UI'
+const backgroundOptIn = 'HEXCLAW_RUN_NATIVE_UI_IN_BACKGROUND'
 const apiToken = 'recovering-lock-isolated-api-token'
 const sessionTitle = 'K12 recovering query-only gate'
 const sourceMessageText = 'Recovering query-only fixture message'
@@ -58,15 +80,16 @@ const sleep = (milliseconds) =>
 function usage() {
   return `Usage:
   node tests/native/bug-20260824-recovering-execution-lock-installed.mjs --help
-  node tests/native/bug-20260824-recovering-execution-lock-installed.mjs validate
-  ${runOptIn}=1 ${foregroundOptIn}=1 node tests/native/bug-20260824-recovering-execution-lock-installed.mjs run
+  ${installedCandidateEnv}=/Applications/HexClaw.app node tests/native/bug-20260824-recovering-execution-lock-installed.mjs validate
+  ${installedCandidateEnv}=/Applications/HexClaw.app ${runOptIn}=1 ${foregroundOptIn}=1 node tests/native/bug-20260824-recovering-execution-lock-installed.mjs run
+  ${installedCandidateEnv}=/Applications/HexClaw.app ${runOptIn}=1 ${backgroundOptIn}=1 node tests/native/bug-20260824-recovering-execution-lock-installed.mjs run
 
 Commands:
   validate  Static-only validation. Does not launch an App or call AX at runtime.
-  run       Directly launch the exact installed Desktop in an isolated Test Home.
+  run       Launch the exact installed bundle through macOS LaunchServices in an isolated Test Home.
 
-The run command opens a native application window. Both explicit opt-ins are required.
-It performs no WebView injection, foreground automation, click, key, clipboard, model, or IM action.
+The run command requires exactly one foreground or background observation opt-in.
+It performs no WebView injection, foreground input automation, click, key, clipboard, model, or IM action.
 `
 }
 
@@ -82,9 +105,52 @@ function writeJSON(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
 
+function installedFileIdentity(path) {
+  const link = lstatSync(path)
+  assert.ok(link.isFile() && !link.isSymbolicLink(), `installed artifact is not physical: ${path}`)
+  assert.equal(realpathSync(path), path, `installed artifact resolves outside candidate: ${path}`)
+  const info = statSync(path, { bigint: true })
+  return {
+    sha256: sha256File(path),
+    device: String(info.dev),
+    inode: String(info.ino),
+    size: String(info.size),
+    mode: String(info.mode),
+    mtime_ns: String(info.mtimeNs),
+    ctime_ns: String(info.ctimeNs),
+  }
+}
+
+function installedBundleIdentity() {
+  const link = lstatSync(installedBundle)
+  assert.ok(
+    link.isDirectory() && !link.isSymbolicLink(),
+    'installed candidate must remain a physical application bundle',
+  )
+  assert.equal(
+    realpathSync(installedBundle),
+    installedBundle,
+    'installed candidate must not resolve through a symlink',
+  )
+  const info = statSync(installedBundle, { bigint: true })
+  return {
+    device: String(info.dev),
+    inode: String(info.ino),
+    mode: String(info.mode),
+    mtime_ns: String(info.mtimeNs),
+    ctime_ns: String(info.ctimeNs),
+  }
+}
+
 function installedArtifactIdentity() {
   for (const path of [installedExecutable, installedSidecar, installedInfoPlist]) {
     assert.ok(existsSync(path) && statSync(path).isFile(), `installed artifact missing: ${path}`)
+  }
+  const bundle = installedBundleIdentity()
+  const files = {
+    desktop: installedFileIdentity(installedExecutable),
+    sidecar: installedFileIdentity(installedSidecar),
+    infoPlist: installedFileIdentity(installedInfoPlist),
   }
   const identifier = execFileSync(
     'plutil',
@@ -96,21 +162,42 @@ function installedArtifactIdentity() {
     ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', installedInfoPlist],
     { encoding: 'utf8' },
   ).trim()
-  const desktopSHA256 = sha256File(installedExecutable)
-  const sidecarSHA256 = sha256File(installedSidecar)
+  assert.deepEqual(
+    {
+      bundle: installedBundleIdentity(),
+      files: {
+        desktop: installedFileIdentity(installedExecutable),
+        sidecar: installedFileIdentity(installedSidecar),
+        infoPlist: installedFileIdentity(installedInfoPlist),
+      },
+    },
+    { bundle, files },
+    'installed artifact changed while resolving candidate identity',
+  )
   assert.equal(identifier, 'com.hexclaw.desktop', 'installed bundle identifier drifted')
   assert.equal(version, '0.5.0-beta', 'installed version drifted')
-  assert.equal(
-    desktopSHA256,
-    expectedInstalledDesktopSHA256,
-    'installed Desktop is not the final candidate',
+  return {
+    candidateBundle: installedBundle,
+    identifier,
+    version,
+    desktopSHA256: files.desktop.sha256,
+    sidecarSHA256: files.sidecar.sha256,
+    infoPlistSHA256: files.infoPlist.sha256,
+    bundle,
+    files,
+  }
+}
+
+function freezeInstalledArtifactIdentity() {
+  return Object.freeze(installedArtifactIdentity())
+}
+
+function assertInstalledArtifactUnchanged(frozenIdentity) {
+  assert.deepEqual(
+    installedArtifactIdentity(),
+    frozenIdentity,
+    'installed artifact changed during the gate',
   )
-  assert.equal(
-    sidecarSHA256,
-    expectedInstalledSidecarSHA256,
-    'installed Sidecar is not the final candidate',
-  )
-  return { identifier, version, desktopSHA256, sidecarSHA256 }
 }
 
 async function reserveLoopbackPort() {
@@ -154,6 +241,54 @@ function existingInstalledDesktopPIDs() {
         ? [Number(match[1])]
         : []
     })
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false
+    throw error
+  }
+}
+
+function installedDesktopCommand(pid) {
+  return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim()
+}
+
+function assertLaunchedExecutableIdentity(pid, installedIdentity) {
+  const command = installedDesktopCommand(pid)
+  assert.ok(
+    command === installedExecutable || command.startsWith(`${installedExecutable} `),
+    `launched process does not execute the installed Desktop: ${command}`,
+  )
+  assert.equal(
+    sha256File(installedExecutable),
+    installedIdentity.desktopSHA256,
+    'launched Desktop bytes differ from frozen installed candidate',
+  )
+  return { command: '<installed-bundle>/Contents/MacOS/hexclaw-desktop' }
+}
+
+async function waitForNewInstalledDesktopPID(previousPIDs, launcherProcess) {
+  const previous = new Set(previousPIDs)
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    if (launcherProcess.exitCode !== null) {
+      throw new Error(
+        `LaunchServices exited before the installed Desktop started: ${launcherProcess.exitCode}`,
+      )
+    }
+    const candidates = existingInstalledDesktopPIDs().filter((pid) => !previous.has(pid))
+    if (candidates.length === 1) return candidates[0]
+    assert.ok(
+      candidates.length < 2,
+      `LaunchServices started multiple installed Desktop processes: ${candidates}`,
+    )
+    await sleep(100)
+  }
+  throw new Error('LaunchServices did not start the installed Desktop before timeout')
 }
 
 function sqlString(value) {
@@ -261,11 +396,20 @@ function runPrivateCommand(command, args, options = {}) {
   })
 }
 
+function parseCommandReceipt(output, label) {
+  const lines = String(output)
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  assert.ok(lines.length > 0, `${label} did not emit a receipt`)
+  return JSON.parse(lines.at(-1))
+}
+
 async function prepareFixture(sandbox, databasePath, sidecarPort) {
   const manifestPath = join(sandbox, 'fixture-manifest.json')
   const runID = `recovering-lock-${process.pid}-${Date.now()}`
   const result = await runPrivateCommand(
-    'go',
+    fixtureGoExecutable,
     [
       'run',
       '-tags',
@@ -293,14 +437,17 @@ async function prepareFixture(sandbox, databasePath, sidecarPort) {
       cwd: hexclawRoot,
       env: {
         ...process.env,
+        GOCACHE: join(sandbox, '.gocache'),
         GOENV: 'off',
+        GOROOT: fixtureGoRoot,
         GOPROXY: 'off',
         GOSUMDB: 'off',
+        GOTOOLCHAIN: 'local',
       },
       label: 'offline durable recovering fixture',
     },
   )
-  const startReceipt = JSON.parse(result.stdout)
+  const startReceipt = parseCommandReceipt(result.stdout, 'offline durable recovering fixture')
   assert.deepEqual(startReceipt.boundary_calls, {
     model_calls: 0,
     dingtalk_sends: 0,
@@ -330,7 +477,7 @@ async function prepareFixture(sandbox, databasePath, sidecarPort) {
         SET source_session_id=${sqlString(controlSession)}
       WHERE dispatch_id IN (${sqlString(manifest.retryable_dispatch_id)},${sqlString(manifest.outcome_unknown_dispatch_id)});
      INSERT INTO sessions(id,user_id,platform,title,status,message_count,last_message_preview,created_at,updated_at)
-     VALUES(${sqlString(manifest.ownership)},'desktop-user','web',${sqlString(sessionTitle)},1,1,${sqlString(sourceMessageText)},${sqlString(now)},${sqlString(now)});
+     VALUES(${sqlString(manifest.ownership)},'api-user','web',${sqlString(sessionTitle)},1,1,${sqlString(sourceMessageText)},${sqlString(now)},${sqlString(now)});
      INSERT INTO messages(id,session_id,role,content,content_type,created_at)
      VALUES(${sqlString(outcome.source_ref)},${sqlString(manifest.ownership)},'user',${sqlString(sourceMessageText)},'text',${sqlString(now)});
      COMMIT;`,
@@ -372,6 +519,7 @@ function databaseBoundarySnapshot(databasePath) {
 function readOnlyProbeSource() {
   return `
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -471,7 +619,60 @@ do {
     guard let command = arguments.first else { throw ProbeError.invalidArguments("missing command") }
     switch command {
     case "preflight":
-        try emitJSON(["accessibility": AXIsProcessTrusted(), "screenCapture": CGPreflightScreenCaptureAccess()])
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let screenLocked = (session?["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue ?? false
+        try emitJSON([
+            "accessibility": AXIsProcessTrusted(),
+            "screenCapture": CGPreflightScreenCaptureAccess(),
+            "screenLocked": screenLocked,
+        ])
+    case "activate":
+        guard arguments.count == 2 else { throw ProbeError.invalidArguments("activate requires pid") }
+        let pid = try pidArgument(arguments[1])
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            throw ProbeError.invalidArguments("target application process is missing")
+        }
+        let requested = app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        let deadline = Date().addingTimeInterval(10)
+        while !app.isActive && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let root = AXUIElementCreateApplication(pid)
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(
+            root,
+            kAXWindowsAttribute as CFString,
+            &windowsValue
+        )
+        let windowCount = (windowsValue as? [AXUIElement])?.count ?? 0
+        try emitJSON([
+            "activationRequested": true,
+            "requested": requested,
+            "active": app.isActive,
+            "axReadable": windowsResult == .success,
+            "windowCount": windowCount,
+        ])
+    case "inspect":
+        guard arguments.count == 2 else { throw ProbeError.invalidArguments("inspect requires pid") }
+        let pid = try pidArgument(arguments[1])
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            throw ProbeError.invalidArguments("target application process is missing")
+        }
+        let root = AXUIElementCreateApplication(pid)
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(
+            root,
+            kAXWindowsAttribute as CFString,
+            &windowsValue
+        )
+        let windowCount = (windowsValue as? [AXUIElement])?.count ?? 0
+        try emitJSON([
+            "activationRequested": false,
+            "requested": false,
+            "active": app.isActive,
+            "axReadable": windowsResult == .success,
+            "windowCount": windowCount,
+        ])
     case "ax":
         guard arguments.count == 2 else { throw ProbeError.invalidArguments("ax requires pid") }
         try emitJSON(walk(AXUIElementCreateApplication(try pidArgument(arguments[1]))))
@@ -576,10 +777,10 @@ for row in rows {
   return { bytes: statSync(destination).size, sha256: sha256File(destination) }
 }
 
-async function waitForHealth(port, appProcess) {
+async function waitForHealth(port, launcherProcess, appPID) {
   const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
-    if (appProcess.exitCode !== null)
+    if (launcherProcess.exitCode !== null || !processExists(appPID))
       throw new Error('installed Desktop exited before Sidecar health')
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -616,6 +817,18 @@ async function stopProcess(processHandle) {
     processHandle.kill('SIGKILL')
     await new Promise((resolveExit) => processHandle.once('exit', resolveExit))
   }
+}
+
+async function stopInstalledDesktop(pid, installedIdentity) {
+  if (!pid || !processExists(pid)) return
+  assertLaunchedExecutableIdentity(pid, installedIdentity)
+  process.kill(pid, 'SIGTERM')
+  const deadline = Date.now() + 5000
+  while (processExists(pid) && Date.now() < deadline) await sleep(100)
+  if (processExists(pid)) process.kill(pid, 'SIGKILL')
+  const killDeadline = Date.now() + 5000
+  while (processExists(pid) && Date.now() < killDeadline) await sleep(100)
+  assert.equal(processExists(pid), false, `installed Desktop PID ${pid} did not stop`)
 }
 
 async function stopOwnedSidecar(port) {
@@ -665,24 +878,67 @@ function appEnvironment(sandbox, sidecarPort) {
   }
 }
 
-async function runExactPhase({ name, sandbox, sidecarPort, probe, fixture, expectRecovering }) {
+async function runExactPhase({
+  name,
+  sandbox,
+  sidecarPort,
+  probe,
+  fixture,
+  expectRecovering,
+  installedIdentity,
+  background,
+  runState,
+}) {
+  assertInstalledArtifactUnchanged(installedIdentity)
   assert.deepEqual(
     existingInstalledDesktopPIDs(),
     [],
     'an installed HexClaw process is already running; refusing to trigger single-instance focus',
   )
   const rawLog = join(sandbox, `${name}.log`)
+  const appStdout = join(sandbox, `${name}.app.stdout.log`)
+  const appStderr = join(sandbox, `${name}.app.stderr.log`)
+  writeFileSync(appStdout, '', { flag: 'wx', mode: 0o600 })
+  writeFileSync(appStderr, '', { flag: 'wx', mode: 0o600 })
   const logStream = createWriteStream(rawLog, { flags: 'wx', mode: 0o600 })
-  const appProcess = spawn(installedExecutable, [], {
+  const isolatedEnvironment = appEnvironment(sandbox, sidecarPort)
+  const openArguments = ['-n', '-F', '-W', '-o', appStdout, '--stderr', appStderr]
+  if (background) openArguments.splice(1, 0, '-g')
+  for (const [name, value] of Object.entries(isolatedEnvironment)) {
+    openArguments.push('--env', `${name}=${value}`)
+  }
+  openArguments.push(installedBundle)
+  const launcherProcess = spawn('/usr/bin/open', openArguments, {
     cwd: sandbox,
-    env: appEnvironment(sandbox, sidecarPort),
+    env: {
+      PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin',
+      HOME: process.env.HOME || '/',
+      USER: process.env.USER || 'hexclaw-test-launcher',
+      LOGNAME: process.env.LOGNAME || process.env.USER || 'hexclaw-test-launcher',
+      TMPDIR: process.env.TMPDIR || '/tmp',
+      LANG: 'zh_CN.UTF-8',
+      LC_ALL: 'zh_CN.UTF-8',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  appProcess.stdout.pipe(logStream, { end: false })
-  appProcess.stderr.pipe(logStream, { end: false })
+  launcherProcess.stdout.pipe(logStream, { end: false })
+  launcherProcess.stderr.pipe(logStream, { end: false })
   const apiAudit = []
+  let appPID = null
   try {
-    await waitForHealth(sidecarPort, appProcess)
+    appPID = await waitForNewInstalledDesktopPID([], launcherProcess)
+    runState.installedDesktopLaunched = true
+    const launchedExecutable = assertLaunchedExecutableIdentity(appPID, installedIdentity)
+    await waitForHealth(sidecarPort, launcherProcess, appPID)
+    const activation = runProbe(probe, background ? 'inspect' : 'activate', appPID)
+    assert.equal(activation.activationRequested, !background)
+    if (background) {
+      assert.equal(activation.active, false, 'background Desktop unexpectedly became active')
+    } else {
+      assert.equal(activation.active, true, 'installed Desktop did not become active')
+    }
+    assert.equal(activation.axReadable, true, 'installed Desktop AX windows are unreadable')
+    assert.ok(activation.windowCount > 0, 'installed Desktop did not expose an AX window')
     const sidecarPIDs = listenerPIDs(sidecarPort)
     assert.equal(sidecarPIDs.length, 1, 'exact installed Desktop must own one Sidecar listener')
     const sessions = await apiGET(sidecarPort, '/api/v1/sessions', apiAudit)
@@ -710,33 +966,45 @@ async function runExactPhase({ name, sandbox, sidecarPort, probe, fixture, expec
     } else {
       assert.deepEqual(recoverable.items, [])
     }
-    const ax = await waitForAXSnapshot(probe, appProcess.pid, expectRecovering)
-    const screenshot = captureWindow(
-      appProcess.pid,
-      join(evidenceRoot, `exact-installed-${name}.png`),
-    )
+    const ax = await waitForAXSnapshot(probe, appPID, expectRecovering)
+    const screenshot = captureWindow(appPID, join(evidenceRoot, `exact-installed-${name}.png`))
     assert.ok(apiAudit.every((request) => request.method === 'GET'))
+    const executableSHA256 = sha256File(installedExecutable)
+    assert.equal(
+      executableSHA256,
+      installedIdentity.desktopSHA256,
+      'launched Desktop bytes differ from frozen installed candidate',
+    )
     return {
-      appPID: appProcess.pid,
+      appPID,
       sidecarPID: sidecarPIDs[0],
+      launchedExecutable,
+      activation,
       apiAudit,
       recoverable,
       ax: { snapshot: ax.snapshot, rows: ax.rows },
       screenshot,
-      executableSHA256: sha256File(installedExecutable),
+      executableSHA256,
     }
   } finally {
-    await stopProcess(appProcess)
+    await stopInstalledDesktop(appPID, installedIdentity)
+    await stopProcess(launcherProcess)
     await stopOwnedSidecar(sidecarPort)
     await new Promise((resolveEnd) => logStream.end(resolveEnd))
-    if (existsSync(rawLog)) {
+    if (existsSync(rawLog) || existsSync(appStdout) || existsSync(appStderr)) {
+      const combinedLog = [rawLog, appStdout, appStderr]
+        .filter((path) => existsSync(path))
+        .map((path) => readFileSync(path, 'utf8'))
+        .filter(Boolean)
+        .join('\n')
       writeFileSync(
         join(evidenceRoot, `exact-installed-${name}.log`),
-        sanitizeText(readFileSync(rawLog, 'utf8'), sandbox),
+        sanitizeText(combinedLog, sandbox),
         { mode: 0o600 },
       )
     }
     assert.deepEqual(listenerPIDs(sidecarPort), [])
+    assertInstalledArtifactUnchanged(installedIdentity)
   }
 }
 
@@ -762,7 +1030,7 @@ function assertEquivalentUnlockedProjection(baseline, recovering) {
 
 function validateStatic() {
   assert.equal(process.platform, 'darwin', 'native installed validation is macOS-only')
-  const installedIdentity = installedArtifactIdentity()
+  const installedIdentity = freezeInstalledArtifactIdentity()
   const source = readFileSync(fileURLToPath(import.meta.url), 'utf8')
   const registry = readFileSync(join(repoRoot, 'src/stores/session-execution-registry.ts'), 'utf8')
   const registryTest = readFileSync(
@@ -779,7 +1047,7 @@ function validateStatic() {
   assert.match(registryTest, /keeps another active execution locked/u)
   assert.match(registryTest, /same dispatch again when assessing resumes/u)
   assert.match(recognizePanel, /syncExecutionState\(currentDispatchId\.value \? 'recovering'/u)
-  assert.match(source, /spawn\(installedExecutable/u)
+  assert.match(source, /spawn\('\/usr\/bin\/open'/u)
   assert.match(source, /apiGET/u)
   assert.match(source, /exact-installed-/u)
   assert.match(source, /HEXCLAW_TEST_HOME: sandbox/u)
@@ -801,6 +1069,7 @@ function validateStatic() {
     encoding: 'utf8',
   })
   assert.equal(typecheck.status, 0, typecheck.stderr || 'native probe typecheck failed')
+  assertInstalledArtifactUnchanged(installedIdentity)
   return {
     status: 'PASS',
     mode: 'static-only',
@@ -808,7 +1077,7 @@ function validateStatic() {
     axInvoked: false,
     modelInvocations: 0,
     imInvocations: 0,
-    installedIdentity,
+    installedIdentity: { ...installedIdentity, frozen: true, unchanged: true },
     exactInstalledRunDeferred: true,
   }
 }
@@ -816,19 +1085,22 @@ function validateStatic() {
 async function runInstalled() {
   assert.equal(process.platform, 'darwin', 'installed boundary is macOS-only')
   assert.equal(process.env[runOptIn], '1', `${runOptIn}=1 is required for run`)
-  assert.equal(
-    process.env[foregroundOptIn],
-    '1',
-    `${foregroundOptIn}=1 is required because the exact installed app opens a window`,
+  const background = process.env[backgroundOptIn] === '1'
+  const foreground = process.env[foregroundOptIn] === '1'
+  assert.notEqual(
+    background,
+    foreground,
+    `exactly one of ${foregroundOptIn}=1 or ${backgroundOptIn}=1 is required`,
   )
-  const installedIdentity = installedArtifactIdentity()
+  const installedIdentity = freezeInstalledArtifactIdentity()
   mkdirSync(evidenceRoot, { recursive: true })
   for (const entry of readdirSync(evidenceRoot)) {
     if (/^exact-installed-/u.test(entry)) rmSync(join(evidenceRoot, entry), { force: true })
   }
-  const sandbox = mkdtempSync(join(tmpdir(), 'hexclaw-recovering-lock-exact.'))
+  const sandbox = mkdtempSync(join('/tmp', 'hexclaw-recovering-lock-exact.'))
   chmodSync(sandbox, 0o700)
   mkdirSync(join(sandbox, '.hexclaw'), { mode: 0o700 })
+  mkdirSync(join(sandbox, '.gocache'), { mode: 0o700 })
   mkdirSync(join(sandbox, 'tmp'), { mode: 0o700 })
   const databasePath = join(sandbox, '.hexclaw/data.db')
   writeFileSync(databasePath, '', { mode: 0o600 })
@@ -839,6 +1111,8 @@ async function runInstalled() {
   let fixture = null
   let baseline = null
   let recovering = null
+  let preflight = null
+  const runState = { installedDesktopLaunched: false }
   try {
     assert.deepEqual(listenerPIDs(sidecarPort), [])
     assert.deepEqual(
@@ -848,9 +1122,10 @@ async function runInstalled() {
     )
     fixture = await prepareFixture(sandbox, databasePath, sidecarPort)
     const probe = compileReadOnlyProbe(sandbox)
-    const preflight = runProbe(probe, 'preflight')
+    preflight = runProbe(probe, 'preflight')
     assert.equal(preflight.accessibility, true, 'Accessibility permission is required')
     assert.equal(preflight.screenCapture, true, 'Screen Recording permission is required')
+    assert.equal(preflight.screenLocked, false, 'The active macOS session must be unlocked')
     const before = databaseBoundarySnapshot(databasePath)
     baseline = await runExactPhase({
       name: 'baseline',
@@ -859,6 +1134,9 @@ async function runInstalled() {
       probe,
       fixture,
       expectRecovering: false,
+      installedIdentity,
+      background,
+      runState,
     })
     sqliteExec(
       databasePath,
@@ -875,12 +1153,16 @@ async function runInstalled() {
       probe,
       fixture,
       expectRecovering: true,
+      installedIdentity,
+      background,
+      runState,
     })
     const after = databaseBoundarySnapshot(databasePath)
     assert.deepEqual(after, before, 'installed GET-only recovery changed durable boundary counts')
     assertEquivalentUnlockedProjection(baseline, recovering)
     const allRequests = [...baseline.apiAudit, ...recovering.apiAudit]
     assert.ok(allRequests.every((request) => request.method === 'GET'))
+    assertInstalledArtifactUnchanged(installedIdentity)
     const summary = {
       schemaVersion: 1,
       status: 'PASS',
@@ -890,7 +1172,13 @@ async function runInstalled() {
         'K12-SESSION-DEADLINE-010',
       ],
       boundary: 'exact-installed-desktop-normal-api-readonly-ax',
-      installedArtifact: { ...installedIdentity, launched: true, mutated: false },
+      installedArtifact: {
+        ...installedIdentity,
+        frozen: true,
+        unchanged: true,
+        launched: true,
+        mutated: false,
+      },
       isolation: {
         testHomeMode: '0700',
         configMode: '0600',
@@ -899,6 +1187,8 @@ async function runInstalled() {
         userHomeReadOrWritten: false,
         applicationsDirectoryMutated: false,
         webViewInjection: false,
+        foregroundWindowActivation: !background,
+        backgroundWindowObservation: background,
         foregroundInputAutomation: false,
       },
       fixture: {
@@ -942,6 +1232,14 @@ async function runInstalled() {
     writeJSON(join(evidenceRoot, 'exact-installed-cleanup.json'), {
       status,
       error: failure,
+      installedArtifact: {
+        ...installedIdentity,
+        frozen: true,
+        unchanged: true,
+        launched: runState.installedDesktopLaunched,
+        mutated: false,
+      },
+      preflight,
       sidecarPortReleased: listenerPIDs(sidecarPort).length === 0,
       sandboxRemoved: !existsSync(sandbox),
       installedApplicationMutated: false,

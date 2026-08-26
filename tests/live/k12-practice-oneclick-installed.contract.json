@@ -1,9 +1,6 @@
 {
   "schema_version": 1,
-  "phases": [
-    "validate",
-    "run"
-  ],
+  "phases": ["validate", "run"],
   "transport": {
     "candidate": "installed_app_sidecar",
     "product_operations": "hexclaw_public_http_api_only",
@@ -18,6 +15,7 @@
     "record_mistake": "/api/k12/record-mistake",
     "mistake_projection": "/api/k12/mistakes/{record_id}/practice-generation",
     "start_mistake_generation": "/api/k12/mistakes/{record_id}/practice-generation",
+    "practice_receipts": "/api/k12/mistakes/{record_id}/practice-generation/receipts",
     "create_accumulation": "/api/k12/accumulation",
     "accumulation_projection": "/api/k12/accumulation/{record_id}",
     "start_accumulation_generation": "/api/k12/accumulation/{record_id}/dictation-to-basket",
@@ -26,18 +24,12 @@
   "state_machine": {
     "initial": "available",
     "admitted": "pending",
-    "terminals": [
-      "joined",
-      "failed"
-    ],
+    "terminals": ["joined", "failed"],
     "exercised_terminal": "failed"
   },
   "accumulation_state_machine": {
     "admitted": "queued",
-    "terminals": [
-      "committed",
-      "failed"
-    ],
+    "terminals": ["committed", "failed"],
     "exercised_terminal": "committed"
   },
   "identity": {
@@ -61,10 +53,28 @@
     "maximum_operation_requests": 2,
     "external_network": false
   },
+  "real_default_profile": {
+    "mode_env": "HEXCLAW_PRACTICE_ONECLICK_REAL_DEFAULT_PROFILE",
+    "authorization_env": "HEXCLAW_PRACTICE_ONECLICK_DEFAULT_PROFILE_AUTHORIZED",
+    "app_bundle": "/Applications/HexClaw.app",
+    "config": "${user_home}/.hexclaw/hexclaw.yaml",
+    "port": 16060,
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "fallback_allowed": false,
+    "im_enabled": false,
+    "source_fixture": "unique_public_api_mistake",
+    "generation_post_count": 1,
+    "terminal_budget": "remaining_phase_budget",
+    "poll_continuation_states": ["pending"],
+    "poll_settled_states": ["joined", "failed", "re_add", "hidden", "available"],
+    "receipt_stages": ["practice_generate", "practice_validate"],
+    "failure_evidence_before_cleanup": ["last_projection", "receipts"],
+    "restart_methods": ["GET"],
+    "cleanup_methods": ["DELETE"]
+  },
   "restart": {
-    "product_methods": [
-      "GET"
-    ],
+    "product_methods": ["GET"],
     "rotate_capability": true,
     "old_capability_status": 401
   },

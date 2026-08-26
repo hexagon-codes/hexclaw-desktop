@@ -296,6 +296,24 @@ test('contract freezes exact real providers, fixtures, public APIs, pages, and n
   })
   assert.equal(projected.textbook.text.pages, 131)
   assert.deepEqual(projected.textbook.text.oracle_pages, [54, 57])
+  assert.deepEqual(projected.textbook.text.oracles, [
+    {
+      physical_page: 54,
+      query: '分数与除法有什么关系？你能用字母表示出分数与除法的关系吗？',
+      query_sha256: 'b083c377bd89d1eb11fa99c27a539a602d28ab99aa957e6da4e571a35bb34283',
+      top_k: 3,
+      expected_physical_pages: [54],
+      expected_page_match: 'contains',
+    },
+    {
+      physical_page: 57,
+      query: '老师买了 5 m 的红绸带，平均分给表演节目的 6 名女生。每人分得几米？',
+      query_sha256: 'eece23497d25e57b02d52521788ea2ac26e3d0edc9aebb016cee91675d254853',
+      top_k: 3,
+      expected_physical_pages: [57],
+      expected_page_match: 'contains',
+    },
+  ])
   assert.equal(projected.textbook.scan.pages, 122)
   assert.deepEqual(projected.textbook.scan.oracle_pages, [5, 61, 120])
   assert.deepEqual(
@@ -328,6 +346,22 @@ test('scan retrieval contract rejects the legacy single-page oracle and topK 20 
   const legacyTopK = structuredClone(contract)
   for (const oracle of legacyTopK.fixtures.scan.oracles) oracle.top_k = 20
   assert.throws(() => validateContract(legacyTopK), /TEXTBOOK_ORACLE_CONTRACT_INVALID/u)
+})
+
+test('text retrieval contract rejects a same-page substitute question and topK drift', async () => {
+  const { validateContract } = await modulePromise
+  const contract = JSON.parse(await readFile(CONTRACT_PATH, 'utf8'))
+
+  const substituted = structuredClone(contract)
+  substituted.fixtures.text.oracles[1].query = '五（1）班获奖作品占全班参赛作品的几分之几？'
+  substituted.fixtures.text.oracles[1].query_sha256 = createHash('sha256')
+    .update('五(1)班获奖作品占全班参赛作品的几分之几')
+    .digest('hex')
+  assert.throws(() => validateContract(substituted), /TEXTBOOK_ORACLE_CONTRACT_INVALID/u)
+
+  const topKDrift = structuredClone(contract)
+  for (const oracle of topKDrift.fixtures.text.oracles) oracle.top_k = 20
+  assert.throws(() => validateContract(topKDrift), /TEXTBOOK_ORACLE_CONTRACT_INVALID/u)
 })
 
 test('live harness binds the scan retrieval contract to the audited OCR oracle file identity', async () => {

@@ -4,7 +4,18 @@ import assert from 'node:assert/strict'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, stat } from 'node:fs/promises'
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  realpath,
+  rm,
+  stat,
+} from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -214,7 +225,20 @@ function mergedMessageMetadata(message) {
   }
 }
 
-function projectHistoryEvidence(messages, response, requestID) {
+function markerEvidence(text, marker) {
+  if (typeof marker !== 'string' || marker.trim() === '') {
+    throw new HarnessError('MARKER_INVALID')
+  }
+  const occurrences = typeof text === 'string' ? text.split(marker).length - 1 : 0
+  if (occurrences !== 1) throw new HarnessError('MARKER_NOT_PRESERVED_EXACTLY_ONCE')
+  return {
+    sha256: sha256Text(marker),
+    bytes: Buffer.byteLength(marker),
+    occurrences,
+  }
+}
+
+function projectHistoryEvidence(messages, response, requestID, marker) {
   if (!Array.isArray(messages)) throw new HarnessError('HISTORY_INVALID')
   const users = messages.filter((message) => message?.role === 'user')
   const assistants = messages.filter((message) => message?.role === 'assistant')
@@ -269,6 +293,7 @@ function projectHistoryEvidence(messages, response, requestID) {
     error.responseHistoryDiagnostics = diagnostics
     throw error
   }
+  const markerReceipt = markerEvidence(assistant.content ?? '', marker)
   return {
     user_count: users.length,
     assistant_count: assistants.length,
@@ -281,6 +306,7 @@ function projectHistoryEvidence(messages, response, requestID) {
     provider: EXPECTED_PROVIDER,
     model: EXPECTED_MODEL,
     reasoning,
+    marker: markerReceipt,
   }
 }
 
@@ -342,19 +368,21 @@ async function dispatchMode(mode, env, operations) {
   throw new HarnessError('INVALID_MODE')
 }
 
-function buildChatRequest(agentName, requestID, left, right) {
+function buildChatRequest(agentName, requestID, marker, left, right) {
   if (
     typeof agentName !== 'string' ||
     agentName.trim() === '' ||
     typeof requestID !== 'string' ||
     requestID.trim() === '' ||
+    typeof marker !== 'string' ||
+    marker.trim() === '' ||
     !Number.isInteger(left) ||
     !Number.isInteger(right)
   ) {
     throw new HarnessError('CHAT_REQUEST_INPUT_INVALID')
   }
   return {
-    message: `孩子正在复习五年级数学。请用孩子能听懂的方式，先估算，再列竖式讲解 ${left} × ${right}，最后用另一种方法验算。`,
+    message: `孩子正在复习五年级数学。请用孩子能听懂的方式，先估算，再列竖式讲解 ${left} × ${right}，最后用另一种方法验算。请在回答最后单独一行原样输出且只输出一次校验标记：${marker}`,
     role: agentName,
     request_id: requestID,
     metadata: {
@@ -362,6 +390,7 @@ function buildChatRequest(agentName, requestID, left, right) {
       producer_kind: 'chat',
       thinking: 'on',
       thinking_effort: 'low',
+      tools_enabled: 'off',
       memory: 'off',
       user_locale: 'zh-CN',
       locale: 'zh-CN',
@@ -619,9 +648,8 @@ function livePaths(env = process.env) {
 }
 
 function injectedSidecarBinary(env = process.env) {
-  const value = typeof env?.HEXCLAW_SIDECAR_BINARY === 'string'
-    ? env.HEXCLAW_SIDECAR_BINARY.trim()
-    : ''
+  const value =
+    typeof env?.HEXCLAW_SIDECAR_BINARY === 'string' ? env.HEXCLAW_SIDECAR_BINARY.trim() : ''
   return value === '' ? '' : resolve(value)
 }
 
@@ -900,11 +928,11 @@ function assertFixtureReceipt(receipt, output) {
 function isStructuredFixtureLog(value) {
   return Boolean(
     value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      typeof value.level === 'string' &&
-      typeof value.msg === 'string' &&
-      ['string', 'number'].includes(typeof value.time),
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof value.level === 'string' &&
+    typeof value.msg === 'string' &&
+    ['string', 'number'].includes(typeof value.time),
   )
 }
 
@@ -993,10 +1021,11 @@ function assertAgentRoute(payload, agentName) {
   }
 }
 
-function assertChatResponse(response, requestID) {
+function assertChatResponse(response, requestID, marker) {
   const metadata = decodeMetadataField(response?.metadata)
   const ids = [response?.assistant_message_id, response?.backend_message_id, response?.message_id]
   const usage = response?.usage
+  const toolCalls = Array.isArray(response?.tool_calls) ? response.tool_calls : []
   if (
     typeof response?.reply !== 'string' ||
     response.reply.trim() === '' ||
@@ -1014,10 +1043,12 @@ function assertChatResponse(response, requestID) {
     usage?.provider !== EXPECTED_PROVIDER ||
     usage?.model !== EXPECTED_MODEL ||
     !Number.isInteger(usage?.total_tokens) ||
-    usage.total_tokens <= 0
+    usage.total_tokens <= 0 ||
+    toolCalls.length !== 0
   ) {
     throw new HarnessError('CHAT_RESPONSE_INVARIANT_FAILED')
   }
+  const markerReceipt = markerEvidence(response.reply, marker)
   return {
     response_sha256: sha256Text(response.reply),
     response_bytes: Buffer.byteLength(response.reply),
@@ -1028,6 +1059,8 @@ function assertChatResponse(response, requestID) {
     model: EXPECTED_MODEL,
     usage_provider_model_exact: true,
     usage_total_tokens_positive: true,
+    tool_call_count: toolCalls.length,
+    marker: markerReceipt,
   }
 }
 
@@ -1184,6 +1217,7 @@ function sidecarEnvironment(runtime, capability, env = process.env) {
     DINGTALK_LIVE_SEND: '0',
     NO_PROXY: '127.0.0.1,localhost',
     no_proxy: '127.0.0.1,localhost',
+    HEXCLAW_TEST_OBSERVE_CHAT_PHYSICAL_CALLS: '1',
   }
 }
 
@@ -1313,6 +1347,43 @@ async function requestJSON(baseURL, apiPath, options = {}) {
   }
 }
 
+function physicalProviderCallsFromLogs(logs, requestID) {
+  const requestIDDigest = sha256Text(requestID)
+  const message = '显式用户请求物理模型调用计数'
+  const matches = (Array.isArray(logs) ? logs : []).filter(
+    (entry) =>
+      entry?.message === message &&
+      entry?.fields?.request_id_sha256 === requestIDDigest &&
+      Number.isInteger(entry?.fields?.physical_provider_calls),
+  )
+  if (matches.length > 1) throw new HarnessError('PHYSICAL_PROVIDER_CALL_RECEIPT_DUPLICATED')
+  if (matches.length === 1 && matches[0].fields.physical_provider_calls >= 0) {
+    return matches[0].fields.physical_provider_calls
+  }
+  return undefined
+}
+
+async function pollPhysicalProviderCalls(baseURL, capability, requestID, deadlineAt) {
+  const message = '显式用户请求物理模型调用计数'
+  const deadline = Math.min(deadlineAt, Date.now() + 10_000)
+  while (Date.now() < deadline) {
+    const response = await requestJSON(
+      baseURL,
+      `/api/v1/logs?keyword=${encodeURIComponent(message)}&limit=100`,
+      {
+        capability,
+        expectedStatus: 200,
+        timeoutMs: Math.min(2_000, Math.max(1, deadline - Date.now())),
+        failureCode: 'PHYSICAL_PROVIDER_CALL_LOG_QUERY_FAILED',
+      },
+    )
+    const count = physicalProviderCallsFromLogs(response.value?.logs, requestID)
+    if (count !== undefined) return count
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50))
+  }
+  throw new HarnessError('PHYSICAL_PROVIDER_CALL_RECEIPT_INVALID')
+}
+
 async function waitForSidecar(baseURL, sidecar, deadlineAt) {
   const deadline = Math.min(deadlineAt, Date.now() + SIDECAR_START_TIMEOUT_MS)
   while (Date.now() < deadline) {
@@ -1340,6 +1411,7 @@ async function pollHistory(
   sessionID,
   response,
   requestID,
+  marker,
   timeoutMs = 30_000,
 ) {
   const deadline = Date.now() + timeoutMs
@@ -1354,7 +1426,7 @@ async function pollHistory(
       },
     )
     try {
-      return projectHistoryEvidence(result.value?.messages, response, requestID)
+      return projectHistoryEvidence(result.value?.messages, response, requestID, marker)
     } catch (error) {
       if (
         !(error instanceof HarnessError) ||
@@ -1369,6 +1441,7 @@ async function pollHistory(
 }
 
 async function readSQLiteEvidence(runtime, sessionID, assistantMessageID, requestID, deadlineAt) {
+  const immutableStore = `file:${runtime.store}?immutable=1`
   const commandOptions = {
     cwd: runtime.profileRoot,
     env: runtime.toolEnvironment,
@@ -1376,7 +1449,7 @@ async function readSQLiteEvidence(runtime, sessionID, assistantMessageID, reques
   }
   const integrity = await runCommand(
     SQLITE_BINARY,
-    ['-readonly', '-json', runtime.store, 'PRAGMA query_only=ON; PRAGMA integrity_check;'],
+    ['-readonly', '-json', immutableStore, 'PRAGMA query_only=ON; PRAGMA integrity_check;'],
     commandOptions,
     'SQLITE_INTEGRITY_READ_FAILED',
   )
@@ -1386,7 +1459,7 @@ async function readSQLiteEvidence(runtime, sessionID, assistantMessageID, reques
   }
   const foreign = await runCommand(
     SQLITE_BINARY,
-    ['-readonly', '-json', runtime.store, 'PRAGMA query_only=ON; PRAGMA foreign_key_check;'],
+    ['-readonly', '-json', immutableStore, 'PRAGMA query_only=ON; PRAGMA foreign_key_check;'],
     commandOptions,
     'SQLITE_FOREIGN_KEY_READ_FAILED',
   )
@@ -1398,27 +1471,30 @@ async function readSQLiteEvidence(runtime, sessionID, assistantMessageID, reques
     [
       '-readonly',
       '-json',
-      runtime.store,
+      immutableStore,
       `PRAGMA query_only=ON;
+WITH message_rows AS (
+  SELECT *, CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END AS metadata_json
+  FROM messages
+)
 SELECT id,session_id,role,request_id,length(CAST(content AS BLOB)) AS content_bytes,
-json_extract(metadata,'$.provider') AS provider,
-json_extract(metadata,'$.model') AS model,
-json_extract(metadata,'$.persist_error') AS persist_error,
-json_extract(metadata,'$.reasoning_receipt.version') AS receipt_version,
-json_extract(metadata,'$.reasoning_receipt.reasoning_request') AS receipt_request,
-json_extract(metadata,'$.reasoning_receipt.reasoning_support') AS receipt_support,
-json_extract(metadata,'$.reasoning_receipt.reasoning_execution') AS receipt_execution,
-json_extract(metadata,'$.assistant_message_id') AS assistant_message_id,
-json_extract(metadata,'$.backend_message_id') AS backend_message_id,
-json_extract(metadata,'$.message_id') AS message_id
-FROM messages ORDER BY created_at ASC,id ASC;`,
+json_extract(metadata_json,'$.provider') AS provider,
+json_extract(metadata_json,'$.model') AS model,
+json_extract(metadata_json,'$.persist_error') AS persist_error,
+json_extract(metadata_json,'$.reasoning_receipt.version') AS receipt_version,
+json_extract(metadata_json,'$.reasoning_receipt.reasoning_request') AS receipt_request,
+json_extract(metadata_json,'$.reasoning_receipt.reasoning_support') AS receipt_support,
+json_extract(metadata_json,'$.reasoning_receipt.reasoning_execution') AS receipt_execution,
+json_extract(metadata_json,'$.assistant_message_id') AS assistant_message_id,
+json_extract(metadata_json,'$.backend_message_id') AS backend_message_id,
+json_extract(metadata_json,'$.message_id') AS message_id
+FROM message_rows ORDER BY created_at ASC,id ASC;`,
     ],
     commandOptions,
     'SQLITE_MESSAGE_READ_FAILED',
   )
   const allRows = parseJSONRows(selected.stdout, 'SQLITE_MESSAGE_RECEIPT_INVALID')
   const rows = allRows.filter((row) => row?.session_id === sessionID)
-  if (allRows.length !== rows.length) throw new HarnessError('SQLITE_UNEXPECTED_SESSION_MESSAGES')
   return {
     integrity_check: 'ok',
     foreign_key_violations: 0,
@@ -1556,9 +1632,11 @@ async function runLive(env = process.env) {
     evidence.startup_warmup.may_call_provider = warmupStatus !== 'skipped_non_local'
 
     const requestID = `req-${randomUUID()}`
+    const marker = `HEXCLAW-SOL-${randomUUID()}`
     const request = buildChatRequest(
       runtime.agentName,
       requestID,
+      marker,
       randomInt(21, 90),
       randomInt(12, 70),
     )
@@ -1572,13 +1650,28 @@ async function runLive(env = process.env) {
       failureCode: 'CHAT_REQUEST_FAILED',
     })
     const response = chat.value
-    evidence.chat = assertChatResponse(response, requestID)
+    evidence.chat = assertChatResponse(response, requestID, marker)
+    const physicalProviderCalls = await pollPhysicalProviderCalls(
+      baseURL,
+      firstCapability,
+      requestID,
+      deadlineAt,
+    )
+    evidence.execution.physical_provider_call_count_observable = true
+    evidence.execution.explicit_user_physical_provider_call_count = physicalProviderCalls
+    if (physicalProviderCalls !== 1) {
+      throw new HarnessError('EXPLICIT_USER_PHYSICAL_PROVIDER_CALL_COUNT_INVALID')
+    }
+    evidence.execution.physical_provider_call_count_claimed = true
+    evidence.execution.fallback_physical_provider_call_count = 0
+    evidence.execution.startup_warmup_excluded_from_physical_count = true
     evidence.history = await pollHistory(
       baseURL,
       firstCapability,
       response.session_id,
       response,
       requestID,
+      marker,
     )
     evidence.reasoning.public_receipt = evidence.history.reasoning
 
@@ -1631,6 +1724,7 @@ async function runLive(env = process.env) {
       response.session_id,
       response,
       requestID,
+      marker,
     )
     assert.deepEqual(restartHistory, evidence.history)
     evidence.restart = {
@@ -1691,7 +1785,11 @@ async function runLive(env = process.env) {
         evidence.status = 'failed'
       }
     }
-    if (ownedRoot) {
+    if (ownedRoot && failure && env.HEXCLAW_SOURCE_SOL_RETAIN_FAILURE === '1') {
+      evidence.cleanup ??= {}
+      evidence.cleanup.temporary_profile_removed = false
+      evidence.temporary_root_id = basename(ownedRoot.root)
+    } else if (ownedRoot) {
       try {
         await removePrivateRunRoot(ownedRoot.root, ownedRoot.canonicalTmp)
         evidence.cleanup ??= {}
@@ -1720,7 +1818,9 @@ async function runLive(env = process.env) {
     model: EXPECTED_MODEL,
     explicit_user_post_count: 1,
     restart_explicit_user_post_count: 0,
-    physical_provider_call_count_observable: false,
+    physical_provider_call_count_observable: true,
+    explicit_user_physical_provider_call_count: 1,
+    fallback_physical_provider_call_count: 0,
     reasoning_effort_application_observable: false,
   }
   assertEvidenceSafe(receipt)
@@ -1936,8 +2036,9 @@ async function runSelfTests() {
     low_available: true,
   })
 
+  const marker = 'marker-safe'
   const response = {
-    reply: 'answer',
+    reply: `answer\n${marker}`,
     session_id: 'sess-safe',
     assistant_message_id: 'msg-safe',
     backend_message_id: 'msg-safe',
@@ -1958,7 +2059,7 @@ async function runSelfTests() {
       model: EXPECTED_MODEL,
     },
   }
-  const responseEvidence = assertChatResponse(response, 'req-safe')
+  const responseEvidence = assertChatResponse(response, 'req-safe', marker)
   assert.equal(responseEvidence.provider, EXPECTED_PROVIDER)
   assert.equal(responseEvidence.usage_total_tokens_positive, true)
 
@@ -1982,7 +2083,7 @@ async function runSelfTests() {
       {
         id: 'msg-safe',
         role: 'assistant',
-        content: 'answer',
+        content: `answer\n${marker}`,
         request_id: 'req-safe',
         session_id: 'sess-safe',
         metadata: JSON.stringify({
@@ -2002,6 +2103,7 @@ async function runSelfTests() {
     ],
     response,
     'req-safe',
+    marker,
   )
   assert.equal(history.user_count, 1)
   assert.equal(history.assistant_count, 1)
@@ -2023,7 +2125,7 @@ async function runSelfTests() {
         {
           id: 'msg-safe',
           role: 'assistant',
-          content: 'answer\n',
+          content: `answer\n${marker}\n`,
           request_id: 'req-safe',
           session_id: 'sess-safe',
           metadata: JSON.stringify({
@@ -2041,8 +2143,9 @@ async function runSelfTests() {
           }),
         },
       ],
-      { ...response, reply: 'answer\r\n' },
+      { ...response, reply: `answer\r\n${marker}\r\n` },
       'req-safe',
+      marker,
     )
   } catch (error) {
     historyMismatch = error
@@ -2053,12 +2156,12 @@ async function runSelfTests() {
   assert.deepEqual(failureEvidence(historyMismatch), {
     code: 'RESPONSE_HISTORY_MISMATCH',
     response_history_diagnostics: {
-      response_bytes: Buffer.byteLength('answer\r\n'),
-      history_bytes: Buffer.byteLength('answer\n'),
-      response_sha256: sha256Text('answer\r\n'),
-      history_sha256: sha256Text('answer\n'),
-      response_normalized_sha256: sha256Text('answer'),
-      history_normalized_sha256: sha256Text('answer'),
+      response_bytes: Buffer.byteLength(`answer\r\n${marker}\r\n`),
+      history_bytes: Buffer.byteLength(`answer\n${marker}\n`),
+      response_sha256: sha256Text(`answer\r\n${marker}\r\n`),
+      history_sha256: sha256Text(`answer\n${marker}\n`),
+      response_normalized_sha256: sha256Text(`answer\n${marker}`),
+      history_normalized_sha256: sha256Text(`answer\n${marker}`),
     },
   })
   assert.doesNotThrow(() => assertEvidenceSafe(failureEvidence(historyMismatch)))
@@ -2094,16 +2197,32 @@ async function runSelfTests() {
   )
   assert.equal(authorizedCalls, 1)
 
-  const chatRequest = buildChatRequest('k12-tutor-safe', 'req-safe', 27, 34)
+  const chatRequest = buildChatRequest('k12-tutor-safe', 'req-safe', marker, 27, 34)
   assert.equal(Object.hasOwn(chatRequest, 'provider'), false)
   assert.equal(Object.hasOwn(chatRequest, 'model'), false)
   assert.equal(chatRequest.metadata.pinned_agent, 'k12-tutor-safe')
   assert.equal(chatRequest.metadata.thinking, 'on')
   assert.equal(chatRequest.metadata.thinking_effort, 'low')
+  assert.equal(chatRequest.metadata.tools_enabled, 'off')
 
   const collector = new LogEvidenceCollector()
   collector.ingest('stdout', Buffer.from('[warmup] 本地默认模型预热完成\n'))
   collector.ingest('stderr', Buffer.from('database is locked (5) (SQLITE_BUSY)\n'))
+  assert.equal(
+    physicalProviderCallsFromLogs(
+      [
+        {
+          message: '显式用户请求物理模型调用计数',
+          fields: {
+            request_id_sha256: sha256Text('req-safe'),
+            physical_provider_calls: 1,
+          },
+        },
+      ],
+      'req-safe',
+    ),
+    1,
+  )
   const logEvidence = collector.snapshot()
   assert.equal(logEvidence.warmup_status, 'completed')
   assert.equal(logEvidence.flags.sqlite_busy, true)

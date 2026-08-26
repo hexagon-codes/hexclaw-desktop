@@ -139,9 +139,9 @@ function deliveredBatch(targets = [target(1), target(2)]) {
       ordinal: 2,
       digest: prefixed(PDF_BYTES),
       attachment: {
-        name: '本周练习卷.pdf',
-        mime: 'application/pdf',
-        data: PDF_BYTES.toString('base64'),
+        Name: '本周练习卷.pdf',
+        MIME: 'application/pdf',
+        Data: PDF_BYTES.toString('base64'),
       },
       message_content: content,
       render_manifest: manifest,
@@ -305,6 +305,24 @@ test('delivered batch must be N x (sampleMarkdown + sampleFile) with canonical P
   assert.equal(projection.canonical_source_digest, canonicalContent().source_digest)
 })
 
+test('frozen PDF attachment rejects the non-production lowercase shape', () => {
+  const batch = deliveredBatch([target(1)])
+  const receipt = batch.receipts[1]
+  const payload = JSON.parse(receipt.payload_json)
+  payload.attachment = {
+    name: payload.attachment.Name,
+    mime: payload.attachment.MIME,
+    data: payload.attachment.Data,
+  }
+  receipt.payload_json = JSON.stringify(payload)
+  receipt.payload_digest = prefixed(Buffer.from(receipt.payload_json))
+
+  assert.throws(
+    () => assertBatchExactSet(batch, expectedFacts([target(1)])),
+    /PDF_ATTACHMENT_INVALID/u,
+  )
+})
+
 test('Markdown visible projection may apply the frozen math fallback without changing canonical source', () => {
   const batch = deliveredBatch([target(1)])
   const projected = `${MARKDOWN.replace('请完成后拍照提交。', '请完成 1/2 + 1/2。')}\n`
@@ -338,7 +356,7 @@ test('batch evidence fails closed on missing external IDs, unsafe paths, duplica
 
   const unsafePath = deliveredBatch(targets)
   const payload = JSON.parse(unsafePath.receipts[1].payload_json)
-  payload.attachment.name = 'file:///private/tmp/secret.pdf'
+  payload.attachment.Name = 'file:///private/tmp/secret.pdf'
   unsafePath.receipts[1].payload_json = JSON.stringify(payload)
   unsafePath.receipts[1].payload_digest = prefixed(Buffer.from(unsafePath.receipts[1].payload_json))
   assert.throws(
@@ -348,7 +366,7 @@ test('batch evidence fails closed on missing external IDs, unsafe paths, duplica
 
   const remoteName = deliveredBatch(targets)
   const remotePayload = JSON.parse(remoteName.receipts[1].payload_json)
-  remotePayload.attachment.name = 'https://example.invalid/practice.pdf'
+  remotePayload.attachment.Name = 'https://example.invalid/practice.pdf'
   remoteName.receipts[1].payload_json = JSON.stringify(remotePayload)
   remoteName.receipts[1].payload_digest = prefixed(Buffer.from(remoteName.receipts[1].payload_json))
   assert.throws(

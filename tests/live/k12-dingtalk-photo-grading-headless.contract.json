@@ -251,50 +251,55 @@
         "tool": "go",
         "fixture_source": "tests/live/k12-photo-exif6-fixture.go",
         "jpeg_quality": 94,
-        "exif_orientation": 6
+        "exif_orientation": 6,
+        "source_fixture": "clear",
+        "source_sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
+        "source_size_bytes": 2178059,
+        "source_width": 1086,
+        "source_height": 1448
       },
       "mime": "image/jpeg",
-      "sha256": "d55c49dbb39bf2db4ced0816db10deb1f4f2df4ec95eae7b105a4d91f240da84",
-      "size_bytes": 1773,
-      "encoded_width": 120,
-      "encoded_height": 80,
-      "display_width": 80,
-      "display_height": 120,
+      "sha256": "04f518b246b262adb8cf2fe1cff1d6ff65c5c6a2cd38054b9a0f07fa3ea03ee1",
+      "size_bytes": 399448,
+      "encoded_width": 1448,
+      "encoded_height": 1086,
+      "display_width": 1086,
+      "display_height": 1448,
       "canonical": {
         "mime": "image/png",
-        "sha256": "87a884386ab33e5386175973aa1ce9b865daef08288465dd2dd7923c98523fd1",
-        "aggregate_sha256": "c06dd2f88a810704dc941b74f267815985949a642ac3e952d1661bddc3a93737",
-        "size_bytes": 5944,
-        "width": 80,
-        "height": 120,
+        "sha256": "43c6d2f3266ff98b341c060acd80e130dafbf824cb8e6f6cae770853b09e7654",
+        "aggregate_sha256": "c2e58c080093481f50c66b2786f9b634d0645a2e7a1c2b2d411c827a27113fe2",
+        "size_bytes": 1454456,
+        "width": 1086,
+        "height": 1448,
         "corner_samples": {
-          "top_left": [20, 189, 88, 255],
-          "top_right": [21, 29, 40, 255],
-          "bottom_left": [190, 189, 160, 255],
-          "bottom_right": [188, 31, 110, 255]
+          "top_left": [192, 183, 188, 255],
+          "top_right": [173, 163, 166, 255],
+          "bottom_left": [209, 207, 207, 255],
+          "bottom_right": [68, 60, 61, 255]
         },
         "corner_mapping": [
           {
             "encoded": "top_left",
             "encoded_xy": [0, 0],
             "canonical": "top_right",
-            "canonical_xy": [79, 0]
+            "canonical_xy": [1085, 0]
           },
           {
             "encoded": "top_right",
-            "encoded_xy": [119, 0],
+            "encoded_xy": [1447, 0],
             "canonical": "bottom_right",
-            "canonical_xy": [79, 119]
+            "canonical_xy": [1085, 1447]
           },
           {
             "encoded": "bottom_right",
-            "encoded_xy": [119, 79],
+            "encoded_xy": [1447, 1085],
             "canonical": "bottom_left",
-            "canonical_xy": [0, 119]
+            "canonical_xy": [0, 1447]
           },
           {
             "encoded": "bottom_left",
-            "encoded_xy": [0, 79],
+            "encoded_xy": [0, 1085],
             "canonical": "top_left",
             "canonical_xy": [0, 0]
           }
@@ -314,6 +319,7 @@
     "export": "analyzePhotoAnnotationGeometry",
     "require_status": "PASS",
     "require_final_immutable_asset": true,
+    "exif6_pixel_baseline": "independent_canonical_png",
     "max_ignored_changed_pixel_ratio": 0
   },
   "canonical_source": {

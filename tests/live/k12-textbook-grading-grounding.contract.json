@@ -54,11 +54,19 @@
       "oracles": [
         {
           "physical_page": 54,
-          "query": "分数与除法有什么关系？你能用字母表示出分数与除法的关系吗？"
+          "query": "分数与除法有什么关系？你能用字母表示出分数与除法的关系吗？",
+          "query_sha256": "b083c377bd89d1eb11fa99c27a539a602d28ab99aa957e6da4e571a35bb34283",
+          "top_k": 3,
+          "expected_physical_pages": [54],
+          "expected_page_match": "contains"
         },
         {
           "physical_page": 57,
-          "query": "五（1）班获奖作品占全班参赛作品的几分之几？"
+          "query": "老师买了 5 m 的红绸带，平均分给表演节目的 6 名女生。每人分得几米？",
+          "query_sha256": "eece23497d25e57b02d52521788ea2ac26e3d0edc9aebb016cee91675d254853",
+          "top_k": 3,
+          "expected_physical_pages": [57],
+          "expected_page_match": "contains"
         }
       ]
     },

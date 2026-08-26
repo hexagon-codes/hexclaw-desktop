@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "scenario": "k12_real_photo_grading_outbound_public_api",
+  "route": {
+    "provider": "hexclaw-gpt",
+    "model": "gpt-5.6-sol",
+    "fallback_allowed": false
+  },
+  "llm_preflight": {
+    "global_default_may_differ": true,
+    "provider_default_model_may_differ": true,
+    "provider_not_disabled_required": true,
+    "credential_present_required": true,
+    "model_specs_mode": "explicit",
+    "required_capabilities": ["text", "vision"],
+    "reasoning_support": "supported",
+    "reasoning_control": {
+      "dialect": "reasoning_effort",
+      "on": "low",
+      "off": "none",
+      "allowed_efforts": ["low"]
+    }
+  },
+  "grading_budget_preflight": {
+    "config_source": "locked_real_default_profile",
+    "require_complete_frozen_budget": true,
+    "required_assessing_buckets": [1, 8, 16, 32],
+    "artifact_path_environment": "HEX_K12_LIVE_GRADING_CALIBRATION_ARTIFACT",
+    "artifact_sha256_environment": "HEX_K12_LIVE_GRADING_CALIBRATION_SHA256",
+    "approval": {
+      "status": "blocked",
+      "approval_ref": null,
+      "provider": "hexclaw-gpt",
+      "model": "gpt-5.6-sol",
+      "artifact_sha256": null,
+      "release_config_sha256": null
+    },
+    "business_side_effects_before_pass": {
+      "agent_creates": 0,
+      "image_task_submissions": 0,
+      "model_calls": 0,
+      "im_sends": 0
+    }
+  },
+  "instance_preflight": {
+    "identifier_match": ["id", "name"],
+    "unique_match_required": true,
+    "provider": "dingtalk",
+    "enabled": true,
+    "status": "running",
+    "masked_config_required": true
+  },
+  "terminal_failure": {
+    "archive_public_task_projection": true,
+    "archive_operation_receipts": true,
+    "raw_invocation_ids_allowed": false,
+    "missing_public_failure_code": "record_unavailable_without_guessing",
+    "automatic_retry_allowed": false,
+    "resource_cleanup": "retain_frozen_run_for_diagnosis"
+  },
+  "transport": {
+    "product_operations": "hexclaw_public_http_api_only",
+    "http_driver": "playwright_api_request_context",
+    "bound_instance_only": true,
+    "synthetic_inbound_stream": false,
+    "dws_cli": false,
+    "direct_dingtalk_http": false,
+    "direct_store_read": false,
+    "sqlite_read_or_write": false
+  },
+  "public_api": {
+    "version": "/api/v1/version",
+    "agents": "/api/v1/agents",
+    "llm_config": "/api/v1/config/llm",
+    "instances": "/api/v1/platforms/instances",
+    "asset_upload": "/api/k12/assets?agent={agent_name}",
+    "asset_get": "/api/k12/assets/{file}?agent={agent_name}",
+    "image_task_create": "/api/k12/image-tasks",
+    "image_task_get": "/api/k12/image-tasks/{dispatch_id}?agent={agent_name}",
+    "image_task_confirm": "/api/k12/image-tasks/{dispatch_id}/confirm",
+    "image_task_result": "/api/k12/image-tasks/{dispatch_id}/result?agent={agent_name}",
+    "final_delivery_send": "/api/k12/tutoring-tips/send",
+    "delivery_batch_get": "/api/k12/delivery-batches/{batch_id}?agent={agent_name}",
+    "delivery_batch_query": "/api/k12/delivery-batches/{batch_id}/query"
+  },
+  "forbidden_api_fragments": ["/platforms/hooks/dingtalk/", "/dingtalk-inbound"],
+  "oracle_source": {
+    "path": "tests/live/k12-dingtalk-photo-grading-headless.contract.json",
+    "sha256": "395ca81952735d977b3f72775f4c6937cfcc1175a519f011864fdafbb03d6e82"
+  },
+  "fixtures": {
+    "clear": {
+      "docs_relative_path": "test/k12-test-批改作业.png",
+      "mime": "image/png",
+      "sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
+      "size_bytes": 2178059,
+      "width": 1086,
+      "height": 1448,
+      "expected_items_sha256": "3be3d21adcc5ce794973360c93a0a11d3adebd317724347fc80b069f27ae9f24",
+      "expected_counts_sha256": "d8bf424d76e2bef431924b1bb2d7824d2f7441c71408816c9a5ec42bb2b67bf6"
+    },
+    "messy": {
+      "docs_relative_path": "test/k12-test-批改（答题比较乱的）.jpg",
+      "mime": "image/jpeg",
+      "sha256": "78cf3a1b5c52e12ca17ca13aa71c7a9439baed244e88b438aa2f1f70cd782fb5",
+      "size_bytes": 191048,
+      "width": 1280,
+      "height": 1707,
+      "expected_items_sha256": "e788fcb060df906907926d83e42f43cc2b4d9eff5dec9f376a54c64ca42e5210",
+      "expected_counts_sha256": "0ef55783cf00da892d168f63d893343a6a1aa4dc117e714d79f9ee5a435094d8"
+    }
+  },
+  "result": {
+    "task_intent": "completed_homework",
+    "result_surface": "annotated_homework",
+    "require_exact_source_attachment": true,
+    "require_per_item_oracle": true,
+    "require_annotation_geometry": true,
+    "require_chinese_markdown": true,
+    "require_real_model_receipts": true
+  },
+  "delivery": {
+    "object_kind": "grading_final_artifact",
+    "object_id_fields": ["final_artifact_id", "final_artifact_digest"],
+    "target_mode": "all_effective_agent_bindings",
+    "physical_target_key": ["platform", "instance_id", "chat_id"],
+    "parts_per_target": 2,
+    "parts": [
+      { "ordinal": 1, "kind": "markdown", "mime": "", "language": "zh-CN" },
+      {
+        "ordinal": 2,
+        "kind": "artifact",
+        "mime_prefix": "image/",
+        "artifact": "final_immutable_annotated_asset"
+      }
+    ],
+    "external_message_id_required": true,
+    "terminal_status": "delivered",
+    "outcome_unknown_action": "query_once_then_wait",
+    "retry_endpoint_allowed": false
+  },
+  "restart_replay": {
+    "same_dispatch_id": true,
+    "same_final_artifact_id": true,
+    "same_final_artifact_digest": true,
+    "same_annotated_digest": true,
+    "same_operation_receipt_exact_set": true,
+    "same_delivery_batch_id": true,
+    "same_delivery_ids": true,
+    "same_external_message_ids": true,
+    "same_attempts": true,
+    "new_model_call_count": 0,
+    "new_provider_send_count": 0
+  },
+  "phase_policy": {
+    "default_timeout_ms": 1440000,
+    "hard_timeout_ms": 1740000,
+    "pending_exit_code": 3
+  },
+  "evidence": {
+    "directory_mode": "0700",
+    "file_mode": "0600",
+    "raw_identity_allowed": false,
+    "credentials_allowed": false,
+    "raw_model_output_allowed": false,
+    "hash_algorithm": "sha256"
+  }
+}
