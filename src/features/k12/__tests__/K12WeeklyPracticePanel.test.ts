@@ -138,6 +138,134 @@ describe('K12WeeklyPracticePanel projection', () => {
     expect(hero.findAll('.weekly-item.resource-row')).toHaveLength(2)
   })
 
+  it('[K12-RECORDS-INSTALL-RESPONSIVE-001] keeps only due-review items in the approved three-domain compact row', async () => {
+    const compactPlan = {
+      ...plan,
+      tracks: [
+        {
+          ...plan.tracks[0]!,
+          items: [
+            {
+              ...plan.tracks[0]!.items[0]!,
+              subject: '数学',
+              knowledge_point: '小数乘法',
+              mastery_status: 'new',
+            },
+          ],
+        },
+        {
+          plan_section: 'textbook_consolidation' as const,
+          status: 'ready' as const,
+          items: [],
+        },
+        {
+          plan_section: 'arithmetic_warmup' as const,
+          status: 'ready' as const,
+          items: [],
+        },
+      ],
+      manual_track_recommendations: {
+        textbook_consolidation: {
+          availability: 'available' as const,
+          selected_item_count: 5,
+          recommended_item_count: 5,
+          min_item_count: 1,
+          max_item_count: 10,
+        },
+        arithmetic_warmup: {
+          availability: 'available' as const,
+          selected_item_count: 10,
+          recommended_item_count: 10,
+          min_item_count: 1,
+          max_item_count: 20,
+        },
+      },
+    }
+    const historyItem = {
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+      plan_id: 'weekly-29',
+      iso_week_year: 2026,
+      iso_week_number: 29,
+      timezone: 'Asia/Shanghai',
+      local_start_date: '2026-07-13',
+      local_end_date: '2026-07-19',
+      item_count: 8,
+      correct_count: 7,
+      wrong_count: 1,
+      needs_review_count: 0,
+      archived_at: '2026-07-20T00:00:00+08:00',
+    }
+    const wrapper = mount(K12WeeklyPracticePanel, {
+      props: {
+        progress: null,
+        settings,
+        plan: compactPlan as any,
+        history: [historyItem] as any,
+      },
+      global: {
+        stubs: {
+          MarkdownRenderer: {
+            props: ['content'],
+            template: '<div>{{ content }}</div>',
+          },
+        },
+      },
+    })
+
+    const dueRow = wrapper.get('[data-track="due_review"] .weekly-item')
+    expect
+      .soft(dueRow.classes())
+      .toEqual(expect.arrayContaining(['k12-compact-row', 'k12-compact-row--weekly']))
+
+    const domainClasses = [
+      'k12-compact-row__primary',
+      'k12-compact-row__meta',
+      'k12-compact-row__actions',
+    ]
+    const directDomains = Array.from(dueRow.element.children)
+      .map((element) => domainClasses.find((className) => element.classList.contains(className)))
+      .filter(Boolean)
+    expect.soft(directDomains).toEqual(domainClasses)
+
+    const primary = Array.from(dueRow.element.children).find((element) =>
+      element.classList.contains('k12-compact-row__primary'),
+    )
+    const meta = Array.from(dueRow.element.children).find((element) =>
+      element.classList.contains('k12-compact-row__meta'),
+    )
+    const actions = Array.from(dueRow.element.children).find((element) =>
+      element.classList.contains('k12-compact-row__actions'),
+    )
+    expect.soft(primary?.querySelector('.weekly-item__prompt')).not.toBeNull()
+    expect.soft(primary?.querySelector('.weekly-item__origin')).not.toBeNull()
+    expect.soft(meta?.querySelector('.kpill')).not.toBeNull()
+    expect.soft(meta?.querySelector('.stpill')).not.toBeNull()
+
+    const actionHost = actions ?? dueRow.get('.weekly-item__foot').element
+    const actionButtons = Array.from(actionHost.querySelectorAll('button'))
+    expect
+      .soft(actionButtons.map((button) => button.textContent?.trim()))
+      .toEqual(['加入练习集', '本周先不练', '不再复习'])
+    expect.soft(actionButtons.map((button) => button.tabIndex)).toEqual([0, 0, 0])
+    expect.soft(actionButtons.every((button) => !button.disabled)).toBe(true)
+    expect.soft(dueRow.find('.mistake-more__trigger').exists()).toBe(false)
+    expect.soft(dueRow.text()).not.toContain('…')
+
+    const manualRows = wrapper.findAll('.weekly-manual.resource-row')
+    expect.soft(manualRows).toHaveLength(2)
+    for (const row of manualRows) {
+      expect.soft(row.classes()).not.toContain('k12-compact-row--weekly')
+    }
+
+    await wrapper
+      .findAll('[role="tab"]')
+      .find((tab) => tab.text() === '历史')!
+      .trigger('click')
+    const historyRow = wrapper.get('.weekly-history__card')
+    expect.soft(historyRow.classes()).not.toContain('k12-compact-row--weekly')
+  })
+
   it('keeps due review while missing progress routes to the canonical form', async () => {
     const wrapper = mount(K12WeeklyPracticePanel, {
       props: {

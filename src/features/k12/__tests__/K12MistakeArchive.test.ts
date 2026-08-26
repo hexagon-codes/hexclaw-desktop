@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   suppressMistake: vi.fn(),
   restoreMistakeReview: vi.fn(),
   markMastered: vi.fn(),
+  getPracticeGeneration: vi.fn(),
   report: vi.fn(),
 }))
 
@@ -31,8 +32,7 @@ vi.mock('@/api/k12', async () => ({
   k12ListCreativeWorks: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: (...args: unknown[]) => h.markMastered(...args),
   k12DeleteMistake: vi.fn().mockResolvedValue({ ok: true }),
-  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
-    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
+  k12GetMistakePracticeGeneration: (...args: unknown[]) => h.getPracticeGeneration(...args),
   k12RecordMistake: vi.fn(),
   k12AddAccumulation: vi.fn(),
   k12AddToBasket: vi.fn(),
@@ -144,6 +144,32 @@ function reviewMenuFor(wrapper: ReturnType<typeof render>, question: string) {
   return menu
 }
 
+function mistakeRowFor(wrapper: ReturnType<typeof render>, question: string) {
+  const row = wrapper.findAll('.rl-row').find((candidate) => candidate.text().includes(question))
+  if (!row) throw new Error(`missing mistake row for ${question}`)
+  return row
+}
+
+function compactDomainOrder(row: ReturnType<typeof mistakeRowFor>) {
+  const domainClasses = new Set(['rl-primary', 'rl-context', 'rl-actions'])
+  return Array.from(row.element.children)
+    .map((child) => Array.from(child.classList).find((className) => domainClasses.has(className)))
+    .filter((className): className is string => Boolean(className))
+}
+
+function directLabels(element: Element) {
+  return Array.from(element.children)
+    .map((child) => child.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    .filter(Boolean)
+}
+
+function tabbableButtonLabels(element: Element) {
+  return Array.from(element.querySelectorAll<HTMLButtonElement>('button:not([disabled])'))
+    .filter((button) => !button.hidden && button.getAttribute('aria-hidden') !== 'true')
+    .map((button) => button.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    .filter(Boolean)
+}
+
 async function requestSuppress(wrapper: ReturnType<typeof render>, question: string) {
   reviewMenuFor(wrapper, question).vm.$emit('suppress')
   await flushPromises()
@@ -156,9 +182,7 @@ function undoButton(recordId: string) {
 }
 
 function undoButtons() {
-  return document.body.querySelectorAll<HTMLButtonElement>(
-    '[data-testid^="mistake-archive-undo-"]',
-  )
+  return document.body.querySelectorAll<HTMLButtonElement>('[data-testid^="mistake-archive-undo-"]')
 }
 
 async function clickUndo(recordId: string) {
@@ -195,6 +219,11 @@ beforeEach(() => {
     return { ...active, version: 5 }
   })
   h.markMastered.mockReset().mockResolvedValue({ ok: true })
+  h.getPracticeGeneration
+    .mockReset()
+    .mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+    )
 })
 
 afterEach(() => {
@@ -203,6 +232,48 @@ afterEach(() => {
 })
 
 describe('BUG-20260725-017 · controlled suppression and restore', () => {
+  it.each([
+    {
+      state: 'available',
+      directActions: ['加入练习集', '不再复习', '详情'],
+      tabOrder: ['加入练习集', '不再复习', '详情'],
+    },
+    {
+      state: 'joined',
+      directActions: ['✓ 已加入练习集', '查看新题', '不再复习', '详情'],
+      tabOrder: ['查看新题', '不再复习', '详情'],
+    },
+  ] as const)(
+    'keeps the $state mistake row in three compact domains with every action visible in one stable order',
+    async ({ state, directActions, tabOrder }) => {
+      h.getPracticeGeneration.mockImplementation((_agent: string, recordID: string) =>
+        Promise.resolve({ state, source_mistake_id: recordID }),
+      )
+      const wrapper = render()
+      await openAllMistakes(wrapper)
+
+      const row = mistakeRowFor(wrapper, '4.5 × 2 = ?')
+      expect(compactDomainOrder(row)).toEqual(['rl-primary', 'rl-context', 'rl-actions'])
+
+      const primary = row.get('.rl-primary')
+      expect(primary.get('.rl-primary__heading').find('.rl-date').exists()).toBe(true)
+      expect(primary.get('.rl-primary__heading').find('.rl-title').exists()).toBe(true)
+      expect(primary.get('.rl-primary__detail').find('.rl-chip').exists()).toBe(true)
+      expect(primary.get('.rl-primary__detail').find('.rl-meta').exists()).toBe(true)
+
+      const context = row.get('.rl-context')
+      expect(context.find('.rl-source').exists()).toBe(true)
+      expect(context.find('.rl-status').exists()).toBe(true)
+
+      const actions = row.get('.rl-actions')
+      expect(directLabels(actions.element)).toEqual(directActions)
+      expect(tabbableButtonLabels(actions.element)).toEqual(tabOrder)
+      expect(actions.find('.mistake-more__trigger').exists()).toBe(false)
+      expect(actions.find('[aria-haspopup="menu"]').exists()).toBe(false)
+      expect(actions.text()).not.toContain('…')
+    },
+  )
+
   it('keeps the same-agent official projection while an overlapping reload is still pending', async () => {
     const store = useK12Store()
     await store.loadMistakes('child-a')
@@ -283,7 +354,6 @@ describe('BUG-20260725-017 · controlled suppression and restore', () => {
       3,
       expect.stringMatching(/^desktop-mistake-suppress:child-a:m1:/),
     )
-
   })
 
   it('commits the suppressed projection and Undo immediately when calibration never returns', async () => {
@@ -421,7 +491,6 @@ describe('BUG-20260725-017 · controlled suppression and restore', () => {
     expect(undoButton('m1')).toBeNull()
     expect(undoButtons()).toHaveLength(1)
     expect(undoButton('m2')).not.toBeNull()
-
   })
 
   it('keeps Undo on the later user action when concurrent suppress responses arrive out of order', async () => {

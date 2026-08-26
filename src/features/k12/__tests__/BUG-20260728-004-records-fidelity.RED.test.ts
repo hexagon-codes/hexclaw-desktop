@@ -24,6 +24,22 @@ function cssBlock(source: string, selector: string): string {
   return ''
 }
 
+function ruleBlock(source: string, start: RegExp): string {
+  const match = start.exec(source)
+  if (!match || match.index === undefined) return ''
+  const blockStart = source.indexOf('{', match.index + match[0].length)
+  if (blockStart < 0) return ''
+
+  let depth = 0
+  for (let index = blockStart; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(blockStart + 1, index)
+  }
+  return ''
+}
+
 describe('BUG-20260728-004 learning-record prototype fidelity', () => {
   it('keeps shared secondary tabs free from page-local visual overrides', () => {
     expect(/\n\.seg\s*\{/.test(recordsSource)).toBe(false)
@@ -82,10 +98,103 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
     expect(weeklyPracticeSource).toContain('projectMistakePracticeGeneration')
   })
 
-  it('does not expand the approved compact creative-work collection cards', () => {
-    expect(creativeWorksSource.includes('repeat(auto-fill, minmax(min(100%, 420px), 1fr))')).toBe(
-      true,
+  it('preserves the prototype secondary-toolbar wrap contract on the weekly surface', () => {
+    const toolbar = cssBlock(weeklyPracticeSource, '.weekly-toolbar')
+    expect(toolbar).toMatch(/flex-wrap:\s*wrap/)
+  })
+
+  it('scopes weekly and mistake row breakpoints to their leaf list containers', () => {
+    expect(weeklyPracticeSource).toMatch(
+      /\.weekly-resource-list\s*\{[^}]*container-type:\s*inline-size/s,
     )
+    expect(recordsSource).toMatch(
+      /\.k12mistakes\s+:deep\(\.rl-rows\)\s*\{[^}]*container-type:\s*inline-size/s,
+    )
+
+    const weeklyViewportRule = ruleBlock(
+      weeklyPracticeSource,
+      /@media\s*\(\s*max-width:\s*1040px\s*\)/,
+    )
+    const mistakeViewportRule = ruleBlock(recordsSource, /@media\s*\(\s*max-width:\s*1040px\s*\)/)
+
+    expect(weeklyViewportRule).not.toMatch(/\.weekly-item\.resource-row/)
+    expect(mistakeViewportRule).not.toMatch(/\.k12mistakes\s+:deep\(\.rl-row/)
+  })
+
+  it('uses the approved three-domain grid and keeps each action rail indivisible', () => {
+    const weeklyRow = cssBlock(
+      weeklyPracticeSource,
+      '.weekly-item.resource-row.k12-compact-row--weekly',
+    )
+    const weeklyPrimary = cssBlock(weeklyPracticeSource, '.k12-compact-row__primary')
+    const weeklyContext = cssBlock(
+      weeklyPracticeSource,
+      '.weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__meta',
+    )
+    const weeklyActions = cssBlock(
+      weeklyPracticeSource,
+      '.weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__actions',
+    )
+    const mistakeRow = cssBlock(recordsSource, '.k12mistakes :deep(.rl-row)')
+    const mistakePrimary = cssBlock(recordsSource, '.k12mistakes :deep(.rl-primary)')
+    const mistakeContext = cssBlock(recordsSource, '.k12mistakes :deep(.rl-context)')
+    const mistakeActions = cssBlock(recordsSource, '.k12mistakes :deep(.rl-actions)')
+
+    expect(weeklyPracticeSource).toMatch(
+      /'k12-compact-row__primary':\s*track\.plan_section\s*===\s*'due_review'/,
+    )
+    for (const row of [weeklyRow, mistakeRow]) {
+      expect.soft(row).toMatch(/display:\s*grid/)
+      expect
+        .soft(row)
+        .toMatch(
+          /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(92px,\s*auto\)\s+max-content/,
+        )
+      expect
+        .soft(row)
+        .toMatch(/grid-template-areas:\s*["']primary\s+(?:context|meta)\s+actions["']/)
+      expect.soft(row).not.toMatch(/flex-wrap:\s*wrap/)
+    }
+    for (const primary of [weeklyPrimary, mistakePrimary]) {
+      expect.soft(primary).toMatch(/grid-area:\s*primary/)
+      expect.soft(primary).toMatch(/min-width:\s*0/)
+    }
+    for (const context of [weeklyContext, mistakeContext]) {
+      expect.soft(context).toMatch(/grid-area:\s*(?:context|meta)/)
+    }
+    for (const actions of [weeklyActions, mistakeActions]) {
+      expect.soft(actions).toMatch(/grid-area:\s*actions/)
+      expect.soft(actions).toMatch(/display:\s*flex/)
+      expect.soft(actions).toMatch(/white-space:\s*nowrap/)
+    }
+  })
+
+  it('flattens only at 1000px and moves the complete action group below at 619px', () => {
+    const weeklyWide = ruleBlock(weeklyPracticeSource, /@container\s*\(\s*min-width:\s*1000px\s*\)/)
+    const mistakeWide = ruleBlock(recordsSource, /@container\s*\(\s*min-width:\s*1000px\s*\)/)
+    const weeklyNarrow = ruleBlock(
+      weeklyPracticeSource,
+      /@container\s*\(\s*max-width:\s*619px\s*\)/,
+    )
+    const mistakeNarrow = ruleBlock(recordsSource, /@container\s*\(\s*max-width:\s*619px\s*\)/)
+
+    for (const wide of [weeklyWide, mistakeWide]) {
+      expect.soft(wide).toMatch(/display:\s*flex/)
+      expect.soft(wide).toMatch(/display:\s*contents/)
+    }
+    for (const narrow of [weeklyNarrow, mistakeNarrow]) {
+      expect
+        .soft(narrow)
+        .toMatch(
+          /grid-template-areas:\s*["']primary\s+(?:context|meta)["']\s*["']actions\s+actions["']/,
+        )
+      expect.soft(narrow).toMatch(/justify-self:\s*end/)
+    }
+  })
+
+  it('keeps the creative-work collection fixed to two equal tracks', () => {
+    expect(creativeWorksSource.includes('repeat(2, minmax(0, 1fr))')).toBe(true)
+    expect(creativeWorksSource).not.toContain('repeat(auto-fill')
     expect(creativeWorksSource.includes('grid-template-columns: 104px minmax(0, 1fr)')).toBe(true)
     expect(creativeWorksSource.includes('min-height: 104px')).toBe(true)
     expect(creativeWorksSource.includes('height: 104px')).toBe(true)
@@ -115,14 +224,15 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
     expect(mistakeReviewMenuSource).toMatch(
       /class="btn btn-ghost week-suppress-action mistake-suppress-visible"/,
     )
+    const weeklyReviewAction = weeklyPracticeSource.match(/<K12MistakeReviewMenu[\s\S]*?\/>/)?.[0]
+    expect(weeklyReviewAction).toBeTruthy()
+    expect(weeklyReviewAction).toMatch(/display="visible"/)
+    expect(weeklyReviewAction).not.toMatch(/display="menu"/)
   })
 
-  it('keeps the wrong-question archive on the compact prototype row track', () => {
+  it('keeps the wrong-question archive typography on the compact prototype track', () => {
     expect(recordsSource).toMatch(
-      /\.k12mistakes\s*:deep\(\.rl-row\)\s*\{[^}]*flex-wrap:\s*nowrap[^}]*padding:\s*9px\s+10px[^}]*font-size:\s*12px[^}]*line-height:\s*18px/s,
-    )
-    expect(recordsSource).toMatch(
-      /\.k12mistakes\s*:deep\(\.rl-title\)\s*\{[^}]*flex:\s*0\s+0\s+250px/s,
+      /\.k12mistakes\s*:deep\(\.rl-row\)\s*\{[^}]*padding:\s*(?:8|9)px\s+10px[^}]*font-size:\s*12px[^}]*line-height:\s*18px/s,
     )
     expect(recordsSource).toMatch(
       /\.k12mistakes\s*:deep\(\.rl-btn\)\s*\{[^}]*display:\s*inline-flex[^}]*font-family:\s*inherit[^}]*line-height:\s*18px/s,
@@ -139,30 +249,22 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
     expect(recordListSource).toMatch(/class="rl-source"/)
   })
 
-  it('wraps the wrong-question row track at 1040px without clipping actions or changing the desktop baseline', () => {
-    const desktopRow = cssBlock(recordsSource, '.k12mistakes :deep(.rl-row)')
-    const desktopTitle = cssBlock(recordsSource, '.k12mistakes :deep(.rl-title)')
+  it('exposes neutral shared row domains without changing other RecordList consumers', () => {
+    for (const className of [
+      'rl-primary',
+      'rl-primary__heading',
+      'rl-primary__detail',
+      'rl-context',
+      'rl-actions',
+    ]) {
+      expect((recordListSource.match(new RegExp(`class="${className}"`, 'g')) || []).length).toBe(1)
+      expect(cssBlock(recordListSource, `.${className}`)).toMatch(/display:\s*contents/)
+    }
 
-    expect(desktopRow).toMatch(/flex-wrap:\s*nowrap/)
-    expect(desktopTitle).toMatch(/flex:\s*0\s+0\s+250px/)
-
-    const narrow = cssBlock(recordsSource, '@media (max-width: 1040px)')
-    const narrowRow = cssBlock(narrow, '.k12mistakes :deep(.rl-row)')
-    const narrowTitle = cssBlock(narrow, '.k12mistakes :deep(.rl-title)')
-    const narrowBody = cssBlock(narrow, '.k12rec__body')
-    const narrowMeta = cssBlock(narrow, '.k12mistakes :deep(.rl-meta)')
-    const narrowActions = cssBlock(narrow, '.k12mistakes :deep(.rl-row > button)')
-
-    expect.soft(narrowBody).toMatch(/padding-inline:\s*16px/)
-    expect.soft(narrowRow).toMatch(/flex-wrap:\s*wrap/)
-    expect.soft(narrowRow).toMatch(/overflow:\s*hidden/)
-    expect.soft(narrowTitle).toMatch(/flex:\s*1\s+1\s+180px/)
-    expect.soft(narrowTitle).toMatch(/white-space:\s*nowrap/)
-    expect.soft(narrowTitle).toMatch(/text-overflow:\s*ellipsis/)
-    expect.soft(narrowMeta).toMatch(/flex:\s*1\s+1\s+100%/)
-    expect.soft(narrowMeta).toMatch(/order:\s*3/)
-    expect.soft(narrowMeta).toMatch(/white-space:\s*normal/)
-    expect.soft(narrowActions).toMatch(/flex:\s*none/)
-    expect.soft(narrowActions).toMatch(/white-space:\s*nowrap/)
+    expect(recordsSource).toMatch(/\.k12mistakes\s+:deep\(\.rl-primary\)/)
+    expect(recordsSource).toMatch(/\.k12mistakes\s+:deep\(\.rl-primary__heading\)/)
+    expect(recordsSource).toMatch(/\.k12mistakes\s+:deep\(\.rl-primary__detail\)/)
+    expect(recordsSource).toMatch(/\.k12mistakes\s+:deep\(\.rl-context\)/)
+    expect(recordsSource).toMatch(/\.k12mistakes\s+:deep\(\.rl-actions\)/)
   })
 })

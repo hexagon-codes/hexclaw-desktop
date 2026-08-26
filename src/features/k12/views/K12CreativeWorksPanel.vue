@@ -1837,8 +1837,8 @@ defineExpose({ load, openAdd })
 
 .k12cw__list {
   display: grid;
-  /* 作品集合按可用宽度形成 1/2/3 列；auto-fill 保留空轨，避免单件作品拉满整行。 */
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  /* 作品集合固定双列，单件作品只占第一条轨道。 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: stretch;
   margin: 0;

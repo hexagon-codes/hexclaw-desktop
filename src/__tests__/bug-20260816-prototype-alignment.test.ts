@@ -38,15 +38,13 @@ describe('BUG-20260816-004: 周练「设置教材进度」标题不折行（对�
   })
 })
 
-describe('BUG-20260816-005: 作品列表按已批准的稳定 Collection 投影', () => {
-  it('k12cw__list 必须用 420px auto-fill 形成 1/2/3 列并禁止固定双列', async () => {
+describe('BUG-20260816-005: 作品列表固定双列投影', () => {
+  it('k12cw__list 必须固定两条等宽轨道并禁止 auto-fill', async () => {
     const panel = await source('src/features/k12/views/K12CreativeWorksPanel.vue')
-    expect(panel).toContain(
-      'grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr))',
-    )
-    expect(panel).not.toMatch(
+    expect(panel).toMatch(
       /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/su,
     )
+    expect(panel).not.toContain('repeat(auto-fill')
   })
 })
 

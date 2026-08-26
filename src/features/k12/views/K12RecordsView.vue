@@ -2566,9 +2566,8 @@ async function doExportMd() {
   cursor: pointer;
 }
 @supports (font: -apple-system-body) {
-  /* WebKit 对原型中无显式高度的筛选标签按 26px 排版。 */
   .k12rec__filter {
-    height: 26px;
+    height: 27px;
     font-family: system-ui;
   }
 }
@@ -3007,15 +3006,29 @@ async function doExportMd() {
 .k12mistakes--collapsed :deep(.record-list > .rl-rows) {
   display: none;
 }
-/* 错题档案行与原型 resource-row 同一紧凑轨道；日期/来源字段由服务端数据可用时接入，
-   当前保留标题起始槽位，避免缺字段时 chip/meta/action 横向跳动。 */
+/* 错题档案只在叶子列表内启用容器查询；外层页面与窗口宽度不参与行级响应式判断。 */
+.k12mistakes :deep(.rl-rows) {
+  container-type: inline-size;
+  inline-size: 100%;
+  min-inline-size: 0;
+  gap: 8px;
+}
+/* 默认桌面内容列使用三域紧凑行：主信息两条基线、来源/状态、完整动作轨。
+   只有题目与错因允许省略；来源、状态和动作必须完整，且动作组不可拆分。 */
 .k12mistakes :deep(.rl-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, auto) max-content;
+  grid-template-areas: 'primary context actions';
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  flex-wrap: nowrap;
   min-width: 0;
-  min-height: 52px;
+  min-height: 60px;
   height: auto;
   box-sizing: border-box;
-  flex-wrap: nowrap;
-  padding: 9px 10px;
+  overflow: hidden;
+  padding: 8px 10px;
   border-radius: 10px;
   background: rgba(255, 254, 249, 0.9);
   color: var(--hc-text-secondary);
@@ -3023,8 +3036,43 @@ async function doExportMd() {
   font-size: 12px;
   line-height: 18px;
 }
+.k12mistakes :deep(.rl-primary) {
+  grid-area: primary;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.k12mistakes :deep(.rl-primary__heading),
+.k12mistakes :deep(.rl-primary__detail) {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.k12mistakes :deep(.rl-context) {
+  grid-area: context;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  align-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 148px;
+}
+.k12mistakes :deep(.rl-actions) {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: max-content;
+  white-space: nowrap;
+}
+.k12mistakes :deep(.rl-actions > *) {
+  flex: none;
+}
 .k12mistakes :deep(.rl-title) {
-  flex: 0 0 250px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3043,17 +3091,21 @@ async function doExportMd() {
   flex: none;
   line-height: 15.75px;
 }
-.k12mistakes :deep(.rl-rows) {
-  gap: 8px;
-}
 .k12mistakes :deep(.rl-meta) {
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 18px;
 }
 .k12mistakes :deep(.rl-source[data-source*='家长']) {
   color: var(--hc-warning);
   background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
   border: 1px dashed color-mix(in srgb, var(--hc-warning) 40%, transparent);
+}
+.k12mistakes :deep(.rl-source) {
+  min-width: 0;
 }
 .k12mistakes :deep(.stpill) {
   font-size: 10.5px;
@@ -3094,61 +3146,66 @@ async function doExportMd() {
   white-space: nowrap;
   gap: 6px;
 }
-.k12mistakes :deep(.rl-row > button) {
+.k12mistakes :deep(.rl-actions > button) {
   /* 全部错题的行内动作与权威原型一致，不参与主轴压缩。 */
   flex: none;
+  white-space: nowrap;
 }
-.k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
+.k12mistakes :deep(.rl-actions > button[data-testid^='mistake-practice-']) {
   height: 36px;
   padding: 8px 14px;
   color: rgb(23, 61, 80);
   background: color-mix(in srgb, var(--hc-accent) 7.5%, transparent);
 }
-.k12mistakes :deep(.rl-row > button[data-testid^='mistake-view-practice-']) {
+.k12mistakes :deep(.rl-actions > button[data-testid^='mistake-view-practice-']) {
   padding-inline: 8px;
   border-color: transparent;
   color: var(--hc-text-secondary);
 }
-.k12mistakes :deep(.rl-row > .rl-btn:last-child) {
+.k12mistakes :deep(.rl-actions > .rl-btn:last-child) {
   border-color: transparent;
   padding-inline: 8px;
 }
-@supports (font: -apple-system-body) {
-  /* 原型在 WebKit 中由半像素边框和内容自然撑高，避免固定高度多出 1～2px。 */
+/* 内容足够宽时解除三域分组，恢复原型的平铺单行；DOM 与键盘焦点顺序保持不变。 */
+@container (min-width: 1000px) {
   .k12mistakes :deep(.rl-row) {
-    min-height: 50px;
+    display: flex;
+    min-height: 0;
+    overflow: visible;
   }
-  .k12mistakes :deep(.rl-btn) {
-    height: 31px;
+  .k12mistakes :deep(.rl-primary),
+  .k12mistakes :deep(.rl-primary__heading),
+  .k12mistakes :deep(.rl-primary__detail),
+  .k12mistakes :deep(.rl-context),
+  .k12mistakes :deep(.rl-actions) {
+    display: contents;
   }
-  .k12mistakes :deep(.rl-row > button) {
-    height: 31px;
+  .k12mistakes :deep(.rl-primary__heading > .rl-title) {
+    flex: 0 0 250px;
   }
-  .k12mistakes :deep(.rl-row > button[data-testid^='mistake-practice-']) {
-    height: 35px;
+  .k12mistakes :deep(.rl-primary__detail > .rl-meta) {
+    flex: 1;
+  }
+  .k12mistakes :deep(.rl-source) {
+    min-width: 92px;
+    text-align: center;
+  }
+}
+/* 窄档只让完整动作组整体下移并右对齐，禁止单个动作自行换行。 */
+@container (max-width: 619px) {
+  .k12mistakes :deep(.rl-row) {
+    grid-template-columns: minmax(0, 1fr) minmax(92px, auto);
+    grid-template-areas:
+      'primary context'
+      'actions actions';
+  }
+  .k12mistakes :deep(.rl-actions) {
+    justify-self: end;
   }
 }
 @media (max-width: 1040px) {
   .k12rec__body {
     padding-inline: 16px;
-  }
-  .k12mistakes :deep(.rl-row) {
-    flex-wrap: wrap;
-    overflow: hidden;
-  }
-  .k12mistakes :deep(.rl-title) {
-    flex: 1 1 180px;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .k12mistakes :deep(.rl-meta) {
-    flex: 1 1 100%;
-    order: 3;
-    white-space: normal;
-  }
-  .k12mistakes :deep(.rl-row > button) {
-    flex: none;
-    white-space: nowrap;
   }
 }
 /* 原型 1193-1212：本周复习用大数字 hero；列表、自动化脚注都收进同一张卡。 */

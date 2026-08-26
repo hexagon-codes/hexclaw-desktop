@@ -199,55 +199,68 @@ const reviewItems = computed(() => {
         :data-record-id="item.recordId"
         :data-record-status="item.status"
       >
-        <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
-        <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
-        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{
-          chipText(item, f)
-        }}</span>
-        <span class="rl-meta rl-spacer">{{
-          metaFields
-            .map((f) => fieldValue(item, f))
-            .filter(Boolean)
-            .join(' · ')
-        }}</span>
-        <span
-          v-if="sourceFields.length"
-          class="rl-source"
-          :data-source="
-            sourceFields
-              .map((f) => fieldValue(item, f))
-              .filter(Boolean)
-              .join(' · ')
-          "
-          >{{
-            sourceFields
-              .map((f) => fieldValue(item, f))
-              .filter(Boolean)
-              .join(' · ')
-          }}</span
-        >
-        <span
-          v-if="stateOf(item)"
-          class="rl-status"
-          :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`"
-        >
-          {{ t(stateOf(item)!.labelKey) }}
-        </span>
-        <slot name="list-row-actions" :item="item" />
-        <!-- 「再练」是复习动作：仅可复习集合（schema.reviewable）才渲染——积累本不复习/不再练，
-             无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
-        <slot v-if="canPractice(item)" name="list-practice-action" :item="item" />
-        <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
-        <button
-          v-if="!hideMasteryAction && canMarkMastered(item)"
-          class="rl-btn"
-          @click="emit('action', { id: 'markMastered', record: item })"
-        >
-          {{ t('records.markMastered') }}
-        </button>
-        <button class="rl-btn" @click="emit('action', { id: 'detail', record: item })">
-          {{ t('records.detail') }}
-        </button>
+        <div class="rl-primary">
+          <div class="rl-primary__heading">
+            <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
+            <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
+          </div>
+          <div class="rl-primary__detail">
+            <span
+              v-for="f in chipFields"
+              :key="f.key"
+              class="rl-chip"
+              :data-chip="chipText(item, f)"
+              >{{ chipText(item, f) }}</span
+            >
+            <span class="rl-meta rl-spacer">{{
+              metaFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            }}</span>
+          </div>
+        </div>
+        <div class="rl-context">
+          <span
+            v-if="sourceFields.length"
+            class="rl-source"
+            :data-source="
+              sourceFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            "
+            >{{
+              sourceFields
+                .map((f) => fieldValue(item, f))
+                .filter(Boolean)
+                .join(' · ')
+            }}</span
+          >
+          <span
+            v-if="stateOf(item)"
+            class="rl-status"
+            :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`"
+          >
+            {{ t(stateOf(item)!.labelKey) }}
+          </span>
+        </div>
+        <div class="rl-actions">
+          <!-- 「再练」只属于可复习集合；不可复习集合不渲染该动作。 -->
+          <slot v-if="canPractice(item)" name="list-practice-action" :item="item" />
+          <slot name="list-row-actions" :item="item" />
+          <!-- 未掌握且未归档的可复习记录允许确认已掌握。 -->
+          <button
+            v-if="!hideMasteryAction && canMarkMastered(item)"
+            class="rl-btn"
+            @click="emit('action', { id: 'markMastered', record: item })"
+          >
+            {{ t('records.markMastered') }}
+          </button>
+          <button class="rl-btn" @click="emit('action', { id: 'detail', record: item })">
+            {{ t('records.detail') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -319,6 +332,22 @@ const reviewItems = computed(() => {
   background: var(--hc-bg-card);
   border: 0.5px solid var(--hc-border);
   font-size: 13px;
+}
+/* 领域中性结构组默认不产生布局盒；页面层仅在已批准的密度变体中激活其布局。 */
+.rl-primary {
+  display: contents;
+}
+.rl-primary__heading {
+  display: contents;
+}
+.rl-primary__detail {
+  display: contents;
+}
+.rl-context {
+  display: contents;
+}
+.rl-actions {
+  display: contents;
 }
 .rl-date {
   font-variant-numeric: tabular-nums;

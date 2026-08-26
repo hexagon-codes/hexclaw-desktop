@@ -24,12 +24,13 @@ describe('K12 works prototype layout', () => {
     )
   })
 
-  it('uses the approved 420px auto-fill collection, 104px media and 720px detail modal', () => {
+  it('uses the fixed two-column collection, 104px media and 720px detail modal', () => {
     expect(worksSource).toContain('class="k12cw__preview"')
     expect(worksSource).toContain('data-testid="cw-detail-toggle"')
     expect(worksSource).toMatch(
-      /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*420px\),\s*1fr\)\)/,
+      /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
     )
+    expect(worksSource).not.toContain('repeat(auto-fill')
     expect(worksSource).not.toContain('k12cw__card--expanded')
     expect(worksSource).toContain('data-testid="cw-detail-modal"')
     expect(worksSource).toMatch(

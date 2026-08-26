@@ -720,18 +720,43 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 v-for="item in verifiedItems(track)"
                 :key="item.item_id"
                 class="weekly-item resource-row"
+                :class="{
+                  'k12-compact-row': track.plan_section === 'due_review',
+                  'k12-compact-row--weekly': track.plan_section === 'due_review',
+                }"
               >
-                <MarkdownRenderer class="weekly-item__prompt" :content="item.prompt_markdown" />
-                <div class="weekly-item__origin rc-practice-origin">
-                  <b>
-                    {{ sectionLabels[item.plan_section] }} ·
-                    {{ generationLabels[item.generation_method] || item.generation_method }}
-                  </b>
-                  <small>依据：{{ evidenceLabel(item) || '已通过服务端验证' }}</small>
+                <div
+                  class="weekly-item__primary"
+                  :class="{
+                    'k12-compact-row__primary': track.plan_section === 'due_review',
+                  }"
+                >
+                  <MarkdownRenderer
+                    class="weekly-item__prompt"
+                    :class="{
+                      'k12-compact-row__title': track.plan_section === 'due_review',
+                    }"
+                    :content="item.prompt_markdown"
+                  />
+                  <div class="weekly-item__origin rc-practice-origin">
+                    <b>
+                      {{ sectionLabels[item.plan_section] }} ·
+                      {{ generationLabels[item.generation_method] || item.generation_method }}
+                    </b>
+                    <small>依据：{{ evidenceLabel(item) || '已通过服务端验证' }}</small>
+                  </div>
                 </div>
                 <div
-                  v-if="item.subject || item.knowledge_point || item.mastery_status"
+                  v-if="
+                    track.plan_section === 'due_review' ||
+                    item.subject ||
+                    item.knowledge_point ||
+                    item.mastery_status
+                  "
                   class="weekly-item__meta"
+                  :class="{
+                    'k12-compact-row__meta': track.plan_section === 'due_review',
+                  }"
                 >
                   <span
                     v-if="item.subject || item.knowledge_point"
@@ -746,7 +771,12 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     >{{ masteryPill(item.mastery_status)!.label }}</span
                   >
                 </div>
-                <div class="weekly-item__foot">
+                <div
+                  class="weekly-item__foot"
+                  :class="{
+                    'k12-compact-row__actions': track.plan_section === 'due_review',
+                  }"
+                >
                   <button
                     v-if="
                       track.plan_section === 'due_review' &&
@@ -820,6 +850,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     v-if="track.plan_section === 'due_review'"
                     :suppressed="false"
                     :busy="busy"
+                    display="visible"
                     @suppress="emit('suppress-item', item)"
                   />
                 </div>
@@ -1274,6 +1305,8 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* 有效内容列变窄时页签和动作自然换行，禁止横向裁切。 */
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
@@ -1518,6 +1551,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  container-type: inline-size;
 }
 
 .weekly-hero.rc-week-hero
@@ -1571,6 +1605,82 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   color: var(--hc-text-secondary);
   font-size: 12px;
   line-height: 18px;
+}
+
+.weekly-item__primary {
+  display: contents;
+}
+
+/* 到期复习题按叶子内容宽度响应；其他周练轨道继续使用原有资源行。 */
+.weekly-item.resource-row.k12-compact-row--weekly {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, auto) max-content;
+  grid-template-areas: 'primary meta actions';
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.k12-compact-row__primary {
+  grid-area: primary;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weekly-item.resource-row .k12-compact-row__title {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__origin {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__origin b {
+  flex: none;
+  white-space: nowrap;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__origin small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  align-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 148px;
+  margin: 0;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__actions > * {
+  flex: none;
 }
 
 .weekly-item.resource-row .weekly-item__prompt {
@@ -1696,8 +1806,8 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 @supports (font: -apple-system-body) {
   /* WebKit 使用同引擎原型的自然高度，Chromium 已通过的几何保持不变。 */
   .weekly-progress.rc-week-progress {
-    height: 50px;
-    min-height: 50px;
+    height: 52px;
+    min-height: 52px;
   }
 
   .weekly-item.resource-row {
@@ -1706,17 +1816,44 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 }
 
 @media (max-width: 1040px) {
-  .weekly-item.resource-row {
+  .weekly-item:not(.k12-compact-row--weekly).resource-row {
     flex-wrap: wrap;
     overflow: hidden;
   }
 
-  .weekly-item.resource-row .weekly-item__prompt {
+  .weekly-item:not(.k12-compact-row--weekly).resource-row .weekly-item__prompt {
     flex: 1 1 180px;
   }
 
-  .weekly-item.resource-row .weekly-item__origin {
+  .weekly-item:not(.k12-compact-row--weekly).resource-row .weekly-item__origin {
     flex: 1 1 178px;
+  }
+}
+
+@container (min-width: 1000px) {
+  .weekly-item.resource-row.k12-compact-row--weekly {
+    display: flex;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__primary,
+  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__meta,
+  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__actions {
+    display: contents;
+  }
+}
+
+@container (max-width: 619px) {
+  .weekly-item.resource-row.k12-compact-row--weekly {
+    grid-template-columns: minmax(0, 1fr) minmax(92px, auto);
+    grid-template-areas:
+      'primary meta'
+      'actions actions';
+  }
+
+  .weekly-item.resource-row.k12-compact-row--weekly .k12-compact-row__actions {
+    justify-self: end;
   }
 }
 </style>
