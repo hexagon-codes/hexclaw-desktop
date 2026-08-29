@@ -165,6 +165,23 @@ export function canonicalizeModelOption(model: ModelOption): ModelOption {
   }
 }
 
+function reasoningContractFromModel(
+  ...sources: Array<ModelOption | undefined>
+): Partial<Pick<ModelOption, 'reasoningSupport' | 'reasoningControl'>> {
+  for (const source of sources) {
+    if (!source) continue
+    const canonical = canonicalizeModelOption(source)
+    const hasSupport = hasOwn(canonical, 'reasoningSupport')
+    const hasControl = hasOwn(canonical, 'reasoningControl')
+    if (!hasSupport && !hasControl) continue
+    return {
+      ...(hasSupport ? { reasoningSupport: canonical.reasoningSupport } : {}),
+      ...(hasControl ? { reasoningControl: canonical.reasoningControl } : {}),
+    }
+  }
+  return {}
+}
+
 export function isChatModelOption(model: Pick<ModelOption, 'id' | 'capabilities'>): boolean {
   return isChatModel(normalizeModelCapabilities(model))
 }
@@ -253,10 +270,19 @@ export function mergeProviderModels(
             ? PROVIDER_PRESETS[localProvider.type]?.defaultModels.find((model) => model.id === id)
             : undefined
         const localPreset = presetReasoning ? canonicalizeModelOption(presetReasoning) : undefined
+        // 后端仅返回 effective_models 或旧 model_specs 时，不得抹掉本地已持久化的精确合同。
+        // 只有本地没有声明时，才回退到同 ID 的静态预设；后端显式字段仍拥有最高优先级。
+        const omittedReasoning =
+          !hasBackendReasoningSupport && !hasBackendReasoningControl
+            ? reasoningContractFromModel(
+                local ? canonicalizeModelOption(local) : undefined,
+                localPreset,
+              )
+            : {}
         const isCustom = spec?.is_custom ?? local?.isCustom
         const reasoningSupport = hasBackendReasoningSupport
           ? normalizeModelReasoningSupport(spec?.reasoning_support)
-          : localPreset?.reasoningSupport
+          : omittedReasoning.reasoningSupport
         return {
           id,
           name: effectiveModel?.display_name || spec?.display_name || local?.name || id,
@@ -276,8 +302,8 @@ export function mergeProviderModels(
             ? spec?.reasoning_control === undefined
               ? {}
               : { reasoningControl: spec.reasoning_control }
-            : localPreset?.reasoningControl
-              ? { reasoningControl: localPreset.reasoningControl }
+            : omittedReasoning.reasoningControl
+              ? { reasoningControl: omittedReasoning.reasoningControl }
               : {}),
           ...(spec?.embedding === undefined ? {} : { embedding: spec.embedding }),
         }

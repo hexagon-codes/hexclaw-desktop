@@ -291,6 +291,32 @@ describe('model reasoning support contract', () => {
     expect(reasoningControlOf(explicitControl)).toBeUndefined()
   })
 
+  it('preserves a locally persisted exact contract when an effective catalog omits reasoning fields', () => {
+    const localContract = makeProvider(
+      [
+        {
+          id: 'gpt-5.6-sol',
+          name: 'GPT-5.6 Sol',
+          capabilities: ['text'],
+          reasoningSupport: 'supported',
+          reasoningControl: effortControl,
+        },
+      ],
+      'custom',
+    )
+
+    const [restored] = mergeProviderModels(
+      localContract,
+      'gpt-5.6-sol',
+      ['gpt-5.6-sol'],
+      [{ id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol', capabilities: ['text'] }],
+      [{ id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol', capabilities: ['text'] }],
+    )
+
+    expect(reasoningSupportOf(restored)).toBe('supported')
+    expect(reasoningControlOf(restored)).toEqual(effortControl)
+  })
+
   it('accepts allowed_efforts only as an exact reasoning_effort declaration', () => {
     const valid = canonicalizeModelOption({
       id: 'effort-only',
