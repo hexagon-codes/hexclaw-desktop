@@ -201,15 +201,31 @@ function messageReasoningVisibility(message: ChatMessage): 'visible' | 'not_expo
 }
 
 function hasThinkingProgress(message: ChatMessage): boolean {
+  const metadata = message.metadata
+  const reasoningRequest = metadata?.reasoning_request ?? metadata?.thinking
+  if (
+    reasoningRequest === 'off' ||
+    reasoningRequest === false ||
+    reasoningRequest === 'false' ||
+    reasoningRequest === '0'
+  ) {
+    return false
+  }
+  const thinkingEnabled = metadata?.thinking_enabled
+  if (thinkingEnabled === false || thinkingEnabled === 'false' || thinkingEnabled === '0') {
+    return false
+  }
+  if (metadata?.reasoning_support === 'unsupported' || metadata?.reasoning_support === 'unknown') {
+    return false
+  }
+
   const state = message.metadata?.thinking_state
-  return (
-    !!normalizeAssistantReasoning(message.reasoning ?? '') ||
-    messageThinkingElapsed(message) > 0 ||
-    state === 'running' ||
-    state === 'completed' ||
-    state === 'failed' ||
-    state === 'cancelled'
-  )
+  // completed 只有在真实思考摘要或正数耗时存在时才是可展示证据；
+  // 旧消息单独带 completed/0 不能伪造「思考了 0s」。
+  if (normalizeAssistantReasoning(message.reasoning ?? '') || messageThinkingElapsed(message) > 0) {
+    return true
+  }
+  return state === 'running' || state === 'failed' || state === 'cancelled'
 }
 
 function messageReasoningReceipt(message: ChatMessage): ReasoningReceipt | null {

@@ -81,6 +81,19 @@ export function deriveAssistantRunPresentation(
     }
   }
 
+  // applied 只能由同一精确模型的 supported 能力事实产生；历史/异常的
+  // unknown + applied 组合不得伪造思考完成计时，回退到普通回复状态。
+  if (input.reasoningSupport === 'unknown' && input.reasoningExecution === 'applied') {
+    return input.hasVisibleAnswer
+      ? HIDDEN_PRESENTATION
+      : {
+          kind: 'preparing',
+          text: labels.preparing,
+          animated: true,
+          timerActive: false,
+        }
+  }
+
   if (input.hasVisibleAnswer) {
     if (input.reasoningExecution === 'applied') {
       return {

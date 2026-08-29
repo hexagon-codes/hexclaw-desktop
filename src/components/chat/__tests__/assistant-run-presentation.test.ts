@@ -177,17 +177,17 @@ describe('assistant run presentation', () => {
     },
   )
 
-  it('lets an applied receipt override unknown capability without inventing support', () => {
+  it('keeps an unknown-capability applied receipt in the neutral state', () => {
     expect(
       present({
         reasoningSupport: 'unknown',
         reasoningExecution: 'applied',
       }),
     ).toEqual({
-      kind: 'thinking',
-      text: '正在深度思考 · 19s',
+      kind: 'preparing',
+      text: '正在回复…',
       animated: true,
-      timerActive: true,
+      timerActive: false,
     })
   })
 
@@ -332,6 +332,34 @@ describe('assistant run presentation', () => {
     },
   )
 
+  it.each([
+    { support: 'unsupported' as const, expectedKind: 'unsupported' as const },
+    { support: 'unknown' as const, expectedKind: 'hidden' as const },
+  ])(
+    'does not render a completed thinking timer for $support applied receipts',
+    ({ support, expectedKind }) => {
+      expect(
+        present({
+          reasoningSupport: support,
+          reasoningExecution: 'applied',
+          hasVisibleAnswer: true,
+          elapsedSeconds: 0,
+        }),
+      ).toMatchObject({
+        kind: expectedKind,
+        timerActive: false,
+      })
+      expect(
+        present({
+          reasoningSupport: support,
+          reasoningExecution: 'applied',
+          hasVisibleAnswer: true,
+          elapsedSeconds: 0,
+        }).text,
+      ).not.toBe('思考了 0s')
+    },
+  )
+
   it('covers request, support, execution, and answer-phase combinations as one matrix', () => {
     const supports: ReasoningSupport[] = ['supported', 'unsupported', 'unknown']
     const executions: ReasoningExecution[] = ['applied', 'ignored', 'rejected', 'unknown']
@@ -412,11 +440,29 @@ describe('assistant run presentation', () => {
 
     for (const reasoningSupport of ['supported', 'unknown'] satisfies ReasoningSupport[]) {
       for (const reasoningExecution of executions) {
+        const before =
+          reasoningSupport === 'unknown' && reasoningExecution === 'applied'
+            ? {
+                kind: 'preparing' as const,
+                text: '正在回复…',
+                animated: true,
+                timerActive: false,
+              }
+            : beforeAnswer[reasoningExecution]
+        const after =
+          reasoningSupport === 'unknown' && reasoningExecution === 'applied'
+            ? {
+                kind: 'hidden' as const,
+                text: null,
+                animated: false,
+                timerActive: false,
+              }
+            : afterAnswer[reasoningExecution]
         expect(present({ reasoningSupport, reasoningExecution, hasVisibleAnswer: false })).toEqual(
-          beforeAnswer[reasoningExecution],
+          before,
         )
         expect(present({ reasoningSupport, reasoningExecution, hasVisibleAnswer: true })).toEqual(
-          afterAnswer[reasoningExecution],
+          after,
         )
       }
     }

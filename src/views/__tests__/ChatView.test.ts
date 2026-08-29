@@ -1088,6 +1088,139 @@ describe('ChatView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
+  it.each([
+    {
+      name: 'completed state without reasoning evidence',
+      metadata: {
+        thinking_state: 'completed' as const,
+        thinking_duration: 0,
+        reasoning_visibility: 'not_exposed' as const,
+      },
+    },
+    {
+      name: 'explicitly disabled thinking',
+      metadata: {
+        thinking_state: 'completed' as const,
+        thinking_duration: 4,
+        thinking_enabled: false,
+      },
+    },
+    {
+      name: 'unsupported model',
+      metadata: {
+        thinking_state: 'completed' as const,
+        thinking_duration: 4,
+        reasoning_support: 'unsupported',
+      },
+    },
+    {
+      name: 'unknown model',
+      metadata: {
+        thinking_state: 'completed' as const,
+        thinking_duration: 4,
+        reasoning_support: 'unknown',
+      },
+    },
+  ])('does not show a zero-second thinking summary for $name', async ({ metadata }) => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'reasoning-disabled-history'
+    store.messages = [
+      {
+        id: 'reasoning-disabled-history-user',
+        role: 'user',
+        content: '普通问题',
+        timestamp: '',
+      },
+      {
+        id: 'reasoning-disabled-history-assistant',
+        role: 'assistant',
+        content: '普通回答',
+        timestamp: '',
+        metadata,
+      },
+    ]
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('思考了 0s')
+
+    wrapper.unmount()
+  })
+
+  it('keeps the completed thinking summary when the message has actual reasoning evidence', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'reasoning-completed-history'
+    store.messages = [
+      {
+        id: 'reasoning-completed-history-user',
+        role: 'user',
+        content: '需要思考的问题',
+        timestamp: '',
+      },
+      {
+        id: 'reasoning-completed-history-assistant',
+        role: 'assistant',
+        content: '带有思考过程的回答',
+        timestamp: '',
+        metadata: {
+          thinking_state: 'completed',
+          thinking_duration: 2,
+          reasoning_visibility: 'not_exposed',
+        },
+      },
+    ]
+    await flushPromises()
+
+    expect(wrapper.get('[data-component="ThinkingProgress"]').text()).toContain('思考了 2s')
+
+    wrapper.unmount()
+  })
+
+  it('does not project an invalid unknown-capability applied receipt as a zero-second summary', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'reasoning-unknown-applied-history'
+    store.messages = [
+      {
+        id: 'reasoning-unknown-applied-history-user',
+        role: 'user',
+        content: '普通问题',
+        timestamp: '',
+      },
+      {
+        id: 'reasoning-unknown-applied-history-assistant',
+        role: 'assistant',
+        content: '普通回答',
+        timestamp: '',
+        metadata: {
+          thinking_state: 'completed',
+          thinking_duration: 0,
+          reasoning_receipt: {
+            version: 1,
+            reasoning_request: 'on',
+            reasoning_support: 'unknown',
+            reasoning_execution: 'applied',
+          },
+        },
+      },
+    ]
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-component="AssistantRunStatus"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('思考了 0s')
+
+    wrapper.unmount()
+  })
+
   it('REG-CHAT-REASONING-STATUS-004 applied 首正文到达后停止动画并冻结思考耗时', async () => {
     const wrapper = mountChatView()
     await flushPromises()
