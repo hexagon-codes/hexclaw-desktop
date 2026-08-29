@@ -1462,7 +1462,14 @@ function providerCatalogCount(providerId: string): number {
 
 /** 目录超过阈值时使用“摘要 + 管理器”，避免把聚合商全量目录铺进 Provider 卡片。 */
 function isManagedCatalog(providerId: string): boolean {
-  return providerCatalogCount(providerId) > AUTO_ENABLE_CATALOG_LIMIT
+  const catalogCount = providerCatalogCount(providerId)
+  if (catalogCount > AUTO_ENABLE_CATALOG_LIMIT) return true
+  const provider = config.value?.llm.providers.find((candidate) => candidate.id === providerId)
+  if (!provider || provider.models.length === 0) return false
+  return provider.models.length < catalogCount && provider.models.every((model) => {
+    const catalog = catalogStore.getCatalog(providerId)
+    return catalog?.models.some((catalogModel) => catalogModel.id === model.id)
+  })
 }
 
 /** 所有云端 Provider 共用目录管理器；本地 Ollama 保持独立的本地模型管理链路。 */

@@ -239,7 +239,14 @@ export function reconcileProviderCatalog(
   excludedModelIds: ReadonlySet<string> = new Set(),
 ): ProviderCatalogReconcileResult {
   const before = modelListSignature(target.models, target.selectedModelId)
-  const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT
+  const isCuratedSubset =
+    target.models.length > 0 &&
+    target.models.length < remoteModels.length &&
+    target.models.every((model) => {
+      const normalized = normalizeExcludedModelId(model.id)
+      return !excludedModelIds.has(normalized) && remoteModels.some((remote) => normalizeExcludedModelId(remote.id) === normalized)
+    })
+  const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT || isCuratedSubset
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
   const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
   const normalizedExclusions = new Set(

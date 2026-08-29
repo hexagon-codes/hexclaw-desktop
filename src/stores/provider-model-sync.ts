@@ -52,10 +52,12 @@ export function syncProviderModelCatalogs(
       }
 
       catalogStore.setCatalog(target.id, remoteModels)
+      const exclusionScope = target.providerInstanceId || target.id
       const result = reconcileProviderCatalog(
         target,
         remoteModels,
         PROVIDER_PRESETS[provider.type]?.defaultModels ?? [],
+        catalogStore.getExcludedModelIds(exclusionScope),
       )
       if (result.changed) {
         const runtimeTarget = context.getRuntimeProviders()?.find(
