@@ -73,7 +73,9 @@ export function createSessionExecutionRegistry(executions: Ref<SessionExecutionS
     const normalizedSessionId = sessionId.trim()
     if (!normalizedSessionId) return false
     return Object.values(executions.value[normalizedSessionId] ?? {}).some(
-      (snapshot) => !isTerminalSessionExecutionState(snapshot.state),
+      (snapshot) =>
+        !isTerminalSessionExecutionState(snapshot.state) &&
+        !QUERY_ONLY_STATES.has(snapshot.state.trim().toLowerCase()),
     )
   }
 

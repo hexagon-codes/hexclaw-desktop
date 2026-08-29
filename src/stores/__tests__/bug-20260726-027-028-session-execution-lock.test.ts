@@ -66,6 +66,20 @@ describe('BUG-20260726-027/028 · one shared session execution lock', () => {
     },
   )
 
+  it('does not treat a stale query-only snapshot already present in the registry as executing', () => {
+    const executions = ref<SessionExecutionState>({
+      'session-1': {
+        'dispatch-1': {
+          executionId: 'dispatch-1',
+          state: 'recovering',
+        },
+      },
+    })
+    const registry = createSessionExecutionRegistry(executions)
+
+    expect(registry.isSessionExecuting('session-1')).toBe(false)
+  })
+
   it('keeps another active execution locked when one dispatch becomes query-only', () => {
     const executions = ref<SessionExecutionState>({})
     const registry = createSessionExecutionRegistry(executions)
