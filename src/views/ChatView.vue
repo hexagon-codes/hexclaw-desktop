@@ -6319,7 +6319,10 @@ function startSidebarResize(event: MouseEvent) {
 /* ── Apple HIG 图片预览 Modal ── */
 .hc-img-preview__backdrop {
   position: fixed;
-  inset: 0;
+  top: var(--hc-titlebar-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 9999;
   display: flex;
   align-items: center;
