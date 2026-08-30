@@ -659,7 +659,7 @@ export default {
     pasteHint: '或粘贴图片数据（data:image/…;base64,）',
     run: '识题',
     running: '正在识题分题…',
-    routing: '正在识别图片内容…',
+    routing: '正在识别图片内容',
     empty: '还没识题——选一张作业照片，我先分题再让你核对。',
     guardTitle: '我读到的是这些，对吗？',
     kpLabel: '知识点',

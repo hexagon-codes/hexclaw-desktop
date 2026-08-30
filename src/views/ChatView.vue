@@ -1421,6 +1421,12 @@ const scenarioCtx = computed(() => {
     descriptor,
     modelRoute: currentScenarioTextRoute(),
     messageIds: visibleMessages.value.map((message) => message.id),
+    messageImageSources: Object.fromEntries(
+      visibleMessages.value.map((message) => {
+        const attachment = getMessageAttachments(message).find((item) => item.type === 'image')
+        return [message.id, attachment ? messageImageSrc(attachment) : '']
+      }),
+    ),
   }
 })
 // Shell 只读取 descriptor 合同；任何场景都可声明自己的已批准头部，普通会话默认保留通用工具栏。
@@ -1898,12 +1904,14 @@ function toggleDeepThinking() {
   const policy = enabled ? preferredEnabledThinkingPolicy() : { mode: 'off' as const }
   setActiveSessionThinkingPolicy(policy)
   applyThinkingRequestState(enabled)
+  showThinkingSelector.value = false
 }
 
 function selectThinkingEffort(effort: ReasoningEffort) {
   if (!selectedReasoningEfforts.value.includes(effort)) return
   setActiveSessionThinkingPolicy({ mode: 'effort', effort })
   applyThinkingRequestState(true)
+  showThinkingSelector.value = false
 }
 
 function toggleThinkingSelector() {

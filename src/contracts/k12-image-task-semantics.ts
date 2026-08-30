@@ -797,6 +797,7 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
     [
       'kind',
       'stage',
+      'completed_at',
       'confirmation_state',
       'anchor_state',
       'recognition',
@@ -822,6 +823,10 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
   )
   if (projection.kind !== 'homework') fail(`${path}.kind`, 'homework')
   enumValue(projection.stage, HOMEWORK_STAGES, `${path}.stage`)
+  if (projection.completed_at !== undefined) {
+    numberValue(projection.completed_at, `${path}.completed_at`, true)
+    if (projection.stage !== 'completed') fail(`${path}.completed_at`, 'completed stage only')
+  }
   if (!['pending', 'confirmed'].includes(String(projection.confirmation_state))) {
     fail(`${path}.confirmation_state`, 'pending|confirmed')
   }
@@ -914,6 +919,9 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
   const normalized: WireRecord = {
     kind: 'homework',
     stage: projection.stage,
+    ...(projection.completed_at !== undefined
+      ? { completed_at: projection.completed_at }
+      : {}),
     confirmation_state: projection.confirmation_state,
     anchor_state: projection.anchor_state,
     ...(recognition
@@ -1488,6 +1496,7 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
         'parent_invocation_id',
         'physical_unit',
         'operation',
+        'execution_kind',
         'canonical_input_digest',
         'provider',
         'model',
@@ -1504,6 +1513,7 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
       [
         'invocation_id',
         'operation',
+        'execution_kind',
         'canonical_input_digest',
         'status',
         'attempt',
@@ -1513,6 +1523,10 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
     )
     stringValue(receipt.invocation_id, `${path}.invocation_id`)
     const operation = stringValue(receipt.operation, `${path}.operation`)
+    const executionKind = stringValue(receipt.execution_kind, `${path}.execution_kind`)
+    if (executionKind !== 'provider' && executionKind !== 'local_deterministic') {
+      fail(`${path}.execution_kind`, 'provider or local_deterministic')
+    }
     const canonicalInputDigest = digestValue(
       receipt.canonical_input_digest,
       `${path}.canonical_input_digest`,
@@ -1528,8 +1542,10 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
       if (resultDigest === '') fail(`${path}.result_digest`, 'annotated image SHA-256 digest')
       annotationResultDigests.push(resultDigest)
     }
-    if (receipt.operation !== 'annotation') {
+    if (executionKind === 'provider') {
       required(receipt, ['provider', 'model'], path)
+    } else if (receipt.provider !== undefined || receipt.model !== undefined) {
+      fail(path, 'local_deterministic receipt without provider or model')
     }
     optionalString(receipt.provider, `${path}.provider`)
     optionalString(receipt.model, `${path}.model`)

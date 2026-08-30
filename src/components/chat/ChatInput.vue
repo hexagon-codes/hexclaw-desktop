@@ -16,7 +16,6 @@ import {
   AudioLines,
   Square,
   Paperclip,
-  Mic,
   Sparkles,
   Puzzle,
   Plus,
@@ -88,12 +87,10 @@ const { t } = useI18n()
 const voiceToast = useToast()
 // STT 错误继续交给公共 toast 承载，录音面板不再新建错误通道。
 const {
-  isListening,
   transcript,
   startListening,
   finishListening,
   cancelListening,
-  toggleListening,
   error: voiceError,
 } = useVoice()
 watch(voiceError, (msg) => {
@@ -552,7 +549,6 @@ const canSend = computed(() => {
 
 const showVoicePrimary = computed(
   () =>
-    !isScenarioComposer.value &&
     !isGenMode.value &&
     !inputText.value.trim() &&
     attachedFiles.value.length === 0,
@@ -1329,40 +1325,28 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Plus :size="20" />
           </button>
-          <span v-if="!isScenarioComposer" class="hc-composer__tool-divider" aria-hidden="true" />
+          <span class="hc-composer__tool-divider" aria-hidden="true" />
           <button
-            class="hc-composer__tool"
-            :class="{ 'hc-composer__tool--labeled': !isScenarioComposer }"
+            class="hc-composer__tool hc-composer__tool--labeled"
             :title="t('chat.skillLibrary', '🧩 调用 skill（或输入 /）')"
-            :disabled="disabled || submitting || !(skills && skills.length)"
+            :disabled="disabled || submitting"
             @click="openSkillPicker"
           >
             <Puzzle :size="18" />
-            <span v-if="!isScenarioComposer" class="hc-composer__tool-label">
+            <span class="hc-composer__tool-label">
               {{ t('chat.composer.skill', '技能') }}
             </span>
           </button>
           <button
-            class="hc-composer__tool"
-            :class="{ 'hc-composer__tool--labeled': !isScenarioComposer }"
+            class="hc-composer__tool hc-composer__tool--labeled"
             :title="t('chat.promptLibrary', '✨ prompt / 命令（或输入 /）')"
             :disabled="disabled || submitting"
             @click="openPromptPicker"
           >
             <Sparkles :size="18" />
-            <span v-if="!isScenarioComposer" class="hc-composer__tool-label">
+            <span class="hc-composer__tool-label">
               {{ t('chat.composer.prompt', '提示词') }}
             </span>
-          </button>
-          <button
-            v-if="isScenarioComposer"
-            class="hc-composer__tool"
-            :class="{ 'hc-composer__tool--recording': isListening }"
-            :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
-            :disabled="disabled || submitting || isGenMode"
-            @click="toggleListening"
-          >
-            <Mic :size="18" />
           </button>
           <!-- 场景输入行动作锚点：场景包扩展位（ChatInput 零场景知识）。K12 手动识题按钮已删
                （BUG-20260711-E：识题=图片自动改道，原型「零手动按钮」），锚点保留给后续场景。 -->

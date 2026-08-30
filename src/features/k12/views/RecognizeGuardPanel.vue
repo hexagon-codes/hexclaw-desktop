@@ -26,7 +26,6 @@ import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import HcDisclosureButton from '@/components/common/HcDisclosureButton.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
-import TutoringTipsPanel from './TutoringTipsPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import SourceIssueResolver from '../components/SourceIssueResolver.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
@@ -92,6 +91,8 @@ const props = defineProps<{
     Record<'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art', string>
   >
   initialImage?: string
+  /** 已固化消息资产的只读展示地址；变化时不得重新创建图片任务。 */
+  sourceImage?: string
   initialFile?: File
   /** 新选图片 asset receipt 后持久同一条用户消息；失败时不得创建 ImageTask。 */
   onSourceStored?: (receipt: ScenarioComposerImageAssetReceipt) => Promise<boolean>
@@ -238,7 +239,7 @@ const retryable = ref(false)
 const retrySubmitting = ref(false)
 const currentTaskStage = ref('')
 const taskCreatedAt = ref<number>()
-const taskUpdatedAt = ref<number>()
+const taskCompletedAt = ref<number>()
 const automaticBudgetSeconds = ref<number>()
 const automaticStartedAt = ref<number>()
 const automaticDeadlineAt = ref<number>()
@@ -248,22 +249,6 @@ let runtimeClock: ReturnType<typeof setInterval> | null = null
 const confirmed = ref(false)
 const correctionMode = ref(false)
 const selectedSubject = ref('')
-const subjectTextbookKeys: Record<
-  string,
-  'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art'
-> = {
-  数学: 'math',
-  语文: 'chinese',
-  英语: 'english',
-  科学: 'science',
-  信息科技: 'information_technology',
-  美术: 'art',
-}
-const activeTextbook = computed(() => {
-  const key = subjectTextbookKeys[selectedSubject.value]
-  if (!key) return props.textbook || ''
-  return props.textbooks?.[key] || (key === 'math' ? props.textbook || '' : '')
-})
 const batchWorking = ref(false)
 const confirming = ref(false)
 // Desktop 只持有 facade identity/version；服务端内部目标身份不泄露到客户端。
@@ -370,6 +355,24 @@ const taskShellTitle = computed(() => {
   if (currentTaskIntent.value === 'artwork') return '美术作品'
   return '图片任务'
 })
+const taskContinuesInBackground = computed(() =>
+  [
+    'routing',
+    'queued',
+    'normalizing',
+    'recognizing',
+    'locating',
+    'assessing',
+    'rendering',
+    'projecting',
+    'preparing',
+    'feedback_pending',
+    'recovering',
+  ].includes(currentTaskStage.value),
+)
+const collapsedTaskSummary = computed(() =>
+  taskContinuesInBackground.value ? '任务已收起 · 后台继续处理' : '任务已收起',
+)
 const taskProviderDisplayName = computed(() => frozenProviderDisplayName.value)
 const taskModelDisplayName = computed(() => frozenModelID.value)
 const taskTimeDisplay = computed(() => {
@@ -473,7 +476,6 @@ const finalArtifactTitle = computed(() => {
   }
   return '整页批改完成'
 })
-
 interface SingleProblemProgressItem {
   kind: 'problem'
   key: string
@@ -733,7 +735,11 @@ function problemProgressMarker(problem: ImageTaskProblemProgressDTO): string {
 }
 
 function problemProgressQuestion(problem: ImageTaskProblemProgressDTO): string {
-  return rows.value.find((row) => row.problemId === problem.problem_id)?.rawProblem.trim() ?? ''
+  const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
+  const question = row?.rawProblem.trim() ?? ''
+  const answer = row?.rawStudentAnswer.trim() ?? ''
+  if (!answer || question.replace(/\s/g, '').endsWith(answer.replace(/\s/g, ''))) return question
+  return `${question}　原始作答：${answer}`
 }
 
 function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
@@ -1185,7 +1191,6 @@ const riskCount = computed(() => rows.value.filter((row) => row.confirmationRequ
 const unconfirmedRiskCount = computed(
   () => rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
 )
-const homeworkResultAnchor = ref<HTMLElement | null>(null)
 const homeworkTaskProgressState = computed<'running' | 'completed' | null>(() => {
   if (
     currentTaskIntent.value !== 'completed_homework' ||
@@ -1210,20 +1215,26 @@ const homeworkCurrentProblemNumber = computed(() => {
   return 0
 })
 const homeworkCompletedDurationSeconds = computed(() => {
-  if (automaticStartedAt.value === undefined || taskUpdatedAt.value === undefined) return 0
-  const updatedAt =
-    taskUpdatedAt.value > 1_000_000_000_000
-      ? Math.floor(taskUpdatedAt.value / 1000)
-      : Math.floor(taskUpdatedAt.value)
-  return Math.max(0, updatedAt - automaticStartedAt.value)
+  if (taskCreatedAt.value === undefined || taskCompletedAt.value === undefined) return null
+  const createdAt =
+    taskCreatedAt.value > 1_000_000_000_000
+      ? Math.floor(taskCreatedAt.value / 1000)
+      : Math.floor(taskCreatedAt.value)
+  const completedAt =
+    taskCompletedAt.value > 1_000_000_000_000
+      ? Math.floor(taskCompletedAt.value / 1000)
+      : Math.floor(taskCompletedAt.value)
+  return Math.max(0, completedAt - createdAt)
 })
 const homeworkTaskSummary = computed(() => {
   const coverage = taskCoverage.value
   const state = homeworkTaskProgressState.value
   if (!coverage || !state) return ''
   if (state === 'completed') {
-    const minutes = Math.floor(homeworkCompletedDurationSeconds.value / 60)
-    const seconds = homeworkCompletedDurationSeconds.value % 60
+    const duration = homeworkCompletedDurationSeconds.value
+    if (duration === null) return `作业批改完成　${coverage.total} 题`
+    const minutes = Math.floor(duration / 60)
+    const seconds = duration % 60
     return `作业批改完成　${coverage.total} 题　·　用时 ${minutes} 分 ${seconds} 秒`
   }
   return `正在批改作业　${coverage.processed}/${coverage.total}　·　已用时 ${formatDuration(elapsedSeconds.value)}`
@@ -1254,11 +1265,6 @@ const homeworkTimelineItems = computed<ActivityTimelineItem[]>(() => {
   }
   return items
 })
-
-function viewHomeworkResult(): void {
-  homeworkResultAnchor.value?.scrollIntoView({ block: 'nearest' })
-  homeworkResultAnchor.value?.focus({ preventScroll: true })
-}
 
 const OCR_RISK_LABELS: Record<OCRConfirmationReason, string> = {
   fraction: '分数线',
@@ -1397,6 +1403,7 @@ function projectImageTaskView(view: ImageTaskView) {
   currentDispatchVersion.value = view.dispatchVersion
   currentTaskStage.value = view.stage
   taskCreatedAt.value = view.createdAt
+  taskCompletedAt.value = view.completedAt
   automaticBudgetSeconds.value = view.automaticBudgetSeconds
   automaticStartedAt.value = view.automaticStartedAt
   automaticDeadlineAt.value = view.automaticDeadlineAt
@@ -1442,7 +1449,10 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   frozenProviderDisplayName.value = dispatch.provider_display_name?.trim() ?? ''
   frozenModelID.value = dispatch.model_id?.trim() ?? ''
   taskCreatedAt.value = dispatch.created_at
-  taskUpdatedAt.value = dispatch.updated_at
+  taskCompletedAt.value =
+    dispatch.target_projection?.kind === 'homework'
+      ? dispatch.target_projection.completed_at
+      : undefined
   projectRuntimeTiming(dispatch)
   currentTaskIntent.value = dispatch.task_intent
   const projection = dispatch.target_projection
@@ -1478,6 +1488,7 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
       dispatchId: dispatch.dispatch_id,
       dispatchVersion: dispatch.version,
       createdAt: dispatch.created_at,
+      completedAt: projection.completed_at,
       automaticBudgetSeconds: dispatch.automatic_budget_seconds,
       automaticStartedAt: dispatch.automatic_started_at,
       automaticDeadlineAt: dispatch.automatic_deadline_at,
@@ -2189,6 +2200,11 @@ function applyPhotoJobResult(result: PhotoJobResult) {
     const row = rows.value[byID >= 0 ? byID : (answerableIndexes[resultIndex] ?? -1)]
     if (!row) return
     row.bbox = item.question.bbox ?? row.bbox
+    row.rawStudentAnswer =
+      item.question.answer_raw_transcription ?? item.question.student_answer ?? row.rawStudentAnswer
+    row.studentAnswer =
+      item.question.answer_canonical_markdown ?? item.question.student_answer ?? row.studentAnswer
+    row.answerState = normalizeAnswerState(item.question)
     row.assessmentStatus = item.status
     const grade = item.grade
     switch (item.status) {
@@ -2230,7 +2246,9 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         break
       }
       default:
-        // unanswered / answer_unclear / failed：保持行现状（既有空白/未读清提示继续生效）。
+        // unanswered / answer_unclear / failed 也是服务端已发布的逐题终态。
+        row.graded = true
+        row.expanded = projectPhotoAssessmentStatus(item.status).defaultExpanded
         break
     }
   })
@@ -2284,7 +2302,7 @@ async function coldStart() {
       >
       <template v-else-if="collapsed">
         <span class="rec-panel__title">{{ taskShellTitle }}</span>
-        <span class="rec-panel__collapsed-summary">任务已收起 · 后台继续处理</span>
+        <span class="rec-panel__collapsed-summary">{{ collapsedTaskSummary }}</span>
       </template>
       <HcDisclosureButton
         class="rec-panel__x"
@@ -2380,14 +2398,6 @@ async function coldStart() {
       :ariaLabel="'已作答作业处理状态'"
       :items="homeworkTimelineItems"
       :initially-expanded="homeworkTaskProgressState === 'running'"
-      @view-result="viewHomeworkResult"
-    />
-    <div
-      v-if="homeworkTaskProgressState === 'completed'"
-      ref="homeworkResultAnchor"
-      class="rec-panel__result-anchor"
-      data-testid="homework-results-anchor"
-      tabindex="-1"
     />
 
     <div
@@ -2582,20 +2592,19 @@ async function coldStart() {
     </div>
 
     <section
-      v-if="finalArtifact && finalArtifactID && finalArtifactDigest"
+      v-if="
+        finalArtifact &&
+        finalArtifactID &&
+        finalArtifactDigest &&
+        skippedProblems.length
+      "
       class="rec-final-artifact"
       data-testid="image-task-final-artifact"
       :data-artifact-id="finalArtifactID"
       :data-artifact-digest="finalArtifactDigest"
       aria-label="批改最终结果"
     >
-      <b>{{ isWithSkips ? '处理完成 · 有跳过' : '处理完成' }}</b>
-      <h3>{{ finalArtifactTitle }}</h3>
-      <p v-if="taskCoverage">
-        共 {{ taskCoverage.total }} 题 · 已处理 {{ taskCoverage.processed }} 题 ·
-        {{ taskCoverage.skipped }} 题由家长跳过
-      </p>
-      <div v-if="skippedProblems.length" class="rec-final-artifact__skips">
+      <div class="rec-final-artifact__skips">
         <div
           v-for="problem in skippedProblems"
           :key="problem.problem_id"
@@ -2606,13 +2615,6 @@ async function coldStart() {
         </div>
       </div>
       <p v-if="isWithSkips">本次有 {{ taskCoverage?.skipped ?? 0 }} 题跳过，未生成完整辅导要点。</p>
-      <FinalArtifactActions
-        :artifact-id="finalArtifactID"
-        :artifact-digest="finalArtifactDigest"
-        :artifact-title="finalArtifactTitle"
-        :actions="['print', 'export_pdf']"
-        @intent="emit('finalArtifactAction', $event)"
-      />
     </section>
 
     <div
@@ -2828,10 +2830,22 @@ async function coldStart() {
     <!-- 已作答作业终态只投影一个结果面：批注原图与摘要在前，错题家长讲法和正确题折叠均内聚其中。 -->
     <PhotoGradeOverlay
       v-else-if="currentTaskIntent === 'completed_homework' && showOverlay"
-      :image="imageB64"
+      :image="sourceImage || imageB64"
       :annotated-image="annotatedImage"
       :marks="overlayMarks"
-    />
+    >
+      <template #actions>
+        <FinalArtifactActions
+          v-if="finalArtifact && finalArtifactID && finalArtifactDigest"
+          class="rec-final-artifact-actions"
+          :artifact-id="finalArtifactID"
+          :artifact-digest="finalArtifactDigest"
+          :artifact-title="finalArtifactTitle"
+          :actions="['print', 'export_pdf']"
+          @intent="emit('finalArtifactAction', $event)"
+        />
+      </template>
+    </PhotoGradeOverlay>
 
     <div
       v-else-if="
@@ -3011,27 +3025,6 @@ async function coldStart() {
       {{ t('k12.recognize.empty') }}
     </p>
 
-    <!-- 服务端持久确认成功后才内联辅导要点；未知结果只冻结生成，不清空已生成内容。 -->
-    <TutoringTipsPanel
-      v-if="
-        !hasBlankWorksheetGuide &&
-        (!taskCoverage || taskCoverage.state === 'full') &&
-        confirmed &&
-        selectedSubject &&
-        rows.length &&
-        allKnowledgePoints.length
-      "
-      :agent-id="agentId"
-      :dispatch-id="currentDispatchId"
-      :session-id="sessionId"
-      :final-artifact-id="finalArtifactID"
-      :final-artifact-digest="finalArtifactDigest"
-      :generation-locked="outcomeUnknown"
-      :grade="props.grade || ''"
-      :subject="selectedSubject"
-      :textbook="activeTextbook"
-      :knowledge-points="allKnowledgePoints"
-    />
     <MessageFooter
       v-if="showTaskFooter"
       class="rec-panel__footer msg-footer"
@@ -3855,6 +3848,22 @@ async function coldStart() {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--hc-accent);
+}
+.rec-final-artifact-actions {
+  gap: 6px;
+}
+.rec-final-artifact-actions :deep(.btn) {
+  min-height: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  color: var(--hc-text-primary);
+  font-size: 11px;
+  line-height: 1.2;
+}
+.rec-final-artifact-actions :deep(.btn:hover) {
+  background: var(--hc-bg-hover);
 }
 @media (max-width: 700px) {
   .rec-pipeline__branches {

@@ -97,6 +97,7 @@ export interface ImageTaskView {
   dispatchId: string
   dispatchVersion: number
   createdAt?: number
+  completedAt?: number
   automaticBudgetSeconds?: number
   automaticStartedAt?: number
   automaticDeadlineAt?: number
@@ -454,6 +455,7 @@ export const useK12Store = defineStore('k12', () => {
       dispatchId: dispatch.dispatch_id,
       dispatchVersion: dispatch.version,
       createdAt: dispatch.created_at,
+      completedAt: homework?.completed_at,
       automaticBudgetSeconds: dispatch.automatic_budget_seconds,
       automaticStartedAt: dispatch.automatic_started_at,
       automaticDeadlineAt: dispatch.automatic_deadline_at,

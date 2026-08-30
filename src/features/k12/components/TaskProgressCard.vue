@@ -16,10 +16,6 @@ const props = withDefaults(
   { initiallyExpanded: false },
 )
 
-const emit = defineEmits<{
-  viewResult: []
-}>()
-
 const expanded = ref(props.initiallyExpanded)
 </script>
 
@@ -43,16 +39,6 @@ const expanded = ref(props.initiallyExpanded)
     <div v-if="expanded && items.length" class="k12-task-progress__timeline">
       <ActivityTimeline :items="items" layout="stacked" running-indicator="typing-dots" />
     </div>
-
-    <button
-      v-if="state === 'completed'"
-      class="k12-task-progress__result"
-      data-testid="task-progress-result"
-      type="button"
-      @click="emit('viewResult')"
-    >
-      查看结果 ›
-    </button>
   </section>
 </template>
 
@@ -87,15 +73,4 @@ const expanded = ref(props.initiallyExpanded)
   border: 0;
 }
 
-.k12-task-progress__result {
-  justify-self: start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--hc-accent);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-}
 </style>

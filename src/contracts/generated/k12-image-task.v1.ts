@@ -220,16 +220,30 @@ export const K12_IMAGE_TASK_SCHEMA = {
       "additionalProperties": false,
       "allOf": [
         {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "provider"
+                  ]
+                },
+                {
+                  "required": [
+                    "model"
+                  ]
+                }
+              ]
+            }
+          },
           "if": {
             "properties": {
-              "operation": {
-                "not": {
-                  "const": "annotation"
-                }
+              "execution_kind": {
+                "const": "provider"
               }
             },
             "required": [
-              "operation"
+              "execution_kind"
             ]
           },
           "then": {
@@ -248,6 +262,12 @@ export const K12_IMAGE_TASK_SCHEMA = {
         "canonical_input_digest": {
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
+        },
+        "execution_kind": {
+          "enum": [
+            "provider",
+            "local_deterministic"
+          ]
         },
         "invocation_id": {
           "minLength": 1,
@@ -317,6 +337,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
       "required": [
         "invocation_id",
         "operation",
+        "execution_kind",
         "canonical_input_digest",
         "status",
         "attempt",

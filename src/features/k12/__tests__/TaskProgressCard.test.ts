@@ -44,7 +44,7 @@ describe('K12-INV-TASK-PROGRESS-001 durable task shell', () => {
     expect(timeline.attributes('data-activity-layout')).toBe('stacked')
   })
 
-  it('persists the approved completed summary and a separate result action', async () => {
+  it('persists the approved completed summary without a duplicate result action', () => {
     const wrapper = mountCard({
       state: 'completed',
       summary: '作业批改完成　4 题　·　2 题需确认　·　用时 1 分 42 秒',
@@ -55,8 +55,6 @@ describe('K12-INV-TASK-PROGRESS-001 durable task shell', () => {
     expect(wrapper.get('[data-testid="task-progress-summary"]').text()).toContain(
       '作业批改完成　4 题　·　2 题需确认　·　用时 1 分 42 秒',
     )
-    expect(wrapper.get('[data-testid="task-progress-result"]').text()).toBe('查看结果 ›')
-    await wrapper.get('[data-testid="task-progress-result"]').trigger('click')
-    expect(wrapper.emitted('viewResult')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="task-progress-result"]').exists()).toBe(false)
   })
 })

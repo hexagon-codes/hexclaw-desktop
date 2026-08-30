@@ -1858,6 +1858,7 @@ export interface ImageTaskProblemGroundingReceiptDTO extends ImageTaskGroundingE
 export interface ImageTaskHomeworkProjectionDTO {
   kind: 'homework'
   stage: ImageTaskHomeworkStage
+  completed_at?: number
   confirmation_state: 'pending' | 'confirmed'
   anchor_state: 'pending' | 'located' | 'degraded'
   recognition?: ImageTaskHomeworkRecognition
@@ -2160,6 +2161,7 @@ export interface ImageTaskRequestPolicyReceipt {
 export interface ImageTaskOperationReceipt {
   invocation_id: string
   operation: string
+  execution_kind: 'provider' | 'local_deterministic'
   canonical_input_digest: string
   provider?: string
   model?: string

@@ -54,6 +54,8 @@ const props = defineProps<{
   composerAction?: ScenarioComposerAction
   /** 当前消息窗口的 canonical ID 集合；不存在锚点的任务不投影到会话尾部。 */
   messageIds?: string[]
+  /** 当前消息图片的只读展示地址；不参与任务创建与刷新恢复。 */
+  messageImageSources?: Record<string, string>
 }>()
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
@@ -542,6 +544,7 @@ watch(
               :textbook="textbook"
               :textbooks="subjectTextbooks"
               :initial-image="task.payload?.previewUrl || task.payload?.dataUrl || ''"
+              :source-image="messageImageSources?.[task.sourceMessageId] || ''"
               :initial-file="task.payload?.file"
               :on-source-stored="task.payload?.onSourceStored"
               :request-id="task.sourceMessageId"

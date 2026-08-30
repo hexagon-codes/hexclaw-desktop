@@ -214,6 +214,7 @@ function markStatusLabel(mark: IndexedMark): string {
           <small>{{ summarySubtitle }}</small>
         </div>
         <div class="grade-result__actions">
+          <slot name="actions" />
           <button
             class="grade-action"
             data-testid="overlay-toggle"
