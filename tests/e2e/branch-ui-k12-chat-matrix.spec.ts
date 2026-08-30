@@ -66,6 +66,7 @@ type ImplementationMode =
   | 'writing-processing'
   | 'writing-result'
   | 'artwork-processing'
+  | 'artwork-failure'
   | 'artwork-result'
 
 type EvidenceClassification = 'COMPARABLE' | 'NOT_COMPARABLE'
@@ -91,16 +92,20 @@ interface PixelDiffReport {
   changed_bbox: [number, number, number, number] | null
 }
 
+const CREATIVE_FEEDBACK_FAILURE_STATE = '06b-artwork-feedback-failed-retryable'
 const TASK_SHELL_FOOTER_TARGET_STATES = new Set([
   '04-homework-recognition-confirmation',
   '05-homework-progress-and-source-resolver',
   '06-homework-failed-retryable',
+  CREATIVE_FEEDBACK_FAILURE_STATE,
 ])
 const ORDINARY_ASSISTANT_ACTIONS_STATE = '02b-ordinary-assistant-actions'
 const IMAGE_ROUTING_TARGET_STATE = '03-image-routing'
 const ACTION_TOOLBAR_TARGET_STATES = new Set([
   ORDINARY_ASSISTANT_ACTIONS_STATE,
-  ...TASK_SHELL_FOOTER_TARGET_STATES,
+  '04-homework-recognition-confirmation',
+  '05-homework-progress-and-source-resolver',
+  '06-homework-failed-retryable',
 ])
 
 interface ActionToolbarContract {
@@ -130,6 +135,17 @@ const ACTION_TOOLBAR_CONTRACTS: Record<string, ActionToolbarContract> = {
     width: 109,
   },
   '06-homework-failed-retryable': {
+    sequence: [
+      'button:赞',
+      'button:踩',
+      'divider',
+      'button:复制',
+      'button:朗读',
+      'button:重试当前阶段',
+    ],
+    width: 135,
+  },
+  [CREATIVE_FEEDBACK_FAILURE_STATE]: {
     sequence: [
       'button:赞',
       'button:踩',
@@ -410,6 +426,17 @@ const matrices: MatrixState[] = [
     classification: 'NOT_COMPARABLE',
     reason:
       '失败语义可达，但原型失败是静态演示切换、实现来自服务端 retryable 投影，题目 fixture 不同。',
+    referenceSelector: '#k12StageError',
+    implementationSelector: '[data-testid="recognize-stage-error"]',
+  },
+  {
+    name: CREATIVE_FEEDBACK_FAILURE_STATE,
+    title: '作品点评可重试失败的单一轻量活动行',
+    referenceMode: 'failure',
+    implementationMode: 'artwork-failure',
+    classification: 'COMPARABLE',
+    reason:
+      '作品点评复用共享 ActivityTimeline 轻量失败行；目标裁剪注入同一确定性文案，只比较无框活动行、阶段重试与宿主 exact-set，不比较业务正文。',
     referenceSelector: '#k12StageError',
     implementationSelector: '[data-testid="recognize-stage-error"]',
   },
@@ -832,13 +859,14 @@ function blankWorksheetDispatch() {
 
 function creativeDispatch(
   intent: 'writing' | 'artwork',
-  state: 'awaiting_confirmation' | 'feedback_pending' | 'feedback_ready',
+  state: 'awaiting_confirmation' | 'feedback_pending' | 'feedback_failed' | 'feedback_ready',
 ) {
   const writing = intent === 'writing'
   return {
     dispatch_id: DISPATCH,
     task_intent: intent,
     status: 'routed',
+    retryable: state === 'feedback_failed',
     provider_display_name: 'HexClaw-GPT',
     model_id: 'gpt-5.6-sol',
     intent_evidence: [writing ? 'long_form_handwriting' : 'artwork_visual_evidence'],
@@ -924,6 +952,7 @@ function dispatchFor(mode: ImplementationMode) {
   if (mode === 'writing-processing') return creativeDispatch('writing', 'feedback_pending')
   if (mode === 'writing-result') return creativeDispatch('writing', 'feedback_ready')
   if (mode === 'artwork-processing') return creativeDispatch('artwork', 'feedback_pending')
+  if (mode === 'artwork-failure') return creativeDispatch('artwork', 'feedback_failed')
   if (mode === 'artwork-result') return creativeDispatch('artwork', 'feedback_ready')
   return null
 }
@@ -1778,6 +1807,7 @@ const geometrySelectors = {
     '[data-k12-task-shell-footer] > .msg-actions--assistant:visible',
     '#chatNormalView .msg.bot[data-reasoning-fixture-message] .msg-actions--assistant:visible',
     '.k12-pipeline:visible',
+    '#k12StageError:visible',
     '.k12-source-issue-resolver:visible',
     '#k12-recognized .guide:visible',
     '#k12-batch .grade-result:visible',
@@ -1812,6 +1842,8 @@ const geometrySelectors = {
     '[data-testid="task-shell-footer"] > .hc-msg-actions--assistant:visible',
     '[data-testid="chat-message-assistant"] .hc-msg-actions--assistant:visible',
     '[data-testid="recognize-pipeline"]:visible',
+    '[data-testid="recognize-stage-error"]:visible',
+    '.rec-panel__err:visible',
     '[data-testid="tutoring-tips"]:visible',
     '[data-testid="photo-grade-overlay"]:visible',
     '[data-testid="photo-grade-overlay"] .grade-result__title:visible',
@@ -2209,6 +2241,214 @@ async function captureNormalizedActionToolbar(
   )
   try {
     await page.locator(`#${stageID}`).screenshot({ path: outputPath, animations: 'disabled' })
+  } finally {
+    await page
+      .locator(`#${stageID}`)
+      .evaluate((node) => node.remove())
+      .catch(() => {})
+  }
+}
+
+async function collectCreativeFailureTargetEvidence(
+  page: Page,
+  selector: string,
+  surface: 'reference' | 'currentSource',
+) {
+  const target = page.locator(selector)
+  const targetCount = await target.count()
+  const card = await target.first().evaluate((node) => {
+    const host = node as HTMLElement
+    const element = host.matches('.hc-activity-timeline')
+      ? host
+      : host.querySelector<HTMLElement>('[data-testid="activity-timeline"]')
+    if (!element) throw new Error('creative failure ActivityTimeline is missing')
+    const rect = element.getBoundingClientRect()
+    const style = getComputedStyle(element)
+    return {
+      text: host.innerText.replace(/\s+/g, ' ').trim(),
+      role: host.getAttribute('role') ?? '',
+      rect: {
+        width: Number(rect.width.toFixed(2)),
+        height: Number(rect.height.toFixed(2)),
+      },
+      style: {
+        display: style.display,
+        alignItems: style.alignItems,
+        gap: style.gap,
+        marginTop: style.marginTop,
+        padding: style.padding,
+        borderWidth: style.borderWidth,
+        borderRadius: style.borderRadius,
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+        color: style.color,
+        fontSize: style.fontSize,
+        lineHeight: style.lineHeight,
+        boxSizing: style.boxSizing,
+      },
+    }
+  })
+  const [legacyErrorCount, stageErrorCount, taskRetryCount, regenerateCount, notRetryableCount] =
+    await Promise.all([
+      page.locator('.rec-panel__err:visible').count(),
+      page.locator('[data-testid="recognize-stage-error"]:visible').count(),
+      page.locator('[data-testid="message-task-stage-retry"]:visible').count(),
+      page.locator('[data-testid="message-regenerate"]:visible').count(),
+      page.locator('[data-testid="recognize-stage-not-retryable"]:visible').count(),
+    ])
+  return {
+    surface,
+    targetCount,
+    card,
+    legacyErrorCount,
+    stageErrorCount,
+    taskRetryCount,
+    regenerateCount,
+    notRetryableCount,
+  }
+}
+
+type CreativeFailureTargetEvidence = Awaited<
+  ReturnType<typeof collectCreativeFailureTargetEvidence>
+>
+
+function validateCreativeFailureTargetSide(evidence: CreativeFailureTargetEvidence) {
+  const issues: string[] = []
+  const expectValue = (actual: unknown, expected: unknown, invariant: string) => {
+    if (actual !== expected) {
+      issues.push(
+        `${evidence.surface}: ${invariant} is ${String(actual)}, expected ${String(expected)}`,
+      )
+    }
+  }
+  expectValue(evidence.targetCount, 1, 'failure activity exact-set')
+  expectValue(evidence.card.role, 'alert', 'failure activity role')
+  expectValue(evidence.card.style.display, 'grid', 'failure activity display')
+  expectValue(evidence.card.style.alignItems, 'normal', 'failure activity align-items')
+  expectValue(evidence.card.style.gap, '9px', 'failure activity gap')
+  expectValue(evidence.card.style.marginTop, '0px', 'failure activity margin-top')
+  expectValue(evidence.card.style.padding, '0px', 'failure activity padding')
+  expectValue(evidence.card.style.borderWidth, '0px', 'failure activity border')
+  expectValue(evidence.card.style.borderRadius, '0px', 'failure activity border-radius')
+  expectValue(
+    evidence.card.style.backgroundColor,
+    'rgba(0, 0, 0, 0)',
+    'failure activity background',
+  )
+  expectValue(evidence.card.style.boxShadow, 'none', 'failure activity shadow')
+  expectValue(evidence.card.style.fontSize, '13px', 'failure activity font-size')
+  if (evidence.surface === 'currentSource') {
+    expectValue(evidence.legacyErrorCount, 0, 'legacy top error exact-set')
+    expectValue(evidence.stageErrorCount, 1, 'TaskShell error exact-set')
+    expectValue(evidence.taskRetryCount, 1, 'task-stage retry exact-set')
+    expectValue(evidence.regenerateCount, 0, 'generic regenerate exact-set')
+    expectValue(evidence.notRetryableCount, 0, 'not-retryable copy exact-set')
+    if (!evidence.card.text.includes('点评生成失败')) {
+      issues.push('currentSource: creative feedback failure copy is missing')
+    }
+    for (const forbidden of ['识题失败', '拍照批改', '本地模型慢', '超时']) {
+      if (evidence.card.text.includes(forbidden)) {
+        issues.push(`currentSource: creative feedback failure leaked forbidden copy ${forbidden}`)
+      }
+    }
+  }
+  return issues
+}
+
+async function compareCreativeFailureTarget(
+  referencePage: Page,
+  currentSourcePage: Page,
+  referenceSelector: string,
+  currentSourceSelector: string,
+) {
+  const [reference, currentSource] = await Promise.all([
+    collectCreativeFailureTargetEvidence(referencePage, referenceSelector, 'reference'),
+    collectCreativeFailureTargetEvidence(currentSourcePage, currentSourceSelector, 'currentSource'),
+  ])
+  const issues = [
+    ...validateCreativeFailureTargetSide(reference),
+    ...validateCreativeFailureTargetSide(currentSource),
+  ]
+  const contextualDifferences: string[] = []
+  for (const key of [
+    'display',
+    'alignItems',
+    'gap',
+    'marginTop',
+    'padding',
+    'borderWidth',
+    'borderRadius',
+    'backgroundColor',
+    'boxShadow',
+    'color',
+    'fontSize',
+    'boxSizing',
+  ] as const) {
+    if (reference.card.style[key] !== currentSource.card.style[key]) {
+      issues.push(
+        `failure activity ${key} differs: ${reference.card.style[key]} != ${currentSource.card.style[key]}`,
+      )
+    }
+  }
+  if (reference.card.style.lineHeight !== currentSource.card.style.lineHeight) {
+    contextualDifferences.push(
+      `inherited lineHeight differs: ${reference.card.style.lineHeight} != ${currentSource.card.style.lineHeight}`,
+    )
+  }
+  for (const dimension of ['width', 'height'] as const) {
+    if (Math.abs(reference.card.rect[dimension] - currentSource.card.rect[dimension]) > 0.01) {
+      contextualDifferences.push(
+        `parent-context ${dimension} differs: ${reference.card.rect[dimension]} != ${currentSource.card.rect[dimension]}`,
+      )
+    }
+  }
+  return {
+    classification: 'COMPARABLE_TARGET' as const,
+    normalization: 'shared TaskShell lightweight activity crop with deterministic business copy',
+    reference,
+    currentSource,
+    contextualDifferences,
+    issues,
+  }
+}
+
+async function captureNormalizedCreativeFailureTarget(
+  page: Page,
+  selector: string,
+  outputPath: string,
+) {
+  const stageID = `visual-creative-failure-${Math.random().toString(36).slice(2)}`
+  await page
+    .locator(selector)
+    .first()
+    .evaluate((node, id) => {
+      const stage = document.createElement('div')
+      stage.id = id
+      stage.dataset.visualNormalization = 'creative-failure-activity-white-stage'
+      Object.assign(stage.style, {
+        position: 'fixed',
+        left: '0',
+        top: '0',
+        width: '780px',
+        margin: '0',
+        padding: '0',
+        background: '#fff',
+        zIndex: '2147483647',
+      })
+      const clone = node.cloneNode(true) as HTMLElement
+      const label = clone.querySelector('b')
+      if (label) label.textContent = '点评生成失败，你可以重试。'
+      clone.querySelectorAll('small').forEach((detail) => detail.remove())
+      clone.removeAttribute('id')
+      Object.assign(clone.style, { width: '100%', margin: '0', boxSizing: 'border-box' })
+      stage.appendChild(clone)
+      document.body.appendChild(stage)
+    }, stageID)
+  try {
+    await page.locator(`#${stageID} > :first-child`).screenshot({
+      path: outputPath,
+      animations: 'disabled',
+    })
   } finally {
     await page
       .locator(`#${stageID}`)
@@ -3402,6 +3642,7 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
   let taskShellFooterTarget: ReturnType<typeof compareTaskShellFooterTarget> | null = null
   let actionToolbarTarget: Awaited<ReturnType<typeof compareActionToolbarTarget>> | null = null
   let imageRoutingTarget: Awaited<ReturnType<typeof compareImageRoutingTarget>> | null = null
+  let creativeFailureTarget: Awaited<ReturnType<typeof compareCreativeFailureTarget>> | null = null
   let processIssueExternalUiEvidence: ProcessIssueExternalUiEvidence | null = null
   let processIssueTargetCrop: {
     method: 'playwright-live-fractional-common-root-local-intersection'
@@ -3525,6 +3766,26 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
           currentSourcePage,
           state.implementationSelector!,
           'currentSource',
+          targetCurrentSourcePath,
+        ),
+      ])
+    }
+    if (state.name === CREATIVE_FEEDBACK_FAILURE_STATE) {
+      creativeFailureTarget = await compareCreativeFailureTarget(
+        referencePage,
+        currentSourcePage,
+        state.referenceSelector!,
+        state.implementationSelector!,
+      )
+      await Promise.all([
+        captureNormalizedCreativeFailureTarget(
+          referencePage,
+          state.referenceSelector!,
+          targetReferencePath,
+        ),
+        captureNormalizedCreativeFailureTarget(
+          currentSourcePage,
+          state.implementationSelector!,
           targetCurrentSourcePath,
         ),
       ])
@@ -3712,6 +3973,7 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
           taskShellFooterTarget,
           actionToolbarTarget,
           imageRoutingTarget,
+          creativeFailureTarget,
         },
         null,
         2,
@@ -3759,7 +4021,11 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
   }
 
   let targetDiffReport: PixelDiffReport | null = null
-  if (ACTION_TOOLBAR_TARGET_STATES.has(state.name) || state.name === IMAGE_ROUTING_TARGET_STATE) {
+  if (
+    ACTION_TOOLBAR_TARGET_STATES.has(state.name) ||
+    state.name === IMAGE_ROUTING_TARGET_STATE ||
+    state.name === CREATIVE_FEEDBACK_FAILURE_STATE
+  ) {
     try {
       targetDiffReport = await createBrowserPixelDiff(
         browser,
@@ -3787,9 +4053,13 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
     ...(taskShellFooterTarget?.issues ?? []),
     ...(actionToolbarTarget?.issues ?? []),
     ...(imageRoutingTarget?.issues ?? []),
+    ...(creativeFailureTarget?.issues ?? []),
   ]
   const materialIssues = [...processIssueMaterialIssues, ...targetMaterialIssues]
-  const gatedPixelDiff = state.name === IMAGE_ROUTING_TARGET_STATE ? targetDiffReport : diffReport
+  const gatedPixelDiff =
+    state.name === IMAGE_ROUTING_TARGET_STATE || state.name === CREATIVE_FEEDBACK_FAILURE_STATE
+      ? targetDiffReport
+      : diffReport
   const status =
     runtimeError || missingExpectedSurface
       ? 'BLOCKED'
@@ -3822,7 +4092,9 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
             ? 'expected-surface-visible-intersection'
             : state.name === IMAGE_ROUTING_TARGET_STATE
               ? 'approved-status-line-target; full viewport is evidence-only'
-              : 'full-viewport',
+              : state.name === CREATIVE_FEEDBACK_FAILURE_STATE
+                ? 'approved-TaskShell-lightweight-activity-target; business content normalized'
+                : 'full-viewport',
         processIssueTargetCrop,
         processIssueExternalUiEvidence,
         pixelDiff: diffReport,
@@ -3843,6 +4115,14 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
                 ...imageRoutingTarget,
                 pixelDiff: targetDiffReport,
                 pixelDiffGate: 'approved status-line target only; business content excluded',
+              }
+            : null,
+          creativeFailure: creativeFailureTarget
+            ? {
+                ...creativeFailureTarget,
+                pixelDiff: targetDiffReport,
+                pixelDiffGate:
+                  'shared TaskShell lightweight activity target with normalized business copy',
               }
             : null,
         },
@@ -3869,7 +4149,11 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
       if (body) await testInfo.attach(`${state.name}-${name}`, { body, contentType })
     }
   }
-  if (ACTION_TOOLBAR_TARGET_STATES.has(state.name) || state.name === IMAGE_ROUTING_TARGET_STATE) {
+  if (
+    ACTION_TOOLBAR_TARGET_STATES.has(state.name) ||
+    state.name === IMAGE_ROUTING_TARGET_STATE ||
+    state.name === CREATIVE_FEEDBACK_FAILURE_STATE
+  ) {
     for (const [name, file, contentType] of [
       ['target-reference', targetReferencePath, 'image/png'],
       ['target-current-source', targetCurrentSourcePath, 'image/png'],
@@ -3945,6 +4229,28 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
         .toBeLessThanOrEqual(0.001)
     }
   }
+  if (state.name === CREATIVE_FEEDBACK_FAILURE_STATE) {
+    expect
+      .soft(
+        targetDiffReport,
+        `${state.name} failure activity must emit a target pixel diff; see ${targetRatioPath}`,
+      )
+      .not.toBeNull()
+    expect
+      .soft(
+        creativeFailureTarget?.issues ?? ['creative failure target was not captured'],
+        `${state.name} failure activity and exact-set must match the approved contract; see ${statusPath}`,
+      )
+      .toEqual([])
+    if (targetDiffReport) {
+      expect
+        .soft(
+          targetDiffReport.changed_pixel_ratio,
+          `${state.name} normalized activity pixels must match the prototype; see ${targetRatioPath}`,
+        )
+        .toBeLessThanOrEqual(0.001)
+    }
+  }
   if (state.name === '10-blank-worksheet-parent-guide') {
     type GeometryNode = {
       rect: { x: number; y: number; width: number; height: number }
@@ -4013,6 +4319,14 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
             ...imageRoutingTarget,
             pixelDiff: targetDiffReport,
             pixelDiffGate: 'approved status-line target only; business content excluded',
+          }
+        : null,
+      creativeFailure: creativeFailureTarget
+        ? {
+            ...creativeFailureTarget,
+            pixelDiff: targetDiffReport,
+            pixelDiffGate:
+              'shared TaskShell lightweight activity target with normalized business copy',
           }
         : null,
     },

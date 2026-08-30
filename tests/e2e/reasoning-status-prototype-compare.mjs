@@ -4,8 +4,11 @@ import path from 'node:path'
 
 const ROOT = path.resolve(process.cwd())
 const EVIDENCE_ROOT = path.resolve(
-  ROOT,
-  '../hexclaw-docs/test/evidence/chat-deep-think-progress-001/visual-current-source',
+  process.env.HEX_REASONING_EVIDENCE_ROOT ??
+    path.resolve(
+      ROOT,
+      '../hexclaw-docs/test/evidence/chat-deep-think-progress-001/visual-current-source',
+    ),
 )
 const REFERENCE_URL = process.env.HEX_REASONING_REFERENCE_URL ?? 'http://127.0.0.1:16070/app.html'
 const IMPLEMENTATION_URL =
@@ -14,6 +17,7 @@ const IMPLEMENTATION_URL =
 const VIEWPORT = { width: 1440, height: 900 }
 const PIXEL_THRESHOLD = 8
 const MAX_CHANGED_PIXEL_RATIO = 0.001
+const REQUESTED_STATE = process.env.HEX_REASONING_STATE?.trim() ?? ''
 
 const states = [
   {
@@ -194,6 +198,16 @@ const controlStates = [
   { id: 'chat-toggle-unknown-off', support: 'unknown', request: 'off' },
   { id: 'chat-toggle-unknown-on', support: 'unknown', request: 'on' },
 ]
+
+const selectedStates = REQUESTED_STATE
+  ? states.filter((state) => state.id === REQUESTED_STATE)
+  : states
+const selectedControlStates = REQUESTED_STATE
+  ? controlStates.filter((state) => state.id === REQUESTED_STATE)
+  : controlStates
+if (REQUESTED_STATE && selectedStates.length + selectedControlStates.length === 0) {
+  throw new Error(`unknown reasoning visual state: ${REQUESTED_STATE}`)
+}
 
 const frameStyles = `
   html, body { margin: 0 !important; width: 100%; min-height: 100%; background: var(--hc-bg-main) !important; }
@@ -847,7 +861,7 @@ const implementationPage = await implementationContext.newPage()
 const results = []
 
 try {
-  for (const state of states) {
+  for (const state of selectedStates) {
     await Promise.all([
       prepareReference(referencePage, state),
       prepareImplementation(implementationPage, state),
@@ -909,7 +923,7 @@ try {
     results.push({ id: state.id, status, semanticDifferences: semanticDiffs, pixels })
   }
 
-  for (const state of controlStates) {
+  for (const state of selectedControlStates) {
     const controlReferencePage = await referenceContext.newPage()
     const controlImplementationPage = await implementationContext.newPage()
     try {

@@ -97,6 +97,7 @@ function creativeDispatch(
     | 'feedback_ready'
     | 'feedback_failed'
     | 'recovering' = 'feedback_ready',
+  retryable = false,
 ) {
   const writing = intent === 'writing'
   return {
@@ -104,6 +105,7 @@ function creativeDispatch(
       dispatch_id: `dispatch-${intent}`,
       task_intent: intent,
       status: 'routed',
+      retryable,
       intent_evidence: [writing ? 'long_form_handwriting' : 'artwork_visual_evidence'],
       intent_confidence: 0.99,
       confirmation_candidates: [],
@@ -116,6 +118,8 @@ function creativeDispatch(
         work: { work_id: 'work-1', display_name: writing ? '语文写作' : '美术作品' },
       },
       progress: { operation: 'promotion', state: feedbackState },
+      provider_display_name: 'HexClaw-GPT',
+      model_id: 'gpt-5.6-sol',
       version: 2,
       created_at: 1,
       updated_at: 2,
@@ -291,12 +295,13 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     const wrapper = mountPanel()
     await flushPromises()
 
-    const progress = wrapper.get('[data-component="AssistantRunStatus"]')
+    const progress = wrapper.get('[data-component="ImageTaskRunStatus"]')
     expect(progress.text()).toBe('正在识别图片内容…')
     expect(progress.attributes('role')).toBe('status')
     expect(progress.attributes('aria-live')).toBe('polite')
-    expect(progress.findAll('.hc-assistant-run-status__spinner')).toHaveLength(1)
-    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+    expect(progress.findAll('.hc-assistant-run-status__spinner')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(1)
+    expect(wrapper.findAll('.hc-typing-dots__dot')).toHaveLength(3)
     expect(wrapper.text()).not.toContain('美术作品')
   })
 
@@ -495,6 +500,9 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
         expect(feedback.text()).toContain(heading)
       }
       expect(feedback.text()).not.toContain('##')
+      const footer = wrapper.get('[data-testid="task-shell-footer"]')
+      expect(footer.text()).toContain('HexClaw-GPT')
+      expect(footer.text()).toContain('gpt-5.6-sol')
       wrapper.unmount()
       h.create.mockReset()
       h.get.mockReset()
@@ -604,4 +612,40 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(h.retry).not.toHaveBeenCalled()
     expect(h.cancel).not.toHaveBeenCalled()
   })
+
+  it.each(['writing', 'artwork'] as const)(
+    '%s feedback failure renders one intent-correct TaskShell error and one stage retry',
+    async (intent) => {
+      h.create.mockResolvedValue({
+        created: true,
+        ...creativeDispatch(intent, 'feedback_failed', true),
+      })
+      h.retry.mockRejectedValueOnce(
+        new Error('usecase: 取作品: records: 查询失败: context canceled'),
+      )
+
+      const wrapper = mountPanel()
+      await flushPromises()
+
+      expect(wrapper.findAll('[data-testid="recognize-stage-error"]')).toHaveLength(1)
+      expect(wrapper.find('.rec-panel__err').exists()).toBe(false)
+      const error = wrapper.get('[data-testid="recognize-stage-error"]')
+      expect(error.text()).toContain('点评生成失败')
+      for (const forbidden of ['识题失败', '拍照批改', '本地模型慢', '超时']) {
+        expect(error.text()).not.toContain(forbidden)
+      }
+      expect(wrapper.findAll('[data-testid="message-task-stage-retry"]')).toHaveLength(1)
+      expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
+
+      await wrapper.get('[data-testid="message-task-stage-retry"]').trigger('click')
+      await flushPromises()
+
+      expect(h.retry).toHaveBeenCalledTimes(1)
+      expect(wrapper.get('[data-testid="recognize-stage-error"]').text()).toContain('点评生成失败')
+      expect(wrapper.text()).not.toContain('usecase')
+      expect(wrapper.text()).not.toContain('records')
+      expect(wrapper.text()).not.toContain('context canceled')
+      wrapper.unmount()
+    },
+  )
 })

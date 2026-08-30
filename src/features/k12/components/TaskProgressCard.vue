@@ -41,7 +41,7 @@ const expanded = ref(props.initiallyExpanded)
     </div>
 
     <div v-if="expanded && items.length" class="k12-task-progress__timeline">
-      <ActivityTimeline :items="items" :layout="state === 'running' ? 'branch-grid' : 'stacked'" />
+      <ActivityTimeline :items="items" layout="stacked" running-indicator="typing-dots" />
     </div>
 
     <button
@@ -60,31 +60,31 @@ const expanded = ref(props.initiallyExpanded)
 .k12-task-progress {
   display: grid;
   gap: 9px;
-  padding: 10px 11px;
-  border: 1px solid var(--hc-border);
-  border-radius: 11px;
-  background: var(--hc-bg-card);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .k12-task-progress__header {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 4px;
 }
 
 .k12-task-progress__summary {
   min-width: 0;
-  flex: 1;
-  color: var(--hc-text-primary);
+  flex: 0 1 auto;
+  color: var(--hc-text-secondary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.5;
 }
 
 .k12-task-progress__timeline {
-  padding-top: 9px;
-  border-top: 1px solid var(--hc-divider);
+  padding-top: 0;
+  border: 0;
 }
 
 .k12-task-progress__result {
@@ -98,5 +98,4 @@ const expanded = ref(props.initiallyExpanded)
   font-size: 12.5px;
   font-weight: 600;
 }
-
 </style>

@@ -151,7 +151,11 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
     await Promise.all([retry.trigger('click'), retry.trigger('click')])
 
     expect(h.retryTask).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-testid="recognize-retry-processing"]').text()).not.toBe('')
+    expect(wrapper.get('[data-testid="recognize-stage-error"]').text()).toContain(
+      '正在处理同一个任务',
+    )
+    expect(wrapper.findAll('[data-testid="recognize-stage-error"] .hc-typing-dots')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="recognize-stage-error"] .hc-typing-dots__dot')).toHaveLength(3)
 
     resolveRetry(dispatch('recovering', false))
     await flushPromises()

@@ -9,11 +9,10 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const REFERENCE_URL = process.env.HEX_K12_REFERENCE_URL?.trim() || 'http://127.0.0.1:16070/app.html'
-const SOURCE_URL = 'http://127.0.0.1:5173'
-const EVIDENCE_ROOT = path.resolve(
-  desktopRoot,
-  '../hexclaw-docs/test/evidence/k12-skin-desktop-v9-20260802',
-)
+const SOURCE_URL = process.env.HEX_UI_IMPLEMENTATION_URL?.trim() || 'http://127.0.0.1:5173'
+const EVIDENCE_ROOT =
+  process.env.HEX_UI_EVIDENCE_ROOT?.trim() ||
+  path.resolve(desktopRoot, '../hexclaw-docs/test/evidence/k12-skin-desktop-v9-20260802')
 const PIXEL_DIFF_TOOL = path.resolve('tests/e2e/tools/visual_pixel_diff.py')
 const VIEWPORT = { width: 2048, height: 924 }
 const K12_RECORD = JSON.stringify({ version: 1, preference: 'k12', introSeen: true })
@@ -2202,7 +2201,7 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
         await expect(task.getByTestId('activity-timeline')).toHaveCount(1)
         await expect(task.getByTestId('activity-timeline')).toHaveAttribute(
           'data-activity-layout',
-          'branch-grid',
+          'stacked',
         )
         const runningTaskVisuals = await task.evaluate((node) => {
           const timeline = node.querySelector<HTMLElement>('[data-testid="activity-timeline"]')
@@ -2216,9 +2215,32 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
           return {
             body: body?.getBoundingClientRect().toJSON() ?? null,
             progress: progress?.getBoundingClientRect().toJSON() ?? null,
+            progressStyle: progress
+              ? {
+                  padding: getComputedStyle(progress).padding,
+                  borderWidth: getComputedStyle(progress).borderWidth,
+                  borderRadius: getComputedStyle(progress).borderRadius,
+                  backgroundColor: getComputedStyle(progress).backgroundColor,
+                  boxShadow: getComputedStyle(progress).boxShadow,
+                }
+              : null,
             timelineColumns: timeline
               ? getComputedStyle(timeline).gridTemplateColumns.split(' ').length
               : 0,
+            firstMarker: timeline
+              ? (() => {
+                  const marker = timeline.querySelector<HTMLElement>(
+                    '.hc-activity-timeline__marker',
+                  )
+                  return marker
+                    ? {
+                        width: getComputedStyle(marker).width,
+                        height: getComputedStyle(marker).height,
+                        backgroundColor: getComputedStyle(marker).backgroundColor,
+                      }
+                    : null
+                })()
+              : null,
             slots: slots.map((slot) => {
               const style = getComputedStyle(slot)
               return {
@@ -2229,6 +2251,37 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
             }),
           }
         })
+        const referenceTaskVisuals = await reference
+          .locator('[data-k12-task-shell]:visible')
+          .first()
+          .evaluate((node) => {
+            const progress = node.querySelector<HTMLElement>('.k12-pipeline')
+            const timeline = node.querySelector<HTMLElement>('.k12-pipeline__branches')
+            const marker = timeline?.querySelector<HTMLElement>('.k12-pipeline__branch > i')
+            const progressStyle = progress ? getComputedStyle(progress) : null
+            const markerStyle = marker ? getComputedStyle(marker) : null
+            return {
+              progressStyle: progressStyle
+                ? {
+                    padding: progressStyle.padding,
+                    borderWidth: progressStyle.borderWidth,
+                    borderRadius: progressStyle.borderRadius,
+                    backgroundColor: progressStyle.backgroundColor,
+                    boxShadow: progressStyle.boxShadow,
+                  }
+                : null,
+              timelineColumns: timeline
+                ? getComputedStyle(timeline).gridTemplateColumns.split(' ').length
+                : 0,
+              firstMarker: markerStyle
+                ? {
+                    width: markerStyle.width,
+                    height: markerStyle.height,
+                    backgroundColor: markerStyle.backgroundColor,
+                  }
+                : null,
+            }
+          })
         expect(runningTaskVisuals.body).not.toBeNull()
         expect(runningTaskVisuals.progress).not.toBeNull()
         expect(
@@ -2237,7 +2290,21 @@ test.describe('K12-SKIN-DESKTOP v9 @ WebKit', () => {
         expect(
           Math.abs(runningTaskVisuals.progress!.width - runningTaskVisuals.body!.width),
         ).toBeLessThanOrEqual(1)
-        expect(runningTaskVisuals.timelineColumns).toBe(2)
+        for (const visuals of [runningTaskVisuals, referenceTaskVisuals]) {
+          expect(visuals.progressStyle).toEqual({
+            padding: '0px',
+            borderWidth: '0px',
+            borderRadius: '0px',
+            backgroundColor: 'rgba(0, 0, 0, 0)',
+            boxShadow: 'none',
+          })
+          expect(visuals.timelineColumns).toBe(1)
+          expect(visuals.firstMarker).toEqual({
+            width: '16px',
+            height: '16px',
+            backgroundColor: 'rgba(0, 0, 0, 0)',
+          })
+        }
         expect(runningTaskVisuals.slots).toHaveLength(3)
         for (const slot of runningTaskVisuals.slots) {
           expect(slot.minHeight).toBe('52px')

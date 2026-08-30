@@ -13,9 +13,7 @@ function testI18n() {
   })
 }
 
-function mountCard(
-  props: InstanceType<typeof TaskProgressCard>['$props'],
-) {
+function mountCard(props: InstanceType<typeof TaskProgressCard>['$props']) {
   return mount(TaskProgressCard, {
     props,
     global: { plugins: [testI18n()] },
@@ -42,7 +40,8 @@ describe('K12-INV-TASK-PROGRESS-001 durable task shell', () => {
     expect(wrapper.text()).not.toContain('收起')
 
     await wrapper.get('[data-testid="task-progress-disclosure"]').trigger('click')
-    expect(wrapper.find('[data-testid="activity-timeline"]').exists()).toBe(true)
+    const timeline = wrapper.get('[data-testid="activity-timeline"]')
+    expect(timeline.attributes('data-activity-layout')).toBe('stacked')
   })
 
   it('persists the approved completed summary and a separate result action', async () => {

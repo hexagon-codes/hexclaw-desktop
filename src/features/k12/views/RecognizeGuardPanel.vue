@@ -18,7 +18,7 @@ import { formatTime } from '@/utils/time'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
+import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
@@ -332,6 +332,22 @@ function projectRuntimeTiming(dispatch: ImageTaskDispatchDTO): void {
   runtimeNowSeconds.value = Math.floor(Date.now() / 1000)
 }
 const currentTaskIntent = ref<ImageTaskIntent>('unknown')
+
+function isCreativeFeedbackFailure(intent: ImageTaskIntent, stage: string): boolean {
+  return (intent === 'writing' || intent === 'artwork') && stage === 'feedback_failed'
+}
+
+function taskStageSupportsRetry(stage: string): boolean {
+  return stage === 'failed_retryable' || stage === 'feedback_failed'
+}
+
+function taskFailureMessage(intent: ImageTaskIntent, stage: string, canRetry: boolean): string {
+  if (isCreativeFeedbackFailure(intent, stage)) {
+    return t(canRetry ? 'k12.works.initialReviewFailed' : 'k12.works.reviewFailed')
+  }
+  return t('k12.recognize.jobFailed')
+}
+
 interface CreativeConflictRow {
   segmentId: string
   rawText: string
@@ -365,11 +381,11 @@ const taskTimeDisplay = computed(() => {
 const showTaskFooter = computed(
   () =>
     !!currentDispatchId.value &&
-    !['completed', 'feedback_ready', 'promoted', 'cancelled'].includes(currentTaskStage.value),
+    !['completed', 'promoted', 'cancelled'].includes(currentTaskStage.value),
 )
 const showTaskRetry = computed(
   () =>
-    currentTaskStage.value === 'failed_retryable' &&
+    taskStageSupportsRetry(currentTaskStage.value) &&
     retryable.value &&
     !retrySubmitting.value &&
     !outcomeUnknown.value,
@@ -379,6 +395,66 @@ const unconfirmedCreativeConflictCount = computed(
 )
 // recovering 仅表示同一个图片任务正在恢复；不是终态，也不提供二次操作入口。
 const outcomeUnknown = ref(false)
+const taskStageErrorText = computed(() =>
+  isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
+    ? errMsg.value
+    : `${t('k12.recognize.err')}：${errMsg.value}`,
+)
+const imageRoutingActivityItems = computed<ActivityTimelineItem[]>(() => [
+  {
+    id: 'image-routing',
+    state: 'running',
+    label: t('k12.recognize.routing'),
+  },
+])
+// 任务失败、恢复与作品点评进度只向共享活动时间线提供领域事实。
+const taskStatusActivityItems = computed<ActivityTimelineItem[]>(() => {
+  if (outcomeUnknown.value) {
+    return [
+      {
+        id: 'task-recovering',
+        state: 'running',
+        label: '正在恢复批改结果',
+        detail:
+          '系统正在查询同一个任务的服务端状态；不会重新创建任务或重复提交。恢复后会自动显示结果。',
+      },
+    ]
+  }
+  if (recognitionFailed.value && currentDispatchId.value) {
+    return [
+      {
+        id: 'task-failed',
+        state: retrySubmitting.value ? 'running' : 'failed',
+        label: retrySubmitting.value ? '正在处理同一个任务…' : taskStageErrorText.value,
+        detail: !retrySubmitting.value && !retryable.value
+            ? '当前状态不能安全重试，系统不会重复提交。'
+            : undefined,
+      },
+    ]
+  }
+  if (
+    (currentTaskIntent.value === 'writing' || currentTaskIntent.value === 'artwork') &&
+    !creativeResult.value &&
+    batchWorking.value
+  ) {
+    return [
+      {
+        id: 'creative-feedback-running',
+        state: 'running',
+        label: currentTaskIntent.value === 'artwork' ? '已识别出：美术作品' : '正在生成作品点评…',
+        detail: currentTaskIntent.value === 'artwork' ? '正在生成作品点评…' : undefined,
+      },
+    ]
+  }
+  return []
+})
+const taskStatusActivityTestID = computed(() => {
+  if (outcomeUnknown.value) return 'recognize-recovering'
+  if (recognitionFailed.value && currentDispatchId.value) return 'recognize-stage-error'
+  return currentTaskIntent.value === 'artwork'
+    ? 'artwork-feedback-progress'
+    : 'writing-feedback-progress'
+})
 const isWithSkips = computed(() => taskCoverage.value?.state === 'with_skips')
 const skippedProblems = computed(() => problemProgressSlots.value.filter(problemIsSkipped))
 const finalArtifactID = computed(() => {
@@ -1322,11 +1398,13 @@ function projectImageTaskView(view: ImageTaskView) {
   syncExecutionState(view.stage)
   currentTaskIntent.value = view.taskIntent
   projectCreativeIntake(view.creative)
-  retryable.value = view.retryable === true && view.stage === 'failed_retryable'
+  retryable.value = view.retryable === true && taskStageSupportsRetry(view.stage)
   recognitionFailed.value = ['failed_retryable', 'failed_terminal', 'feedback_failed'].includes(
     view.stage,
   )
-  errMsg.value = recognitionFailed.value ? t('k12.recognize.jobFailed') : ''
+  errMsg.value = recognitionFailed.value
+    ? taskFailureMessage(view.taskIntent, view.stage, retryable.value)
+    : ''
 
   const questions = view.questions
   if (questions.length && !rows.value.length) rows.value = guardRowsFromQuestions(questions)
@@ -1370,7 +1448,7 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
           ? projection.status
           : dispatch.status
   syncExecutionState(currentTaskStage.value)
-  retryable.value = dispatch.retryable === true && currentTaskStage.value === 'failed_retryable'
+  retryable.value = dispatch.retryable === true && taskStageSupportsRetry(currentTaskStage.value)
   if (projection?.kind === 'homework') {
     taskCoverage.value = projection.coverage ?? null
     finalArtifact.value = projection.final_artifact ?? null
@@ -1420,7 +1498,9 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
       ? dispatch.progress.state
       : ''
   recognitionFailed.value = dispatch.status === 'failed' || feedbackState === 'feedback_failed'
-  errMsg.value = recognitionFailed.value ? t('k12.recognize.jobFailed') : ''
+  errMsg.value = recognitionFailed.value
+    ? taskFailureMessage(dispatch.task_intent, currentTaskStage.value, retryable.value)
+    : ''
   recognizing.value =
     dispatch.status === 'routing' ||
     (projection?.kind === 'creative' && projection.status === 'preparing')
@@ -1700,7 +1780,11 @@ async function run() {
       (e as Error).name === 'AbortError'
     )
       return
-    errMsg.value = e instanceof Error ? e.message : String(e)
+    errMsg.value = isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
+      ? taskFailureMessage(currentTaskIntent.value, currentTaskStage.value, retryable.value)
+      : e instanceof Error
+        ? e.message
+        : String(e)
     recognitionFailed.value = true
     syncExecutionState(currentDispatchId.value ? 'recovering' : 'failed_retryable')
   } finally {
@@ -1739,7 +1823,11 @@ async function retryRecognitionStage() {
   } catch (error) {
     if (generation !== agentGeneration || (error as Error).name === 'AbortError') return
     recognitionFailed.value = true
-    errMsg.value = error instanceof Error ? error.message : String(error)
+    errMsg.value = isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
+      ? taskFailureMessage(currentTaskIntent.value, currentTaskStage.value, retryable.value)
+      : error instanceof Error
+        ? error.message
+        : String(error)
   } finally {
     if (generation === agentGeneration) retrySubmitting.value = false
     if (generation === agentGeneration && !outcomeUnknown.value) batchWorking.value = false
@@ -2165,6 +2253,8 @@ async function coldStart() {
     :class="{
       'rec-panel--conversation': !!initialImage || restoredFromBinding,
       'rec-panel--collapsed': collapsed,
+      'rec-panel--creative-task':
+        currentTaskIntent === 'writing' || currentTaskIntent === 'artwork',
       'rec-panel--homework-running': homeworkTaskProgressState === 'running',
       'rec-panel--blank-guide': hasBlankWorksheetGuide,
       'rec-panel--photo-result': showOverlay,
@@ -2236,58 +2326,36 @@ async function coldStart() {
       {{ recognizing ? t('k12.recognize.running') : t('k12.recognize.run') }}
     </button>
 
-    <div
-      v-if="
-        errMsg &&
-        !outcomeUnknown &&
-        (!recognitionFailed || currentTaskIntent !== 'completed_homework')
-      "
-      class="rec-panel__err"
-    >
+    <div v-if="errMsg && !outcomeUnknown && !currentDispatchId" class="rec-panel__err">
       {{ t('k12.recognize.err') }}：{{ errMsg }}
     </div>
 
-    <AssistantRunStatus
+    <div
       v-if="recognizing && currentTaskIntent === 'unknown'"
-      reasoning-request="off"
-      reasoning-support="unknown"
-      reasoning-execution="unknown"
-      :has-visible-answer="false"
-      :elapsed-seconds="0"
-      :status-label="t('k12.recognize.routing')"
-    />
-
-    <p
-      v-if="
-        currentTaskIntent === 'artwork' &&
-        !creativeResult &&
-        batchWorking &&
-        !recognitionFailed &&
-        !outcomeUnknown
-      "
-      class="rec-creative-progress"
-      data-testid="artwork-feedback-progress"
+      data-component="ImageTaskRunStatus"
       role="status"
+      aria-live="polite"
+      aria-atomic="true"
     >
-      <b>已识别出：美术作品</b>
-      <span aria-hidden="true">···</span>
-      <span>正在生成作品点评…</span>
-    </p>
+      <ActivityTimeline
+        :items="imageRoutingActivityItems"
+        layout="stacked"
+        running-indicator="typing-dots"
+      />
+    </div>
 
-    <p
-      v-if="
-        currentTaskIntent === 'writing' &&
-        !creativeResult &&
-        batchWorking &&
-        !recognitionFailed &&
-        !outcomeUnknown
-      "
-      class="rec-creative-progress"
-      data-testid="writing-feedback-progress"
-      role="status"
+    <div
+      v-if="taskStatusActivityItems.length"
+      class="rec-task-activity"
+      :data-testid="taskStatusActivityTestID"
+      :role="recognitionFailed ? 'alert' : 'status'"
     >
-      <span>正在生成作品点评…</span>
-    </p>
+      <ActivityTimeline
+        :items="taskStatusActivityItems"
+        layout="stacked"
+        :running-indicator="outcomeUnknown ? 'pulse' : 'typing-dots'"
+      />
+    </div>
 
     <p
       v-if="homeworkTaskProgressState === 'running'"
@@ -2317,13 +2385,10 @@ async function coldStart() {
 
     <div
       v-if="
-        outcomeUnknown ||
-        (!hasBlankWorksheetGuide &&
-          !showOverlay &&
-          ((currentTaskIntent === 'completed_homework' &&
-            (rows.length || recognitionFailed || recognizing || batchWorking || anchoring)) ||
-            ((currentTaskIntent === 'writing' || currentTaskIntent === 'artwork') &&
-              recognitionFailed)))
+        !hasBlankWorksheetGuide &&
+        !showOverlay &&
+        currentTaskIntent === 'completed_homework' &&
+        (rows.length || recognizing || batchWorking || anchoring)
       "
       class="rec-pipeline"
       data-testid="recognize-pipeline"
@@ -2504,31 +2569,6 @@ async function coldStart() {
           </div>
         </div>
       </div>
-      <div
-        v-if="recognitionFailed && !outcomeUnknown"
-        class="rec-pipeline__error"
-        data-testid="recognize-stage-error"
-        role="alert"
-      >
-        <span>{{ t('k12.recognize.err') }}：{{ errMsg }}</span>
-        <span v-if="!retryable" data-testid="recognize-stage-not-retryable"
-          >当前状态不能安全重试，系统不会重复提交。</span
-        >
-        <span v-if="retrySubmitting" data-testid="recognize-retry-processing" role="status"
-          >正在处理同一个任务…</span
-        >
-      </div>
-      <div
-        v-if="outcomeUnknown"
-        class="rec-pipeline__error is-unknown"
-        data-testid="recognize-recovering"
-        role="status"
-      >
-        <span
-          ><b>正在恢复批改结果</b
-          >系统正在查询同一个任务的服务端状态；不会重新创建任务或重复提交。恢复后会自动显示结果。</span
-        >
-      </div>
     </div>
 
     <section
@@ -2592,6 +2632,7 @@ async function coldStart() {
       <CreativeWorkFeedbackRenderer
         v-if="creativeResult.payload.feedback"
         :data-testid="`${creativeResult.taskIntent}-result-feedback`"
+        :work-type="creativeResult.taskIntent"
         :generation-id="creativeResult.payload.feedback.generation_id"
         :feedback-id="creativeResult.payload.feedback.structured_feedback.feedback_id"
         :projection-markdown="creativeResult.payload.feedback.projection_markdown"
@@ -3056,6 +3097,12 @@ async function coldStart() {
   top: 5px;
   right: 5px;
 }
+.rec-panel--conversation.rec-panel--creative-task .rec-panel__head {
+  position: static;
+  justify-content: flex-start;
+  width: 100%;
+  gap: 4px;
+}
 .rec-panel--collapsed.rec-panel--conversation .rec-panel__head {
   position: static;
   width: 100%;
@@ -3066,6 +3113,9 @@ async function coldStart() {
   transition:
     opacity 0.15s ease,
     background 0.15s ease;
+}
+.rec-panel--conversation.rec-panel--creative-task .rec-panel__x {
+  opacity: 1;
 }
 .rec-panel--collapsed.rec-panel--conversation .rec-panel__x {
   opacity: 1;
@@ -3246,6 +3296,11 @@ async function coldStart() {
   font-weight: 700;
   flex: 1;
 }
+.rec-panel--creative-task .rec-panel__title {
+  flex: 0 1 auto;
+  color: var(--hc-text-secondary);
+  font-weight: 500;
+}
 .rec-panel__collapsed-summary {
   color: var(--hc-text-muted);
   font-size: 11.5px;
@@ -3259,17 +3314,8 @@ async function coldStart() {
   line-height: 1.5;
   margin: 0;
 }
-.rec-creative-progress {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.rec-task-activity {
   margin: 0;
-  color: var(--hc-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.rec-creative-progress b {
-  color: var(--hc-text-primary);
 }
 .rec-panel__file {
   display: inline-flex;
@@ -3326,10 +3372,10 @@ async function coldStart() {
 }
 .rec-pipeline {
   margin: 9px 0 8px;
-  padding: 10px;
-  border: 1px solid var(--hc-border);
-  border-radius: 12px;
-  background: var(--hc-bg-input);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .rec-pipeline__head {
   display: flex;
@@ -3529,43 +3575,6 @@ async function coldStart() {
 .rec-pipeline__branch.is-degraded > i {
   background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
   color: var(--hc-warning);
-}
-.rec-pipeline__error {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 8px;
-  padding: 8px 9px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--hc-error) 7%, transparent);
-  color: var(--hc-error);
-  font-size: 10.5px;
-}
-.rec-pipeline__error span {
-  flex: 1;
-}
-.rec-pipeline__error button {
-  padding: 3px 7px;
-  border: 0.5px solid currentColor;
-  border-radius: 7px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.rec-pipeline__error.is-unknown {
-  align-items: flex-start;
-  background: color-mix(in srgb, var(--hc-warning) 10%, transparent);
-  color: var(--hc-text-secondary);
-}
-.rec-pipeline__error.is-unknown span {
-  line-height: 1.5;
-}
-.rec-pipeline__error.is-unknown b {
-  display: block;
-  margin-bottom: 1px;
-  color: var(--hc-warning);
-  font-size: 10.5px;
 }
 .rec-panel__subject {
   display: flex;

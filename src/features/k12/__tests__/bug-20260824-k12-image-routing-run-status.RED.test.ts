@@ -95,7 +95,7 @@ describe('K12 图片意图判定等待态', () => {
     })
     await flushPromises()
 
-    const routingStatus = wrapper.find('[data-component="AssistantRunStatus"]')
+    const routingStatus = wrapper.find('[data-component="ImageTaskRunStatus"]')
     expect.soft(wrapper.findAll('[role="status"]')).toHaveLength(1)
     expect.soft(routingStatus.exists()).toBe(true)
     expect.soft(routingStatus.exists() ? routingStatus.text() : '').toBe('正在识别图片内容…')
@@ -109,19 +109,18 @@ describe('K12 图片意图判定等待态', () => {
       .soft(routingStatus.exists() ? routingStatus.attributes('aria-atomic') : undefined)
       .toBe('true')
     expect
-      .soft(routingStatus.exists() ? routingStatus.classes() : [])
-      .toContain('hc-assistant-run-status')
-    expect
       .soft(wrapper.findAll('.hc-assistant-run-status__spinner[aria-hidden="true"]'))
-      .toHaveLength(1)
-    expect.soft(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+      .toHaveLength(0)
+    expect.soft(wrapper.findAll('.hc-typing-dots')).toHaveLength(1)
+    expect.soft(wrapper.findAll('.hc-typing-dots__dot')).toHaveLength(3)
 
     upload.resolve({ asset_id: 'asset://mingming/homework.png', size: 3 })
     await flushPromises()
 
-    expect(wrapper.findAll('[data-component="AssistantRunStatus"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-component="ImageTaskRunStatus"]')).toHaveLength(0)
     expect(wrapper.findAll('[data-testid="image-task-routing-progress"]')).toHaveLength(0)
-    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(0)
+    expect(wrapper.findAll('.hc-typing-dots')).toHaveLength(1)
+    expect(wrapper.findAll('.hc-typing-dots__dot')).toHaveLength(3)
     expect(wrapper.findAll('.k12-task-progress')).toHaveLength(1)
     wrapper.unmount()
   })

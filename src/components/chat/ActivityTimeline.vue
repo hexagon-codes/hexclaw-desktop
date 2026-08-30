@@ -6,8 +6,9 @@ withDefaults(
     items: ActivityTimelineItem[]
     /** Explicit presentation only. The default preserves existing thinking surfaces. */
     layout?: 'stacked' | 'branch-grid'
+    runningIndicator?: 'pulse' | 'typing-dots'
   }>(),
-  { layout: 'stacked' },
+  { layout: 'stacked', runningIndicator: 'pulse' },
 )
 </script>
 
@@ -15,7 +16,10 @@ withDefaults(
   <ol
     v-if="items.length"
     class="hc-activity-timeline"
-    :class="{ 'hc-activity-timeline--branch-grid': layout === 'branch-grid' }"
+    :class="{
+      'hc-activity-timeline--branch-grid': layout === 'branch-grid',
+      'hc-activity-timeline--typing-dots': runningIndicator === 'typing-dots',
+    }"
     :data-activity-layout="layout"
     data-testid="activity-timeline"
     role="list"
@@ -33,6 +37,14 @@ withDefaults(
           <circle cx="12" cy="12" r="9" />
           <path d="m8 12 2.5 2.5L16 9" />
         </svg>
+        <span
+          v-else-if="item.state === 'running' && runningIndicator === 'typing-dots'"
+          class="hc-typing-dots hc-typing-dots--inline"
+        >
+          <span class="hc-typing-dots__dot" />
+          <span class="hc-typing-dots__dot" />
+          <span class="hc-typing-dots__dot" />
+        </span>
         <span v-else-if="item.state === 'running'" class="hc-activity-timeline__pulse" />
         <span v-else>!</span>
       </span>
@@ -46,14 +58,18 @@ withDefaults(
 
 <style scoped>
 .hc-activity-timeline {
+  position: relative;
   display: grid;
   gap: 9px;
   margin: 0;
   padding: 0;
+  font-size: 13px;
+  line-height: 1.5;
   list-style: none;
 }
 
 .hc-activity-timeline__item {
+  position: relative;
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: 8px;
@@ -61,7 +77,28 @@ withDefaults(
   color: var(--hc-text-secondary);
 }
 
+.hc-activity-timeline--typing-dots .hc-activity-timeline__item {
+  grid-template-columns: 28px minmax(0, 1fr);
+}
+
+.hc-activity-timeline--typing-dots .hc-activity-timeline__marker {
+  width: 28px;
+}
+
+.hc-activity-timeline:not(.hc-activity-timeline--branch-grid)
+  .hc-activity-timeline__item:not(:last-child)::after {
+  position: absolute;
+  top: 16px;
+  bottom: -9px;
+  left: 7.5px;
+  width: 1px;
+  background: var(--hc-divider);
+  content: '';
+}
+
 .hc-activity-timeline__marker {
+  position: relative;
+  z-index: 1;
   display: grid;
   width: 16px;
   height: 16px;
