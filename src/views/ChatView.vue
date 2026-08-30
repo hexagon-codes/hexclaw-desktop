@@ -3740,7 +3740,7 @@ function startSidebarResize(event: MouseEvent) {
                       </div>
                     </div>
                   </div>
-                  <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
+                  <MessageFooter class="hc-msg__footer">
                     <div class="hc-msg__meta">
                       <span v-if="messageProviderDisplay(msg) || messageSourceDisplay(msg)">
                         {{ messageSourceDisplay(msg) }}
@@ -3751,6 +3751,7 @@ function startSidebarResize(event: MouseEvent) {
                         role="assistant"
                         :content="msg.content"
                         :feedback="messageFeedbackValue(msg)"
+                        :retry-disabled="isLiveAssistantMessage(msg)"
                         @retry="handleRetry(windowOffset + idx)"
                         @fork="handleFork(windowOffset + idx)"
                         @like="handleLike(msg.id)"

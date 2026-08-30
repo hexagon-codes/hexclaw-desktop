@@ -51,7 +51,7 @@ describe('prototype chat chrome fidelity', () => {
     const userFooterStart = userFooterTag?.index ?? -1
     expect(assistantFooterStart).toBeGreaterThan(-1)
     expect(userFooterStart).toBeGreaterThan(assistantFooterStart)
-    expect(assistantFooterTag?.[0]).toContain('v-if="!isLiveAssistantMessage(msg)"')
+    expect(assistantFooterTag?.[0]).not.toContain('v-if=')
 
     const assistantFooter = chatView.slice(assistantFooterStart, userFooterStart)
     const assistantMeta = assistantFooter.indexOf('<div class="hc-msg__meta">')
@@ -66,6 +66,7 @@ describe('prototype chat chrome fidelity', () => {
       'formatClockTime(msg.timestamp)',
     )
     expect(assistantFooter).toContain('formatClockTime(msg.timestamp)')
+    expect(assistantFooter).toContain(':retry-disabled="isLiveAssistantMessage(msg)"')
     expect(assistantFooter).not.toContain('hc-msg__actions-float')
 
     const userFooter = chatView.slice(

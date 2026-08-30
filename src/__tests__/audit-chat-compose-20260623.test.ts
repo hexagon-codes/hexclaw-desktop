@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldSendOnEnter, normalizePastedText, shouldAutoScroll, resolveChatScroll, COMPOSE_GUARD_MS } from '@/utils/chat-compose'
+import { imageSrc, shouldSendOnEnter, normalizePastedText, shouldAutoScroll, resolveChatScroll, COMPOSE_GUARD_MS } from '@/utils/chat-compose'
 
 const LS = String.fromCharCode(0x2028) // U+2028 行分隔
 const PS = String.fromCharCode(0x2029) // U+2029 段分隔
@@ -77,5 +77,12 @@ describe('会话滚动决策 resolveChatScroll', () => {
   it('会话内：贴底时自动跟随；点下翻浮标(force)强制到底', () => {
     expect(resolveChatScroll({ opening: false, force: false, userScrolledUp: false }).shouldScroll).toBe(true)
     expect(resolveChatScroll({ opening: false, force: true, userScrolledUp: true }).shouldScroll).toBe(true)
+  })
+})
+
+describe('K12 原生图片预览 URL', () => {
+  it('原样保留 hexclaw-preview 受控 URL', () => {
+    const preview = 'hexclaw-preview://localhost/lease-1'
+    expect(imageSrc({ data: preview, mime: 'image/png' })).toBe(preview)
   })
 })

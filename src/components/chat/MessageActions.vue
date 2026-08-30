@@ -24,11 +24,12 @@ const props = withDefaults(
     role: 'user' | 'assistant'
     content: string
     showRetry?: boolean
+    retryDisabled?: boolean
     showFork?: boolean
     retryMode?: 'regenerate' | 'task-stage'
     feedback?: 'like' | 'dislike' | null
   }>(),
-  { showRetry: true, showFork: true, retryMode: 'regenerate' },
+  { showRetry: true, retryDisabled: false, showFork: true, retryMode: 'regenerate' },
 )
 
 const emit = defineEmits<{
@@ -151,6 +152,7 @@ async function toggleSpeak() {
         :aria-label="t('chat.regenerate')"
         v-if="showRetry !== false && retryMode === 'regenerate'"
         data-testid="message-regenerate"
+        :disabled="retryDisabled"
         @click="emit('retry')"
       >
         <RotateCcw :size="14" />
@@ -301,6 +303,12 @@ async function toggleSpeak() {
 
 .hc-msg-actions__btn:active {
   transform: scale(0.9);
+}
+
+.hc-msg-actions__btn[data-testid='message-regenerate']:disabled {
+  cursor: default;
+  opacity: 0.45;
+  transform: none;
 }
 
 .hc-msg-actions__btn--copied {

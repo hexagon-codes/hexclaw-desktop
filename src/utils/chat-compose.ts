@@ -25,11 +25,11 @@ export function shouldSendOnEnter(
   return true
 }
 
-/** 附件图片 src：按 ChatAttachment.data 契约 auto-detect——已是 http(S)/data:/blob: URL 则原样，
+/** 附件图片 src：按 ChatAttachment.data 契约 auto-detect——已是 http(S)/data:/blob:/hexclaw-preview: URL 则原样，
  *  否则视为裸 base64 加 `data:<mime>;base64,` 前缀。避免对 data-URL/http 图双重前缀致破图。 */
 export function imageSrc(att: { data: string; mime: string }): string {
   const d = att.data
-  if (d.startsWith('http') || d.startsWith('data:') || d.startsWith('blob:')) return d
+  if (d.startsWith('http') || d.startsWith('data:') || d.startsWith('blob:') || d.startsWith('hexclaw-preview:')) return d
   return `data:${att.mime};base64,${d}`
 }
 
