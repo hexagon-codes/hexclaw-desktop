@@ -1093,6 +1093,7 @@ const overlayMarks = computed(() =>
       system_section_ordinal: r.systemSectionOrdinal,
       system_display_label: r.systemDisplayLabel,
       question: r.problem,
+      studentAnswer: r.rawStudentAnswer.trim() || r.studentAnswer.trim(),
       // solution 可能是整段 Markdown 推导；原图上只显示简短最终答案。
       correctAnswer: extractBriefFinalAnswer(r.solution),
       wrongStep: r.wrongStep,
@@ -1223,9 +1224,9 @@ const homeworkTaskSummary = computed(() => {
   if (state === 'completed') {
     const minutes = Math.floor(homeworkCompletedDurationSeconds.value / 60)
     const seconds = homeworkCompletedDurationSeconds.value % 60
-    return `作业批改完成　${coverage.total} 题　·　${riskCount.value} 题需确认　·　用时 ${minutes} 分 ${seconds} 秒`
+    return `作业批改完成　${coverage.total} 题　·　用时 ${minutes} 分 ${seconds} 秒`
   }
-  return `正在批改作业　${coverage.processed}/${coverage.total}　·　${riskCount.value} 题需确认　·　已用时 ${formatDuration(elapsedSeconds.value)}`
+  return `正在批改作业　${coverage.processed}/${coverage.total}　·　已用时 ${formatDuration(elapsedSeconds.value)}`
 })
 const homeworkTimelineItems = computed<ActivityTimelineItem[]>(() => {
   if (!homeworkTaskProgressState.value) return []
@@ -1233,16 +1234,22 @@ const homeworkTimelineItems = computed<ActivityTimelineItem[]>(() => {
     {
       id: 'structure-frozen',
       state: 'completed',
-      label: '题目结构已冻结',
-      detail: taskCoverage.value ? `共 ${taskCoverage.value.total} 个可作答小题` : '',
+      label: taskCoverage.value ? `已识别 ${taskCoverage.value.total} 题` : '题目识别完成',
+      detail: '题目顺序已冻结',
     },
   ]
-  if (homeworkTaskProgressState.value === 'running' && homeworkCurrentProblemNumber.value > 0) {
+  if (homeworkTaskProgressState.value === 'running') {
+    const coverage = taskCoverage.value
+    const composingArtifact = currentTaskStage.value === 'rendering' || currentTaskStage.value === 'projecting'
     items.push({
       id: 'grading-current',
       state: 'running',
-      label: `正在批改第 ${homeworkCurrentProblemNumber.value} 题`,
-      detail: `阶段预算 ${activeStageBudgetSeconds.value} 秒`,
+      label: composingArtifact
+        ? '正在生成批注图…'
+        : homeworkCurrentProblemNumber.value > 0
+          ? `正在核对第 ${homeworkCurrentProblemNumber.value} 题答案并整理家长讲法…`
+          : '正在核对答案并整理家长讲法…',
+      detail: coverage ? `已完成 ${coverage.processed}/${coverage.total} 题` : '',
     })
   }
   return items
@@ -2363,7 +2370,7 @@ async function coldStart() {
       data-testid="homework-task-running-lead"
     >
       📷
-      收到！已自动识别为<b>已作答作业</b>。每道题完成后会在原题位置稳定显示；需要核对的题不会阻塞其他清晰题。
+      收到！已自动识别为<b>已作答作业</b>。正在核对答案并整理家长讲法。
     </p>
 
     <TaskProgressCard
@@ -2404,13 +2411,16 @@ async function coldStart() {
       >
         <b>已作答作业</b>
         <span>{{
-          riskCount ? `清晰内容自动处理 · 仅核对 ${riskCount} 处不确定项` : '清晰内容自动处理'
+          unconfirmedRiskCount
+            ? `${unconfirmedRiskCount} 处不确定项需要确认 · 确认后继续批改`
+            : '清晰内容自动处理'
         }}</span>
       </div>
       <ol
         v-if="
           !outcomeUnknown &&
           currentTaskIntent === 'completed_homework' &&
+          homeworkTaskProgressState !== 'running' &&
           problemProgressSlots.length
         "
         class="rec-problem-progress"
@@ -3531,49 +3541,64 @@ async function coldStart() {
   color: var(--hc-text-muted);
 }
 .rec-pipeline__branches {
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+}
+.rec-pipeline__branches::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 7.5px;
+  width: 1px;
+  background: var(--hc-divider);
 }
 .rec-pipeline__branch {
-  display: flex;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: flex-start;
-  gap: 7px;
-  padding: 8px 9px;
-  border-radius: 9px;
-  background: var(--hc-bg-card);
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--hc-text-muted);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
 }
 .rec-pipeline__branch > i {
   display: grid;
   place-items: center;
   flex: none;
-  width: 19px;
-  height: 19px;
-  border-radius: 50%;
-  background: var(--hc-accent-subtle);
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  background: transparent;
   color: var(--hc-accent);
   font-style: normal;
-  font-weight: 800;
+  font-weight: 700;
 }
 .rec-pipeline__branch b {
   display: block;
-  color: var(--hc-text-primary);
-  font-size: 10.5px;
+  color: var(--hc-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
 }
 .rec-pipeline__branch small {
   display: block;
-  margin-top: 2px;
+  margin-top: 1px;
   line-height: 1.4;
 }
 .rec-pipeline__branch.is-done > i {
-  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
+  background: transparent;
   color: var(--hc-success);
 }
 .rec-pipeline__branch.is-degraded > i {
-  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  background: transparent;
   color: var(--hc-warning);
 }
 .rec-panel__subject {

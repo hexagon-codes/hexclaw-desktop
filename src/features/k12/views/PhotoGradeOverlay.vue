@@ -40,6 +40,8 @@ interface OverlayMark {
   system_display_label?: string
   /** 题干（降级文字批改时展示，供家长对位）。 */
   question?: string
+  /** OCR 冻结的学生原始作答。 */
+  studentAnswer?: string
   /** 正确答案（订正，错题时展示）。 */
   correctAnswer?: string
   /** 第一个可复核的错误步骤。 */
@@ -345,6 +347,12 @@ function markStatusLabel(mark: IndexedMark): string {
             <span v-if="m.question" class="pg-overlay__degraded-q">
               <MarkdownRenderer class="pg-overlay__md-inline" :content="m.question" />
             </span>
+            <span v-if="m.studentAnswer" class="pg-overlay__degraded-cause">
+              原始作答：<MarkdownRenderer
+                class="pg-overlay__md-inline"
+                :content="m.studentAnswer"
+              />
+            </span>
             <span
               v-if="
                 m._projection.summaryBucket !== 'correct' &&
@@ -402,6 +410,10 @@ function markStatusLabel(mark: IndexedMark): string {
               <span>{{ t('k12.overlay.question') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.question" />
             </div>
+            <div v-if="m.studentAnswer" class="grade-card__row">
+              <span>原始作答</span>
+              <MarkdownRenderer class="grade-card__md" :content="m.studentAnswer" />
+            </div>
             <div v-if="m._projection.tone !== 'scope' && m.correctAnswer" class="grade-card__row">
               <span>{{
                 m.status === 'correct_with_process_issue'
@@ -426,7 +438,7 @@ function markStatusLabel(mark: IndexedMark): string {
               <span v-if="m.status === 'correct_with_process_issue'">{{ m.errorCause }}</span>
               <MarkdownRenderer v-else class="grade-card__md" :content="m.errorCause" />
             </div>
-            <template v-if="m.parentGuide && m.status !== 'correct_with_process_issue'">
+            <template v-if="m.parentGuide">
               <div class="grade-card__row">
                 <span>答案</span>
                 <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.answer" />
@@ -475,13 +487,6 @@ function markStatusLabel(mark: IndexedMark): string {
                 <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.checking_method" />
               </div>
             </template>
-            <div
-              v-else-if="m.parentGuide && m.status === 'correct_with_process_issue'"
-              class="grade-card__row"
-            >
-              <span>家长怎么讲</span>
-              <span>{{ m.parentGuide.parent_teaching_sequence.join('；') }}</span>
-            </div>
             <div v-if="m.status === 'out_of_scope'" class="grade-wrong-step is-scope">
               {{ t('verify.outOfScope') }}
             </div>
@@ -504,6 +509,7 @@ function markStatusLabel(mark: IndexedMark): string {
                     class="grade-card__md"
                     :content="m.question"
                   />
+                  <small>原始作答：{{ m.studentAnswer || '—' }} · 正确</small>
                 </div>
               </div>
               <span v-if="correctMarks.length === 0" class="grade-correct-empty">{{
@@ -644,13 +650,13 @@ function markStatusLabel(mark: IndexedMark): string {
 }
 .grade-workspace {
   display: grid;
-  grid-template-columns: minmax(300px, 1.18fr) minmax(260px, 0.82fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 480px;
 }
 .grade-media {
   min-width: 0;
   padding: 14px;
-  border-right: 1px solid var(--hc-divider);
+  border-bottom: 1px solid var(--hc-divider);
   background: color-mix(in srgb, var(--hc-bg-input) 74%, transparent);
 }
 .grade-media__bar {
@@ -677,7 +683,7 @@ function markStatusLabel(mark: IndexedMark): string {
   position: relative;
   isolation: isolate;
   width: fit-content;
-  max-width: 430px;
+  max-width: min(680px, 100%);
   min-height: 160px;
   margin: 0 auto;
   overflow: hidden;
@@ -1048,13 +1054,6 @@ function markStatusLabel(mark: IndexedMark): string {
   margin: 0;
 }
 @media (max-width: 900px) {
-  .grade-workspace {
-    grid-template-columns: 1fr;
-  }
-  .grade-media {
-    border-right: 0;
-    border-bottom: 1px solid var(--hc-divider);
-  }
   .grade-summary {
     grid-template-columns: repeat(2, 1fr);
   }

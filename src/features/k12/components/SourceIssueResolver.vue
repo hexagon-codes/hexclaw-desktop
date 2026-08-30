@@ -346,7 +346,7 @@ onBeforeUnmount(releaseSourceImage)
   >
     <div class="source-resolver__head">
       <b>{{ displayLabel }} · 需要你确认</b>
-      <span>其他题继续处理</span>
+      <span>确认后继续批改</span>
     </div>
     <p data-source-issue-reason>{{ sourceIssueReason }}</p>
 
@@ -511,7 +511,7 @@ onBeforeUnmount(releaseSourceImage)
       >
         <p>
           {{ affectedCopy }} 将标记为“已跳过 ·
-          未判断对错”，不会写入错题、复习或学情；其他题继续处理。
+          未判断对错”，不会写入错题、复习或学情；确认后继续批改。
         </p>
         <button type="button" class="hc-btn hc-btn-primary" :disabled="locked" @click="confirmSkip">
           {{ scope === 'group' ? `确认跳过 ${problemIds.length} 题` : '确认跳过这题' }}
