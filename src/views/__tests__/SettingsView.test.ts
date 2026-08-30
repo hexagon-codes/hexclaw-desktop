@@ -1017,16 +1017,16 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
-    expect(body.get('[data-testid="custom-model-capability"]').text()).toContain('文本')
-    await selectHcOption(wrapper, 'custom-model-capability', 'Embedding')
+    expect(body.get('[data-testid="custom-model-cap-text"]')).toBeTruthy()
+    // For embedding-only, uncheck text and check embedding
+    await body.get('[data-testid="custom-model-cap-text"]').trigger('click')
+    await body.get('[data-testid="custom-model-cap-embedding"]').trigger('click')
     await body.get('[data-testid="custom-model-id"]').setValue('vendor/vector-v1')
     await body.get('[data-testid="custom-model-submit"]').trigger('click')
     await flushPromises()
 
     const updated = store.config!.llm.providers.find((item) => item.id === provider.id)!
-    expect(updated.models.find((model) => model.id === 'vendor/vector-v1')?.capabilities).toEqual([
-      'embedding',
-    ])
+    expect(updated.models.find((model) => model.id === 'vendor/vector-v1')?.capabilities).toEqual(['embedding'])
     expect(updated.selectedModelId).toBe('chat')
     expect(store.config!.llm.defaultModel).toBe('chat')
   })
@@ -1057,7 +1057,7 @@ describe('SettingsView — E2E 关键路径', () => {
       await card.get('.hc-model-chip--add').trigger('click')
       await flushPromises()
       const body = new DOMWrapper(document.body)
-      expect(body.get('[data-testid="custom-model-capability"]').text()).toContain('文本')
+      expect(body.get('[data-testid="custom-model-cap-text"]')).toBeTruthy()
       await body.get('[data-testid="custom-model-id"]').setValue(modelId)
       await body.get('[data-testid="custom-model-submit"]').trigger('click')
       await flushPromises()

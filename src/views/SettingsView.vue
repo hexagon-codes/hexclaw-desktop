@@ -87,9 +87,18 @@ const shownApiKeys = ref<Record<string, boolean>>({})
 const showAddProvider = ref(false)
 const addProviderType = ref<ProviderType>('openai')
 
-// 自定义模型输入
+// 自定义模型输入（多选，仅系统自动识别的能力）
 const newModelId = ref('')
-const newModelCapability = ref<ModelCapability>('text')
+const newModelCapability = ref<Record<ModelCapability, boolean>>({
+  text: true,
+  vision: false,
+  video: false,
+  audio: false,
+  code: false,
+  image_generation: false,
+  video_generation: false,
+  embedding: false,
+})
 const customModelDialogProviderId = ref<string | null>(null)
 const customModelInputRef = ref<HTMLInputElement | null>(null)
 const customModelDialogRef = ref<HTMLDivElement | null>(null)
@@ -260,7 +269,16 @@ function refreshAutoSaveDirtyState() {
 
 function resetPendingModelDraft() {
   newModelId.value = ''
-  newModelCapability.value = 'text'
+  newModelCapability.value = {
+    text: true,
+    vision: false,
+    video: false,
+    audio: false,
+    code: false,
+    image_generation: false,
+    video_generation: false,
+    embedding: false,
+  }
 }
 
 async function persistSettings({
@@ -878,8 +896,16 @@ function requestDeleteProviderModel(provider: ProviderConfig, model: ModelOption
   }
 }
 
-function capabilitiesForCustomModel(capability: ModelCapability): ModelCapability[] {
-  return capability === 'vision' ? ['text', 'vision'] : [capability]
+function capabilitiesForCustomModel(caps: Record<ModelCapability, boolean>): ModelCapability[] {
+  const selected = (Object.keys(caps) as ModelCapability[]).filter((cap) => caps[cap])
+  if (selected.length === 0) return ['text']
+  // 纯 embedding 模型（仅用于知识库）不含 text，由 isChatModel 区分
+  if (selected.includes('embedding') && selected.length === 1) return ['embedding']
+  // 混合时保证 text
+  if (selected.includes('embedding') && !selected.includes('text') && selected.length > 1) {
+    return [...new Set([...selected, 'text' as ModelCapability])] as ModelCapability[]
+  }
+  return [...new Set(selected)] as ModelCapability[]
 }
 
 function openCustomModelDialog(provider: ProviderConfig, event?: MouseEvent) {
@@ -968,7 +994,8 @@ function submitCustomModel() {
   const provider = customModelDialogProvider.value
   if (!provider || !canSubmitCustomModel.value || !addCustomModel(provider)) return
   const addedModelId = normalizedNewModelId.value
-  const embeddingOnly = newModelCapability.value === 'embedding'
+  const caps = capabilitiesForCustomModel(newModelCapability.value)
+  const embeddingOnly = caps.length === 1 && caps[0] === 'embedding'
   closeCustomModelDialog()
   toast.success(
     embeddingOnly
@@ -2536,13 +2563,22 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               </p>
             </div>
             <fieldset class="hc-edit-model__field hc-custom-model-dialog__capability">
-              <legend>核心能力</legend>
-              <HcSelect
-                v-model="newModelCapability"
-                data-testid="custom-model-capability"
-                aria-label="核心能力"
-                :options="customModelCapabilityOptions"
-              />
+              <legend>核心能力（可多选，仅系统自动识别）</legend>
+              <div class="hc-edit-model__caps">
+                <label
+                  v-for="cap in (['text','vision','code','image_generation','video_generation','embedding'] as ModelCapability[])"
+                  :key="cap"
+                  class="hc-edit-model__cap-item"
+                >
+                  <input
+                    v-model="newModelCapability[cap]"
+                    type="checkbox"
+                    :data-testid="`custom-model-cap-${cap}`"
+                  />
+                  <span class="hc-edit-model__cap-icon">{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}</span>
+                  <span>{{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                </label>
+              </div>
             </fieldset>
           </div>
           <div class="hc-edit-model-dialog__actions">
