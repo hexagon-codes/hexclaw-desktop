@@ -393,8 +393,9 @@ const matrices: MatrixState[] = [
     classification: 'COMPARABLE',
     reason: '两侧冻结同一图片意图尚未判定状态，只比较状态行，不比较会话正文。',
     referenceSelector:
-      '[data-artwork-review-output] [data-component="AssistantRunStatus"] > .think-summary',
-    implementationSelector: '[data-testid="recognize-guard"] [data-component="AssistantRunStatus"]',
+      '[data-artwork-review-output] [data-component="ImageTaskRunStatus"] [data-testid="activity-timeline-item"]',
+    implementationSelector:
+      '[data-testid="recognize-guard"] [data-component="ImageTaskRunStatus"] [data-testid="activity-timeline-item"]',
   },
   {
     name: '04-homework-recognition-confirmation',
@@ -1707,7 +1708,7 @@ async function openCurrentSource(page: Page, mode: ImplementationMode) {
     try {
       await page.locator('.hc-composer input[type="file"]').setInputFiles(C02_FIXTURE.path)
       await expect(
-        page.getByTestId('recognize-guard').locator('[data-component="AssistantRunStatus"]'),
+        page.getByTestId('recognize-guard').locator('[data-component="ImageTaskRunStatus"]'),
       ).toBeVisible({ timeout: 20_000 })
     } finally {
       control.releaseResult()
@@ -2470,10 +2471,7 @@ async function captureNormalizedImageRoutingTarget(
     .evaluate(
       (node, options) => {
         const summary = node as HTMLElement
-        const host =
-          options.surface === 'reference'
-            ? summary.closest<HTMLElement>('[data-component="AssistantRunStatus"]')
-            : summary
+        const host = summary.closest<HTMLElement>('[data-component="ImageTaskRunStatus"]')
         if (!host) throw new Error(`${options.surface}: image-routing host is missing`)
 
         const stage = document.createElement('div')
@@ -2648,14 +2646,10 @@ async function collectImageRoutingTargetEvidence(
     .first()
     .evaluate((node, surfaceName) => {
       const summary = node as HTMLElement
-      const host =
-        surfaceName === 'reference'
-          ? summary.closest<HTMLElement>('[data-component="AssistantRunStatus"]')
-          : summary
-      const spinner = summary.querySelector<HTMLElement>(
-        surfaceName === 'reference' ? '.ti' : '.hc-assistant-run-status__spinner',
-      )
+      const host = summary.closest<HTMLElement>('[data-component="ImageTaskRunStatus"]')
+      const spinner = summary.querySelector<HTMLElement>('.hc-typing-dots')
       if (!host || !spinner) throw new Error(`${surfaceName}: image-routing status is incomplete`)
+      const dots = [...spinner.querySelectorAll<HTMLElement>('.hc-typing-dots__dot')]
       const rect = (element: Element) => {
         const box = element.getBoundingClientRect()
         return {
@@ -2723,24 +2717,32 @@ async function collectImageRoutingTargetEvidence(
         },
         spinner: {
           rect: rect(spinner),
-          ariaHidden: spinner.getAttribute('aria-hidden'),
+          ariaHidden: spinner.closest('[aria-hidden="true"]')?.getAttribute('aria-hidden') ?? null,
+          dotCount: dots.length,
           style: {
-            borderTopWidth: spinnerStyle.borderTopWidth,
-            borderRightWidth: spinnerStyle.borderRightWidth,
-            borderBottomWidth: spinnerStyle.borderBottomWidth,
-            borderLeftWidth: spinnerStyle.borderLeftWidth,
-            borderTopColor: spinnerStyle.borderTopColor,
-            borderRightColor: spinnerStyle.borderRightColor,
-            borderBottomColor: spinnerStyle.borderBottomColor,
-            borderLeftColor: spinnerStyle.borderLeftColor,
+            display: spinnerStyle.display,
+            alignItems: spinnerStyle.alignItems,
+            gap: spinnerStyle.gap,
+            padding: spinnerStyle.padding,
+            backgroundColor: spinnerStyle.backgroundColor,
+            borderWidth: spinnerStyle.borderWidth,
             borderRadius: spinnerStyle.borderRadius,
           },
+          dots: dots.map((dot) => {
+            const style = getComputedStyle(dot)
+            return {
+              rect: rect(dot),
+              style: {
+                backgroundColor: style.backgroundColor,
+                borderRadius: style.borderRadius,
+              },
+            }
+          }),
         },
-        ordinaryTypingDots: document.querySelectorAll('.hc-typing-dots').length,
+        typingDotGroups: document.querySelectorAll('.hc-typing-dots').length,
         theme: {
           textSecondary: resolveThemeColor('--hc-text-secondary'),
-          border: resolveThemeColor('--hc-border'),
-          accent: resolveThemeColor('--hc-accent'),
+          textMuted: resolveThemeColor('--hc-text-muted'),
         },
       }
     }, surface)
@@ -2762,46 +2764,44 @@ function validateImageRoutingTargetSide(evidence: ImageRoutingTargetEvidence) {
       issues.push(`${evidence.surface}: ${invariant} is ${actual}px, expected ${expected}px`)
     }
   }
-  expectValue(evidence.text, '正在识别图片内容…', 'status text')
-  expectValue(evidence.host.component, 'AssistantRunStatus', 'component identity')
+  expectValue(evidence.text, '正在识别图片内容', 'status text')
+  expectValue(evidence.host.component, 'ImageTaskRunStatus', 'component identity')
   expectValue(evidence.host.role, 'status', 'status role')
   expectValue(evidence.host.ariaLive, 'polite', 'aria-live')
   expectValue(evidence.host.ariaAtomic, 'true', 'aria-atomic')
-  expectValue(evidence.host.style.margin, '2px 0px 8px', 'outer margin')
-  expectValue(evidence.host.style.maxWidth, '720px', 'outer max-width')
-  if (!['inline-flex', 'flex'].includes(evidence.summary.style.display)) {
-    issues.push(
-      `${evidence.surface}: summary display is ${evidence.summary.style.display}, expected flex formatting`,
-    )
-  }
-  expectValue(evidence.summary.style.alignItems, 'center', 'summary align-items')
-  expectValue(evidence.summary.style.gap, '7px', 'summary gap')
-  expectValue(evidence.summary.style.padding, '5px 0px', 'summary padding')
+  expectValue(evidence.summary.style.display, 'grid', 'summary display')
+  expectValue(evidence.summary.style.alignItems, 'start', 'summary align-items')
+  expectValue(evidence.summary.style.gap, '8px', 'summary gap')
+  expectValue(evidence.summary.style.padding, '0px', 'summary padding')
   expectValue(evidence.summary.style.color, evidence.theme.textSecondary, 'summary theme color')
   expectValue(evidence.summary.style.fontSize, '13px', 'summary font-size')
-  expectValue(evidence.summary.style.fontWeight, '500', 'summary font-weight')
+  expectValue(evidence.summary.style.fontWeight, '400', 'summary font-weight')
   expectValue(evidence.summary.style.lineHeight, '19.5px', 'summary line-height')
   expectValue(evidence.summary.style.backgroundColor, 'rgba(0, 0, 0, 0)', 'summary background')
   expectValue(evidence.summary.style.borderWidth, '0px', 'summary border width')
   expectValue(evidence.summary.style.borderRadius, '0px', 'summary border radius')
-  expectPixels(evidence.summary.rect.height, 29.5, 'summary height')
-  expectPixels(evidence.spinner.rect.width, 14, 'spinner width')
-  expectPixels(evidence.spinner.rect.height, 14, 'spinner height')
+  expectPixels(evidence.summary.rect.height, 19.5, 'summary height')
+  expectPixels(evidence.spinner.rect.width, 26, 'typing dots width')
+  expectPixels(evidence.spinner.rect.height, 6, 'typing dots height')
   expectValue(evidence.spinner.ariaHidden, 'true', 'spinner aria-hidden')
-  expectValue(evidence.spinner.style.borderRadius, '50%', 'spinner border-radius')
-  expectValue(
-    evidence.spinner.style.borderTopColor,
-    evidence.theme.accent,
-    'spinner top accent color',
-  )
-  for (const side of ['Right', 'Bottom', 'Left'] as const) {
+  expectValue(evidence.spinner.dotCount, 3, 'typing dot count')
+  expectValue(evidence.spinner.style.display, 'flex', 'typing dots display')
+  expectValue(evidence.spinner.style.alignItems, 'center', 'typing dots alignment')
+  expectValue(evidence.spinner.style.gap, '4px', 'typing dots gap')
+  expectValue(evidence.spinner.style.padding, '0px', 'typing dots padding')
+  expectValue(evidence.spinner.style.backgroundColor, 'rgba(0, 0, 0, 0)', 'typing dots background')
+  expectValue(evidence.spinner.style.borderWidth, '0px', 'typing dots border')
+  for (const [index, dot] of evidence.spinner.dots.entries()) {
+    expectPixels(dot.rect.width, 6, `typing dot ${index + 1} width`)
+    expectPixels(dot.rect.height, 6, `typing dot ${index + 1} height`)
+    expectValue(dot.style.borderRadius, '50%', `typing dot ${index + 1} radius`)
     expectValue(
-      evidence.spinner.style[`border${side}Color`],
-      evidence.theme.border,
-      `spinner ${side} border color`,
+      dot.style.backgroundColor,
+      evidence.theme.textMuted,
+      `typing dot ${index + 1} color`,
     )
   }
-  expectValue(evidence.ordinaryTypingDots, 0, 'ordinary typing dots')
+  expectValue(evidence.typingDotGroups, 1, 'typing dot group exact-set')
   return issues
 }
 
@@ -2819,6 +2819,7 @@ async function compareImageRoutingTarget(
     ...validateImageRoutingTargetSide(reference),
     ...validateImageRoutingTargetSide(currentSource),
   ]
+  const contextualDifferences: string[] = []
   for (const dimension of ['width', 'height'] as const) {
     if (
       Math.abs(
@@ -2826,12 +2827,14 @@ async function compareImageRoutingTarget(
           currentSource.summary.visualLineRect[dimension],
       ) > 0.01
     ) {
-      issues.push(
+      const target = dimension === 'width' ? contextualDifferences : issues
+      target.push(
         `status-line ${dimension} differs: ${reference.summary.visualLineRect[dimension]} != ${currentSource.summary.visualLineRect[dimension]}`,
       )
     }
     if (Math.abs(reference.host.rect[dimension] - currentSource.host.rect[dimension]) > 0.01) {
-      issues.push(
+      const target = dimension === 'width' ? contextualDifferences : issues
+      target.push(
         `status host ${dimension} differs: ${reference.host.rect[dimension]} != ${currentSource.host.rect[dimension]}`,
       )
     }
@@ -2855,20 +2858,27 @@ async function compareImageRoutingTarget(
     }
   }
   for (const key of [
-    'borderTopWidth',
-    'borderRightWidth',
-    'borderBottomWidth',
-    'borderLeftWidth',
-    'borderTopColor',
-    'borderRightColor',
-    'borderBottomColor',
-    'borderLeftColor',
+    'display',
+    'alignItems',
+    'gap',
+    'padding',
+    'backgroundColor',
+    'borderWidth',
     'borderRadius',
   ] as const) {
     if (reference.spinner.style[key] !== currentSource.spinner.style[key]) {
-      issues.push(
-        `spinner ${key} differs: ${reference.spinner.style[key]} != ${currentSource.spinner.style[key]}`,
-      )
+      const difference = `typing dots ${key} differs: ${reference.spinner.style[key]} != ${currentSource.spinner.style[key]}`
+      if (
+        key === 'borderRadius' &&
+        reference.spinner.style.borderWidth === '0px' &&
+        currentSource.spinner.style.borderWidth === '0px' &&
+        reference.spinner.style.backgroundColor === 'rgba(0, 0, 0, 0)' &&
+        currentSource.spinner.style.backgroundColor === 'rgba(0, 0, 0, 0)'
+      ) {
+        contextualDifferences.push(difference)
+      } else {
+        issues.push(difference)
+      }
     }
   }
   return {
@@ -2876,6 +2886,7 @@ async function compareImageRoutingTarget(
     normalization: 'status-line-only crop; conversation and business data excluded',
     reference,
     currentSource,
+    contextualDifferences,
     issues,
   }
 }

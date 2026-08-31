@@ -180,15 +180,21 @@ describe('ChatInput · 对话框重新设计', () => {
     )
   })
 
-  it('场景 Composer 保留原有图标工具、左侧听写与空态禁用发送', async () => {
+  it('场景 Composer 与普通会话共用工具栏和空态语音主按钮', async () => {
     const w = await mountChatInput({
       skills: [{ name: 's1' }],
       scenarioImageIntercept: true,
     })
-    expect(w.findAll('.hc-composer__tool-label')).toHaveLength(0)
-    expect(toolByTitle(w, '语音')).toBeTruthy()
-    expect(w.find('[data-testid="chat-voice-start"]').exists()).toBe(false)
-    expect((w.get('[data-testid="chat-send"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(w.findAll('.hc-composer__tool-label').map((label) => label.text())).toEqual([
+      '技能',
+      '提示词',
+    ])
+    expect(w.findAll('.hc-composer__tool-divider')).toHaveLength(1)
+    expect(toolByTitle(w, '语音')).toBeUndefined()
+    expect((w.get('[data-testid="chat-voice-start"]').element as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+    expect(w.find('[data-testid="chat-send"]').exists()).toBe(false)
   })
 })
 

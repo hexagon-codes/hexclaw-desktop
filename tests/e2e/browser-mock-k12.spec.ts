@@ -97,12 +97,25 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     const overlayImage = page.getByTestId('overlay-image')
     const annotatedImageSrc = await overlayImage.getAttribute('src')
     expect(annotatedImageSrc).toMatch(/^data:image\/png;base64,/)
+    const sourceMessageId = await page
+      .getByTestId('k12-photo-assistant-message')
+      .getAttribute('data-source-message-id')
+    expect(sourceMessageId).toBeTruthy()
+    const currentSourceImage = page.locator(
+      `[id="msg-${sourceMessageId}"] .hc-msg__attachment-img`,
+    )
+    await expect(currentSourceImage).toBeVisible()
+    const currentSourceImageSrc = await currentSourceImage.getAttribute('src')
+    expect(currentSourceImageSrc).toBeTruthy()
     await expect(page.locator('[data-testid^="overlay-sym-"]')).toHaveCount(0)
     const overlayToggle = page.getByTestId('overlay-toggle')
     await expect(overlayToggle).toHaveAttribute('aria-pressed', 'true')
     await overlayToggle.click()
     await expect(overlayToggle).toHaveAttribute('aria-pressed', 'false')
-    await expect(overlayImage).not.toHaveAttribute('src', annotatedImageSrc!)
+    await expect(overlayImage).toHaveAttribute('src', currentSourceImageSrc!)
+    await expect
+      .poll(() => overlayImage.evaluate((image: HTMLImageElement) => image.naturalWidth))
+      .toBeGreaterThan(0)
     await expect(gradeResult.locator('.grade-analysis')).toBeVisible()
     await overlayToggle.click()
     await expect(overlayToggle).toHaveAttribute('aria-pressed', 'true')

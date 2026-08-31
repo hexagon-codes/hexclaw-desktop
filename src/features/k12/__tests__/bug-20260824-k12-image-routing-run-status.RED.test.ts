@@ -98,7 +98,7 @@ describe('K12 图片意图判定等待态', () => {
     const routingStatus = wrapper.find('[data-component="ImageTaskRunStatus"]')
     expect.soft(wrapper.findAll('[role="status"]')).toHaveLength(1)
     expect.soft(routingStatus.exists()).toBe(true)
-    expect.soft(routingStatus.exists() ? routingStatus.text() : '').toBe('正在识别图片内容…')
+    expect.soft(routingStatus.exists() ? routingStatus.text() : '').toBe('正在识别图片内容')
     expect
       .soft(routingStatus.exists() ? routingStatus.attributes('role') : undefined)
       .toBe('status')
