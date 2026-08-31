@@ -115,10 +115,8 @@ function dismissSplash() {
   }
 }
 
-onMounted(async () => {
-  await installSidecarReadyListener()
-  appStore.startHealthCheck()
-  // 如果 sidecar 30 秒内未就绪，也移除 splash 避免永远卡住
+onMounted(() => {
+  // 事件监听注册可能迟滞，健康轮询与 splash 兜底必须独立建立。
   const splashTimeout = setTimeout(dismissSplash, 30000)
   watch(
     () => appStore.sidecarReady,
@@ -134,6 +132,10 @@ onMounted(async () => {
     },
     { immediate: true },
   )
+  void Promise.race([
+    installSidecarReadyListener(),
+    new Promise<void>((resolve) => window.setTimeout(resolve, 250)),
+  ]).then(() => appStore.startHealthCheck())
 })
 
 onUnmounted(() => {
