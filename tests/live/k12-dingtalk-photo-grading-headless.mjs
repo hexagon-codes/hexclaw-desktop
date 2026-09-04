@@ -1791,7 +1791,7 @@ export async function waitForBoundInstanceProjection(
   while (Date.now() < until) {
     const projection = await fetchProjection()
     const matchingInstances = array(projection?.instances, 'INSTANCE_PROJECTION_INVALID').filter(
-      (instance) => instance?.provider === 'dingtalk' && instance?.name === runtime.instanceID,
+      (instance) => instance?.provider === 'dingtalk' && instance?.id === runtime.instanceID,
     )
     if (
       matchingInstances.length === 1 &&
@@ -1816,7 +1816,7 @@ export function assertPreparedPublicProjection(runtime, llm, instances, agents) 
   )
     throw new HarnessError('REAL_ROUTE_PROJECTION_INVALID')
   const matchingInstances = array(instances?.instances, 'INSTANCE_PROJECTION_INVALID').filter(
-    (instance) => instance?.provider === 'dingtalk' && instance?.name === runtime.instanceID,
+    (instance) => instance?.provider === 'dingtalk' && instance?.id === runtime.instanceID,
   )
   if (
     matchingInstances.length !== 1 ||
