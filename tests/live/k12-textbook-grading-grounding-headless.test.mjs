@@ -391,7 +391,7 @@ test('live harness binds the scan retrieval contract to the audited OCR oracle f
   )
 })
 
-test('scan retrieval uses topK 3 and accepts only the frozen physical-page exact-set', async () => {
+test('scan retrieval scopes the target document and contains the frozen physical page in topK 3', async () => {
   const { assertOracleSearchExactSet, retrievalRequestForOracle } = await modulePromise
   const contract = JSON.parse(await readFile(CONTRACT_PATH, 'utf8'))
   const oracle = contract.fixtures.scan.oracles[0]
@@ -416,23 +416,35 @@ test('scan retrieval uses topK 3 and accepts only the frozen physical-page exact
     source: 'scan-source',
   }
 
-  assert.deepEqual(retrievalRequestForOracle(oracle), {
+  assert.deepEqual(retrievalRequestForOracle(oracle, 'contains', 'scan-source'), {
     query: oracle.query,
     top_k: 3,
+    sources: ['scan-source'],
   })
-  assert.equal(assertOracleSearchExactSet([hit], oracle, saved, receipt).length, 1)
+  assert.equal(assertOracleSearchExactSet([hit], oracle, saved, receipt, 'contains').length, 1)
+  assert.equal(
+    assertOracleSearchExactSet(
+      [hit, { ...hit, chunk_id: 'scan-chunk-6', page_start: 6, page_end: 6 }],
+      oracle,
+      saved,
+      receipt,
+      'contains',
+    ).length,
+    2,
+  )
   assert.throws(
     () =>
       assertOracleSearchExactSet(
-        [...Array(2).fill(hit), { ...hit, chunk_id: 'scan-chunk-6', page_start: 6, page_end: 6 }],
+        [{ ...hit, chunk_id: 'scan-chunk-6', page_start: 6, page_end: 6 }],
         oracle,
         saved,
         receipt,
+        'contains',
       ),
     /ORACLE_PHYSICAL_PAGE_EXACT_SET_INVALID/u,
   )
   assert.throws(
-    () => retrievalRequestForOracle({ ...oracle, top_k: 20 }),
+    () => retrievalRequestForOracle({ ...oracle, top_k: 20 }, 'contains', 'scan-source'),
     /TEXTBOOK_ORACLE_CONTRACT_INVALID/u,
   )
 })

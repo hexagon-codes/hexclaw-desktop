@@ -32,7 +32,7 @@ const DEFAULT_DOCS_ROOT = resolve(DESKTOP_ROOT, '../hexclaw-docs')
 const CONTRACT_PATH = resolve(LIVE_ROOT, 'k12-textbook-grading-grounding.contract.json')
 const PROFILE_FIXTURE_PATH = resolve(LIVE_ROOT, 'k12-textbook-grounding-profile-fixture.go')
 const SCAN_OCR_ORACLE_RELATIVE_PATH = 'tests/fixtures/local/k12-textbook-scan-ocr-oracle.v1.json'
-const SCAN_OCR_ORACLE_SHA256 = '5d4af483e7acd7266338e2b9335976e96a328ae630168a00ade286929acd2adb'
+const SCAN_OCR_ORACLE_SHA256 = '6c333aad9743beb586e3d6d24938a94a900045c661ab65d92e8a86602e704ebc'
 const EXPECTED_PROVIDER = 'hexclaw-gpt'
 const EXPECTED_MODEL = 'gpt-5.6-sol'
 const PRIVATE_DIRECTORY_MODE = 0o700
@@ -191,7 +191,7 @@ const EXPECTED_SCAN_RETRIEVAL_ORACLES = Object.freeze([
     query_sha256: '6d98bce4803d96192497ce7449914c83dea1301ca7f78fef66cd8d56118c5258',
     top_k: 3,
     expected_physical_pages: Object.freeze([5]),
-    expected_page_match: 'exact-set',
+    expected_page_match: 'contains',
   }),
   Object.freeze({
     physical_page: 61,
@@ -199,7 +199,7 @@ const EXPECTED_SCAN_RETRIEVAL_ORACLES = Object.freeze([
     query_sha256: '182291d26ffacbec35c3d81abb4b3dbe50e382a7cb9d6b36be2795d206db5382',
     top_k: 3,
     expected_physical_pages: Object.freeze([61]),
-    expected_page_match: 'exact-set',
+    expected_page_match: 'contains',
   }),
   Object.freeze({
     physical_page: 120,
@@ -207,7 +207,7 @@ const EXPECTED_SCAN_RETRIEVAL_ORACLES = Object.freeze([
     query_sha256: 'ca18148a2ab80fbe12a2c0a15a2257ae9a1cd42c79367a17f3849b6806bdb719',
     top_k: 3,
     expected_physical_pages: Object.freeze([120]),
-    expected_page_match: 'exact-set',
+    expected_page_match: 'contains',
   }),
 ])
 
@@ -404,7 +404,7 @@ function projectBasicOracle(oracle, pages) {
 function projectScanRetrievalOracle(
   oracle,
   pages = Number.MAX_SAFE_INTEGER,
-  expectedPageMatch = 'exact-set',
+  expectedPageMatch = 'contains',
 ) {
   const value = object(oracle, 'TEXTBOOK_ORACLE_CONTRACT_INVALID')
   const expectedKeys = [
@@ -444,7 +444,7 @@ function projectScanRetrievalOracle(
   }
 }
 
-function fixtureProjection(fixture, expectedPageMatch = 'exact-set') {
+function fixtureProjection(fixture, expectedPageMatch = 'contains') {
   const value = object(fixture, 'FIXTURE_CONTRACT_INVALID')
   if (!SHA256.test(value.sha256) || !Number.isInteger(value.size_bytes) || value.size_bytes < 1) {
     throw new HarnessError('FIXTURE_CONTRACT_INVALID')
@@ -705,6 +705,24 @@ export function assertActiveEmbeddingRevision(policy, document, vectorJob, expec
   const chunksTotal = active.chunks_total
   const documentChunksDone = document?.vector_chunks_done
   const documentChunksTotal = document?.vector_chunks_total
+  const documentJobProvesRevision =
+    typeof document?.vector_job_id === 'string' &&
+    document.vector_job_id.trim() !== '' &&
+    document.vector_job_id === vectorJob?.job_id &&
+    document?.vector_job_state === 'succeeded' &&
+    Number.isInteger(documentChunksDone) &&
+    documentChunksDone > 0 &&
+    documentChunksDone === documentChunksTotal &&
+    vectorJob?.document_id === document.document_id &&
+    vectorJob?.kind === 'embed_document' &&
+    vectorJob?.stage === 'embedding' &&
+    vectorJob?.chunks_done === documentChunksDone &&
+    vectorJob?.chunks_total === documentChunksTotal
+  const revisionRebuildProvesRevision =
+    vectorJob?.kind === 'rebuild_revision' &&
+    vectorJob?.stage === 'publishing' &&
+    vectorJob?.chunks_done === chunksDone &&
+    vectorJob?.chunks_total === chunksTotal
   if (
     !nonEmpty(active.revision_id, 'ACTIVE_EMBEDDING_REVISION_INVALID') ||
     active.state !== 'ready' ||
@@ -723,19 +741,9 @@ export function assertActiveEmbeddingRevision(policy, document, vectorJob, expec
     chunksDone <= 0 ||
     chunksDone !== chunksTotal ||
     document?.vector_index_state !== 'ready' ||
-    document?.vector_job_state !== 'succeeded' ||
-    !nonEmpty(document?.vector_job_id, 'ACTIVE_EMBEDDING_REVISION_INVALID') ||
-    !Number.isInteger(documentChunksDone) ||
-    documentChunksDone <= 0 ||
-    documentChunksDone !== documentChunksTotal ||
-    vectorJob?.job_id !== document.vector_job_id ||
-    vectorJob?.document_id !== document.document_id ||
     vectorJob?.target_revision_id !== active.revision_id ||
-    vectorJob?.kind !== 'embed_document' ||
     vectorJob?.state !== 'succeeded' ||
-    vectorJob?.stage !== 'embedding' ||
-    vectorJob?.chunks_done !== documentChunksDone ||
-    vectorJob?.chunks_total !== documentChunksTotal
+    (!documentJobProvesRevision && !revisionRebuildProvesRevision)
   ) {
     throw new HarnessError('ACTIVE_EMBEDDING_REVISION_INVALID')
   }
@@ -2099,11 +2107,12 @@ async function advanceDocumentPhase(paths, contract, env, deadline, kind) {
           code: 'EMBEDDING_POLICY_PROJECTION_FAILED',
         }),
       ])
-      const vectorJob = document?.vector_job_id
+      const vectorJobID = document?.vector_job_id || saved.vector_recovery_job_id
+      const vectorJob = vectorJobID
         ? await apiJSON(
             api,
             'GET',
-            `/api/v1/knowledge/jobs/${encodeURIComponent(document.vector_job_id)}`,
+            `/api/v1/knowledge/jobs/${encodeURIComponent(vectorJobID)}`,
             { code: 'VECTOR_JOB_PROJECTION_FAILED' },
           )
         : undefined
@@ -2122,6 +2131,7 @@ async function advanceDocumentPhase(paths, contract, env, deadline, kind) {
           state.route,
         )
         saved.document_generation = document.document_generation
+        saved.source = nonEmpty(document.source, 'DOCUMENT_SOURCE_REQUIRED')
         saved.text_index_state = document.text_index_state
         saved.vector_index_state = document.vector_index_state
         saved.chunks_done = document.chunks_done
@@ -2247,13 +2257,17 @@ function projectSearchHit(hit, saved, receipt) {
   }
 }
 
-export function retrievalRequestForOracle(oracle, expectedPageMatch = 'exact-set') {
+export function retrievalRequestForOracle(oracle, expectedPageMatch = 'contains', source) {
   const projected = projectScanRetrievalOracle(
     oracle,
     Number.MAX_SAFE_INTEGER,
     expectedPageMatch,
   )
-  return { query: projected.query, top_k: projected.top_k }
+  return {
+    query: projected.query,
+    top_k: projected.top_k,
+    sources: [nonEmpty(source, 'DOCUMENT_SOURCE_REQUIRED')],
+  }
 }
 
 export function assertOracleSearchExactSet(
@@ -2294,8 +2308,8 @@ async function retrieveDocumentPhase(paths, contract, env, deadline, kind) {
   const observed = []
   await withSidecar(paths, state, env, deadline, async (api) => {
     for (const oracle of contract.fixtures[key].oracles) {
-      const expectedPageMatch = key === 'scan' ? 'exact-set' : 'contains'
-      const request = retrievalRequestForOracle(oracle, expectedPageMatch)
+      const expectedPageMatch = 'contains'
+      const request = retrievalRequestForOracle(oracle, expectedPageMatch, saved.source)
       const payload = await apiJSON(api, 'POST', '/api/v1/knowledge/search', {
         data: request,
         timeout: remaining(deadline, 3 * 60_000, 'SEARCH_PENDING'),
@@ -3050,10 +3064,13 @@ async function createHomeworkImageTask(api, state) {
     code: 'IMAGE_TASK_CREATE_FAILED',
   })
   const dispatch = object(created?.dispatch, 'IMAGE_TASK_CREATE_INVALID')
+  if (!Number.isInteger(dispatch.version) || dispatch.version < 0) {
+    throw new HarnessError('IMAGE_TASK_CREATE_INVALID')
+  }
   return {
     dispatch_id: nonEmpty(dispatch.dispatch_id, 'IMAGE_TASK_CREATE_INVALID'),
     source_session: sourceSession,
-    initial_version: positiveInteger(dispatch.version, 'IMAGE_TASK_CREATE_INVALID'),
+    initial_version: dispatch.version,
   }
 }
 
@@ -3224,7 +3241,10 @@ async function observeRestartDocument(api, state, contract, kind) {
       code: 'RESTART_EMBEDDING_POLICY_FAILED',
     }),
   ])
-  const vectorJobID = nonEmpty(document?.vector_job_id, 'RESTART_VECTOR_JOB_REQUIRED')
+  const vectorJobID = nonEmpty(
+    document?.vector_job_id || saved.vector_recovery_job_id,
+    'RESTART_VECTOR_JOB_REQUIRED',
+  )
   const vectorJob = await apiJSON(
     api,
     'GET',

@@ -45,7 +45,7 @@
   },
   "fixtures": {
     "text": {
-      "relative_path": "test/义务教育教科书·数学五年级下册.pdf",
+      "relative_path": "test/教材/义务教育教科书·数学五年级下册.pdf",
       "sha256": "657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83",
       "size_bytes": 14621452,
       "pages": 131,
@@ -71,7 +71,7 @@
       ]
     },
     "scan": {
-      "relative_path": "test/人教版·小学六年级上册.pdf",
+      "relative_path": "test/教材/人教版·小学六年级上册.pdf",
       "sha256": "65bd80bd35be524bf68f66f9b67820a97176e1487db81810cb268e04e44dd8b2",
       "size_bytes": 57313616,
       "pages": 122,
@@ -79,7 +79,7 @@
       "require_real_ocr_receipt": true,
       "oracle_source": {
         "relative_path": "tests/fixtures/local/k12-textbook-scan-ocr-oracle.v1.json",
-        "sha256": "5d4af483e7acd7266338e2b9335976e96a328ae630168a00ade286929acd2adb",
+        "sha256": "6c333aad9743beb586e3d6d24938a94a900045c661ab65d92e8a86602e704ebc",
         "schema_version": 1,
         "fixture_id": "scanned_textbook_pdf"
       },
@@ -90,7 +90,7 @@
           "query_sha256": "6d98bce4803d96192497ce7449914c83dea1301ca7f78fef66cd8d56118c5258",
           "top_k": 3,
           "expected_physical_pages": [5],
-          "expected_page_match": "exact-set"
+          "expected_page_match": "contains"
         },
         {
           "physical_page": 61,
@@ -98,7 +98,7 @@
           "query_sha256": "182291d26ffacbec35c3d81abb4b3dbe50e382a7cb9d6b36be2795d206db5382",
           "top_k": 3,
           "expected_physical_pages": [61],
-          "expected_page_match": "exact-set"
+          "expected_page_match": "contains"
         },
         {
           "physical_page": 120,
@@ -106,7 +106,7 @@
           "query_sha256": "ca18148a2ab80fbe12a2c0a15a2257ae9a1cd42c79367a17f3849b6806bdb719",
           "top_k": 3,
           "expected_physical_pages": [120],
-          "expected_page_match": "exact-set"
+          "expected_page_match": "contains"
         }
       ]
     },

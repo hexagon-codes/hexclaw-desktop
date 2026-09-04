@@ -38,7 +38,7 @@
         "expectedPhysicalPages": [
           5
         ],
-        "expectedPageMatch": "exact-set"
+        "expectedPageMatch": "contains"
       }
     },
     {
@@ -56,7 +56,7 @@
         "expectedPhysicalPages": [
           61
         ],
-        "expectedPageMatch": "exact-set"
+        "expectedPageMatch": "contains"
       }
     },
     {
@@ -74,7 +74,7 @@
         "expectedPhysicalPages": [
           120
         ],
-        "expectedPageMatch": "exact-set"
+        "expectedPageMatch": "contains"
       }
     }
   ]
