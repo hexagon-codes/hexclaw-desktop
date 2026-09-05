@@ -56,6 +56,7 @@ const props = defineProps<{
   messageIds?: string[]
   /** 当前消息图片的只读展示地址；不参与任务创建与刷新恢复。 */
   messageImageSources?: Record<string, string>
+  messageFeedback?: Record<string, 'like' | 'dislike' | null>
 }>()
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
@@ -81,6 +82,7 @@ const headerName = computed(() => {
 })
 
 const emit = defineEmits<{
+  (e: 'messageAction', payload: { sourceMessageId: string; action: 'retry' | 'fork' | 'like' | 'dislike' }): void
   (e: 'update:recordsActive', v: boolean): void
   /** composer 预设 chips 上交 shell（数据流，替代旧 Teleport-锚点方案·BUG-20260709）：
    *  shell 透传给 ChatInput 在对话框盒内渲染，杜绝 defer/锚点顺序时序类反复回归。 */
@@ -191,10 +193,6 @@ function closeRecognize(task: TaskShellProjection) {
       candidate.sourceMessageId !== task.sourceMessageId ||
       candidate.restoreDispatchId !== task.restoreDispatchId,
   )
-}
-function retryRecognizeAsNewAttempt(task: TaskShellProjection) {
-  if (!task.payload?.requestId?.trim()) return
-  emit('scenarioImageAttempt', task.payload)
 }
 
 // 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
@@ -549,11 +547,13 @@ watch(
               :on-source-stored="task.payload?.onSourceStored"
               :request-id="task.sourceMessageId"
               :source-message-id="task.sourceMessageId"
+              :message-feedback="messageFeedback?.[task.sourceMessageId]"
               :restore-dispatch-id="task.restoreDispatchId"
               :model-route="task.payload?.route"
               :message-intent="task.payload?.contextText?.trim() || ''"
               @close="closeRecognize(task)"
-              @retry="retryRecognizeAsNewAttempt(task)"
+              @retry="emit('messageAction', { sourceMessageId: task.sourceMessageId, action: 'retry' })"
+              @message-action="emit('messageAction', { sourceMessageId: task.sourceMessageId, ...$event })"
               @final-artifact-action="runFinalArtifactAction"
               @content-updated="emit('contentUpdated', $event)"
               @update:execution-state="emit('update:sessionExecution', $event)"

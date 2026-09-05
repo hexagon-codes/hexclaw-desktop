@@ -784,6 +784,8 @@ function blankWorksheetDispatch() {
       stage: 'completed',
       confirmation_state: 'confirmed',
       anchor_state: 'located',
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
       recognition: {
         subject: '数学',
         questions: [

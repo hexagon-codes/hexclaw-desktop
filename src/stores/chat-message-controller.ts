@@ -49,9 +49,10 @@ export function createChatMessageController(params: {
   async function setMessageFeedback(
     messageId: string,
     feedback: Exclude<UserFeedback, ''> | null,
+    taskResult = false,
   ): Promise<ChatMessage | null> {
     const current = messages.value.find((message) => message.id === messageId)
-    if (!current || current.role !== 'assistant') return null
+    if (!current || (current.role !== 'assistant' && !(taskResult && current.role === 'user'))) return null
 
     const previous = cloneMessage(current)
     const next = await updateMessage(messageId, (message) => {
@@ -63,7 +64,7 @@ export function createChatMessageController(params: {
 
     const backendMessageId = typeof previous.metadata?.backend_message_id === 'string'
       ? previous.metadata.backend_message_id
-      : null
+      : taskResult ? previous.id : null
     if (!backendMessageId) {
       logger.warn('消息缺少 backend_message_id，反馈仅保存在本地', { messageId })
       return next

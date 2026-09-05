@@ -25,6 +25,7 @@ const props = withDefaults(
     content: string
     showRetry?: boolean
     retryDisabled?: boolean
+    retryTitle?: string
     showFork?: boolean
     retryMode?: 'regenerate' | 'task-stage'
     feedback?: 'like' | 'dislike' | null
@@ -105,13 +106,7 @@ async function toggleSpeak() {
         :aria-label="t('chat.liked')"
         @click="emit('like')"
       >
-        <svg v-if="retryMode === 'task-stage'" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M7 10v12H3V10h4Z" />
-          <path
-            d="M7 20h10.4a2 2 0 0 0 1.9-1.4l2.4-7A2 2 0 0 0 19.8 9H15l.7-3.4A3 3 0 0 0 12.8 2L7 10"
-          />
-        </svg>
-        <ThumbsUp v-else :size="14" />
+        <ThumbsUp :size="14" />
       </button>
       <button
         type="button"
@@ -121,13 +116,7 @@ async function toggleSpeak() {
         :aria-label="t('chat.disliked')"
         @click="emit('dislike')"
       >
-        <svg v-if="retryMode === 'task-stage'" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M7 14V2H3v12h4Z" />
-          <path
-            d="M7 4h10.4a2 2 0 0 1 1.9 1.4l2.4 7a2 2 0 0 1-1.9 2.6H15l.7 3.4a3 3 0 0 1-2.9 3.6L7 14"
-          />
-        </svg>
-        <ThumbsDown v-else :size="14" />
+        <ThumbsDown :size="14" />
       </button>
       <span class="hc-msg-actions__divider" aria-hidden="true" />
       <button
@@ -139,19 +128,15 @@ async function toggleSpeak() {
         @click="handleCopy"
       >
         <Check v-if="copied" :size="14" />
-        <svg v-else-if="retryMode === 'task-stage'" viewBox="0 0 24 24" aria-hidden="true">
-          <rect width="14" height="14" x="8" y="8" rx="2" />
-          <path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
-        </svg>
         <Copy v-else :size="14" />
       </button>
       <button
         type="button"
         class="hc-msg-actions__btn"
-        :title="t('chat.regenerate')"
-        :aria-label="t('chat.regenerate')"
-        v-if="showRetry !== false && retryMode === 'regenerate'"
-        data-testid="message-regenerate"
+        :title="retryTitle || t(retryMode === 'task-stage' ? 'chat.retryCurrentStage' : 'chat.regenerate')"
+        :aria-label="t(retryMode === 'task-stage' ? 'chat.retryCurrentStage' : 'chat.regenerate')"
+        v-if="showRetry !== false"
+        :data-testid="retryMode === 'task-stage' ? 'message-task-stage-retry' : 'message-regenerate'"
         :disabled="retryDisabled"
         @click="emit('retry')"
       >
@@ -169,25 +154,7 @@ async function toggleSpeak() {
         @click="toggleSpeak"
       >
         <Square v-if="isSpeaking" :size="14" />
-        <svg v-else-if="retryMode === 'task-stage'" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M11 5 6 9H2v6h4l5 4V5Z" />
-          <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
-        </svg>
         <Volume2 v-else :size="14" />
-      </button>
-      <button
-        v-if="showRetry !== false && retryMode === 'task-stage'"
-        type="button"
-        class="hc-msg-actions__btn"
-        data-testid="message-task-stage-retry"
-        :title="t('chat.retryCurrentStage')"
-        :aria-label="t('chat.retryCurrentStage')"
-        @click="emit('retry')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-          <path d="M3 3v5h5" />
-        </svg>
       </button>
       <button
         v-if="showFork !== false"

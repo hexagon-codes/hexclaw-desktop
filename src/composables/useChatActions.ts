@@ -6,7 +6,7 @@
 
 import { ref } from 'vue'
 import { removeMessage } from '@/services/messageService'
-import { forkSession } from '@/api/chat'
+import { appendSessionMessage, forkSession } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { logger } from '@/utils/logger'
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
@@ -200,7 +200,7 @@ export function useChatActions(
    * rowid 截到该消息含自身），切到新分支继续聊——原会话原样保留。
    * 消息 id 解析同删除：live 消息用 metadata.backend_message_id，重载消息本身就是后端 id。
    */
-  async function handleFork(msgIndex: number) {
+  async function handleFork(msgIndex: number, taskResultContent?: string) {
     const targetMsg = chatStore.messages[msgIndex]
     const sessionId = chatStore.currentSessionId
     if (!targetMsg || !sessionId) return
@@ -211,6 +211,13 @@ export function useChatActions(
     }
     try {
       const res = await forkSession(sessionId, backendDeletableMessageId(targetMsg))
+      // 任务卡结果不在原消息序列中，分支只携带已展示正文，不重建活动任务。
+      if (taskResultContent?.trim()) {
+        await appendSessionMessage(res.session.id, {
+          role: 'assistant',
+          content: taskResultContent,
+        })
+      }
       await chatStore.loadSessions()
       await chatStore.selectSession(res.session.id)
       toast.success(i18n.global.t('chat.forkCreated'))
@@ -220,25 +227,29 @@ export function useChatActions(
     }
   }
 
-  async function handleLike(msgId: string) {
+  async function handleLike(msgId: string, taskResult = false) {
     const message = chatStore.messages.find((item) => item.id === msgId)
     if (!message) return
 
     const nextFeedback = message.metadata?.user_feedback === 'like' ? null : 'like'
     try {
-      await chatStore.setMessageFeedback(msgId, nextFeedback)
+      await (taskResult
+        ? chatStore.setMessageFeedback(msgId, nextFeedback, true)
+        : chatStore.setMessageFeedback(msgId, nextFeedback))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '同步点赞状态失败')
     }
   }
 
-  async function handleDislike(msgId: string) {
+  async function handleDislike(msgId: string, taskResult = false) {
     const message = chatStore.messages.find((item) => item.id === msgId)
     if (!message) return
 
     const nextFeedback = message.metadata?.user_feedback === 'dislike' ? null : 'dislike'
     try {
-      await chatStore.setMessageFeedback(msgId, nextFeedback)
+      await (taskResult
+        ? chatStore.setMessageFeedback(msgId, nextFeedback, true)
+        : chatStore.setMessageFeedback(msgId, nextFeedback))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '同步点踩状态失败')
     }

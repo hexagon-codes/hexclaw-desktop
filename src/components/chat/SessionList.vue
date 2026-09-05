@@ -385,7 +385,7 @@ function formatDate(ts: string): string {
 }
 
 function isSessionGenerating(sessionId: string) {
-  return chatStore.isSessionStreaming(sessionId) || chatStore.isSessionExecuting(sessionId)
+  return chatStore.isSessionStreaming(sessionId) || chatStore.isSessionExecutionRunning(sessionId)
 }
 
 function isSessionAwaitingApproval(sessionId: string) {

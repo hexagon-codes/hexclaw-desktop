@@ -2637,6 +2637,41 @@ const {
   cancelEdit,
 } = useChatActions(chatStore, toast, handleSend, submitEditedMessage, captureEditedMessageRoute)
 
+const scenarioMessageFeedback = computed(() => Object.fromEntries(
+  chatStore.messages.map((message) => [message.id, message.metadata?.user_feedback ?? null]),
+))
+
+// 场景任务只上交消息动作，分支、反馈和新版本仍由通用会话入口处理。
+async function handleScenarioMessageAction(payload: {
+  sourceMessageId: string
+  action: 'retry' | 'fork' | 'like' | 'dislike'
+  content?: string
+}) {
+  const index = chatStore.messages.findIndex((message) => message.id === payload.sourceMessageId)
+  const message = chatStore.messages[index]
+  const sessionId = chatStore.currentSessionId
+  if (!message || !sessionId) return
+  if (payload.action === 'fork') return handleFork(index, payload.content)
+  if (payload.action === 'like') return handleLike(message.id, true)
+  if (payload.action === 'dislike') return handleDislike(message.id, true)
+  if (chatStore.isSessionStreaming(sessionId) || chatStore.isSessionExecuting(sessionId) ||
+      resubmittingScenarioAttempts.has(message.id)) return
+  resubmittingScenarioAttempts.add(message.id)
+  try {
+    await submitEditedMessage({
+      sourceMessage: message,
+      targetSessionId: sessionId,
+      content: message.content,
+      carry: { attachments: getMessageAttachments(message) },
+      routeSnapshot: captureEditedMessageRoute(sessionId),
+    })
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    resubmittingScenarioAttempts.delete(message.id)
+  }
+}
+
 // 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
 // 「确认候选词」，不能误当「提交编辑」。compositionstart/end 跟踪 + 兜底 WKWebView 早结束竞态。
 const editComposing = ref(false)
@@ -3310,6 +3345,8 @@ function startSidebarResize(event: MouseEvent) {
         v-model:records-active="scenarioRecordsActive"
         :composer-action="scenarioComposerAction"
         :composer-image="scenarioComposerImage"
+        :message-feedback="scenarioMessageFeedback"
+        @message-action="handleScenarioMessageAction"
         @update:composer-chips="scenarioComposerChips = $event"
         @update:composer-image="handleScenarioComposerImageConsumed"
         @update:inline-active="handleScenarioInlineActive"

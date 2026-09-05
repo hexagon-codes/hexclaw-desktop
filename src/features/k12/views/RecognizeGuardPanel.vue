@@ -108,6 +108,7 @@ const props = defineProps<{
   sessionId?: string
   /** 当前图片消息的可选意图提示；仅作为分类证据，不替代服务端裁决。 */
   messageIntent?: string
+  messageFeedback?: 'like' | 'dislike' | null
 }>()
 // close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
 // 收起手段必须内聚在面板自身。
@@ -119,6 +120,7 @@ const emit = defineEmits<{
    * 组件绝不能把旧 Job 的 request_id 原地重放，否则模型改绑后会撞上不可变调用账本。
    */
   (e: 'retry'): void
+  (e: 'messageAction', payload: { action: 'fork' | 'like' | 'dislike'; content: string }): void
   (e: 'sourceIssueIntent', intent: SourceIssueIntent): void
   (e: 'finalArtifactAction', intent: FinalArtifactActionIntent): void
   (
@@ -370,9 +372,14 @@ const taskContinuesInBackground = computed(() =>
     'recovering',
   ].includes(currentTaskStage.value),
 )
-const collapsedTaskSummary = computed(() =>
-  taskContinuesInBackground.value ? '任务已收起 · 后台继续处理' : '任务已收起',
-)
+const collapsedTaskSummary = computed(() => {
+  if (currentTaskStage.value === 'awaiting_confirmation') return t('k12.recognize.needsConfirm')
+  if (recognitionFailed.value) return taskStageErrorText.value
+  return taskContinuesInBackground.value ? '任务已收起 · 后台继续处理' : '任务已收起'
+})
+const collapsedActivityItems = computed<ActivityTimelineItem[]>(() => [
+  { id: 'collapsed-task', state: 'running', label: collapsedTaskSummary.value },
+])
 const taskProviderDisplayName = computed(() => frozenProviderDisplayName.value)
 const taskModelDisplayName = computed(() => frozenModelID.value)
 const taskTimeDisplay = computed(() => {
@@ -381,11 +388,7 @@ const taskTimeDisplay = computed(() => {
     taskCreatedAt.value < 1_000_000_000_000 ? taskCreatedAt.value * 1000 : taskCreatedAt.value
   return formatTime(new Date(timestamp).toISOString())
 })
-const showTaskFooter = computed(
-  () =>
-    !!currentDispatchId.value &&
-    !['completed', 'promoted', 'cancelled'].includes(currentTaskStage.value),
-)
+const showTaskFooter = computed(() => !!currentDispatchId.value)
 const showTaskRetry = computed(
   () =>
     taskStageSupportsRetry(currentTaskStage.value) &&
@@ -393,6 +396,20 @@ const showTaskRetry = computed(
     !retrySubmitting.value &&
     !outcomeUnknown.value,
 )
+const canRegenerateTask = computed(() =>
+  ['completed', 'feedback_ready', 'promoted', 'cancelled'].includes(currentTaskStage.value),
+)
+const taskMessageContent = computed(() => {
+  if (finalArtifact.value?.canonical_markdown) return finalArtifact.value.canonical_markdown
+  if (blankWorksheetGuide.value.length) {
+    return blankWorksheetGuide.value.map(({ question, guide }) => [
+      question, guide.answer, ...guide.full_solution_steps, guide.grade_level_method,
+      ...guide.likely_mistakes, ...guide.parent_teaching_sequence,
+      ...guide.follow_up_questions, guide.checking_method,
+    ].join('\n\n')).join('\n\n')
+  }
+  return taskShellTitle.value
+})
 const unconfirmedCreativeConflictCount = computed(
   () => creativeConflicts.value.filter((conflict) => !conflict.confirmed).length,
 )
@@ -434,6 +451,11 @@ const taskStatusActivityItems = computed<ActivityTimelineItem[]>(() => {
             : undefined,
       },
     ]
+  }
+  if (
+    currentTaskIntent.value === 'blank_worksheet' && taskContinuesInBackground.value
+  ) {
+    return [{ id: 'blank-worksheet-running', state: 'running', label: taskShellTitle.value }]
   }
   if (
     (currentTaskIntent.value === 'writing' || currentTaskIntent.value === 'artwork') &&
@@ -1865,6 +1887,15 @@ function startCorrection() {
   for (const row of rows.value) row.editing = row.confirmationRequired
 }
 
+function confirmRecognitionRow() {
+  if (unconfirmedRiskCount.value === 0) void confirmAll()
+}
+
+function retryTask() {
+  if (canRegenerateTask.value) emit('retry')
+  else if (showTaskRetry.value) void retryRecognitionStage()
+}
+
 function gradingCorrections(): GradingQuestionCorrection[] {
   return rows.value.flatMap((row, index) =>
     row.confirmationRequired
@@ -2302,7 +2333,8 @@ async function coldStart() {
       >
       <template v-else-if="collapsed">
         <span class="rec-panel__title">{{ taskShellTitle }}</span>
-        <span class="rec-panel__collapsed-summary">{{ collapsedTaskSummary }}</span>
+        <ActivityTimeline v-if="taskContinuesInBackground" :items="collapsedActivityItems" running-indicator="typing-dots" />
+        <span v-else class="rec-panel__collapsed-summary">{{ collapsedTaskSummary }}</span>
       </template>
       <HcDisclosureButton
         class="rec-panel__x"
@@ -2861,6 +2893,7 @@ async function coldStart() {
       <div
         v-for="(row, i) in rows"
         :key="row.problemId || i"
+        v-show="confirmed || row.confirmationRequired"
         class="rec-row"
         :class="{
           'rec-row--parent': row.problemKind === 'compound_parent',
@@ -2907,6 +2940,8 @@ async function coldStart() {
               v-model="row.recognitionConfirmed"
               type="checkbox"
               :data-testid="`rq-confirm-${i}`"
+              :disabled="confirming || outcomeUnknown"
+              @change="confirmRecognitionRow"
             />
             我已逐项核对
           </label>
@@ -2982,8 +3017,17 @@ async function coldStart() {
       >
         还有 {{ unconfirmedRiskCount }} 处高风险识别需要逐项对照原图确认。
       </p>
+      <p
+        v-if="errMsg && !outcomeUnknown && currentDispatchId"
+        class="rec-panel__err"
+        role="alert"
+      >
+        {{ recognitionFailed ? taskStageErrorText : errMsg }}
+      </p>
+      <ActivityTimeline v-if="confirming" :items="[{ id: 'confirming', state: 'running', label: 'Continuing task…' }]" running-indicator="typing-dots" />
       <div v-if="!confirmed && riskCount" class="rec-guard__confirm-actions">
         <button
+          v-if="errMsg && !unconfirmedRiskCount"
           class="rec-guard__confirm"
           data-testid="recognize-confirm-all"
           :disabled="
@@ -2998,7 +3042,7 @@ async function coldStart() {
           "
           @click="confirmAll"
         >
-          {{ t('k12.recognize.confirmAll') }}
+          Continue
         </button>
         <button
           v-if="!correctionMode"
@@ -3047,11 +3091,15 @@ async function coldStart() {
       </div>
       <MessageActions
         role="assistant"
-        :content="taskShellTitle"
-        :show-retry="showTaskRetry"
-        :show-fork="false"
-        retry-mode="task-stage"
-        @retry="retryRecognitionStage"
+        :content="taskMessageContent"
+        :retry-disabled="!showTaskRetry && !canRegenerateTask"
+        :retry-title="!showTaskRetry && !canRegenerateTask ? 'Retry is unavailable in the current task state' : undefined"
+        :retry-mode="canRegenerateTask ? 'regenerate' : 'task-stage'"
+        :feedback="messageFeedback"
+        @retry="retryTask"
+        @fork="emit('messageAction', { action: 'fork', content: taskMessageContent })"
+        @like="emit('messageAction', { action: 'like', content: taskMessageContent })"
+        @dislike="emit('messageAction', { action: 'dislike', content: taskMessageContent })"
       />
     </MessageFooter>
   </div>

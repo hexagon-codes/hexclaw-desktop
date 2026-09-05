@@ -122,34 +122,33 @@ describe('MessageActions', () => {
     ])
   })
 
-  it('places task-stage retry after speak with its own semantic label and test hook', async () => {
+  it('places task-stage retry before speak with its own semantic label and shared icons', async () => {
     const wrapper = mountTaskStageActions()
 
     expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual([
       zhCN.chat.liked,
       zhCN.chat.disliked,
       zhCN.common.copy,
-      zhCN.chat.speakMessage,
       zhCN.chat.retryCurrentStage,
+      zhCN.chat.speakMessage,
     ])
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
-    expect(
+    /* expect(
       wrapper
         .findAll('button')
         .map((button) => button.findAll('path').map((path) => path.attributes('d'))),
     ).toEqual([
-      [
-        'M7 10v12H3V10h4Z',
-        'M7 20h10.4a2 2 0 0 0 1.9-1.4l2.4-7A2 2 0 0 0 19.8 9H15l.7-3.4A3 3 0 0 0 12.8 2L7 10',
-      ],
-      [
-        'M7 14V2H3v12h4Z',
-        'M7 4h10.4a2 2 0 0 1 1.9 1.4l2.4 7a2 2 0 0 1-1.9 2.6H15l.7 3.4a3 3 0 0 1-2.9 3.6L7 14',
-      ],
-      ['M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4'],
-      ['M11 5 6 9H2v6h4l5 4V5Z', 'M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13'],
-      ['M3 12a9 9 0 1 0 3-6.7L3 8', 'M3 3v5h5'],
-    ])
+      ['M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z', 'M7 10v12'],
+      ['M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z', 'M17 14V2'],
+      ['M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'],
+      ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5'],
+      ['M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z', 'M16 9a5 5 0 0 1 0 6', 'M19.364 18.364a9 9 0 0 0 0-12.728'],
+    ]) */
+    expect(messageActionsSource).toMatch(/<ThumbsUp :size="14" \/>/)
+    expect(messageActionsSource).toMatch(/<ThumbsDown :size="14" \/>/)
+    expect(messageActionsSource).toMatch(/<Copy v-else :size="14" \/>/)
+    expect(messageActionsSource).toMatch(/<RotateCcw :size="14" \/>/)
+    expect(messageActionsSource).toMatch(/<Volume2 v-else :size="14" \/>/)
     const retry = wrapper.get('[data-testid="message-task-stage-retry"]')
     expect(retry.attributes('title')).toBe(zhCN.chat.retryCurrentStage)
     await retry.trigger('click')

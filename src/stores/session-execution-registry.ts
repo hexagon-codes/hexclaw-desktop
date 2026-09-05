@@ -83,5 +83,14 @@ export function createSessionExecutionRegistry(executions: Ref<SessionExecutionS
     setSessionExecution,
     clearSessionExecution,
     isSessionExecuting,
+    // 等待用户仍保留任务身份，但不表示正在运行。
+    isSessionExecutionRunning(sessionId: string): boolean {
+      return Object.values(executions.value[sessionId.trim()] ?? {}).some(
+        (snapshot) =>
+          !isTerminalSessionExecutionState(snapshot.state) &&
+          !QUERY_ONLY_STATES.has(snapshot.state.trim().toLowerCase()) &&
+          snapshot.state.trim().toLowerCase() !== 'awaiting_confirmation',
+      )
+    },
   }
 }

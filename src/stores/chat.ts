@@ -70,6 +70,7 @@ export const useChatStore = defineStore('chat', () => {
     setSessionExecution,
     clearSessionExecution,
     isSessionExecuting,
+    isSessionExecutionRunning,
   } = createSessionExecutionRegistry(sessionExecutions)
   const isCurrentSessionExecuting = computed(
     () => !!currentSessionId.value && isSessionExecuting(currentSessionId.value),
@@ -286,6 +287,7 @@ export const useChatStore = defineStore('chat', () => {
     setMessageFeedback: messageController.setMessageFeedback,
     isSessionStreaming: boundStreamController.isSessionStreaming,
     isSessionExecuting,
+    isSessionExecutionRunning,
     setSessionExecution,
     clearSessionExecution,
     hasSessionPendingApproval: approvalController.hasSessionPendingApproval,
