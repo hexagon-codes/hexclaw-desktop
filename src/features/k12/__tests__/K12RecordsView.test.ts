@@ -64,6 +64,7 @@ const h = vi.hoisted(() => {
     queryDeliveryBatchSpy: vi.fn(),
     retryDeliveryBatchSpy: vi.fn(),
     getPracticeGenerationSpy: vi.fn(),
+    startPracticeGenerationSpy: vi.fn(),
     retryPracticeGenerationSpy: vi.fn(),
   }
 })
@@ -75,6 +76,7 @@ vi.mock('@/api/k12', async () => ({
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
   k12GetMistakePracticeGeneration: (...args: unknown[]) => h.getPracticeGenerationSpy(...args),
+  k12StartMistakePracticeGeneration: (...args: unknown[]) => h.startPracticeGenerationSpy(...args),
   k12RetryMistakePracticeGeneration: (...args: unknown[]) => h.retryPracticeGenerationSpy(...args),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
@@ -300,6 +302,9 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       .mockImplementation((_agent: string, recordID: string) =>
         Promise.resolve({ state: 'pending', source_mistake_id: recordID }),
       )
+    h.startPracticeGenerationSpy.mockReset().mockImplementation((req: { record_id: string }) =>
+      Promise.resolve({ state: 'pending', source_mistake_id: req.record_id }),
+    )
   })
 
   it('[BUG-20260727-007] failed practice generation projects one retry command in weekly and all mistakes', async () => {
@@ -653,6 +658,12 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   })
 
   it('手录错题走轻量 record-mistake 端点（非 grade 验算链），透传家长选的非默认学科', async () => {
+    h.recordMistakeSpy.mockImplementationOnce(async () => {
+      h.listMistakesSpy.mockResolvedValue({ items: [...h.mistakes, {
+        ...h.mistakes[3], record_id: 'manual-cn-1', question: '“床前明月光”的下一句',
+      }] })
+      return { record_created: true, record_id: 'manual-cn-1', error_cause: '记错下一句' }
+    })
     const w = render()
     await flushPromises()
     // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
@@ -677,6 +688,13 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
         problem: '“床前明月光”的下一句',
       }),
     )
+    expect(h.getPracticeGenerationSpy).toHaveBeenCalledWith('mingming', 'manual-cn-1')
+    await w.get('[data-testid="mistake-practice-manual-cn-1"]').trigger('click')
+    await flushPromises()
+    expect(h.startPracticeGenerationSpy).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agent: 'mingming', record_id: 'manual-cn-1',
+    }))
+    w.unmount()
   })
 
   it('「⋯」溢出菜单：备份/恢复收进菜单（不占常驻顶栏），点击外发 open-backup', async () => {

@@ -91,6 +91,9 @@ vi.mock('@/api/k12', async (importOriginal) => ({
       },
     ],
   }),
+  k12GetProfile: vi.fn().mockResolvedValue({
+    child_name: '小明', grade_term: '五年级下', textbook_edition: '人教版', revision: 3,
+  }),
   k12GetCurriculumProgress: vi.fn().mockResolvedValue({
     revision: 4,
     progress: {

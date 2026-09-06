@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   unregisterSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
   profileSpy: vi.fn().mockResolvedValue({}),
+  getProfileSpy: vi.fn(),
   profileBundleSpy: vi.fn().mockResolvedValue({}),
   catalogSpy: vi.fn(),
   progressSpy: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('@/api/agents', () => ({
 }))
 vi.mock('@/api/k12', () => ({
   k12UpdateProfile: (r: unknown) => h.profileSpy(r),
+  k12GetProfile: (agent: string) => h.getProfileSpy(agent),
   k12UpdateProfileBundle: (r: unknown) => h.profileBundleSpy(r),
   k12GetCurriculumCatalog: (...args: unknown[]) => h.catalogSpy(...args),
   k12GetCurriculumProgress: (...args: unknown[]) => h.progressSpy(...args),
@@ -84,6 +86,9 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.unregisterSpy.mockReset().mockResolvedValue({})
     h.updateSpy.mockClear()
     h.profileSpy.mockReset().mockResolvedValue({})
+    h.getProfileSpy.mockReset().mockResolvedValue({
+      child_name: '小明', grade_term: '五年级上', textbook_edition: '人教版', revision: 2,
+    })
     h.profileBundleSpy.mockReset().mockResolvedValue({
       profile: {
         child_name: '小明',
@@ -235,6 +240,8 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
     // 当前版本只开放数学教材边界；其他五科仅作兼容 metadata 保留，不注入运行时提示词。
     expect(payload.system_prompt).toContain('数学讲解始终按人教版')
+    expect(payload.system_prompt).toContain('先给家长正确答案、完整解法和怎么给孩子讲的方法')
+    expect(payload.system_prompt).not.toContain('不直接报答案')
     for (const edition of ['人教PEP版', '教科版', '浙教版', '人美版']) {
       expect(payload.system_prompt).not.toContain(edition)
     }
@@ -420,7 +427,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       props: {
         agent: {
           name: 'k12-tutor-x',
-          display_name: '小明的辅导助手 · 五年级',
+          display_name: '小红的辅导老师',
           metadata: {
             scenario: 'k12-tutor',
             'k12.child_name': '小明',
@@ -438,6 +445,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await flushPromises()
 
     expect(h.profileBundleSpy).toHaveBeenCalledOnce()
+    expect(h.profileBundleSpy).toHaveBeenCalledWith(expect.objectContaining({
+      agent_config: expect.objectContaining({ display_name: '小红的辅导老师' }),
+      curriculum_progress: expect.objectContaining({
+        textbook_manifest_id: 'manifest-math-1',
+        unit_id: 'unit-1',
+      }),
+    }))
     expect(h.provisionSpy).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ agent: 'k12-tutor-x' }),
     )
@@ -464,6 +478,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('改档模式：预填 k12.* + 改年级 → profile-bundle 原子写六科与 Agent 基础字段', async () => {
+    h.progressSpy.mockResolvedValue({ revision: 2, progress: null })
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -486,6 +501,11 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     // 改年级 → 六年级；学期保持原来的“上”（两个字段均走 HcSelect）
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
+    expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
+    await B().find('input[placeholder="起始页"]').setValue('1')
+    expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeDefined()
+    await B().find('input[placeholder="起始页"]').setValue('')
+    expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     expect(h.registerSpy).not.toHaveBeenCalled() // 改档不新建
@@ -499,12 +519,16 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         grade_term: string
         subject_textbooks: Record<string, string>
       }
+      curriculum_progress: unknown
+      expected_profile_revision: number
     }
     expect(bundle.agent).toBe('k12-tutor-x')
     expect(bundle.agent_config.display_name).toContain('六年级')
     expect(bundle.profile.grade_term).toBe('六年级上')
     expect(bundle.profile.child_name).toBe('小明')
     expect(bundle.profile.subject_textbooks.math).toBe('人教版')
+    expect(bundle.curriculum_progress).toBeNull()
+    expect(bundle.expected_profile_revision).toBe(2)
     expect(w.emitted('created')).toBeTruthy()
   })
 

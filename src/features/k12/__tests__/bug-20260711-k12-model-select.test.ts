@@ -36,6 +36,9 @@ vi.mock('@/api/k12', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
+  k12GetProfile: vi.fn().mockResolvedValue({
+    child_name: '小明', grade_term: '五年级上', textbook_edition: '人教版', revision: 0,
+  }),
   k12GetCurriculumProgress: vi.fn().mockResolvedValue({
     progress: {
       revision: 1,

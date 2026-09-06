@@ -22,7 +22,7 @@ const h = vi.hoisted(() => ({
         source_label: '🧠 学情信号',
       },
       {
-        title: '每道题怎么带（不直接给答案）',
+        title: '每道题的答案与讲法',
         content: '先问孩子等式两边应同时做什么。',
         source_label: '🤖 AI 归纳·供参考',
       },
@@ -147,7 +147,7 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
         { title: '这页在练什么', content: '等式两边同时加减。', source_label: '📖 依据课本' },
         { title: '小明要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
         {
-          title: '每道题怎么带（不直接给答案）',
+          title: '每道题的答案与讲法',
           content: '先问孩子等式两边应同时做什么。',
           source_label: '🤖 AI 归纳·供参考',
         },

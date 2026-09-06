@@ -74,7 +74,7 @@ describe('K12 records 多孩异步隔离', () => {
         { title: '这页在练什么', content: '新内容', source_label: '📖 依据课本' },
         { title: '新孩子要留意', content: '暂无历史证据', source_label: '🧠 学情信号' },
         {
-          title: '每道题怎么带（不直接给答案）',
+          title: '每道题的答案与讲法',
           content: '新带法',
           source_label: '🤖 AI 归纳·供参考',
         },
@@ -87,7 +87,7 @@ describe('K12 records 多孩异步隔离', () => {
         { title: '这页在练什么', content: '旧内容', source_label: '📖 依据课本' },
         { title: '旧孩子要留意', content: '暂无历史证据', source_label: '🧠 学情信号' },
         {
-          title: '每道题怎么带（不直接给答案）',
+          title: '每道题的答案与讲法',
           content: '旧带法',
           source_label: '🤖 AI 归纳·供参考',
         },

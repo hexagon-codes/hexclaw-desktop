@@ -6,8 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import TutorProgressivePanel from '../views/TutorProgressivePanel.vue'
 
-// T3.1（hex-test）：渐进提示分阶段辅导 UI——后端 tutor-turn + store.tutorTurn 齐备但原无 Vue 组件驱动。
-// 本测试钉死：面板把家长「直接讲」跳到阶段三、渲染验算解，且逐级升级时 prior_stage 递进回传。
+// 家长始终能看到验算解，阶段仅表达面向孩子的讲法；历史阶段值仍原样回传。
 const h = vi.hoisted(() => ({ tutorSpy: vi.fn() }))
 vi.mock('@/api/k12', () => ({
   k12TutorTurn: (r: unknown) => h.tutorSpy(r),
@@ -64,12 +63,14 @@ describe('TutorProgressivePanel（T3.1 渐进提示分阶段辅导）', () => {
   })
 
   it('逐级升级：第一次提示后 prior_stage 递进回传', async () => {
-    h.tutorSpy.mockResolvedValueOnce({ stage: 1, comfort: false, escalated: false, prompt_hint: '想想单位' })
-    h.tutorSpy.mockResolvedValueOnce({ stage: 2, comfort: false, escalated: true, prompt_hint: '对齐小数点' })
+    h.tutorSpy.mockResolvedValueOnce({ stage: 1, comfort: false, escalated: false, prompt_hint: '想想单位', solution: '解：11.4' })
+    h.tutorSpy.mockResolvedValueOnce({ stage: 2, comfort: false, escalated: true, prompt_hint: '对齐小数点', solution: '解：11.4' })
     const w = render()
     await w.find('textarea').setValue('3.8×3=?')
     await w.find('[data-testid="tutor-next-hint"]').trigger('click')
     await flushPromises()
+    expect(w.find('[data-testid="tutor-solution"]').exists()).toBe(true)
+    expect(w.text()).toContain('解：11.4')
     await w.find('[data-testid="tutor-next-hint"]').trigger('click')
     await flushPromises()
 
@@ -81,7 +82,7 @@ describe('TutorProgressivePanel（T3.1 渐进提示分阶段辅导）', () => {
 
   it('情绪守门：comfort=true 时显示安抚、不再显示阶段徽标', async () => {
     h.tutorSpy.mockResolvedValue({
-      stage: 1, comfort: true, emotion_cue: '孩子哭了', escalated: false, prompt_hint: '先抱抱他',
+      stage: 1, comfort: true, emotion_cue: '孩子哭了', escalated: false, prompt_hint: '先抱抱他', solution: '解：11.4',
     })
     const w = render()
     await w.find('textarea').setValue('3.8×3=?')
@@ -89,5 +90,7 @@ describe('TutorProgressivePanel（T3.1 渐进提示分阶段辅导）', () => {
     await flushPromises()
     expect(w.text()).toContain('先安抚')
     expect(w.text()).toContain('孩子哭了')
+    expect(w.find('[data-testid="tutor-solution"]').exists()).toBe(true)
+    expect(w.text()).toContain('解：11.4')
   })
 })

@@ -360,13 +360,41 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
   })
 
   it('没有冲突的已完成作业直接读终态，零人工确认', async () => {
+    const blankQuestion = {
+      ...riskQuestion,
+      problem_id: 'problem-blank',
+      question: '10×0.01=?',
+      canonical_markdown: '10\\times 0.01',
+      answer_state: 'blank',
+      student_answer: '',
+      answer_canonical_markdown: '',
+      confirmation_required: false,
+      confirmation_reasons: [],
+    }
     const completed = homeworkStatus('completed', {
-      questions: [clearQuestion],
+      questions: [clearQuestion, blankQuestion],
       confirmationState: 'confirmed',
       version: 5,
     })
     const result = completedResult()
-    result.result.payload.items = [result.result.payload.items[0]!]
+    result.result.payload.items = [result.result.payload.items[0]!, {
+      ...result.result.payload.items[1]!,
+      question: blankQuestion,
+      status: 'blank_solved',
+      result_kind: 'parent_teaching_guide',
+      grade: {
+        solution: '0.1',
+        verdict: '',
+        evidence_type: 'numeric_exec',
+        badge: 'verified-strong',
+        out_of_scope: false,
+        record_created: false,
+        record_id: '',
+        wrong_step: '',
+        error_cause: '',
+      },
+      parent_guide: parentGuide,
+    }]
     h.create.mockResolvedValue({ created: true, ...completed })
     h.get.mockResolvedValue(completed)
     h.getResult.mockResolvedValue(result)
@@ -378,6 +406,11 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid^="rq-confirm-"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(true)
+    const solvedBlank = wrapper.get('[data-problem-id="problem-blank"][data-assessment-status="blank_solved"]')
+    expect(solvedBlank.text()).toContain(parentGuide.answer)
+    expect(solvedBlank.text()).toContain(parentGuide.parent_teaching_sequence[0])
+    expect(solvedBlank.text()).not.toContain('待人工复核')
+    expect(wrapper.find('[data-testid^="overlay-mark-"][data-assessment-status="blank_solved"]').exists()).toBe(false)
   })
 
   it('确认冲突返回 409 时留在原任务，不绕过 facade 生成结果', async () => {

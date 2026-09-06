@@ -1464,8 +1464,8 @@ async function installCurrentSourceFixture(page: Page, mode: ImplementationMode)
             source_label: '🧠 学情信号',
           },
           {
-            title: '每道题怎么带',
-            content: '先让孩子说出每个数位表示什么，不直接给答案。',
+            title: '每道题的答案与讲法',
+            content: '家长先看完整解法，再让孩子说出每个数位表示什么，并按步骤讲解。',
             source_label: '🤖 AI 归纳·供参考',
           },
         ],

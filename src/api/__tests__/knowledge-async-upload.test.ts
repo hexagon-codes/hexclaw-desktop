@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { apiPost } = vi.hoisted(() => ({ apiPost: vi.fn() }))
+const { apiGet, apiPost } = vi.hoisted(() => ({ apiGet: vi.fn(), apiPost: vi.fn() }))
 
 vi.mock('../client', () => ({
-  apiGet: vi.fn(),
+  apiGet,
   apiPost,
   apiDelete: vi.fn(),
   apiPut: vi.fn(),
@@ -12,6 +12,7 @@ vi.mock('../client', () => ({
 describe('Knowledge asynchronous document upload contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    apiGet.mockResolvedValue({ operations: [] })
     localStorage.clear()
     vi.resetModules()
   })

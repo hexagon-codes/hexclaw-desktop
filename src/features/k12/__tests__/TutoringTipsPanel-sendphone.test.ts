@@ -96,7 +96,7 @@ describe('DD-024: 辅导要点全绑定直发的单按钮状态机', () => {
         },
         { title: '小明要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
         {
-          title: '每道题怎么带（不直接给答案）',
+          title: '每道题的答案与讲法',
           content: '先问孩子小数位数。',
           source_label: '🤖 AI 归纳·供参考',
         },

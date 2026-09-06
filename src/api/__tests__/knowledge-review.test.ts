@@ -15,6 +15,7 @@ vi.mock('../client', () => ({
 describe('Knowledge API upload behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    apiGet.mockResolvedValue({ operations: [] })
   })
 
   it('uploads to the canonical knowledge upload endpoint', async () => {

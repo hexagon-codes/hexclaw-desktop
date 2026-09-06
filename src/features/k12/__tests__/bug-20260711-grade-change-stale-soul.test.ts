@@ -33,6 +33,9 @@ vi.mock('@/api/k12', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
+  k12GetProfile: vi.fn().mockResolvedValue({
+    child_name: '小明', grade_term: '五年级上', textbook_edition: '人教版', revision: 0,
+  }),
   k12GetCurriculumProgress: vi.fn().mockResolvedValue({
     progress: {
       revision: 1,
@@ -60,7 +63,7 @@ function i18n() {
 }
 const B = () => new DOMWrapper(document.body)
 
-/** 与 K12ProfileForm.tutorSoul 同构的派生模板（契约锚：改模板必须同步改这里，回归锁才有效） */
+/** 历史自动派生模板，用于验证改档时能迁移人设且保留自定义。 */
 function derivedSoul(child: string, grade: string, textbook: string): string {
   return `你是${child}的${grade}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。始终按${textbook} · ${grade}的教材范围讲题，绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
 }
@@ -102,6 +105,8 @@ describe('BUG-20260711-A：改档年级后 tutor 人设必须重派生', () => {
     // 核心断言：人设讲题边界必须是新年级（bug 症状 = 仍含「五年级上」→ tutor 自称五年级上辅导老师）
     expect(upd.agent_config.system_prompt).toContain('五年级下')
     expect(upd.agent_config.system_prompt).not.toContain('五年级上')
+    expect(upd.agent_config.system_prompt).toContain('先给家长正确答案、完整解法和怎么给孩子讲的方法')
+    expect(upd.agent_config.system_prompt).not.toContain('不直接报答案')
     expect(h.updateSpy).not.toHaveBeenCalled()
   })
 

@@ -26,7 +26,7 @@ describe('K12 辅导要点 API 契约', () => {
         { title: '这页在练什么', content: '小数乘法。', source_label: '📖 依据课本' },
         { title: '孩子要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
         {
-          title: '每道题怎么带（不直接给答案）',
+          title: '每道题的答案与讲法',
           content: '先问孩子小数位数。',
           source_label: '🤖 AI 归纳·供参考',
         },
