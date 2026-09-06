@@ -1138,6 +1138,7 @@ describe('ChatView — E2E 关键路径', () => {
         id: 'reasoning-disabled-history-assistant',
         role: 'assistant',
         content: '普通回答',
+        reasoning: '不应因公开摘要文本而伪造零秒思考标识',
         timestamp: '',
         metadata,
       },

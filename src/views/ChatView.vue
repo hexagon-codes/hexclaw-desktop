@@ -220,11 +220,8 @@ function hasThinkingProgress(message: ChatMessage): boolean {
   }
 
   const state = message.metadata?.thinking_state
-  // completed 只有在真实思考摘要或正数耗时存在时才是可展示证据；
-  // 旧消息单独带 completed/0 不能伪造「思考了 0s」。
-  if (normalizeAssistantReasoning(message.reasoning ?? '') || messageThinkingElapsed(message) > 0) {
-    return true
-  }
+  // completed 只有正数耗时才是可展示证据；0 秒不能因旧 reasoning 文本伪造思考标识。
+  if (messageThinkingElapsed(message) > 0) return true
   return state === 'running' || state === 'failed' || state === 'cancelled'
 }
 

@@ -333,6 +333,7 @@ describe('assistant run presentation', () => {
   )
 
   it.each([
+    { support: 'supported' as const, expectedKind: 'hidden' as const },
     { support: 'unsupported' as const, expectedKind: 'unsupported' as const },
     { support: 'unknown' as const, expectedKind: 'hidden' as const },
   ])(

@@ -57,6 +57,11 @@ export function formatAssistantRunDuration(elapsedSeconds: number): string {
   return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
 }
 
+function hasPositiveAssistantRunDuration(elapsedSeconds: number): boolean {
+  const numericSeconds = Number(elapsedSeconds)
+  return Number.isFinite(numericSeconds) && numericSeconds > 0
+}
+
 export function deriveAssistantRunPresentation(
   input: AssistantRunPresentationInput,
   labels: AssistantRunPresentationLabels,
@@ -96,6 +101,8 @@ export function deriveAssistantRunPresentation(
 
   if (input.hasVisibleAnswer) {
     if (input.reasoningExecution === 'applied') {
+      // 0 秒表示没有发生可展示的思考，不能伪造完成态标识。
+      if (!hasPositiveAssistantRunDuration(input.elapsedSeconds)) return HIDDEN_PRESENTATION
       return {
         kind: 'thought',
         text: labels.thought(formatAssistantRunDuration(input.elapsedSeconds)),
