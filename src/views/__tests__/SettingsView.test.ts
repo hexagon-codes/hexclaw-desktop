@@ -26,9 +26,14 @@ const ollamaApi = vi.hoisted(() => ({
   restartOllama: vi.fn(),
 }))
 
-const { mockTestLLMConnection, mockFetchProviderModels } = vi.hoisted(() => ({
+const {
+  mockTestLLMConnection,
+  mockFetchProviderModels,
+  mockProbeLLMModelCapability,
+} = vi.hoisted(() => ({
   mockTestLLMConnection: vi.fn(),
   mockFetchProviderModels: vi.fn(),
+  mockProbeLLMModelCapability: vi.fn(),
 }))
 
 const capabilityApi = vi.hoisted(() => ({
@@ -54,6 +59,7 @@ vi.mock('@/api/config', () => ({
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
   }),
   testLLMConnection: mockTestLLMConnection,
+  probeLLMModelCapability: mockProbeLLMModelCapability,
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
   fetchProviderModels: mockFetchProviderModels,
   readProviderApiKey: vi.fn(async (providerId: string) => {
@@ -298,6 +304,16 @@ describe('SettingsView — E2E 关键路径', () => {
       tested_at: '2026-07-28T06:20:00Z',
       latency_ms: 12,
     })
+    mockProbeLLMModelCapability.mockReset()
+    mockProbeLLMModelCapability.mockResolvedValue({
+      probe_kind: 'text',
+      outcome: 'passed',
+      probe_policy_version: 'v4',
+      tested_at: 1722147600000,
+      probe_started_at: 1722147599988,
+      latency_ms: 12,
+      persisted: true,
+    })
     mockFetchProviderModels.mockReset()
     mockFetchProviderModels.mockResolvedValue([])
     capabilityApi.fetchCapabilities.mockReset()
@@ -513,6 +529,10 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     expect(wrapper.get('.hc-provider__connection-status').text()).toContain('成功')
+    expect(mockProbeLLMModelCapability).toHaveBeenCalledWith(
+      'pvd_v1_11112222333344445555666677778888',
+      'gpt-4o',
+    )
   })
 
   it('does not pass masked provider api keys in connection probes when the provider has stable identity', async () => {

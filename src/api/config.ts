@@ -184,6 +184,49 @@ export async function testLLMConnection(
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }
 
+export interface LLMModelCapabilityProbeResult {
+  probe_kind: string
+  outcome: string
+  failure_code?: string
+  probe_policy_version: string
+  tested_at: number
+  probe_started_at: number
+  latency_ms: number
+  persisted: boolean
+}
+
+interface LLMModelCapabilityProbeResponse {
+  provider_instance_id: string
+  model: string
+  results: LLMModelCapabilityProbeResult[]
+}
+
+/** 为已保存的精确模型执行文本能力探测，并要求服务端持久化真实回执。 */
+export async function probeLLMModelCapability(
+  providerInstanceId: string,
+  model: string,
+): Promise<LLMModelCapabilityProbeResult> {
+  const text = await proxyApiRequestText(
+    'POST',
+    '/api/v1/config/llm/probe',
+    JSON.stringify({
+      provider_instance_id: providerInstanceId,
+      model,
+      kinds: ['text'],
+    }),
+  )
+  const result = safeJsonParse<LLMModelCapabilityProbeResponse>(text, 'probeLLMModelCapability')
+  const probe = result.results?.find((candidate) => candidate.probe_kind === 'text')
+  if (!probe) throw new Error('Model text capability probe returned no text result')
+  if (probe.outcome !== 'passed') {
+    throw new Error(
+      `Model text capability probe failed: ${probe.failure_code || 'PROBE_EXECUTION_FAILED'}`,
+    )
+  }
+  if (!probe.persisted) throw new Error('Model text capability probe receipt was not persisted')
+  return probe
+}
+
 /** 后端 /api/v1/config/llm/models 返回的模型条目（snake_case） */
 interface BackendProviderModel {
   id: string

@@ -29,7 +29,13 @@ import {
   resolveProviderSelectedModelId,
 } from '@/stores/settings-helpers'
 import { getRuntimeConfig } from '@/api/settings'
-import { getLLMConfig, testLLMConnection, fetchProviderModels, readProviderApiKey } from '@/api/config'
+import {
+  getLLMConfig,
+  testLLMConnection,
+  probeLLMModelCapability,
+  fetchProviderModels,
+  readProviderApiKey,
+} from '@/api/config'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import { messageFromUnknownError } from '@/utils/errors'
 import { thirdPartyAiServicesUrl } from '@/utils/legal-links'
@@ -1312,7 +1318,7 @@ async function testProvider(provider: ProviderConfig) {
   testingProviderIds.value.add(provider.id)
   delete testProviderResult.value[provider.id]
 
-  // 此入口只验证 chat-completions；Embedding-only 由知识库 profile preflight 验证。
+  // 此入口验证 chat-completions，并为精确模型写入文本能力回执；Embedding-only 由知识库 profile preflight 验证。
   const preferred =
     provider.models?.find(
       (model) => model.id === provider.selectedModelId && isChatModelOption(model),
@@ -1384,6 +1390,15 @@ async function testProvider(provider: ProviderConfig) {
       },
     )
     const testedAt = parseProviderProbeTime(result.tested_at)
+
+    // Provider 连接回执与模型能力回执是两份独立事实；同一次用户主动测试顺便
+    // 验证当前模型的文本能力，避免 K12 文本链路只能读到过期或不存在的能力回执。
+    if (result.ok && activeProvider.providerInstanceId) {
+      // 旧 Provider 回执不能覆盖当前文本探测的失败原因；成功后由本次连接测试重新写回。
+      activeProvider.probeReceipt = undefined
+      if (activeProvider !== provider) provider.probeReceipt = undefined
+      await probeLLMModelCapability(activeProvider.providerInstanceId, activeModelId)
+    }
 
     if (!result.ok) {
       activeProvider.probeReceipt = undefined
