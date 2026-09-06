@@ -506,10 +506,24 @@ async function pollKnowledgeUploadJobs() {
   indexPollInFlight = true
   try {
     let uploadProjectionChanged = false
+    let uploadOperationsReconciled = false
     const terminalDocumentIDs = new Set<string>()
     const polledJobs = new Map<string, Awaited<ReturnType<typeof getKnowledgeJob>>>()
+    // response-unknown 也必须沿同一 operation/job 继续对账；不能因为 202
+    // 回执丢失就把条目永久停在“等待确认”。没有 jobId 时先读取 durable
+    // operation，按内容摘要/幂等身份重新绑定，仍不创建第二个任务。
+    if (uploadsStore.items.some((entry) => entry.status === 'pending-response')) {
+      try {
+        uploadsStore.reconcileRecoverableOperations(await listKnowledgeOperations())
+        uploadOperationsReconciled = true
+      } catch (error) {
+        logger.warn('[Knowledge] upload operation reconciliation failed', error)
+      }
+    }
     const running = uploadsStore.items.filter(
-      (entry) => entry.status === 'processing' && Boolean(entry.jobId),
+      (entry) =>
+        (entry.status === 'processing' || entry.status === 'pending-response') &&
+        Boolean(entry.jobId),
     )
     for (const entry of running) {
       try {
@@ -570,13 +584,20 @@ async function pollKnowledgeUploadJobs() {
       }
     } else if (
       isMounted &&
-      (uploadProjectionChanged || uploadsStore.items.some((entry) => entry.status === 'done'))
+      (uploadProjectionChanged ||
+        uploadOperationsReconciled ||
+        uploadsStore.items.some((entry) => entry.status === 'done'))
     ) {
       await revalidateFromApi(true)
     }
   } finally {
     indexPollInFlight = false
-    if (!uploadsStore.hasAwaitingIndex() && !hasPollableVectorJobs() && indexPollTimer) {
+    if (
+      !uploadsStore.hasAwaitingIndex() &&
+      !uploadsStore.hasRecoverableResponse() &&
+      !hasPollableVectorJobs() &&
+      indexPollTimer
+    ) {
       clearInterval(indexPollTimer)
       indexPollTimer = null
     }
@@ -586,7 +607,11 @@ async function pollKnowledgeUploadJobs() {
 function ensureIndexPolling() {
   if (!isMounted || indexPollTimer) return
   indexPollTimer = setInterval(() => {
-    if (!uploadsStore.hasAwaitingIndex() && !hasPollableVectorJobs()) {
+    if (
+      !uploadsStore.hasAwaitingIndex() &&
+      !uploadsStore.hasRecoverableResponse() &&
+      !hasPollableVectorJobs()
+    ) {
       if (indexPollTimer) clearInterval(indexPollTimer)
       indexPollTimer = null
       return
@@ -650,7 +675,13 @@ onMounted(async () => {
   void loadEmbeddingStatus()
   void loadRagConfig()
   // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
-  if (uploadsStore.hasAwaitingIndex() || hasPollableVectorJobs()) ensureIndexPolling()
+  if (
+    uploadsStore.hasAwaitingIndex() ||
+    uploadsStore.hasRecoverableResponse() ||
+    hasPollableVectorJobs()
+  ) {
+    ensureIndexPolling()
+  }
 })
 
 watch(activeTab, () => {
@@ -695,7 +726,12 @@ async function revalidateFromApi(
     errorSeverity.value = null
     // 上传条目结算：已在列表落地的 done 条目移除（挂载/轮询/手动刷新都会走到这里）
     uploadsStore.settleAgainstDocs(docs.value)
-    if (isMounted && (uploadsStore.hasAwaitingIndex() || hasPollableVectorJobs())) {
+    if (
+      isMounted &&
+      (uploadsStore.hasAwaitingIndex() ||
+        uploadsStore.hasRecoverableResponse() ||
+        hasPollableVectorJobs())
+    ) {
       ensureIndexPolling()
     }
 
@@ -1042,7 +1078,7 @@ function getDocumentRowStatus(doc: KnowledgeDoc): string {
   if (isReadingDocumentProjection(doc)) return t('knowledge.authorityReading')
   const structuredFacts = getStructuredDocumentFacts(doc)
   if (structuredFacts.length > 0) return structuredFacts.join('\n')
-  if (doc.error_message) return doc.error_message
+  if (doc.error_message) return getKnowledgeErrorMessage(doc.error_message, true)
   if (
     getDocStatus(doc) === 'processing' &&
     doc.source_type?.trim().toLowerCase() === 'connector' &&
@@ -1095,6 +1131,32 @@ function getDocumentBadgeStyle(doc: KnowledgeDoc) {
   return getDocStatusStyle(doc)
 }
 
+function getKnowledgeErrorMessage(rawMessage: string | undefined, hasDurableIdentity: boolean): string {
+  // 内部错误码、阶段名和 invocation outcome 只留在本地日志；家长只需知道
+  // 当前材料是否已接收，以及是否可以用同一文件安全恢复同一代次。
+  const raw = rawMessage?.trim() || ''
+  const normalized = raw.toLowerCase()
+  const technical =
+    normalized.includes('upload_failed') ||
+    normalized.includes('outcome_unknown') ||
+    normalized.includes('knowledge:') ||
+    normalized.includes('invocation') ||
+    normalized.includes('provider') ||
+    normalized.includes('sqlite') ||
+    normalized.includes('job_') ||
+    normalized.includes('http ') ||
+    normalized.includes('network error') ||
+    normalized.includes('timeout')
+  if (!technical) return raw || t('knowledge.uploadFailed')
+  return hasDurableIdentity
+    ? '教材处理未完成；重新选择同一文件恢复'
+    : '文件未接收完成；重新选择同一文件恢复'
+}
+
+function getUploadRecoveryMessage(entry: KnowledgeUploadEntry): string {
+  return getKnowledgeErrorMessage(entry.error, Boolean(entry.documentId || entry.jobId))
+}
+
 function getUploadRowStatus(entry: KnowledgeUploadEntry): string {
   switch (entry.status) {
     case 'uploading':
@@ -1102,14 +1164,13 @@ function getUploadRowStatus(entry: KnowledgeUploadEntry): string {
     case 'processing':
       return t('knowledge.processing')
     case 'pending-response':
-      return (
-        entry.error ||
-        t('knowledge.uploadAwaitingAcceptance', '等待服务器确认；可重新选择同一文件恢复')
-      )
+      return entry.error
+        ? getUploadRecoveryMessage(entry)
+        : t('knowledge.uploadAwaitingAcceptance', '正在确认文件状态；稍后自动更新')
     case 'error':
-      return entry.error || t('knowledge.uploadFailed')
+      return getUploadRecoveryMessage(entry)
     case 'done':
-      return entry.warning || t('knowledge.indexing')
+      return entry.warning || '文本已可检索 · 语义索引后台增强中'
     case 'cancelled':
       return ''
   }
@@ -2441,7 +2502,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 class="rounded-lg px-3 py-2 text-sm"
                 style="background: #ef444415; color: #dc2626"
               >
-                {{ selectedDoc.error_message }}
+                {{ getKnowledgeErrorMessage(selectedDoc.error_message, true) }}
               </div>
               <div
                 class="rounded-xl border p-4 text-sm leading-6"

@@ -125,7 +125,11 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
   }
 
   function markSucceeded(entry: KnowledgeUploadEntry): void {
-    if (entry.status === 'processing') entry.status = 'done'
+    // Job 状态可能在 HTTP 202 回执确认前已经终态；pending-response 也必须
+    // 收敛为 done，不能让一个已成功的任务继续占用“等待确认”提示。
+    if (entry.status === 'processing' || entry.status === 'pending-response') {
+      entry.status = 'done'
+    }
     entry.operationTerminal = true
     entry.cancelling = false
   }
@@ -149,24 +153,56 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     items.value = items.value.filter((candidate) => candidate !== entry)
   }
 
-  /** A completed operation lands only when its stable document ID is listed. */
+  /** 持久终态只有在稳定 document ID 出现在文档列表后才算落地。 */
   function landed(entry: KnowledgeUploadEntry, docs: DocLike[]): boolean {
     return Boolean(entry.documentId && docs.some((document) => document.id === entry.documentId))
   }
 
-  /** Settle terminal success by Sidecar identity; filename/source are presentation only. */
+  /**
+   * 结算必须按 Sidecar 身份完成，文件名/来源只用于展示。已绑定文档的失败
+   * 行在文档卡落地后由文档卡承载重试入口；接纳前失败没有文档卡，继续保留
+   * 其恢复提示。
+   */
   function settleAgainstDocs(docs: DocLike[]): void {
-    items.value = items.value.filter((e) => !(e.status === 'done' && landed(e, docs)))
+    items.value = items.value.filter((e) => {
+      if (!landed(e, docs)) return true
+      return !(e.status === 'done' || (e.status === 'error' && e.operationTerminal === true))
+    })
   }
 
   /** Replace restartable rows with the Sidecar's durable upload-operation projection. */
   function reconcileRecoverableOperations(operations: KnowledgeOperation[]): void {
-    const remoteOperationIDs = new Set(operations.map((operation) => operation.operation_id))
+    // 接纳前失败没有内容摘要时，只能用同一显示名合并连续尝试；一旦存在
+    // 已绑定成功代次，旧的无绑定失败降为审计，避免主列表重复占位。
+    const operationKey = (operation: KnowledgeOperation): string => {
+      if (operation.content_digest) return `digest:${operation.content_digest}`
+      return `name:${(operation.display_name || operation.title).trim()}`
+    }
+    const successfulKeys = new Set(
+      operations
+        .filter((operation) => operation.state === 'succeeded' && Boolean(operation.document_id))
+        .map(operationKey),
+    )
+    const seenUnboundFailures = new Set<string>()
+    const visibleOperations = operations.filter((operation) => {
+      if (
+        operation.state !== 'failed' ||
+        operation.document_id ||
+        operation.job_id
+      ) {
+        return true
+      }
+      const key = operationKey(operation)
+      if (successfulKeys.has(key) || seenUnboundFailures.has(key)) return false
+      seenUnboundFailures.add(key)
+      return true
+    })
+    const remoteOperationIDs = new Set(visibleOperations.map((operation) => operation.operation_id))
     const remoteJobIDs = new Set(
-      operations.map((operation) => operation.job_id).filter((jobID) => Boolean(jobID)),
+      visibleOperations.map((operation) => operation.job_id).filter((jobID) => Boolean(jobID)),
     )
     const remoteDocumentIDs = new Set(
-      operations
+      visibleOperations
         .map((operation) => operation.document_id)
         .filter((documentID) => Boolean(documentID)),
     )
@@ -179,7 +215,7 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
         Boolean(entry.documentId && remoteDocumentIDs.has(entry.documentId))
       )
     })
-    for (const operation of operations) {
+    for (const operation of visibleOperations) {
       const existing = items.value.find(
         (entry) =>
           entry.operationId === operation.operation_id ||
@@ -247,6 +283,15 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     )
   }
 
+  /** 是否有可用幂等身份的 response-unknown 条目需要后台对账。 */
+  function hasRecoverableResponse(): boolean {
+    return items.value.some(
+      (entry) =>
+        entry.status === 'pending-response' &&
+        Boolean(entry.intentKey || entry.operationId || entry.jobId),
+    )
+  }
+
   /** 新一轮上传开始前清掉旧错误或兼容取消条目 */
   function clearErrors(): void {
     items.value = items.value.filter((e) => e.status !== 'error' && e.status !== 'cancelled')
@@ -265,6 +310,7 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     settleAgainstDocs,
     reconcileRecoverableOperations,
     hasAwaitingIndex,
+    hasRecoverableResponse,
     clearErrors,
   }
 })
