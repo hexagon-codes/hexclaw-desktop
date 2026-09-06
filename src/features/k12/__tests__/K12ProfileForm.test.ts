@@ -479,6 +479,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
 
   it('改档模式：预填 k12.* + 改年级 → profile-bundle 原子写六科与 Agent 基础字段', async () => {
     h.progressSpy.mockResolvedValue({ revision: 2, progress: null })
+    h.bindingOptionsSpy.mockResolvedValueOnce({ items: [] })
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -498,6 +499,12 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
     // 预填称呼（读 k12.child_name）
     expect((B().find('input.k12pf__input').element as HTMLInputElement).value).toBe('小明')
+    await flushPromises()
+    expect(B().find('[data-testid="k12-textbook-manifest"] button').attributes('aria-disabled')).toBe('true')
+    expect(B().find('[data-testid="k12-textbook-manifest"]').text()).toBe('尚未关联数学教材文件')
+    expect(B().find('[data-testid="k12-current-unit-value"]').text()).toBe('选择当前单元')
+    expect(B().find('[data-testid="k12-textbook-empty-hint"]').exists()).toBe(false)
+    expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
     // 改年级 → 六年级；学期保持原来的“上”（两个字段均走 HcSelect）
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
@@ -751,7 +758,26 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('[K12-PROFILE-056/057] 可见档案面与权威原型保持能力文案、教材状态行和清空控件 exact-set', async () => {
-    mount(K12ProfileForm, {
+    const { items } = await h.bindingOptionsSpy()
+    const failureMessages = [
+      ' textbook catalog evidence insufficient: copyright or edition year evidence is missing ',
+      '默认模型未配置',
+      '',
+    ]
+    h.bindingOptionsSpy.mockResolvedValue({
+      items: [
+        ...items,
+        ...failureMessages.map((failure_message, index) => ({
+          ...items[0],
+          manifest_id: `failed-manifest-${index}`,
+          state: 'failed_terminal',
+          failure_message,
+          text_index_state: index === 0 ? 'ready' : 'pending',
+          catalog: null,
+        })),
+      ],
+    })
+    const wrapper = mount(K12ProfileForm, {
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -786,6 +812,27 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(root.find('[data-testid="k12-textbook-manifest"] .hc-select__label').text()).toContain(
       ' · 可确认',
     )
+    const manifestSelect = wrapper.findAllComponents(HcSelect).find(
+      (select) => select.attributes('data-testid') === 'k12-textbook-manifest',
+    )!
+    expect(manifestSelect.props('options').slice(1)).toEqual([
+      {
+        value: 'failed-manifest-0',
+        label: `${items[0].document_title} · 教材目录待补齐`,
+        disabled: true,
+      },
+      {
+        value: 'failed-manifest-1',
+        label: `${items[0].document_title} · 默认模型未配置`,
+        disabled: true,
+      },
+      {
+        value: 'failed-manifest-2',
+        label: `${items[0].document_title} · 识别失败`,
+        disabled: true,
+      },
+    ])
+    expect(h.profileBundleSpy).not.toHaveBeenCalled()
     expect(root.findAll('.hc-clearable-field__button')).toHaveLength(0)
   })
 

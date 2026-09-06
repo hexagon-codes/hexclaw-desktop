@@ -167,6 +167,7 @@ function cardTime(work: CreativeWorkDTO): {
 // `<img src>` 直连 /_hexclaw 资产路径没有 Bearer/IPC 通道（桌面 WebView
 // 无该 HTTP 服务、dev 代理无 token），故复用 k12GetAssetBlob 走 api 客户端。
 const thumbURLs = reactive(new Map<string, string>())
+const thumbBlobs = reactive(new Map<string, Blob>())
 const thumbAborters = new Map<string, AbortController>()
 
 function releaseThumb(workID: string) {
@@ -175,6 +176,7 @@ function releaseThumb(workID: string) {
   const url = thumbURLs.get(workID)
   if (url) URL.revokeObjectURL(url)
   thumbURLs.delete(workID)
+  thumbBlobs.delete(workID)
 }
 
 async function loadThumb(work: CreativeWorkDTO) {
@@ -185,6 +187,7 @@ async function loadThumb(work: CreativeWorkDTO) {
   thumbAborters.set(work.work_id, controller)
   const blob = await k12GetAssetBlob(props.agentId, assetID, controller.signal)
   if (!controller.signal.aborted && blob) {
+    thumbBlobs.set(work.work_id, blob)
     thumbURLs.set(work.work_id, URL.createObjectURL(blob))
   }
   thumbAborters.delete(work.work_id)
@@ -347,9 +350,53 @@ function feedbackMarkdown(work: CreativeWorkDTO): string {
   return latestFeedback(work)?.projection_markdown?.trim() ?? ''
 }
 
-function workDocumentMarkdown(work: CreativeWorkDTO): string {
+async function blobToDataURL(blob: Blob): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result === 'string' && result.startsWith('data:')) {
+          resolve(result)
+        } else {
+          reject(new Error('Unable to encode artwork for export'))
+        }
+      }
+      reader.onerror = () =>
+        reject(reader.error ?? new Error('Unable to encode artwork for export'))
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  if (typeof globalThis.btoa !== 'function') {
+    throw new Error('Unable to encode artwork for export')
+  }
+  return `data:${blob.type || 'application/octet-stream'};base64,${globalThis.btoa(binary)}`
+}
+
+async function exportImageURL(work: CreativeWorkDTO): Promise<string> {
+  const assetID = work.source_asset_id?.trim() ?? ''
+  if (!assetID) return ''
+  if (!assetID.startsWith('asset://')) {
+    throw new Error('Artwork source asset is invalid')
+  }
+
+  const blob = thumbBlobs.get(work.work_id) ?? (await k12GetAssetBlob(props.agentId, assetID))
+  if (!blob) {
+    throw new Error('Artwork source asset is unavailable')
+  }
+  thumbBlobs.set(work.work_id, blob)
+  return blobToDataURL(blob)
+}
+
+async function workDocumentMarkdown(work: CreativeWorkDTO): Promise<string> {
   const lines = [`# ${work.display_name}`]
-  const imageURL = workThumbURL(work)
+  const imageURL = await exportImageURL(work)
   if (imageURL) lines.push('', `![${work.display_name}](${imageURL})`)
   if (work.work_type === 'writing' && work.content_markdown?.trim()) {
     lines.push('', `## ${t('k12.works.contentLabel')}`, '', work.content_markdown.trim())
@@ -398,7 +445,7 @@ function safePDFName(name: string): string {
 async function exportWorkPDF(work: CreativeWorkDTO) {
   try {
     await exportArchiveDocument({
-      content: workDocumentMarkdown(work),
+      content: await workDocumentMarkdown(work),
       format: 'pdf',
       title: `${work.display_name} · ${t('k12.works.latestFeedback')}`,
       filename: safePDFName(work.display_name),

@@ -492,6 +492,7 @@ function fillSoulDraft(target: 'add' | 'edit', key: string) {
 }
 
 function openEditAgent(agent: AgentConfig) {
+  if (openScenarioAgentEditor(agent)) return
   errorMsg.value = ''
   // BUG-20260703 D3：打开弹窗不再跑 syncAgentModelSelection——provider 失效时它会把
   // 存量 model 当场清空（数据未保存就被动）。快照原 LLM 配置作「未真改就不校验」的
@@ -848,14 +849,33 @@ async function useLibraryTemplate(tpl: AgentTemplate) {
 // 本视图零 K12 知识，用 <component :is> 动态渲染表单。
 const scenarioTemplates = scenarioRegistry.scenarioTemplates
 const activeScenarioForm = shallowRef<Component | null>(null)
-function onScenarioCreated() {
+
+/** 从场景注册表选择既有专属表单，避免场景实例误走通用 Agent patch。 */
+const activeScenarioAgent = shallowRef<AgentConfig | null>(null)
+function openScenarioAgentEditor(agent: AgentConfig): boolean {
+  const scenarioKey = agent.metadata?.scenario || agent.metadata?.template
+  const template = scenarioKey
+    ? scenarioTemplates.find((candidate) => candidate.key === scenarioKey)
+    : undefined
+  if (!template) return false
+  activeScenarioAgent.value = agent
+  activeScenarioForm.value = template.form
+  return true
+}
+
+function closeScenarioForm() {
+  activeScenarioAgent.value = null
   activeScenarioForm.value = null
+}
+
+function onScenarioCreated() {
+  closeScenarioForm()
   void loadAgents()
 }
 
 /** 专属建档“上一步”回到通用创建起点；宿主必须消费该意图，不能留下无响应按钮。 */
 function onScenarioBack() {
-  activeScenarioForm.value = null
+  closeScenarioForm()
   openAddAgentDialog(true)
 }
 
@@ -1283,7 +1303,7 @@ async function handleUnregisterAgent() {
             :key="stpl.key"
             type="button"
             class="hc-cxcard hc-tplcard"
-            @click="activeScenarioForm = stpl.form"
+            @click="closeScenarioForm(); activeScenarioForm = stpl.form"
           >
             <div class="hc-cxtop">
               <div class="hc-cxlogo" style="font-size: 20px">{{ stpl.icon }}</div>
@@ -1322,10 +1342,11 @@ async function handleUnregisterAgent() {
     <component
       :is="activeScenarioForm"
       v-if="activeScenarioForm"
+      :agent="activeScenarioAgent || undefined"
       @created="onScenarioCreated"
       @removed="onScenarioCreated"
       @back="onScenarioBack"
-      @close="activeScenarioForm = null"
+      @close="closeScenarioForm"
     />
 
     <!-- 注册 Agent 对话框 -->

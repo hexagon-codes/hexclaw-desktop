@@ -238,20 +238,45 @@ const manifestStateLabels: Record<TextbookManifestState, string> = {
   extracting: '正在识别',
   ready_for_confirmation: '可确认',
   failed_retryable: '识别失败',
-  failed_terminal: '默认模型未配置',
+  failed_terminal: '识别失败',
   stale: '源已失效',
 }
 const textbookManifestOptions = computed(() => {
   if (!textbookBindingOptions.value.length) {
-    return [{ value: '', label: '未上传', disabled: true }]
+    return [{ value: '', label: '尚未关联数学教材文件', disabled: true }]
   }
   return textbookBindingOptions.value.map((option) => ({
     value: option.manifest_id,
     // 选择器直接投影文件与摄取状态，避免家长只能看到无法选择的文件名。
-    label: `${option.document_title} · ${manifestStateLabels[option.state]}`,
+    label: `${option.document_title} · ${textbookManifestStatusLabel(option)}`,
     disabled: option.state !== 'ready_for_confirmation',
   }))
 })
+
+function textbookManifestStatusLabel(option: TextbookBindingOptionDTO): string {
+  // 正文已完成而目录证据不足时，教材仍可用于通用检索；绑定资格继续锁定，
+  // 家长看到的是可理解的补齐状态，不把 catalog/job 的内部错误直接透传。
+  if (option.state === 'failed_terminal' && option.text_index_state === 'ready') {
+    return '教材目录待补齐'
+  }
+  if (option.state !== 'failed_terminal') return manifestStateLabels[option.state]
+  const failure = option.failure_message.trim()
+  if (!failure) return manifestStateLabels[option.state]
+  if (failure === '默认模型未配置') return failure
+  const normalized = failure.toLowerCase()
+  const internalFailure = [
+    'knowledge:',
+    'outcome_unknown',
+    'invocation',
+    'provider',
+    'sqlite',
+    'job_',
+    'catalog evidence insufficient',
+    'copyright or edition year evidence',
+  ].some((marker) => normalized.includes(marker))
+  return internalFailure ? '教材处理未完成' : failure
+}
+
 const textbookBindingStatus = computed(() => {
   const selected = textbookBindingOptions.value.find(
     (option) => option.manifest_id === effectiveTextbookManifestID.value,
@@ -259,10 +284,9 @@ const textbookBindingStatus = computed(() => {
   if (!selected) return { state: 'none', label: '未关联教材文件' }
   return {
     state: selected.state,
-    label:
-      selected.state === 'ready_for_confirmation'
-        ? '已识别，可关联'
-        : manifestStateLabels[selected.state],
+    label: selected.state === 'ready_for_confirmation'
+      ? '已识别，可关联'
+      : textbookManifestStatusLabel(selected),
   }
 })
 const lessonOptions = computed(() => {
@@ -822,6 +846,7 @@ async function submit() {
                     :model-value="effectiveTextbookManifestID"
                     @update:model-value="textbookManifestID = $event"
                     :options="textbookManifestOptions"
+                    :disabled="!textbookBindingOptions.length"
                     placeholder="未上传"
                     aria-label="关联教材文件"
                     data-testid="k12-textbook-manifest"
@@ -833,22 +858,16 @@ async function submit() {
                   >
                     <small>{{ textbookBindingStatus.label }}</small>
                   </span>
-                  <p
-                    v-if="!textbookBindingOptions.length"
-                    class="k12pf__curriculum-hint"
-                    data-testid="k12-textbook-empty-hint"
-                  >
-                    关联教材后可生成教材同步练习
-                  </p>
                 </div>
                 <div class="k12pf__field k12pf__field--wide">
                   <span>当前单元 必填</span>
                   <HcSelect
                     v-model="unitID"
                     :options="unitOptions"
+                    placeholder="选择当前单元"
                     class="k12pf__current-unit-value"
                     :aria-label="`当前单元：${
-                      unitOptions.find((option) => option.value === unitID)?.label ?? '未选择'
+                      unitOptions.find((option) => option.value === unitID)?.label ?? '选择当前单元'
                     }`"
                     data-testid="k12-current-unit-value"
                   />
@@ -1269,6 +1288,12 @@ async function submit() {
   padding: 8px 12px;
   gap: 10px;
   line-height: normal;
+}
+.k12pf__textbook-field :deep(.hc-select__trigger--disabled) {
+  opacity: 1;
+}
+.k12pf__current-unit-value :deep(.hc-select__label--placeholder) {
+  color: inherit;
 }
 .k12pf__pages .k12pf__input {
   padding: 9px 12px;

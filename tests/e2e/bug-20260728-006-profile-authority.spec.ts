@@ -11,6 +11,7 @@ const EVIDENCE_ROOT = resolve(
 )
 const REFERENCE_URL = 'http://127.0.0.1:16126/app.html'
 const IMPLEMENTATION_URL = 'http://127.0.0.1:16127/agents'
+const UNBOUND = process.env.HEX_K12_PROFILE_UNBOUND === '1'
 const AGENT = 'agent-k12-ming'
 const SESSION = 'session-k12-ming'
 const NOW = '2026-07-28T12:00:00+08:00'
@@ -30,7 +31,7 @@ const { PNG } = require(resolve(playwrightCoreRoot, 'lib/utilsBundle.js')) as {
 
 const agent = {
   name: AGENT,
-  display_name: '小明的辅导助手 · 五年级',
+  display_name: `小明的辅导助手 · ${UNBOUND ? '六' : '五'}年级`,
   description: '五年级上 · 数学教材与当前进度 · 按年级边界讲解',
   provider: 'HexClaw-GPT',
   model: 'gpt-5.6-sol',
@@ -47,7 +48,7 @@ const agent = {
     avatar: '🎓',
     'k12.learner_id': 'learner-ming',
     'k12.child_name': '小明',
-    'k12.grade_term': '五年级上',
+    'k12.grade_term': UNBOUND ? '六年级上' : '五年级上',
     'k12.profile_revision': '3',
     'k12.textbook_edition': '人教版',
     'k12.textbook_edition.math': '人教版',
@@ -82,7 +83,7 @@ const settings = {
   revision: 7,
   timezone: 'Asia/Shanghai',
   due_review_enabled: true,
-  textbook_consolidation_enabled: true,
+  textbook_consolidation_enabled: !UNBOUND,
   textbook_consolidation_tier: 'standard',
   arithmetic_warmup_enabled: true,
   arithmetic_minutes: 2,
@@ -348,10 +349,18 @@ async function installImplementationFixture(page: Page) {
       })
     }
     if (path === '/api/k12/curriculum-progress' && method === 'GET') {
-      return json(route, { progress, revision: 4 })
+      return json(route, { progress: UNBOUND ? null : progress, revision: 4 })
+    }
+    if (path === '/api/k12/profile' && method === 'GET') {
+      return json(route, {
+        child_name: '小明',
+        grade_term: agent.metadata['k12.grade_term'],
+        textbook_edition: '人教版',
+        revision: 3,
+      })
     }
     if (path === '/api/k12/textbook-binding-options' && method === 'GET') {
-      return json(route, { items: [binding] })
+      return json(route, { items: UNBOUND ? [] : [binding] })
     }
     if (path === '/api/k12/weekly-practice/settings' && method === 'GET') {
       return json(route, settings)
@@ -517,6 +526,9 @@ async function snapshot(page: Page, kind: SurfaceKind, entry: string) {
           border: computed.border,
           borderRadius: computed.borderRadius,
           gap: computed.gap,
+          disabled: (node as HTMLButtonElement).disabled || node.getAttribute('aria-disabled') === 'true',
+          opacity: computed.opacity,
+          labelColor: getComputedStyle(node.querySelector('.hc-select__label, .k12-curriculum-select__value') ?? node).color,
         }
       })
 
@@ -743,7 +755,8 @@ async function snapshot(page: Page, kind: SurfaceKind, entry: string) {
         (root.querySelector(selector) as HTMLInputElement | null)?.value ?? ''
       const data = (selector: string, name: string) =>
         (root.querySelector(selector) as HTMLElement | null)?.getAttribute(name) ?? ''
-      const normalizeDocument = (text: string) => clean(text).split(' · ')[0]
+      const normalizeDocument = (text: string) =>
+        clean(text) === '尚未关联数学教材文件' ? '' : clean(text).split(' · ')[0]
       const semantic = reference
         ? {
             title: first('.modal-h b'),
@@ -831,6 +844,8 @@ async function snapshot(page: Page, kind: SurfaceKind, entry: string) {
         footerButtons: Array.from(root.querySelectorAll(`${selectors.foot} button`)).map((node) =>
           clean(node.textContent),
         ),
+        saveEnabled: !(root.querySelector('#k12ProfileSaveButton, .k12pf__btn--primary') as HTMLButtonElement)?.disabled,
+        emptyHintCount: root.querySelectorAll('[data-testid="k12-textbook-empty-hint"]').length,
         controlGeometry,
         layoutDiagnostics,
         profileChildren,
@@ -862,6 +877,21 @@ async function snapshot(page: Page, kind: SurfaceKind, entry: string) {
 
 async function openReferenceAgents(page: Page) {
   await page.goto(REFERENCE_URL, { waitUntil: 'domcontentloaded' })
+  if (UNBOUND) {
+    // 两侧只替换业务 fixture；空态结构与样式仍取权威原型。
+    await page.evaluate(`
+      k12KnowledgePdfOptions = () => [];
+      k12LearnerRuntime.ming.profileOverride = {
+        grade: '六年级', gradeTerm: '六年级上',
+        weeklyPracticeProfile: {
+          ...K12_WEEKLY_PROFILE_DEFAULTS.ming,
+          volume: '六年级上册', textbookManifestId: '', textbookDocumentLabel: '',
+          unitId: '', unitLabel: '选择当前单元', lessonId: '', lessonLabel: '选择课时（选填）',
+          pageFrom: '', pageTo: '', textbookConsolidationEnabled: false
+        }
+      };
+    `)
+  }
   await page.locator('.sb-item[data-screen="agents"]').click()
   const card = page.locator('.cxcard[data-agent-kind="k12"]', { hasText: '小明的辅导助手' }).first()
   await expect(card).toBeVisible()
@@ -876,7 +906,7 @@ async function openImplementationAgents(page: Page) {
   await card.getByRole('button', { name: '编辑档案', exact: true }).click()
   await expect(page.locator('.k12pf')).toBeVisible()
   await expect(page.getByTestId('k12-current-unit-value')).toContainText(
-    '第4单元「分数的意义和性质」',
+    UNBOUND ? '选择当前单元' : '第4单元「分数的意义和性质」',
   )
 }
 
@@ -884,7 +914,7 @@ async function openReferenceWeekly(page: Page) {
   await page.evaluate(() => (window as typeof window & { closeModal: () => void }).closeModal())
   const card = page.locator('.cxcard[data-agent-kind="k12"]', { hasText: '小明的辅导助手' }).first()
   await card.getByRole('button', { name: '学习档案', exact: true }).click()
-  const progressEntry = page.locator('.rc-week-progress', { hasText: '当前教材进度' }).first()
+  const progressEntry = page.locator('.rc-week-progress').first()
   await expect(progressEntry).toBeVisible()
   await progressEntry.getByRole('button', { name: '调整进度', exact: true }).click()
   await expect(page.locator('.k12-profile-modal')).toBeVisible()
@@ -895,12 +925,12 @@ async function openImplementationWeekly(page: Page) {
   const card = page.locator('.hc-cxcard', { hasText: '小明的辅导助手' }).first()
   await card.getByRole('button', { name: '学习档案', exact: true }).click()
   await expect(page.locator('.k12rec')).toBeVisible()
-  const progressEntry = page.locator('.rc-week-progress', { hasText: '当前教材进度' }).first()
+  const progressEntry = page.locator('.rc-week-progress').first()
   await expect(progressEntry).toBeVisible()
   await progressEntry.getByRole('button', { name: '调整进度', exact: true }).click()
   await expect(page.locator('.k12pf')).toBeVisible()
   await expect(page.getByTestId('k12-current-unit-value')).toContainText(
-    '第4单元「分数的意义和性质」',
+    UNBOUND ? '选择当前单元' : '第4单元「分数的意义和性质」',
   )
 }
 
@@ -1069,6 +1099,15 @@ test('两个真实入口复用同一档案表单并与批准原型成对验收',
     JSON.stringify(sharedSurfaceSignature(agentsState.implementation)) ===
       JSON.stringify(sharedSurfaceSignature(weeklyState.implementation))
   const structuralPass = [agentsState, weeklyState].every(({ reference, implementation }) => {
+    const emptyControls = (surface: typeof reference) => surface.controlGeometry.filter(
+      (control) => ['尚未关联数学教材文件', '选择当前单元', '选择课时（选填）'].includes(control.text),
+    )
+    const emptyStateMatch = !UNBOUND || (
+      emptyControls(reference).length === 3 &&
+      JSON.stringify(emptyControls(reference)) === JSON.stringify(emptyControls(implementation)) &&
+      reference.saveEnabled && implementation.saveEnabled &&
+      reference.emptyHintCount === 0 && implementation.emptyHintCount === 0
+    )
     const exactSubjects =
       JSON.stringify(reference.mathSubjectExactSet) === JSON.stringify(['数学']) &&
       JSON.stringify(implementation.mathSubjectExactSet) === JSON.stringify(['math'])
@@ -1089,6 +1128,7 @@ test('两个真实入口复用同一档案表单并与批准原型成对验收',
         surface.styles.curriculum?.boxShadow === 'none',
     )
     return (
+      emptyStateMatch &&
       exactSubjects &&
       fullSections &&
       widths &&
@@ -1122,7 +1162,7 @@ test('两个真实入口复用同一档案表单并与批准原型成对验收',
       ? 'PASS'
       : 'NOT_PASS'
   const summary = {
-    issue: 'BUG-20260728-006',
+    issue: UNBOUND ? 'BUG-20260905-002' : 'BUG-20260728-006',
     conclusion,
     comparable,
     structuralPass,
