@@ -173,9 +173,25 @@ async function createUploadIntent(
   sourceSha256: string,
 ): Promise<KnowledgeUploadIntentRecord> {
   const fingerprint = uploadIntentFingerprint(file, sourceSha256)
+  // 只有权威取消记录划分新代次；创建时间不会随 ACK 或进度更新漂移。
+  const cancelled = (await listKnowledgeOperations())
+    .filter(
+      (operation) =>
+        operation.state === 'cancelled' &&
+        operation.job_id.length > 0 &&
+        operation.display_name === file.name &&
+        operation.content_digest === sourceSha256,
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(right.created_at) - Date.parse(left.created_at) ||
+        right.job_id.localeCompare(left.job_id),
+    )[0]
   return {
     fingerprint,
-    idempotencyKey: await createUploadIdempotencyKey(fingerprint),
+    idempotencyKey: await createUploadIdempotencyKey(
+      cancelled ? JSON.stringify([fingerprint, cancelled.job_id]) : fingerprint,
+    ),
     sourceSha256,
   }
 }
@@ -471,9 +487,9 @@ async function uploadDocumentExclusive(
     error.name = 'AbortError'
     throw error
   }
-  const intent = await createUploadIntent(file, sourceSha256)
-  onIntent?.({ idempotencyKey: intent.idempotencyKey, sourceSha256: intent.sourceSha256 })
   try {
+    const intent = await createUploadIntent(file, sourceSha256)
+    onIntent?.({ idempotencyKey: intent.idempotencyKey, sourceSha256: intent.sourceSha256 })
     let accepted: KnowledgeUploadResponse
     if (isTauri()) {
       onProgress?.(0)

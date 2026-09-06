@@ -699,7 +699,7 @@ async function submitMistake() {
     toast.success(res.record_created ? t('k12.mistakeAdd.recorded') : t('k12.mistakeAdd.exists'))
     mistakeForm.value = { subject: '', problem: '', studentAnswer: '', knowledgePoints: '' }
     mistakeAddOpen.value = false
-    await store.loadMistakes(props.agentId)
+    await reloadMistakes()
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   } finally {

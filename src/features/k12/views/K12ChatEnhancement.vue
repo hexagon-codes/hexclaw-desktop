@@ -196,7 +196,7 @@ function closeRecognize(task: TaskShellProjection) {
 }
 
 // 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
-// 头部只留身份 + [辅导|错题本] tab；识题=composer 拍照入口、渐进提示=辅导默认行为，均非头部动作。
+// 头部只留身份与页签；识题由 composer 拍照入口触发，渐进提示只描述家长对孩子的讲法。
 // composer 预设 chips：从后端 view-descriptor 下发（AP-1：不在前端硬编码场景 chip）
 const composerChips = ref<ScenarioComposerChip[]>([])
 

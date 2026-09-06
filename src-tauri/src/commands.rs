@@ -205,6 +205,19 @@ mod cancellation_tests {
             registry.active_count().expect("replacement released"),
             MAX_ACTIVE_SIDECAR_FETCHES - 1
         );
+        for name in [
+            "x-hexclaw-artifact-id",
+            "x-hexclaw-source-digest",
+            "x-hexclaw-object-counts",
+        ] {
+            assert!(
+                proxy_response_header(&reqwest::header::HeaderName::from_static(name)),
+                "archive response metadata must cross the native proxy: {name}"
+            );
+        }
+        assert!(!proxy_response_header(
+            &reqwest::header::HeaderName::from_static("set-cookie")
+        ));
     }
 }
 
@@ -235,6 +248,9 @@ fn proxy_response_header(name: &reqwest::header::HeaderName) -> bool {
             | "etag"
             | "last-modified"
             | "x-content-sha256"
+            | "x-hexclaw-artifact-id"
+            | "x-hexclaw-source-digest"
+            | "x-hexclaw-object-counts"
     )
 }
 

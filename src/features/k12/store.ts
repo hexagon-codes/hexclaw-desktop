@@ -844,7 +844,7 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  /** 渐进提示一轮：返回分阶段指令 + 守门标志（阶段三带验算解） */
+  /** 返回家长完整验算解与给孩子讲题、安抚的方法。 */
   async function tutorTurn(req: TutorTurnReq): Promise<TutorTurnResp> {
     return await k12TutorTurn(req)
   }

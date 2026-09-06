@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
 import { registerAgent, unregisterAgent } from '@/api/agents'
 import {
+  k12GetProfile,
   k12GetCurriculumProgress,
   k12GetTextbookBindingOptions,
   k12GetWeeklyPracticeSettings,
@@ -179,11 +180,14 @@ function setMathProgressSection(element: Element | ComponentPublicInstance | nul
 }
 const curriculumCatalog = ref<TextbookManifestCatalogDTO | null>(null)
 const curriculumProgress = ref<CurriculumProgressDTO | null>(null)
+const profileRevision = ref(0)
 const curriculumProgressRevision = ref(0)
 const textbookBindingOptions = ref<TextbookBindingOptionDTO[]>([])
 const textbookManifestID = ref('')
 const effectiveTextbookManifestID = computed(
-  () => textbookManifestID.value || curriculumProgress.value?.textbook_manifest_id || '',
+  () => textbookManifestID.value || textbookBindingOptions.value.find(
+    (option) => option.state === 'ready_for_confirmation',
+  )?.manifest_id || curriculumProgress.value?.textbook_manifest_id || '',
 )
 const curriculumLoading = ref(false)
 const curriculumReady = ref(!isEdit.value)
@@ -206,6 +210,16 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   updated_at: '',
 })
 const profileBundleKey = ref('')
+// 仅无旧进度、无当前进度输入且未启用教材周练时，基础档案可以保留空进度。
+const saveWithoutCurriculumProgress = computed(() =>
+  !curriculumProgress.value &&
+  !textbookManifestID.value &&
+  !unitID.value &&
+  !lessonID.value &&
+  pageFrom.value === '' &&
+  pageTo.value === '' &&
+  !weeklySettings.value.textbook_consolidation_enabled,
+)
 
 const volumeOptions = computed(() =>
   SEMESTERS.map((term) => {
@@ -267,7 +281,7 @@ function newCommandKey(prefix: string): string {
 function projectSelectedManifest() {
   const selected = textbookBindingOptions.value.find(
     (option) =>
-      option.manifest_id === textbookManifestID.value &&
+      option.manifest_id === effectiveTextbookManifestID.value &&
       option.state === 'ready_for_confirmation',
   )
   curriculumCatalog.value = selected?.catalog ?? null
@@ -289,11 +303,13 @@ async function loadCurriculumProjection() {
   curriculumReady.value = false
   curriculumError.value = ''
   try {
-    const [progressResp, settingsResp, bindingResp] = await Promise.all([
+    const [profileResp, progressResp, settingsResp, bindingResp] = await Promise.all([
+      k12GetProfile(props.agent.name),
       k12GetCurriculumProgress(props.agent.name),
       k12GetWeeklyPracticeSettings(props.agent.name),
       k12GetTextbookBindingOptions(props.agent.name),
     ])
+    profileRevision.value = profileResp.revision
     curriculumProgress.value = progressResp.progress
     curriculumProgressRevision.value = progressResp.revision
     weeklySettings.value = settingsResp
@@ -314,9 +330,7 @@ async function loadCurriculumProjection() {
     )
     textbookManifestID.value = selectableActive
       ? activeManifest!
-      : (textbookBindingOptions.value.find(
-          (option) => option.state === 'ready_for_confirmation',
-        )?.manifest_id ?? '')
+      : ''
     projectSelectedManifest()
     curriculumReady.value = true
     if (props.focusMathProgress) {
@@ -427,11 +441,18 @@ function metadataWithSubjectTextbooks(base: Record<string, string> = {}): Record
   return metadata
 }
 
-const displayName = computed(() =>
+const autoDisplayName = computed(() =>
   t('k12.profile.autoName', {
     child: childName.value.trim() || t('k12.profile.namePlaceholder'),
     grade: gradeShort(grade.value),
   }),
+)
+const storedDisplayName = props.agent?.display_name ?? ''
+// 仅原自动名称随档案更新；显式名称在预览和保存时均保留原值。
+const displayNameIsAutomatic =
+  !storedDisplayName.trim() || storedDisplayName === autoDisplayName.value
+const displayName = computed(() =>
+  displayNameIsAutomatic ? autoDisplayName.value : storedDisplayName,
 )
 
 // 卡片副标题严格采用原型口径，说明分科绑定事实；改年级时与 display_name 同步派生。
@@ -498,16 +519,18 @@ const modelDisplayName = computed(() => {
   )
 })
 
-// 辅导助手人设(SOUL)：只挂 skill 不设 system_prompt → 身份回落默认助理「小蟹」（BUG-20260708 F2，真机
-// qwen3.5:9b 取证）。据档案派生身份 + 讲题边界，随年级/教材跟随；建档/改档均回写，使 tutor 自我认同为
-// 「{孩子}的辅导助手」而非小蟹。K12 领域文案，内联于 features/k12（AP-1 允许）。
+// 人设按档案派生身份与讲题边界；历史模板仅用于识别自动人设，不作为新建或改档的输出。
 const legacyTutorSoul = computed(() => {
   const child = childName.value.trim() || t('k12.profile.namePlaceholder')
   return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。始终按${textbook.value} · ${grade.value}的教材范围讲题，绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
 })
-const tutorSoul = computed(() => {
+const legacySubjectTutorSoul = computed(() => {
   const child = childName.value.trim() || t('k12.profile.namePlaceholder')
   return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。数学讲解始终按${textbook.value} · ${grade.value}的教材范围，绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
+})
+const tutorSoul = computed(() => {
+  const child = childName.value.trim() || t('k12.profile.namePlaceholder')
+  return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。数学讲解始终按${textbook.value} · ${grade.value}的教材范围，绝不超纲用初中/高中说法；先给家长正确答案、完整解法和怎么给孩子讲的方法，用渐进提示帮助家长引导孩子思考；先肯定孩子做对的部分再纠错，多鼓励。能自动识题、解题、验算和批改的步骤直接完成，只对真实歧义请求最小必要确认。家长找你要辅导要点、出题、看学情时照常配合。`
 })
 
 // 「辅导语气」可编辑人设（D3·原型建档设计有此编辑框，app 曾漏实现→tutor 无人设回落小蟹）：
@@ -516,9 +539,12 @@ const tutorSoul = computed(() => {
 // 「已有 system_prompt」不能当自定义信号——建档必写派生人设，那样判会让改档永远 dirty、
 // 改年级人设不重派生、tutor 自称旧年级（BUG-20260711-A）。只有 ≠ 按当前档案派生的模板才算家长自定义。
 const storedSoul = props.agent?.system_prompt?.trim() || ''
-// 兼容由旧单教材模板自动生成的人设：它不是家长自定义，打开改档时应无损迁移为分科边界。
+// 精确识别历史自动模板并迁移；真正自定义的人设保持原样。
 const storedSoulIsAutomatic =
-  !storedSoul || storedSoul === tutorSoul.value || storedSoul === legacyTutorSoul.value
+  !storedSoul ||
+  storedSoul === tutorSoul.value ||
+  storedSoul === legacyTutorSoul.value ||
+  storedSoul === legacySubjectTutorSoul.value
 const soulDirty = ref(!storedSoulIsAutomatic)
 const soulText = ref(storedSoulIsAutomatic ? tutorSoul.value : storedSoul)
 watch(tutorSoul, (v) => {
@@ -561,8 +587,8 @@ async function submit() {
     if (isEdit.value && props.agent) {
       if (
         !curriculumReady.value ||
-        !effectiveTextbookManifestID.value ||
-        !unitID.value
+        (!saveWithoutCurriculumProgress.value &&
+          (!effectiveTextbookManifestID.value || !unitID.value))
       ) {
         throw new Error(curriculumError.value || '请先关联可确认的数学教材并设置当前单元')
       }
@@ -570,9 +596,7 @@ async function submit() {
       await k12UpdateProfileBundle({
         agent: props.agent.name,
         idempotency_key: profileBundleKey.value,
-        expected_profile_revision: Number(
-          props.agent.metadata?.['k12.profile_revision'] ?? '0',
-        ),
+        expected_profile_revision: profileRevision.value,
         expected_progress_revision: curriculumProgressRevision.value,
         expected_settings_revision: weeklySettings.value.revision,
         agent_config: {
@@ -588,7 +612,7 @@ async function submit() {
           grade_term: grade.value,
           subject_textbooks: { ...textbookEditions },
         },
-        curriculum_progress: {
+        curriculum_progress: saveWithoutCurriculumProgress.value ? null : {
           subject: 'math',
           textbook_manifest_id: effectiveTextbookManifestID.value,
           volume: volume.value,
@@ -795,7 +819,8 @@ async function submit() {
                 <div class="k12pf__field k12pf__field--wide k12pf__textbook-field">
                   <span>关联教材文件</span>
                   <HcSelect
-                    v-model="textbookManifestID"
+                    :model-value="effectiveTextbookManifestID"
+                    @update:model-value="textbookManifestID = $event"
                     :options="textbookManifestOptions"
                     placeholder="未上传"
                     aria-label="关联教材文件"
@@ -972,8 +997,7 @@ async function submit() {
                 submitting ||
                 curriculumLoading ||
                 !curriculumReady ||
-                !effectiveTextbookManifestID ||
-                !unitID
+                (!saveWithoutCurriculumProgress && (!effectiveTextbookManifestID || !unitID))
               "
               @click="submit"
             >

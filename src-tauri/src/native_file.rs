@@ -1020,17 +1020,18 @@ fn mime_for_name(name: &str) -> &'static str {
 
 fn validate_mime(name: &str, declared: &str) -> Result<String, String> {
     let inferred = mime_for_name(name);
-    let declared = declared.trim().to_ascii_lowercase();
-    if declared.is_empty() || declared == "application/octet-stream" {
-        return Ok(inferred.to_owned());
-    }
-    if declared.len() > 128
-        || declared.chars().any(char::is_control)
-        || (inferred != "application/octet-stream" && declared != inferred)
-    {
+    if declared.len() > 128 || declared.chars().any(char::is_control) {
         return Err("file MIME does not match its approved extension".into());
     }
-    Ok(declared)
+    let declared = declared.trim().to_ascii_lowercase();
+    let media_type = declared.split(';').next().unwrap_or_default().trim();
+    if declared.is_empty() || media_type == "application/octet-stream" {
+        return Ok(inferred.to_owned());
+    }
+    if media_type.is_empty() || (inferred != "application/octet-stream" && media_type != inferred) {
+        return Err("file MIME does not match its approved extension".into());
+    }
+    Ok(media_type.to_owned())
 }
 
 async fn identity(path: &Path) -> Result<FileIdentity, String> {
@@ -2139,6 +2140,15 @@ mod tests {
         );
         assert!(validate_mime("paper.pdf", "application/pdf").is_ok());
         assert!(validate_mime("paper.pdf", "image/png").is_err());
+        assert_eq!(
+            validate_mime("archive.md", "text/markdown;charset=utf-8").expect("Markdown MIME"),
+            "text/markdown"
+        );
+        assert!(validate_mime("archive.pdf", "text/markdown;charset=utf-8").is_err());
+        assert!(validate_mime("archive.md", "text/markdown;charset=utf-8\n").is_err());
+        assert!(
+            validate_mime("archive.md", &format!("text/markdown;{}", "a".repeat(128))).is_err()
+        );
         assert!(!GrantPurpose::SaveDownload.is_read());
         assert!(!GrantPurpose::KnowledgeUpload.is_save());
     }

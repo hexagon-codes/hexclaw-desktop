@@ -1105,11 +1105,11 @@ const allKnowledgePoints = computed(() => {
   return out
 })
 
-// 原图批改叠加（Phase 1）：批改完成后，把已批改题的对/错 + bbox 投给 PhotoGradeOverlay。
-// bbox 合理性由叠加组件自己兜底（缺失/非法 → 降级文字批改，不错位），此处只喂数据不做几何判断。
+// 已批改题与空白题解答共用结果详情；是否叠加勾叉由状态投影决定，空白题不伪造作答结论。
+// bbox 合理性由叠加组件检查；缺失或非法时保留文字详情。
 const overlayMarks = computed(() =>
   rows.value
-    .filter((r) => r.graded && r.assessmentStatus)
+    .filter((r) => r.assessmentStatus && (r.graded || r.assessmentStatus === 'blank_solved'))
     .map((r) => ({
       problemId: r.problemId,
       status: r.assessmentStatus as PhotoJobItemStatus,
@@ -2269,7 +2269,7 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         row.solution = grade.solution
         row.wrongStep = ''
         row.errorCause = ''
-        row.parentGuide = null
+        row.parentGuide = isParentTeachingGuide(item.parent_guide) ? item.parent_guide : null
         row.recorded = false
         row.recordDeduplicated = false
         row.graded = false

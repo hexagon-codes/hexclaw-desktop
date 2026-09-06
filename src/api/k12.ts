@@ -524,7 +524,8 @@ function assertTutoringTipsResp(value: unknown): asserts value is TutoringTipsRe
   if (
     titles[0] !== '这页在练什么' ||
     !titles[1]?.endsWith('要留意') ||
-    titles[2] !== '每道题怎么带（不直接给答案）'
+    // 历史冻结产物保留原文；新生成统一提供家长答案与讲法。
+    !['每道题的答案与讲法', '每道题怎么带（不直接给答案）'].includes(titles[2] ?? '')
   ) {
     throw new Error('invalid tutoring tips section order')
   }
@@ -612,8 +613,11 @@ export interface UpdateProfileReq {
   grade_term?: string
   textbook_edition?: string
 }
-// 注：GET /profile 的前端客户端已删除——档案在前端从 agent.metadata(k12.*) 读取（确定性注入通道），
-// 无需单独拉档案端点（审计 #8 冗余死绑定清理）。后端 GET /profile 仍存（其它用途/联调）。
+// 档案保存的 CAS revision 由此端点读取，不能从 Agent metadata 推断。
+export function k12GetProfile(agent: string) {
+  return apiGet<Omit<ProfileBundleProfileDTO, 'subject_textbooks'>>(`${BASE}/profile`, { agent })
+}
+
 export function k12UpdateProfile(req: UpdateProfileReq) {
   return apiPut<ProfileDTO>(`${BASE}/profile`, req)
 }
@@ -2343,31 +2347,31 @@ export async function k12SubmitImageTaskProblemSourceAction(
   return response
 }
 
-// ── tutor-turn（渐进提示三阶段 + 情绪守门）────────────────────
+// ── tutor-turn（家长完整参考 + 面向孩子的讲法）────────────────
 export interface TutorTurnReq {
   agent: string
   /** 上一轮阶段（首轮传 0，之后回传上一轮响应的 stage） */
   prior_stage: number
-  /** 家长本轮消息（后端据此检测"不会/直接讲"升级 + "哭了/生气"情绪守门） */
+  /** 家长本轮消息，用于调整给孩子讲题和安抚的方法，不限制家长查看答案。 */
   parent_message?: string
-  /** 家长转述的孩子作答（非空 → 至少进阶段二批改） */
+  /** 家长转述的真实孩子作答，可空；不要求家长先做题。 */
   student_answer?: string
-  /** 题目（阶段三取验算解用） */
+  /** 题目，用于自动求解与验算。 */
   problem?: string
   grade?: string
 }
 export interface TutorTurnResp {
-  /** 1 方向提示 / 2 具体提示·批改 / 3 完整讲解 */
+  /** 当前完整参考为 3；兼容历史方向提示 1 / 具体提示 2。 */
   stage: 1 | 2 | 3
-  /** 情绪守门命中：本轮切安抚、不推进、不给解 */
+  /** 情绪安抚建议，不影响家长查看完整解法。 */
   comfort: boolean
   emotion_cue?: string
   escalated: boolean
-  /** 给上游会话 LLM 的分阶段行为指令（前端连同题目发给模型生成家长话术） */
+  /** 面向家长的教学方法指令。 */
   prompt_hint: string
-  /** 仅阶段三：经 solve 验算链的完整解 */
+  /** 经 solve 验算链的完整解，不受提示阶段限制。 */
   solution?: string
-  /** 阶段三验算徽章（同 GradeBadge 语义） */
+  /** 验算徽章（同 GradeBadge 语义）。 */
   badge?: string
 }
 export function k12TutorTurn(req: TutorTurnReq) {

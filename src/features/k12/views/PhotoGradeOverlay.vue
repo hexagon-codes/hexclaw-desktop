@@ -165,6 +165,10 @@ function markDisplayLabel(mark: OverlayMark): string {
 }
 
 function issueTitle(mark: OverlayMark): string {
+  if (mark.status === 'blank_solved') {
+    const label = markDisplayLabel(mark)
+    return label ? `${label} · 已解答` : '已解答'
+  }
   const projection = projectPhotoAssessmentStatus(mark.status)
   const issue =
     mark.status === 'correct_with_process_issue'
@@ -191,6 +195,8 @@ function markStatusLabel(mark: IndexedMark): string {
       return t('k12.overlay.statusUnanswered')
     case 'answer_unclear':
       return t('k12.overlay.statusUnclear')
+    case 'blank_solved':
+      return '已解答'
     case 'out_of_scope':
       return t('verify.outOfScope')
     default:

@@ -1,10 +1,7 @@
 <script setup lang="ts">
 /**
- * 渐进提示分阶段辅导面板（T3.1 · 原型 app.html #chatTutorView 的提示①→②→完整讲解揭示）。
- *
- * 后端 tutor-turn 三阶段（PRD §3.3.4）：1 方向提示 → 2 具体提示·批改 → 3 完整讲解（带验算解）；
- * 情绪守门命中时切安抚、不推进、不给解。本面板只做**分阶段揭示交互**——把后端的 prompt_hint 指令
- * 逐级展示给家长，「再给点提示」升级、「直接讲」跳阶段三。真话术由上游会话 LLM 生成，本层不造答案。
+ * 家长辅导参考面板：完整答案与讲法由后端提供，本层不生成或隐藏答案。
+ * 历史阶段只表示面向孩子的提示方式；安抚建议不阻止家长查看验算解。
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -94,7 +91,7 @@ function stageLabel(s: number): string {
     />
     </HcClearableField>
 
-    <!-- 分阶段揭示历史 -->
+    <!-- 辅导历史保留孩子话术阶段，同时完整展示给家长的解法。 -->
     <div v-for="(turnItem, i) in turns" :key="i" class="tutor-turn" :class="{ comfort: turnItem.comfort }">
       <div class="tutor-turn__stage">
         <span class="tutor-turn__badge">{{ turnItem.comfort ? t('k12.tutor.comfort') : stageLabel(turnItem.stage) }}</span>
@@ -102,7 +99,7 @@ function stageLabel(s: number): string {
       </div>
       <!-- 渐进提示为模型生成，数学题提示含 LaTeX → md 渲染。 -->
       <MarkdownRenderer class="tutor-turn__hint tutor-turn__md" :content="turnItem.prompt_hint" />
-      <div v-if="turnItem.stage === 3 && turnItem.solution" class="tutor-turn__solution" data-testid="tutor-solution">
+      <div v-if="turnItem.solution" class="tutor-turn__solution" data-testid="tutor-solution">
         <span v-if="turnItem.badge" class="tutor-turn__vbadge">✓ {{ turnItem.badge }}</span>
         <!-- 完整讲解为模型生成的富文本（**加粗** / 列表 / LaTeX 数学）→ md 渲染，勿裸显。 -->
         <MarkdownRenderer class="tutor-turn__md" :content="turnItem.solution" />
