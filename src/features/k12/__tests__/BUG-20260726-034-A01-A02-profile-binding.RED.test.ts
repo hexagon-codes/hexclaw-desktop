@@ -337,9 +337,9 @@ describe('[BUG-20260726-034] A01/A02 K12 profile-bundle and textbook binding con
 
     expect(
       normalizedText(document.body.textContent),
-      '[BUG-20260726-034][A02] 未绑定教材时必须投影“未上传”',
-    ).toContain('未上传')
-    expect(normalizedText(document.body.textContent)).toContain('关联教材后可生成教材同步练习')
+      '[BUG-20260726-034][A02] 失效来源不再回填为已关联教材',
+    ).toContain('尚未关联数学教材文件')
+    expect(normalizedText(document.body.textContent)).not.toContain('关联教材后可生成教材同步练习')
   })
 
   it('[BUG-20260726-034][A02] renders all frozen manifest states and enables only ready_for_confirmation', async () => {

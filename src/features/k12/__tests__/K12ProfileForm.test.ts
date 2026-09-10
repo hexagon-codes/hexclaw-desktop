@@ -478,8 +478,12 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('改档模式：预填 k12.* + 改年级 → profile-bundle 原子写六科与 Agent 基础字段', async () => {
-    h.progressSpy.mockResolvedValue({ revision: 2, progress: null })
-    h.bindingOptionsSpy.mockResolvedValueOnce({ items: [] })
+    h.progressSpy.mockResolvedValue({
+      revision: 2,
+      progress: null,
+    })
+    const settings = { ...(await h.settingsSpy()), textbook_consolidation_enabled: true }
+    h.settingsSpy.mockResolvedValue(settings)
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -500,8 +504,12 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     // 预填称呼（读 k12.child_name）
     expect((B().find('input.k12pf__input').element as HTMLInputElement).value).toBe('小明')
     await flushPromises()
-    expect(B().find('[data-testid="k12-textbook-manifest"] button').attributes('aria-disabled')).toBe('true')
-    expect(B().find('[data-testid="k12-textbook-manifest"]').text()).toBe('尚未关联数学教材文件')
+    expect(h.profileBundleSpy).not.toHaveBeenCalled()
+    expect(B().find('[data-testid="k12-textbook-manifest"] button').attributes('aria-disabled')).toBeUndefined()
+    expect(w.findAllComponents(HcSelect).find(
+      (select) => select.attributes('data-testid') === 'k12-textbook-manifest',
+    )?.props('modelValue')).toBe('')
+    expect(B().find('[data-testid="k12-textbook-binding-status"]').attributes('data-state')).toBe('none')
     expect(B().find('[data-testid="k12-current-unit-value"]').text()).toBe('选择当前单元')
     expect(B().find('[data-testid="k12-textbook-empty-hint"]').exists()).toBe(false)
     expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
@@ -528,6 +536,9 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       }
       curriculum_progress: unknown
       expected_profile_revision: number
+      expected_progress_revision: number
+      expected_settings_revision: number
+      weekly_practice_settings: Record<string, unknown>
     }
     expect(bundle.agent).toBe('k12-tutor-x')
     expect(bundle.agent_config.display_name).toContain('六年级')
@@ -536,6 +547,14 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(bundle.profile.subject_textbooks.math).toBe('人教版')
     expect(bundle.curriculum_progress).toBeNull()
     expect(bundle.expected_profile_revision).toBe(2)
+    expect(bundle.expected_progress_revision).toBe(2)
+    expect(bundle.expected_settings_revision).toBe(settings.revision)
+    expect(bundle.weekly_practice_settings).toEqual(expect.objectContaining({
+      timezone: settings.timezone,
+      textbook_consolidation_enabled: true,
+      arithmetic_warmup_enabled: settings.arithmetic_warmup_enabled,
+      arithmetic_minutes: settings.arithmetic_minutes,
+    }))
     expect(w.emitted('created')).toBeTruthy()
   })
 

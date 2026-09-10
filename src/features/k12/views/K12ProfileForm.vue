@@ -184,11 +184,22 @@ const profileRevision = ref(0)
 const curriculumProgressRevision = ref(0)
 const textbookBindingOptions = ref<TextbookBindingOptionDTO[]>([])
 const textbookManifestID = ref('')
-const effectiveTextbookManifestID = computed(
-  () => textbookManifestID.value || textbookBindingOptions.value.find(
+// 仅已成功读取的教材集合能证明旧来源缺失或失效，读取失败仍由 curriculumReady 阻止保存。
+const curriculumProgressInvalidated = computed(() => {
+  const manifestID = curriculumProgress.value?.textbook_manifest_id
+  if (!manifestID) return false
+  const option = textbookBindingOptions.value.find((item) => item.manifest_id === manifestID)
+  return !option || option.state === 'stale'
+})
+const effectiveTextbookManifestID = computed(() => {
+  if (textbookManifestID.value) return textbookManifestID.value
+  // 已保存的空进度保持为空；只有本次主动选择才能重新关联教材。
+  if (curriculumProgressInvalidated.value ||
+    (curriculumProgressRevision.value > 0 && !curriculumProgress.value)) return ''
+  return textbookBindingOptions.value.find(
     (option) => option.state === 'ready_for_confirmation',
-  )?.manifest_id || curriculumProgress.value?.textbook_manifest_id || '',
-)
+  )?.manifest_id || curriculumProgress.value?.textbook_manifest_id || ''
+})
 const curriculumLoading = ref(false)
 const curriculumReady = ref(!isEdit.value)
 const curriculumError = ref('')
@@ -210,15 +221,14 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   updated_at: '',
 })
 const profileBundleKey = ref('')
-// 仅无旧进度、无当前进度输入且未启用教材周练时，基础档案可以保留空进度。
+// 确定失效的旧进度只在保存时解除，保留周练偏好；新进度仍需完整填写。
 const saveWithoutCurriculumProgress = computed(() =>
-  !curriculumProgress.value &&
+  (!curriculumProgress.value || curriculumProgressInvalidated.value) &&
   !textbookManifestID.value &&
   !unitID.value &&
   !lessonID.value &&
   pageFrom.value === '' &&
-  pageTo.value === '' &&
-  !weeklySettings.value.textbook_consolidation_enabled,
+  pageTo.value === '',
 )
 
 const volumeOptions = computed(() =>
@@ -355,6 +365,12 @@ async function loadCurriculumProjection() {
     textbookManifestID.value = selectableActive
       ? activeManifest!
       : ''
+    if (curriculumProgressInvalidated.value) {
+      unitID.value = ''
+      lessonID.value = ''
+      pageFrom.value = ''
+      pageTo.value = ''
+    }
     projectSelectedManifest()
     curriculumReady.value = true
     if (props.focusMathProgress) {
