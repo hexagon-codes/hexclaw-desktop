@@ -117,6 +117,7 @@ function generation(
   return {
     generation_id: `generation-${suffix}`,
     status,
+    retry_safe: status === 'failed',
     ...(status === 'succeeded' ? { feedback: feedback(type, suffix) } : {}),
     ...(status === 'failed' ? { failure_message: '点评生成失败' } : {}),
   }
@@ -195,7 +196,11 @@ describe('K12CreativeWorksPanel current contract', () => {
           display_name: '美术作品',
           content_markdown: undefined,
           source_asset_id: 'asset://agent-1/art.png',
-          initial_feedback: generation('failed', 'art', 'art'),
+          initial_feedback: {
+            ...generation('failed', 'art', 'art'),
+            retry_safe: false,
+            recovery_state: 'outcome_unknown',
+          },
         }),
         work({
           work_id: 'work-pending',
@@ -218,6 +223,10 @@ describe('K12CreativeWorksPanel current contract', () => {
     expect(wrapper.findAll('.k12cw__card')).toHaveLength(1)
     expect(wrapper.get('.k12cw__card').attributes('data-work-id')).toBe('work-art')
     expect(wrapper.get('[data-testid="cw-thumb"]').attributes('src')).toMatch(/^blob:/)
+    await openOnlyDetail(wrapper)
+    expect(wrapper.text()).toContain('点评结果暂未恢复，作品已保存。')
+    expect(wrapper.find('[data-testid="cw-initial-review-retry"]').exists()).toBe(false)
+    expect(h.generate).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -235,7 +244,10 @@ describe('K12CreativeWorksPanel current contract', () => {
       display_name: '彩虹和小猫',
       content_markdown: undefined,
     })
-    h.list.mockResolvedValueOnce({ items: [pending] }).mockResolvedValue({ items: [reviewed] })
+    h.list
+      .mockResolvedValueOnce({ items: [pending] })
+      .mockRejectedValueOnce(new Error('temporary list read failure'))
+      .mockResolvedValue({ items: [reviewed] })
 
     const wrapper = render()
     await flushPromises()
@@ -245,6 +257,10 @@ describe('K12CreativeWorksPanel current contract', () => {
     await flushPromises()
 
     expect(h.list).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.k12cw__card').attributes('data-review-state')).toBe('pending')
+    await vi.advanceTimersByTimeAsync(3_000)
+    await flushPromises()
+    expect(h.list).toHaveBeenCalledTimes(3)
     expect(wrapper.get('.k12cw__card').attributes('data-review-state')).toBe('reviewed')
     expect(wrapper.get('[data-testid="cw-detail-toggle"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
@@ -429,6 +445,29 @@ describe('K12CreativeWorksPanel current contract', () => {
     expect(wrapper.get('[data-testid="cw-latest-feedback"]').text()).toContain(
       '先这样肯定 replacement',
     )
+    h.generate.mockRejectedValueOnce(new Error('response outcome unknown'))
+    h.list.mockResolvedValue({
+      items: [
+        work({
+          latest_feedback: generation('succeeded', 'writing', 'replacement'),
+          current_feedback: {
+            ...generation('failed', 'writing', 'unknown-regeneration'),
+            retry_safe: false,
+            recovery_state: 'outcome_unknown',
+          },
+        }),
+      ],
+    })
+    await wrapper.get('[data-testid="cw-feedback-regenerate"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="cw-latest-feedback"]').text()).toContain(
+      '先这样肯定 replacement',
+    )
+    expect(wrapper.get('[data-testid="cw-feedback-regenerate-error"]').text()).toBe(
+      '点评结果暂未恢复，作品已保存。',
+    )
+    expect(wrapper.find('[data-testid="cw-feedback-regenerate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cw-copy"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

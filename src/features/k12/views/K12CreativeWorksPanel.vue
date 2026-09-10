@@ -58,6 +58,8 @@ const typeFilter = ref<'' | WorkType>('')
 let loadGeneration = 0
 const pendingReviewPollIntervalMS = 1_500
 let pendingReviewTimer: number | null = null
+let pendingReviewReadFailures = 0
+const feedbackRefreshPending = ref<Record<string, boolean>>({})
 
 const filtered = computed(() =>
   typeFilter.value
@@ -71,7 +73,7 @@ watch(
   { immediate: true },
 )
 
-type ReviewState = 'pending' | 'reviewed' | 'failed'
+type ReviewState = 'pending' | 'reviewed' | 'failed' | 'recovering' | 'unknown'
 const initialRetryingID = ref('')
 
 function latestFeedbackGeneration(work: CreativeWorkDTO) {
@@ -87,9 +89,45 @@ function latestFeedback(work: CreativeWorkDTO): WorkFeedbackDTO | undefined {
   return latestFeedbackGeneration(work)?.feedback
 }
 
+function currentFeedbackGeneration(work: CreativeWorkDTO) {
+  return work.current_feedback ?? work.latest_feedback ?? work.initial_feedback
+}
+
+function feedbackRecovering(work: CreativeWorkDTO): boolean {
+  return (
+    !!feedbackRefreshPending.value[work.work_id] ||
+    currentFeedbackGeneration(work).recovery_state === 'recovering'
+  )
+}
+
+function feedbackOutcomeUnknown(work: CreativeWorkDTO): boolean {
+  const generation = currentFeedbackGeneration(work)
+  return (
+    generation.recovery_state === 'outcome_unknown' ||
+    (generation.status === 'failed' && generation.retry_safe !== true)
+  )
+}
+
+function feedbackPending(work: CreativeWorkDTO): boolean {
+  return (
+    feedbackRecovering(work) ||
+    ['queued', 'running'].includes(currentFeedbackGeneration(work).status)
+  )
+}
+
+function regenerationNotice(work: CreativeWorkDTO): string {
+  if (feedbackRecovering(work)) return t('k12.works.feedbackRecovering')
+  if (feedbackOutcomeUnknown(work)) return t('k12.works.feedbackOutcomeUnknown')
+  if (currentFeedbackGeneration(work).status === 'failed')
+    return t('k12.works.feedbackRegenerateFailed')
+  return feedbackRegenerateError.value[work.work_id] ?? ''
+}
+
 function reviewState(work: CreativeWorkDTO): ReviewState {
   if (initialRetryingID.value === work.work_id) return 'pending'
   if (latestFeedback(work)) return 'reviewed'
+  if (feedbackRecovering(work)) return 'recovering'
+  if (feedbackOutcomeUnknown(work)) return 'unknown'
   return work.initial_feedback.status === 'failed' ? 'failed' : 'pending'
 }
 
@@ -102,12 +140,16 @@ const kpiPending = computed(() => kpiTotal.value - kpiReviewed.value)
 function reviewStatusLabel(work: CreativeWorkDTO): string {
   if (reviewState(work) === 'reviewed') return t('k12.works.reviewed')
   if (reviewState(work) === 'failed') return t('k12.works.reviewFailed')
+  if (reviewState(work) === 'recovering') return t('k12.works.feedbackRecoveringLabel')
+  if (reviewState(work) === 'unknown') return t('k12.works.feedbackIncomplete')
   return t('k12.works.reviewing')
 }
 
 function reviewCTA(work: CreativeWorkDTO): string {
   if (reviewState(work) === 'reviewed') return t('k12.works.viewFeedback')
   if (reviewState(work) === 'failed') return t('k12.works.initialReviewFailedCTA')
+  if (reviewState(work) === 'recovering') return t('k12.works.feedbackRecovering')
+  if (reviewState(work) === 'unknown') return t('k12.works.viewWork')
   return t('k12.works.initialReviewPendingCTA')
 }
 
@@ -134,6 +176,8 @@ function cardEvidence(work: CreativeWorkDTO): string[] {
 function cardSummary(work: CreativeWorkDTO): string {
   if (reviewState(work) === 'reviewed') return t('k12.works.latestFeedbackSaved')
   if (reviewState(work) === 'failed') return t('k12.works.initialReviewFailed')
+  if (reviewState(work) === 'recovering') return t('k12.works.feedbackRecovering')
+  if (reviewState(work) === 'unknown') return t('k12.works.feedbackOutcomeUnknown')
   return t('k12.works.initialReviewPending')
 }
 
@@ -218,15 +262,18 @@ function stopPendingReviewPoll() {
 
 function schedulePendingReviewPoll() {
   stopPendingReviewPoll()
-  if (!works.value.some((work) => ['queued', 'running'].includes(work.initial_feedback.status))) {
+  if (!works.value.some(feedbackPending)) {
     return
   }
   const agent = props.agentId.trim()
-  pendingReviewTimer = window.setTimeout(() => {
-    pendingReviewTimer = null
-    if (agent !== props.agentId.trim()) return
-    void loadWorks(true)
-  }, pendingReviewPollIntervalMS)
+  pendingReviewTimer = window.setTimeout(
+    () => {
+      pendingReviewTimer = null
+      if (agent !== props.agentId.trim()) return
+      void loadWorks(true)
+    },
+    pendingReviewPollIntervalMS * 2 ** pendingReviewReadFailures,
+  )
 }
 
 async function loadWorks(background: boolean) {
@@ -242,11 +289,15 @@ async function loadWorks(background: boolean) {
     const response = await k12ListCreativeWorks(agent)
     if (generation !== loadGeneration || agent !== props.agentId.trim()) return
     works.value = response.items ?? []
-    schedulePendingReviewPoll()
+    pendingReviewReadFailures = 0
+    feedbackRefreshPending.value = {}
   } catch (error) {
     if (generation !== loadGeneration || agent !== props.agentId.trim()) return
+    pendingReviewReadFailures = Math.min(pendingReviewReadFailures + 1, 2)
     if (!background) loadError.value = (error as Error).message || t('k12.works.loadError')
   } finally {
+    // 读取失败仍沿同一轮询恢复；卸载和切换 Agent 已通过 generation 使旧请求失效。
+    if (generation === loadGeneration && agent === props.agentId.trim()) schedulePendingReviewPoll()
     if (!background && generation === loadGeneration) loading.value = false
   }
 }
@@ -258,6 +309,7 @@ async function load() {
 function replaceWork(updated: CreativeWorkDTO) {
   const index = works.value.findIndex((work) => work.work_id === updated.work_id)
   if (index >= 0) works.value.splice(index, 1, updated)
+  schedulePendingReviewPoll()
 }
 
 // ── Detail / image preview ───────────────────────────────────
@@ -486,7 +538,9 @@ async function retryInitialFeedback(work: CreativeWorkDTO) {
       (error as Error).name === 'AbortError'
     )
       return
-    // Same work and generation stay visible; a later click reuses the same generation ID.
+    // 命令响应丢失只回读原作品；在拿到服务端许可前不再次提交。
+    feedbackRefreshPending.value[work.work_id] = true
+    await loadWorks(true)
   } finally {
     if (generation === feedbackGeneration) {
       initialRetryingID.value = ''
@@ -496,7 +550,13 @@ async function retryInitialFeedback(work: CreativeWorkDTO) {
 }
 
 async function regenerateFeedback(work: CreativeWorkDTO) {
-  if (feedbackRegeneratingID.value || reviewState(work) !== 'reviewed') return
+  if (
+    feedbackRegeneratingID.value ||
+    reviewState(work) !== 'reviewed' ||
+    feedbackPending(work) ||
+    feedbackOutcomeUnknown(work)
+  )
+    return
   const agent = props.agentId
   const generation = ++feedbackGeneration
   const controller = new AbortController()
@@ -505,14 +565,19 @@ async function regenerateFeedback(work: CreativeWorkDTO) {
   feedbackRegeneratingID.value = work.work_id
   feedbackRegenerateError.value[work.work_id] = ''
   const commandID =
-    regenerateCommands.get(work.work_id) ?? newCommandID(`regenerate-${work.work_id}`)
+    regenerateCommands.get(work.work_id) ??
+    (currentFeedbackGeneration(work).status === 'failed'
+      ? currentFeedbackGeneration(work).generation_id
+      : newCommandID(`regenerate-${work.work_id}`))
   regenerateCommands.set(work.work_id, commandID)
   try {
     const updated = await k12GenerateWorkFeedback(agent, work.work_id, commandID, controller.signal)
     if (generation !== feedbackGeneration || agent !== props.agentId) return
     replaceWork(updated)
-    regenerateCommands.delete(work.work_id)
-    delivery.reset()
+    if (currentFeedbackGeneration(updated).status === 'succeeded') {
+      regenerateCommands.delete(work.work_id)
+      delivery.reset()
+    }
   } catch (error) {
     if (
       generation !== feedbackGeneration ||
@@ -521,6 +586,8 @@ async function regenerateFeedback(work: CreativeWorkDTO) {
     )
       return
     feedbackRegenerateError.value[work.work_id] = t('k12.works.feedbackRegenerateFailed')
+    feedbackRefreshPending.value[work.work_id] = true
+    await loadWorks(true)
   } finally {
     if (generation === feedbackGeneration) {
       feedbackRegeneratingID.value = ''
@@ -1056,6 +1123,8 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 
 function resetAgentState() {
   stopPendingReviewPoll()
+  pendingReviewReadFailures = 0
+  feedbackRefreshPending.value = {}
   loadGeneration += 1
   feedbackGeneration += 1
   feedbackAbort?.abort()
@@ -1258,7 +1327,7 @@ defineExpose({ load, openAdd })
               aria-haspopup="dialog"
               :aria-expanded="expandedID === work.work_id"
               :aria-controls="`cw-detail-${work.work_id}`"
-              :disabled="reviewState(work) === 'pending'"
+              :disabled="['pending', 'recovering'].includes(reviewState(work))"
               @click="openDetails(work, $event)"
             >
               {{ reviewCTA(work) }}
@@ -1346,22 +1415,42 @@ defineExpose({ load, openAdd })
               {{ t('k12.works.initialReviewFailed') }}
             </p>
             <p
+              v-else-if="reviewState(activeWork) === 'unknown'"
+              class="k12cw__notice"
+              data-testid="cw-feedback-recovery-status"
+              role="status"
+            >
+              {{ t('k12.works.feedbackOutcomeUnknown') }}
+            </p>
+            <p
               v-else
               class="k12cw__notice"
               data-testid="cw-feedback-auto-pending"
               role="status"
               aria-live="polite"
             >
-              {{ t('k12.works.initialReviewPendingDetail') }}
+              {{
+                feedbackRecovering(activeWork)
+                  ? t('k12.works.feedbackRecovering')
+                  : t('k12.works.initialReviewPendingDetail')
+              }}
             </p>
 
             <p
-              v-if="feedbackRegenerateError[activeWork.work_id]"
-              class="k12cw__notice k12cw__notice--error"
+              v-if="latestFeedback(activeWork) && regenerationNotice(activeWork)"
+              class="k12cw__notice"
+              :class="{
+                'k12cw__notice--error':
+                  !feedbackRecovering(activeWork) && !feedbackOutcomeUnknown(activeWork),
+              }"
               data-testid="cw-feedback-regenerate-error"
-              role="alert"
+              :role="
+                feedbackRecovering(activeWork) || feedbackOutcomeUnknown(activeWork)
+                  ? 'status'
+                  : 'alert'
+              "
             >
-              {{ feedbackRegenerateError[activeWork.work_id] }}
+              {{ regenerationNotice(activeWork) }}
             </p>
 
             <div
@@ -1401,17 +1490,20 @@ defineExpose({ load, openAdd })
                 {{ t('k12.works.exportPDF') }}
               </button>
               <button
+                v-if="!feedbackOutcomeUnknown(activeWork)"
                 type="button"
                 class="hc-btn hc-btn-secondary"
                 data-testid="cw-feedback-regenerate"
-                :disabled="!!feedbackRegeneratingID"
+                :disabled="!!feedbackRegeneratingID || feedbackPending(activeWork)"
                 :aria-busy="feedbackRegeneratingID === activeWork.work_id"
                 @click="regenerateFeedback(activeWork)"
               >
                 {{
-                  feedbackRegeneratingID === activeWork.work_id
-                    ? t('k12.works.feedbackRegenerating')
-                    : t('k12.works.feedbackRegenerate')
+                  feedbackRecovering(activeWork)
+                    ? t('k12.works.feedbackRecovering')
+                    : feedbackRegeneratingID === activeWork.work_id || feedbackPending(activeWork)
+                      ? t('k12.works.feedbackRegenerating')
+                      : t('k12.works.feedbackRegenerate')
                 }}
               </button>
               <button
@@ -2051,7 +2143,9 @@ defineExpose({ load, openAdd })
   font-weight: 700;
 }
 
-.k12cw__pill--pending {
+.k12cw__pill--pending,
+.k12cw__pill--recovering,
+.k12cw__pill--unknown {
   color: var(--hc-text-muted);
   background: var(--hc-bg-input);
 }

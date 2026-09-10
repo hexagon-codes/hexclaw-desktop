@@ -3066,6 +3066,9 @@ export interface WorkFeedbackGenerationDTO {
   status: WorkFeedbackGenerationStatus
   feedback?: WorkFeedbackDTO
   failure_message?: string
+  /** 由同代次调用账本投影，不由模型正文或客户端推断。 */
+  recovery_state?: 'recovering' | 'outcome_unknown'
+  retry_safe?: boolean
 }
 
 export interface CreativeWorkDTO {
@@ -3086,6 +3089,7 @@ export interface CreativeWorkDTO {
   row_version: number
   initial_feedback: WorkFeedbackGenerationDTO
   latest_feedback?: WorkFeedbackGenerationDTO
+  current_feedback?: WorkFeedbackGenerationDTO
   delivery_batch_id?: string
   /** Persisted work creation time, unix seconds. */
   created_at: number
@@ -3201,6 +3205,7 @@ function normalizeCreativeWork(raw: CreativeWorkWireDTO): CreativeWorkDTO {
     row_version: Number(raw.row_version ?? 0),
     initial_feedback: initial,
     latest_feedback: latest,
+    current_feedback: raw.current_feedback,
     delivery_batch_id: raw.delivery_batch_id,
     created_at: Number(raw.created_at ?? 0),
     latest_generation_at:
