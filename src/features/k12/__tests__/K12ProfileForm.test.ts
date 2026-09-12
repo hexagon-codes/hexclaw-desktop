@@ -292,17 +292,29 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('改数学教材只改数学 metadata，保留其他科和无关 metadata，并同步 legacy fallback', async () => {
+    const { items } = await h.bindingOptionsSpy()
+    h.bindingOptionsSpy.mockResolvedValue({
+      items: items.map((item: (typeof items)[number]) => ({
+        ...item,
+        catalog: { ...item.catalog, volume: '上册' },
+      })),
+    })
+    const progress = await h.progressSpy()
+    h.progressSpy.mockResolvedValue({
+      ...progress,
+      progress: { ...progress.progress, textbook_manifest_id: items[0].manifest_id, volume: '上册' },
+    })
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
           name: 'k12-tutor-x',
-          display_name: '小明的辅导助手 · 五年级',
+          display_name: '小明的辅导助手 · 六年级',
           metadata: {
             scenario: 'k12-tutor',
             avatar: '🎓',
             custom: 'keep-me',
             'k12.child_name': '小明',
-            'k12.grade_term': '五年级上',
+            'k12.grade_term': '六年级上',
             'k12.textbook_edition': '人教版',
             'k12.textbook_edition.math': '人教版',
             'k12.textbook_edition.chinese': '统编版',
@@ -318,6 +330,15 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
 
     await flushPromises()
+    const volumeSelect = w.findAllComponents(HcSelect).find(
+      (select) => select.attributes('data-testid') === 'k12-progress-volume',
+    )!
+    expect(volumeSelect.props('modelValue')).toBe('上册')
+    expect(volumeSelect.props('options')).toEqual([
+      { value: '上册', label: '六年级上册' },
+      { value: '六年级下册', label: '六年级下册' },
+    ])
+    expect(B().find('[data-testid="k12-progress-volume"] .hc-select__label').text()).toBe('六年级上册')
     const mathSelect = w
       .findAllComponents(HcSelect)
       .find((select) => select.element.closest('[data-testid="k12-textbook-math"]'))!
@@ -331,7 +352,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       expect.objectContaining({
         profile: {
           child_name: '小明',
-          grade_term: '五年级上',
+          grade_term: '六年级上',
           subject_textbooks: {
             math: '北师大版',
             chinese: '统编版',
@@ -341,6 +362,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
             art: '湘美版',
           },
         },
+        curriculum_progress: expect.objectContaining({ volume: '上册' }),
       }),
     )
   })

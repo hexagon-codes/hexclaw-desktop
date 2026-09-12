@@ -233,8 +233,13 @@ const saveWithoutCurriculumProgress = computed(() =>
 
 const volumeOptions = computed(() =>
   SEMESTERS.map((term) => {
-    const value = `${gradeLevel.value}${term}册`
-    return { value, label: value }
+    const shortVolume = `${term}册`
+    const label = `${gradeLevel.value}${shortVolume}`
+    // 标签补全年级，选中和提交仍消费目录或既有进度的原始册别值。
+    const value = curriculumCatalog.value?.volume === shortVolume || volume.value === shortVolume
+      ? shortVolume
+      : label
+    return { value, label }
   }),
 )
 const unitOptions = computed(() =>
