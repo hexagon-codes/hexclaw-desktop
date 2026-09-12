@@ -100,7 +100,7 @@ verify-build-local-budget:
 	@$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-fingerprint.mjs; \
 	case $$? in \
 		0) echo "build-local 指纹命中：源码未变，复用现有产物";; \
-		*) $(MAKE) build-local; $(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-budget.mjs;; \
+		*) $(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-budget.mjs;; \
 	esac
 
 # 从 GitHub 远程仓库同步后端源码；设置 HEXCLAW_LOCAL_SRC 时改用本地源码。
