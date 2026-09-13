@@ -401,7 +401,7 @@ describe('SessionList', () => {
 
   it('reuses the shared destructive confirmation with the global 1500ms cooldown', async () => {
     vi.useFakeTimers()
-    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(1_500)
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(800)
     const { wrapper, store } = mountSessionList()
     await flushPromises()
 

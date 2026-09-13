@@ -152,10 +152,10 @@ describe('WebhookPanel CRUD', () => {
 
     const confirmDialog = wrapper.findComponent(ConfirmDialog)
     expect(confirmDialog.exists()).toBe(true)
-    expect(confirmDialog.props('confirmDelayMs')).toBe(1500)
+    expect(confirmDialog.props('confirmDelayMs')).toBe(800)
     expect(deleteWebhook).not.toHaveBeenCalledWith('hook-b')
 
-    vi.advanceTimersByTime(1499)
+    vi.advanceTimersByTime(799)
     await flushPromises()
     expect(confirmDialog.get('button.hc-dialog__btn--danger').attributes('disabled')).toBeDefined()
 

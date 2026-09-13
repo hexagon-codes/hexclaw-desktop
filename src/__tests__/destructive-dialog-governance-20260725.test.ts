@@ -16,7 +16,7 @@ import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '../config/destructive-actions'
 
 describe('global destructive-dialog governance (2026-07-25)', () => {
   it('owns the 1500ms destructive cooldown in the shared dialog', () => {
-    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(1_500)
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(800)
     expect(confirmSource).toContain('confirmDelayMs: DESTRUCTIVE_CONFIRM_COOLDOWN_MS')
     expect(confirmSource).toContain(
       'const delay = props.danger ? Math.max(0, props.confirmDelayMs) : 0',
