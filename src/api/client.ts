@@ -76,7 +76,9 @@ export async function sidecarFetch(
       onRegistered,
     })
     if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
-    return new Response(new Uint8Array(response.body), {
+    // 无正文响应必须使用 null；空字节数组仍是 body，会使 204 等状态的构造抛错。
+    const hasNullBody = request.method === 'HEAD' || [204, 205, 304].includes(response.status)
+    return new Response(hasNullBody ? null : new Uint8Array(response.body), {
       status: response.status,
       headers: response.headers,
     })
