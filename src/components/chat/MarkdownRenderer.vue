@@ -326,7 +326,9 @@ const rendered = computed(() => {
     return DOMPurify.sanitize(rawHtml, KATEX_DOMPURIFY_CONFIG)
   }
   const markdown = projection?.markdown ?? displayMarkdown.value
-  const html = mdInstance.value.render(normalizeMathMarkdown(markdown))
+  // 渲染管线原生支持 `\[...\]`（tex 插件 delimiters:'all'）：保留方括号形态，
+  // 避开 normalize 转独占行 `$$` 后在缩进列表内的跨块误配对（乱码根因）。
+  const html = mdInstance.value.render(normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true }))
   return DOMPurify.sanitize(
     projection ? decoratePromptPreviewHtml(html, projection) : html,
     KATEX_DOMPURIFY_CONFIG,

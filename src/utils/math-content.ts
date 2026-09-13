@@ -207,7 +207,7 @@ function replaceSourceMapped(
   return { content: output.join(''), sourceBoundaries }
 }
 
-function normalizeMathTextWithSourceMap(text: string): SourceMappedText {
+function normalizeMathTextWithSourceMap(text: string, preserveDisplayBrackets = false): SourceMappedText {
   let mapped: SourceMappedText = {
     content: text,
     sourceBoundaries: Array.from({ length: text.length + 1 }, (_, index) => index),
@@ -216,6 +216,10 @@ function normalizeMathTextWithSourceMap(text: string): SourceMappedText {
     mapped,
     /(\\{1,2})\[([\s\S]*?)\1\]/g,
     (_all, slashes: string, body: string) => {
+      if (preserveDisplayBrackets) {
+        if (slashes.length !== 2) return _all
+        return `\\[${unescapeDoubleEncodedTex(body, slashes).trim()}\\]`
+      }
       const tex = unescapeDoubleEncodedTex(body, slashes).trim()
       return tex ? `$$\n${tex}\n$$` : _all
     },
@@ -244,17 +248,29 @@ function normalizeMathTextWithSourceMap(text: string): SourceMappedText {
   )
 }
 
-function normalizeMathText(text: string): string {
-  return normalizeMathTextWithSourceMap(text).content
+function normalizeMathText(text: string, preserveDisplayBrackets = false): string {
+  return normalizeMathTextWithSourceMap(text, preserveDisplayBrackets).content
 }
 
 /**
  * Convert supported external delimiters to the app's canonical dollar-delimited
  * Markdown/LaTeX without touching inline code or fenced code blocks.
+ *
+ * `preserveDisplayBrackets` 只用于已原生支持 `\[...\]` 的渲染管线
+ *（`@mdit/plugin-tex`，`delimiters: 'all'`）：缩进列表内的 `\[...\]` 若先转
+ * 成独占行 `$$`，块规则会跨块误配对并原文泄漏；保留方括号形态可避开该路径。
+ * 双反斜杠转义仍归一化为单层 `\[...\]`。发送/粘贴等非渲染路径保持默认不变。
  */
-export function normalizeMathMarkdown(source: string): string {
+export function normalizeMathMarkdown(
+  source: string,
+  options?: { preserveDisplayBrackets?: boolean },
+): string {
   return partitionCode(source)
-    .map((part) => part.code ? part.content : normalizeMathText(part.content))
+    .map((part) =>
+      part.code
+        ? part.content
+        : normalizeMathText(part.content, options?.preserveDisplayBrackets ?? false),
+    )
     .join('')
 }
 
