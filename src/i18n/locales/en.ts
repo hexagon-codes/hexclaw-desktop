@@ -1486,6 +1486,9 @@ export default {
     deleteFailed: 'Failed to delete document',
     searchFailed: 'Search failed',
     uploadFailed: 'Upload failed',
+    uploadReselectFile: 'Reselect file',
+    uploadDismiss: 'Remove record',
+    uploadDismissFailed: 'Unable to remove the upload record. Please try again.',
     uploadAwaitingAcceptance: 'Awaiting server confirmation; reselect the same file to recover',
     uploadReselectToRecover: 'Reselect the same file to recover',
     imageVisionRequired:

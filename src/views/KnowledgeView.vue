@@ -26,6 +26,7 @@ import {
   putKnowledgeConfig,
   MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES,
   listKnowledgeOperations,
+  dismissKnowledgeUpload,
 } from '@/api/knowledge'
 import type { KnowledgeSourceCount } from '@/api/knowledge'
 import type {
@@ -397,7 +398,7 @@ const isDragging = ref(false)
 // BUG-20260710：上传/索引进度提升为 store——上传→索引是跨页面生命周期的后台过程，
 // 组件本地 ref 在切页卸载时必丢（上传 100% 后切走再回来条目消失，用户以为上传丢了）。
 const uploadsStore = useKnowledgeUploadsStore()
-const uploadingFiles = computed(() => uploadsStore.items)
+const uploadingFiles = computed(() => uploadsStore.temporaryItems)
 const fileInputRef = ref<HTMLInputElement>()
 const uploadAbortControllers = new Map<KnowledgeUploadEntry, AbortController>()
 
@@ -512,7 +513,7 @@ async function pollKnowledgeUploadJobs() {
     // response-unknown 也必须沿同一 operation/job 继续对账；不能因为 202
     // 回执丢失就把条目永久停在“等待确认”。没有 jobId 时先读取 durable
     // operation，按内容摘要/幂等身份重新绑定，仍不创建第二个任务。
-    if (uploadsStore.items.some((entry) => entry.status === 'pending-response')) {
+    if (uploadsStore.items.some((entry) => entry.operationId || entry.jobId || entry.intentKey)) {
       try {
         uploadsStore.reconcileRecoverableOperations(await listKnowledgeOperations())
         uploadOperationsReconciled = true
@@ -657,6 +658,48 @@ function canCancelUpload(entry: KnowledgeUploadEntry): boolean {
     (entry.status === 'uploading' && uploadAbortControllers.has(entry)) ||
     (entry.status === 'processing' && Boolean(entry.jobId))
   )
+}
+
+function getDocumentUpload(doc: KnowledgeDoc): KnowledgeUploadEntry | undefined {
+  return uploadsStore.items.find(
+    (entry) => entry.documentId === doc.id && entry.status === 'processing' && entry.jobId,
+  )
+}
+
+async function cancelDocumentUpload(doc: KnowledgeDoc) {
+  const entry = getDocumentUpload(doc)
+  if (entry) await cancelUploadJob(entry)
+}
+
+function canDismissUpload(entry: KnowledgeUploadEntry): boolean {
+  return entry.status === 'error' && !entry.documentId && !entry.jobId
+}
+
+async function dismissUpload(entry: KnowledgeUploadEntry) {
+  if (!canDismissUpload(entry) || entry.dismissing) return
+  entry.dismissing = true
+  try {
+    // 刚发生的接纳前失败可能尚未返回 operation ID；按原意图回读，不能按文件名认领。
+    if (!entry.operationId && entry.intentKey) {
+      uploadsStore.reconcileRecoverableOperations(await listKnowledgeOperations())
+      if (!canDismissUpload(entry)) return
+    }
+    if (entry.operationId) await dismissKnowledgeUpload(entry.operationId)
+    uploadsStore.removeEntry(entry)
+  } catch (error) {
+    logger.warn('[Knowledge] upload reminder dismissal failed', error)
+    errorMsg.value = t('knowledge.uploadDismissFailed')
+    errorSeverity.value = 'error'
+  } finally {
+    entry.dismissing = false
+  }
+}
+
+function getUploadDate(entry: KnowledgeUploadEntry): string {
+  if (!entry.createdAt) return ''
+  const date = new Date(entry.createdAt)
+  if (!Number.isFinite(date.getTime())) return ''
+  return new Intl.DateTimeFormat('sv-SE').format(date).replace(/-/g, '/')
 }
 onUnmounted(() => {
   isMounted = false
@@ -1170,7 +1213,7 @@ function getUploadRowStatus(entry: KnowledgeUploadEntry): string {
     case 'error':
       return getUploadRecoveryMessage(entry)
     case 'done':
-      return entry.warning || '文本已可检索 · 语义索引后台增强中'
+      return ''
     case 'cancelled':
       return ''
   }
@@ -1382,7 +1425,6 @@ const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200 MiB, aligned with the durable ing
 
 async function processFiles(files: FileList) {
   if (!ensureKnowledgeEnabled()) return
-  uploadsStore.clearErrors() // 新一轮上传前清掉旧错误条目
   const selectedFiles = Array.from(files)
   const batchBytes = selectedFiles.reduce((total, file) => total + file.size, 0)
   if (batchBytes > MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES) {
@@ -1396,7 +1438,6 @@ async function processFiles(files: FileList) {
     return
   }
   const uploadTasks: Promise<void>[] = []
-  let uploadedAny = false
 
   for (const file of selectedFiles) {
     if (file.size === 0) {
@@ -1465,7 +1506,8 @@ async function processFiles(files: FileList) {
             accepted.job_id,
             accepted.operation_id,
           )
-          uploadedAny = true
+          await loadDocs()
+          ensureIndexPolling()
         } catch (e) {
           if (uploadController.signal.aborted) {
             uploadsStore.markCancelled(entry)
@@ -1492,19 +1534,20 @@ async function processFiles(files: FileList) {
           if (uploadAbortControllers.get(entry) === uploadController) {
             uploadAbortControllers.delete(entry)
           }
+          if (entry.status === 'error' || entry.status === 'pending-response') {
+            try {
+              uploadsStore.reconcileRecoverableOperations(await listKnowledgeOperations())
+              ensureIndexPolling()
+            } catch (error) {
+              logger.warn('[Knowledge] upload outcome reconciliation failed', error)
+            }
+          }
         }
       })(),
     )
   }
 
   await Promise.all(uploadTasks)
-
-  if (uploadedAny) {
-    // revalidateFromApi 成功后会 settleAgainstDocs：已落地的 done 条目移除；
-    // 索引未完成的保留并开启轻量轮询，直到文档真正出现在列表里（BUG-20260710）。
-    await loadDocs()
-    ensureIndexPolling()
-  }
 }
 
 // Global drag prevention
@@ -1641,10 +1684,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             <div v-if="uploadingFiles.length > 0" class="knowledge-page__temporary-list mb-4 space-y-2">
               <div
                 v-for="(uf, idx) in uploadingFiles"
-                :key="idx"
+                :key="uf.operationId || uf.intentKey || idx"
                 data-testid="knowledge-upload-job"
                 class="knowledge-page__resource-row knowledge-page__temporary-row"
-                :class="{ 'knowledge-page__resource-row--error': uf.status === 'error' }"
               >
                 <span class="knowledge-page__resource-file">
                   <span
@@ -1676,6 +1718,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                     {{ getUploadRowStatus(uf) }}
                   </span>
                 </span>
+                <time
+                  v-if="uf.status === 'error' && getUploadDate(uf)"
+                  :datetime="uf.createdAt"
+                  class="knowledge-page__upload-date"
+                >
+                  {{ getUploadDate(uf) }}
+                </time>
                 <span
                   v-if="getUploadBadgeLabel(uf)"
                   class="knowledge-page__resource-badge"
@@ -1683,6 +1732,24 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 >
                   {{ getUploadBadgeLabel(uf) }}
                 </span>
+                <template v-if="canDismissUpload(uf)">
+                  <button
+                    type="button"
+                    class="knowledge-page__resource-action"
+                    :disabled="uf.dismissing || !knowledgeEnabled"
+                    @click="openFilePicker"
+                  >
+                    {{ t('knowledge.uploadReselectFile') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="knowledge-page__resource-action"
+                    :disabled="uf.dismissing"
+                    @click="dismissUpload(uf)"
+                  >
+                    {{ t('knowledge.uploadDismiss') }}
+                  </button>
+                </template>
                 <button
                   v-if="canCancelUpload(uf)"
                   type="button"
@@ -1882,7 +1949,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           {{ t('knowledge.settingsAction') }}
                         </button>
                         <button
-                          v-if="canCancelVectorJob(doc)"
+                          v-if="getDocumentUpload(doc)"
+                          type="button"
+                          class="knowledge-page__resource-action"
+                          :disabled="getDocumentUpload(doc)?.cancelling || !knowledgeEnabled"
+                          @click="cancelDocumentUpload(doc)"
+                        >
+                          {{ t('common.cancel') }}
+                        </button>
+                        <button
+                          v-else-if="canCancelVectorJob(doc)"
                           type="button"
                           data-testid="knowledge-vector-cancel"
                           class="knowledge-page__resource-action knowledge-page__resource-action--warning"
@@ -2755,8 +2831,11 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   font-size: 12px;
 }
 
-.knowledge-page__resource-row--error {
-  border-color: #ef4444;
+.knowledge-page__upload-date {
+  flex: none;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  white-space: nowrap;
 }
 
 .knowledge-page__document-card--structured-failure {

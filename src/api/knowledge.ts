@@ -173,11 +173,11 @@ async function createUploadIntent(
   sourceSha256: string,
 ): Promise<KnowledgeUploadIntentRecord> {
   const fingerprint = uploadIntentFingerprint(file, sourceSha256)
-  // 只有权威取消记录划分新代次；创建时间不会随 ACK 或进度更新漂移。
-  const cancelled = (await listKnowledgeOperations())
+  // 权威取消或删除记录划分显式重新上传的新代次；普通恢复仍复用原意图。
+  const cancelled = (await listKnowledgeOperations({ includeHistory: true }))
     .filter(
       (operation) =>
-        operation.state === 'cancelled' &&
+        (operation.state === 'cancelled' || operation.document_deleted === true) &&
         operation.job_id.length > 0 &&
         operation.display_name === file.name &&
         operation.content_digest === sourceSha256,
@@ -755,6 +755,8 @@ export type KnowledgeOperationState =
 
 export interface KnowledgeOperation {
   operation_id: string
+  idempotency_key?: string
+  document_deleted?: boolean
   job_id: string
   document_id: string
   title: string
@@ -815,25 +817,38 @@ function parseKnowledgeOperation(value: unknown): KnowledgeOperation {
     (record.content_digest !== undefined &&
       (typeof record.content_digest !== 'string' ||
         !/^[0-9a-f]{64}$/.test(record.content_digest))) ||
-    (record.error !== undefined && typeof record.error !== 'string')
+    (record.error !== undefined && typeof record.error !== 'string') ||
+    (record.idempotency_key !== undefined && typeof record.idempotency_key !== 'string') ||
+    (record.document_deleted !== undefined && typeof record.document_deleted !== 'boolean')
   ) {
     throw new Error('Invalid knowledge operation projection')
   }
   return record as unknown as KnowledgeOperation
 }
 
-export async function listKnowledgeOperations(): Promise<KnowledgeOperation[]> {
+export async function listKnowledgeOperations(
+  options: { includeHistory?: boolean } = {},
+): Promise<KnowledgeOperation[]> {
   const response = await apiGet<{ operations: unknown }>(
-    '/api/v1/knowledge/operations',
+    options.includeHistory
+      ? '/api/v1/knowledge/operations?include_history=true'
+      : '/api/v1/knowledge/operations',
   )
   if (!Array.isArray(response.operations)) {
     throw new Error('Invalid knowledge operation projection')
   }
   const operations = response.operations.map(parseKnowledgeOperation)
   for (const operation of operations) {
-    if (operation.state === 'pending_response') {
+    if (operation.state === 'pending_response' && !operation.document_deleted) {
       void acknowledgeKnowledgeUpload(operation.operation_id)
     }
   }
   return operations
+}
+
+/** 仅结束接纳前失败的提醒；文档、任务与历史审计继续保留。 */
+export function dismissKnowledgeUpload(operationID: string): Promise<void> {
+  return apiPost<void>(
+    `/api/v1/knowledge/operations/${encodeURIComponent(opaqueKnowledgeOperationID(operationID))}/dismiss?corpus_id=${KNOWLEDGE_CORPUS_ID}`,
+  )
 }

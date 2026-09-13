@@ -1445,6 +1445,9 @@ export default {
     deleteFailed: '删除文档失败',
     searchFailed: '搜索失败',
     uploadFailed: '上传失败',
+    uploadReselectFile: '重新选择文件',
+    uploadDismiss: '移除记录',
+    uploadDismissFailed: 'Unable to remove the upload record. Please try again.',
     uploadAwaitingAcceptance: '等待服务器确认；可重新选择同一文件恢复',
     uploadReselectToRecover: '请重新选择同一文件恢复',
     imageVisionRequired:

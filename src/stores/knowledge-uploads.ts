@@ -9,13 +9,13 @@
  *  - uploading：上传请求进行中（字节传输），进度条 0→100%。
  *  - processing：字节已传完(100%)、后端仍在解析(pdftotext/VLM)+向量嵌入——这段无法上报
  *    百分比，若继续显示「100%」会被误读成卡死（BUG-20260712 #8）；单列一相显「处理中…」。
- *  - done：持久化 Job 已 succeeded——**直到文档真正出现在 getDocuments 结果里**才由
- *    settleAgainstDocs 移除（不用「N 秒后消失」这种与真实状态无关的定时器）。
- *  - error：保留给用户看，由下一轮上传开始时 clearErrors 清理。
+ *  - 接纳后：临时行退出，保留内部 Job 跟踪，由文档行展示处理状态。
+ *  - done：持久 Job 已成功，由权威终态结算，不依赖当前筛选或分页。
+ *  - error：接纳前失败保留到用户移除或同一意图恢复，已接纳失败由文档行展示。
  *  - cancelled：后端终态账本保持权威，确认取消后不再占用临时可见队列，也不在恢复时重入。
  */
 import { defineStore } from 'pinia'
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import type { KnowledgeOperation, KnowledgeOperationState } from '@/api/knowledge'
 
 export interface KnowledgeUploadEntry {
@@ -24,6 +24,7 @@ export interface KnowledgeUploadEntry {
   status: 'uploading' | 'pending-response' | 'processing' | 'done' | 'error' | 'cancelled'
   operationId?: string
   operationUpdatedAt?: string
+  createdAt?: string
   operationTerminal?: boolean
   intentKey?: string
   sourceSha256?: string
@@ -31,6 +32,7 @@ export interface KnowledgeUploadEntry {
   jobId?: string
   stage?: string
   cancelling?: boolean
+  dismissing?: boolean
   error?: string
   warning?: string
 }
@@ -55,10 +57,16 @@ const OPERATION_STATUS = {
 
 export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
   const items = ref<KnowledgeUploadEntry[]>([])
+  // 已确认移除的回执拦截并行读取的旧快照；显式重新接收后恢复正常投影。
+  const dismissedOperationIDs = new Set<string>()
+  // 文档接纳后继续跟踪任务，但可见进度由唯一文档行承载。
+  const temporaryItems = computed(() =>
+    items.value.filter((entry) => !entry.documentId && entry.status !== 'cancelled'),
+  )
 
   /** 登记一个条目并返回其响应式引用——上传任务直接改 entry.progress/status 即驱动 UI */
   function track(init: KnowledgeUploadEntry): KnowledgeUploadEntry {
-    const entry = reactive({ ...init })
+    const entry = reactive({ createdAt: new Date().toISOString(), ...init })
     items.value.push(entry)
     return entry
   }
@@ -92,6 +100,8 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
       existing.error = undefined
       existing.warning = undefined
       existing.cancelling = false
+      existing.operationTerminal = false
+      existing.sourceSha256 = intent.sourceSha256
       return existing
     }
     entry.intentKey = intent.idempotencyKey
@@ -153,30 +163,28 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     items.value = items.value.filter((candidate) => candidate !== entry)
   }
 
-  /** 持久终态只有在稳定 document ID 出现在文档列表后才算落地。 */
+  /** 只按稳定文档身份判断当前列表是否已承载该内容。 */
   function landed(entry: KnowledgeUploadEntry, docs: DocLike[]): boolean {
     return Boolean(entry.documentId && docs.some((document) => document.id === entry.documentId))
   }
 
   /**
-   * 结算必须按 Sidecar 身份完成，文件名/来源只用于展示。已绑定文档的失败
-   * 行在文档卡落地后由文档卡承载重试入口；接纳前失败没有文档卡，继续保留
-   * 其恢复提示。
+   * 结算按 Sidecar 身份与终态完成；筛选和分页不能阻止已接纳终态退出跟踪。
+   * 接纳前失败没有文档卡，继续保留其恢复提示。
    */
   function settleAgainstDocs(docs: DocLike[]): void {
     items.value = items.value.filter((e) => {
-      if (!landed(e, docs)) return true
+      if (!e.documentId || (!landed(e, docs) && !e.operationTerminal)) return true
       return !(e.status === 'done' || (e.status === 'error' && e.operationTerminal === true))
     })
   }
 
   /** Replace restartable rows with the Sidecar's durable upload-operation projection. */
   function reconcileRecoverableOperations(operations: KnowledgeOperation[]): void {
-    // 接纳前失败没有内容摘要时，只能用同一显示名合并连续尝试；一旦存在
-    // 已绑定成功代次，旧的无绑定失败降为审计，避免主列表重复占位。
+    // 只有内容身份可验证时才归并历史失败，文件同名不能证明输入相同。
     const operationKey = (operation: KnowledgeOperation): string => {
       if (operation.content_digest) return `digest:${operation.content_digest}`
-      return `name:${(operation.display_name || operation.title).trim()}`
+      return `operation:${operation.operation_id}`
     }
     const successfulKeys = new Set(
       operations
@@ -185,11 +193,12 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     )
     const seenUnboundFailures = new Set<string>()
     const visibleOperations = operations.filter((operation) => {
-      if (
-        operation.state !== 'failed' ||
-        operation.document_id ||
-        operation.job_id
-      ) {
+      if (operation.document_deleted) return false
+      if (dismissedOperationIDs.has(operation.operation_id)) {
+        if (operation.state === 'failed') return false
+        dismissedOperationIDs.delete(operation.operation_id)
+      }
+      if (operation.state !== 'failed' || operation.document_id || operation.job_id) {
         return true
       }
       const key = operationKey(operation)
@@ -207,7 +216,6 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
         .filter((documentID) => Boolean(documentID)),
     )
     items.value = items.value.filter((entry) => {
-      if (entry.status === 'done') return true
       if (!entry.operationId && !entry.jobId && !entry.documentId) return true
       return (
         Boolean(entry.operationId && remoteOperationIDs.has(entry.operationId)) ||
@@ -219,6 +227,7 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
       const existing = items.value.find(
         (entry) =>
           entry.operationId === operation.operation_id ||
+          Boolean(operation.idempotency_key && entry.intentKey === operation.idempotency_key) ||
           Boolean(operation.job_id && entry.jobId === operation.job_id) ||
           Boolean(operation.document_id && entry.documentId === operation.document_id) ||
           Boolean(
@@ -244,6 +253,8 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
         existing.name = name || existing.name
         existing.operationId = operation.operation_id
         existing.operationUpdatedAt = operation.updated_at
+        existing.createdAt = operation.created_at
+        if (operation.idempotency_key) existing.intentKey = operation.idempotency_key
         existing.operationTerminal = operation.terminal
         if (operation.document_id) existing.documentId = operation.document_id
         if (operation.job_id) existing.jobId = operation.job_id
@@ -263,6 +274,8 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
           status,
           operationId: operation.operation_id,
           operationUpdatedAt: operation.updated_at,
+          createdAt: operation.created_at,
+          ...(operation.idempotency_key ? { intentKey: operation.idempotency_key } : {}),
           operationTerminal: operation.terminal,
           ...(operation.document_id ? { documentId: operation.document_id } : {}),
           ...(operation.job_id ? { jobId: operation.job_id } : {}),
@@ -297,8 +310,16 @@ export const useKnowledgeUploadsStore = defineStore('knowledgeUploads', () => {
     items.value = items.value.filter((e) => e.status !== 'error' && e.status !== 'cancelled')
   }
 
+  /** 持久移除成功后或本地校验失败时，结束指定提醒。 */
+  function removeEntry(entry: KnowledgeUploadEntry): void {
+    if (entry.operationId) dismissedOperationIDs.add(entry.operationId)
+    items.value = items.value.filter((candidate) => candidate !== entry)
+  }
+
   return {
     items,
+    temporaryItems,
+    removeEntry,
     track,
     bindIntent,
     markProcessing,
