@@ -1728,6 +1728,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <span
                   v-if="getUploadBadgeLabel(uf)"
                   class="knowledge-page__resource-badge"
+                  :class="{ 'knowledge-page__resource-badge--failed': uf.status === 'error' }"
                   :style="getUploadBadgeStyle(uf)"
                 >
                   {{ getUploadBadgeLabel(uf) }}
@@ -2795,7 +2796,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 .knowledge-page__tab-stack {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
+}
+
+/* 知识库页签遵循原型行高，避免继承正文行高造成后续内容整体下移。 */
+.knowledge-page__tab-stack > :deep(.hc-utabs) {
+  min-height: 39px;
+}
+
+.knowledge-page__tab-stack > :deep(.hc-utabs .hc-utab) {
+  line-height: normal;
 }
 
 .knowledge-page__scroll {
@@ -2927,6 +2937,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   border-radius: 50%;
   background: currentColor;
   content: '';
+}
+
+.knowledge-page__resource-badge--failed::before {
+  background: var(--hc-error);
 }
 
 .knowledge-page__document-actions {
