@@ -124,7 +124,7 @@ describe('BUG-20260702 mcp-probe 纯判定', () => {
         total: 1,
       })
       await runMcpConnectorProbe(inst, '生产库')
-      expect(callMcpTool).toHaveBeenCalledWith('run_sql', { query: 'SELECT 1 AS ok' })
+      expect(callMcpTool).toHaveBeenCalledWith('run_sql', { query: 'SELECT 1 AS ok' }, '生产库')
     })
 
     it('无归属工具 → 抛 tool_missing，绝不 callMcpTool', async () => {

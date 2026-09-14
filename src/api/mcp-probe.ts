@@ -122,5 +122,5 @@ export async function runMcpConnectorProbe(inst: ConnectorInstance, serverName: 
     throw new McpProbeError('tool_missing', `No SQL probe tool found for MCP server "${serverName}"`)
   }
   const args = resolveMcpProbeArgs(tool, sql)
-  await callMcpTool(tool.name, args)
+  await callMcpTool(tool.name, args, serverName)
 }

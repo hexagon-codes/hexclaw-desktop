@@ -204,9 +204,20 @@ const toolSearchQuery = ref('')
 
 // ─── Tool testing state ──────────────────────────────
 const testingTool = ref<string | null>(null)
-const testParams = ref<Record<string, string>>({})
+// 参数和迟到结果归各自工具所有，切换展开行不改变在途调用归属。
+const testParamsByTool = ref<Record<string, Record<string, string>>>({})
+const testResultsByTool = ref<Record<string, { output?: unknown; error?: string }>>({})
+const testParams = computed(() =>
+  testingTool.value ? (testParamsByTool.value[testingTool.value] ?? {}) : {},
+)
 const testRunningTools = ref<Set<string>>(new Set())
-const testResult = ref<{ output?: unknown; error?: string } | null>(null)
+const testResult = computed(() =>
+  testingTool.value ? testResultsByTool.value[testingTool.value] : undefined,
+)
+
+function toolKey(tool: McpTool): string {
+  return JSON.stringify([tool.server_name ?? '', tool.name])
+}
 
 onMounted(async () => {
   await loadAll()
@@ -296,10 +307,6 @@ const expandedTools = ref<Set<string>>(new Set())
 // 保留旧的单值暴露，兼容既有测试/调用方；实际展开状态由 Set 维护。
 const expandedTool = computed(() => expandedTools.value.values().next().value ?? null)
 
-function isToolExpanded(name: string): boolean {
-  return expandedTools.value.has(name)
-}
-
 function toggleTool(name: string) {
   const next = new Set(expandedTools.value)
   if (next.has(name)) next.delete(name)
@@ -308,7 +315,6 @@ function toggleTool(name: string) {
   // Close test form when collapsing
   if (!next.has(name) && testingTool.value === name) {
     testingTool.value = null
-    testResult.value = null
   }
 }
 
@@ -336,56 +342,47 @@ const filteredTools = computed(() => {
 })
 
 // ─── Tool testing ────────────────────────────────────
-function openTestForm(toolName: string) {
-  if (testingTool.value === toolName) {
+function openTestForm(tool: McpTool) {
+  const key = toolKey(tool)
+  if (testingTool.value === key) {
     testingTool.value = null
-    testResult.value = null
     return
   }
-  testingTool.value = toolName
-  testResult.value = null
-  // Initialize params from schema
-  const tool = tools.value.find((t) => t.name === toolName)
-  const params: Record<string, string> = {}
-  if (tool?.input_schema) {
-    const props = (tool.input_schema as Record<string, unknown>).properties as
-      | Record<string, unknown>
-      | undefined
-    if (props) {
-      for (const key of Object.keys(props)) {
-        params[key] = ''
-      }
-    }
+  if (!testParamsByTool.value[key]) {
+    testParamsByTool.value[key] = Object.fromEntries(
+      getSchemaProperties(tool).map((prop) => [prop.key, '']),
+    )
   }
-  testParams.value = params
+  testingTool.value = key
 }
 
-function isTestRunning(toolName: string): boolean {
-  return testRunningTools.value.has(toolName)
+function isTestRunning(tool: McpTool): boolean {
+  return testRunningTools.value.has(toolKey(tool))
 }
 
-async function executeTest(toolName: string) {
-  if (testRunningTools.value.has(toolName)) return
-  testRunningTools.value = new Set([...testRunningTools.value, toolName])
-  testResult.value = null
+async function executeTest(tool: McpTool) {
+  const key = toolKey(tool)
+  if (testRunningTools.value.has(key)) return
+  testRunningTools.value = new Set([...testRunningTools.value, key])
+  delete testResultsByTool.value[key]
   try {
-    // Parse params - try to parse JSON values
+    // 参数在本次调用开始时复制，之后切行或编辑不会改变已发送请求。
     const args: Record<string, unknown> = {}
-    for (const [key, val] of Object.entries(testParams.value)) {
+    for (const [param, val] of Object.entries(testParamsByTool.value[key] ?? {})) {
       if (!val.trim()) continue
       try {
-        args[key] = JSON.parse(val)
+        args[param] = JSON.parse(val)
       } catch {
-        args[key] = val
+        args[param] = val
       }
     }
-    const res = await callMcpTool(toolName, args)
-    testResult.value = { output: res.result, error: res.error }
+    const res = await callMcpTool(tool.name, args, tool.server_name)
+    testResultsByTool.value[key] = { output: res.result, error: res.error }
   } catch (e: unknown) {
-    testResult.value = { error: e instanceof Error ? e.message : 'Execution failed' }
+    testResultsByTool.value[key] = { error: e instanceof Error ? e.message : 'Execution failed' }
   } finally {
     const next = new Set(testRunningTools.value)
-    next.delete(toolName)
+    next.delete(key)
     testRunningTools.value = next
   }
 }
@@ -699,12 +696,12 @@ defineExpose({ openAddServer, switchToMarketplace, expandedTool })
         <div v-else class="hc-capability-installed-track hc-capability-installed-track--mcp">
           <div
             v-for="tool in filteredTools"
-            :key="tool.name"
+            :key="toolKey(tool)"
             class="hc-capability-installed-row hc-capability-installed-row--tool overflow-hidden"
           >
             <div
               class="hc-capability-installed-main hc-capability-installed-main--mcp-tool"
-              @click="toggleTool(tool.name)"
+              @click="toggleTool(toolKey(tool))"
             >
               <div class="hc-capability-installed-tool-name">{{ tool.name }}</div>
               <p v-if="tool.description" class="hc-capability-installed-tool-description">
@@ -737,7 +734,7 @@ defineExpose({ openAddServer, switchToMarketplace, expandedTool })
               <!-- Test button -->
               <button
                 class="btn flex-shrink-0"
-                @click.stop="openTestForm(tool.name)"
+                @click.stop="openTestForm(tool)"
               >
                 {{ t('mcp.testTool') }}
               </button>
@@ -745,7 +742,7 @@ defineExpose({ openAddServer, switchToMarketplace, expandedTool })
 
             <!-- Test form -->
             <div
-              v-if="testingTool === tool.name"
+              v-if="testingTool === toolKey(tool)"
               class="hc-capability-installed-expanded px-4 pb-4 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
@@ -800,16 +797,16 @@ defineExpose({ openAddServer, switchToMarketplace, expandedTool })
                 <button
                   class="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
                   :style="{
-                    background: isTestRunning(tool.name)
+                    background: isTestRunning(tool)
                       ? 'var(--hc-text-muted)'
                       : 'var(--hc-accent)',
                   }"
-                  :disabled="isTestRunning(tool.name)"
-                  @click="executeTest(tool.name)"
+                  :disabled="isTestRunning(tool)"
+                  @click="executeTest(tool)"
                 >
-                  <Loader2 v-if="isTestRunning(tool.name)" :size="12" class="animate-spin" />
+                  <Loader2 v-if="isTestRunning(tool)" :size="12" class="animate-spin" />
                   <Play v-else :size="12" />
-                  {{ isTestRunning(tool.name) ? t('mcp.testing') : t('mcp.testExecute') }}
+                  {{ isTestRunning(tool) ? t('mcp.testing') : t('mcp.testExecute') }}
                 </button>
 
                 <!-- Test result -->

@@ -14,7 +14,11 @@ export function getMcpServers() {
 }
 
 /** 调用 MCP 工具（测试） */
-export async function callMcpTool(toolName: string, args: Record<string, unknown>) {
+export async function callMcpTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  serverName?: string,
+) {
   if (!toolName || typeof toolName !== 'string' || !toolName.trim()) {
     throw new Error('callMcpTool: toolName must be a non-empty string')
   }
@@ -22,6 +26,7 @@ export async function callMcpTool(toolName: string, args: Record<string, unknown
   const res = await apiPost<{ result: unknown; error?: string }>('/api/v1/mcp/tools/call', {
     name: toolName.trim(),
     arguments: args,
+    ...(serverName ? { server_name: serverName } : {}),
   })
 
   if (res == null || typeof res !== 'object') {
