@@ -590,7 +590,7 @@ function problemIsSkipped(problem: ImageTaskProblemProgressDTO): boolean {
 }
 
 function problemNeedsResolver(problem: ImageTaskProblemProgressDTO): boolean {
-  return problem.source_state === 'awaiting_resolution' || problemIsSkipped(problem)
+  return (!confirmed.value && problem.source_state === 'awaiting_resolution') || problemIsSkipped(problem)
 }
 
 function resolverDisabled(problems: ImageTaskProblemProgressDTO[]): boolean {

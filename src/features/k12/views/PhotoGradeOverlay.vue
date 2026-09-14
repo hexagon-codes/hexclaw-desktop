@@ -165,6 +165,11 @@ function markDisplayLabel(mark: OverlayMark): string {
 }
 
 function issueTitle(mark: OverlayMark): string {
+  if (mark.status === 'answer_unclear') {
+    const label = markDisplayLabel(mark)
+    const status = t('k12.overlay.statusUnclear')
+    return label ? `${label} · ${status}` : status
+  }
   if (mark.status === 'blank_solved') {
     const label = markDisplayLabel(mark)
     return label ? `${label} · 已解答` : '已解答'
