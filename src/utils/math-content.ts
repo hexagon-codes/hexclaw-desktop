@@ -269,7 +269,11 @@ export function normalizeMathMarkdown(
     .map((part) =>
       part.code
         ? part.content
-        : normalizeMathText(part.content, options?.preserveDisplayBrackets ?? false),
+        // 仅还原公式步骤之间的编码换行；代码区、TeX 命令与持久原文均不改写。
+        : normalizeMathText(
+            part.content.replace(/\\n(?=\\(?:\(|\[)|=|答[：:])/g, '\n'),
+            options?.preserveDisplayBrackets ?? false,
+          ),
     )
     .join('')
 }
