@@ -1373,6 +1373,9 @@ function validateStructuredFeedback(value: unknown, path: string): WireRecord {
       'limitations',
       'suggestions',
       'projection_markdown',
+      'affirmation',
+      'parent_guidance',
+      'next_step',
     ],
     path,
   )
@@ -1399,6 +1402,9 @@ function validateStructuredFeedback(value: unknown, path: string): WireRecord {
   }
   stringArray(feedback.evidence_refs, `${path}.evidence_refs`)
   stringArray(feedback.suggestions, `${path}.suggestions`)
+  for (const key of ['affirmation', 'parent_guidance', 'next_step']) {
+    optionalString(feedback[key], `${path}.${key}`)
+  }
   arrayValue(feedback.observations, `${path}.observations`).forEach((value, index) => {
     const observationPath = `${path}.observations[${index}]`
     const observation = record(value, observationPath)

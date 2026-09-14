@@ -2121,6 +2121,9 @@ export interface ImageTaskStructuredFeedbackDTO {
   limitations: string
   suggestions: string[]
   projection_markdown: string
+  affirmation?: string
+  parent_guidance?: string
+  next_step?: string
 }
 
 export interface ImageTaskCreativeFeedbackDTO {
