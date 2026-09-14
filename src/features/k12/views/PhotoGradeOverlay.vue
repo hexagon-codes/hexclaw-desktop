@@ -695,7 +695,7 @@ function markStatusLabel(mark: IndexedMark): string {
 }
 .grade-photo--process {
   width: 100%;
-  max-width: 320px;
+  max-width: 100%;
   min-height: 0;
   aspect-ratio: 1086 / 1448;
   background: #d7d0cc;
