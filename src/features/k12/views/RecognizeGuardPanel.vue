@@ -40,7 +40,7 @@ import { projectImageTaskProblemSourceActionSnapshot } from '../source-action-pr
 import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
-import { k12QuestionSourceDisplayLabel } from '../source-display'
+import { k12MathDisplayMarkdown, k12QuestionSourceDisplayLabel } from '../source-display'
 import {
   PHOTO_PROCESS_ISSUE_COLOR,
   isPhotoAssessmentStatus,
@@ -424,7 +424,7 @@ const imageRoutingActivityItems = computed<ActivityTimelineItem[]>(() => [
   {
     id: 'image-routing',
     state: 'running',
-    label: t('k12.recognize.routing'),
+    label: t(currentTaskIntent.value === 'unknown' ? 'k12.recognize.routing' : 'k12.recognize.running'),
   },
 ])
 // 任务失败、恢复与作品点评进度只向共享活动时间线提供领域事实。
@@ -709,7 +709,7 @@ function problemAssessmentStatusLabel(status: PhotoJobItemStatus): string {
     case 'unanswered':
       return '未作答'
     case 'answer_unclear':
-      return '看不清'
+      return t('k12.overlay.statusUnclear')
     case 'blank_solved':
       return '已解答'
     case 'out_of_scope':
@@ -781,7 +781,7 @@ function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
         case 'unanswered':
           return '未作答'
         case 'answer_unclear':
-          return '作答内容看不清'
+          return t('k12.overlay.statusUnclear')
         case 'blank_solved':
           return '解答结果已发布'
         case 'out_of_scope':
@@ -1676,8 +1676,13 @@ onMounted(async () => {
       (error as Error).name === 'AbortError'
     )
       return
-    restoredFromBinding.value = false
-    emit('close')
+    // 读取或结果投影异常仍属于原任务，不能等同于用户关闭并移除回答。
+    recognizing.value = false
+    anchoring.value = false
+    batchWorking.value = false
+    recognitionFailed.value = true
+    retryable.value = false
+    errMsg.value = error instanceof Error ? error.message : String(error)
   } finally {
     if (restoreAbort === controller) restoreAbort = null
   }
@@ -1972,6 +1977,10 @@ function toggleCreativeConflictEdit(conflict: CreativeConflictRow) {
   conflict.confirmed = false
 }
 
+function confirmCreativeConflictRow() {
+  if (canConfirmCreative.value) void confirmCreativeOCR()
+}
+
 async function confirmCreativeOCR() {
   const creative = creativeFreezeCommand()
   if (!canConfirmCreative.value || !creative) return
@@ -2029,6 +2038,7 @@ async function confirmCreativeOCR() {
 async function confirmAll() {
   if (
     outcomeUnknown.value ||
+    confirmed.value ||
     confirming.value ||
     !props.agentId.trim() ||
     !props.sessionId?.trim() ||
@@ -2388,7 +2398,7 @@ async function coldStart() {
     </div>
 
     <div
-      v-if="recognizing && currentTaskIntent === 'unknown'"
+      v-if="recognizing && ['unknown', 'completed_homework', 'blank_worksheet'].includes(currentTaskIntent)"
       data-component="ImageTaskRunStatus"
       role="status"
       aria-live="polite"
@@ -2495,9 +2505,11 @@ async function coldStart() {
                 <div class="rec-problem-progress__line">
                   <b>
                     {{ problemProgressDisplayLabel(item.problem) }}
-                    <template v-if="problemProgressQuestion(item.problem)">
-                      &nbsp; {{ problemProgressQuestion(item.problem) }}
-                    </template>
+                    <MarkdownRenderer
+                      v-if="problemProgressQuestion(item.problem)"
+                      class="rec-row__md"
+                      :content="k12MathDisplayMarkdown(problemProgressQuestion(item.problem))"
+                    />
                   </b>
                 </div>
                 <small>{{ problemProgressDetail(item.problem) }}</small>
@@ -2540,7 +2552,9 @@ async function coldStart() {
                     :data-problem-id="problem.problem_id"
                   >
                     <b>{{ problemProgressDisplayLabel(problem) }}</b>
-                    <span>{{ problemProgressQuestion(problem) }}</span>
+                    <MarkdownRenderer
+                      :content="k12MathDisplayMarkdown(problemProgressQuestion(problem))"
+                    />
                     <span>{{ problemProgressStatus(problem) }}</span>
                   </div>
                 </div>
@@ -2576,7 +2590,7 @@ async function coldStart() {
         "
         class="rec-pipeline__branches"
       >
-        <div class="rec-pipeline__branch is-done" data-testid="recognize-confirm-branch">
+        <div v-if="confirmed && rows.length" class="rec-pipeline__branch is-done" data-testid="recognize-confirm-branch">
           <i>✓</i>
           <div>
             <b>清晰题已自动通过</b>
@@ -2584,6 +2598,7 @@ async function coldStart() {
           </div>
         </div>
         <div
+          v-if="confirmed && rows.length"
           class="rec-pipeline__branch"
           :class="{
             'is-done': rows.length && !anchoring && !anchorWarning,
@@ -2835,6 +2850,7 @@ async function coldStart() {
               type="checkbox"
               data-testid="creative-conflict-confirm"
               :disabled="confirming"
+              @change="confirmCreativeConflictRow"
             />
             我已逐项核对
           </label>
@@ -2847,7 +2863,7 @@ async function coldStart() {
       >
         还有 {{ unconfirmedCreativeConflictCount }} 处高风险识别需要逐项对照原图确认。
       </p>
-      <div class="rec-guard__confirm-actions">
+      <div v-if="errMsg && canConfirmCreative" class="rec-guard__confirm-actions">
         <button
           class="rec-guard__confirm"
           data-testid="creative-confirm-all"
@@ -2870,6 +2886,7 @@ async function coldStart() {
         <FinalArtifactActions
           v-if="finalArtifact && finalArtifactID && finalArtifactDigest"
           class="rec-final-artifact-actions"
+          variant="ghost"
           :artifact-id="finalArtifactID"
           :artifact-digest="finalArtifactDigest"
           :artifact-title="finalArtifactTitle"
@@ -2918,7 +2935,7 @@ async function coldStart() {
             v-else
             class="rec-row__qtext"
             :data-testid="row.problemKind === 'compound_parent' ? 'rq-parent' : undefined"
-            :content="`**${rowLabel(row, i)}.** ${row.problem}`"
+            :content="`**${rowLabel(row, i)}.** ${k12MathDisplayMarkdown(row.problem)}`"
           />
           <button
             v-if="correctionMode && row.confirmationRequired"
@@ -3061,6 +3078,9 @@ async function coldStart() {
         currentTaskIntent !== 'writing' &&
         currentTaskIntent !== 'artwork' &&
         !recognizing &&
+        !batchWorking &&
+        !currentDispatchId &&
+        !rows.length &&
         !outcomeUnknown &&
         !restoredFromBinding
       "
@@ -3899,19 +3919,6 @@ async function coldStart() {
 }
 .rec-final-artifact-actions {
   gap: 6px;
-}
-.rec-final-artifact-actions :deep(.btn) {
-  min-height: 0;
-  padding: 5px 9px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-primary);
-  font-size: 11px;
-  line-height: 1.2;
-}
-.rec-final-artifact-actions :deep(.btn:hover) {
-  background: var(--hc-bg-hover);
 }
 @media (max-width: 700px) {
   .rec-pipeline__branches {

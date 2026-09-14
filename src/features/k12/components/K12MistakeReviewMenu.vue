@@ -17,7 +17,6 @@ const emit = defineEmits<{
 }>()
 
 const menuOpen = ref(false)
-const confirmOpen = ref(false)
 const menuTrigger = ref<HTMLButtonElement | null>(null)
 const menuElement = ref<HTMLElement | null>(null)
 const menuPosition = ref<Record<string, string>>({})
@@ -26,13 +25,13 @@ watch(
   () => props.suppressed,
   () => {
     menuOpen.value = false
-    confirmOpen.value = false
   },
 )
 
 function askSuppress() {
+  if (props.busy || props.suppressed) return
   menuOpen.value = false
-  confirmOpen.value = true
+  emit('suppress')
 }
 
 async function toggleMenu() {
@@ -65,11 +64,6 @@ async function toggleMenu() {
     maxHeight: `${maxHeight}px`,
     overflowY: 'auto',
   }
-}
-
-function confirmSuppress() {
-  confirmOpen.value = false
-  emit('suppress')
 }
 </script>
 
@@ -117,34 +111,6 @@ function confirmSuppress() {
       <button type="button" role="menuitem" @click="askSuppress">不再复习</button>
     </div>
   </div>
-
-  <Teleport to="body">
-    <div v-if="confirmOpen" class="review-confirm__overlay" @click.self="confirmOpen = false">
-      <section
-        class="review-confirm"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="review-confirm-title"
-      >
-        <h2 id="review-confirm-title">不再复习这道题？</h2>
-        <p>
-          这道题将长期从本周该练和自动复习中排除。系统不会把它标记为已掌握，你可以随时在“不再复习”中恢复。
-        </p>
-        <footer>
-          <button type="button" class="hc-btn" @click="confirmOpen = false">取消</button>
-          <button
-            type="button"
-            class="hc-btn hc-btn-primary"
-            :disabled="busy"
-            data-testid="confirm-suppress-review"
-            @click="confirmSuppress"
-          >
-            不再复习
-          </button>
-        </footer>
-      </section>
-    </div>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -197,37 +163,5 @@ function confirmSuppress() {
 }
 .mistake-more__menu button:hover {
   background: var(--hc-bg-hover);
-}
-.review-confirm__overlay {
-  position: fixed;
-  z-index: var(--hc-z-modal);
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: color-mix(in srgb, #081220 42%, transparent);
-  backdrop-filter: blur(4px);
-}
-.review-confirm {
-  width: min(440px, 100%);
-  padding: 20px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 16px;
-  background: var(--hc-bg-elevated);
-  box-shadow: var(--hc-shadow-float);
-}
-.review-confirm h2 {
-  margin: 0;
-  font-size: 17px;
-}
-.review-confirm p {
-  margin: 10px 0 18px;
-  color: var(--hc-text-secondary);
-  line-height: 1.65;
-}
-.review-confirm footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
 }
 </style>

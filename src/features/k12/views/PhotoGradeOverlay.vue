@@ -14,7 +14,7 @@ import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { BBox, ParentTeachingGuideDTO, PhotoJobItemStatus } from '@/api/k12'
 import { isValidGradingBBox } from '../graded-photo'
-import { k12QuestionSourceDisplayLabel } from '../source-display'
+import { k12MathDisplayMarkdown, k12QuestionSourceDisplayLabel } from '../source-display'
 import {
   PHOTO_PROCESS_ISSUE_COLOR,
   projectPhotoAssessmentStatus,
@@ -222,7 +222,7 @@ function markStatusLabel(mark: IndexedMark): string {
         <div class="grade-result__actions">
           <slot name="actions" />
           <button
-            class="grade-action"
+            class="btn btn-ghost"
             data-testid="overlay-toggle"
             type="button"
             :aria-pressed="showOverlay"
@@ -352,12 +352,12 @@ function markStatusLabel(mark: IndexedMark): string {
               {{ m._projection.symbol + ' ' + markStatusLabel(m) }}
             </span>
             <span v-if="m.question" class="pg-overlay__degraded-q">
-              <MarkdownRenderer class="pg-overlay__md-inline" :content="m.question" />
+              <MarkdownRenderer class="pg-overlay__md-inline" :content="k12MathDisplayMarkdown(m.question)" />
             </span>
             <span v-if="m.studentAnswer" class="pg-overlay__degraded-cause">
               原始作答：<MarkdownRenderer
                 class="pg-overlay__md-inline"
-                :content="m.studentAnswer"
+                :content="k12MathDisplayMarkdown(m.studentAnswer)"
               />
             </span>
             <span
@@ -415,11 +415,11 @@ function markStatusLabel(mark: IndexedMark): string {
               class="grade-card__row"
             >
               <span>{{ t('k12.overlay.question') }}</span>
-              <MarkdownRenderer class="grade-card__md" :content="m.question" />
+              <MarkdownRenderer class="grade-card__md" :content="k12MathDisplayMarkdown(m.question)" />
             </div>
             <div v-if="m.studentAnswer" class="grade-card__row">
               <span>原始作答</span>
-              <MarkdownRenderer class="grade-card__md" :content="m.studentAnswer" />
+              <MarkdownRenderer class="grade-card__md" :content="k12MathDisplayMarkdown(m.studentAnswer)" />
             </div>
             <div v-if="m._projection.tone !== 'scope' && m.correctAnswer" class="grade-card__row">
               <span>{{
@@ -594,23 +594,12 @@ function markStatusLabel(mark: IndexedMark): string {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.grade-action {
-  padding: 5px 9px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-primary);
-  font: inherit;
+.grade-result__actions :deep(.btn) {
+  min-height: 0;
+  height: auto;
   font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.grade-action:hover {
-  background: var(--hc-bg-hover);
-}
-.grade-action:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  line-height: 18px;
+  padding: 5px 9px;
 }
 .grade-summary {
   display: grid;

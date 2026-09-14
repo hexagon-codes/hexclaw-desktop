@@ -252,7 +252,7 @@ export default {
     deliveryDelivered: 'يەتكۈزۈلدى',
     deliveryFailed: 'يوللاش مەغلۇپ بولدى، قايتا سىناڭ',
     returnTitle: 'جاۋاب سۈرىتىنى يۈكلەش',
-    returnHint: 'ھەقىقىي جاۋاب سۈرىتىنى تاللاپ، سۈرەتتىكى سوئاللارنى بەلگىلەڭ.',
+    returnHint: 'Choose a photo. Matching and grading start automatically; missing pages can be added later.',
     returnPhoto: 'جاۋاب سۈرىتى (PNG/JPG/WebP، 10MB ئىچىدە)',
     returnCovered: 'بۇ سۈرەتتە قايسى سوئاللار بار؟',
     returnConfirm: 'يۈكلەپ قايتۇرۇش',

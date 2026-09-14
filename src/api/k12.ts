@@ -2500,6 +2500,8 @@ export interface PracticeReturnAssetDTO {
   return_id: string
   asset_id: string
   item_ids: string[]
+  auto_match?: boolean
+  candidate_item_ids?: string[]
   /** 服务端 Unix 秒。 */
   returned_at: number
   /** 自动复批的耐久任务及其冻结模型路由。 */
@@ -2965,13 +2967,13 @@ export function k12AdvancePracticeSet(
 }
 
 /**
- * 回传作答照片后标记照片覆盖到的题。前端禁止空 item_ids，避免旧端点的“空=整卷回传”
- * 兼容语义误把未上传/未覆盖的题全部标为已回传。asset_id 为已落本地资产服务的照片证据。
+ * 自动回传只提供真实照片及意图；服务端冻结候选并投影实际覆盖。历史显式题集仍可重放。
  */
 export interface SubmitPracticeReturnReq {
   return_id: string
   asset_id: string
-  item_ids: string[]
+  item_ids?: string[]
+  auto_match?: boolean
 }
 
 export function k12SubmitPracticeSet(
@@ -2980,13 +2982,15 @@ export function k12SubmitPracticeSet(
   req: SubmitPracticeReturnReq,
 ) {
   if (!req.return_id.trim()) throw new Error('回传批次不能为空')
-  if (!req.item_ids.length) throw new Error('至少选择一道照片覆盖的题目')
+  if (!!req.auto_match === !!req.item_ids?.length)
+    throw new Error('Specify either auto_match or covered item_ids')
   if (!req.asset_id.trim()) throw new Error('请先上传作答照片')
   return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/submit`, {
     agent,
     return_id: req.return_id,
     asset_id: req.asset_id,
     item_ids: req.item_ids,
+    ...(req.auto_match ? { auto_match: true } : {}),
   })
 }
 

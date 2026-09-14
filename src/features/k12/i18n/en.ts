@@ -250,7 +250,7 @@ export default {
     deliveryFailed: 'Delivery failed — retry',
     returnTitle: 'Upload answer photo',
     returnHint:
-      'Choose a real answer photo and mark the questions visible in it. You can add missing questions later.',
+      'Choose a photo. Matching and grading start automatically; missing pages can be added later.',
     returnPhoto: 'Answer photo (PNG/JPG/WebP, up to 10MB)',
     returnCovered: 'Which questions are visible?',
     returnConfirm: 'Upload and return',

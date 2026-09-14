@@ -12,6 +12,7 @@ const props = defineProps<{
   sendLabel?: string
   sendDisabled?: boolean
   actions?: FinalArtifactAction[]
+  variant?: 'ghost'
 }>()
 
 const emit = defineEmits<{
@@ -55,13 +56,14 @@ function actionDisabled(action: FinalArtifactAction) {
         {
           'btn-primary': primaryAction === action,
           'final-artifact-actions__primary': primaryAction === action,
+          'btn-ghost': variant === 'ghost',
         },
       ]"
       :disabled="actionDisabled(action)"
       @click="dispatch(action)"
     >
       <svg
-        v-if="action === 'print'"
+        v-if="action === 'print' && variant !== 'ghost'"
         class="ic-sm final-artifact-actions__icon"
         viewBox="0 0 24 24"
         aria-hidden="true"

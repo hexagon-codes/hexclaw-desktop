@@ -185,6 +185,9 @@ watch(
   () => props.agentId,
   () => {
     releasePracticeAssets()
+    returnDraft.value = emptyReturnDraft()
+    returnError.value = ''
+    busy.value = ''
     void load()
   },
 )
@@ -462,7 +465,6 @@ async function advance(s: PracticeSetDTO, step: 'submit' | 'grade' | 'close', ok
 interface ReturnDraft {
   set: PracticeSetDTO | null
   file: File | null
-  itemIds: string[]
   /** 上传成功后保留；submit 结果未知时重试不再制造第二份资产。 */
   assetId: string
   /** 同一请求快照重试必须复用，后端按它返回既有 return_assets 记录。 */
@@ -472,7 +474,6 @@ interface ReturnDraft {
 const emptyReturnDraft = (): ReturnDraft => ({
   set: null,
   file: null,
-  itemIds: [],
   assetId: '',
   returnId: '',
   requestFingerprint: '',
@@ -486,12 +487,6 @@ function newReturnId(): string {
   return `desktop-return:${props.agentId}:${uuid ?? `${Date.now()}-${++returnIdSequence}`}`
 }
 const returnOpen = computed(() => !!returnDraft.value.set)
-const returnItems = computed(
-  () => returnDraft.value.set?.items.filter((it) => it.verification_status === 'verified') ?? [],
-)
-const returnCanSubmit = computed(
-  () => !!returnDraft.value.file && returnDraft.value.itemIds.length > 0,
-)
 function openReturn(s: PracticeSetDTO) {
   returnError.value = ''
   returnDraft.value = { ...emptyReturnDraft(), set: s }
@@ -502,6 +497,7 @@ function closeReturn() {
   returnDraft.value = emptyReturnDraft()
 }
 function pickReturnFile(e: Event) {
+  if (busy.value) return
   const file = (e.target as HTMLInputElement).files?.[0] ?? null
   returnError.value = ''
   returnDraft.value.assetId = ''
@@ -524,38 +520,44 @@ function pickReturnFile(e: Event) {
     return
   }
   returnDraft.value.file = file
+  void submitReturn()
 }
 async function submitReturn() {
-  const s = returnDraft.value.set
-  const file = returnDraft.value.file
-  if (!s || !file || !returnDraft.value.itemIds.length) return
+  const draft = returnDraft.value
+  const agentId = props.agentId
+  const s = draft.set
+  const file = draft.file
+  if (!s || !file || busy.value) return
+  const isCurrent = () => returnDraft.value === draft && props.agentId === agentId
   busy.value = s.record_id
   returnError.value = ''
   try {
-    if (!returnDraft.value.assetId) {
-      const asset = await k12UploadAsset(props.agentId, file)
-      returnDraft.value.assetId = asset.asset_id
+    if (!draft.assetId) {
+      const asset = await k12UploadAsset(agentId, file)
+      if (!isCurrent()) return
+      draft.assetId = asset.asset_id
     }
-    const itemIds = [...returnDraft.value.itemIds]
-    const fingerprint = `${returnDraft.value.assetId}\n${[...itemIds].sort().join(',')}`
-    if (!returnDraft.value.returnId || returnDraft.value.requestFingerprint !== fingerprint) {
-      returnDraft.value.returnId = newReturnId()
-      returnDraft.value.requestFingerprint = fingerprint
+    const fingerprint = `${draft.assetId}\nauto_match`
+    if (!draft.returnId || draft.requestFingerprint !== fingerprint) {
+      draft.returnId = newReturnId()
+      draft.requestFingerprint = fingerprint
     }
-    const updated = await k12SubmitPracticeSet(props.agentId, s.record_id, {
-      return_id: returnDraft.value.returnId,
-      asset_id: returnDraft.value.assetId,
-      item_ids: itemIds,
+    const updated = await k12SubmitPracticeSet(agentId, s.record_id, {
+      return_id: draft.returnId,
+      asset_id: draft.assetId,
+      auto_match: true,
     })
+    if (!isCurrent()) return
     const index = sets.value.findIndex((entry) => entry.record_id === updated.record_id)
     if (index >= 0) sets.value.splice(index, 1, updated)
     scheduleRegradePoll()
     toast.success(t('k12.practice.returnSaved'))
+    busy.value = ''
     returnDraft.value = emptyReturnDraft()
   } catch (e) {
-    returnError.value = (e as Error).message || t('k12.practice.returnFailed')
+    if (isCurrent()) returnError.value = (e as Error).message || t('k12.practice.returnFailed')
   } finally {
-    busy.value = ''
+    if (isCurrent()) busy.value = ''
   }
 }
 
@@ -1274,24 +1276,9 @@ async function cancelSet(s: PracticeSetDTO) {
               data-testid="ps-return-file"
               type="file"
               accept="image/png,image/jpeg,image/webp"
+              :disabled="!!busy"
               @change="pickReturnFile"
             />
-          </label>
-          <b class="k12ps__formlabel">{{ t('k12.practice.returnCovered') }}</b>
-          <label v-for="(it, index) in returnItems" :key="it.item_id" class="k12ps__choice">
-            <input
-              v-model="returnDraft.itemIds"
-              type="checkbox"
-              :value="it.item_id"
-              :data-testid="`ps-return-item-${it.item_id}`"
-              @change="returnError = ''"
-            />
-            <span>
-              {{ it.paper_seq || index + 1 }}. {{ it.question_markdown }}
-              <small v-if="it.return_ids?.length" class="k12ps__returned-ref">
-                {{ t('k12.practice.returnAlreadyCovered', { n: it.return_ids.length }) }}
-              </small>
-            </span>
           </label>
           <div
             v-if="returnError"
@@ -1314,14 +1301,6 @@ async function cancelSet(s: PracticeSetDTO) {
         <footer class="k12ps__mfoot">
           <button class="k12ps__btn" :disabled="!!busy" @click="closeReturn">
             {{ t('k12.practice.paperClose') }}
-          </button>
-          <button
-            class="k12ps__btn k12ps__btn--primary"
-            data-testid="ps-return-confirm"
-            :disabled="!returnCanSubmit || !!busy"
-            @click="submitReturn"
-          >
-            {{ t('k12.practice.returnConfirm') }}
           </button>
         </footer>
       </div>
