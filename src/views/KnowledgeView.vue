@@ -1119,6 +1119,7 @@ function isReadingDocumentProjection(doc: KnowledgeDoc): boolean {
 
 function getDocumentRowStatus(doc: KnowledgeDoc): string {
   if (isReadingDocumentProjection(doc)) return t('knowledge.authorityReading')
+  if (doc.text_outcome_unknown) return '结果待核实，文件已保留'
   const structuredFacts = getStructuredDocumentFacts(doc)
   if (structuredFacts.length > 0) return structuredFacts.join('\n')
   if (doc.error_message) return getKnowledgeErrorMessage(doc.error_message, true)
@@ -1152,6 +1153,7 @@ function getDocumentRowStatus(doc: KnowledgeDoc): string {
 
 function getDocumentBadgeLabel(doc: KnowledgeDoc): string {
   if (isReadingDocumentProjection(doc)) return t('knowledge.syncingStatus')
+  if (doc.text_outcome_unknown) return '结果待核实'
   if (['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? '')) {
     return t('knowledge.semanticIndex.enhancing')
   }
@@ -1279,6 +1281,7 @@ async function retryDocContent() {
 
 async function handleReindex(doc: KnowledgeDoc) {
   if (!ensureKnowledgeEnabled()) return
+  if (doc.text_outcome_unknown) return
   if (reindexingDocIds.value.has(doc.id) || hasPollableVectorJob(doc)) return
   const next = new Set(reindexingDocIds.value)
   next.add(doc.id)
@@ -1927,6 +1930,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           class="knowledge-page__resource-action"
                           :disabled="
                             !knowledgeEnabled ||
+                            doc.text_outcome_unknown ||
                             reindexingDocIds.has(doc.id) ||
                             hasPollableVectorJob(doc) ||
                             getDocStatus(doc) === 'processing'

@@ -21,6 +21,7 @@ export interface KnowledgePreflightProjection {
 /** 摄取阶段的结构化投影；字段缺失时由调用方保留现有状态。 */
 export interface KnowledgeProjectionFields {
   text_index_state?: KnowledgeTextIndexState | null
+  text_outcome_unknown?: boolean
   ingestion_state?: string | null
   failure_code?: string | null
   affected_pages?: number | number[] | null
