@@ -2649,6 +2649,8 @@ button.hc-cxcard {
   overflow: hidden;
   border: 0.5px solid var(--hc-border);
   border-radius: 12px;
+  /* 折叠态也必须拥有不透明卡片背景，避免安装版 WebKit 合成透明层时吞掉摘要文字。 */
+  background: var(--hc-bg-card);
 }
 
 .hc-agent-fold--open {
@@ -2662,7 +2664,8 @@ button.hc-cxcard {
   width: 100%;
   padding: 13px 14px;
   border: 0;
-  background: transparent;
+  /* 折叠态摘要自身保持不透明，避免安装版 WebKit 跳过透明按钮层的文字绘制。 */
+  background: var(--hc-bg-card);
   color: var(--hc-text-primary);
   font: inherit;
   font-size: 13px;
