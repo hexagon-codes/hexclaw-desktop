@@ -15,6 +15,7 @@ const TERMINAL_STATES = new Set([
   'completed',
   'feedback_ready',
   'promoted',
+  'unreadable',
   'failed',
   'failed_retryable',
   'failed_terminal',

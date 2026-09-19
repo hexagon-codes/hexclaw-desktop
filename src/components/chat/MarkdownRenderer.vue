@@ -131,6 +131,16 @@ function createMarkdownRenderer(copyLabel: string) {
     typographer: true,
   })
 
+  // 正文图片进入全应用预览，公式和交互产物仍沿各自渲染器。
+  const renderImage = instance.renderer.rules.image!
+  instance.renderer.rules.image = (tokens, index, options, env, self) => {
+    const token = tokens[index]!
+    token.attrSet('data-image-preview', '')
+    token.attrSet('role', 'button')
+    token.attrSet('tabindex', '0')
+    return renderImage(tokens, index, options, env, self)
+  }
+
   // 本组件只拥有 TeX delimiter/token 解析；KaTeX 执行统一委托给 math-render adapter。
   const parseErrorSignal = 'data-math-render-error="parse-error"'
   instance.use(tex, {

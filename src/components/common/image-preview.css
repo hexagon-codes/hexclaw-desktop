@@ -1,0 +1,206 @@
+/* 全应用图片预览使用通透背景；顶部局部渐暗维持文字对比，原图不参与背景模糊。 */
+.hc-image-viewer {
+  position: fixed;
+  inset: var(--hc-titlebar-height, 38px) 0 0;
+  margin: 0;
+  width: 100%;
+  height: calc(100% - var(--hc-titlebar-height, 38px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.4), transparent 160px),
+    rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  box-sizing: border-box;
+  z-index: 9999;
+}
+.hc-image-viewer::backdrop {
+  background: transparent;
+}
+.hc-image-viewer:not([open]) {
+  display: none;
+}
+.hc-image-viewer__header {
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  right: 76px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+.hc-image-viewer__title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hc-image-viewer__count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hc-image-viewer__button {
+  font: inherit;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 0.5px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  background: rgba(28, 28, 30, 0.72);
+  color: #fff;
+  cursor: pointer;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+.hc-image-viewer__button[hidden] {
+  display: none;
+}
+.hc-image-viewer__button svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hc-image-viewer__button:hover:not(:disabled) {
+  background: rgba(80, 80, 86, 0.85);
+}
+.hc-image-viewer__button:focus-visible {
+  border-radius: 50%;
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+.hc-image-viewer__button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.hc-image-viewer__close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+}
+.hc-image-viewer__previous,
+.hc-image-viewer__next {
+  position: absolute;
+  top: calc(50% - 18px);
+  z-index: 2;
+}
+.hc-image-viewer__previous {
+  left: 20px;
+}
+.hc-image-viewer__next {
+  right: 20px;
+}
+.hc-image-viewer__stage {
+  position: absolute;
+  inset: 72px 76px 88px;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.hc-image-viewer__image {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  user-select: none;
+}
+.hc-image-viewer__image > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+.hc-image-viewer__mark {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  line-height: 1;
+}
+.hc-image-viewer__tools {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 0.5px solid rgba(255, 255, 255, 0.24);
+  border-radius: 26px;
+  background: rgba(28, 28, 30, 0.82);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+.hc-image-viewer__tools .hc-image-viewer__button {
+  font: inherit;
+  background: transparent;
+  border: 0;
+}
+.hc-image-viewer__scale {
+  width: 48px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.hc-image-viewer__divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 0 4px;
+}
+.hc-image-viewer__error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.8);
+}
+@media (max-width: 600px) {
+  .hc-image-viewer__stage {
+    left: 56px;
+    right: 56px;
+  }
+  .hc-image-viewer__previous {
+    left: 10px;
+  }
+  .hc-image-viewer__next {
+    right: 10px;
+  }
+  .hc-image-viewer__header {
+    left: 16px;
+  }
+}
+
+img[data-image-preview] {
+  cursor: zoom-in;
+}
+img[data-image-preview]:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 3px;
+}
+.hc-image-viewer__mark > span {
+  position: absolute;
+  left: 0;
+  top: 0;
+}

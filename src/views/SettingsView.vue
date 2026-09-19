@@ -637,8 +637,7 @@ const selectedDefaultReasoningModel = computed(() => {
   if (!llmConfig?.defaultProviderId || !llmConfig.defaultModel) return undefined
   return settingsStore.availableModels.find(
     (model) =>
-      model.providerId === llmConfig.defaultProviderId &&
-      model.modelId === llmConfig.defaultModel,
+      model.providerId === llmConfig.defaultProviderId && model.modelId === llmConfig.defaultModel,
   )
 })
 
@@ -1266,7 +1265,9 @@ async function toggleApiKeyVisibility(provider: ProviderConfig) {
       return
     }
     try {
-      const plain = await readProviderApiKey(provider.backendKey || provider.providerInstanceId || provider.id)
+      const plain = await readProviderApiKey(
+        provider.backendKey || provider.providerInstanceId || provider.id,
+      )
       if (!plain) {
         toast.error(t('settings.llm.apiKeyRevealFailed', '暂时无法读取已保存的 API Key'))
         return
@@ -1369,8 +1370,7 @@ async function testProvider(provider: ProviderConfig) {
     }
     const activePreferred =
       activeProvider.models?.find(
-        (model) =>
-          model.id === activeProvider.selectedModelId && isChatModelOption(model),
+        (model) => model.id === activeProvider.selectedModelId && isChatModelOption(model),
       ) || activeProvider.models?.find(isChatModelOption)
     const activeModelId = (activePreferred?.id || selectedModelId).trim()
     const preset = PROVIDER_PRESETS[activeProvider.type]
@@ -1391,45 +1391,44 @@ async function testProvider(provider: ProviderConfig) {
     )
     const testedAt = parseProviderProbeTime(result.tested_at)
 
-    // Provider 连接回执与模型能力回执是两份独立事实；同一次用户主动测试顺便
-    // 验证当前模型的文本能力，避免 K12 文本链路只能读到过期或不存在的能力回执。
-    if (result.ok && activeProvider.providerInstanceId) {
-      // 旧 Provider 回执不能覆盖当前文本探测的失败原因；成功后由本次连接测试重新写回。
-      activeProvider.probeReceipt = undefined
-      if (activeProvider !== provider) provider.probeReceipt = undefined
-      await probeLLMModelCapability(activeProvider.providerInstanceId, activeModelId)
-    }
-
-    if (!result.ok) {
-      activeProvider.probeReceipt = undefined
-      const failed = {
-        ok: false,
-        msg: result.error_message || result.message || t('settings.llm.connectionFailed'),
-      }
-      testProviderResult.value[provider.id] = failed
-      if (activeProvider.id !== provider.id) {
-        testProviderResult.value[activeProvider.id] = failed
-      }
-    } else if (result.persisted && testedAt !== undefined) {
+    // 成功与失败都以持久回执为准，页面卸载不能丢失最近一次连接结论。
+    if (result.persisted && testedAt !== undefined) {
       activeProvider.probeReceipt = {
         providerInstanceId: activeProvider.providerInstanceId,
-        outcome: 'passed',
+        outcome: result.ok ? 'passed' : 'failed',
         locality: effectiveProviderLocality(activeProvider),
         latencyMs: result.latency_ms ?? 0,
         testedAt,
         ...(result.error_code ? { errorCode: result.error_code } : {}),
+        ...(!result.ok
+          ? {
+              errorMessage:
+                result.error_message || result.message || t('settings.llm.connectionFailed'),
+            }
+          : {}),
       }
       delete testProviderResult.value[activeProvider.id]
       delete testProviderResult.value[provider.id]
     } else {
       activeProvider.probeReceipt = undefined
-      const success = {
-        ok: true,
-        msg: t('settings.llm.connectionOk'),
+      const transient = {
+        ok: result.ok,
+        msg: result.ok
+          ? t('settings.llm.connectionOk')
+          : result.error_message || result.message || t('settings.llm.connectionFailed'),
       }
-      testProviderResult.value[provider.id] = success
+      testProviderResult.value[provider.id] = transient
       if (activeProvider.id !== provider.id) {
-        testProviderResult.value[activeProvider.id] = success
+        testProviderResult.value[activeProvider.id] = transient
+      }
+    }
+    // 模型能力与连接结果各自持久化；能力探测失败不覆盖已确认的连接回执。
+    if (result.ok && activeProvider.providerInstanceId) {
+      try {
+        await probeLLMModelCapability(activeProvider.providerInstanceId, activeModelId)
+      } catch (error) {
+        logger.warn('[Settings] 模型文本能力探测失败:', error)
+        toast.error(t('settings.llm.probeFailed', '能力探测失败，请重试'))
       }
     }
     // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
@@ -1469,7 +1468,9 @@ async function syncRemoteModels(
       privateNetworkAccess: provider.privateNetworkAccess,
     })
     if (!remoteModels.length) throw new Error('empty model catalog')
-    const currentProvider = config.value?.llm.providers.find((candidate) => candidate.id === provider.id)
+    const currentProvider = config.value?.llm.providers.find(
+      (candidate) => candidate.id === provider.id,
+    )
     if (!currentProvider) return false
     const currentPreset = PROVIDER_PRESETS[currentProvider.type]
     const currentBaseUrl = currentProvider.baseUrl || currentPreset?.defaultBaseUrl || ''
@@ -1508,10 +1509,13 @@ function isManagedCatalog(providerId: string): boolean {
   if (catalogCount > AUTO_ENABLE_CATALOG_LIMIT) return true
   const provider = config.value?.llm.providers.find((candidate) => candidate.id === providerId)
   if (!provider || provider.models.length === 0) return false
-  return provider.models.length < catalogCount && provider.models.every((model) => {
-    const catalog = catalogStore.getCatalog(providerId)
-    return catalog?.models.some((catalogModel) => catalogModel.id === model.id)
-  })
+  return (
+    provider.models.length < catalogCount &&
+    provider.models.every((model) => {
+      const catalog = catalogStore.getCatalog(providerId)
+      return catalog?.models.some((catalogModel) => catalogModel.id === model.id)
+    })
+  )
 }
 
 /** 非 Ollama 的兼容服务共用目录管理器，不按端点物理位置隐藏入口。 */
@@ -1696,9 +1700,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('chat.reasoning.defaultStrategy') }}
-                <span
-                  class="hc-settings__info"
-                  :data-info="t('chat.reasoning.defaultStrategyHint')"
+                <span class="hc-settings__info" :data-info="t('chat.reasoning.defaultStrategyHint')"
                   >?</span
                 >
               </span>
@@ -1809,19 +1811,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 </span>
                 <div class="hc-settings__row-right">
                   <div class="hc-settings__stepper">
-                    <button
-                      class="hc-settings__step-button"
-                      @click="stepMaxTools(-1)"
-                    >
-                      −
-                    </button>
+                    <button class="hc-settings__step-button" @click="stepMaxTools(-1)">−</button>
                     <input :value="maxToolsDisplay" readonly />
-                    <button
-                      class="hc-settings__step-button"
-                      @click="stepMaxTools(1)"
-                    >
-                      +
-                    </button>
+                    <button class="hc-settings__step-button" @click="stepMaxTools(1)">+</button>
                   </div>
                 </div>
               </div>
@@ -1891,8 +1883,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     <span
                       class="hc-provider__connection-status"
                       :class="{
-                        'hc-provider__connection-status--testing':
-                          testingProviderIds.has(provider.id),
+                        'hc-provider__connection-status--testing': testingProviderIds.has(
+                          provider.id,
+                        ),
                         'hc-provider__connection-status--ok':
                           !testingProviderIds.has(provider.id) &&
                           providerConnectionResult(provider)?.ok,
@@ -2047,7 +2040,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   </div>
 
                   <p
-                    v-if="providerConnectionResult(provider) && !providerConnectionResult(provider)!.ok"
+                    v-if="
+                      providerConnectionResult(provider) && !providerConnectionResult(provider)!.ok
+                    "
                     class="hc-provider__connection-detail"
                   >
                     {{ providerConnectionResult(provider)!.msg }}
@@ -2144,6 +2139,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         <div
                           v-if="!isChatModelOption(model)"
                           class="hc-model-chip hc-model-chip--non-chat"
+                          :data-model-name="model.name || model.id"
+                          tabindex="0"
                           :class="{
                             'hc-model-chip--embedding': isEmbeddingOnlyModel(model),
                             'hc-model-chip--stale': isStaleModel(provider, model),
@@ -2182,6 +2179,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         <div
                           v-else-if="isProviderModelRemovable(provider, model)"
                           class="hc-model-chip hc-model-chip--custom"
+                          :data-model-name="model.name || model.id"
                           :class="{
                             'hc-model-chip--active': provider.selectedModelId === model.id,
                             'hc-model-chip--stale': isStaleModel(provider, model),
@@ -2262,6 +2260,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           v-else
                           type="button"
                           class="hc-model-chip"
+                          :data-model-name="model.name || model.id"
                           :class="{
                             'hc-model-chip--active': provider.selectedModelId === model.id,
                             'hc-model-chip--stale': isStaleModel(provider, model),
@@ -2581,7 +2580,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <legend>核心能力（可多选，仅系统自动识别）</legend>
               <div class="hc-edit-model__caps">
                 <label
-                  v-for="cap in (['text','vision','code','image_generation','video_generation','embedding'] as ModelCapability[])"
+                  v-for="cap in [
+                    'text',
+                    'vision',
+                    'code',
+                    'image_generation',
+                    'video_generation',
+                    'embedding',
+                  ] as ModelCapability[]"
                   :key="cap"
                   class="hc-edit-model__cap-item"
                 >
@@ -2590,7 +2596,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     type="checkbox"
                     :data-testid="`custom-model-cap-${cap}`"
                   />
-                  <span class="hc-edit-model__cap-icon">{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}</span>
+                  <span class="hc-edit-model__cap-icon">{{
+                    MODEL_CAPABILITY_DISPLAY[cap].icon
+                  }}</span>
                   <span>{{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
                 </label>
               </div>
@@ -2712,9 +2720,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   <ConfirmDialog
     :open="pendingDeleteModel !== null"
     :confirmation-key="
-      pendingDeleteModel
-        ? `${pendingDeleteModel.providerId}:${pendingDeleteModel.modelId}`
-        : null
+      pendingDeleteModel ? `${pendingDeleteModel.providerId}:${pendingDeleteModel.modelId}` : null
     "
     :title="t('settings.llm.deleteModel')"
     :message="
@@ -3184,7 +3190,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__theme-segment.is-selected {
   background: var(--hc-bg-elevated);
   color: var(--hc-accent);
-  box-shadow: var(--hc-shadow-sm), inset 0 0 0 0.5px var(--hc-border);
+  box-shadow:
+    var(--hc-shadow-sm),
+    inset 0 0 0 0.5px var(--hc-border);
 }
 
 /* ─── Info Display ───── */
@@ -4139,8 +4147,45 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-model-chips {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(172px, 100%), 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 7px;
+}
+
+.hc-model-chips > .hc-model-chip {
+  position: relative;
+  height: 38px;
+  padding: 6px 11px;
+  gap: 5px;
+  border-radius: 999px;
+}
+
+/* 完整名称提示脱离文档流，悬停和聚焦均不改变网格尺寸。 */
+.hc-model-chip[data-model-name]::after {
+  content: attr(data-model-name);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-text-primary);
+  color: var(--hc-text-inverse, #fff);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  pointer-events: none;
+  visibility: hidden;
+  z-index: 100;
+}
+
+.hc-model-chip[data-model-name]:hover::after,
+.hc-model-chip[data-model-name]:focus-within::after {
+  visibility: visible;
 }
 
 .hc-model-chip {
@@ -4166,8 +4211,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-model-chip__name {
   flex: 1 1 auto;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
 }
 
 .hc-model-chip--non-chat {
@@ -4183,7 +4230,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   align-items: center;
   min-width: 0;
   flex: 1;
-  gap: 4px;
+  gap: 5px;
   padding: 0;
   border: 0;
   border-radius: var(--hc-radius-sm);
@@ -4213,9 +4260,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 2px;
-  width: 24px;
-  height: 24px;
+  flex: none;
+  margin-left: 0;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   font-size: 13px;
   line-height: 1;
@@ -4271,9 +4319,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 3px;
-  width: 24px;
-  height: 24px;
+  flex: none;
+  margin-left: 0;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   color: var(--hc-text-muted);
   border: 0;

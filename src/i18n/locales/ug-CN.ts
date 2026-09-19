@@ -132,6 +132,17 @@ export default {
   },
 
   chat: {
+    previewTitle: 'Image preview',
+    previewClose: 'Close preview',
+    previewPrevious: 'Previous image',
+    previewNext: 'Next image',
+    previewZoom: 'Image zoom',
+    previewZoomOut: 'Zoom out',
+    previewZoomIn: 'Zoom in',
+    previewFit: 'Fit to window',
+    previewOriginal: 'Original',
+    previewGraded: 'Graded result',
+    previewImage: 'Image',
     orphanAgentCleared: 'This Agent was deleted; the session fell back to the default assistant', // ug 占位（保留术语 Agent），待母语校订
     orphanAgentSession: 'ئۆچۈرۈلگەن Agent', // ug 占位，待母语校订
     persistFailed: 'Message generated but not saved; it may be lost after refreshing the session', // TODO: verify ug

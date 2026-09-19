@@ -332,6 +332,16 @@ export const useSettingsStore = defineStore('settings', () => {
         )
         config.value!.llm.defaultModel = restoredDefault.modelId
         config.value!.llm.defaultProviderId = restoredDefault.providerId
+        // 已消解的历史误绑定经原有保存链落盘，避免下次启动再次继承同一身份。
+        const repairedIdentity = providers.some((provider) =>
+          localProviders.some(
+            (local) =>
+              local.id === provider.id && local.providerInstanceId && !provider.providerInstanceId,
+          ),
+        )
+        if (isTauri() && repairedIdentity) {
+          await saveConfig(config.value!)
+        }
         logger.info('LLM 配置加载成功', { providerCount: providers.length })
         return
       } catch (e) {

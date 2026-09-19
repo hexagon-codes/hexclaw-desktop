@@ -62,6 +62,7 @@ import {
 import { getStreamThinkingDuration } from '@/stores/chat-stream-helpers'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import { closeImagePreview, releaseImagePreviewResource } from '@/composables/useImagePreview'
 import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'
 import MessageText from '@/components/chat/MessageText.vue'
@@ -610,7 +611,7 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
 
 // K12 图片的消息数据只保存 asset:// 稳定身份。可见地址由认证客户端读取后在当前
 // WebView 内生成，并由这里统一持有，避免把鉴权端点直接交给 <img> 或泄漏 object URL。
-const previewImageSrc = ref('')
+
 const k12AssetDisplayURLs = ref(new Map<string, string>())
 const k12AssetBlobs = new Map<string, Blob>()
 const k12AssetAborters = new Map<string, AbortController>()
@@ -655,17 +656,14 @@ function activeK12AssetIDs(): Set<string> {
   return active
 }
 
-function revokeK12ObjectURL(url: string | undefined, replacement = '') {
+function revokeK12ObjectURL(url: string | undefined) {
   if (!url?.startsWith('blob:')) return
-  if (previewImageSrc.value === url) previewImageSrc.value = replacement
+  releaseImagePreviewResource(url)
   URL.revokeObjectURL(url)
 }
 
-function releaseScenarioImagePreview(
-  ownership: ScenarioImagePreviewOwnership,
-  replacement = '',
-) {
-  if (previewImageSrc.value === ownership.url) previewImageSrc.value = replacement
+function releaseScenarioImagePreview(ownership: ScenarioImagePreviewOwnership) {
+  releaseImagePreviewResource(ownership.url)
   try {
     ownership.release()
   } catch (errorValue) {
@@ -673,11 +671,11 @@ function releaseScenarioImagePreview(
   }
 }
 
-function releasePendingScenarioImagePreview(messageId: string, replacement = ''): boolean {
+function releasePendingScenarioImagePreview(messageId: string): boolean {
   const ownership = scenarioPendingPreviewOwnerships.get(messageId)
   if (!ownership) return false
   scenarioPendingPreviewOwnerships.delete(messageId)
-  releaseScenarioImagePreview(ownership, replacement)
+  releaseScenarioImagePreview(ownership)
   return true
 }
 
@@ -750,10 +748,10 @@ function seedK12AssetPreview(assetId: string, ownership: ScenarioImagePreviewOwn
   k12AssetDisplayURLs.value.set(assetId, previewURL)
   k12AssetPreviewOwnerships.set(assetId, ownership)
   if (previousOwnership && previousOwnership !== ownership) {
-    releaseScenarioImagePreview(previousOwnership, previewURL)
-    if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL, previewURL)
+    releaseScenarioImagePreview(previousOwnership)
+    if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL)
   } else if (previousURL !== previewURL) {
-    revokeK12ObjectURL(previousURL, previewURL)
+    revokeK12ObjectURL(previousURL)
   }
 }
 
@@ -777,10 +775,10 @@ function ensureK12AssetBlob(assetId: string): Promise<Blob | null> {
     k12AssetDisplayURLs.value.set(assetId, nextURL)
     k12AssetPreviewOwnerships.delete(assetId)
     if (previousOwnership) {
-      releaseScenarioImagePreview(previousOwnership, nextURL)
-      if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL, nextURL)
+      releaseScenarioImagePreview(previousOwnership)
+      if (previousURL !== previousOwnership.url) revokeK12ObjectURL(previousURL)
     } else if (previousURL !== nextURL) {
-      revokeK12ObjectURL(previousURL, nextURL)
+      revokeK12ObjectURL(previousURL)
     }
     return blob
   })().finally(() => {
@@ -1658,14 +1656,6 @@ const isVoiceChatModel = computed(() => selectedModelKind.value === 'voice_chat'
 
 // 后端注册的生成模型集合 — 不在这里面的生成模型选了会失败，UI 灰掉。
 // onMounted 时通过 /api/v1/{images,videos,voicechat}/status 一次性拉取。
-/** 当前预览图（in-app modal）— Tauri WKWebView 不支持 window.open，必须走内嵌 */
-function openImagePreview(src: string) {
-  previewImageSrc.value = src
-}
-function closeImagePreview() {
-  previewImageSrc.value = ''
-}
-
 /**
  * 为下载生成唯一文件名：`HexClaw-{ISO时间}-{4位随机}.{ext}`
  *
@@ -2718,6 +2708,7 @@ watch(
 watch(
   () => chatStore.currentSessionId,
   (newId, previousId) => {
+    if (newId !== previousId) closeImagePreview()
     // 离开已有会话时释放其预览与认证请求；首图创建首个会话 ID 时，预览已经属于新会话，
     // 不能被 null → session 的身份分配误判为会话切换。
     if (previousId && previousId !== newId) {
@@ -3360,6 +3351,7 @@ function startSidebarResize(event: MouseEvent) {
         ref="messagesContainerRef"
         class="hc-chat__messages"
         @scroll="handleMessagesScroll"
+        :data-image-preview-group="chatStore.currentSessionId || 'draft-chat'"
         @wheel.passive="markMessagesUserIntent"
         @touchstart.passive="markMessagesUserIntent"
         @pointerdown="markMessagesUserIntent"
@@ -3532,7 +3524,11 @@ function startSidebarResize(event: MouseEvent) {
                                   class="hc-msg__attachment-img"
                                   :src="messageImageSrc(att)"
                                   :alt="att.name"
-                                  @click="openImagePreview(messageImageSrc(att))"
+                                  data-image-preview
+                                  :data-preview-key="`${msg.id}:${ai}`"
+                                  :data-preview-label="t('chat.previewImage')"
+                                  role="button"
+                                  tabindex="0"
                                 />
                                 <button
                                   class="hc-msg__media-download"
@@ -3812,14 +3808,18 @@ function startSidebarResize(event: MouseEvent) {
                     <div v-if="editingMsgId !== msg.id" class="hc-msg__bubble hc-msg__bubble--user">
                       <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                         <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
-                          <!-- BUG-20260709：CSS zoom-in 承诺可放大，与助手气泡同走 openImagePreview -->
+                          <!-- 用户和助手的图片附件共用会话预览入口。 -->
                           <template v-if="att.type === 'image'">
                             <img
                               v-if="messageImageSrc(att)"
                               class="hc-msg__attachment-img"
                               :src="messageImageSrc(att)"
                               :alt="att.name"
-                              @click="openImagePreview(messageImageSrc(att))"
+                              data-image-preview
+                              :data-preview-key="`${msg.id}:${ai}`"
+                              :data-preview-label="t('chat.previewOriginal')"
+                              role="button"
+                              tabindex="0"
                             />
                           </template>
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
@@ -3907,6 +3907,7 @@ function startSidebarResize(event: MouseEvent) {
                           <img
                             v-if="messageImageSrc(att)"
                             class="hc-msg__edit-att-img"
+                            data-image-preview role="button" tabindex="0"
                             :src="messageImageSrc(att)"
                             :alt="att.name"
                           />
@@ -4044,6 +4045,7 @@ function startSidebarResize(event: MouseEvent) {
               :src="attachmentPreview.url"
               :alt="attachmentPreview.name"
               class="hc-chat__attach-thumb"
+              data-image-preview role="button" tabindex="0"
             />
             <video
               v-else-if="attachmentPreview.type === 'video'"
@@ -4344,14 +4346,6 @@ function startSidebarResize(event: MouseEvent) {
         @close="restoreWorkspaceAfterRightPanelClose"
         @select="chatStore.selectArtifact($event)"
       />
-    </Transition>
-
-    <!-- 图片预览 Modal — Apple HIG: 毛玻璃覆盖 + 居中大图 + 点击外部关闭 -->
-    <Transition name="hc-preview">
-      <div v-if="previewImageSrc" class="hc-img-preview__backdrop" @click="closeImagePreview">
-        <img class="hc-img-preview__img" :src="previewImageSrc" @click.stop />
-        <button class="hc-img-preview__close" @click="closeImagePreview">×</button>
-      </div>
     </Transition>
 
     <!-- 与 AI 对话创建 Skill（扣子式技能子菜单入口） -->
@@ -6356,64 +6350,6 @@ function startSidebarResize(event: MouseEvent) {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   z-index: 2;
-}
-
-/* ── Apple HIG 图片预览 Modal ── */
-.hc-img-preview__backdrop {
-  position: fixed;
-  top: var(--hc-titlebar-height);
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  cursor: zoom-out;
-}
-.hc-img-preview__img {
-  max-width: 92vw;
-  max-height: 92vh;
-  border-radius: 12px;
-  /* HIG --shadow-lg: 柔和多层阴影，alpha ≤ 0.12 */
-  box-shadow:
-    0 20px 40px rgba(0, 0, 0, 0.12),
-    0 8px 16px rgba(0, 0, 0, 0.06);
-  cursor: default;
-}
-.hc-img-preview__close {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 0.5px solid rgba(255, 255, 255, 0.3);
-  background: rgba(28, 28, 30, 0.72);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  color: #fff;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    transform 0.12s;
-}
-.hc-img-preview__close:hover {
-  background: rgba(60, 60, 67, 0.85);
-  transform: scale(1.05);
-}
-.hc-preview-enter-active,
-.hc-preview-leave-active {
-  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.hc-preview-enter-from,
-.hc-preview-leave-to {
-  opacity: 0;
 }
 
 .hc-msg__media-download:hover {

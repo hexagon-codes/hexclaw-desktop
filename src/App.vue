@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ToastProvider from '@/components/common/ToastProvider.vue'
 import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
+import ImagePreviewHost from '@/components/common/ImagePreviewHost.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useTheme } from '@/composables/useTheme'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
@@ -75,5 +76,6 @@ onUnmounted(() => {
     </AppLayout>
     <RouterView v-else />
   </ErrorBoundary>
+  <ImagePreviewHost />
   <ToastProvider ref="toastRef" />
 </template>

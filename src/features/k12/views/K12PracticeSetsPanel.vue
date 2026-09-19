@@ -706,6 +706,10 @@ const regradeAttentionCount = computed(() => {
   }
   return attention.size
 })
+const regradeUnmatched = computed(() => {
+  const asset = regradeResult.value.asset
+  return asset?.regrade_status === 'needs_review' && asset.item_ids.length === 0
+})
 const regradeCorrectItems = computed(() =>
   regradeResultItems.value.filter((item) => item.result_correct === true),
 )
@@ -1037,7 +1041,7 @@ async function cancelSet(s: PracticeSetDTO) {
               class="k12ps__returns"
               role="list"
               :aria-label="t('k12.practice.returnHistory')"
-              data-testid="ps-return-assets"
+              data-testid="ps-return-assets" :data-image-preview-group="s.record_id"
             >
               <article
                 v-for="(asset, assetIndex) in s.return_assets ?? []"
@@ -1050,6 +1054,7 @@ async function cancelSet(s: PracticeSetDTO) {
                   v-if="practiceAssetURL(asset.asset_id)"
                   :src="practiceAssetURL(asset.asset_id)"
                   class="k12ps__return-thumb"
+                  data-image-preview role="button" tabindex="0"
                   :alt="t('k12.practice.returnPhotoAlt', { n: assetIndex + 1 })"
                   loading="lazy"
                 />
@@ -1385,12 +1390,16 @@ async function cancelSet(s: PracticeSetDTO) {
         <div class="k12ps__result-body">
           <div
             class="k12ps__result-notice"
-            :class="{ 'k12ps__result-notice--success': regradeAttentionCount === 0 }"
+            :class="{
+              'k12ps__result-notice--success': !regradeUnmatched && regradeAttentionCount === 0,
+            }"
           >
             {{
-              regradeAttentionCount
-                ? t('k12.practice.regradeResultNotice', { n: regradeAttentionCount })
-                : t('k12.practice.regradeResultAllCorrect')
+              regradeUnmatched
+                ? t('k12.practice.regradeResultUnmatched')
+                : regradeAttentionCount
+                  ? t('k12.practice.regradeResultNotice', { n: regradeAttentionCount })
+                  : t('k12.practice.regradeResultAllCorrect')
             }}
           </div>
           <div class="k12ps__result-workspace">
@@ -1402,6 +1411,7 @@ async function cancelSet(s: PracticeSetDTO) {
                   )
                 "
                 data-testid="ps-regrade-annotated"
+                data-image-preview role="button" tabindex="0"
                 :src="
                   practiceAssetURL(
                     regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id || '',

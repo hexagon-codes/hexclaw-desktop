@@ -55,6 +55,8 @@ interface OverlayMark {
 const props = defineProps<{
   /** 原始作业图；只读对照与老服务 bbox 叠加的底图。 */
   image: string
+  /** 原消息身份使原图附件与结果面在会话预览中正确去重。 */
+  previewKey?: string
   /** 新服务返回的不可变批注图 data URL；存在时优先展示，禁止重复画 DOM 勾叉。 */
   annotatedImage?: string
   marks: OverlayMark[]
@@ -289,6 +291,12 @@ function markStatusLabel(mark: IndexedMark): string {
             class="pg-overlay__img"
             :alt="t('k12.overlay.imageAlt')"
             data-testid="overlay-image"
+            data-image-preview
+            :data-preview-key="previewKey ? `${previewKey}:${showOverlay ? 'annotated' : '0'}` : undefined"
+            :data-preview-label="showOverlay ? t('chat.previewGraded') : t('chat.previewOriginal')"
+            role="button"
+            tabindex="0"
+            style="cursor: zoom-in"
           />
           <template v-if="showProgrammaticMarks">
             <div

@@ -1274,9 +1274,9 @@ defineExpose({ focus, setInput, triggerFileUpload })
       </div>
 
       <!-- 附件预览 -->
-      <div v-if="attachedFiles.length > 0" class="hc-composer__files">
+      <div v-if="attachedFiles.length > 0" class="hc-composer__files" data-image-preview-group="composer">
         <div v-for="(item, idx) in attachedFiles" :key="idx" class="hc-composer__file">
-          <img v-if="item.previewUrl" :src="item.previewUrl" class="hc-composer__file-img" />
+          <img v-if="item.previewUrl" :src="item.previewUrl" class="hc-composer__file-img" :alt="item.file.name" data-image-preview role="button" tabindex="0" />
           <div v-else class="hc-composer__file-card">
             <Paperclip :size="16" class="hc-composer__file-icon" />
             <div class="hc-composer__file-info">

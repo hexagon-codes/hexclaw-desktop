@@ -88,7 +88,7 @@ export type ImageTaskCompletionOutcome =
       result: PhotoJobResult
     }
   | {
-      stage: 'promoted'
+      stage: 'promoted' | 'unreadable'
       taskIntent: 'writing' | 'artwork'
       result: Extract<ImageTaskResultProjection, { kind: 'writing' | 'artwork' }>['payload']
     }
@@ -510,6 +510,7 @@ export const useK12Store = defineStore('k12', () => {
         projection.status === 'awaiting_confirmation' &&
         !!projection.conflicts?.length) ||
       feedbackState === 'feedback_ready' ||
+      projection.status === 'unreadable' ||
       feedbackState === 'feedback_failed'
     )
   }
@@ -518,7 +519,7 @@ export const useK12Store = defineStore('k12', () => {
     const projection = dispatch.target_projection
     if (projection?.kind === 'homework') return projection.stage === 'completed'
     if (projection?.kind === 'creative') {
-      return creativeFeedbackState(dispatch) === 'feedback_ready'
+      return projection.status === 'unreadable' || creativeFeedbackState(dispatch) === 'feedback_ready'
     }
     return false
   }
@@ -768,7 +769,7 @@ export const useK12Store = defineStore('k12', () => {
       (projection.task_intent === 'artwork' && projection.result.kind === 'artwork')
     ) {
       return {
-        stage: 'promoted',
+        stage: projection.result.payload.intake.status === 'unreadable' ? 'unreadable' : 'promoted',
         taskIntent: projection.task_intent,
         result: projection.result.payload,
       }

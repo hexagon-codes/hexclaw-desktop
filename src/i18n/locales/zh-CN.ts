@@ -125,6 +125,17 @@ export default {
 
   // 聊天页
   chat: {
+    previewTitle: '图片预览',
+    previewClose: '关闭预览',
+    previewPrevious: '上一张',
+    previewNext: '下一张',
+    previewZoom: '图片缩放',
+    previewZoomOut: '缩小',
+    previewZoomIn: '放大',
+    previewFit: '适应窗口',
+    previewOriginal: '原图',
+    previewGraded: '批改结果',
+    previewImage: '图片',
     orphanAgentCleared: '该智能体已删除，本会话回退为默认助理',
     orphanAgentSession: '已删除的智能体',
     persistFailed: '消息已生成但保存失败，刷新会话后可能丢失',

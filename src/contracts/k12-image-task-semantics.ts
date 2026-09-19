@@ -30,6 +30,7 @@ const HOMEWORK_STAGES = new Set([
   'failed_terminal',
 ])
 const CREATIVE_STATUSES = new Set([
+  'unreadable',
   'preparing',
   'awaiting_confirmation',
   'ready',
@@ -967,6 +968,8 @@ function validateCreativeProjection(value: unknown, path: string): WireRecord {
       'promoted_generation_id',
       'canonical_version',
       'canonical_content',
+      'outcome',
+      'notice',
       'conflicts',
       'work',
     ],
@@ -979,6 +982,7 @@ function validateCreativeProjection(value: unknown, path: string): WireRecord {
     fail(`${path}.work_type`, 'writing|art')
   }
   enumValue(projection.status, CREATIVE_STATUSES, `${path}.status`)
+  validateWritingOutcome(projection, path)
   if (
     projection.entry_kind !== undefined &&
     !['auto', 'new_work'].includes(String(projection.entry_kind))
@@ -1426,13 +1430,17 @@ function validateStructuredFeedback(value: unknown, path: string): WireRecord {
 
 function validateCreativePayload(value: unknown, path: string): void {
   const payload = record(value, path)
-  exact(payload, ['intake', 'work', 'feedback'], path)
+  exact(payload, ['intake', 'work', 'feedback', 'outcome', 'notice'], path)
+  validateWritingOutcome(payload, path)
   required(payload, ['intake'], path)
   const intake = record(payload.intake, `${path}.intake`)
   exact(intake, ['intake_id', 'status'], `${path}.intake`)
   required(intake, ['intake_id', 'status'], `${path}.intake`)
   stringValue(intake.intake_id, `${path}.intake.intake_id`)
   enumValue(intake.status, CREATIVE_STATUSES, `${path}.intake.status`)
+  if (intake.status === 'unreadable' && (payload.outcome !== 'unreadable' || !payload.notice || payload.work !== undefined || payload.feedback !== undefined)) {
+    fail(path, 'unreadable result without promoted work or feedback')
+  }
   if (payload.work !== undefined) {
     const work = record(payload.work, `${path}.work`)
     exact(work, ['work_id', 'display_name'], `${path}.work`)
@@ -1465,6 +1473,13 @@ function validateCreativePayload(value: unknown, path: string): void {
       fail(`${path}.feedback.projection_markdown`, 'canonical feedback projection')
     }
   }
+}
+
+function validateWritingOutcome(value: WireRecord, path: string): void {
+  if (value.outcome !== undefined && !['', 'complete', 'partial', 'unreadable'].includes(String(value.outcome))) {
+    fail(`${path}.outcome`, 'complete|partial|unreadable')
+  }
+  optionalString(value.notice, `${path}.notice`)
 }
 
 type ValidatedImageTaskAuditEnvelope = {

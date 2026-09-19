@@ -19,7 +19,7 @@
 -->
 <template>
   <div class="hc-interactive-card">
-    <img v-if="card.image" :src="card.image" alt="" class="hc-interactive-card__image" loading="lazy" />
+    <img v-if="card.image" :src="card.image" :alt="card.title" class="hc-interactive-card__image" data-image-preview role="button" tabindex="0" loading="lazy" />
     <div class="hc-interactive-card__title">{{ card.title }}</div>
     <div v-if="card.fields && card.fields.length" class="hc-interactive-card__fields">
       <div

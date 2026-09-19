@@ -321,11 +321,6 @@ const activeWork = computed(
   () => works.value.find((work) => work.work_id === expandedID.value) ?? null,
 )
 
-const previewImageSrc = ref('')
-const previewImageAlt = ref('')
-const previewDialog = ref<HTMLElement | null>(null)
-let previewOpener: HTMLElement | null = null
-
 const delivery = useK12DeliveryBatch({
   agent: () => props.agentId,
   idleLabel: t('k12.works.sendPhone'),
@@ -346,26 +341,6 @@ function closeDetails(restoreFocus = true) {
   delivery.reset()
   const opener = detailOpener
   detailOpener = null
-  void nextTick(() => {
-    if (restoreFocus && opener?.isConnected) opener.focus()
-  })
-}
-
-function openImagePreview(src: string, alt: string, event?: Event) {
-  if (!src) return
-  const trigger = event?.currentTarget
-  previewOpener = trigger instanceof HTMLElement ? trigger : null
-  previewImageSrc.value = src
-  previewImageAlt.value = alt
-  void nextTick(() => previewDialog.value?.focus())
-}
-
-function closeImagePreview(restoreFocus = true) {
-  if (!previewImageSrc.value) return
-  previewImageSrc.value = ''
-  previewImageAlt.value = ''
-  const opener = previewOpener
-  previewOpener = null
   void nextTick(() => {
     if (restoreFocus && opener?.isConnected) opener.focus()
   })
@@ -1102,11 +1077,6 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   // ConfirmDialog owns Escape while it is the sole visible modal. The detail is
   // intentionally still represented in state so cancel can restore it.
   if (deleteTarget.value) return
-  if (previewImageSrc.value && event.key === 'Escape') {
-    event.preventDefault()
-    closeImagePreview()
-    return
-  }
   if (addOpen.value && event.key === 'Escape') {
     event.preventDefault()
     closeAdd()
@@ -1138,7 +1108,6 @@ function resetAgentState() {
   deleteTarget.value = null
   deleteReturnState.value = null
   closeDetails(false)
-  closeImagePreview(false)
   closeAdd()
   resetPhoto()
 }
@@ -1286,13 +1255,8 @@ defineExpose({ load, openAdd })
             role="button"
             tabindex="0"
             :aria-label="t('k12.works.previewWork', { name: work.display_name })"
-            @click="openImagePreview(workThumbURL(work), work.display_name, $event)"
-            @keydown.enter.prevent="
-              !$event.isComposing &&
-              $event.keyCode !== 229 &&
-              openImagePreview(workThumbURL(work), work.display_name, $event)
-            "
-            @keydown.space.prevent="openImagePreview(workThumbURL(work), work.display_name, $event)"
+            data-image-preview
+            :data-preview-key="work.work_id"
           />
           <span v-else class="k12cw__preview-placeholder" aria-hidden="true" />
         </div>
@@ -1350,6 +1314,7 @@ defineExpose({ load, openAdd })
           class="k12cw-detail-modal"
           :data-work-id="activeWork.work_id"
           data-testid="cw-detail-modal"
+          :data-image-preview-group="activeWork.work_id"
           role="dialog"
           aria-modal="true"
           :aria-labelledby="`cw-detail-title-${activeWork.work_id}`"
@@ -1377,9 +1342,9 @@ defineExpose({ load, openAdd })
                 type="button"
                 class="k12cw__source-image"
                 :aria-label="t('k12.works.previewWork', { name: activeWork.display_name })"
-                @click="openImagePreview(workThumbURL(activeWork), activeWork.display_name, $event)"
+                data-image-preview-trigger
               >
-                <img :src="workThumbURL(activeWork)" :alt="activeWork.display_name" />
+                <img :src="workThumbURL(activeWork)" :alt="activeWork.display_name" data-image-preview :data-preview-key="activeWork.work_id" />
               </button>
               <div
                 v-if="activeWork.work_type === 'writing' && activeWork.content_markdown"
@@ -1541,31 +1506,6 @@ defineExpose({ load, openAdd })
     </Teleport>
 
     <Teleport to="body">
-      <div
-        v-if="previewImageSrc"
-        ref="previewDialog"
-        class="k12cw-image-preview"
-        data-testid="cw-image-preview"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="t('k12.works.previewWork', { name: previewImageAlt })"
-        tabindex="-1"
-        @click.self="closeImagePreview()"
-        @keydown.esc.prevent="closeImagePreview()"
-      >
-        <img :src="previewImageSrc" :alt="previewImageAlt" />
-        <button
-          type="button"
-          class="k12cw-image-preview__close"
-          :aria-label="t('k12.works.closePreview')"
-          @click="closeImagePreview()"
-        >
-          ✕
-        </button>
-      </div>
-    </Teleport>
-
-    <Teleport to="body">
       <div v-if="addOpen" class="k12cw-overlay" data-testid="cw-add-modal" @click.self="closeAdd">
         <div
           ref="addDialog"
@@ -1650,7 +1590,7 @@ defineExpose({ load, openAdd })
                 </b>
               </div>
               <div v-else class="k12cw__photopreview" data-testid="cw-photo-preview">
-                <img :src="photoPreview" alt="" />
+                <img :src="photoPreview" :alt="t('chat.previewOriginal')" data-image-preview role="button" tabindex="0" />
                 <div class="k12cw__photostate">
                   <span v-if="photoUploading" data-testid="cw-photo-progress">
                     {{ t('k12.works.photoUploading') }} {{ photoPercent }}%
@@ -2404,42 +2344,6 @@ defineExpose({ load, openAdd })
 
 .k12cw__action-bar--compact {
   justify-content: flex-end;
-}
-
-.k12cw-image-preview {
-  position: fixed;
-  top: var(--hc-titlebar-height);
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: var(--hc-z-modal);
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(8, 18, 32, 0.58);
-  backdrop-filter: blur(4px) saturate(120%);
-  -webkit-backdrop-filter: blur(4px) saturate(120%);
-}
-
-.k12cw-image-preview > img {
-  max-width: min(920px, calc(100vw - 48px));
-  max-height: calc(100vh - var(--hc-titlebar-height) - 48px);
-  object-fit: contain;
-  border-radius: 14px;
-  box-shadow: var(--hc-shadow-float);
-}
-
-.k12cw-image-preview__close {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--hc-text-primary);
-  cursor: pointer;
 }
 
 .k12cw-modal {

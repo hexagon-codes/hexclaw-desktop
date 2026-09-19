@@ -1959,6 +1959,7 @@ export interface CreativeConflictDTO {
 }
 
 export type CreativeWorkIntakeStatus =
+	| 'unreadable'
   | 'preparing'
   | 'awaiting_confirmation'
   | 'ready'
@@ -1967,6 +1968,8 @@ export type CreativeWorkIntakeStatus =
   | 'cancelled'
 
 export interface ImageTaskCreativeProjectionDTO {
+	 outcome?: 'complete' | 'partial' | 'unreadable'
+	 notice?: string
   kind: 'creative'
   intake_id: string
   work_type: 'writing' | 'art'
@@ -2135,6 +2138,8 @@ export interface ImageTaskCreativeFeedbackDTO {
 }
 
 export interface ImageTaskCreativeResultPayload {
+	 outcome?: 'complete' | 'partial' | 'unreadable'
+	 notice?: string
   intake: {
     intake_id: string
     status: CreativeWorkIntakeStatus

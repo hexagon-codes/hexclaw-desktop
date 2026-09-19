@@ -273,6 +273,7 @@ export default {
     regradeResultTitle: 'Re-grade result',
     regradeResultNotice: 'Re-grade complete · {n} item(s) to review',
     regradeResultAllCorrect: 'Re-grade complete · all answers in this batch are correct',
+    regradeResultUnmatched: 'Re-grade complete · some content could not be matched',
     regradeAnnotatedAlt: 'Answer photo with automatic annotations',
     regradeAnnotatedCaption: 'Original answer photo · automatically re-graded',
     regradeGuideTitle: 'Only items needing attention are expanded',

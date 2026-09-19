@@ -271,6 +271,7 @@ export default {
     regradeResultTitle: '复批结果',
     regradeResultNotice: '复批完成 · {n} 题继续复习',
     regradeResultAllCorrect: '复批完成 · 本批作答均正确',
+    regradeResultUnmatched: '复批完成 · 存在未匹配内容',
     regradeAnnotatedAlt: '自动批注后的作答原图',
     regradeAnnotatedCaption: '作答原图 · 自动复批',
     regradeGuideTitle: '只展开需要关注的题',

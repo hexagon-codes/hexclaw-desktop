@@ -49,7 +49,10 @@ type ReferenceMode =
   | 'blank-worksheet'
   | 'artwork-processing'
   | 'artwork-result'
-  | 'unrendered-writing'
+  | 'writing-complete'
+  | 'writing-partial'
+  | 'writing-unreadable'
+  | 'writing-technical-failure'
 
 type ImplementationMode =
   | 'empty'
@@ -65,6 +68,9 @@ type ImplementationMode =
   | 'writing-conflict'
   | 'writing-processing'
   | 'writing-result'
+  | 'writing-partial'
+  | 'writing-unreadable'
+  | 'writing-technical-failure'
   | 'artwork-processing'
   | 'artwork-failure'
   | 'artwork-result'
@@ -460,7 +466,7 @@ const matrices: MatrixState[] = [
     classification: 'NOT_COMPARABLE',
     reason:
       '原型批改结果是 3 题练习册 P52；实现 fixture 是 2 题，不能建立同 fixture 的逐像素通过结论。',
-    referenceSelector: '#k12-batch .grade-result',
+    referenceSelector: ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result',
     implementationSelector: '[data-testid="photo-grade-overlay"]',
   },
   {
@@ -472,7 +478,7 @@ const matrices: MatrixState[] = [
     reason:
       '两侧均使用 SHA-256 0c4b…c861 的同一 C02 原图、16 题、14 题正确、第 15/16 题为 correct_with_process_issue，可比较统计、批注、展开状态与家长讲法。',
     referenceSelector:
-      '#k12-batch .grade-result[data-assessment-fixture="correct_with_process_issue-c02"]',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result[data-assessment-fixture="correct_with_process_issue-c02"]',
     implementationSelector:
       '[data-testid="photo-grade-overlay"][data-assessment-status="correct_with_process_issue"]',
   },
@@ -483,7 +489,7 @@ const matrices: MatrixState[] = [
     implementationMode: 'homework-completed',
     classification: 'NOT_COMPARABLE',
     reason: '两侧动作 exact-set 可观察，但最终产物内容和题目 fixture 不同；只记录结构与样式证据。',
-    referenceSelector: '#k12-batch .grade-result__actions',
+    referenceSelector: ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result__actions',
     implementationSelector: '[data-testid="image-task-final-artifact"]',
   },
   {
@@ -496,34 +502,18 @@ const matrices: MatrixState[] = [
     referenceSelector: '[data-parent-teaching-guide]',
     implementationSelector: '[data-testid="blank-worksheet-parent-guide"]',
   },
-  {
-    name: '11-writing-ocr-conflict',
-    title: '作文 OCR 最小冲突确认',
-    referenceMode: 'unrendered-writing',
-    implementationMode: 'writing-conflict',
-    classification: 'NOT_COMPARABLE',
-    reason:
-      '原型只有 data-writing-confirmation 契约声明，没有可渲染的作文 OCR 冲突权威实例；实现状态可达，参考侧不可构造。',
-    implementationSelector: '[data-testid="creative-conflict-guard"]',
-  },
-  {
-    name: '12-writing-feedback-processing',
-    title: '作文点评处理中',
-    referenceMode: 'unrendered-writing',
-    implementationMode: 'writing-processing',
-    classification: 'NOT_COMPARABLE',
-    reason: '原型只有写作 result-surface 声明，没有可冻结的写作点评处理中画面。',
-    implementationSelector: '[data-testid="writing-feedback-progress"]',
-  },
-  {
-    name: '13-writing-feedback-result',
-    title: '作文点评最终结果',
-    referenceMode: 'unrendered-writing',
-    implementationMode: 'writing-result',
-    classification: 'NOT_COMPARABLE',
-    reason: '原型没有会话内可渲染写作点评结果，只声明 writing-feedback；不得用作品档案页替代。',
-    implementationSelector: '[data-testid="writing-result-surface"]',
-  },
+  ...(['complete', 'partial', 'unreadable', 'technical-failure'] as const).map((outcome): MatrixState => ({
+    name: `writing-auto-${outcome}`,
+    title: `作文自动结果：${outcome}`,
+    referenceMode: `writing-${outcome}`,
+    implementationMode: outcome === 'complete' ? 'writing-result' : `writing-${outcome}`,
+    classification: 'COMPARABLE',
+    reason: '同一已批准作文四态模板与 API fixture；内容和结果生命周期一致。',
+    referenceSelector: `[data-writing-result="${outcome}"]`,
+    implementationSelector: outcome === 'technical-failure'
+      ? '[data-testid="recognize-recovering"]'
+      : '[data-testid="writing-result-surface"]',
+  })),
   {
     name: '14-artwork-feedback-processing',
     title: '美术作品点评处理中',
@@ -549,10 +539,10 @@ const matrices: MatrixState[] = [
 ]
 
 const selectedMatrices = REQUESTED_STATE
-  ? matrices.filter((state) => state.name === REQUESTED_STATE)
+  ? matrices.filter((state) => REQUESTED_STATE === 'writing-auto' ? state.name.startsWith('writing-auto-') : state.name === REQUESTED_STATE)
   : matrices
 
-if (REQUESTED_STATE && selectedMatrices.length !== 1) {
+if (REQUESTED_STATE && !selectedMatrices.length) {
   throw new Error(`unknown K12 chat matrix state: ${REQUESTED_STATE}`)
 }
 
@@ -691,6 +681,8 @@ function c02ProcessIssueDispatch(final = true) {
       stage: final ? 'completed' : 'awaiting_confirmation',
       confirmation_state: final ? 'confirmed' : 'pending',
       anchor_state: 'located',
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
       recognition: { questions: c02Questions(!final), subject: '数学' },
       progressive: {
         structure_version: 2,
@@ -706,6 +698,23 @@ function c02ProcessIssueDispatch(final = true) {
           projection_revision: published,
         },
       },
+      final_artifact: final
+        ? {
+            artifact_id: 'artifact-c02-process-issue',
+            agent_name: AGENT,
+            job_id: 'job-c02-process-issue',
+            structure_version: 2,
+            coverage_status: 'complete',
+            total_count: 16,
+            published_count: 16,
+            skipped_count: 0,
+            canonical_markdown: '# 整页批改完成\n\n共 16 题：14 道正确，2 道过程问题，0 道需订正。',
+            artifact_digest: 'sha256:artifact-c02-process-issue',
+            title: '整页批改完成',
+            created_at: 1785295900,
+            updated_at: 1785295901,
+          }
+        : null,
     },
     progress: {
       operation: 'homework',
@@ -949,11 +958,26 @@ function dispatchFor(mode: ImplementationMode) {
   }
   if (mode === 'homework-tips') return homeworkTipsDispatch()
   if (mode === 'homework-completed') return homeworkDispatch('completed', { final: true })
-  if (mode === 'homework-process-issue') return c02ProcessIssueDispatch(false)
+  if (mode === 'homework-process-issue') return c02ProcessIssueDispatch(true)
   if (mode === 'blank-worksheet') return blankWorksheetDispatch()
   if (mode === 'writing-conflict') return creativeDispatch('writing', 'awaiting_confirmation')
   if (mode === 'writing-processing') return creativeDispatch('writing', 'feedback_pending')
-  if (mode === 'writing-result') return creativeDispatch('writing', 'feedback_ready')
+  if (mode === 'writing-result' || mode === 'writing-partial') {
+    const dispatch = creativeDispatch('writing', 'feedback_ready')
+    return { ...dispatch, target_projection: { ...dispatch.target_projection,
+      outcome: mode === 'writing-partial' ? 'partial' : 'complete',
+      ...(mode === 'writing-partial' ? { notice: WRITING_PARTIAL_NOTICE } : {}),
+    } }
+  }
+  if (mode === 'writing-unreadable') return {
+    ...creativeDispatch('writing', 'feedback_ready'),
+    target_projection: { kind: 'creative', intake_id: 'intake-chat-matrix', work_type: 'writing', status: 'unreadable', outcome: 'unreadable', notice: WRITING_UNREADABLE_NOTICE },
+    progress: { operation: 'writing_ocr', state: 'unreadable' },
+  }
+  if (mode === 'writing-technical-failure') return {
+    ...creativeDispatch('writing', 'feedback_failed'), retryable: false,
+    progress: { operation: 'promotion', state: 'recovering' },
+  }
   if (mode === 'artwork-processing') return creativeDispatch('artwork', 'feedback_pending')
   if (mode === 'artwork-failure') return creativeDispatch('artwork', 'feedback_failed')
   if (mode === 'artwork-result') return creativeDispatch('artwork', 'feedback_ready')
@@ -1082,10 +1106,19 @@ function blankWorksheetResult() {
   }
 }
 
-function creativeResult(intent: 'writing' | 'artwork') {
+const WRITING_PARTIAL_NOTICE = '部分文字无法可靠识别，仅点评可辨认内容；未识别部分不作评价。'
+const WRITING_UNREADABLE_NOTICE = '原图文字无法可靠识别，本次无法形成可靠点评。原图已保留。'
+
+function creativeResult(intent: 'writing' | 'artwork', partial = false) {
   const writing = intent === 'writing'
   const markdown = writing
-    ? '## 可见证据\n\n- 文章围绕爸爸展开。\n\n## 先这样肯定\n\n主题清楚。\n\n## 家长可以这样问或讲\n\n可以问最想保留哪一句。\n\n## 下一次只试一个点\n\n补充一个具体细节。\n\n## 说明\n\n只依据当前原稿。'
+    ? [
+        '## 可见证据', '“柳枝像绿色的丝带”把观察写得具体。',
+        '## 先这样肯定孩子', partial ? '这一句写出了柳枝的颜色和形状。' : '你抓住了柳枝的颜色和形状。',
+        '## 家长可以这样问或讲', partial ? '只讨论这句可辨认的描写，不补写缺失的原文或整篇参考稿。' : '请孩子说说风吹过时柳枝怎样动，再把看到的动作写下来。',
+        '## 下一步小练习', '只改写这一句，保留自己的观察。',
+        '## 本次点评边界', partial ? WRITING_PARTIAL_NOTICE : '依据原稿可见内容，不打分、不评级。',
+      ].join('\n\n')
     : '## 可见证据\n\n- 主体位于画面中央。\n\n## 先这样肯定\n\n主体安排清楚。\n\n## 家长可以这样问或讲\n\n可以问最想保留哪一处。\n\n## 下一次只试一个点\n\n加强明暗差别。\n\n## 说明\n\n只依据当前图片。'
   return {
     dispatch_id: DISPATCH,
@@ -1095,6 +1128,7 @@ function creativeResult(intent: 'writing' | 'artwork') {
       kind: intent,
       payload: {
         intake: { intake_id: 'intake-chat-matrix', status: 'promoted' },
+        ...(writing ? { outcome: partial ? 'partial' : 'complete', ...(partial ? { notice: WRITING_PARTIAL_NOTICE } : {}) } : {}),
         work: {
           work_id: writing ? 'work-writing-matrix' : 'work-art-matrix',
           display_name: writing ? '《我的好爸爸》' : '《雨后的校园》',
@@ -1136,7 +1170,11 @@ function resultFor(mode: ImplementationMode) {
     return completedHomeworkResult()
   }
   if (mode === 'blank-worksheet') return blankWorksheetResult()
-  if (mode === 'writing-result') return creativeResult('writing')
+  if (mode === 'writing-result' || mode === 'writing-partial') return creativeResult('writing', mode === 'writing-partial')
+  if (mode === 'writing-unreadable') return {
+    dispatch_id: DISPATCH, task_intent: 'writing', status: 'routed',
+    result: { kind: 'writing', payload: { intake: { intake_id: 'intake-chat-matrix', status: 'unreadable' }, outcome: 'unreadable', notice: WRITING_UNREADABLE_NOTICE } },
+  }
   if (mode === 'artwork-result') return creativeResult('artwork')
   return null
 }
@@ -1636,6 +1674,21 @@ async function openReference(page: Page, mode: ReferenceMode) {
       }
     }
 
+    if (referenceMode.startsWith('writing-')) {
+      const templates: Record<string, string> = {
+        'writing-complete': 'k12WritingCompleteTemplate',
+        'writing-partial': 'k12WritingPartialTemplate',
+        'writing-unreadable': 'k12WritingUnreadableTemplate',
+        'writing-technical-failure': 'k12WritingTechnicalFailureTemplate',
+      }
+      const template = document.getElementById(templates[referenceMode]!) as HTMLTemplateElement
+      const message = document.createElement('div')
+      message.className = 'msg bot'
+      message.innerHTML = '<div class="msg-body"><div class="bubble bot"></div></div>'
+      message.querySelector('.bubble')!.appendChild(template.content.cloneNode(true))
+      thread.appendChild(message)
+    }
+
     if (referenceMode === 'failure') {
       const api = window as typeof window & { simulateK12StageFailure?: () => void }
       api.simulateK12StageFailure?.()
@@ -1648,7 +1701,12 @@ async function openReference(page: Page, mode: ReferenceMode) {
         showK12CorrectWithProcessIssueResult?: () => boolean
       }
       api.showK12CorrectWithProcessIssueResult?.()
-      show(document.querySelector('#k12-batch'))
+      const result = document.querySelector('[data-assessment-fixture="correct_with_process_issue-c02"]')
+      let ancestor = result?.parentElement
+      while (ancestor && ancestor !== thread) {
+        ancestor.style.display = ''
+        ancestor = ancestor.parentElement
+      }
     }
     if (referenceMode === 'image-routing') {
       const api = window as typeof window & { startK12ArtworkReview?: () => void }
@@ -1670,7 +1728,7 @@ async function openReference(page: Page, mode: ReferenceMode) {
 
   if (mode === 'photo-process-issue') {
     const sourceImage = page.locator(
-      '#k12-batch .grade-result[data-assessment-fixture="correct_with_process_issue-c02"] .grade-photo--process > img',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result[data-assessment-fixture="correct_with_process_issue-c02"] .grade-photo--process > img',
     )
     await expect(sourceImage).toHaveJSProperty('complete', true)
     await expect(sourceImage).toHaveJSProperty('naturalWidth', C02_FIXTURE.width)
@@ -1722,42 +1780,7 @@ async function openCurrentSource(page: Page, mode: ImplementationMode) {
       await page.locator('.hc-composer input[type="file"]').setInputFiles(C02_FIXTURE.path)
       const guard = page.getByTestId('recognize-guard')
       await expect(guard).toBeVisible({ timeout: 20_000 })
-      const processSlots = guard.locator(
-        '[data-testid="homework-problem-progress-slot"][data-assessment-status="correct_with_process_issue"]',
-      )
-      await expect(processSlots).toHaveCount(2, { timeout: 20_000 })
-      const progressiveProcessStatuses = await processSlots.evaluateAll((nodes) =>
-        nodes.map((node) => {
-          const marker = node.querySelector<HTMLElement>('.rec-problem-progress__status')
-          return {
-            problemId: (node as HTMLElement).dataset.problemId ?? '',
-            assessmentStatus: (node as HTMLElement).dataset.assessmentStatus ?? '',
-            marker: marker?.innerText.trim() ?? '',
-            markerColor: marker ? getComputedStyle(marker).color : '',
-          }
-        }),
-      )
-      control.evidence.progressiveProcessStatuses = progressiveProcessStatuses
-      expect(progressiveProcessStatuses).toEqual([
-        {
-          problemId: 'problem-15',
-          assessmentStatus: 'correct_with_process_issue',
-          marker: '⚠',
-          markerColor: 'rgb(165, 107, 214)',
-        },
-        {
-          problemId: 'problem-16',
-          assessmentStatus: 'correct_with_process_issue',
-          marker: '⚠',
-          markerColor: 'rgb(165, 107, 214)',
-        },
-      ])
-
-      const pendingConfirmation = guard.locator('[data-testid="rq-confirm-0"]')
-      await expect(pendingConfirmation).toBeVisible()
-      await pendingConfirmation.check()
-      await guard.getByTestId('recognize-confirm-all').click()
-      await expect.poll(() => control.evidence.imageTaskConfirmed, { timeout: 20_000 }).toBe(true)
+      await expect(guard.getByTestId('recognize-confirm-all')).toHaveCount(0)
     } finally {
       control.releaseResult()
     }
@@ -1787,6 +1810,7 @@ async function openCurrentSource(page: Page, mode: ImplementationMode) {
     expect(control.evidence.sourceAssetStored).toBe(true)
     expect(control.evidence.sourceMessagePersisted).toBe(true)
     expect(control.evidence.overlayImageSource).toBe('blob')
+    expect(control.evidence.imageTaskConfirmed).toBe(false)
     return control.evidence
   }
   if (mode !== 'empty' && mode !== 'ordinary-assistant') {
@@ -1813,21 +1837,21 @@ const geometrySelectors = {
     '#k12StageError:visible',
     '.k12-source-issue-resolver:visible',
     '#k12-recognized .guide:visible',
-    '#k12-batch .grade-result:visible',
-    '#k12-batch .grade-result__title:visible',
-    '#k12-batch .grade-summary:visible',
-    '#k12-batch .grade-workspace:visible',
-    '#k12-batch .grade-media:visible',
-    '#k12-batch .grade-photo--process:visible',
-    '#k12-batch .grade-mark--process:visible',
-    '#k12-batch .grade-analysis:visible',
-    '#k12-batch .grade-card--process:visible',
-    '#k12-batch .grade-card--process .grade-card__row > b.grade-math:visible',
-    '#k12-batch .grade-card--process .grade-wrong-step > .grade-math:visible',
-    '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
-    '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible',
-    '#k12-batch .grade-card--correct:visible',
-    '#k12-batch .grade-projection-status:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result__title:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-summary:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-workspace:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-media:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-photo--process:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-mark--process:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-analysis:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row > b.grade-math:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-wrong-step > .grade-math:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--correct:visible',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-projection-status:visible',
     '[data-parent-teaching-guide]:visible',
     '[data-artwork-review-output]:visible',
     '#k12ViewChat > .chat-input',
@@ -1860,7 +1884,7 @@ const geometrySelectors = {
     '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row > b.grade-math:visible',
     '[data-testid="photo-grade-overlay"] .grade-card--process .grade-wrong-step > .grade-math:visible',
     '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
-    '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible',
+    '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible',
     '[data-testid="photo-grade-overlay"] .grade-card--correct:visible',
     '[data-testid="photo-grade-overlay"] .grade-projection-status:visible',
     '[data-testid="blank-worksheet-parent-guide"]:visible',
@@ -3050,58 +3074,58 @@ function compareProcessIssueGeometry(
   currentSource: Record<string, unknown[]>,
 ) {
   const mappings = [
-    ['#k12-batch .grade-result:visible', '[data-testid="photo-grade-overlay"]:visible'],
+    [':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result:visible', '[data-testid="photo-grade-overlay"]:visible'],
     [
-      '#k12-batch .grade-result__title:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result__title:visible',
       '[data-testid="photo-grade-overlay"] .grade-result__title:visible',
     ],
     [
-      '#k12-batch .grade-summary:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-summary:visible',
       '[data-testid="photo-grade-overlay"] .grade-summary:visible',
     ],
     [
-      '#k12-batch .grade-workspace:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-workspace:visible',
       '[data-testid="photo-grade-overlay"] .grade-workspace:visible',
     ],
-    ['#k12-batch .grade-media:visible', '[data-testid="photo-grade-overlay"] .grade-media:visible'],
+    [':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-media:visible', '[data-testid="photo-grade-overlay"] .grade-media:visible'],
     [
-      '#k12-batch .grade-photo--process:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-photo--process:visible',
       '[data-testid="photo-grade-overlay"] .grade-photo:visible',
     ],
     [
-      '#k12-batch .grade-mark--process:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-mark--process:visible',
       '[data-testid="photo-grade-overlay"] .pg-overlay__mark--process .pg-overlay__sym:visible',
     ],
     [
-      '#k12-batch .grade-analysis:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-analysis:visible',
       '[data-testid="photo-grade-overlay"] .grade-analysis:visible',
     ],
     [
-      '#k12-batch .grade-card--process:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process:visible',
       '[data-testid="photo-grade-overlay"] .grade-card--process:visible',
     ],
     [
-      '#k12-batch .grade-card--process .grade-card__row > b.grade-math:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row > b.grade-math:visible',
       '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row > b.grade-math:visible',
     ],
     [
-      '#k12-batch .grade-card--process .grade-wrong-step > .grade-math:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-wrong-step > .grade-math:visible',
       '[data-testid="photo-grade-overlay"] .grade-card--process .grade-wrong-step > .grade-math:visible',
     ],
     [
-      '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
       '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
     ],
     [
-      '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible',
-      '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible',
+      '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible',
     ],
     [
-      '#k12-batch .grade-card--correct:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--correct:visible',
       '[data-testid="photo-grade-overlay"] .grade-card--correct:visible',
     ],
     [
-      '#k12-batch .grade-projection-status:visible',
+      ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-projection-status:visible',
       '[data-testid="photo-grade-overlay"] .grade-projection-status:visible',
     ],
   ] as const
@@ -3124,21 +3148,21 @@ function compareProcessIssueGeometry(
   const comparableStyle = (key: string, value: string) =>
     key === 'border' && /^0px\s/.test(value) ? '0px' : value
   const nestedComparedStyles: Record<string, readonly string[]> = {
-    '#k12-batch .grade-card--process .grade-card__row > b.grade-math:visible': [
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row > b.grade-math:visible': [
       'display',
       'fontFamily',
       'fontWeight',
     ],
-    '#k12-batch .grade-card--process .grade-wrong-step > .grade-math:visible': [
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-wrong-step > .grade-math:visible': [
       'fontFamily',
       'fontWeight',
     ],
-    '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible':
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible':
       ['display', 'fontFamily', 'fontWeight', 'lineHeight'],
-    '#k12-batch .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible':
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible':
       ['display', 'fontFamily', 'fontWeight', 'lineHeight'],
   }
-  const referenceRoot = (reference['#k12-batch .grade-result:visible'] ?? [])[0] as
+  const referenceRoot = (reference[':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result:visible'] ?? [])[0] as
     | GeometryNode
     | undefined
   const currentRoot = (currentSource['[data-testid="photo-grade-overlay"]:visible'] ?? [])[0] as
@@ -3253,7 +3277,7 @@ function compareProcessIssueGeometry(
   }
   for (const selector of [
     '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("原因")) > span:last-child:visible',
-    '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > span:last-child:visible',
+    '[data-testid="photo-grade-overlay"] .grade-card--process .grade-card__row:has(> span:first-child:text-is("家长怎么讲")) > ol.grade-card__list:last-child .grade-card__md p:visible',
   ]) {
     const nodes = (currentSource[selector] ?? []) as GeometryNode[]
     if (
@@ -3272,7 +3296,7 @@ async function collectProcessIssueSemanticEvidence(
   taskShellEvidence: Record<string, unknown>,
 ) {
   const referenceRoot = referencePage.locator(
-    '#k12-batch .grade-result[data-assessment-fixture="correct_with_process_issue-c02"]',
+    ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result[data-assessment-fixture="correct_with_process_issue-c02"]',
   )
   const currentRoot = currentSourcePage.locator(
     '[data-testid="photo-grade-overlay"][data-assessment-status="correct_with_process_issue"]',
@@ -3820,7 +3844,7 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
       await Promise.all([
         referencePage
           .locator(
-            '#k12-batch .grade-result[data-assessment-fixture="correct_with_process_issue-c02"] .grade-photo--process > img',
+            ':is(#k12-batch, [data-k12-progressive-final-anchor]) .grade-result[data-assessment-fixture="correct_with_process_issue-c02"] .grade-photo--process > img',
           )
           .evaluate((image) => (image as HTMLImageElement).decode()),
         currentSourcePage
@@ -3994,6 +4018,46 @@ async function captureState(browser: Browser, state: MatrixState, testInfo: Test
     )
   } catch (cause) {
     runtimeError = cause instanceof Error ? cause.stack || cause.message : String(cause)
+    if (
+      state.name === '08b-photo-process-issue' &&
+      !referencePage.isClosed() &&
+      !currentSourcePage.isClosed()
+    ) {
+      // 对齐失败仍保留实际几何与语义证据，原有失败门禁不变。
+      try {
+        ;[referenceGeometry, currentSourceGeometry] = await Promise.all([
+          collectGeometry(referencePage, geometrySelectors.reference),
+          collectGeometry(currentSourcePage, geometrySelectors.implementation),
+        ])
+        processIssueGeometryComparison = compareProcessIssueGeometry(
+          referenceGeometry,
+          currentSourceGeometry,
+        )
+        processIssueSemanticEvidence = await collectProcessIssueSemanticEvidence(
+          referencePage,
+          currentSourcePage,
+          currentSourceFixtureEvidence,
+        )
+        await writeFile(
+          geometryPath,
+          JSON.stringify(
+            {
+              viewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
+              locale: 'zh-CN',
+              colorScheme: 'light',
+              reference: referenceGeometry,
+              currentSource: currentSourceGeometry,
+              processIssueCriticalComparison: processIssueGeometryComparison,
+              captureError: runtimeError,
+            },
+            null,
+            2,
+          ),
+        )
+      } catch (evidenceError) {
+        runtimeError += `\nEvidence capture: ${String(evidenceError)}`
+      }
+    }
     if (!(await referencePage.isClosed())) {
       await referencePage
         .screenshot({ path: referencePath, animations: 'disabled' })
@@ -4407,4 +4471,70 @@ test.describe('feat/v0.5.0-k12-parent-tutor · K12 chat authoritative state matr
       ),
     )
   })
+})
+
+
+test('writing automatic result pairs approved templates with application surfaces', async ({ browser }, testInfo) => {
+  test.skip(REQUESTED_STATE !== 'writing-auto')
+  for (const state of selectedMatrices) {
+    const dir = path.join(EVIDENCE_ROOT, testInfo.project.name, state.name)
+    await mkdir(dir, { recursive: true })
+    const reference = await browser.newPage()
+    const implementation = await browser.newPage()
+    try {
+      await openReference(reference, state.referenceMode)
+      await openCurrentSource(implementation, state.implementationMode)
+      const implRoot = implementation.locator(state.implementationSelector!).first()
+      const refRoot = reference.locator(state.referenceSelector!).first()
+      await expect(implRoot).toBeVisible()
+      await expect(refRoot).toBeVisible()
+      // 原型模板不绑定消息位置；仅统一宿主宽度，保留子节点原有样式。
+      for (const page of [reference, implementation]) {
+        for (const close of await page.locator('.hc-toast__close').all()) {
+          if (await close.isVisible()) await close.click()
+        }
+      }
+      const box = await implRoot.boundingBox()
+      await refRoot.evaluate((el, width) => { (el as HTMLElement).style.width = `${width}px` }, box!.width)
+      await Promise.all([freezeVisualState(reference), freezeVisualState(implementation)])
+      await Promise.all([
+        reference.screenshot({path:path.join(dir, 'reference-context.png')}),
+        implementation.screenshot({path:path.join(dir, 'implementation-context.png')}),
+      ])
+      // 范围外插画按同一纯色背景归一；原始完整上下文另存，组件颜色/文字/边框不改。
+      for (const page of [reference, implementation]) {
+        await page.evaluate(() => {
+          for (const node of document.querySelectorAll<HTMLElement>('*')) {
+            if (getComputedStyle(node).backgroundImage !== 'none') node.style.backgroundImage = 'none'
+          }
+        })
+        await page.addStyleTag({ content: 'body { background: white !important; }' })
+      }
+      for (const root of [refRoot, implRoot]) {
+        await root.evaluate(node => {
+          let parent = node.parentElement
+          while(parent) { parent.style.backgroundColor = '#ffffff'; parent = parent.parentElement }
+        })
+      }
+      const refBox = await refRoot.boundingBox()
+      const implBox = await implRoot.boundingBox()
+      await refRoot.evaluate((node, offset) => { (node as HTMLElement).style.position = 'relative'; (node as HTMLElement).style.top = `${offset}px` }, implBox!.y - refBox!.y)
+
+      await Promise.all([
+        refRoot.screenshot({ path: path.join(dir, 'reference.png') }),
+        implRoot.screenshot({ path: path.join(dir, 'implementation.png') }),
+      ])
+      const nodes = async (page: Page, selector: string) => collectGeometry(page, [selector, `${selector} h2`, `${selector} p`, `${selector} p > span`, `${selector} .hc-activity-timeline`, `${selector} .hc-activity-timeline__item`, `${selector} b`, `${selector} small`])
+      await writeFile(path.join(dir, 'geometry-style.json'), JSON.stringify({
+        viewport: { width: 1440, height: 900, scale: 1 }, locale: 'zh-CN', colorScheme: 'light',
+        hostNormalization: 'same host width and vertical pixel phase; decorative ancestor images normalized on both sides; original contexts preserved',
+        reference: await nodes(reference, state.referenceSelector!),
+        implementation: await nodes(implementation, state.implementationSelector!),
+        confirmationCount: await implementation.getByTestId('creative-conflict-guard').count(),
+      }, null, 2))
+    } finally {
+      await reference.close()
+      await implementation.close()
+    }
+  }
 })

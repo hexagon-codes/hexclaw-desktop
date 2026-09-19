@@ -397,7 +397,7 @@ const showTaskRetry = computed(
     !outcomeUnknown.value,
 )
 const canRegenerateTask = computed(() =>
-  ['completed', 'feedback_ready', 'promoted', 'cancelled'].includes(currentTaskStage.value),
+  ['completed', 'feedback_ready', 'promoted', 'unreadable', 'cancelled'].includes(currentTaskStage.value),
 )
 const taskMessageContent = computed(() => {
   if (finalArtifact.value?.canonical_markdown) return finalArtifact.value.canonical_markdown
@@ -434,7 +434,9 @@ const taskStatusActivityItems = computed<ActivityTimelineItem[]>(() => {
       {
         id: 'task-recovering',
         state: 'running',
-        label: '正在恢复批改结果',
+        label: ['writing', 'artwork'].includes(currentTaskIntent.value)
+          ? '正在恢复点评结果'
+          : '正在恢复批改结果',
         detail:
           '系统正在查询同一个任务的服务端状态；不会重新创建任务或重复提交。恢复后会自动显示结果。',
       },
@@ -1664,7 +1666,7 @@ onMounted(async () => {
       return
     }
     projectImageTaskView(view)
-    if (view.stage === 'completed' || view.stage === 'feedback_ready') {
+    if (['completed', 'feedback_ready', 'unreadable'].includes(view.stage)) {
       batchWorking.value = true
       await completeImageTaskFlow()
       if (generation === agentGeneration && !controller.signal.aborted) batchWorking.value = false
@@ -1767,7 +1769,7 @@ async function run() {
     // Blank worksheet tasks have already frozen their source facts and completed
     // the whole-sheet parent guide. Read the same facade result directly; never
     // route this through the completed-homework confirmation/grade controls.
-    if (task.stage === 'completed' || task.stage === 'feedback_ready') {
+    if (['completed', 'feedback_ready', 'unreadable'].includes(task.stage)) {
       confirmed.value = true
       batchWorking.value = true
       await completeImageTaskFlow()
@@ -2370,6 +2372,7 @@ async function coldStart() {
       :src="imageB64"
       class="rec-panel__preview"
       data-testid="recognize-preview"
+      data-image-preview role="button" tabindex="0"
       alt="作业照片预览"
     />
     <HcClearableField v-if="!initialImage && !restoredFromBinding">
@@ -2688,6 +2691,9 @@ async function coldStart() {
       :data-intake-status="creativeResult.payload.intake.status"
       :data-work-id="creativeResult.payload.work?.work_id || undefined"
     >
+      <p v-if="creativeResult.payload.notice" class="rec-creative-result__notice" role="status" data-testid="writing-result-notice">
+        {{ creativeResult.payload.notice }}
+      </p>
       <CreativeWorkFeedbackRenderer
         v-if="creativeResult.payload.feedback"
         :data-testid="`${creativeResult.taskIntent}-result-feedback`"
@@ -2880,6 +2886,7 @@ async function coldStart() {
       v-else-if="currentTaskIntent === 'completed_homework' && showOverlay"
       :image="sourceImage || imageB64"
       :annotated-image="annotatedImage"
+      :preview-key="sourceMessageId || currentDispatchId || restoreDispatchId"
       :marks="overlayMarks"
     >
       <template #actions>
@@ -3919,6 +3926,12 @@ async function coldStart() {
 }
 .rec-final-artifact-actions {
   gap: 6px;
+}
+.rec-creative-result__notice {
+  margin: 0 0 12px;
+  color: var(--hc-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
 }
 @media (max-width: 700px) {
   .rec-pipeline__branches {

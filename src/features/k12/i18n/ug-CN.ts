@@ -275,6 +275,7 @@ export default {
     regradeResultTitle: 'قايتا تەكشۈرۈش نەتىجىسى',
     regradeResultNotice: 'تەكشۈرۈش تامام · {n} سوئالنى تەكرارلاش كېرەك',
     regradeResultAllCorrect: 'تەكشۈرۈش تامام · بۇ تۈركۈمدىكى جاۋابلار توغرا',
+    regradeResultUnmatched: 'تەكشۈرۈش تامام · ماسلاشتۇرۇلمىغان مەزمۇن بار',
     regradeAnnotatedAlt: 'ئاپتوماتىك بەلگە قويۇلغان جاۋاب سۈرىتى',
     regradeAnnotatedCaption: 'ئەسلى جاۋاب سۈرىتى · ئاپتوماتىك تەكشۈرۈش',
     regradeGuideTitle: 'دىققەت قىلىدىغان سوئاللارلا ئېچىلىدۇ',

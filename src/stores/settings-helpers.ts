@@ -102,15 +102,18 @@ export function mergeProviderRuntimeIdentities(
   runtimeIdentityProviders: ProviderConfig[],
 ): ProviderConfig[] {
   return targetProviders.map((provider) => {
-    const runtime = runtimeIdentityProviders.find(
-      (candidate) =>
-        candidate.id === provider.id ||
-        Boolean(
-          provider.providerInstanceId &&
-          candidate.providerInstanceId === provider.providerInstanceId,
-        ) ||
-        Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
-    )
+    const runtime =
+      runtimeIdentityProviders.find((candidate) => candidate.id === provider.id) ??
+      runtimeIdentityProviders.find(
+        (candidate) =>
+          Boolean(
+            provider.providerInstanceId &&
+            candidate.providerInstanceId === provider.providerInstanceId,
+          ) ||
+          Boolean(
+            candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey),
+          ),
+      )
     if (!runtime) return provider
     return {
       ...provider,
@@ -186,8 +189,26 @@ export function appendLocalProvidersMissingFromRuntime(
   const providers = cloneProviders(runtimeSlice)
   for (const lp of localProviders) {
     if (!providers.some((p) => p.id === lp.id || providerMatchesBackendKey(lp, p.name))) {
+      // 独立本地卡片不能继承另一张卡片已占用的后端身份或凭据。
+      const identityOwned = runtimeSlice.some(
+        (p) =>
+          Boolean(lp.providerInstanceId && p.providerInstanceId === lp.providerInstanceId) ||
+          Boolean(lp.backendKey && p.backendKey === lp.backendKey),
+      )
       providers.push({
         ...lp,
+        ...(identityOwned
+          ? {
+              providerInstanceId: undefined,
+              backendKey: undefined,
+              credentialRef: undefined,
+              credentialPresent: false,
+              apiKey: '',
+              apiKeyLength: undefined,
+              apiKeyMutation: 'delete' as const,
+              probeReceipt: undefined,
+            }
+          : {}),
         models: cloneModels(lp.models),
       })
     }
@@ -368,10 +389,23 @@ export function backendToProviders(
               : {}),
           }
         : undefined
+    const identityMatches = p.provider_instance_id
+      ? localProviders.filter((provider) => provider.providerInstanceId === p.provider_instance_id)
+      : []
+    const localMatches = identityMatches.length
+      ? identityMatches
+      : localProviders.filter((provider) => providerMatchesBackendKey(provider, name))
+    // 历史多卡误绑定时由服务端明确的展示名确定归属，不能依赖数组先后顺序。
+    const namedMatches = localMatches.filter((provider) => provider.name === p.display_name?.trim())
     const localProvider =
-      (p.provider_instance_id
-        ? localProviders.find((provider) => provider.providerInstanceId === p.provider_instance_id)
-        : undefined) ?? localProviders.find((provider) => providerMatchesBackendKey(provider, name))
+      localMatches.length > 1
+        ? namedMatches.length === 1
+          ? namedMatches[0]
+          : undefined
+        : localMatches[0]
+    if (localMatches.length > 1 && !localProvider) {
+      throw new Error('Provider identity is shared by multiple local configurations')
+    }
     const lowerName = name.toLowerCase()
     const matchedType = KNOWN_PROVIDER_TYPES.find((t) => lowerName === t || lowerName.startsWith(t))
     const nextProvider: ProviderConfig = {
@@ -420,10 +454,18 @@ export function providersToBackend(
   defaultReasoningPolicy: DefaultReasoningPolicy | undefined = DEFAULT_REASONING_POLICY,
 ): BackendLLMConfig {
   const backendProviders: Record<string, BackendLLMProvider> = {}
+  const providerIdentities = new Set<string>()
   for (const p of providers) {
     // 禁用 provider 不再被丢弃：随 enabled:false 上送，后端保留 Key/配置但不参与路由
     // （bug 2026-06-22：此前 `if (!p.enabled) continue` 致禁用即从磁盘删 Key）。
     const key = p.backendKey || p.name || p.id
+    if (
+      Object.prototype.hasOwnProperty.call(backendProviders, key) ||
+      (p.providerInstanceId && providerIdentities.has(p.providerInstanceId))
+    ) {
+      throw new Error('Independent providers must not share a backend key or identity')
+    }
+    if (p.providerInstanceId) providerIdentities.add(p.providerInstanceId)
     // Ollama 模型不在 provider.models 里（来自独立缓存），直接用 defaultModel
     const isOllama = p.type === 'ollama' || p.name?.toLowerCase().includes('ollama')
     const selectedModelId =
