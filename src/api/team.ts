@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * Team API
  *
@@ -47,7 +48,7 @@ const TEAM_MEMBERS_KEY = 'hexclaw_team_members'
 
 function getLocal<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = backendLocalStorage.getItem(key)
     return raw ? JSON.parse(raw) : fallback
   } catch {
     return fallback
@@ -55,7 +56,7 @@ function getLocal<T>(key: string, fallback: T): T {
 }
 
 function setLocal<T>(key: string, data: T) {
-  localStorage.setItem(key, JSON.stringify(data))
+  backendLocalStorage.setItem(key, JSON.stringify(data))
 }
 
 // ─── 默认当前用户（桌面端单用户） ─────────────────────

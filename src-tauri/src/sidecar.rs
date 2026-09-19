@@ -390,6 +390,8 @@ fn spawn_child(
         capability_token()
             .map_err(|reason| SidecarSupervisor::<SystemProcess>::start_failed(instance, reason))?,
     );
+    cmd.env("HEXCLAW_DESKTOP_API_TOKEN", crate::backend_connection::local_token()
+        .map_err(|reason| SidecarSupervisor::<SystemProcess>::start_failed(instance, reason))?);
     cmd.env("PATH", &enriched_path);
 
     // 把资源根透传给 sidecar，main.go.resolveRenderAssetPaths 第一优先级查这里。

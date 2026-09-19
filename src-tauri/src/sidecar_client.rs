@@ -5,6 +5,7 @@
 //! bearer capability, reject redirects, and bound response bodies.
 
 use crate::sidecar;
+use crate::backend_connection::{self, ConnectionSnapshot};
 use percent_encoding::percent_decode_str;
 use reqwest::{header, Method, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -17,6 +18,7 @@ pub(crate) const MAX_JSON_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct SidecarClient {
     client: reqwest::Client,
+    connection: ConnectionSnapshot,
 }
 
 impl SidecarClient {
@@ -29,7 +31,7 @@ impl SidecarClient {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("build Sidecar client: {error}"))?;
-        Ok(Self { client })
+        Ok(Self { client, connection: backend_connection::current()? })
     }
 
     pub(crate) fn endpoint(relative_path: &str) -> Result<Url, String> {
@@ -41,8 +43,8 @@ impl SidecarClient {
         method: Method,
         relative_path: &str,
     ) -> Result<reqwest::RequestBuilder, String> {
-        let (endpoint, _) = resolve_endpoint(relative_path)?;
-        self.request_endpoint(method, endpoint)
+        let canonical_path = validate_relative_path(relative_path)?;
+        self.request_endpoint(method, relative_path, &canonical_path)
     }
 
     pub(crate) fn renderer_request(
@@ -50,27 +52,35 @@ impl SidecarClient {
         method: Method,
         relative_path: &str,
     ) -> Result<reqwest::RequestBuilder, String> {
-        let (endpoint, canonical_path) = resolve_endpoint(relative_path)?;
+        let canonical_path = validate_relative_path(relative_path)?;
         if canonical_path.starts_with("/api/internal/") {
             return Err("Sidecar internal endpoint is native-coordinator only".into());
         }
         if method == Method::PUT && canonical_path == "/api/v1/config/llm" {
             return Err("LLM credential config is native-coordinator only".into());
         }
-        self.request_endpoint(method, endpoint)
+        self.request_endpoint(method, relative_path, &canonical_path)
     }
 
     fn request_endpoint(
         &self,
         method: Method,
-        endpoint: Url,
+        relative_path: &str,
+        canonical_path: &str,
     ) -> Result<reqwest::RequestBuilder, String> {
-        let capability = sidecar::capability_token()?;
+        let internal = canonical_path.starts_with("/api/internal/");
+        if internal && !self.connection.is_local() {
+            return Err("Internal desktop endpoint is unavailable on a remote backend".into());
+        }
+        let token = if internal { sidecar::capability_token()? } else { self.connection.token() };
+        let endpoint = self.connection.endpoint(relative_path)?;
         Ok(self
             .client
             .request(method, endpoint)
-            .header(header::AUTHORIZATION, format!("Bearer {capability}")))
+            .header(header::AUTHORIZATION, format!("Bearer {token}")))
     }
+
+    pub(crate) fn connection(&self) -> &ConnectionSnapshot { &self.connection }
 
     pub(crate) async fn get(&self, relative_path: &str) -> Result<Response, String> {
         self.request(Method::GET, relative_path)?
@@ -156,7 +166,7 @@ pub(crate) async fn read_bounded(mut response: Response, limit: usize) -> Result
     Ok(body)
 }
 
-fn validate_relative_path(path: &str) -> Result<String, String> {
+pub(crate) fn validate_relative_path(path: &str) -> Result<String, String> {
     let raw_path = path.split_once('?').map_or(path, |(raw_path, _)| raw_path);
     if !path.starts_with('/')
         || path.starts_with("//")
@@ -364,8 +374,10 @@ mod tests {
             ));
         }
 
-        let authenticated = SidecarClient::new(Duration::from_secs(5))?
-            .request_endpoint(Method::GET, protected_url)?
+        let mut authenticated_client = SidecarClient::new(Duration::from_secs(5))?;
+        authenticated_client.connection.context.api_base = format!("http://localhost:{port}");
+        let authenticated = authenticated_client
+            .request(Method::GET, "/api/v1/knowledge/operations?corpus_id=default")?
             .send()
             .await
             .map_err(|error| format!("production Rust client probe: {error}"))?;

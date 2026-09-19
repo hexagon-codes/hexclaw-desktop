@@ -1,3 +1,4 @@
+import { backendContext, backendStorageKey, backendLocalStorage } from '@/services/backend-context'
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
@@ -193,7 +194,16 @@ export const useSettingsStore = defineStore('settings', () => {
         try {
           const { LazyStore } = await import('@tauri-apps/plugin-store')
           const store = new LazyStore(CONFIG_STORE_FILE)
-          savedConfig = (await store.get<AppConfig>(CONFIG_STORE_KEY)) ?? null
+          savedConfig = (await store.get<AppConfig>(backendStorageKey(CONFIG_STORE_KEY))) ?? null
+          if (!savedConfig && backendContext.value?.kind === 'local') {
+            const legacyOwner = (await store.get<string>('legacy_local_backend_id')) ?? null
+            if (!legacyOwner || legacyOwner === backendContext.value.backendId) {
+              savedConfig = (await store.get<AppConfig>(CONFIG_STORE_KEY)) ?? null
+              await store.set('legacy_local_backend_id', backendContext.value.backendId)
+              if (savedConfig) await store.set(backendStorageKey(CONFIG_STORE_KEY), savedConfig)
+              await store.save()
+            }
+          }
           logger.debug('Tauri Store 配置已读取', {
             providerCount: savedConfig?.llm?.providers?.length ?? 0,
           })
@@ -202,7 +212,7 @@ export const useSettingsStore = defineStore('settings', () => {
         }
       } else {
         try {
-          const raw = localStorage.getItem(CONFIG_STORE_KEY)
+          const raw = backendLocalStorage.getItem(CONFIG_STORE_KEY)
           if (raw) savedConfig = JSON.parse(raw)
         } catch {
           // ignore
@@ -518,15 +528,15 @@ export const useSettingsStore = defineStore('settings', () => {
         try {
           const { LazyStore } = await import('@tauri-apps/plugin-store')
           const store = new LazyStore(CONFIG_STORE_FILE)
-          await store.set(CONFIG_STORE_KEY, configToSave)
+          await store.set(backendStorageKey(CONFIG_STORE_KEY), configToSave)
           await store.save()
           logger.debug('非 LLM 配置已保存到 Tauri Store', configToSave)
         } catch (e) {
           logger.warn('Tauri Store 保存失败，降级到 localStorage', e)
-          localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
+          backendLocalStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
         }
       } else {
-        localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
+        backendLocalStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
       }
 
       // 保存后异步拉取远程模型列表（不阻塞保存，失败静默）

@@ -1708,11 +1708,14 @@ pub async fn upload_file_grant(
     relative_path: String,
     idempotency_key: String,
     field_name: Option<String>,
+    scope: Option<String>,
     on_progress: Channel<NativeTransferProgress>,
     on_registered: Channel<()>,
     registry: State<'_, NativeFileGrantRegistry>,
     transfers: State<'_, NativeFileTransferRegistry>,
 ) -> Result<NativeTransferReceipt, String> {
+    let client = SidecarClient::new(Duration::from_secs(300))?;
+    client.connection().validate_scope(scope.as_deref())?;
     if !purpose.is_read() {
         return Err("upload grant purpose is invalid".into());
     }
@@ -1755,7 +1758,6 @@ pub async fn upload_file_grant(
             .map_err(|error| format!("build upload part: {error}"))?;
         let form =
             reqwest::multipart::Form::new().part(field_name.unwrap_or_else(|| "file".into()), part);
-        let client = SidecarClient::new(Duration::from_secs(300))?;
         let request = client
             .request(reqwest::Method::POST, &relative_path)?
             .header("Idempotency-Key", idempotency_key)
@@ -1802,15 +1804,17 @@ pub async fn download_file_grant(
     grant_id: String,
     operation_id: String,
     relative_path: String,
+    scope: Option<String>,
     registry: State<'_, NativeFileGrantRegistry>,
 ) -> Result<NativeTransferReceipt, String> {
+    let client = SidecarClient::new(Duration::from_secs(300))?;
+    client.connection().validate_scope(scope.as_deref())?;
     let grant = registry.consume(
         &grant_id,
         window.label(),
         &operation_id,
         GrantPurpose::SaveDownload,
     )?;
-    let client = SidecarClient::new(Duration::from_secs(300))?;
     let response = client.get(&relative_path).await?;
     SidecarClient::require_non_redirect(&response)?;
     if !response.status().is_success() {

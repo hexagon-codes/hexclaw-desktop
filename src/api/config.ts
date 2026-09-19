@@ -1,3 +1,4 @@
+import { backendScopeKey } from '@/services/backend-context'
 import { logger } from '@/utils/logger'
 import { messageFromUnknownError } from '@/utils/errors'
 import { env } from '@/config/env'
@@ -55,6 +56,7 @@ async function proxyApiRequestText(
       method,
       path,
       body,
+      scope: backendScopeKey(),
     })
   } catch (e) {
     throw new Error(messageFromUnknownError(e))
@@ -63,11 +65,12 @@ async function proxyApiRequestText(
 
 /** 一次性明文回读（方案A，2026-08-17 批准）：仅本机 Tauri 环境可用，浏览器环境直接失败。 */
 export async function readProviderApiKey(providerId: string): Promise<string> {
+  const scope = backendScopeKey()
   if (!isTauri()) {
     throw new Error('reading saved API keys is only available in the desktop app')
   }
   const { invoke } = await import('@tauri-apps/api/core')
-  const value = await invoke<string | null>('read_provider_api_key', { providerId })
+  const value = await invoke<string | null>('read_provider_api_key', { providerId, scope })
   return value ?? ''
 }
 
@@ -118,9 +121,10 @@ function assertExternalBaseUrlAllowed(
  * 从后端获取 LLM 配置（Tauri 命令会从 owner YAML 回灌明文 API key）
  */
 export async function getLLMConfig(): Promise<BackendLLMConfig> {
+  const scope = backendScopeKey()
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core')
-    return await invoke<BackendLLMConfig>('get_llm_config_with_credentials')
+    return await invoke<BackendLLMConfig>('get_llm_config_with_credentials', { scope })
   }
   const text = await proxyApiRequestText('GET', '/api/v1/config/llm', null)
   return safeJsonParse<BackendLLMConfig>(text, 'getLLMConfig')
@@ -133,6 +137,7 @@ export async function updateLLMConfig(
   config: BackendLLMConfig,
   replacements: ProviderCredentialReplacement[] = [],
 ): Promise<LLMConfigMutationReceipt> {
+  const scope = backendScopeKey()
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core')
     const result = await invoke<
@@ -141,7 +146,7 @@ export async function updateLLMConfig(
           configDigest?: string
         }
       | undefined
-    >('apply_llm_config_with_credentials', { config, replacements })
+    >('apply_llm_config_with_credentials', { config, replacements, scope })
     logger.debug('LLM config updated by native credential coordinator')
     return {
       config_revision: result?.configRevision,

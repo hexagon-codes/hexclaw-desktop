@@ -1,3 +1,4 @@
+import { backendContext } from '@/services/backend-context'
 import { watch } from 'vue'
 import { getRuntimeConfig, updateConfig } from '@/api/settings'
 import { logger } from '@/utils/logger'
@@ -24,6 +25,7 @@ export function getEnabledLocalFolderAllowedPaths(instances: ConnectorInstance[]
 let lastSyncedLocalFolderPaths = new Set<string>()
 
 export async function syncLocalFolderAllowedPaths(paths: string[]): Promise<void> {
+  if (backendContext.value?.kind === 'remote') return
   const normalizedPaths = Array.from(new Set(paths.map(normalizeLocalFolderPath).filter(Boolean))).sort()
   const runtimeConfig = await getRuntimeConfig()
   const currentPaths = (runtimeConfig.sandbox?.allowed_paths ?? []).map(normalizeLocalFolderPath).filter(Boolean)

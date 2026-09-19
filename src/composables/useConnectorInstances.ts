@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 import { ref, watch, type Ref } from 'vue'
 
 export interface ConnectorInstance {
@@ -31,7 +32,7 @@ function isSecretKey(key: string): boolean {
 
 function loadFromStorage(): ConnectorInstance[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -68,7 +69,7 @@ watch(
   list,
   (instances) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(instances.map(redactedInstance)))
+      backendLocalStorage.setItem(STORAGE_KEY, JSON.stringify(instances.map(redactedInstance)))
     } catch {
       // Persistence unavailable: keep the in-memory projection only.
     }

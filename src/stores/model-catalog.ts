@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
@@ -68,7 +69,7 @@ function normalizeExcludedModelId(modelId: string): string {
 
 function loadFromStorage(): CatalogMap {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as CatalogMap
     return typeof parsed === 'object' && parsed !== null ? parsed : {}
@@ -80,7 +81,7 @@ function loadFromStorage(): CatalogMap {
 
 function loadExclusionsFromStorage(): ExclusionMap {
   try {
-    const raw = localStorage.getItem(EXCLUSIONS_STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(EXCLUSIONS_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as ExclusionMap
     if (typeof parsed !== 'object' || parsed === null) return {}
@@ -104,7 +105,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
 
   function persist() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(catalogs.value))
+      backendLocalStorage.setItem(STORAGE_KEY, JSON.stringify(catalogs.value))
     } catch (e) {
       // 配额满等场景只降级为"每次重新同步"，不影响功能
       logger.warn('[ModelCatalog] 写入本地缓存失败:', e)
@@ -113,7 +114,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
 
   function persistExclusions(): boolean {
     try {
-      localStorage.setItem(EXCLUSIONS_STORAGE_KEY, JSON.stringify(exclusions.value))
+      backendLocalStorage.setItem(EXCLUSIONS_STORAGE_KEY, JSON.stringify(exclusions.value))
       return true
     } catch (e) {
       logger.warn('[ModelCatalog] 写入模型排除集合失败:', e)

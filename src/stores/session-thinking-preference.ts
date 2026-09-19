@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * 会话级“深度思考”偏好。
  *
@@ -19,7 +20,7 @@ type PreferenceMap = Record<string, StoredPreference>
 
 function readAll(): PreferenceMap {
   try {
-    const raw = localStorage.getItem(SESSION_THINKING_STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(SESSION_THINKING_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
@@ -42,7 +43,7 @@ function readAll(): PreferenceMap {
 
 function writeAll(map: PreferenceMap): void {
   try {
-    localStorage.setItem(SESSION_THINKING_STORAGE_KEY, JSON.stringify(map))
+    backendLocalStorage.setItem(SESSION_THINKING_STORAGE_KEY, JSON.stringify(map))
   } catch {
     // 隐私模式/配额不足时只降级为本次内存态，不阻断聊天。
   }

@@ -1,3 +1,4 @@
+import { backendScopeKey, assertBackendActive } from '@/services/backend-context'
 import { isTauri } from '@/utils/platform'
 
 interface NativeStreamEvent {
@@ -12,6 +13,8 @@ export async function sidecarStreamFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const scope = backendScopeKey()
+  assertBackendActive(scope)
   if (!isTauri()) return await globalThis.fetch(input, init)
 
   const { env } = await import('@/config/env')
@@ -23,6 +26,8 @@ export async function sidecarStreamFetch(
   const request = new Request(input instanceof Request ? input : url.toString(), init)
   const body = request.body ? Array.from(new Uint8Array(await request.arrayBuffer())) : []
   const headers = Object.fromEntries(request.headers.entries())
+  headers['x-hexclaw-connection-scope'] = scope
+  assertBackendActive(scope)
   const { Channel, invoke } = await import('@tauri-apps/api/core')
 
   let streamId: string | null = null

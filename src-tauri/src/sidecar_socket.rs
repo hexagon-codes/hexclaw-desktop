@@ -3,7 +3,7 @@
 //! WebView code receives browser-like events but never sees the process-scoped
 //! bearer. Only the two product WebSocket paths are accepted.
 
-use crate::{sidecar, sidecar_client::SidecarClient};
+use crate::backend_connection;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use std::{
@@ -91,15 +91,21 @@ fn socket_path(path: &str) -> Result<&str, String> {
 fn websocket_request(
     path: &str,
 ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, String> {
-    let mut url = SidecarClient::endpoint(socket_path(path)?)?;
-    url.set_scheme("ws")
+    scoped_websocket_request(path, None)
+}
+
+fn scoped_websocket_request(path: &str, scope: Option<&str>) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, String> {
+    let connection = backend_connection::current()?;
+    connection.validate_scope(scope)?;
+    let mut url = connection.endpoint(socket_path(path)?)?;
+    let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+    url.set_scheme(scheme)
         .map_err(|_| "resolve Sidecar WebSocket scheme".to_string())?;
     let mut request = url
         .as_str()
         .into_client_request()
         .map_err(|_| "build Sidecar WebSocket request".to_string())?;
-    let capability = sidecar::capability_token()?;
-    let value = HeaderValue::from_str(&format!("Bearer {capability}"))
+    let value = HeaderValue::from_str(&format!("Bearer {}", connection.token()))
         .map_err(|_| "build Sidecar WebSocket authorization".to_string())?;
     request.headers_mut().insert(AUTHORIZATION, value);
     Ok(request)
@@ -123,10 +129,11 @@ fn close_event(frame: Option<CloseFrame>, was_clean: bool) -> NativeSidecarSocke
 #[tauri::command]
 pub async fn sidecar_socket_open(
     path: String,
+    scope: Option<String>,
     on_event: Channel<NativeSidecarSocketEvent>,
     registry: State<'_, NativeSidecarSocketRegistry>,
 ) -> Result<String, String> {
-    let request = websocket_request(&path)?;
+    let request = scoped_websocket_request(&path, scope.as_deref())?;
     let socket_id = Uuid::new_v4().to_string();
     let (sender, mut receiver) = socket_command_channel();
     let cancellation = CancellationToken::new();

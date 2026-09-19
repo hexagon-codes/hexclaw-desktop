@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * 会话级模型绑定（per-conversation model binding）
  *
@@ -58,7 +59,7 @@ type BindingMap = Record<string, SessionModelBinding>
 
 function readAll(): BindingMap {
   try {
-    const raw = localStorage.getItem(SESSION_MODEL_STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(SESSION_MODEL_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
@@ -71,7 +72,7 @@ function readAll(): BindingMap {
 
 function writeAll(map: BindingMap): void {
   try {
-    localStorage.setItem(SESSION_MODEL_STORAGE_KEY, JSON.stringify(map))
+    backendLocalStorage.setItem(SESSION_MODEL_STORAGE_KEY, JSON.stringify(map))
   } catch {
     // 持久化失败（隐私模式 / 配额）不应阻断会话流程
   }

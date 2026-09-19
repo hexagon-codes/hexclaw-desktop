@@ -515,7 +515,17 @@ fn identity_receipt(
 /// 仅眼睛点击显示时调用，明文只写入前端独立展示层、内存短驻，不写入表单保存值；
 /// 不写入任何第二持久化路径，日志与审计保持脱敏。
 #[tauri::command]
-pub async fn read_provider_api_key(provider_id: String) -> Result<Option<String>, String> {
+pub async fn read_provider_api_key(provider_id: String, scope: Option<String>) -> Result<Option<String>, String> {
+    let client = SidecarClient::new(Duration::from_secs(30))?;
+    client.connection().validate_scope(scope.as_deref())?;
+    if !client.connection().is_local() {
+        credential_ref_for(&provider_id)?;
+        let response = client.post_json(
+            &format!("/api/v1/config/llm/providers/{provider_id}/reveal-key"), &serde_json::json!({}), None,
+        ).await?;
+        let body: Value = response_json(response, "reveal provider key").await?;
+        return Ok(body.get("api_key").and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_owned));
+    }
     read_provider_api_key_from_owner_yaml(&provider_id).await
 }
 
@@ -547,9 +557,11 @@ async fn read_provider_api_key_from_owner_yaml(
 #[tauri::command]
 pub async fn get_llm_config_with_credentials(
     state: State<'_, ProviderCredentialCoordinator>,
+    scope: Option<String>,
 ) -> Result<Value, String> {
-    let _guard = state.operation_lock.lock().await;
     let client = SidecarClient::new(Duration::from_secs(30))?;
+    client.connection().validate_scope(scope.as_deref())?;
+    let _guard = state.operation_lock.lock().await;
     get_config(&client).await
 }
 
@@ -561,11 +573,16 @@ pub async fn apply_llm_config_with_credentials(
     state: State<'_, ProviderCredentialCoordinator>,
     mut config: Value,
     replacements: Vec<ProviderCredentialReplacement>,
+    scope: Option<String>,
 ) -> Result<ProviderCredentialApplyReceipt, String> {
-    let _guard = state.operation_lock.lock().await;
     let client = SidecarClient::new(Duration::from_secs(300))?;
+    client.connection().validate_scope(scope.as_deref())?;
+    let _guard = state.operation_lock.lock().await;
     let current = get_config(&client).await?;
     validate_config_conditions(&config, &current)?;
+    if !client.connection().is_local() {
+        return apply_remote_config(&client, config, replacements).await;
+    }
     let current_refs = provider_credential_refs(&current)?;
     let prepared = prepare_config(&client, &mut config, replacements).await?;
     let replacement_refs = prepared
@@ -597,6 +614,59 @@ pub async fn apply_llm_config_with_credentials(
         .collect::<Vec<_>>();
     post_dehydrate(&client, &stale_refs).await?;
     identity_receipt(&config, mutation)
+}
+
+// 远端的替换值只随本次公开管理请求传输，不读取本机 YAML 或调用内部 hydrate。
+async fn apply_remote_config(
+    client: &SidecarClient,
+    mut config: Value,
+    replacements: Vec<ProviderCredentialReplacement>,
+) -> Result<ProviderCredentialApplyReceipt, String> {
+    let mut supplied = BTreeMap::new();
+    for mut replacement in replacements {
+        let key = std::mem::take(&mut replacement.provider_key);
+        let secret = Zeroizing::new(std::mem::take(&mut replacement.secret));
+        if key.is_empty() || secret.is_empty() || secret.len() > MAX_SECRET_BYTES || supplied.insert(key, secret).is_some() {
+            return Err("Invalid provider credential replacement".into());
+        }
+    }
+    for (name, value) in providers_object_mut(&mut config)? {
+        let provider = value.as_object_mut().ok_or("Invalid provider configuration")?;
+        let mode = provider.get("api_key_mutation").and_then(|value| value.get("mode"))
+            .and_then(Value::as_str).ok_or("Credential mutation required")?.to_owned();
+        provider.remove("api_key");
+        provider.remove("credential_ref");
+        match mode.as_str() {
+            "replace" => {
+                let secret = supplied.remove(name).ok_or("Replacement credential required")?;
+                provider.remove("api_key_mutation");
+                provider.insert("api_key".into(), Value::String(secret.to_string()));
+            }
+            "preserve" | "delete" => {
+                if supplied.contains_key(name) { return Err("Unexpected replacement credential".into()); }
+                provider.insert("api_key_mutation".into(), serde_json::json!({"mode": mode}));
+            }
+            _ => return Err("Invalid credential mutation".into()),
+        }
+    }
+    if !supplied.is_empty() { return Err("Replacement provider missing".into()); }
+    let request_id = format!("llm-config:{}", Uuid::new_v4());
+    let result = put_config(client, &config, &request_id).await;
+    for value in providers_object_mut(&mut config)?.values_mut() {
+        if let Some(Value::String(mut secret)) = value.as_object_mut().and_then(|value| value.remove("api_key")) { secret.zeroize(); }
+    }
+    let mutation = match result {
+        Ok(receipt) => receipt,
+        Err(error) if error.contains("outcome is unknown") => {
+            let response = client.get(&format!("/api/v1/config/mutations/{request_id}?operation_kind=llm")).await
+                .map_err(|_| format!("Configuration outcome unknown; request_id={request_id}"))?;
+            if !response.status().is_success() { return Err(format!("Configuration outcome unknown; request_id={request_id}")); }
+            response_json(response, "query configuration receipt").await?
+        }
+        Err(error) => return Err(error),
+    };
+    let saved = get_config(client).await?;
+    identity_receipt(&saved, mutation)
 }
 
 #[cfg(test)]

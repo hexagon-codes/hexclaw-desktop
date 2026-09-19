@@ -1,3 +1,4 @@
+import { backendScopeKey } from '@/services/backend-context'
 import {
   k12GetGenericPrintArtifact,
   k12GetGenericPrintJob,
@@ -66,6 +67,7 @@ export async function executeNativePrintJob(input: {
 }): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const result = await invoke<{ receipt: NativePrintReceipt }>('execute_print_job', {
+    scope: backendScopeKey(),
     request: {
       agent: input.agent,
       printJobId: input.printJobId,

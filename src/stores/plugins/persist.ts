@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * Pinia 持久化插件
  *
@@ -47,7 +48,7 @@ export function createPersistPlugin() {
 
     // 恢复状态
     try {
-      const raw = localStorage.getItem(key)
+      const raw = backendLocalStorage.getItem(key)
       if (raw) {
         const persisted = JSON.parse(raw) as PersistedData
         if (persisted.v === version && persisted.d) {
@@ -55,13 +56,13 @@ export function createPersistPlugin() {
           logger.debug(`恢复 store [${store.$id}] 状态`)
         } else {
           // 版本不匹配，清理旧数据
-          localStorage.removeItem(key)
+          backendLocalStorage.removeItem(key)
           logger.debug(`store [${store.$id}] 版本不匹配，已清理旧数据`)
         }
       }
     } catch (e) {
       logger.warn(`恢复 store [${store.$id}] 状态失败`, e)
-      localStorage.removeItem(key)
+      backendLocalStorage.removeItem(key)
     }
 
     // 监听变更并持久化
@@ -70,7 +71,7 @@ export function createPersistPlugin() {
         try {
           const data = pickFields(store.$state as unknown as Record<string, unknown>, opts.pick)
           const persisted: PersistedData = { v: version, d: data }
-          localStorage.setItem(key, JSON.stringify(persisted))
+          backendLocalStorage.setItem(key, JSON.stringify(persisted))
         } catch (e) {
           logger.warn(`持久化 store [${store.$id}] 失败`, e)
         }

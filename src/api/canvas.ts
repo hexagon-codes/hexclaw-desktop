@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * Canvas/A2UI API
  *
@@ -96,7 +97,7 @@ const WORKFLOWS_STORAGE_KEY = 'hexclaw_workflows'
 /** 从 localStorage 读取工作流列表（后端 API 不可用时的降级方案） */
 function getLocalWorkflows(): Workflow[] {
   try {
-    const raw = localStorage.getItem(WORKFLOWS_STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(WORKFLOWS_STORAGE_KEY)
     return raw ? JSON.parse(raw) : []
   } catch {
     return []
@@ -105,7 +106,7 @@ function getLocalWorkflows(): Workflow[] {
 
 /** 保存工作流列表到 localStorage */
 function setLocalWorkflows(workflows: Workflow[]) {
-  localStorage.setItem(WORKFLOWS_STORAGE_KEY, JSON.stringify(workflows))
+  backendLocalStorage.setItem(WORKFLOWS_STORAGE_KEY, JSON.stringify(workflows))
 }
 
 function k12ScopeFromDefinition(

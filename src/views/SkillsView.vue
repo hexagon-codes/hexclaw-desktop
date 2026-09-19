@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { backendLocalStorage } from '@/services/backend-context'
+
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -110,7 +112,7 @@ onMounted(async () => {
 
 function readDisabledSkillsFromStorage(): Set<string> {
   try {
-    const raw = localStorage.getItem('hexclaw_disabled_skills')
+    const raw = backendLocalStorage.getItem('hexclaw_disabled_skills')
     return raw ? new Set(JSON.parse(raw)) : new Set()
   } catch {
     return new Set()
@@ -131,7 +133,7 @@ async function loadSkills() {
       }
     }
     disabledSkills.value = next
-    localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
+    backendLocalStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
   } catch (e) {
     console.error('加载 Skill 列表失败:', e)
   } finally {
@@ -147,7 +149,7 @@ function setLocalSkillEnabled(name: string, enabled: boolean) {
     next.add(name)
   }
   disabledSkills.value = next
-  localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
+  backendLocalStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
 }
 
 function updateSkill(name: string, patch: Partial<Skill>) {

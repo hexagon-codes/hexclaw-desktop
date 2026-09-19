@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import BackendServiceCard from '@/components/settings/BackendServiceCard.vue'
+import { backendContext } from '@/services/backend-context'
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -718,7 +720,7 @@ const runtimeApiEndpoint = computed(
   () =>
     `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
-const runtimeLocalStoreFile = 'data.db'
+const runtimeLocalStoreFile = computed(() => backendContext.value?.kind === 'remote' ? '远端服务 · 独立数据' : '本机服务 · data.db')
 const runtimeModeShort = computed(() => {
   const rawMode = runtimeConfig.value?.server.mode?.trim()?.toLowerCase()
   if (!rawMode) return ''
@@ -2340,6 +2342,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
           <!-- System (merged: appearance + storage) -->
           <div v-else-if="activeSection === 'system'" class="hc-settings__section">
             <div class="hc-settings__form hc-settings__form--system">
+              <BackendServiceCard />
               <div class="hc-settings__sep">
                 <span class="hc-settings__sep-label">{{ t('settings.appearance.title') }}</span>
                 <span class="hc-settings__sep-line"></span>

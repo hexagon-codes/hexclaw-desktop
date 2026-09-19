@@ -1,3 +1,4 @@
+import { backendScopeKey } from '@/services/backend-context'
 import { invoke } from '@tauri-apps/api/core'
 import { env } from '@/config/env'
 
@@ -283,6 +284,7 @@ export async function uploadGrantedFile<T>(options: {
   signal?: AbortSignal
   onProgress?: (percent: number) => void
 }): Promise<NativeTransferReceipt<T>> {
+  const scope = backendScopeKey()
   const { Channel } = await import('@tauri-apps/api/core')
   const onProgress = new Channel<{ bytesTransferred: number; totalBytes: number }>((progress) => {
     if (progress.totalBytes > 0) {
@@ -310,6 +312,7 @@ export async function uploadGrantedFile<T>(options: {
   options.signal?.addEventListener('abort', cancel, { once: true })
   try {
     return await invoke<NativeTransferReceipt<T>>('upload_file_grant', {
+      scope,
       grantId: options.grant.grantId,
       operationId: options.grant.operationId,
       purpose: options.grant.purpose,
@@ -329,6 +332,7 @@ export async function uploadGrantedFile<T>(options: {
 
 export function downloadIntoGrant(grant: NativeFileGrant, url: string) {
   return invoke<NativeTransferReceipt>('download_file_grant', {
+    scope: backendScopeKey(),
     grantId: grant.grantId,
     operationId: grant.operationId,
     relativePath: sidecarRelativePath(url),

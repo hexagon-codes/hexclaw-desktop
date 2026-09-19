@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * 会话级 Agent（收件人/人设）绑定（per-conversation agent binding）
  *
@@ -19,7 +20,7 @@ type BindingMap = Record<string, string>
 
 function readAll(): BindingMap {
   try {
-    const raw = localStorage.getItem(SESSION_AGENT_STORAGE_KEY)
+    const raw = backendLocalStorage.getItem(SESSION_AGENT_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
@@ -32,7 +33,7 @@ function readAll(): BindingMap {
 
 function writeAll(map: BindingMap): void {
   try {
-    localStorage.setItem(SESSION_AGENT_STORAGE_KEY, JSON.stringify(map))
+    backendLocalStorage.setItem(SESSION_AGENT_STORAGE_KEY, JSON.stringify(map))
   } catch {
     /* 非浏览器 / 配额满 → 静默降级 */
   }

@@ -1,3 +1,4 @@
+import { backendLocalStorage } from '@/services/backend-context'
 /**
  * 消息服务层
  *
@@ -307,9 +308,9 @@ export async function saveArtifact(_sessionId: string, _artifact: Artifact): Pro
  * lastSessionId: 使用 localStorage 替代 SQLite app_state
  */
 export function getLastSessionId(): string | null {
-  return localStorage.getItem('hexclaw_lastSessionId')
+  return backendLocalStorage.getItem('hexclaw_lastSessionId')
 }
 
 export function setLastSessionId(id: string): void {
-  localStorage.setItem('hexclaw_lastSessionId', id)
+  backendLocalStorage.setItem('hexclaw_lastSessionId', id)
 }

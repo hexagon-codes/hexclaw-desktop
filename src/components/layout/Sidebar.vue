@@ -1,11 +1,11 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
+import { backendContext, backendPanelOpen } from '@/services/backend-context'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
-import { useAboutWindow } from '@/composables/useAboutWindow'
 import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
 import logoUrl from '@/assets/logo.png'
@@ -13,9 +13,8 @@ import logoUrl from '@/assets/logo.png'
 const { t, locale } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
-const openAbout = useAboutWindow()
 
-const productVersionLabel = 'HexClaw 0.5.0-beta'
+const productVersionLabel = computed(() => backendContext.value?.kind === 'remote' ? `远端 · ${new URL(backendContext.value.apiBase).host}` : `本机服务 · ${appStore.sidecarReady ? '已连接' : '未连接'}`)
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
@@ -86,14 +85,14 @@ function getGroupItems(group: NavGroup) {
 
     <!-- Footer: sidecar status + fixed product identity -->
     <div class="hc-sidebar__footer">
-      <div class="hc-sidebar__engine-row" :title="env.apiBase">
+      <div class="hc-sidebar__engine-row" :title="backendContext?.apiBase ?? env.apiBase">
         <span class="hc-sidebar__dot" :class="dotClass" />
         <template v-if="!collapsed">
           <span
             class="hc-sidebar__engine-label"
             role="button"
-            :title="t('about.open', '关于河蟹')"
-            @click="openAbout"
+            title="管理后端服务"
+            tabindex="0" @keydown.enter="backendPanelOpen = true" @click="backendPanelOpen = true"
           >
             {{ productVersionLabel }}
           </span>
@@ -102,7 +101,7 @@ function getGroupItems(group: NavGroup) {
             :class="{ 'hc-sidebar__restart-btn--spinning': appStore.isRestarting }"
             :title="t('nav.restartEngine', 'Restart engine')"
             :disabled="appStore.isRestarting"
-            @click.stop="appStore.restartSidecar()"
+            @click.stop="backendContext?.kind === 'remote' ? appStore.checkConnection() : appStore.restartSidecar()"
           >
             <RotateCw :size="12" />
           </button>

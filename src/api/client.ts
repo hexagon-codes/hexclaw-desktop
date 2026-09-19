@@ -1,3 +1,4 @@
+import { backendScopeKey, assertBackendActive } from '@/services/backend-context'
 /**
  * API 客户端
  *
@@ -36,6 +37,8 @@ export async function sidecarFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const scope = backendScopeKey()
+  assertBackendActive(scope)
   const path = managedSidecarPath(input)
   if (!isTauri() || !path) return globalThis.fetch(input, init)
 
@@ -51,6 +54,8 @@ export async function sidecarFetch(
     : Array.from(new Uint8Array(await request.arrayBuffer()))
   if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
   const { Channel, invoke } = await import('@tauri-apps/api/core')
+  headers['x-hexclaw-connection-scope'] = scope
+  assertBackendActive(scope)
   const cancellationId = `sidecar-fetch:${globalThis.crypto.randomUUID()}`
   let registered = false
   let cancellationPending = false
@@ -75,6 +80,7 @@ export async function sidecarFetch(
       cancellationId,
       onRegistered,
     })
+    assertBackendActive(scope)
     if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
     // 无正文响应必须使用 null；空字节数组仍是 body，会使 204 等状态的构造抛错。
     const hasNullBody = request.method === 'HEAD' || [204, 205, 304].includes(response.status)

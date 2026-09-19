@@ -45,6 +45,10 @@ enum CoordinatorState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CoordinatorRecord {
+    #[serde(default)]
+    connection_id: String,
+    #[serde(default)]
+    backend_id: String,
     operation_id: String,
     attempt_count: i32,
     owner_digest: String,
@@ -138,8 +142,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn record_path(app: &AppHandle, operation_id: &str, attempt_count: i32) -> Result<PathBuf, String> {
-    let digest = sha256_hex(format!("{operation_id}:attempt:{attempt_count}").as_bytes());
+fn record_path(app: &AppHandle, connection_id: &str, backend_id: &str, operation_id: &str, attempt_count: i32) -> Result<PathBuf, String> {
+    let identity = if connection_id.is_empty() { format!("{operation_id}:attempt:{attempt_count}") }
+        else { serde_json::to_string(&(connection_id, backend_id, operation_id, attempt_count)).map_err(|_| "Encode print scope")? };
+    let digest = sha256_hex(identity.as_bytes());
     Ok(app
         .path()
         .app_data_dir()
@@ -149,7 +155,7 @@ fn record_path(app: &AppHandle, operation_id: &str, attempt_count: i32) -> Resul
 }
 
 async fn persist(app: &AppHandle, record: &CoordinatorRecord) -> Result<(), String> {
-    let path = record_path(app, &record.operation_id, record.attempt_count)?;
+    let path = record_path(app, &record.connection_id, &record.backend_id, &record.operation_id, record.attempt_count)?;
     let parent = path
         .parent()
         .ok_or("print coordinator path has no parent")?;
@@ -177,12 +183,26 @@ async fn persist(app: &AppHandle, record: &CoordinatorRecord) -> Result<(), Stri
 
 async fn load(
     app: &AppHandle,
+    connection: &crate::backend_connection::BackendContext,
     operation_id: &str,
     attempt_count: i32,
 ) -> Result<Option<CoordinatorRecord>, String> {
-    match tokio::fs::read(record_path(app, operation_id, attempt_count)?).await {
+    let path = record_path(app, &connection.connection_id, &connection.backend_id, operation_id, attempt_count)?;
+    let bytes = match tokio::fs::read(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && connection.kind == "local" => {
+            tokio::fs::read(record_path(app, "", "", operation_id, attempt_count)?).await
+        }
+        result => result,
+    };
+    match bytes {
         Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
+            .map(|mut record: CoordinatorRecord| {
+                if record.connection_id.is_empty() && connection.kind == "local" {
+                    record.connection_id = connection.connection_id.clone();
+                    record.backend_id = connection.backend_id.clone();
+                }
+                Some(record)
+            })
             .map_err(|error| format!("decode print state: {error}")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("read print state: {error}")),
@@ -491,17 +511,23 @@ async fn converge(
 pub async fn execute_print_job(
     app: AppHandle,
     request: ExecutePrintJobRequest,
+    scope: Option<String>,
     locks: State<'_, PrintOperationLocks>,
 ) -> Result<ExecutePrintJobResponse, String> {
     let agent = validate_identity("print agent", &request.agent, true)?;
     let print_job_id = validate_identity("print job id", &request.print_job_id, false)?;
-    let _operation_lock = locks.operation_lock(&print_job_id).await?;
     let client = SidecarClient::new(Duration::from_secs(120))?;
+    client.connection().validate_scope(scope.as_deref())?;
+    let scope = &client.connection().context;
+    if scope.backend_id.is_empty() { return Err("Backend identity unavailable for printing".into()); }
+    let lock_id = serde_json::to_string(&(&scope.connection_id, &scope.backend_id, &print_job_id)).map_err(|_| "Encode print scope")?;
+    let _operation_lock = locks.operation_lock(&lock_id).await?;
     let job = query_job(&client, &agent, &print_job_id).await?;
     let owner_digest = sha256_hex(agent.as_bytes());
 
-    let recovered = if let Some(record) = load(&app, &print_job_id, job.attempt_count).await? {
-        if record.owner_digest != owner_digest || record.source_digest != job.source_digest {
+    let recovered = if let Some(record) = load(&app, scope, &print_job_id, job.attempt_count).await? {
+        if record.connection_id != scope.connection_id || record.backend_id != scope.backend_id
+            || record.owner_digest != owner_digest || record.source_digest != job.source_digest {
             return Err("local print coordinator record conflicts with Sidecar PrintJob".into());
         }
         if record.state == CoordinatorState::Completed {
@@ -569,6 +595,8 @@ pub async fn execute_print_job(
         }
         let (pdf, pdf_digest) = fetch_print_pdf(&client, &agent, &job).await?;
         let record = CoordinatorRecord {
+            connection_id: scope.connection_id.clone(),
+            backend_id: scope.backend_id.clone(),
             operation_id: print_job_id.clone(),
             attempt_count: job.attempt_count,
             owner_digest,
@@ -880,6 +908,8 @@ mod tests {
     #[test]
     fn dialog_open_record_replays_when_sidecar_is_still_preparing() {
         let record = CoordinatorRecord {
+            connection_id: "local".into(),
+            backend_id: "test-backend".into(),
             operation_id: "job-1".into(),
             attempt_count: 0,
             owner_digest: sha256_hex(b"agent-1"),

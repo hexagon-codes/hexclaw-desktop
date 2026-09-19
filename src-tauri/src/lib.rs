@@ -10,6 +10,7 @@
 use tauri::Manager;
 
 pub mod autostart;
+pub mod backend_connection;
 pub mod commands;
 pub mod menu;
 pub mod native_file;
@@ -49,6 +50,9 @@ pub fn run() {
         .unwrap_or_else(|err| panic!("initialize Sidecar capability: {err}"));
 
     env_logger::init();
+    if let Err(error) = backend_connection::initialize() {
+        log::error!("Backend connection initialization failed: {error}");
+    }
 
     let app = tauri::Builder::default()
         // 插件
@@ -105,7 +109,8 @@ pub fn run() {
             tray::setup(app)?;
 
             // 启动 Ollama 本地推理引擎（优先复用外部实例，否则启动内嵌二进制）
-            let ollama_started = if test_runtime::should_start_managed_ollama() {
+            let start_local = backend_connection::current().is_ok_and(|snapshot| snapshot.is_local());
+            let ollama_started = if start_local && test_runtime::should_start_managed_ollama() {
                 match ollama::spawn_ollama(app.handle()) {
                     Ok(()) => {
                         log::info!("Ollama 进程就绪");
@@ -127,7 +132,7 @@ pub fn run() {
             };
 
             // 启动 hexclaw sidecar 进程
-            let sidecar_instance = match sidecar::spawn_sidecar(app.handle()) {
+            let sidecar_instance = if start_local { match sidecar::spawn_sidecar(app.handle()) {
                 Ok(instance) => {
                     log::info!("sidecar 进程已启动");
                     eprintln!("[HexClaw] sidecar 进程已启动");
@@ -138,7 +143,7 @@ pub fn run() {
                     eprintln!("[HexClaw] sidecar 启动失败: {}", e);
                     None
                 }
-            };
+            }} else { None };
 
             // 异步健康检查
             {
@@ -153,9 +158,12 @@ pub fn run() {
                     }
                     // sidecar 健康检查
                     if let Some(instance) = sidecar_instance {
-                        if let Err(error) = sidecar::wait_for_healthy(handle, 30, instance).await {
+                        if let Err(error) = sidecar::wait_for_healthy(handle.clone(), 30, instance).await {
                             log::error!("sidecar 健康检查失败: {}", error);
                         }
+                    }
+                    if let Err(error) = backend_connection::refresh_active_identity(handle).await {
+                        log::warn!("Backend connection check failed: {error}");
                     }
                 });
             }
@@ -171,6 +179,10 @@ pub fn run() {
         })
         // Tauri commands
         .invoke_handler(tauri::generate_handler![
+            backend_connection::get_backend_context,
+            backend_connection::get_backend_connections,
+            backend_connection::test_backend_connection,
+            backend_connection::activate_backend_connection,
             commands::get_sidecar_status,
             commands::get_platform_info,
             commands::check_engine_health,

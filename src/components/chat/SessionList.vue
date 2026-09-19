@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { backendLocalStorage } from '@/services/backend-context'
+
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatSessionDate } from '@/utils/time'
@@ -170,7 +172,7 @@ function normalizeSearchText(value: string) {
 
 onMounted(() => {
   try {
-    const raw = localStorage.getItem('hexclaw_pinned_sessions')
+    const raw = backendLocalStorage.getItem('hexclaw_pinned_sessions')
     if (raw) pinnedIds.value = new Set(JSON.parse(raw))
   } catch {
     /* ignore */
@@ -178,7 +180,7 @@ onMounted(() => {
 })
 
 function savePins() {
-  localStorage.setItem('hexclaw_pinned_sessions', JSON.stringify([...pinnedIds.value]))
+  backendLocalStorage.setItem('hexclaw_pinned_sessions', JSON.stringify([...pinnedIds.value]))
 }
 
 function togglePin(sessionId: string) {

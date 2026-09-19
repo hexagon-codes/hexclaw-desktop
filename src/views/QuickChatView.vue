@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { backendLocalStorage } from '@/services/backend-context'
+
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Send, StopCircle, Trash2, RotateCcw, ChevronDown } from 'lucide-vue-next'
@@ -156,7 +158,7 @@ function resolvePreferredModel() {
 
 function loadModelSelection() {
   try {
-    const savedModel = localStorage.getItem(MODEL_STORAGE_KEY)
+    const savedModel = backendLocalStorage.getItem(MODEL_STORAGE_KEY)
     const [savedProviderId, savedModelId] = (savedModel || '').includes('::')
       ? (savedModel || '').split('::', 2)
       : ['', savedModel || '']
@@ -185,7 +187,7 @@ onMounted(async () => {
 
   // Restore messages from localStorage
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
+    const saved = backendLocalStorage.getItem(STORAGE_KEY)
     if (saved) {
       messages.value = JSON.parse(saved)
     }
@@ -234,7 +236,7 @@ watch(
   messages,
   (val) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
+      backendLocalStorage.setItem(STORAGE_KEY, JSON.stringify(val))
     } catch {}
   },
   { deep: true },
@@ -243,7 +245,7 @@ watch(
 // Persist model selection
 watch([selectedProviderId, selectedModel], ([providerId, modelId]) => {
   if (modelId) {
-    localStorage.setItem(MODEL_STORAGE_KEY, `${providerId}::${modelId}`)
+    backendLocalStorage.setItem(MODEL_STORAGE_KEY, `${providerId}::${modelId}`)
   }
 })
 
@@ -454,7 +456,7 @@ function clearChat() {
   streamingContent.value = ''
   streamingReasoning.value = ''
   resetReasoningStatus()
-  localStorage.removeItem(STORAGE_KEY)
+  backendLocalStorage.removeItem(STORAGE_KEY)
 }
 
 function handleStop() {

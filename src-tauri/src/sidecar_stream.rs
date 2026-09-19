@@ -155,12 +155,14 @@ fn send_event(
 
 #[tauri::command]
 pub async fn sidecar_stream_open(
-    request: NativeSidecarStreamRequest,
+    mut request: NativeSidecarStreamRequest,
     on_event: Channel<NativeSidecarStreamEvent>,
     registry: State<'_, NativeSidecarStreamRegistry>,
 ) -> Result<String, String> {
+    let scope = request.headers.remove("x-hexclaw-connection-scope");
     let method = validate_request(&request)?;
     let client = SidecarClient::new(Duration::from_secs(60 * 60))?;
+    client.connection().validate_scope(scope.as_deref())?;
     let mut builder = client.renderer_request(method, &request.path)?;
     for (name, value) in request.headers {
         builder = builder.header(name, value);

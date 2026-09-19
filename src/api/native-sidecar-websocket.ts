@@ -1,3 +1,4 @@
+import { backendScopeKey } from '@/services/backend-context'
 /** Browser-compatible facade over the authenticated Rust Sidecar socket. */
 
 import { env } from '@/config/env'
@@ -115,6 +116,7 @@ export class NativeSidecarWebSocket extends EventTarget {
   }
 
   private async connectNative(path: string) {
+    const scope = backendScopeKey()
     try {
       const { Channel, invoke } = await import('@tauri-apps/api/core')
       const onEvent = new Channel<NativeSocketEvent>((event) => {
@@ -125,7 +127,7 @@ export class NativeSidecarWebSocket extends EventTarget {
           this.emitClose(event.code, event.reason, event.was_clean)
         }
       })
-      this.socketId = await invoke<string>('sidecar_socket_open', { path, onEvent })
+      this.socketId = await invoke<string>('sidecar_socket_open', { path, onEvent, scope })
       if (this.closeRequested) {
         await this.enqueueNativeCommand('sidecar_socket_close', { socketId: this.socketId })
       }

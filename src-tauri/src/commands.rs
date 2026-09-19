@@ -267,6 +267,10 @@ async fn execute_sidecar_fetch(
     let client = SidecarClient::new(Duration::from_secs(300))?;
     let mut request = client.renderer_request(proxy_method(&method)?, &path)?;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case("x-hexclaw-connection-scope") {
+            client.connection().validate_scope(Some(&value))?;
+            continue;
+        }
         if !proxy_request_header(&name) || value.len() > 1024 || value.chars().any(char::is_control)
         {
             return Err("Sidecar request header is not allowed".into());
@@ -321,17 +325,21 @@ pub struct SidecarStatus {
 
 /// 获取 sidecar 状态
 #[tauri::command]
-pub fn get_sidecar_status(app: tauri::AppHandle) -> SidecarStatus {
-    SidecarStatus {
-        ready: sidecar::is_ready(&app),
-        base_url: sidecar::base_url(),
-        port: sidecar::HEXCLAW_PORT,
-    }
+pub fn get_sidecar_status(app: tauri::AppHandle) -> Result<SidecarStatus, String> {
+    let connection = crate::backend_connection::current()?;
+    Ok(SidecarStatus {
+        ready: if connection.is_local() { sidecar::is_ready(&app) } else { !connection.context.backend_id.is_empty() },
+        port: url::Url::parse(&connection.context.api_base).ok().and_then(|url| url.port_or_known_default()).unwrap_or(0),
+        base_url: connection.context.api_base,
+    })
 }
 
 /// 重启 sidecar 进程
 #[tauri::command]
 pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<String, String> {
+    if !crate::backend_connection::current()?.is_local() {
+        return Err("Remote backend lifecycle is managed on its server".into());
+    }
     sidecar::stop_sidecar()?;
     let instance = sidecar::spawn_sidecar(&app)?;
     // 等待健康检查
@@ -385,10 +393,12 @@ pub async fn proxy_api_request(
     method: String,
     path: String,
     body: Option<String>,
+    scope: Option<String>,
     registry: tauri::State<'_, SidecarFetchRegistry>,
 ) -> Result<String, String> {
     let registration = register_legacy_proxy(&registry)?;
     let mut headers = BTreeMap::new();
+    if let Some(scope) = scope { headers.insert("x-hexclaw-connection-scope".into(), scope); }
     let bytes = body.unwrap_or_default().into_bytes();
     if !bytes.is_empty() {
         headers.insert("content-type".into(), "application/json".into());
