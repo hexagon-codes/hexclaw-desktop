@@ -27,6 +27,25 @@ let generation = 0
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
 let renderTasks: RenderTask[] = []
+const PAGE_RENDER_TIMEOUT_MS = 15_000
+
+function withRenderTimeout<T>(promise: Promise<T>, operation: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`print preview ${operation} timed out`))
+    }, PAGE_RENDER_TIMEOUT_MS)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (cause) => {
+        window.clearTimeout(timer)
+        reject(cause)
+      },
+    )
+  })
+}
 
 async function readPdfBytes(pdf: Blob): Promise<Uint8Array> {
   if (typeof pdf.arrayBuffer === 'function') {
@@ -99,9 +118,13 @@ async function renderPreview(pdf: Blob) {
       data,
       isEvalSupported: false,
       useSystemFonts: true,
+      // WKWebView 可能让含批改原图的页面卡在 worker canvas/image-decoder 路径；
+      // 固定走主线程 canvas，并让真实渲染失败进入现有可重试错误态。
+      isOffscreenCanvasSupported: false,
+      isImageDecoderSupported: false,
     })
     loadingTask = task
-    const documentProxy = await task.promise
+    const documentProxy = await withRenderTimeout(task.promise, 'document load')
     if (currentGeneration !== generation) {
       await documentProxy.destroy()
       return
@@ -116,7 +139,10 @@ async function renderPreview(pdf: Blob) {
 
     for (let pageNumber = 1; pageNumber <= documentProxy.numPages; pageNumber += 1) {
       if (currentGeneration !== generation) return
-      const page = await documentProxy.getPage(pageNumber)
+      const page = await withRenderTimeout(
+        documentProxy.getPage(pageNumber),
+        `page ${pageNumber} load`,
+      )
       const baseViewport = page.getViewport({ scale: 1 })
       const availableWidth = host.clientWidth > 0 ? Math.max(320, host.clientWidth - 24) : 794
       const cssScale = Math.min(1.45, availableWidth / baseViewport.width)
@@ -143,7 +169,16 @@ async function renderPreview(pdf: Blob) {
         background: '#ffffff',
       })
       renderTasks.push(renderTask)
-      await renderTask.promise
+      try {
+        await withRenderTimeout(renderTask.promise, `page ${pageNumber} render`)
+      } catch (cause) {
+        try {
+          renderTask.cancel()
+        } catch {
+          // 已完成的 task 可能拒绝取消；外层错误仍负责投影可操作状态。
+        }
+        throw cause
+      }
       renderTasks = renderTasks.filter((candidate) => candidate !== renderTask)
       renderedPages.value = pageNumber
     }
