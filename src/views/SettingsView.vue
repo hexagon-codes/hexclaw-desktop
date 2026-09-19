@@ -1514,9 +1514,9 @@ function isManagedCatalog(providerId: string): boolean {
   })
 }
 
-/** 所有云端 Provider 共用目录管理器；本地 Ollama 保持独立的本地模型管理链路。 */
+/** 非 Ollama 的兼容服务共用目录管理器，不按端点物理位置隐藏入口。 */
 function canManageProviderCatalog(provider: ProviderConfig): boolean {
-  return provider.type !== 'ollama' && effectiveProviderLocality(provider) === 'cloud'
+  return provider.type !== 'ollama'
 }
 
 function providerHasNewModels(providerId: string): boolean {
@@ -4166,9 +4166,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-model-chip__name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hc-model-chip--non-chat {
