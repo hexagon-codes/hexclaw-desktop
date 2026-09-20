@@ -14,6 +14,7 @@ import {
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { useAppStore } from '@/stores/app'
+import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
 import {
   bindSessionAgent,
   getSessionAgent,
@@ -63,15 +64,16 @@ import { getStreamThinkingDuration } from '@/stores/chat-stream-helpers'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { closeImagePreview, releaseImagePreviewResource } from '@/composables/useImagePreview'
+import { useBackendMedia } from '@/composables/useBackendMedia'
 import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
   shouldSendOnEnter,
-  imageSrc,
+  imageSrc as attachmentSource,
   scrollNavFlags,
   resolveChatScroll,
-  videoPosterFromMetadata,
+  videoPosterFromMetadata as posterSource,
   videoDisplaySrc,
 } from '@/utils/chat-compose'
 import { sanitizeMessageContent } from '@/utils/messageContent'
@@ -608,6 +610,22 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
 }
+
+const backendMedia = useBackendMedia()
+function imageSrc(attachment: ChatAttachment): string {
+  return backendMedia.display(attachmentSource(attachment))
+}
+function videoPosterFromMetadata(metadata: Record<string, unknown> | undefined | null): string | undefined {
+  const source = posterSource(metadata)
+  return source ? backendMedia.display(source) || undefined : undefined
+}
+watch(
+  () => chatStore.messages.flatMap((message) => [
+    ...getMessageAttachments(message).map(attachmentSource),
+    posterSource(message.metadata) ?? '',
+  ]),
+  (sources) => backendMedia.retain(sources),
+)
 
 // K12 图片的消息数据只保存 asset:// 稳定身份。可见地址由认证客户端读取后在当前
 // WebView 内生成，并由这里统一持有，避免把鉴权端点直接交给 <img> 或泄漏 object URL。
@@ -2128,10 +2146,21 @@ async function toggleModelSelector() {
   }
 }
 
-function openProviderSettings() {
+async function openProviderSettings() {
   showModelSelector.value = false
   showThinkingSelector.value = false
-  router.push('/settings')
+  try {
+    await flushBackendDrafts()
+    saveModelSettingsReturn({
+      path: route.fullPath,
+      sessionId: chatStore.currentSessionId,
+      agentRole: chatStore.agentRole,
+      chatMode: chatStore.chatMode,
+    })
+    await router.push('/settings')
+  } catch (error) {
+    toast.error(String(error))
+  }
 }
 
 function asToolApprovalRisk(risk: string): 'safe' | 'sensitive' | 'dangerous' {
@@ -4128,6 +4157,7 @@ function startSidebarResize(event: MouseEvent) {
             :allow-video="supportsVideo"
             :recipient-name="agentRoleDisplay || t('chat.defaultAgent', '小蟹')"
             :draft-scope-key="chatStore.currentSessionId ?? ''"
+            :draft-agent-key="chatStore.agentRole"
             :preset-chips="scenarioCtx ? scenarioComposerChips : []"
             :scenario-placeholder="scenarioComposerPlaceholder"
             :scenario-hint="scenarioComposerHint"

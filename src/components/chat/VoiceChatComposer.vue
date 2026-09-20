@@ -11,6 +11,7 @@ import { voiceChat, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { logger } from '@/utils/logger'
 import { audioBlobToWavBase64 } from '@/utils/audio-wav'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { useBackendMedia } from '@/composables/useBackendMedia'
 
 const props = defineProps<{
   modelId: string
@@ -50,6 +51,16 @@ let mediaRecorder: MediaRecorder | null = null
 let recordedChunks: Blob[] = []
 let activeStream: MediaStream | null = null
 let canceling = false
+const backendMedia = useBackendMedia()
+let playback: HTMLAudioElement | null = null
+
+async function playResponse(source: string) {
+  playback?.pause()
+  backendMedia.retain([source])
+  const url = await backendMedia.load(source)
+  playback = new Audio(url)
+  await playback.play()
+}
 
 async function startRecording() {
   if (recording.value || sending.value) return
@@ -129,9 +140,8 @@ async function sendAudio(blob: Blob) {
     // 自动播放回应；autoplay policy 拒绝时提示用户手动点消息播放
     const src = audioToSrc(result)
     if (src) {
-      const audio = new Audio(src)
       try {
-        await audio.play()
+        await playResponse(src)
       } catch (playErr) {
         lastError.value = '浏览器阻止自动播放，请点击消息气泡里的播放按钮'
         logger.warn('[VoiceChatComposer] autoplay blocked', playErr)
@@ -161,9 +171,8 @@ async function sendText() {
     emit('exchanged', result, t)
     const src = audioToSrc(result)
     if (src) {
-      const audio = new Audio(src)
       try {
-        await audio.play()
+        await playResponse(src)
       } catch (playErr) {
         lastError.value = '浏览器阻止自动播放，请点击消息气泡里的播放按钮'
         logger.warn('[VoiceChatComposer] autoplay blocked', playErr)
@@ -194,6 +203,8 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 onBeforeUnmount(() => {
+  playback?.pause()
+  playback = null
   if (mediaRecorder?.state !== 'inactive') {
     try { mediaRecorder?.stop() } catch { /* ignore */ }
   }

@@ -290,6 +290,7 @@ export const useChatStore = defineStore('chat', () => {
     isSessionExecutionRunning,
     setSessionExecution,
     clearSessionExecution,
+    observedRunningTaskCount: computed(() => Object.values(sessionExecutions.value).reduce((count, executions) => count + Object.values(executions).filter((execution) => !['awaiting_confirmation', 'recovering', 'outcome_unknown'].includes(execution.state.trim().toLowerCase())).length, 0)),
     hasSessionPendingApproval: approvalController.hasSessionPendingApproval,
     clearPendingApprovalsForSession: approvalController.clearPendingApprovalsForSession,
     recoverActiveStreams: boundStreamController.recoverActiveStreams,

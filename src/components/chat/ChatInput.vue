@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useI18n } from 'vue-i18n'
 import { fileFromNativeGrant } from '@/api/desktop'
@@ -10,6 +10,8 @@ import {
   syncNativeImagePreviewScope,
   type NativeFileGrant,
 } from '@/api/native-files'
+import { backendStorageKey, registerBackendDraftFlush } from '@/services/backend-context'
+import { preserveComposerFile, restoreComposerFile, readComposerDraft, writeComposerDraft } from '@/services/composer-drafts'
 import { DESKTOP_USER_ID } from '@/constants'
 import {
   ArrowUp,
@@ -114,6 +116,7 @@ const props = defineProps<{
   recipientName?: string
   /** 附件草稿的会话作用域；作用域变化时回收当前附件预览能力。 */
   draftScopeKey?: string
+  draftAgentKey?: string
   /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip）。
    *  string 保留后端旧契约兼容；结构化项只把 actionId 向父级派发，本组件不解释领域语义。 */
   presetChips?: Array<string | ScenarioComposerChip>
@@ -472,31 +475,101 @@ function createScenarioImagePreviewOwnership(file: File): ScenarioComposerImageP
   }
 }
 
-watch(
-  () => props.draftScopeKey,
-  (scopeKey, previousScopeKey) => {
-    nativePreviewScopeGeneration++
-    // 首次分配会话 ID 仍属于同一份发送中的草稿；只有离开已有会话作用域才回收附件预览。
-    if (previousScopeKey === scopeKey) return
-    if (!previousScopeKey) {
-      if (nativePreviewRuntimeUsed) {
-        void enqueueNativePreviewLifecycle(() => synchronizeNativePreviewScope()).catch(() => {
-          logger.warn('[ChatInput] Native image preview scope sync failed')
-        })
+const draftLoading = ref(true)
+let draftRevision = 0
+let draftWrite: Promise<void> = Promise.resolve()
+let activeDraftKey = ''
+const composerDraftKey = () => backendStorageKey(`composer:${props.draftAgentKey ?? ''}:${props.draftScopeKey ?? ''}`)
+function persistDraft(): Promise<void> {
+  if (draftLoading.value || !activeDraftKey) return draftWrite
+  const key = activeDraftKey
+  const text = inputText.value
+  const skills = JSON.parse(JSON.stringify(mountedSkills.value))
+  const contexts = JSON.parse(JSON.stringify(contextChips.value))
+  const files = attachedFiles.value.map((item) => preserveComposerFile(item.file))
+  draftWrite = draftWrite.catch(() => undefined).then(async () => {
+    await writeComposerDraft(key, { text, skills, contexts, files: await Promise.all(files) })
+  })
+  return draftWrite
+}
+const unregisterDraftFlush = registerBackendDraftFlush(async () => {
+  await Promise.allSettled(pendingContextFills)
+  await persistDraft()
+})
+const sentDraftKeys = new Set<string>()
+async function clearSentDrafts() {
+  clearDraft()
+  await persistDraft()
+  for (const key of sentDraftKeys) await writeComposerDraft(key, { text: '', skills: [], contexts: [], files: [] })
+  sentDraftKeys.clear()
+}
+async function loadDraft(key: string) {
+  const revision = ++draftRevision
+  draftLoading.value = true
+  activeDraftKey = ''
+  clearAttachedFiles()
+  inputText.value = ''
+  mountedSkills.value = []
+  contextChips.value = []
+  const draft = await readComposerDraft(key)
+  if (revision !== draftRevision || chatInputUnmounted) return
+  try {
+    for (const saved of draft?.files ?? []) {
+      let file = await restoreComposerFile(saved)
+      let grant = nativeGrantFromFile(file)
+      if (grant?.previewLease && currentDraftSessionId()) {
+        nativePreviewRuntimeUsed = true
+        const attachmentId = newNativePreviewAttachmentId()
+        activeNativePreviewAttachmentIds.add(attachmentId)
+        await synchronizeNativePreviewScope()
+        grant = await bindNativeImagePreviewLease(grant, { ownerId: DESKTOP_USER_ID, sessionId: currentDraftSessionId()!, attachmentId })
+        const bound = fileFromNativeGrant(grant)
+        // 保存后的句柄仍引用同一份草稿字节，不再复制一份。
+        file = Object.assign(bound, { draftOriginalFile: file })
       }
-      return
+      if (revision !== draftRevision || chatInputUnmounted) return
+      attachedFiles.value.push({ file, previewGrant: grant?.previewLease ? grant : undefined,
+        previewUrl: grant?.previewLease?.url ?? (file.type.startsWith('image/') && !grant ? URL.createObjectURL(file) : undefined) })
     }
-    activeNativePreviewAttachmentIds.clear()
-    if (nativePreviewRuntimeUsed) {
-      void enqueueNativePreviewLifecycle(() =>
-        synchronizeNativePreviewScope(scopeKey?.trim()),
-      ).catch(() => {
-        logger.warn('[ChatInput] Native image preview scope sync failed')
-      })
+    if (revision === draftRevision && !chatInputUnmounted) {
+      // 全部附件恢复后才发布正文与上下文，失败不呈现可发送的残缺草稿。
+      inputText.value = draft?.text ?? ''
+      mountedSkills.value = (draft?.skills ?? []) as Skill[]
+      contextChips.value = (draft?.contexts ?? []) as ContextChip[]
+      for (const chip of [...contextChips.value]) {
+        if (!chip.loading) continue
+        removeContextRef(chip.type, chip.id)
+        addContextRef({ type: chip.type as MentionSelectItem['type'], id: chip.id, name: chip.label })
+      }
+      activeDraftKey = key
     }
-    clearAttachedFiles()
-  },
-)
+  } catch (error) {
+    if (revision === draftRevision && !chatInputUnmounted) clearAttachedFiles()
+    throw error
+  } finally { if (revision === draftRevision) draftLoading.value = false }
+}
+watch(() => [props.draftScopeKey, props.draftAgentKey], async (_, previous) => {
+  // 首次发送创建会话时仍保留发送中的输入，不恢复另一份草稿。
+  if (previous && !previous[0] && props.draftScopeKey && submitting.value) {
+    const previousKey = activeDraftKey
+    await persistDraft()
+    sentDraftKeys.add(previousKey)
+    activeDraftKey = composerDraftKey()
+    return
+  }
+  try {
+    await persistDraft()
+    nativePreviewScopeGeneration++
+    await loadDraft(composerDraftKey())
+  } catch (error) {
+    draftLoading.value = false
+    voiceToast.error(error instanceof Error ? error.message : String(error))
+  }
+}, { immediate: true })
+watch([inputText, attachedFiles, mountedSkills, contextChips], () => {
+  if (!draftLoading.value) void persistDraft().catch((error) => logger.warn('[ChatInput] Draft persistence failed', error))
+}, { deep: true, flush: 'post' })
+onBeforeUnmount(() => { void persistDraft().catch((error) => logger.warn('[ChatInput] Draft persistence failed', error)); unregisterDraftFlush() })
 const isScenarioComposer = computed(
   () => !!props.scenarioImageIntercept || !!props.scenarioPlaceholder || !!props.scenarioHint,
 )
@@ -539,7 +612,7 @@ const hasImageAttachment = computed(() =>
 watch(composerMode, (mode) => emit('mode:changed', mode), { immediate: true })
 
 const canSend = computed(() => {
-  if (props.streaming || props.disabled || submitting.value || generating.value) return false
+  if (draftLoading.value || props.streaming || props.disabled || submitting.value || generating.value) return false
   if (isGenMode.value) {
     // 生成 mode 必须有 prompt（不允许仅附件）
     return !!inputText.value.trim()
@@ -591,8 +664,9 @@ function clearDraft() {
 }
 
 async function handleSend() {
+  if (draftLoading.value) return
   const text = normalizeMathMarkdown(inputText.value.trim())
-  const files = attachedFiles.value.map((a) => a.file)
+  let files = attachedFiles.value.map((a) => a.file)
   if (props.streaming || props.disabled || submitting.value || generating.value) return
   closePopups()
 
@@ -661,13 +735,16 @@ async function handleSend() {
 
   // 普通 chat / vision（含附图）
   if (!text && files.length === 0) return
-  if (!props.sendHandler) {
-    emit('send', text, files)
-    clearDraft()
-    return
-  }
   submitting.value = true
+  let handedToSendHandler = false
   try {
+    files = await Promise.all(files.map(async (file) => nativeGrantFromFile(file)
+      ? restoreComposerFile(await preserveComposerFile(file)) : file))
+    if (!props.sendHandler) {
+      emit('send', text, files)
+      await clearSentDrafts()
+      return
+    }
     // 发送前等待所有上下文解析完成，避免「chip 仍在 loading 就发送」导致空内容被静默丢弃
     if (pendingContextFills.size > 0) {
       await Promise.allSettled(pendingContextFills)
@@ -679,14 +756,16 @@ async function handleSend() {
       content: c.content,
     }))
     const skillNames = mountedSkills.value.map((s) => s.name)
+    handedToSendHandler = true
     const accepted = await props.sendHandler(
       text,
       files,
       contextRefs.length || skillNames.length ? { contextRefs, skillNames } : undefined,
     )
-    if (accepted) clearDraft()
-  } catch {
-    // Parent send handler is responsible for surfacing errors.
+    if (accepted) await clearSentDrafts()
+  } catch (error) {
+    // 附件恢复发生在父发送入口之前，错误通过已有消息通道显示。
+    if (!handedToSendHandler) voiceToast.error(error instanceof Error ? error.message : String(error))
   } finally {
     submitting.value = false
   }
@@ -1031,6 +1110,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   chatInputUnmounted = true
+  draftLoading.value = true
   nativePreviewScopeGeneration++
   stopVoiceTimer()
   clearAttachedFiles()
@@ -1062,6 +1142,7 @@ function addFiles(files: File[]) {
       emit('scenario-image', { file, previewUrl, previewOwnership, attachment })
       continue
     }
+    void preserveComposerFile(file).catch((error) => voiceToast.error(String(error)))
     const nativeGrant = nativeGrantFromFile(file)
     const previewGrant = isImage && nativeGrant?.previewLease ? nativeGrant : undefined
     attachedFiles.value.push({
