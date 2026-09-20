@@ -1,4 +1,5 @@
 import { env } from '@/config/env'
+import { backendContext } from '@/services/backend-context'
 import { buildDuplicateInstanceNameError } from '@/config/im-channel-errors'
 import {
   CHANNEL_CONFIG_FIELDS,
@@ -38,7 +39,7 @@ export interface IMInstance {
 }
 
 export function getPlatformHookUrl(instance: Pick<IMInstance, 'name' | 'type'>): string {
-  return `${env.apiBase}/api/v1/platforms/hooks/${instance.type}/${encodeURIComponent(instance.name)}`
+  return `${(backendContext.value?.apiBase ?? env.apiBase).replace(/\/+$/, '')}/api/v1/platforms/hooks/${instance.type}/${encodeURIComponent(instance.name)}`
 }
 
 // ─── Sidecar 持久化：Go instances.Manager 是唯一事实源 ─────────────

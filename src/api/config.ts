@@ -35,6 +35,7 @@ async function proxyApiRequestText(
   path: string,
   body: string | null,
 ): Promise<string> {
+  const scope = backendScopeKey()
   try {
     if (!isTauri()) {
       const response = await fetch(`${env.apiBase}${path}`, {
@@ -56,7 +57,7 @@ async function proxyApiRequestText(
       method,
       path,
       body,
-      scope: backendScopeKey(),
+      scope,
     })
   } catch (e) {
     throw new Error(messageFromUnknownError(e))

@@ -474,9 +474,13 @@ async fn put_config(
         .map_err(|error| format!("update LLM config outcome is unknown: {error}"))?;
     SidecarClient::require_non_redirect(&response)?;
     let status = response.status();
-    let body = read_bounded(response, MAX_ERROR_BYTES).await?;
+    let body = read_bounded(response, MAX_ERROR_BYTES).await
+        .map_err(|error| format!("update LLM config outcome is unknown: {error}"))?;
     if status.is_success() {
         // 旧 Sidecar 的成功响应可不含版本回执，保持兼容；当前 Sidecar 则返回二者。
+        if !client.connection().is_local() {
+            return confirmed_mutation_receipt(&body, request_id);
+        }
         return Ok(serde_json::from_slice(&body).unwrap_or_default());
     }
     Err(format!(
@@ -488,6 +492,19 @@ async fn put_config(
             format!(": {}", String::from_utf8_lossy(&body).trim())
         }
     ))
+}
+
+fn confirmed_mutation_receipt(body: &[u8], request_id: &str) -> Result<LLMConfigMutationReceipt, String> {
+    let unknown = || "update LLM config outcome is unknown: invalid receipt".to_string();
+    let value: Value = serde_json::from_slice(body).map_err(|_| unknown())?;
+    let digest = value.get("config_digest").and_then(Value::as_str).unwrap_or_default();
+    if value.get("request_id").and_then(Value::as_str) != Some(request_id)
+        || value.get("config_revision").and_then(Value::as_u64).is_none()
+        || !matches!(value.get("status").and_then(Value::as_str), Some("ok" | "committed"))
+        || !digest.strip_prefix("sha256:").is_some_and(|value| is_hex(value, 64)) {
+        return Err(unknown());
+    }
+    serde_json::from_value(value).map_err(|_| unknown())
 }
 
 fn identity_receipt(
@@ -661,7 +678,9 @@ async fn apply_remote_config(
             let response = client.get(&format!("/api/v1/config/mutations/{request_id}?operation_kind=llm")).await
                 .map_err(|_| format!("Configuration outcome unknown; request_id={request_id}"))?;
             if !response.status().is_success() { return Err(format!("Configuration outcome unknown; request_id={request_id}")); }
-            response_json(response, "query configuration receipt").await?
+            let body = read_bounded(response, MAX_ERROR_BYTES).await
+                .map_err(|_| format!("Configuration outcome unknown; request_id={request_id}"))?;
+            confirmed_mutation_receipt(&body, &request_id)?
         }
         Err(error) => return Err(error),
     };

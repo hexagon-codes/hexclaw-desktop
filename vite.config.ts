@@ -1,4 +1,7 @@
 import { isAbsolute } from 'node:path'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
@@ -23,6 +26,16 @@ export default defineConfig(({ mode }) => {
     : (() => {
         const host = process.env.TAURI_DEV_HOST
         const sidecarProxyTarget = process.env.HEX_E2E_SIDECAR_URL || 'http://127.0.0.1:16060'
+        // 凭据只在开发代理进程中读取，不进入 Vite 公开环境或浏览器状态。
+        const proxyToken = () => {
+          const supplied = process.env.HEXCLAW_DEV_API_TOKEN || process.env.HEX_E2E_API_TOKEN
+          if (supplied) return supplied
+          if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(sidecarProxyTarget).hostname)) return ''
+          try {
+            const auth = JSON.parse(readFileSync(join(homedir(), '.hexclaw', 'auth.json'), 'utf8'))
+            return auth.connections?.find((connection: { kind: string }) => connection.kind === 'local')?.api_token || ''
+          } catch { return '' }
+        }
         return {
           port: 5173,
           strictPort: true,
@@ -36,6 +49,15 @@ export default defineConfig(({ mode }) => {
               // 浏览器握手来自开发端口；转发时保持 Sidecar 的严格同源校验。
               rewriteWsOrigin: true,
               rewrite: (path: string) => path.replace(/^\/_hexclaw/, ''),
+              configure: (proxy: Parameters<NonNullable<import('vite').ProxyOptions['configure']>>[0]) => {
+                const authorize = (request: import('node:http').ClientRequest) => {
+                  if (request.hasHeader('Authorization')) return
+                  const token = proxyToken()
+                  if (token) request.setHeader('Authorization', `Bearer ${token}`)
+                }
+                proxy.on('proxyReq', authorize)
+                proxy.on('proxyReqWs', authorize)
+              },
             },
           },
           watch: {

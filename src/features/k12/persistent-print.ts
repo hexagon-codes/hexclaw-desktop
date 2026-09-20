@@ -65,9 +65,10 @@ export async function executeNativePrintJob(input: {
   agent: string
   printJobId: string
 }): Promise<boolean> {
+  const scope = backendScopeKey()
   const { invoke } = await import('@tauri-apps/api/core')
   const result = await invoke<{ receipt: NativePrintReceipt }>('execute_print_job', {
-    scope: backendScopeKey(),
+    scope,
     request: {
       agent: input.agent,
       printJobId: input.printJobId,

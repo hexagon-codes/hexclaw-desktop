@@ -113,7 +113,14 @@ fn persist(path: &Path, file: &AuthFile) -> Result<(), String> {
         handle.write_all(&bytes).and_then(|_| handle.sync_all())
             .map_err(|error| format!("Write backend connections: {error}"))?;
         fs::rename(&temp, path).map_err(|error| format!("Commit backend connections: {error}"))?;
-        #[cfg(unix)] { fs::File::open(dir).and_then(|file| file.sync_all()).map_err(|error| format!("Sync backend connections: {error}"))?; }
+        #[cfg(unix)] {
+            if fs::File::open(dir).and_then(|file| file.sync_all()).is_err() {
+                // rename 已完成时按实际文件对账，不能让内存继续指向旧连接。
+                let committed = fs::read(path).map_err(|_| "Backend connection commit outcome is unknown")?;
+                if committed != bytes { return Err("Backend connection commit outcome is unknown".into()); }
+                log::warn!("Backend connections committed; directory durability sync unavailable");
+            }
+        }
         Ok(())
     })();
     if result.is_err() { let _ = fs::remove_file(temp); }
@@ -223,10 +230,11 @@ fn candidate_record(candidate: BackendCandidate) -> Result<ConnectionRecord, Str
     })
 }
 
-async fn inspect(record: &mut ConnectionRecord) -> Result<(), String> {
+async fn inspect(record: &mut ConnectionRecord) -> Result<String, String> {
     let frozen = snapshot(record, 0);
     let client = reqwest::Client::builder().timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Create backend connection check")?;
+    let mut version = String::new();
     for path in ["/health", "/api/v1/version", "/api/v1/config"] {
         let response = client.get(frozen.endpoint(path)?).bearer_auth(frozen.token()).send().await
             .map_err(|_| "Backend connection failed")?;
@@ -234,12 +242,43 @@ async fn inspect(record: &mut ConnectionRecord) -> Result<(), String> {
         if !status.is_success() { return Err(format!("Backend check {path}: HTTP {}", status.as_u16())); }
         let bytes = crate::sidecar_client::read_bounded(response, 2 * 1024 * 1024).await?;
         let body: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid backend response")?;
+        if path == "/api/v1/version" {
+            version = body.get("version").and_then(|value| value.as_str()).unwrap_or_default().into();
+        }
         if path == "/api/v1/config" {
             record.backend_id = body.get("backend_id").and_then(|value| value.as_str())
                 .filter(|value| !value.is_empty()).ok_or("Backend does not support persistent data identity")?.into();
         }
     }
-    Ok(())
+    Ok(version)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendReadiness {
+    context: BackendContext,
+    version: String,
+    default_model: String,
+}
+
+// 首配仅投影候选服务的配置事实，不切换连接、不发送模型请求。
+#[tauri::command]
+pub async fn inspect_backend_readiness(candidate: BackendCandidate) -> Result<BackendReadiness, String> {
+    let mut record = candidate_record(candidate)?;
+    let version = inspect(&mut record).await?;
+    let frozen = snapshot(&record, 0);
+    let response = reqwest::Client::builder().timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Create backend model check")?
+        .get(frozen.endpoint("/api/v1/config/llm")?).bearer_auth(frozen.token()).send().await
+        .map_err(|_| "Backend model configuration check failed")?;
+    if !response.status().is_success() { return Err(format!("Backend model check: HTTP {}", response.status().as_u16())); }
+    let bytes = crate::sidecar_client::read_bounded(response, 2 * 1024 * 1024).await?;
+    let body: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid backend model configuration")?;
+    let provider = body.get("default").and_then(|value| value.as_str())
+        .and_then(|name| body.get("providers").and_then(|providers| providers.get(name)));
+    let default_model = provider.filter(|provider| provider.get("enabled").and_then(|value| value.as_bool()) != Some(false))
+        .and_then(|provider| provider.get("model")).and_then(|value| value.as_str()).unwrap_or_default().to_owned();
+    Ok(BackendReadiness { context: frozen.context, version, default_model })
 }
 
 #[tauri::command]
@@ -295,14 +334,21 @@ pub(crate) async fn refresh_active_identity(app: tauri::AppHandle) -> Result<(),
             .cloned().ok_or("Active backend connection missing")?
     };
     inspect(&mut record).await?;
+    accept_active_identity(app, &initial, &record.backend_id)
+}
+
+// 只接纳原连接代次的受保护响应；同地址换库也会切换数据作用域。
+pub(crate) fn accept_active_identity(app: tauri::AppHandle, initial: &ConnectionSnapshot, backend_id: &str) -> Result<(), String> {
+    if backend_id.is_empty() { return Err("Backend data identity is missing".into()); }
     let context = {
         let mut guard = state()?.lock().map_err(|_| "Backend connection lock unavailable")?;
         if guard.generation != initial.context.activation_generation { return Ok(()); }
         let mut next = read_file(&auth_path()?)?;
-        let saved = next.connections.iter_mut().find(|value| value.connection_id == record.connection_id)
+        let saved = next.connections.iter_mut().find(|value| value.connection_id == initial.context.connection_id)
             .ok_or("Active backend connection missing")?;
-        if saved.backend_id == record.backend_id { return Ok(()); }
-        saved.backend_id = record.backend_id.clone();
+        if saved.backend_id == backend_id { return Ok(()); }
+        saved.backend_id = backend_id.into();
+        let record = saved.clone();
         persist(&auth_path()?, &next)?;
         guard.file = next;
         guard.generation += 1;

@@ -1,6 +1,7 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from './client'
 import { DESKTOP_USER_ID } from '@/constants'
 import { env } from '@/config/env'
+import { backendContext } from '@/services/backend-context'
 
 /**
  * Webhook 类型 —— 与后端 webhook/webhook.go 一致（入站事件 webhook）：
@@ -76,7 +77,7 @@ export interface K12WebhookMutation {
 
 /** 拼出 Webhook 的真实接收 URL（后端按 name 注册 /api/v1/webhooks/{name}）。 */
 export function webhookUrlFor(name: string): string {
-  return `${env.apiBase}/api/v1/webhooks/${encodeURIComponent(name)}`
+  return `${(backendContext.value?.apiBase ?? env.apiBase).replace(/\/+$/, '')}/api/v1/webhooks/${encodeURIComponent(name)}`
 }
 
 /** 获取 Webhook 列表 */

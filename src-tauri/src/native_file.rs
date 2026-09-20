@@ -1697,6 +1697,64 @@ pub fn revoke_native_image_preview_leases_for_window(
     registry.revoke_image_previews_for_window(window_label)
 }
 
+// 未发送附件属于本机草稿；目录按服务与数据库身份隔离，不上传到目标服务。
+fn draft_attachment_directory(scope: &str) -> Result<PathBuf, String> {
+    let connection = crate::backend_connection::current()?;
+    connection.validate_scope(Some(scope))?;
+    if connection.context.backend_id.is_empty() { return Err("Backend identity is unavailable".into()); }
+    let identity = serde_json::to_vec(&(connection.context.connection_id, connection.context.backend_id))
+        .map_err(|error| error.to_string())?;
+    Ok(crate::sidecar::desktop_config_path()?.with_file_name("desktop-drafts")
+        .join(format!("{:x}", Sha256::digest(identity))))
+}
+
+#[tauri::command]
+pub async fn preserve_draft_attachment(
+    window: WebviewWindow, grant_id: String, operation_id: String, scope: String,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<String, String> {
+    let root = draft_attachment_directory(&scope)?;
+    let grant = registry.inspect(&grant_id, window.label(), &operation_id, GrantPurpose::AttachmentUpload)?;
+    let mut source = open_verified_read_grant(&grant).await?;
+    let id = Uuid::new_v4().to_string();
+    let dir = root.join(&id);
+    tokio::fs::create_dir_all(&dir).await.map_err(|error| error.to_string())?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).await.map_err(|error| error.to_string())?;
+    }
+    let path = dir.join(&grant.name);
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)] options.mode(0o600);
+    let mut output = options.open(&path).await.map_err(|error| error.to_string())?;
+    let bytes = tokio::io::copy(&mut source, &mut output).await.map_err(|error| error.to_string())?;
+    output.sync_all().await.map_err(|error| error.to_string())?;
+    drop(output);
+    if bytes != grant.expected_size || Some(sha256_file(&path).await?) != grant.source_sha256 {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err("Draft attachment integrity mismatch".into());
+    }
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn restore_draft_attachment(
+    window: WebviewWindow, attachment_id: String, scope: String,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<FileGrantDescriptor, String> {
+    let id = Uuid::parse_str(&attachment_id).map_err(|_| "Invalid draft attachment identity")?;
+    let root = draft_attachment_directory(&scope)?;
+    let dir = root.join(id.to_string());
+    let mut entries = tokio::fs::read_dir(&dir).await.map_err(|error| error.to_string())?;
+    let entry = entries.next_entry().await.map_err(|error| error.to_string())?.ok_or("Draft attachment is missing")?;
+    if !entry.file_type().await.map_err(|error| error.to_string())?.is_file()
+        || entries.next_entry().await.map_err(|error| error.to_string())?.is_some() {
+        return Err("Invalid draft attachment storage".into());
+    }
+    issue_read_grant(&registry, window.label(), &format!("draft:{}", Uuid::new_v4()), entry.path(), GrantPurpose::AttachmentUpload).await
+}
+
 #[tauri::command]
 // Keep the audited Tauri upload ABI explicit at the process boundary.
 #[allow(clippy::too_many_arguments)]
@@ -1949,6 +2007,7 @@ pub async fn render_artifact_to_grant(
     format: String,
     title: Option<String>,
     options: Option<serde_json::Value>,
+    scope: Option<String>,
     registry: State<'_, NativeFileGrantRegistry>,
 ) -> Result<u64, String> {
     if !matches!(
@@ -1966,6 +2025,7 @@ pub async fn render_artifact_to_grant(
         GrantPurpose::RenderArtifact,
     )?;
     let client = SidecarClient::new(Duration::from_secs(120))?;
+    client.connection().validate_scope(scope.as_deref())?;
     let response = client
         .post_json(
             "/api/v1/render",

@@ -1,6 +1,5 @@
-import { backendScopeKey } from '@/services/backend-context'
+import { backendScopeKey, backendRelativePath } from '@/services/backend-context'
 import { invoke } from '@tauri-apps/api/core'
-import { env } from '@/config/env'
 
 export type NativeFilePurpose =
   | 'attachment_upload'
@@ -264,12 +263,9 @@ export async function stageBlob(
 }
 
 function sidecarRelativePath(raw: string): string {
-  const url = new URL(raw, env.apiBase)
-  const base = new URL(env.apiBase)
-  if (url.origin !== base.origin || url.username || url.password || url.hash) {
-    throw new Error('Native transfer target must be the managed Sidecar origin')
-  }
-  return `${url.pathname}${url.search}`
+  const path = backendRelativePath(raw)
+  if (!path) throw new Error('Native transfer target must belong to the active backend')
+  return path
 }
 
 export function validateManagedSidecarURL(raw: string): void {

@@ -1,5 +1,7 @@
 import { shallowRef } from 'vue'
 import { isTauri } from '@/utils/platform'
+import { env } from '@/config/env'
+import type { ChatMode } from '@/types/chat'
 
 export interface BackendContext {
   connectionId: string
@@ -14,6 +16,21 @@ export interface BackendContext {
 
 export const backendContext = shallowRef<BackendContext | null>(null)
 export const backendPanelOpen = shallowRef(false)
+
+// 兼容内部占位地址和当前后端的绝对资产 URL，返回由原生层追加部署前缀的业务路径。
+export function backendRelativePath(raw: string): string | null {
+  const url = new URL(raw, env.apiBase)
+  if (url.username || url.password || url.hash) return null
+  for (const root of [backendContext.value?.apiBase, env.apiBase]) {
+    if (!root) continue
+    const base = new URL(root)
+    const prefix = base.pathname.replace(/\/+$/, '')
+    if (url.origin !== base.origin) continue
+    if (prefix && url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) continue
+    return `${url.pathname.slice(prefix.length) || '/'}${url.search}`
+  }
+  return null
+}
 let reloadPending = false
 const beforeReload = new Set<() => void | Promise<void>>()
 
@@ -30,6 +47,10 @@ export function backendStorageKey(key: string): string {
 export function registerBackendDraftFlush(flush: () => void | Promise<void>): () => void {
   beforeReload.add(flush)
   return () => beforeReload.delete(flush)
+}
+
+export async function flushBackendDrafts(): Promise<void> {
+  await Promise.all([...beforeReload].map((flush) => flush()))
 }
 
 // 切换后重建页面运行域，已进入原生层的操作继续使用原快照。
@@ -87,4 +108,35 @@ export const backendLocalStorage = {
   },
   setItem(key: string, value: string): void { localStorage.setItem(backendStorageKey(key), value) },
   removeItem(key: string): void { localStorage.removeItem(backendStorageKey(key)) },
+}
+
+export interface ModelSettingsReturn {
+  path: string
+  sessionId: string | null
+  agentRole: string
+  chatMode: ChatMode
+}
+
+const modelSettingsReturnKey = 'model-settings-return'
+
+// 配置支路只记录原入口；正文和附件仍由 Composer 持久化，按同一服务身份恢复。
+export function saveModelSettingsReturn(context: ModelSettingsReturn): void {
+  backendLocalStorage.setItem(modelSettingsReturnKey, JSON.stringify(context))
+}
+
+export function readModelSettingsReturn(): ModelSettingsReturn | null {
+  try {
+    const raw = backendLocalStorage.getItem(modelSettingsReturnKey)
+    if (!raw) return null
+    const value = JSON.parse(raw) as ModelSettingsReturn
+    if (typeof value.path !== 'string' || !value.path.startsWith('/chat')
+      || typeof value.agentRole !== 'string'
+      || (value.sessionId !== null && typeof value.sessionId !== 'string')
+      || !['chat', 'agent', 'research'].includes(value.chatMode)) return null
+    return value
+  } catch { return null }
+}
+
+export function clearModelSettingsReturn(): void {
+  backendLocalStorage.removeItem(modelSettingsReturnKey)
 }

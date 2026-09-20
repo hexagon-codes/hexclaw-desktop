@@ -7,6 +7,7 @@ import type {
   _ExtractGettersFromSetupStore,
   _ExtractStateFromSetupStore,
 } from 'pinia'
+import { getVersion } from '@/api/system'
 import { checkHealth } from '@/api/client'
 
 type SidecarStatus = 'running' | 'stopped' | 'starting'
@@ -17,6 +18,7 @@ const STEADY_HEALTH_CHECK_INTERVAL_MS = 5000
 
 const setup = () => {
   const sidecarReady = ref(false)
+  const backendVersion = ref('')
   const sidecarStatus = ref<SidecarStatus>('stopped')
   const sidebarCollapsed = ref(false)
   const detailPanelOpen = ref(false)
@@ -38,8 +40,12 @@ const setup = () => {
     const ok = await checkHealth()
     if (ok) {
       markSidecarReady()
+      if (!backendVersion.value) {
+        try { backendVersion.value = (await getVersion()).version } catch { /* 版本单独重查 */ }
+      }
     } else {
       sidecarReady.value = false
+      backendVersion.value = ''
       if (!isRestarting.value) sidecarStatus.value = 'stopped'
     }
   }
@@ -136,6 +142,7 @@ const setup = () => {
     detailPanelOpen,
     markSidecarReady,
     checkConnection,
+    backendVersion,
     startHealthCheck,
     stopHealthCheck,
     restartSidecar,

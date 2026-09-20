@@ -1,4 +1,4 @@
-import { backendScopeKey, assertBackendActive } from '@/services/backend-context'
+import { backendScopeKey, assertBackendActive, backendRelativePath } from '@/services/backend-context'
 /**
  * API 客户端
  *
@@ -22,10 +22,7 @@ interface NativeSidecarFetchResponse {
 
 function managedSidecarPath(input: RequestInfo | URL): string | null {
   const raw = input instanceof Request ? input.url : input.toString()
-  const url = new URL(raw, env.apiBase)
-  const base = new URL(env.apiBase)
-  if (url.origin !== base.origin || url.username || url.password || url.hash) return null
-  return `${url.pathname}${url.search}`
+  return backendRelativePath(raw)
 }
 
 /**
@@ -270,8 +267,8 @@ async function uploadFormData<T>(
 }
 
 /** PUT 请求 */
-export function apiPut<T>(url: string, body?: Record<string, unknown> | object) {
-  return withNormalizedError(api<T>(url, { method: 'PUT', body: body as Record<string, unknown> }))
+export function apiPut<T>(url: string, body?: Record<string, unknown> | object, options?: { headers?: Record<string, string> }) {
+  return withNormalizedError(api<T>(url, { method: 'PUT', body: body as Record<string, unknown>, headers: options?.headers, retry: 0 }))
 }
 
 /** PATCH 请求 */

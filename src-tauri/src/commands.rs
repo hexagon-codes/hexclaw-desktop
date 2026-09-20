@@ -349,12 +349,16 @@ pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<String, String> {
 
 /// 健康检查（Rust 端发请求，绕过 WebView CORS 限制）
 #[tauri::command]
-pub async fn check_engine_health() -> bool {
+pub async fn check_engine_health(app: tauri::AppHandle) -> bool {
     let Ok(client) = SidecarClient::new(Duration::from_secs(3)) else {
         return false;
     };
-    match client.get("/health").await {
-        Ok(resp) => resp.status().is_success(),
+    match client.get("/api/v1/config").await {
+        Ok(resp) => {
+            let Ok(body) = SidecarClient::read_json::<serde_json::Value>(resp).await else { return false; };
+            let Some(identity) = body.get("backend_id").and_then(|value| value.as_str()) else { return false; };
+            crate::backend_connection::accept_active_identity(app, client.connection(), identity).is_ok()
+        },
         Err(_) => false,
     }
 }

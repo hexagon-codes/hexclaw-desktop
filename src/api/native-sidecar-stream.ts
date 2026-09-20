@@ -1,4 +1,4 @@
-import { backendScopeKey, assertBackendActive } from '@/services/backend-context'
+import { backendScopeKey, assertBackendActive, backendRelativePath } from '@/services/backend-context'
 import { isTauri } from '@/utils/platform'
 
 interface NativeStreamEvent {
@@ -20,9 +20,8 @@ export async function sidecarStreamFetch(
   const { env } = await import('@/config/env')
   const raw = input instanceof Request ? input.url : input.toString()
   const url = new URL(raw, env.apiBase)
-  const base = new URL(env.apiBase)
-  if (url.origin !== base.origin) return await globalThis.fetch(input, init)
-  const path = `${url.pathname}${url.search}`
+  const path = backendRelativePath(raw)
+  if (!path) return await globalThis.fetch(input, init)
   const request = new Request(input instanceof Request ? input : url.toString(), init)
   const body = request.body ? Array.from(new Uint8Array(await request.arrayBuffer())) : []
   const headers = Object.fromEntries(request.headers.entries())

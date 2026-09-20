@@ -1,8 +1,5 @@
-//! Authenticated, loopback-only client for the managed HexClaw Sidecar.
-//!
-//! The renderer never receives the per-process capability. All native HTTP
-//! operations resolve the current managed Sidecar port here, attach the same
-//! bearer capability, reject redirects, and bound response bodies.
+//! 当前后端的受管原生客户端：每个操作冻结服务地址、数据身份和业务令牌。
+//! 本机端口来自 Sidecar supervisor，远端保留部署前缀；秘密不返回渲染层。
 
 use crate::sidecar;
 use crate::backend_connection::{self, ConnectionSnapshot};
@@ -25,9 +22,7 @@ impl SidecarClient {
     pub(crate) fn new(timeout: Duration) -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(timeout)
-            // A managed loopback endpoint never redirects. Disabling redirects
-            // also prevents a compromised endpoint from forwarding the bearer
-            // capability to another origin or a metadata address.
+            // 一个操作固定访问已选服务，重定向不能替换其凭据归属。
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("build Sidecar client: {error}"))?;
