@@ -13,7 +13,7 @@ const remote = computed(() => backendContext.value?.kind === 'remote')
       <div class="runtime-service-card__identity">
         <span class="backend-live-dot" :class="{ 'backend-live-dot--disconnected': !app.sidecarReady }" />
         <div><strong>{{ remote ? '远端服务' : '本机服务' }}</strong>
-          <span class="runtime-service-card__meta">{{ remote ? backendContext?.apiBase : 'HexClaw 后端服务' }} · {{ remote ? 'API v1' : '自动管理' }}</span>
+          <span class="runtime-service-card__meta">{{ remote ? backendContext?.apiBase : 'HexClaw 后端服务' }} · <span class="backend-version" :class="{ 'backend-version--pending': !app.backendVersion }" data-backend-version>{{ app.backendVersion ? (app.backendVersion.startsWith('v') ? app.backendVersion : 'v' + app.backendVersion) : '版本待检查' }}</span> · {{ !app.sidecarReady ? '等待连接' : remote ? 'API v1' : '自动管理' }}</span>
         </div>
       </div>
       <span class="backend-status-pill" :class="{ 'backend-status-pill--warning': !app.sidecarReady }">{{ app.sidecarReady ? '已连接' : '未连接' }}</span>

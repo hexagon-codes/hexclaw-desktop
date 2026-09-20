@@ -1,721 +1,223 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
-import {
-  Key,
-  Bot,
-  Sparkles,
-  ArrowRight,
-  ArrowLeft,
-  Check,
-  Loader2,
-  CheckCircle,
-  XCircle,
-  Radio,
-  Zap,
-} from 'lucide-vue-next'
-import hexagonLogo from '@/assets/logo.png'
-import ProviderSelect from '@/components/common/ProviderSelect.vue'
-import HcSelect from '@/components/common/HcSelect.vue'
+import { invoke } from '@tauri-apps/api/core'
+import { backendContext, flushBackendDrafts, readModelSettingsReturn, saveModelSettingsReturn, type BackendContext } from '@/services/backend-context'
 import { useSettingsStore } from '@/stores/settings'
-import { PROVIDER_PRESETS } from '@/config/providers'
-import type { ModelCapability, ModelOption, ProviderType } from '@/types'
-import { testLLMConnection } from '@/api/config'
-import { getOllamaStatus, type OllamaStatus } from '@/api/ollama'
-import { messageFromUnknownError } from '@/utils/errors'
+import { getLLMConfig } from '@/api/config'
+import { getVersion } from '@/api/system'
+import { isTauri } from '@/utils/platform'
+import { dismissSplash } from '@/utils/splash'
 
+interface Readiness { context: BackendContext; version: string; defaultModel: string }
+interface SetupCompletion { kind: 'local' | 'remote'; apiBase: string; backendId: string }
+const completionKey = 'hexclaw:backend-setup-completion'
 const router = useRouter()
-const { t } = useI18n()
-const settingsStore = useSettingsStore()
+const settings = useSettingsStore()
+const dialog = ref<HTMLElement>()
 const step = ref(0)
+const kind = ref<'local' | 'remote'>(backendContext.value?.kind ?? 'local')
+const address = ref(backendContext.value?.kind === 'remote' ? backendContext.value.apiBase : '')
+const token = ref('')
+const saved = ref<BackendContext[]>([])
+const checking = ref(false)
 const finishing = ref(false)
+const failure = ref('')
+const result = ref<Readiness | null>(null)
+let revision = 0
+const savedToken = computed(() => saved.value.some(record => record.kind === 'remote' && record.hasToken && record.apiBase.replace(/\/+$/, '') === address.value.trim().replace(/\/+$/, '')))
+const valid = computed(() => kind.value === 'local' || (/^https?:\/\/[^\s]+$/.test(address.value.trim()) && (!!token.value.trim() || savedToken.value)))
+const service = computed(() => kind.value === 'local' ? '此设备上的本机服务' : address.value.trim())
+const failureMessage = computed(() => `${failure.value}\n目标：${service.value}\n尚未切换，当前仍使用${backendContext.value?.kind === 'remote' ? '远端服务' : '本机服务'}。返回上一步可修改地址或令牌。`)
+const action = computed(() => failure.value ? '重新检查' : checking.value ? '检查中…' : result.value?.defaultModel ? '继续原任务' : '配置模型服务')
 
-const apiKey = ref('')
-const provider = ref<ProviderType>('openai')
-const model = ref(PROVIDER_PRESETS.openai.defaultModels[0]?.id ?? '')
-const selectedAgentRole = ref<'' | 'coder' | 'writer'>('')
-
-/** Available models based on selected provider */
-const providerModels = computed(() => {
-  const preset = PROVIDER_PRESETS[provider.value]
-  return preset?.defaultModels ?? []
-})
-
-/** Whether the current provider requires an API key */
-const requiresApiKey = computed(() => provider.value !== 'ollama')
-
-/** Whether the current provider is custom (needs base URL and manual model input) */
-const isCustomProvider = computed(() => provider.value === 'custom')
-
-const customBaseUrl = ref('')
-const customModelId = ref('')
-
-// ─── Ollama 检测 ──────────────────────────────────
-const ollamaStatus = ref<OllamaStatus | null>(null)
-const ollamaDetecting = ref(false)
-const isOllamaSelected = computed(() => provider.value === 'ollama')
-
-async function detectOllama() {
-  ollamaDetecting.value = true
+async function check() {
+  if (!valid.value || finishing.value) return
+  const current = ++revision
+  step.value = 1
+  checking.value = true
+  failure.value = ''
+  result.value = null
   try {
-    ollamaStatus.value = await getOllamaStatus()
-  } catch {
-    ollamaStatus.value = null
-  } finally {
-    ollamaDetecting.value = false
-  }
-}
-
-const ollamaModels = computed(() => ollamaStatus.value?.models ?? [])
-const ollamaReady = computed(() => ollamaStatus.value?.running === true)
-
-// HcSelect 选项投影（value 一律 string）
-const ollamaModelOptions = computed(() =>
-  ollamaModels.value.map((m) => ({ value: m.name, label: m.name })),
-)
-const providerModelOptions = computed(() =>
-  providerModels.value.map((m) => ({ value: m.id, label: m.name })),
-)
-
-/** Validation: API key required for non-Ollama providers, custom needs base URL */
-const canProceedFromStep0 = computed(() => {
-  // Ollama：只需要 Ollama 运行中即可
-  if (isOllamaSelected.value) return ollamaReady.value
-  if (requiresApiKey.value && apiKey.value.trim().length === 0) return false
-  if (isCustomProvider.value && !customBaseUrl.value.trim()) return false
-  const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
-  return !!effectiveModel && connectionResult.value?.ok === true
-})
-
-// Reset model when provider changes
-watch(provider, (newProvider) => {
-  const preset = PROVIDER_PRESETS[newProvider]
-  const defaultModels = preset?.defaultModels ?? []
-  model.value = defaultModels[0]?.id ?? ''
-  apiKey.value = ''
-  customBaseUrl.value = ''
-  customModelId.value = ''
-  // Ollama 选中时自动检测状态
-  if (newProvider === 'ollama') {
-    detectOllama()
-  } else {
-    ollamaStatus.value = null
-  }
-})
-
-watch([provider, apiKey, model, customBaseUrl, customModelId], () => {
-  connectionResult.value = null
-})
-
-const steps = computed(() => [
-  { title: t('welcome.step1Title'), description: t('welcome.step1Desc'), icon: Key },
-  { title: t('welcome.step2Title'), description: t('welcome.step2Desc'), icon: Bot },
-  { title: t('welcome.step3Title'), description: t('welcome.step3Desc'), icon: Sparkles },
-])
-
-const agentOptions = computed(() => [
-  {
-    role: '' as const,
-    title: t('welcome.generalAssistant'),
-    description: t('welcome.generalAssistantDesc'),
-  },
-  {
-    role: 'coder' as const,
-    title: t('welcome.codeAssistant'),
-    description: t('welcome.codeAssistantDesc'),
-  },
-  {
-    role: 'writer' as const,
-    title: t('welcome.writingAssistant'),
-    description: t('welcome.writingAssistantDesc'),
-  },
-])
-
-const selectedAgentTitle = computed(
-  () =>
-    agentOptions.value.find((agent) => agent.role === selectedAgentRole.value)?.title ||
-    t('welcome.generalAssistant'),
-)
-
-// ─── 连接测试 ──────────────────────────────────────
-const connectionTesting = ref(false)
-const connectionResult = ref<{ ok: boolean; msg: string } | null>(null)
-let connectionTestGen = 0
-
-async function testConnection() {
-  if (connectionTesting.value) return
-  const testGen = ++connectionTestGen
-  connectionTesting.value = true
-  connectionResult.value = null
-  try {
-    const preset = PROVIDER_PRESETS[provider.value]
-    const effectiveBaseUrl = isCustomProvider.value
-      ? customBaseUrl.value.trim()
-      : preset.defaultBaseUrl
-    const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
-    if (!effectiveModel) {
-      connectionResult.value = {
-        ok: false,
-        msg: t('welcome.testNeedsModel'),
-      }
-      return
-    }
-    if (requiresApiKey.value && !apiKey.value.trim()) {
-      connectionResult.value = {
-        ok: false,
-        msg: t('welcome.testNeedsApiKey'),
-      }
-      return
-    }
-    const result = await testLLMConnection({
-      provider: {
-        type: provider.value,
-        base_url: effectiveBaseUrl,
-        api_key: requiresApiKey.value ? apiKey.value.trim() : '',
-        model: effectiveModel,
-      },
-    })
-    if (testGen !== connectionTestGen) return
-    connectionResult.value = {
-      ok: result.ok,
-      msg:
-        result.message ||
-        (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
-    }
-  } catch (e) {
-    if (testGen !== connectionTestGen) return
-    const errMsg = messageFromUnknownError(e)
-    connectionResult.value = {
-      ok: false,
-      msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : errMsg,
-    }
-  } finally {
-    if (testGen === connectionTestGen) {
-      connectionTesting.value = false
-    }
-  }
-}
-
-const finishError = ref('')
-
-async function finishWizard(targetPath?: string) {
-  if (finishing.value) return
-  finishing.value = true
-  finishError.value = ''
-  try {
-    if (!settingsStore.config) {
-      await settingsStore.loadConfig()
-    }
-
-    const preset = PROVIDER_PRESETS[provider.value]
-    const effectiveBaseUrl = isCustomProvider.value
-      ? customBaseUrl.value.trim()
-      : preset.defaultBaseUrl
-    const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
-
-    // Build and add provider config
-    const selectedModel = providerModels.value.find((m) => m.id === model.value)
-    const providerModelsForConfig: ModelOption[] = isCustomProvider.value
-      ? [{ id: effectiveModel, name: effectiveModel, capabilities: ['text'] as ModelCapability[] }]
-      : selectedModel
-        ? [
-            {
-              id: selectedModel.id,
-              name: selectedModel.name,
-              capabilities: selectedModel.capabilities ?? ['text'],
-            },
-          ]
-        : providerModels.value.length > 0
-          ? [providerModels.value[0]!]
-          : []
-    // 避免重试时重复添加相同 provider（saveConfig 可能失败后用户再次点击）
-    const existingProvider = settingsStore.config?.llm.providers.find(
-      (p) => p.type === provider.value && p.baseUrl === effectiveBaseUrl,
-    )
-    const createdProvider =
-      existingProvider ??
-      settingsStore.addProvider({
-        name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
-        type: provider.value,
-        enabled: true,
-        apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
-        baseUrl: effectiveBaseUrl,
-        models: providerModelsForConfig,
-      })
-
-    // Set default model
-    if (settingsStore.config) {
-      settingsStore.config.llm.defaultModel = effectiveModel
-      settingsStore.config.llm.defaultProviderId = createdProvider?.id ?? ''
-      settingsStore.config.general.welcomeCompleted = true
-      settingsStore.config.general.defaultAgentRole = ''
-      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
-      if (securitySyncFailed) {
-        console.warn('[WelcomeView] 安全/沙箱配置同步后端失败，不影响欢迎流程')
-      }
-    }
-
-    if (targetPath) {
-      router.push(targetPath)
-    } else if (selectedAgentRole.value) {
-      router.push({
-        path: '/chat',
-        query: {
-          role: selectedAgentRole.value,
-          roleTitle: selectedAgentTitle.value,
-        },
-      })
+    let checked: Readiness
+    if (isTauri()) {
+      checked = await invoke<Readiness>('inspect_backend_readiness', { candidate: { kind: kind.value, apiBase: address.value.trim(), apiToken: token.value || undefined } })
     } else {
-      router.push('/chat')
+      if (kind.value !== 'local') throw new Error('Remote connections require the desktop app')
+      const [config, version] = await Promise.all([getLLMConfig(), getVersion()])
+      const provider = config.providers[config.default]
+      checked = { context: backendContext.value ?? { connectionId: 'local', backendId: '', configRevision: 0, activationGeneration: 0, kind: 'local', apiBase: '', wsBase: '', hasToken: false }, version: version.version, defaultModel: provider?.enabled !== false ? provider?.model ?? '' : '' }
     }
-  } catch (e) {
-    finishError.value = messageFromUnknownError(e)
+    if (current === revision) result.value = checked
+  } catch (error) {
+    if (current === revision) failure.value = String(error)
   } finally {
-    finishing.value = false
+    if (current === revision) checking.value = false
   }
 }
-
-async function nextStep() {
-  if (finishing.value) return
-  if (step.value === 0 && !canProceedFromStep0.value) return
-  if (step.value < 2) {
-    step.value++
+function back() { ++revision; step.value = 0; result.value = null; failure.value = ''; checking.value = false }
+async function continueTask() {
+  sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+  await settings.loadConfig({ force: true })
+  const original = readModelSettingsReturn()
+  if (settings.config?.llm.defaultModel) {
+    await router.replace(original?.path ?? '/chat')
   } else {
-    await finishWizard()
+    if (!original) saveModelSettingsReturn({ path: '/chat', sessionId: null, agentRole: '', chatMode: 'chat' })
+    await router.replace('/settings')
   }
 }
-
-function prevStep() {
-  if (step.value > 0) step.value--
-}
-
-async function skip() {
-  if (finishing.value) return
+async function finish() {
+  if (!result.value || checking.value || finishing.value) return
   finishing.value = true
-  // Mark welcome as completed even when skipping
+  failure.value = ''
   try {
-    if (!settingsStore.config) {
-      await settingsStore.loadConfig()
+    await flushBackendDrafts()
+    const current = backendContext.value
+    const checked = result.value.context
+    if (!isTauri() || (current?.kind === checked.kind && current.apiBase === checked.apiBase && current.backendId === checked.backendId && !token.value)) {
+      await continueTask()
+      return
     }
-    if (settingsStore.config) {
-      settingsStore.config.general.welcomeCompleted = true
-      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
-      if (securitySyncFailed) {
-        console.warn('[WelcomeView] 安全/沙箱配置同步后端失败，不影响跳过流程')
-      }
-    }
-    router.push('/chat')
-  } catch (e) {
-    finishError.value = messageFromUnknownError(e)
-  } finally {
+    // 只留下非秘密完成意图；跨服务重载后从目标服务自己的任务作用域恢复。
+    const completion: SetupCompletion = { kind: kind.value, apiBase: checked.apiBase, backendId: checked.backendId }
+    sessionStorage.setItem(completionKey, JSON.stringify(completion))
+    await invoke('activate_backend_connection', { candidate: { kind: kind.value, apiBase: address.value.trim(), apiToken: token.value || undefined } })
+    token.value = ''
+  } catch (error) {
+    sessionStorage.removeItem(completionKey)
+    failure.value = String(error)
     finishing.value = false
   }
 }
+async function cancel() {
+  if (finishing.value) return
+  ++revision
+  sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+  await router.replace(readModelSettingsReturn()?.path ?? '/chat')
+}
+function onKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') { void cancel(); return }
+  if (event.key !== 'Tab') return
+  const items = [...(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)') ?? [])].filter(item => item.getClientRects().length)
+  if (!items.length) return
+  if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items[items.length - 1]?.focus() }
+  else if (!event.shiftKey && document.activeElement === items[items.length - 1]) { event.preventDefault(); items[0]?.focus() }
+}
+onMounted(async () => {
+  dismissSplash()
+  window.addEventListener('keydown', onKey)
+  if (isTauri()) {
+    try { saved.value = await invoke<BackendContext[]>('get_backend_connections') }
+    catch (error) { failure.value = String(error) }
+  }
+  const pending = sessionStorage.getItem(completionKey)
+  sessionStorage.removeItem(completionKey)
+  if (pending) {
+    try {
+      const expected = JSON.parse(pending) as SetupCompletion
+      const current = backendContext.value
+      if (current?.kind === expected.kind && current.apiBase === expected.apiBase && current.backendId === expected.backendId) {
+        await continueTask()
+        return
+      }
+    } catch (error) { failure.value = String(error) }
+  }
+  await nextTick()
+  dialog.value?.focus()
+})
+onBeforeUnmount(() => { ++revision; token.value = ''; window.removeEventListener('keydown', onKey) })
 </script>
 
 <template>
-  <div class="h-full flex items-center justify-center" :style="{ background: 'var(--hc-bg-main)' }">
-    <div class="w-full max-w-lg px-8">
-      <!-- Logo & Title -->
-      <div class="text-center mb-5">
-        <img :src="hexagonLogo" alt="HexClaw" class="hc-welcome__logo mx-auto mb-3" />
-        <h1 class="text-xl font-bold mb-1" :style="{ color: 'var(--hc-text-primary)' }">
-          {{ t('welcome.title') }}
-        </h1>
-        <p class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
-          {{ t('welcome.tagline') }}
-        </p>
-      </div>
-
-      <!-- 步骤指示器 -->
-      <div class="flex items-center justify-center gap-2 mb-4">
-        <div v-for="(s, i) in steps" :key="i" class="flex items-center">
-          <div
-            class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-colors"
-            :style="{
-              background: i <= step ? 'var(--hc-accent)' : 'var(--hc-bg-card)',
-              color: i <= step ? 'var(--hc-text-inverse)' : 'var(--hc-text-muted)',
-            }"
-          >
-            <Check v-if="i < step" :size="14" />
-            <span v-else>{{ i + 1 }}</span>
-          </div>
-          <div
-            v-if="i < steps.length - 1"
-            class="w-12 h-0.5 mx-1"
-            :style="{ background: i < step ? 'var(--hc-accent)' : 'var(--hc-border)' }"
-          />
-        </div>
-      </div>
-
-      <!-- 步骤内容 -->
-      <div
-        class="rounded-xl border p-5 mb-4"
-        :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-      >
-        <h2 class="text-sm font-medium mb-0.5" :style="{ color: 'var(--hc-text-primary)' }">
-          {{ steps[step]?.title }}
-        </h2>
-        <p class="text-xs mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
-          {{ steps[step]?.description }}
-        </p>
-
-        <!-- Step 1: LLM 配置 -->
-        <div v-if="step === 0" class="space-y-4">
-          <div class="hc-settings__field">
-            <label class="hc-settings__label">Provider</label>
-            <ProviderSelect v-model="provider" :include-ollama="true" :include-custom="true" />
-          </div>
-
-          <!-- Ollama 专属：状态检测 + 模型选择 -->
-          <template v-if="isOllamaSelected">
-            <div class="hc-settings__field">
-              <div
-                class="flex items-center gap-2 px-3 py-2.5 rounded-lg border"
-                :style="{
-                  borderColor: ollamaReady
-                    ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)'
-                    : 'var(--hc-border)',
-                  background: 'var(--hc-bg-main)',
-                }"
-              >
-                <Loader2
-                  v-if="ollamaDetecting"
-                  :size="14"
-                  class="animate-spin"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                />
-                <CheckCircle v-else-if="ollamaReady" :size="14" style="color: var(--hc-success)" />
-                <XCircle v-else :size="14" style="color: var(--hc-error)" />
-                <span
-                  class="text-xs"
-                  :style="{ color: ollamaReady ? 'var(--hc-success)' : 'var(--hc-text-secondary)' }"
-                >
-                  {{
-                    ollamaDetecting
-                      ? t('welcome.ollamaDetecting', '正在检测 Ollama...')
-                      : ollamaReady
-                        ? t('welcome.ollamaReady', 'Ollama 已就绪') +
-                          (ollamaStatus?.version ? ` (v${ollamaStatus.version})` : '')
-                        : t(
-                            'welcome.ollamaNotRunning',
-                            'Ollama 未运行 — HexClaw 将自动启动内置引擎',
-                          )
-                  }}
-                </span>
-                <button
-                  v-if="!ollamaDetecting"
-                  class="ml-auto text-xs px-2 py-0.5 rounded border"
-                  :style="{
-                    borderColor: 'var(--hc-border)',
-                    color: 'var(--hc-text-secondary)',
-                    background: 'transparent',
-                  }"
-                  @click="detectOllama"
-                >
-                  {{ t('common.refresh', '刷新') }}
-                </button>
-              </div>
-              <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-muted)' }">
-                {{ t('welcome.ollamaHint', '无需 API Key，模型在本机运行，完全离线可用。') }}
-              </p>
-            </div>
-            <div v-if="ollamaModels.length > 0" class="hc-settings__field">
-              <label class="hc-settings__label">{{
-                t('welcome.ollamaSelectModel', '选择模型')
-              }}</label>
-              <HcSelect v-model="model" :options="ollamaModelOptions" />
-            </div>
-            <p v-else-if="ollamaReady" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-              {{ t('welcome.ollamaNoModels', '暂无已下载模型，完成引导后可在设置页下载。') }}
-            </p>
-          </template>
-
-          <!-- 云 Provider：API Key + Model + 连接测试 -->
-          <template v-else>
-            <div class="hc-settings__field">
-              <label class="hc-settings__label">API Key</label>
-              <HcClearableField>
-                <input
-                  v-model="apiKey"
-                  type="password"
-                  class="hc-input"
-                  :placeholder="PROVIDER_PRESETS[provider].placeholder"
-                />
-              </HcClearableField>
-              <p
-                v-if="apiKey.trim().length === 0"
-                class="text-xs mt-1"
-                :style="{ color: 'var(--hc-warning, #f59e0b)' }"
-              >
-                {{ t('welcome.enterApiKey') }}
-              </p>
-            </div>
-            <div v-if="isCustomProvider" class="hc-settings__field">
-              <label class="hc-settings__label">Base URL</label>
-              <HcClearableField>
-                <input
-                  v-model="customBaseUrl"
-                  type="text"
-                  class="hc-input"
-                  placeholder="https://your-api.example.com/v1"
-                />
-              </HcClearableField>
-            </div>
-            <div class="hc-settings__field">
-              <label class="hc-settings__label">Model</label>
-              <HcClearableField v-if="isCustomProvider">
-                <input
-                  v-model="customModelId"
-                  type="text"
-                  class="hc-input"
-                  :placeholder="t('welcome.customModelPlaceholder')"
-                />
-              </HcClearableField>
-              <HcSelect v-else v-model="model" :options="providerModelOptions" />
-            </div>
-            <div
-              class="flex flex-wrap items-center gap-3 pt-1"
-              data-testid="welcome-connection-actions"
-            >
-              <button
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
-                :style="{
-                  borderColor: connectionResult?.ok
-                    ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)'
-                    : 'var(--hc-border)',
-                  color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-text-secondary)',
-                  background: 'var(--hc-bg-main)',
-                }"
-                :disabled="
-                  connectionTesting ||
-                  (requiresApiKey && apiKey.trim().length === 0) ||
-                  !(isCustomProvider ? customModelId.trim() : model) ||
-                  (isCustomProvider && !customBaseUrl.trim())
-                "
-                @click="testConnection"
-              >
-                <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-                <CheckCircle
-                  v-else-if="connectionResult?.ok"
-                  :size="12"
-                  style="color: var(--hc-success)"
-                />
-                <XCircle
-                  v-else-if="connectionResult && !connectionResult.ok"
-                  :size="12"
-                  style="color: var(--hc-error)"
-                />
-                {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
-              </button>
-
-              <p
-                v-if="connectionResult"
-                data-testid="welcome-connection-receipt"
-                class="text-xs px-3 py-1.5 rounded-lg inline-block"
-                :style="{
-                  background: connectionResult.ok
-                    ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)'
-                    : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
-                  color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
-                }"
-              >
-                {{ connectionResult.msg }}
-              </p>
-            </div>
-          </template>
-        </div>
-
-        <!-- Step 2: 选择 Agent -->
-        <div v-else-if="step === 1" class="space-y-3">
-          <div
-            v-for="agent in agentOptions"
-            :key="agent.role"
-            class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors hover:border-blue-500/30"
-            :style="{
-              borderColor:
-                selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
-              background: selectedAgentRole === agent.role ? 'var(--hc-bg-hover)' : 'transparent',
-            }"
-            @click="selectedAgentRole = agent.role"
-          >
-            <div
-              class="w-8 h-8 rounded-lg flex items-center justify-center"
-              :style="{ background: 'var(--hc-accent)', color: 'var(--hc-text-inverse)' }"
-            >
-              <Bot :size="16" />
-            </div>
-            <div class="min-w-0">
-              <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ agent.title }}
-              </div>
-              <div class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-secondary)' }">
-                {{ agent.description }}
-              </div>
-            </div>
-            <div
-              class="ml-auto w-4 h-4 rounded-full border flex items-center justify-center"
-              :style="{
-                borderColor:
-                  selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
-              }"
-            >
-              <div
-                v-if="selectedAgentRole === agent.role"
-                class="w-2 h-2 rounded-full"
-                :style="{ background: 'var(--hc-accent)' }"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- Step 3: 完成 -->
-        <div v-else class="text-center py-4">
-          <Sparkles :size="48" class="mx-auto mb-4" :style="{ color: 'var(--hc-accent)' }" />
-          <p class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">
-            {{ t('welcome.step3Desc') }}
-          </p>
-          <p class="text-xs mt-1 mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
-            {{ t('welcome.startJourney') }}
-          </p>
-          <div
-            class="mx-auto mt-5 max-w-sm rounded-xl border p-4 text-left"
-            :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
-          >
-            <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('welcome.summaryProvider')
-              }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{
-                PROVIDER_PRESETS[provider].name
-              }}</span>
-            </div>
-            <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('welcome.summaryModel')
-              }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{
-                isCustomProvider
-                  ? customModelId
-                  : providerModels.find((m) => m.id === model)?.name || model
-              }}</span>
-            </div>
-            <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('welcome.summaryAgent')
-              }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{ selectedAgentTitle }}</span>
-            </div>
-            <div class="flex items-center justify-between text-xs">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{
-                t('welcome.summaryConnection')
-              }}</span>
-              <span
-                :style="{ color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-error)' }"
-              >
-                {{
-                  connectionResult?.ok
-                    ? t('welcome.connectionReady')
-                    : t('welcome.connectionPending')
-                }}
-              </span>
-            </div>
-          </div>
-
-          <!-- 下一步引导：聊天之外的两个核心场景入口 -->
-          <div class="mx-auto mt-4 max-w-sm flex flex-col gap-2">
-            <button
-              class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:border-[var(--hc-accent)]"
-              :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
-              :disabled="finishing"
-              @click="finishWizard('/channels')"
-            >
-              <Radio :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
-              <span class="flex-1">
-                <span
-                  class="block text-xs font-medium"
-                  :style="{ color: 'var(--hc-text-primary)' }"
-                  >{{ t('welcome.quickChannels', '接入 IM 通道') }}</span
-                >
-                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{
-                  t('welcome.quickChannelsDesc', '让 AI 出现在你的微信 / 飞书 / Telegram 里')
-                }}</span>
-              </span>
-            </button>
-            <button
-              class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:border-[var(--hc-accent)]"
-              :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
-              :disabled="finishing"
-              @click="finishWizard('/automation')"
-            >
-              <Zap :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
-              <span class="flex-1">
-                <span
-                  class="block text-xs font-medium"
-                  :style="{ color: 'var(--hc-text-primary)' }"
-                  >{{ t('welcome.quickAutomation', '创建第一个定时任务') }}</span
-                >
-                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{
-                  t('welcome.quickAutomationDesc', '每天早上让 AI 主动给你发简报')
-                }}</span>
-              </span>
+  <div class="backend-overlay" @click.self="cancel">
+    <div ref="dialog" class="modal wiz" role="dialog" aria-modal="true" aria-labelledby="setup-title" tabindex="-1">
+      <div class="modal-h"><b id="setup-title">首次配置向导</b><button class="x" aria-label="关闭" :disabled="finishing" @click="cancel">✕</button></div>
+      <div class="wiz-steps"><template v-for="(label, index) in ['选择服务', '检查并开始']" :key="label"><div class="wiz-step" :class="{ done: index < step, on: index === step }"><span class="n">{{ index < step ? '✓' : index + 1 }}</span>{{ label }}</div><div v-if="index === 0" class="wiz-line" :class="{ done: step > 0 }" /></template></div>
+      <div class="wiz-body">
+        <div v-if="step === 0" class="wiz-pane on">
+          <div class="wiz-h">选择后端服务</div>
+          <p class="wiz-sub">帮助家长看懂错在哪、知道怎么讲、持续跟进复习。<br />先连接服务，再继续你的第一项任务。</p>
+          <div role="radiogroup" aria-label="首次配置的后端服务">
+            <button v-for="option in (['local', 'remote'] as const)" :key="option" type="button" class="wiz-opt" :class="{ sel: kind === option }" role="radio" :aria-checked="kind === option" @click="kind = option">
+              <span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><template v-if="option === 'local'"><rect x="3" y="3" width="18" height="13" rx="2" /><path d="M8 21h8M12 16v5" /></template><template v-else><rect x="4" y="3" width="16" height="7" rx="2" /><rect x="4" y="14" width="16" height="7" rx="2" /><path d="M8 6.5h.01M8 17.5h.01" /></template></svg></span>
+              <span class="wiz-copy"><span class="t">{{ option === 'local' ? '本机服务' : '远端服务' }}</span><span class="d">{{ option === 'local' ? '在此设备运行，由 HexClaw 自动管理' : '服务器持续运行，随时在钉钉辅导' }}</span></span><svg class="ck ic-sm" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
             </button>
           </div>
+          <div v-if="kind === 'remote'" class="wiz-remote">
+            <label class="mfield"><span>服务地址 *</span><input v-model="address" class="minput" placeholder="https://your-hexclaw.example.com" required spellcheck="false" autocomplete="url" /></label>
+            <label class="mfield"><span>访问令牌 *</span><input v-model="token" type="password" class="minput" :placeholder="savedToken ? '已保存访问令牌' : '输入访问令牌'" :required="!savedToken" aria-describedby="setup-token-hint" autocomplete="off" /><span id="setup-token-hint" class="backend-field-hint">填写远端 HexClaw 服务配置的访问令牌。</span></label>
+            <p class="wiz-scope">会话、学习记录、模型和钉钉连接由远端服务管理。<br />切换不迁移数据；服务器与模型持续可用时，电脑关机不影响钉钉辅导。</p>
+          </div>
+        </div>
+        <div v-else class="wiz-pane on">
+          <div class="wiz-h">检查服务与模型</div><p class="wiz-sub">服务连接和默认模型分别检查。</p>
+          <div aria-live="polite">
+            <div v-if="failure" class="backend-inline-status is-warn" role="status">{{ failureMessage }}</div>
+            <div v-else-if="checking" class="wiz-check"><span class="wiz-spin" /><div>正在检查 {{ service }}</div></div>
+            <template v-else-if="result">
+              <div class="wiz-check"><div><b>后端服务已连接</b><div class="wiz-check-detail">{{ service }} · {{ result.version }} · API v1</div></div><span class="st success">✓</span></div>
+              <div class="wiz-check"><div><b>{{ result.defaultModel ? '默认模型已选好' : '尚未配置默认模型' }}</b><div class="wiz-check-detail">{{ result.defaultModel || '服务已连接。配置模型后回到原任务，已填写的内容会保留。' }}</div></div><span class="st" :class="result.defaultModel ? 'success' : 'muted'">{{ result.defaultModel ? '✓' : '待配置' }}</span></div>
+            </template>
+          </div>
         </div>
       </div>
-
-      <!-- 操作按钮 -->
-      <div class="flex items-center justify-between">
-        <button
-          v-if="step > 0"
-          class="flex items-center gap-1 px-3 py-2 rounded-lg text-sm transition-colors"
-          :style="{ color: 'var(--hc-text-secondary)' }"
-          @click="prevStep"
-        >
-          <ArrowLeft :size="14" />
-          {{ t('welcome.prev') }}
-        </button>
-        <button
-          v-else
-          class="px-3 py-2 text-sm transition-colors"
-          :style="{
-            color: 'var(--hc-text-muted)',
-            opacity: finishing ? 0.5 : 1,
-            cursor: finishing ? 'not-allowed' : 'pointer',
-          }"
-          :disabled="finishing"
-          @click="skip"
-        >
-          {{ t('welcome.skip') }}
-        </button>
-
-        <button
-          class="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity"
-          :style="{
-            background: 'var(--hc-accent)',
-            opacity: (step === 0 && !canProceedFromStep0) || finishing ? 0.5 : 1,
-            cursor: (step === 0 && !canProceedFromStep0) || finishing ? 'not-allowed' : 'pointer',
-          }"
-          :disabled="finishing || (step === 0 && !canProceedFromStep0)"
-          @click="nextStep"
-        >
-          {{ step === 2 ? t('welcome.start') : t('welcome.next') }}
-          <ArrowRight :size="14" />
-        </button>
-      </div>
-      <p v-if="finishError" class="text-xs text-center mt-2" style="color: var(--hc-error)">
-        {{ finishError }}
-      </p>
+      <div class="wiz-f"><template v-if="step === 0"><div class="sp" /><button class="btn" @click="cancel">取消</button><button class="btn btn-primary" :disabled="!valid" @click="check">下一步</button></template><template v-else><button class="btn btn-ghost" :disabled="finishing" @click="back">上一步</button><div class="sp" /><button class="btn btn-primary" :disabled="checking || finishing || (!failure && !result)" @click="failure ? check() : finish()">{{ action }}</button></template></div>
     </div>
   </div>
 </template>
-
+<style scoped src="../components/settings/backend-service.css"></style>
 <style scoped>
-.hc-welcome__logo {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  object-fit: cover;
-}
+  .wiz{width:560px;max-width:94vw}
+  .wiz-steps{display:flex;align-items:center;padding:16px 22px 4px}
+  .wiz-step{display:inline-flex;align-items:center;gap:8px;color:var(--hc-text-muted);font-size:12.5px;white-space:nowrap}
+  .wiz-step .n{width:23px;height:23px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;
+      background:var(--hc-bg-active);color:var(--hc-text-secondary);flex-shrink:0;transition:.2s}
+  .wiz-step.on{color:var(--hc-text-primary)}
+  .wiz-step.on .n{background:var(--hc-accent);color:#fff}
+  .wiz-step.done{color:var(--hc-text-secondary)}.wiz-step.done .n{background:var(--hc-success);color:#fff}
+  .wiz-line{flex:1;height:2px;background:var(--hc-divider);margin:0 10px;border-radius:1px;min-width:16px}
+  .wiz-line.done{background:var(--hc-success)}
+  .wiz-body{padding:10px 22px 6px;min-height:236px}
+  .wiz-pane{display:none}.wiz-pane.on{display:block;animation:hcfade .18s ease}
+  .wiz-h{font-size:17px;font-weight:600;margin:6px 0 3px}
+  .wiz-sub{font-size:13px;color:var(--hc-text-secondary);margin:0 0 16px;line-height:1.5}
+  .wiz-opt{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border:.5px solid var(--hc-border);border-radius:12px;
+      background:var(--hc-bg-card);color:inherit;font:inherit;text-align:left;cursor:pointer;margin-bottom:10px;transition:border-color .15s,background .15s,box-shadow .15s}
+  .wiz-opt:hover{background:var(--hc-bg-hover)}
+  .wiz-opt.sel{border-color:var(--hc-accent);background:var(--hc-accent-subtle);box-shadow:0 0 0 3px var(--hc-accent-subtle)}
+  .wiz-opt .ico{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;background:var(--hc-bg-input);flex-shrink:0}
+  .wiz-opt .wiz-copy{display:block;min-width:0}
+  .wiz-opt .t{display:block;font-size:14px;font-weight:600}
+  .wiz-opt .d{display:block;font-size:12px;color:var(--hc-text-secondary);margin-top:2px}
+  .wiz-opt .ck{margin-left:auto;color:var(--hc-accent);opacity:0;flex-shrink:0;transition:opacity .15s}
+  .wiz-opt.sel .ck{opacity:1}
+  .wiz-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .wiz-grid .wiz-opt{margin-bottom:0}
+  .wiz-check{display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:11px;background:var(--hc-bg-card);
+      border:.5px solid var(--hc-border);margin-bottom:9px;font-size:13.5px}
+  .wiz-check .st{margin-left:auto;font-size:12px;white-space:nowrap}
+  .wiz-spin{width:15px;height:15px;border:2px solid var(--hc-border);border-top-color:var(--hc-accent);border-radius:50%;
+      animation:wizspin .7s linear infinite;flex-shrink:0}
+  @keyframes wizspin{to{transform:rotate(360deg)}}
+  .wiz-f{display:flex;align-items:center;gap:10px;padding:14px 22px;border-top:.5px solid var(--hc-border)}
+  .wiz-f .sp{flex:1}
+
+
+.wiz{max-height:calc(89vh - 16px);display:flex;flex-direction:column;color:var(--hc-text-primary)}
+.wiz-body{overflow:auto;min-height:min(236px,calc(89vh - 187px));flex:0 1 auto;padding-bottom:6px}
+.modal-h,.wiz-f,.wiz-steps{flex-shrink:0}
+.modal-h b,.wiz-h{letter-spacing:-.01em}
+.modal-h .x{font:13.3333px Arial;padding:1px 6px}
+.ic-sm{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.wiz-remote{margin-top:12px}
+.mfield{display:block;margin-bottom:15px;font-size:14px;color:var(--hc-text-primary)}
+.mfield>span:first-child{display:block;margin-bottom:6px;font-size:13px}
+.mfield>.backend-field-hint{display:block}
+.wiz-scope{font-size:12px;line-height:1.6;color:var(--hc-text-secondary);margin:8px 0 0}
+.wiz-check-detail{font-size:12px;color:var(--hc-text-secondary);margin-top:4px}
+.success{color:var(--hc-success)}
+.muted{color:var(--hc-text-muted)}
+.wiz-opt:hover{transform:translateY(-1px)}
+.wiz-opt.sel:hover{transform:none}
 </style>

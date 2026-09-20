@@ -10,6 +10,7 @@ import CommandPalette from '@/components/common/CommandPalette.vue'
 import { useAppStore } from '@/stores/app'
 import { useSettingsStore } from '@/stores/settings'
 import router from '@/router'
+import { dismissSplash } from '@/utils/splash'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const appStore = useAppStore()
@@ -98,22 +99,6 @@ async function warmupOllamaModel() {
   }
 }
 
-const MIN_SPLASH_MS = 700
-
-function dismissSplash() {
-  const splash = document.getElementById('splash-screen')
-  if (splash) {
-    if (splash.classList.contains('fade-out')) return
-    const elapsed = performance.now() - Number(splash.dataset.shownAt || 0)
-    const remaining = MIN_SPLASH_MS - elapsed
-    if (remaining > 0) {
-      window.setTimeout(dismissSplash, remaining)
-      return
-    }
-    splash.classList.add('fade-out')
-    splash.addEventListener('transitionend', () => splash.remove(), { once: true })
-  }
-}
 
 onMounted(() => {
   // 事件监听注册可能迟滞，健康轮询与 splash 兜底必须独立建立。

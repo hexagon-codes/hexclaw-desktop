@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from '@/utils/logger'
 import { navigationItems } from '@/config/navigation'
+import { readModelSettingsReturn, saveModelSettingsReturn } from '@/services/backend-context'
 
 const navRouteComponents = {
   chat: () => import('@/views/ChatView.vue'),
@@ -130,6 +131,9 @@ router.beforeEach(async (to) => {
       const hasProvider = (settingsStore.config?.llm.providers?.length ?? 0) > 0
       const welcomeCompleted = settingsStore.config?.general?.welcomeCompleted === true
       if (!hasProvider && !welcomeCompleted) {
+        if (to.path === '/chat' && !readModelSettingsReturn()) {
+          saveModelSettingsReturn({ path: to.fullPath, sessionId: null, agentRole: typeof to.query.role === 'string' ? to.query.role : '', chatMode: 'chat' })
+        }
         return '/welcome'
       }
       markWelcomeDone()

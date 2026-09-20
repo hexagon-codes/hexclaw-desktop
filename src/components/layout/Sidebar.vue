@@ -99,7 +99,7 @@ function getGroupItems(group: NavGroup) {
           <button
             class="hc-sidebar__restart-btn"
             :class="{ 'hc-sidebar__restart-btn--spinning': appStore.isRestarting }"
-            :title="t('nav.restartEngine', 'Restart engine')"
+            :title="backendContext?.kind === 'remote' ? '重新连接' : t('nav.restartEngine', 'Restart engine')"
             :disabled="appStore.isRestarting"
             @click.stop="backendContext?.kind === 'remote' ? appStore.checkConnection() : appStore.restartSidecar()"
           >

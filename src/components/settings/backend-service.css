@@ -36,7 +36,8 @@
   .runtime-service-card__hint{min-width:0;flex:1;color:var(--hc-text-muted);font-size:11px;line-height:1.45}
   .runtime-service-card__manage{flex-shrink:0}
   /* 服务配置正文独立滚动，连接动作始终保留在弹窗底部。 */
-  .backend-modal{width:min(720px,92vw);max-height:calc(100vh - 64px);display:flex;flex-direction:column}
+  /* 正文可滚动，页脚在短窗口中仍留有可见空间。 */
+  .backend-modal{width:min(720px,92vw);max-height:calc(89vh - 16px);display:flex;flex-direction:column}
   .backend-modal .modal-h,.backend-modal .modal-f{flex-shrink:0}
   .backend-modal .modal-b{padding:0;max-height:none;min-height:0;overflow:auto}
   .backend-modal .backend-page{padding:18px 20px}
@@ -99,8 +100,11 @@
   .sb-foot-svc:hover{color:var(--hc-text-primary)}
   @media (max-width: 720px){.backend-location-grid,.backend-form-grid{grid-template-columns:1fr}.backend-current-card__top{gap:10px}.backend-actions{justify-content:stretch}.backend-actions .btn{flex:1}}
   @media (prefers-reduced-motion:reduce){.backend-location-card{transition:none}.backend-live-dot{animation:none}}
-.backend-overlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:blur(8px)}
-.sec-label{margin:18px 0 10px;color:var(--hc-text-muted);font-size:11px;font-weight:600}
-.minput{box-sizing:border-box;padding:9px 12px;border:.5px solid var(--hc-border);border-radius:9px;background:var(--hc-bg-input);color:var(--hc-text-primary);font:inherit;font-size:13px;line-height:20px;outline:none}
+.backend-overlay{position:fixed;inset:0;z-index:9100;display:flex;align-items:flex-start;justify-content:center;padding-top:11vh;background:rgba(8,18,32,.4);backdrop-filter:blur(3px) saturate(120%);-webkit-backdrop-filter:blur(3px) saturate(120%);font-family:system-ui,-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif}
+.sec-label{font-size:11px;letter-spacing:.04em;color:var(--hc-text-muted);text-transform:uppercase;padding:6px 0;border-bottom:.5px solid var(--hc-divider);margin:18px 0 4px;display:flex;align-items:center;font-weight:400}
+.minput{width:100%;box-sizing:border-box;padding:9px 12px;border:.5px solid var(--hc-border);border-radius:10px;background:var(--hc-bg-input);color:var(--hc-text-primary);font:inherit;font-size:13px;outline:none}
+.minput::placeholder{color:#757575;opacity:1}
+.backend-modal .modal-h .x{font:13.3333px Arial;padding:1px 6px}
+.backend-modal .modal-h b{letter-spacing:-.15px}
 .minput:focus{border-color:var(--hc-accent);box-shadow:0 0 0 3px var(--hc-accent-subtle)}
 button:disabled{opacity:.45;cursor:default}
