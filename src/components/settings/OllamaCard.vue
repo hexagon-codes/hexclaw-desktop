@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { backendContext, backendScopeKey, assertBackendActive } from '@/services/backend-context'
+import { activeOllamaTarget } from '@/api/ollama'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 
 // 模型目录：name + 预估 RAM（GB，基于 Q4_K_M 量化）
@@ -141,6 +143,9 @@ import {
 } from 'lucide-vue-next'
 import {
   getOllamaStatus,
+  getOllamaTarget,
+  resumeOllamaPulls,
+  type OllamaTarget,
   pullOllamaModel,
   getOllamaRunningResult,
   loadOllamaModel,
@@ -269,6 +274,39 @@ const stateLabel = computed(() => {
   return ''
 })
 
+const target = ref<OllamaTarget | null>(null)
+const targetMode = ref<'default' | 'custom'>('default')
+const targetAddress = ref('')
+const targetSaving = ref(false)
+const targetDirty = computed(() => !!target.value && (targetMode.value !== target.value.mode || (targetMode.value === 'custom' && targetAddress.value.trim() !== target.value.custom_base_url)))
+const remoteBackend = computed(() => backendContext.value?.kind === 'remote')
+const managedLocal = computed(() => !remoteBackend.value && targetMode.value === 'default' && !!status.value?.can_restart)
+const targetHint = computed(() => `访问目标：${targetMode.value === 'custom' ? targetAddress.value || '待填写目标地址' : target.value?.resolved_base_url || 'http://127.0.0.1:11434'}\n模型运行和下载位置：${targetMode.value === 'custom' ? '目标 Ollama 所在设备' : remoteBackend.value ? '后端服务器' : '此设备'}。${!remoteBackend.value && targetMode.value === 'default' ? '由 HexClaw 自动检测或启动。' : ''}`)
+async function readTarget() {
+  target.value = await getOllamaTarget()
+  targetMode.value = target.value.mode
+  targetAddress.value = target.value.custom_base_url
+}
+async function saveTarget() {
+  if (!targetDirty.value || !target.value || targetSaving.value) return
+  if (targetMode.value === 'custom' && !/^https?:\/\/[^\s]+$/.test(targetAddress.value.trim())) throw new Error('A complete Ollama service URL is required')
+  targetSaving.value = true
+  const scope = backendScopeKey()
+  try {
+    const ids = target.value.associated_provider_instance_ids.length ? target.value.associated_provider_instance_ids : (ollamaProviderRef.value?.providerInstanceId ? [ollamaProviderRef.value.providerInstanceId] : [])
+    target.value = await settingsStore.saveOllamaConnection({ ...target.value, mode: targetMode.value, custom_base_url: targetAddress.value.trim() }, ids)
+    assertBackendActive(scope)
+    targetAddress.value = target.value.custom_base_url
+  } finally { targetSaving.value = false }
+}
+async function selectTargetMode(mode: 'default' | 'custom') {
+  targetMode.value = mode
+  if (mode === 'default') { try { await saveTarget(); await detect() } catch (error) { toast.error(String(error)) } }
+}
+async function testTarget() {
+  try { await saveTarget(); await detect() } catch (error) { toast.error(String(error)) }
+}
+
 async function detect() {
   if (detecting.value && !waitingInstall.value) return
   detecting.value = true
@@ -278,7 +316,7 @@ async function detect() {
     if (status.value?.running) {
       await refreshRunning()
       // Ollama 运行中 → 自动确保 Provider 存在并同步模型列表
-      if (!hasOllamaProvider.value) {
+      if (!hasOllamaProvider.value && !remoteBackend.value && targetMode.value === 'default') {
         emit('associate')
       }
       await settingsStore.syncOllamaModels()
@@ -293,6 +331,7 @@ async function detect() {
           dp.name?.toLowerCase().includes('ollama'))
       if (
         isOllamaDefault &&
+        (!target.value?.associated_provider_instance_ids.length || target.value.associated_provider_instance_ids.includes(dp?.providerInstanceId ?? '')) &&
         runningProbeState.value === 'ready' &&
         runningModels.value.length === 0 &&
         status.value?.models?.length
@@ -335,6 +374,7 @@ async function detect() {
       stopPolling()
     }
   } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return
     // During install polling, don't show errors — just keep waiting
     if (!waitingInstall.value) {
       error.value = e instanceof Error ? e.message : 'Unknown error'
@@ -427,6 +467,15 @@ async function finalizePulledModel(model: string) {
 const runningModels = ref<OllamaRunningModel[]>([])
 const runningProbeState = ref<'loading' | 'ready' | 'error'>('loading')
 const runningProbeError = ref('')
+let runningProbeRevision = 0
+watch(activeOllamaTarget, (next, previous) => {
+  if (!previous) return
+  if (next?.target_id === previous?.target_id && next?.target_revision === previous?.target_revision) return
+  runningProbeRevision++
+  runningModels.value = []
+  runningProbeError.value = ''
+  runningProbeState.value = 'loading'
+})
 const unloadingModel = ref('')
 const deletingModel = ref('')
 const pendingDeleteModel = ref<string | null>(null)
@@ -437,10 +486,12 @@ function isModelRunning(name: string): boolean {
 }
 
 async function refreshRunning() {
+  const revision = ++runningProbeRevision
   runningProbeState.value = 'loading'
   runningProbeError.value = ''
   try {
     const result = await getOllamaRunningResult()
+    if (revision !== runningProbeRevision) return
     runningModels.value = result.models
     if (!result.reachable || result.error) {
       runningProbeState.value = 'error'
@@ -450,6 +501,7 @@ async function refreshRunning() {
     }
     runningProbeState.value = 'ready'
   } catch (probeError) {
+    if (revision !== runningProbeRevision || (probeError instanceof DOMException && probeError.name === 'AbortError')) return
     runningModels.value = []
     runningProbeState.value = 'error'
     runningProbeError.value =
@@ -527,25 +579,15 @@ const restarting = ref(false)
 
 /** 重启 Ollama — 优先 Tauri 命令（直接管理进程），回退到 sidecar API */
 async function handleRestart() {
+  if (!managedLocal.value) return
   restarting.value = true
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('restart_ollama')
-    await detect()
-  } catch {
-    // 非 Tauri 环境或 Tauri 命令失败 → 回退到 sidecar API
-    try {
-      await restartOllama()
-      await detect()
-    } catch {
-      /* ignore */
-    }
-  }
-  restarting.value = false
+  try { await restartOllama(); await detect() } catch (error) { toast.error(String(error)) }
+  finally { restarting.value = false }
 }
 
 /** 重启内嵌 Ollama 引擎（Tauri 命令，主体按钮用） */
 async function handleRestartEngine() {
+  if (!managedLocal.value) return
   restarting.value = true
   try {
     const { invoke } = await import('@tauri-apps/api/core')
@@ -772,9 +814,22 @@ async function startPull() {
   }
 }
 
-onMounted(() => {
-  detect()
-  detectSystemMemory()
+onMounted(async () => {
+  try {
+    await readTarget()
+    await detect()
+    if (!remoteBackend.value && targetMode.value === 'default') await detectSystemMemory()
+    pullAbort = new AbortController()
+    await resumeOllamaPulls((progress) => {
+      pulling.value = progress.state === 'running'
+      pullStatus.value = mapPullStatus(progress.status)
+      if (progress.total && progress.completed !== undefined) pullProgress.value = Math.round(progress.completed / progress.total * 100)
+      if (progress.error) pullError.value = progress.error
+    }, pullAbort.signal)
+    await refreshModels()
+  } catch (error) {
+    if ((error as DOMException)?.name !== 'AbortError') pullError.value = String(error)
+  } finally { pulling.value = false }
 })
 onBeforeUnmount(() => {
   clearPollTimer()
@@ -826,7 +881,7 @@ function toggleOllamaProvider() {
   emit('toggleProvider')
 }
 
-defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
+defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveTarget, readTarget })
 </script>
 
 <template>
@@ -843,8 +898,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             class="ollama-card__title"
             title="ollama.com"
             @click.stop
-            >{{ t('settings.ollama.title', '本地模型 (Ollama)')
-            }}<ExternalLink :size="10" class="ollama-card__title-link"
+            >Ollama<ExternalLink :size="10" class="ollama-card__title-link"
           /></a>
           <div v-if="status?.version" class="ollama-card__meta">
             {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} ·
@@ -876,7 +930,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
         <span class="ollama-card__header-divider"></span>
         <!-- 重启：仅异常/未运行时显示 -->
         <button
-          v-if="state === 'not_running' || state === 'error'"
+          v-if="managedLocal"
           class="ollama-card__refresh"
           :disabled="restarting"
           :title="t('settings.ollama.restartEngine', '启动引擎')"
@@ -916,8 +970,14 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
       </div>
     </div>
 
+    <div class="ollama-runtime" data-ollama-runtime :data-ollama-runtime-mode="targetMode">
+      <div class="ollama-runtime__head"><div class="ollama-runtime__title"><b>连接方式</b><span>由当前后端访问 Ollama，模型文件保存在目标设备。</span></div><span class="ollama-runtime__effective">{{ remoteBackend ? '远端后端发起请求' : '本机后端发起请求' }}</span></div>
+      <div class="ollama-runtime__options" role="radiogroup" aria-label="Ollama 连接方式"><button v-for="mode in (['default', 'custom'] as const)" :key="mode" class="ollama-runtime__option" :class="{ 'is-active': targetMode === mode }" role="radio" :aria-checked="targetMode === mode" :disabled="targetSaving" @click="selectTargetMode(mode)">{{ mode === 'default' ? '默认地址' : '自定义地址' }}</button></div>
+      <div class="ollama-runtime__hint">{{ targetHint }}</div>
+      <div v-if="targetMode === 'custom'" class="ollama-runtime__custom"><div class="provider-config-field"><label for="ollamaCustomUrl">Ollama 服务地址</label><span class="provider-clearable"><input id="ollamaCustomUrl" v-model="targetAddress" class="minput" spellcheck="false" placeholder="http://192.168.1.20:11434" :disabled="targetSaving" @change="testTarget"><button class="provider-clear-button" aria-label="清除 Ollama 服务地址" @click="targetAddress = ''">×</button></span></div><button class="btn btn-test" :disabled="targetSaving || detecting" @click="testTarget">{{ detecting ? '测试中…' : '测试连接' }}</button><p class="ollama-runtime__custom-note">{{ remoteBackend ? '填写远端后端可访问的地址。127.0.0.1 指后端服务器；访问此设备需使用其可达网络地址。' : '填写本机后端可访问的 Ollama 地址，可使用其他端口或设备。' }}</p></div>
+    </div>
     <!-- Body -->
-    <Transition name="ollama-body" mode="out-in">
+    <Transition v-if="!targetDirty" name="ollama-body" mode="out-in">
       <!-- Detecting -->
       <div v-if="state === 'detecting'" key="detecting" class="ollama-card__body">
         <div class="ollama-card__detect-placeholder">
@@ -932,6 +992,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
           {{ t('settings.ollama.notRunningHint') }}
         </p>
         <button
+          v-if="managedLocal"
           class="ollama-card__action-btn ollama-card__action-btn--primary"
           :disabled="restarting"
           @click="handleRestartEngine"
@@ -2057,3 +2118,28 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   width: 150px;
 }
 </style>
+
+<style scoped>
+  .ollama-runtime{display:flex;flex-direction:column;gap:9px;margin:12px 0 10px;padding:12px;border:1px solid var(--hc-border);border-radius:12px;background:var(--hc-bg-input)}
+  .ollama-runtime__head{display:flex;align-items:flex-start;gap:10px;min-width:0}
+  .ollama-runtime__title{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+  .ollama-runtime__title b{font-size:12.5px;color:var(--hc-text-primary)}
+  .ollama-runtime__title span{color:var(--hc-text-secondary);font-size:12px;line-height:1.5}
+  .ollama-runtime__effective{flex:none;padding:3px 8px;border-radius:7px;background:var(--hc-accent-subtle);color:var(--hc-accent);font-size:10.5px;font-weight:650;white-space:nowrap}
+  .ollama-runtime__options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .ollama-runtime__option{min-width:0;min-height:34px;padding:7px 8px;border:1px solid var(--hc-border);border-radius:9px;background:var(--hc-bg-card);color:var(--hc-text-secondary);font:inherit;font-size:11.5px;cursor:pointer;transition:border-color .16s,background .16s,color .16s,box-shadow .16s}
+  .ollama-runtime__option:hover{border-color:var(--hc-border-hl);background:var(--hc-bg-hover);color:var(--hc-text-primary)}
+  .ollama-runtime__option.is-active{border-color:var(--hc-accent);background:var(--hc-accent-subtle);color:var(--hc-accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--hc-accent) 15%,transparent)}
+  .ollama-runtime__option:focus-visible{outline:2px solid var(--hc-accent);outline-offset:2px}
+  .ollama-runtime__hint{color:var(--hc-text-secondary);font-size:12px;line-height:1.6;white-space:pre-line}
+  .ollama-runtime__custom{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:6px 8px;padding-top:9px;border-top:1px solid var(--hc-border-subtle,var(--hc-border))}
+  .ollama-runtime__custom[hidden]{display:none}
+  .ollama-runtime__custom .provider-config-field{min-width:0}
+  .ollama-runtime__custom .btn{height:34px;white-space:nowrap}
+  .ollama-runtime__custom-note{grid-column:1/-1;margin:0;color:var(--hc-text-secondary);font-size:12px;line-height:1.6}
+  @media (max-width:720px){.ollama-runtime__options{grid-template-columns:1fr}.ollama-runtime__custom{grid-template-columns:1fr}.ollama-runtime__custom .btn{width:100%}}
+  @media (prefers-reduced-motion:reduce){.ollama-runtime__option{transition:none}}
+
+.provider-config-field{display:flex;flex-direction:column;gap:6px;font-size:12px}.provider-clearable{display:flex;align-items:center;position:relative}.provider-clearable .minput{width:100%;padding-right:28px}.provider-clear-button{position:absolute;right:5px;border:0;background:transparent;color:var(--hc-text-muted)}
+</style>
+<style scoped src="./backend-service.css"></style>

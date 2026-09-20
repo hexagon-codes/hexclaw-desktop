@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import BackendServiceCard from '@/components/settings/BackendServiceCard.vue'
-import { backendContext } from '@/services/backend-context'
+import { backendContext, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
+import { useChatStore } from '@/stores/chat'
 import { useI18n } from 'vue-i18n'
 import {
   Key,
@@ -53,7 +55,7 @@ import { useToast } from '@/composables'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
 import { MODEL_CAPABILITY_DISPLAY } from '@/config/model-capability-display'
-import { OLLAMA_BASE } from '@/config/env'
+import { getOllamaTarget } from '@/api/ollama'
 import { isCatalogModelFree } from '@/types'
 import type {
   ProviderConfig,
@@ -79,6 +81,27 @@ import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 const { t, locale } = useI18n()
 const toast = useToast()
 const settingsStore = useSettingsStore()
+const router = useRouter()
+const taskReturn = ref(readModelSettingsReturn())
+const returningToTask = ref(false)
+const settingsPersisting = ref(false)
+const returnModelReady = computed(() => Boolean(settingsStore.config?.llm.defaultModel) && !isDirty.value && !settingsPersisting.value)
+async function resumeConfiguredTask() {
+  const target = taskReturn.value
+  if (!target || returningToTask.value) return
+  returningToTask.value = true
+  try {
+    await flushAutoSave()
+    const chat = useChatStore()
+    if (target.sessionId && chat.currentSessionId !== target.sessionId) await chat.selectSession(target.sessionId)
+    chat.agentRole = target.agentRole
+    chat.chatMode = target.chatMode
+    await router.push(target.path)
+    clearModelSettingsReturn()
+    taskReturn.value = null
+  } catch (error) { toast.error(String(error)) }
+  finally { returningToTask.value = false }
+}
 const thirdPartyAiServicesHref = computed(() => thirdPartyAiServicesUrl(locale.value))
 
 const catalogStore = useModelCatalogStore()
@@ -298,17 +321,18 @@ async function persistSettings({
 } = {}) {
   if (!settingsStore.config) return
 
-  const result = await settingsStore.saveConfig(settingsStore.config)
-
-  if (refreshRuntimeInfo) {
-    await loadRuntimeInfo()
-  }
-
-  if (showSavedFeedback && !result.securitySyncFailed) {
-    saved.value = true
-    setTimeout(() => {
-      saved.value = false
-    }, 2000)
+  settingsPersisting.value = true
+  try {
+    const result = await settingsStore.saveConfig(settingsStore.config)
+    if (refreshRuntimeInfo) {
+      await loadRuntimeInfo()
+    }
+    if (showSavedFeedback && !result.securitySyncFailed) {
+      saved.value = true
+      setTimeout(() => { saved.value = false }, 2000)
+    }
+  } finally {
+    settingsPersisting.value = false
   }
 }
 
@@ -718,7 +742,7 @@ const runtimeDefaultModel = computed(() => {
 })
 const runtimeApiEndpoint = computed(
   () =>
-    `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
+    backendContext.value?.apiBase ?? `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
 const runtimeLocalStoreFile = computed(() => backendContext.value?.kind === 'remote' ? '远端服务 · 独立数据' : '本机服务 · data.db')
 const runtimeModeShort = computed(() => {
@@ -759,26 +783,33 @@ async function loadRuntimeInfo() {
 }
 
 /** 添加一个新 Provider */
-function handleAssociateOllama() {
+async function handleAssociateOllama() {
   // 防止重复添加 Ollama
   const alreadyExists = settingsStore.config?.llm.providers.some((p) => p.type === 'ollama')
   if (alreadyExists) return
 
   const ollamaPreset = PROVIDER_PRESETS['ollama']
   if (ollamaPreset) {
+    try {
+    const target = await getOllamaTarget()
     settingsStore.addProvider({
       name: ollamaPreset.name,
       type: 'ollama' as ProviderType,
       enabled: true,
       apiKey: '',
-      baseUrl: ollamaPreset.defaultBaseUrl || OLLAMA_BASE,
-      models: [...(ollamaPreset.defaultModels || [])],
+      baseUrl: target.resolved_base_url,
+      models: [],
     })
-    autoSave()
+    await flushAutoSave({ force: true })
+    const provider = settingsStore.config?.llm.providers.find((p) => p.type === 'ollama')
+    if (provider?.providerInstanceId) {
+      await settingsStore.saveOllamaConnection(target, [provider.providerInstanceId])
+    }
+    } catch (error) { toast.error(error instanceof Error ? error.message : String(error)) }
   }
 }
 
-function handleAddProvider() {
+async function handleAddProvider() {
   const preset = PROVIDER_PRESETS[addProviderType.value]
 
   // 防止重复添加 Ollama（只允许一个）
@@ -788,6 +819,11 @@ function handleAddProvider() {
       showAddProvider.value = false
       return
     }
+    await handleAssociateOllama()
+    showAddProvider.value = false
+    const provider = settingsStore.config?.llm.providers.find((item) => item.type === 'ollama')
+    if (provider) editingProviderId.value = provider.id
+    return
   }
 
   settingsStore.addProvider({
@@ -857,12 +893,14 @@ function toggleProvider(provider: ProviderConfig) {
   autoSave()
 }
 
-function handleToggleOllamaProvider() {
+async function handleToggleOllamaProvider() {
   const ollamaProvider = config.value?.llm.providers.find(
     (p) => p.type === 'ollama' || p.name?.toLowerCase().includes('ollama'),
   )
   if (ollamaProvider) {
     toggleProvider(ollamaProvider)
+  } else {
+    await handleAssociateOllama()
   }
 }
 
@@ -1675,6 +1713,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
         <template v-if="config">
           <!-- LLM Providers -->
           <div v-if="activeSection === 'llm'" class="hc-settings__section" style="max-width: 600px">
+            <div v-if="taskReturn" class="hc-settings__task-return" data-task-return>
+              <div>
+                <span>{{ returnModelReady ? '默认模型已选好，可以继续原任务。' : '配置模型后继续原任务，已填写的内容会保留。' }}</span>
+                <button class="hc-btn" :class="{ 'hc-btn-primary': returnModelReady }" :disabled="returningToTask" @click="resumeConfiguredTask">{{ returnModelReady ? '继续原任务' : '返回原任务' }}</button>
+              </div>
+            </div>
             <!-- ── 默认行为 ── -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">默认行为</span>
@@ -2749,6 +2793,29 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 </template>
 
 <style scoped>
+.hc-settings__task-return {
+  margin-bottom: 16px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  padding: 11px 13px;
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  line-height: 1.55;
+}
+.hc-settings__task-return > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.hc-settings__task-return span {
+  flex: 1;
+  min-width: 180px;
+}
+.hc-settings__task-return button {
+  border-radius: 10px;
+}
 .hc-settings {
   height: 100%;
   display: flex;

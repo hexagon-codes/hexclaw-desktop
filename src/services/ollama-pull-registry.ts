@@ -1,3 +1,5 @@
+import { backendStorageKey } from './backend-context'
+import { activeOllamaTarget } from '@/api/ollama'
 import { reactive } from 'vue'
 import { pullOllamaModel, type OllamaPullProgress } from '@/api/ollama'
 
@@ -13,8 +15,11 @@ export interface SharedOllamaPullTask {
 }
 
 interface InternalPullTask extends SharedOllamaPullTask {
+  key: string
   cleanupTimer: ReturnType<typeof setTimeout> | null
 }
+
+function modelKey(model: string) { return backendStorageKey(`ollama:${activeOllamaTarget.value?.target_id ?? 'unknown'}:${activeOllamaTarget.value?.target_revision ?? 0}:${model}`) }
 
 const states = reactive(new Map<string, SharedOllamaPullState>())
 const tasks = new Map<string, InternalPullTask>()
@@ -33,41 +38,42 @@ function progressPercent(progress: OllamaPullProgress): number | null {
 }
 
 function removeTask(task: InternalPullTask) {
-  if (tasks.get(task.model) !== task) return
+  if (tasks.get(task.key) !== task) return
   if (task.cleanupTimer !== null) clearTimeout(task.cleanupTimer)
-  tasks.delete(task.model)
-  states.delete(task.model)
+  tasks.delete(task.key)
+  states.delete(task.key)
 }
 
 export function getSharedOllamaPullState(model: string): SharedOllamaPullState | undefined {
-  return states.get(model)
+  return states.get(modelKey(model))
 }
 
 export function getSharedOllamaPullTask(model: string): SharedOllamaPullTask | undefined {
-  return tasks.get(model)
+  return tasks.get(modelKey(model))
 }
 
 export function startSharedOllamaPull(model: string): {
   task: SharedOllamaPullTask
   started: boolean
 } {
-  const existing = tasks.get(model)
+  const key = modelKey(model)
+  const existing = tasks.get(key)
   if (existing) return { task: existing, started: false }
 
-  states.set(model, { progress: null })
+  states.set(key, { progress: null })
   const promise = Promise.resolve().then(() =>
     pullOllamaModel(model, (progress) => {
-      const state = states.get(model)
+      const state = states.get(key)
       if (state) state.progress = progressPercent(progress)
     }),
   )
-  const task: InternalPullTask = { model, promise, cleanupTimer: null }
-  tasks.set(model, task)
+  const task: InternalPullTask = { model, promise, key, cleanupTimer: null }
+  tasks.set(key, task)
 
   void promise.then(
     () => {
-      if (tasks.get(model) !== task) return
-      const state = states.get(model)
+      if (tasks.get(key) !== task) return
+      const state = states.get(key)
       if (state) state.progress = 100
       // Keep a completed task briefly so a remounted view can join canonical
       // verification instead of starting a duplicate pull.
@@ -80,6 +86,6 @@ export function startSharedOllamaPull(model: string): {
 }
 
 export function releaseSharedOllamaPull(task: SharedOllamaPullTask) {
-  const current = tasks.get(task.model)
+  const current = [...tasks.values()].find((item) => item.promise === task.promise)
   if (current?.promise === task.promise) removeTask(current)
 }

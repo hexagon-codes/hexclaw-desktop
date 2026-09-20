@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
 import { getLLMConfig, updateLLMConfig } from '@/api/config'
-import { getOllamaStatus } from '@/api/ollama'
+import { getOllamaStatus, saveOllamaTarget, type OllamaTarget } from '@/api/ollama'
 import { updateConfig } from '@/api/settings'
 import { isTauri } from '@/utils/platform'
 import type {
@@ -146,6 +146,34 @@ export const useSettingsStore = defineStore('settings', () => {
     recordLLMConfigConditions,
   })
 
+  const ollamaAddressTransitions: Array<{ id: string; before: string; after: string }> = []
+  function reconcileOllamaAddresses(providers: ProviderConfig[]) {
+    for (const change of ollamaAddressTransitions) {
+      for (const provider of providers) {
+        if (provider.providerInstanceId === change.id && provider.baseUrl === change.before) provider.baseUrl = change.after
+      }
+    }
+  }
+  async function saveOllamaConnection(target: OllamaTarget, ids: string[]): Promise<OllamaTarget> {
+    let saved: OllamaTarget | undefined
+    await providerSync.enqueue(async () => {
+      const before = await getLLMConfig()
+      saved = await saveOllamaTarget(target, ids)
+      const after = await getLLMConfig()
+      recordLLMConfigConditions(after)
+      for (const provider of Object.values(after.providers)) {
+        const previous = Object.values(before.providers).find((item) => item.provider_instance_id === provider.provider_instance_id)
+        if (previous && provider.provider_instance_id && previous.base_url !== provider.base_url) {
+          ollamaAddressTransitions.push({ id: provider.provider_instance_id, before: previous.base_url, after: provider.base_url })
+        }
+      }
+      if (config.value) reconcileOllamaAddresses(config.value.llm.providers)
+      if (runtimeProviders.value) reconcileOllamaAddresses(runtimeProviders.value)
+    })
+    if (!saved) throw new Error('Ollama target save was not confirmed')
+    return saved
+  }
+
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
   async function loadConfig({ force = false } = {}) {
     // 已有 providers 且非强制重载，说明完整配置已就绪，无需重新加载
@@ -221,6 +249,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
       // 合并默认值（非 LLM 部分）——保留已有的 LLM 配置，避免切页时短暂清空 providers
       const defaults = defaultConfig()
+      if (backendContext.value?.kind === 'remote') { defaults.llm.providers = []; defaults.llm.defaultModel = ''; defaults.llm.defaultProviderId = '' }
       const defaultRouting = defaults.llm.routing ?? {
         enabled: false,
         strategy: 'cost-aware',
@@ -286,6 +315,7 @@ export const useSettingsStore = defineStore('settings', () => {
     } catch (e) {
       logger.error('加载配置失败', e)
       config.value = defaultConfig()
+      if (backendContext.value?.kind === 'remote') { config.value.llm.providers = []; config.value.llm.defaultModel = ''; config.value.llm.defaultProviderId = '' }
       syncedSecurity.value = cloneSecurity(config.value.security)
       syncedSandbox.value = cloneSandbox(config.value.sandbox ?? fallbackSandbox())
     }
@@ -310,7 +340,7 @@ export const useSettingsStore = defineStore('settings', () => {
         const liveProviders = await restoreProviderApiKeys(
           backendToProviders(backendConfig, localProviders),
         )
-        const providers = appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
+        const providers = backendContext.value?.kind === 'remote' ? liveProviders : appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
 
         logger.debug('Provider 配置已转换', {
           providerCount: providers.length,
@@ -412,6 +442,8 @@ export const useSettingsStore = defineStore('settings', () => {
 
     const persistJob = async () => {
       const plainConfig: AppConfig = JSON.parse(JSON.stringify(requestedConfig))
+      // 地址联合提交与普通模型编辑共用保存队列，旧快照不得回写前一目标。
+      reconcileOllamaAddresses(plainConfig.llm.providers)
       // 前一项排队保存可能刚拿到服务端身份；构造本次 payload 前先吸收，避免并发重命名漂移 key。
       plainConfig.llm.providers = mergeProviderRuntimeIdentities(plainConfig.llm.providers, [
         ...(runtimeProviders.value ?? []),
@@ -445,7 +477,8 @@ export const useSettingsStore = defineStore('settings', () => {
         const liveAfterSave = await restoreProviderApiKeys(
           backendToProviders(backendSnap, plainConfig.llm.providers),
         )
-        const mergedAfterSave = appendLocalProvidersMissingFromRuntime(
+        const remote = backendContext.value?.kind === 'remote'
+        const mergedAfterSave = remote ? liveAfterSave : appendLocalProvidersMissingFromRuntime(
           liveAfterSave,
           plainConfig.llm.providers,
         )
@@ -454,7 +487,7 @@ export const useSettingsStore = defineStore('settings', () => {
             backendSnap.default_reasoning_policy,
           )
         }
-        plainConfig.llm.providers = mergeProviderRuntimeIdentities(
+        plainConfig.llm.providers = remote ? mergedAfterSave : mergeProviderRuntimeIdentities(
           plainConfig.llm.providers,
           mergedAfterSave,
         )
@@ -462,7 +495,7 @@ export const useSettingsStore = defineStore('settings', () => {
           saveRevision === latestSaveRevision &&
           JSON.stringify(config.value) === requestedConfigSignature
         if (config.value) {
-          config.value.llm.providers = mergeProviderRuntimeIdentities(
+          config.value.llm.providers = remote && activeStillMatchesRequest ? cloneProviders(mergedAfterSave) : mergeProviderRuntimeIdentities(
             config.value.llm.providers,
             mergedAfterSave,
           )
@@ -608,7 +641,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function syncOllamaModels() {
     try {
       const status = await getOllamaStatus()
-      if (!status.running) return
+      if (!status.running) { ollamaModelsCache.value = []; return }
       ollamaModelsCache.value = (status.models || []).map((m) => ({
         id: m.name,
         name: m.name,
@@ -639,6 +672,7 @@ export const useSettingsStore = defineStore('settings', () => {
     availableModels,
     loadConfig,
     saveConfig,
+    saveOllamaConnection,
     addProvider,
     updateProvider,
     removeProvider,

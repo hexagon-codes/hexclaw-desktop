@@ -1,5 +1,7 @@
-import { env, OLLAMA_BASE } from '@/config/env'
-import { apiPost, apiDelete } from './client'
+import { shallowRef } from 'vue'
+import { backendLocalStorage, backendScopeKey, assertBackendActive } from '@/services/backend-context'
+import { env } from '@/config/env'
+import { apiGet, apiPost, apiPut, apiDelete } from './client'
 import { sidecarStreamFetch } from './native-sidecar-stream'
 
 /** 轻量错误消息提取（不引入额外依赖，避免测试 mock 面扩大）。 */
@@ -22,6 +24,10 @@ export interface OllamaModel {
 }
 
 export interface OllamaStatus {
+  target_id: string
+  target_revision: number
+  resolved_base_url: string
+  can_restart: boolean
   running: boolean
   /** daemon 是否可达（BUG-20260718：区分「不可达」与「可达但无模型」）。 */
   reachable?: boolean
@@ -43,55 +49,52 @@ export interface OllamaRunningModel {
   context_length: number
 }
 
-/**
- * 直连 Ollama 原生 API 获取状态（不依赖 hexclaw sidecar）
- *
- * Ollama 是独立进程，状态检测不应经过后端代理，
- * 避免 sidecar 未启动时误报 Ollama 不可用。
- */
+export interface OllamaTarget {
+  mode: 'default' | 'custom'
+  custom_base_url: string
+  resolved_base_url: string
+  target_id: string
+  target_revision: number
+  target_digest: string
+  associated_provider_instance_ids: string[]
+  can_restart: boolean
+}
+export const activeOllamaTarget = shallowRef<Pick<OllamaTarget, 'target_id' | 'target_revision'> | null>(null)
+function acceptOllamaTarget(target: Pick<OllamaTarget, 'target_id' | 'target_revision'>) {
+  const current = activeOllamaTarget.value
+  if (current && target.target_revision < current.target_revision) throw new DOMException('Ollama target changed', 'AbortError')
+  activeOllamaTarget.value = target
+}
+export async function getOllamaTarget(): Promise<OllamaTarget> {
+  const result = await apiGet<{ ollama: OllamaTarget }>('/api/v1/config')
+  acceptOllamaTarget(result.ollama)
+  return result.ollama
+}
+export async function saveOllamaTarget(target: OllamaTarget, ids: string[]): Promise<OllamaTarget> {
+  const scope = backendScopeKey()
+  const llm = await apiGet<{ config_revision: number; config_digest: string }>('/api/v1/config/llm')
+  assertBackendActive(scope)
+  const requestId = crypto.randomUUID()
+  const body = { expected_config_revision: llm.config_revision, expected_config_digest: llm.config_digest,
+    expected_target_revision: target.target_revision, expected_target_digest: target.target_digest,
+    ollama: { mode: target.mode, custom_base_url: target.custom_base_url, associated_provider_instance_ids: ids } }
+  try {
+    await apiPut('/api/v1/config', body, { headers: { 'Idempotency-Key': requestId } })
+  } catch (error) {
+    assertBackendActive(scope)
+    // 丢响应只查原提交证明；查询失败保留未确认状态，不再发送 PUT。
+    try { await apiGet(`/api/v1/config/mutations/${requestId}`, { operation_kind: 'ollama_target' }) }
+    catch { throw error }
+  }
+  assertBackendActive(scope)
+  return getOllamaTarget()
+}
+
+/** 管理列表与推理均由当前后端访问已保存的目标。 */
 export async function getOllamaStatus(): Promise<OllamaStatus> {
-  // BUG-20260718（§15）：以 /api/tags 作为存活探针（必需）。version 是可选补充，
-  // 不能因 version 探测失败就把一个存活的 daemon 误报为 running:false（旧 Promise.all
-  // 任一失败即 catch → 不可达与无模型混为一谈）。
-  let tagsRes: Response
-  try {
-    tagsRes = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) })
-  } catch (e) {
-    return { running: false, reachable: false, error: errMessage(e), models: [], associated: false, model_count: 0 }
-  }
-  if (!tagsRes.ok) {
-    return { running: false, reachable: false, error: `tags: ${tagsRes.status}`, models: [], associated: false, model_count: 0 }
-  }
-
-  const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; capabilities?: string[]; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
-
-  // version 可选：失败不掩盖「daemon 存活」这一事实。
-  let version: string | undefined
-  try {
-    const versionRes = await fetch(`${OLLAMA_BASE}/api/version`, { signal: AbortSignal.timeout(3000) })
-    if (versionRes.ok) version = ((await versionRes.json()) as { version?: string }).version
-  } catch {
-    // daemon 已确认可达（tags 成功），version 拿不到无妨
-  }
-
-  const models: OllamaModel[] = (tags.models || []).map((m) => ({
-    name: m.name,
-    size: m.size,
-    modified: m.modified_at,
-    family: m.details?.family,
-    parameter_size: m.details?.parameter_size,
-    quantization_level: m.details?.quantization_level,
-    // BUG-20260704：透出真实能力，视觉模型（如 qwen3.5:9b）才能显示「视觉」徽章
-    capabilities: m.capabilities,
-  }))
-  return {
-    running: true,
-    reachable: true,
-    version,
-    models,
-    associated: true,
-    model_count: models.length,
-  }
+  const result = await apiGet<OllamaStatus>('/api/v1/ollama/status')
+  acceptOllamaTarget(result)
+  return result
 }
 
 /** 运行中模型结果（BUG-20260718：区分「daemon 不可达」与「可达但无运行模型」）。 */
@@ -103,30 +106,15 @@ export interface OllamaRunningResult {
   error?: string
 }
 
-/**
- * 直连 Ollama /api/ps 获取运行中模型，区分不可达 vs 无模型。
- *
- * BUG-20260718（§15）：旧 getOllamaRunning 捕获任意错误都返回 []，「daemon 不可达」
- * 与「可达但无运行模型」无法区分。此处返回 reachable/error；空模型（reachable=true）
- * 与不可达（reachable=false）分开。
- */
 export async function getOllamaRunningResult(): Promise<OllamaRunningResult> {
   try {
-    const res = await fetch(`${OLLAMA_BASE}/api/ps`, { signal: AbortSignal.timeout(3000) })
-    if (!res.ok) return { models: [], reachable: true, error: `ps: ${res.status}` }
-    const data = await res.json() as { models?: Array<{ name: string; size: number; size_vram: number; expires_at: string; details?: { parameter_size?: string; quantization_level?: string }; context_length?: number }> }
-    const models = (data.models || []).map((m) => ({
-      name: m.name,
-      size: m.size,
-      size_vram: m.size_vram,
-      expires_at: m.expires_at,
-      parameter_size: m.details?.parameter_size,
-      quantization_level: m.details?.quantization_level,
-      context_length: m.context_length ?? 0,
-    }))
-    return { models, reachable: true }
-  } catch (e) {
-    return { models: [], reachable: false, error: errMessage(e) }
+    const result = await apiGet<{ models: OllamaRunningModel[]; target_id: string; target_revision: number }>('/api/v1/ollama/running')
+    if (!Array.isArray(result.models)) throw new Error('Invalid Ollama running models response')
+    acceptOllamaTarget(result)
+    return { models: result.models, reachable: true }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    return { models: [], reachable: false, error: errMessage(error) }
   }
 }
 
@@ -136,13 +124,7 @@ export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
 }
 
 export async function loadOllamaModel(model: string): Promise<void> {
-  // 直连 Ollama 原生 API 预热模型（Tauri webview 允许 localhost 跨域）
-  const res = await fetch(`${OLLAMA_BASE}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt: '', keep_alive: '5m' }),
-  })
-  if (!res.ok) throw new Error(`Ollama load failed: ${res.status}`)
+  await apiPost('/api/v1/ollama/load', { model })
 }
 
 export function unloadOllamaModel(model: string): Promise<void> {
@@ -159,6 +141,11 @@ export async function restartOllama(): Promise<string> {
 }
 
 export interface OllamaPullProgress {
+  operation_id?: string
+  target_id?: string
+  target_revision?: number
+  state?: 'running' | 'succeeded' | 'failed' | 'outcome_unknown'
+  model?: string
   status: string
   completed?: number
   total?: number
@@ -166,53 +153,64 @@ export interface OllamaPullProgress {
   error?: string
 }
 
-/**
- * 拉取 Ollama 模型，流式返回下载进度
- * @param model 模型名称（如 "llama3.1", "qwen3:14b"）
- * @param onProgress 进度回调
- * @returns 完成后 resolve
- */
-export async function pullOllamaModel(
-  model: string,
-  onProgress: (p: OllamaPullProgress) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const resp = await sidecarStreamFetch(`${env.apiBase}/api/v1/ollama/pull`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model }),
-    signal,
-  })
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
-    throw new Error(err.error || `Pull failed: ${resp.status}`)
-  }
+interface SavedPull { operationId: string; targetId: string; targetRevision: number; model: string }
+const pullStorageKey = 'ollama-pull-operations'
+function savedPulls(): SavedPull[] {
+  try { return JSON.parse(backendLocalStorage.getItem(pullStorageKey) ?? '[]') } catch { return [] }
+}
+function retainPull(pull: SavedPull) { backendLocalStorage.setItem(pullStorageKey, JSON.stringify([...savedPulls().filter((p) => p.operationId !== pull.operationId), pull])) }
+function forgetPull(id: string) { backendLocalStorage.setItem(pullStorageKey, JSON.stringify(savedPulls().filter((p) => p.operationId !== id))) }
+async function consumePullResponse(resp: Response, scope: string, onProgress: (p: OllamaPullProgress) => void): Promise<void> {
+  if (!resp.ok) throw new Error(`Ollama pull state unavailable: HTTP ${resp.status}`)
   const reader = resp.body?.getReader()
-  if (!reader) throw new Error('No response body')
-
+  if (!reader) throw new Error('Ollama pull response is unavailable')
   const decoder = new TextDecoder()
-  let buffer = ''
-  let streamError = ''
-  let receivedAnyEvent = false
-  while (true) {
-    const { done, value } = await reader.read()
-    if (!done) {
-      buffer += decoder.decode(value, { stream: true })
+  let buffer = ''; let terminal: OllamaPullProgress | undefined
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      assertBackendActive(scope)
+      buffer += decoder.decode(value, { stream: !done })
+      const lines = buffer.split('\n'); buffer = done ? '' : (lines.pop() ?? '')
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue
+        const event = JSON.parse(line.slice(5).trim()) as OllamaPullProgress
+        onProgress(event)
+        if (event.state && event.state !== 'running') terminal = event
+      }
+      if (done) break
     }
-    const lines = buffer.split('\n')
-    buffer = done ? '' : (lines.pop() || '')
-    for (const line of lines) {
-      const trimmed = line.replace(/^data:\s*/, '').trim()
-      if (!trimmed) continue
-      try {
-        const p: OllamaPullProgress = JSON.parse(trimmed)
-        receivedAnyEvent = true
-        if (p.error) streamError = p.error
-        onProgress(p)
-      } catch { /* ignore non-JSON lines */ }
+  } finally { reader.releaseLock() }
+  if (terminal?.state === 'succeeded') { if (terminal.operation_id) forgetPull(terminal.operation_id); return }
+  if (terminal?.state === 'failed' && terminal.operation_id) forgetPull(terminal.operation_id)
+  throw new Error(terminal?.error || 'Ollama pull outcome is unknown; reconnect to query the original operation')
+}
+export async function pullOllamaModel(model: string, onProgress: (p: OllamaPullProgress) => void, signal?: AbortSignal): Promise<void> {
+  const scope = backendScopeKey()
+  const target = await getOllamaTarget()
+  assertBackendActive(scope)
+  const pull = { operationId: crypto.randomUUID(), targetId: target.target_id, targetRevision: target.target_revision, model }
+  retainPull(pull)
+  const resp = await sidecarStreamFetch(`${env.apiBase}/api/v1/ollama/pull`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pull.operationId },
+    body: JSON.stringify({ model, expected_target_id: pull.targetId, expected_target_revision: pull.targetRevision }), signal,
+  })
+  await consumePullResponse(resp, scope, onProgress)
+}
+export async function resumeOllamaPulls(onProgress: (p: OllamaPullProgress) => void, signal?: AbortSignal): Promise<void> {
+  const scope = backendScopeKey()
+  const target = await getOllamaTarget()
+  let failure: unknown
+  for (const pull of savedPulls().filter((p) => p.targetId === target.target_id && p.targetRevision === target.target_revision)) {
+    assertBackendActive(scope)
+    try {
+      const resp = await sidecarStreamFetch(`${env.apiBase}/api/v1/ollama/pulls/${encodeURIComponent(pull.operationId)}/events`, { method: 'GET', signal })
+      await consumePullResponse(resp, scope, onProgress)
+    } catch (error) {
+      assertBackendActive(scope)
+      if (signal?.aborted) throw error
+      failure = error
     }
-    if (done) break
   }
-  if (streamError) throw new Error(streamError)
-  if (!receivedAnyEvent) throw new Error('Download interrupted — no progress events received')
+  if (failure) throw failure
 }
