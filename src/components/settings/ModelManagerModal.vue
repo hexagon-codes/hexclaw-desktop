@@ -305,6 +305,7 @@ function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelO
           ...cloneModelOption(existing),
           id: m.id,
           name: m.name || m.id,
+          ...(m.capabilities ? { capabilities: [...m.capabilities] } : {}),
         },
         m,
       ),
@@ -315,7 +316,7 @@ function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelO
       {
         id: m.id,
         name: m.name || m.id,
-        capabilities: [],
+        capabilities: [...(m.capabilities ?? [])],
       },
       m,
     ),

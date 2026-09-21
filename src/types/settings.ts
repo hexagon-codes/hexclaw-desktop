@@ -80,6 +80,8 @@ export interface ModelOption {
  * 元数据字段来自 OpenRouter 等聚合商扩展格式，标准 OpenAI /models 只有裸 id 时缺省。
  */
 export interface CatalogModel {
+  /** 上游生成方法声明；输入模态不等同于输出能力。 */
+  capabilities?: ModelCapability[]
   id: string
   name: string
   /** 上下文窗口（token） */

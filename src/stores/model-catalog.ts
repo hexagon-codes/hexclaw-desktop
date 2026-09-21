@@ -175,6 +175,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
         return {
           id: canonical.id,
           name: canonical.name || canonical.id,
+          capabilities: canonical.capabilities,
           ...reasoningContractFrom(canonical),
         }
       }),
@@ -265,6 +266,7 @@ export function reconcileProviderCatalog(
         return canonicalizeModelOption({
           ...withoutReasoningContract(model),
           name: remote.name || model.name || remote.id,
+          ...(remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
           ...reasoningContractFrom(remote, model, presetById.get(model.id)),
         })
       })
@@ -279,6 +281,7 @@ export function reconcileProviderCatalog(
           return canonicalizeModelOption({
             ...withoutReasoningContract(existing),
             name: remote.name || existing.name || remote.id,
+            ...(!existing.isCustom && remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
             ...reasoningContractFrom(remote, existing, preset),
           })
         }
@@ -296,6 +299,7 @@ export function reconcileProviderCatalog(
             : remote.inputModalities === undefined
               ? {}
               : { capabilities: [] }),
+          ...(remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
           ...reasoningContractFrom(remote, preset),
         })
       })

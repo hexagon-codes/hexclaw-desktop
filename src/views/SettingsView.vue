@@ -1359,11 +1359,12 @@ async function testProvider(provider: ProviderConfig) {
   testingProviderIds.value.add(provider.id)
   delete testProviderResult.value[provider.id]
 
-  // 此入口验证 chat-completions，并为精确模型写入文本能力回执；Embedding-only 由知识库 profile preflight 验证。
+  // 优先测试聊天模型；仅有 Embedding 时测试向量接口，不改变聊天默认模型。
   const preferred =
     provider.models?.find(
       (model) => model.id === provider.selectedModelId && isChatModelOption(model),
-    ) || provider.models?.find(isChatModelOption)
+    ) || provider.models?.find(isChatModelOption) ||
+    provider.models?.find((model) => model.capabilities?.includes('embedding'))
   const selectedModelId = (preferred?.id || '').trim()
   if (!selectedModelId) {
     testProviderResult.value[provider.id] = {
@@ -1411,7 +1412,8 @@ async function testProvider(provider: ProviderConfig) {
     const activePreferred =
       activeProvider.models?.find(
         (model) => model.id === activeProvider.selectedModelId && isChatModelOption(model),
-      ) || activeProvider.models?.find(isChatModelOption)
+      ) || activeProvider.models?.find(isChatModelOption) ||
+      activeProvider.models?.find((model) => model.capabilities?.includes('embedding'))
     const activeModelId = (activePreferred?.id || selectedModelId).trim()
     const preset = PROVIDER_PRESETS[activeProvider.type]
     const result = await testLLMConnection(
@@ -1463,7 +1465,7 @@ async function testProvider(provider: ProviderConfig) {
       }
     }
     // 模型能力与连接结果各自持久化；能力探测失败不覆盖已确认的连接回执。
-    if (result.ok && activeProvider.providerInstanceId) {
+    if (result.ok && activeProvider.providerInstanceId && activePreferred && isChatModelOption(activePreferred)) {
       try {
         await probeLLMModelCapability(activeProvider.providerInstanceId, activeModelId)
       } catch (error) {
@@ -3757,18 +3759,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 @container (min-width: 520px) {
+  /* 内置服务商的地址和令牌各占整行，共用左右边界。 */
   .hc-provider__config-grid--builtin {
-    grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr);
-  }
-
-  /* 2026-08-17 批准：内置卡 Base URL 左窄列、API Key 右宽列（顺序对调，列宽定义不变） */
-  .hc-provider__config-grid--builtin .hc-provider__config-url {
-    order: -1;
-  }
-
-  /* 2026-08-19 批准：URL 短、API Key 长（等长圆点掩码需整行宽度），API Key 占整行、URL 半行 */
-  .hc-provider__config-grid--builtin .hc-provider__config-key {
-    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .hc-provider__config-grid--custom {
@@ -4254,7 +4247,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip[data-model-name]:hover::after,
-.hc-model-chip[data-model-name]:focus-within::after {
+.hc-model-chip[data-model-name]:focus-visible::after,
+.hc-model-chip[data-model-name]:has(:focus-visible)::after {
   visibility: visible;
 }
 

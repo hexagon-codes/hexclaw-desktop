@@ -113,7 +113,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
   gemini: {
     type: 'gemini',
     name: 'Google Gemini',
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     placeholder: 'AIza...',
     defaultModels: [
       {
