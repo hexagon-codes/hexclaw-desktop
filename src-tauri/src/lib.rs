@@ -181,6 +181,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend_connection::get_backend_context,
             backend_connection::get_backend_connections,
+            backend_connection::get_local_backend_token,
+            backend_connection::get_remote_backend_token,
             backend_connection::test_backend_connection,
             backend_connection::inspect_backend_readiness,
             backend_connection::activate_backend_connection,

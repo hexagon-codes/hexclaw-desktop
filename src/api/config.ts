@@ -10,6 +10,7 @@ import {
 import type {
   BackendLLMConfig,
   CatalogModel,
+  ModelCapability,
   LLMConfigMutationReceipt,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
@@ -235,6 +236,7 @@ export async function probeLLMModelCapability(
 
 /** 后端 /api/v1/config/llm/models 返回的模型条目（snake_case） */
 interface BackendProviderModel {
+  capabilities?: ModelCapability[]
   id: string
   name?: string
   context_length?: number
@@ -284,6 +286,7 @@ export async function fetchProviderModels(
     promptPrice: m.prompt_price,
     completionPrice: m.completion_price,
     inputModalities: m.input_modalities,
+    ...(Array.isArray(m.capabilities) ? { capabilities: [...m.capabilities] } : {}),
     supportsTools: m.supports_tools,
     ...(m.reasoning_support === undefined
       ? {}

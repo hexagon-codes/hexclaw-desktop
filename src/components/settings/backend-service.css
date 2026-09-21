@@ -70,7 +70,8 @@
   .backend-remote-panel__head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12.5px;font-weight:650;color:var(--hc-text-primary)}
   .backend-remote-panel__head .sp{flex:1}
   .backend-remote-state{color:var(--hc-text-muted);font-size:11px;font-weight:500}
-  .backend-form-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:10px}
+  /* 远端地址与令牌上下排列，均占满正文可用宽度。 */
+  .backend-form-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
   .backend-field{display:flex;flex-direction:column;gap:6px;min-width:0;color:var(--hc-text-secondary);font-size:13px}
   .backend-field em{color:var(--hc-text-muted);font-style:normal;font-weight:400}
   .backend-field .minput{width:100%;min-width:0}
@@ -79,6 +80,14 @@
   .backend-secret-toggle{position:absolute;right:5px;top:50%;display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--hc-text-muted);cursor:pointer;transform:translateY(-50%)}
   .backend-secret-toggle:hover{background:var(--hc-bg-hover);color:var(--hc-text-primary)}
   .backend-field-hint{color:var(--hc-text-secondary);font-size:12px;line-height:1.6;font-weight:400}
+  /* 本机只读字段共用令牌视觉，右侧分别提供显隐和复制。 */
+  .backend-modal:has(.backend-local-panel):focus{outline:none}
+  .backend-local-panel{margin-top:18px}
+  .backend-local-panel button{padding:0;font:inherit}
+  .backend-secret-wrap--copy .minput{padding-right:72px}
+  .backend-secret-wrap--copy .backend-secret-toggle{right:37px}
+  .backend-secret-copy{position:absolute;right:5px;top:50%;display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--hc-text-muted);cursor:pointer;transform:translateY(-50%)}
+  .backend-secret-copy:hover{background:var(--hc-bg-hover);color:var(--hc-text-primary)}
   .backend-inline-status{margin-top:14px;padding:0;border-radius:8px;background:transparent;color:var(--hc-text-secondary);font-size:12px;line-height:1.6;white-space:pre-line}
   .backend-inline-status[hidden]{display:none}
   .backend-inline-status.is-ok{color:var(--hc-text-primary)}

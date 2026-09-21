@@ -1,7 +1,9 @@
 import { isAbsolute } from 'node:path'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
@@ -9,6 +11,36 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 import { createPDFWorkerPackageAssetPlugin } from './scripts/ci/pdf-worker-package-asset.mjs'
+
+// PDF 原文包含 CJK 字体和 JPX/JBIG2 图片；解码资产随同版本依赖打包，离线可用。
+function createPDFResourcePlugin(): import('vite').Plugin {
+  const root = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'))
+  const resources = new Map<string, { path: string; mime: string }>()
+  for (const group of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
+    for (const file of readdirSync(join(root, group))) {
+      resources.set(`/pdfjs/${group}/${file}`, {
+        path: join(root, group, file),
+        mime: file.endsWith('.wasm') ? 'application/wasm' : file.endsWith('.js') ? 'text/javascript' : 'application/octet-stream',
+      })
+    }
+  }
+  return {
+    name: 'hexclaw-pdf-resources',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const resource = resources.get((req.url ?? '').split('?')[0]!)
+        if (!resource) return next()
+        res.setHeader('Content-Type', resource.mime)
+        res.end(readFileSync(resource.path))
+      })
+    },
+    generateBundle() {
+      for (const [url, resource] of resources) {
+        this.emitFile({ type: 'asset', fileName: url.slice(1), source: readFileSync(resource.path) })
+      }
+    },
+  }
+}
 
 const packageLocalMode = 'package-local'
 
@@ -69,7 +101,7 @@ export default defineConfig(({ mode }) => {
   return {
     // Tauri 生产页由自定义 asset 协议加载，构建产物必须使用相对路径。
     base: './',
-    plugins: [createPDFWorkerPackageAssetPlugin(), vue(), tailwindcss()],
+    plugins: [createPDFResourcePlugin(), createPDFWorkerPackageAssetPlugin(), vue(), tailwindcss()],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),

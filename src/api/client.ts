@@ -267,8 +267,8 @@ async function uploadFormData<T>(
 }
 
 /** PUT 请求 */
-export function apiPut<T>(url: string, body?: Record<string, unknown> | object, options?: { headers?: Record<string, string> }) {
-  return withNormalizedError(api<T>(url, { method: 'PUT', body: body as Record<string, unknown>, headers: options?.headers, retry: 0 }))
+export function apiPut<T>(url: string, body?: Record<string, unknown> | object, options?: { headers?: Record<string, string>; timeout?: number }) {
+  return withNormalizedError(api<T>(url, { method: 'PUT', body: body as Record<string, unknown>, headers: options?.headers, timeout: options?.timeout ?? env.timeout, retry: 0 }))
 }
 
 /** PATCH 请求 */

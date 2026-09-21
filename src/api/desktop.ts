@@ -4,9 +4,10 @@
  * Tauri 桌面端优先使用后端 /api/v1/desktop/clipboard 写入系统剪贴板，
  * 回退到 navigator.clipboard.writeText，最终回退到 execCommand('copy')。
  */
-export async function setClipboard(content: string): Promise<void> {
+export async function setClipboard(content: string, options: { localOnly?: boolean } = {}): Promise<void> {
   // Tauri 桌面端：通过后端 API 写入系统剪贴板（绕过 WebView 限制）
-  if (typeof window !== 'undefined' && '__TAURI__' in window) {
+  // 本设备凭据只能写入本设备剪贴板，不通过当前后端转交。
+  if (!options.localOnly && typeof window !== 'undefined' && '__TAURI__' in window) {
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       await invoke('proxy_api_request', {
@@ -31,8 +32,12 @@ export async function setClipboard(content: string): Promise<void> {
   textarea.style.opacity = '0'
   document.body.appendChild(textarea)
   textarea.select()
-  document.execCommand('copy')
-  document.body.removeChild(textarea)
+  try {
+    const copied = document.execCommand('copy')
+    if (options.localOnly && !copied) throw new Error('Copy failed')
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 /**

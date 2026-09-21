@@ -163,19 +163,20 @@ pub(crate) async fn wait_for_healthy(
 ) -> Result<(), String> {
     let url = health_url();
     let timeout = Duration::from_secs(timeout_secs);
+    // 进程就绪只由本机端点证明，不能使用仍指向远端的当前业务客户端。
+    let token = crate::backend_connection::local_token()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Create local backend health check".to_string())?;
     let result = wait_for_startup(
         &SIDECAR_SUPERVISOR,
         instance,
         timeout,
         || async {
-            if let Ok(client) = crate::sidecar_client::SidecarClient::new(Duration::from_secs(2)) {
-                if let Ok(resp) = client.get("/health").await {
-                    if resp.status().is_success() {
-                        return true;
-                    }
-                }
-            }
-            false
+            client.get(&url).bearer_auth(&token).send().await
+                .is_ok_and(|response| response.status().is_success())
         },
         |event| match event {
             SidecarEvent::Ready { .. } => {

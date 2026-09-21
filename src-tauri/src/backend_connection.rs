@@ -290,6 +290,22 @@ pub fn get_backend_connections() -> Result<Vec<BackendContext>, String> {
     Ok(guard.file.connections.iter().map(|record| snapshot(record, guard.generation).context).collect())
 }
 
+/// 连接面板只读查看本机业务令牌，不随当前服务切换读取目标。
+#[tauri::command]
+pub fn get_local_backend_token() -> Result<String, String> {
+    local_token()
+}
+
+/// 按已保存的远端连接读取令牌，不改变当前连接或配置文件。
+#[tauri::command]
+pub fn get_remote_backend_token(connection_id: String) -> Result<String, String> {
+    let guard = state()?.lock().map_err(|_| "Backend connection lock unavailable")?;
+    guard.file.connections.iter()
+        .find(|record| record.kind == "remote" && record.connection_id == connection_id)
+        .map(|record| record.api_token.clone())
+        .ok_or_else(|| "Remote backend connection missing".into())
+}
+
 #[tauri::command]
 pub async fn test_backend_connection(candidate: BackendCandidate) -> Result<BackendContext, String> {
     let mut record = candidate_record(candidate)?;
