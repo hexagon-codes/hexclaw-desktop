@@ -1,10 +1,5 @@
 /** 文本索引状态；保留未知字符串以兼容后端新增状态。 */
-export type KnowledgeTextIndexState =
-  | 'pending'
-  | 'building'
-  | 'ready'
-  | 'failed'
-  | (string & {})
+export type KnowledgeTextIndexState = 'pending' | 'building' | 'ready' | 'failed' | (string & {})
 
 /** 视觉模型冻结快照。 */
 export interface KnowledgeFrozenVisionProjection {
@@ -34,11 +29,13 @@ export interface KnowledgeProjectionFields {
 
 /** 文档与任务共用的结构化投影。 */
 export interface KnowledgeStructuredProjection extends KnowledgeProjectionFields {
-  ingestion?: (KnowledgeProjectionFields & {
-    state?: string | null
-    frozen_vision?: KnowledgeFrozenVisionProjection | null
-    preflight?: KnowledgePreflightProjection | string | null
-  }) | null
+  ingestion?:
+    | (KnowledgeProjectionFields & {
+        state?: string | null
+        frozen_vision?: KnowledgeFrozenVisionProjection | null
+        preflight?: KnowledgePreflightProjection | string | null
+      })
+    | null
 }
 
 /** 兼容摄取/索引 Job 响应的结构化部分。 */
@@ -46,6 +43,10 @@ export type KnowledgeJobProjection = KnowledgeStructuredProjection
 
 /** 知识库文档（后端返回） */
 export interface KnowledgeDoc extends KnowledgeStructuredProjection {
+  media_type?: string
+  source_digest?: string
+  page_count?: number
+  document_generation?: number
   id: string
   title: string
   content?: string

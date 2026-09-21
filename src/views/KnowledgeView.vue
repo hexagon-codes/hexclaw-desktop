@@ -4,7 +4,6 @@ import { useKnowledgeUploadsStore } from '@/stores/knowledge-uploads'
 import { useI18n } from 'vue-i18n'
 import {
   BookOpen,
-  Upload,
   Search,
   X,
   FileUp,
@@ -14,13 +13,15 @@ import {
 } from 'lucide-vue-next'
 import {
   getDocuments,
-  getDocumentContent,
+  getDocument,
   addDocument,
   deleteDocument,
   searchKnowledge,
   uploadDocument,
   reindexDocument,
   retryKnowledgeDocument,
+  getKnowledgeRecoveryPlan,
+  recoverKnowledgeDocument,
   getKnowledgeConfig,
   getKnowledgeEmbeddingStatus,
   putKnowledgeConfig,
@@ -28,7 +29,7 @@ import {
   listKnowledgeOperations,
   dismissKnowledgeUpload,
 } from '@/api/knowledge'
-import type { KnowledgeSourceCount } from '@/api/knowledge'
+import type { KnowledgeSourceCount, KnowledgeRecoveryPlan } from '@/api/knowledge'
 import type {
   KnowledgeEmbeddingStatus,
   KnowledgeSearchFilter,
@@ -53,6 +54,7 @@ import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
+import KnowledgeSourceDialog from '@/components/knowledge/KnowledgeSourceDialog.vue'
 import { logger } from '@/utils/logger'
 import { formatRelative } from '@/utils/time'
 
@@ -1244,9 +1246,9 @@ async function loadDocContent(doc: KnowledgeDoc) {
   loadingDocContent.value = true
   docContentError.value = ''
   try {
-    const content = await getDocumentContent(doc)
+    const detail = await getDocument(doc.id)
     if (requestGen === docContentRequestGen && selectedDoc.value?.id === doc.id) {
-      selectedDoc.value = { ...doc, content }
+      selectedDoc.value = { ...doc, ...detail }
       // 同步更新列表中的文档对象，避免非空正文下次打开时重复请求。
       const idx = docs.value.findIndex((d) => d.id === doc.id)
       if (idx >= 0) docs.value[idx] = selectedDoc.value
@@ -1271,7 +1273,7 @@ async function openDocDetail(doc: KnowledgeDoc) {
   docContentError.value = ''
 
   // 如果列表接口未返回正文，主动获取内容。
-  if (!doc.content?.trim()) await loadDocContent(doc)
+  await loadDocContent(doc)
 }
 
 async function retryDocContent() {
@@ -1279,9 +1281,21 @@ async function retryDocContent() {
   await loadDocContent(selectedDoc.value)
 }
 
-async function handleReindex(doc: KnowledgeDoc) {
+const recoveryConfirmation = ref<{ doc: KnowledgeDoc; plan: KnowledgeRecoveryPlan } | null>(null)
+const recoveryMessage = computed(() => {
+  const plan = recoveryConfirmation.value?.plan
+  if (!plan) return ''
+  return `Completed pages will be preserved. Only unfinished pages will run. An earlier unresolved request may already have been charged.\nCompleted pages: ${plan.completed_pages} / ${plan.pages_total}. Pages to retry: ${plan.pages.map((page) => page.page_number).join(', ')}.`
+})
+
+async function confirmDocumentRecovery() {
+  const pending = recoveryConfirmation.value
+  recoveryConfirmation.value = null
+  if (pending) await handleReindex(pending.doc, pending.plan)
+}
+
+async function handleReindex(doc: KnowledgeDoc, recoveryPlan?: KnowledgeRecoveryPlan) {
   if (!ensureKnowledgeEnabled()) return
-  if (doc.text_outcome_unknown) return
   if (reindexingDocIds.value.has(doc.id) || hasPollableVectorJob(doc)) return
   const next = new Set(reindexingDocIds.value)
   next.add(doc.id)
@@ -1289,10 +1303,16 @@ async function handleReindex(doc: KnowledgeDoc) {
   errorMsg.value = ''
 
   try {
+    if (doc.text_outcome_unknown && !recoveryPlan) {
+      recoveryConfirmation.value = { doc, plan: await getKnowledgeRecoveryPlan(doc.id) }
+      return
+    }
     const retryingText = getDocStatus(doc) === 'failed'
     const retryingVector = hasRetryableVectorFailure(doc)
     if (retryingText || retryingVector) {
-      const accepted = await retryKnowledgeDocument(doc.id)
+      const accepted = recoveryPlan
+        ? await recoverKnowledgeDocument(recoveryPlan)
+        : await retryKnowledgeDocument(doc.id)
       docs.value = docs.value.map((item) =>
         item.id === doc.id
           ? retryingVector
@@ -1314,6 +1334,7 @@ async function handleReindex(doc: KnowledgeDoc) {
               }
             : {
                 ...item,
+                text_outcome_unknown: false,
                 status:
                   accepted.text_index_state === 'ready'
                     ? 'indexed'
@@ -1930,7 +1951,6 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           class="knowledge-page__resource-action"
                           :disabled="
                             !knowledgeEnabled ||
-                            doc.text_outcome_unknown ||
                             reindexingDocIds.has(doc.id) ||
                             hasPollableVectorJob(doc) ||
                             getDocStatus(doc) === 'processing'
@@ -2516,6 +2536,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
     <!-- 删除确认 -->
     <ConfirmDialog
+      :open="recoveryConfirmation !== null"
+      :confirmation-key="recoveryConfirmation?.plan.fingerprint"
+      title="Resume processing"
+      :message="recoveryMessage"
+      confirm-text="Continue processing"
+      cancel-text="Cancel"
+      :danger="false"
+      @confirm="confirmDocumentRecovery"
+      @cancel="recoveryConfirmation = null"
+    />
+    <ConfirmDialog
       :open="showDeleteConfirm"
       :confirmation-key="deletingDoc?.id"
       :title="t('knowledge.deleteConfirmTitle')"
@@ -2525,10 +2556,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
       @cancel="closeDeleteConfirm"
     />
 
+    <KnowledgeSourceDialog
+      v-if="showDocDetail && !loadingDocContent && selectedDoc && (selectedDoc.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.title))"
+      :document-id="selectedDoc.id"
+      :title="selectedDoc.title"
+      :source-digest="selectedDoc.source_digest"
+      @close="showDocDetail = false"
+    />
     <Teleport to="body">
       <Transition name="modal">
         <div
-          v-if="showDocDetail && selectedDoc"
+          v-if="showDocDetail && selectedDoc && !(selectedDoc.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.title))"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
           @click.self="showDocDetail = false"
         >

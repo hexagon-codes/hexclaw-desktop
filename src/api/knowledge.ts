@@ -6,7 +6,7 @@ import {
 } from '@/api/native-files'
 import { isTauri } from '@/utils/platform'
 
-import { apiGet, apiPost, apiPut, apiDelete } from './client'
+import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { fromHttpStatus, fromNativeError } from '@/utils/errors'
 import { env } from '@/config/env'
 import { DESKTOP_USER_ID } from '@/constants'
@@ -16,11 +16,7 @@ import {
   KNOWLEDGE_UNSUPPORTED_FORMAT_KEYWORDS,
   KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE,
 } from '@/config/knowledge-errors'
-import type {
-  KnowledgeDoc,
-  KnowledgeSearchResult,
-  KnowledgeStructuredProjection,
-} from '@/types'
+import type { KnowledgeDoc, KnowledgeSearchResult, KnowledgeStructuredProjection } from '@/types'
 import type { KnowledgeQueryEmbeddingReceipt } from '@/types/knowledge'
 
 export type { KnowledgeDoc, KnowledgeQueryEmbeddingReceipt, KnowledgeSearchResult }
@@ -389,44 +385,24 @@ export async function getDocument(id: string): Promise<KnowledgeDoc> {
   )
 }
 
-/**
- * 获取文档内容：优先请求详情 API，回退到搜索文档标题拼接 chunk。
- *
- * BUG-20260718（§15）：detail/search 都失败时不再返回空串（那会把「取内容故障」
- * 伪装成「真实空文档」），而是抛错让 UI 区分。只有至少一条路径成功、但确实拿不到
- * 正文时才返回 ''（真实空文档）。
- */
+/** 详情只返回该文档的完整正文，检索片段不能代替原文。 */
 export async function getDocumentContent(doc: KnowledgeDoc): Promise<string> {
-  let detailError: unknown
-  let searchError: unknown
+  const detail = await getDocument(doc.id)
+  return detail.content ?? ''
+}
 
-  // 尝试详情接口
-  try {
-    const detail = await getDocument(doc.id)
-    if (detail.content?.trim()) return detail.content
-  } catch (e) {
-    detailError = e // 详情接口不存在或失败，回退到搜索
-  }
-
-  // 回退：通过知识库搜索获取该文档的 chunk 内容
-  try {
-    const { result } = await searchKnowledge(doc.title, doc.chunk_count || 5)
-    const docChunks = result
-      .filter((hit) => hit.doc_id === doc.id || hit.doc_title === doc.title)
-      .sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
-    if (docChunks.length > 0) {
-      return docChunks.map((chunk) => chunk.content).join('\n\n')
-    }
-  } catch (e) {
-    searchError = e // 搜索也失败
-  }
-
-  // 两条取内容路径都因错误失败（而非确有空文档）→ 抛错，让 UI 显示「加载失败」而非空文档。
-  if (detailError && searchError) {
-    throw detailError instanceof Error ? detailError : new Error('Failed to load document content')
-  }
-
-  return ''
+/** 通过当前后端的统一鉴权传输获取原文件。 */
+export function getDocumentSource(
+  id: string,
+  sourceDigest?: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  return api<Blob, 'blob'>(`/api/v1/knowledge/documents/${encodeURIComponent(id)}/source`, {
+    responseType: 'blob',
+    retry: 0,
+    signal,
+    query: sourceDigest ? { source_digest: sourceDigest } : undefined,
+  })
 }
 
 /** 添加文档到知识库 */
@@ -551,6 +527,29 @@ export async function retryKnowledgeDocument(id: string): Promise<KnowledgeUploa
   )
 }
 
+export interface KnowledgeRecoveryPlan {
+  document_id: string
+  failed_job_id: string
+  generation: number
+  source_digest: string
+  completed_pages: number
+  pages_total: number
+  pages: { invocation_id: string; page_number: number }[]
+  fingerprint: string
+}
+
+export function getKnowledgeRecoveryPlan(id: string) {
+  return apiGet<KnowledgeRecoveryPlan>(`/api/v1/knowledge/documents/${encodeURIComponent(id)}/recovery`)
+}
+
+export function recoverKnowledgeDocument(plan: KnowledgeRecoveryPlan) {
+  return apiPost<KnowledgeUploadResponse>(
+    `/api/v1/knowledge/documents/${encodeURIComponent(plan.document_id)}/recovery`,
+    { fingerprint: plan.fingerprint },
+    { headers: { 'Idempotency-Key': `knowledge-recovery:v1:${plan.failed_job_id}` } },
+  )
+}
+
 /** 删除知识库文档 */
 export function deleteDocument(id: string) {
   return apiDelete<{ message: string }>(`/api/v1/knowledge/documents/${encodeURIComponent(id)}`)
@@ -566,9 +565,7 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
           score: typeof result.score === 'number' ? result.score : 0,
           doc_id: typeof result.doc_id === 'string' ? result.doc_id : undefined,
           document_generation:
-            typeof result.document_generation === 'number'
-              ? result.document_generation
-              : undefined,
+            typeof result.document_generation === 'number' ? result.document_generation : undefined,
           revision_id: typeof result.revision_id === 'string' ? result.revision_id : undefined,
           doc_title: typeof result.doc_title === 'string' ? result.doc_title : undefined,
           source: typeof result.source === 'string' ? result.source : undefined,
@@ -582,9 +579,7 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
           citation_digest:
             typeof result.citation_digest === 'string' ? result.citation_digest : undefined,
           source_offset_start:
-            typeof result.source_offset_start === 'number'
-              ? result.source_offset_start
-              : undefined,
+            typeof result.source_offset_start === 'number' ? result.source_offset_start : undefined,
           source_offset_end:
             typeof result.source_offset_end === 'number' ? result.source_offset_end : undefined,
           created_at: typeof result.created_at === 'string' ? result.created_at : undefined,
