@@ -28,6 +28,8 @@ export interface ActiveStreamSnapshot {
     assistant_message_aliases?: string[]
     thinking_enabled?: boolean | string
   }
+  blocks?: ChatMessage['blocks']
+  tool_calls?: ChatMessage['tool_calls']
   started_at?: string
   message_content?: ChatMessage['message_content']
   done: boolean

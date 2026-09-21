@@ -74,6 +74,8 @@ export function createChatStreamRecoveryController(params: {
               ...snapshot,
               content: current.content,
               reasoning: current.reasoning,
+              blocks: current.blocks,
+              tool_calls: current.toolCalls,
               done: !!current.done,
               ...current.metadata,
             })

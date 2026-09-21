@@ -21,6 +21,8 @@ import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils
 import { extractThinkTags } from '@/utils/think-tags'
 import type { ChatMessage, ChatSession, Artifact } from '@/types'
 import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
+import { isDegenerateTail, trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
+import { freezeProcessAnswer } from '@/utils/assistant-process'
 
 // ─── 消息序列化（保留，供外部 normalize 使用） ───────
 
@@ -53,16 +55,17 @@ export function normalizeLoadedMessage(row: {
     : parsedMetadata
   const metadata = normalizeThinkingMetadata(runtimeMetadata, rawReasoning)
   const reasoning = metadata?.reasoning_disclosure?.visibility === 'visible' ? rawReasoning : undefined
+  const degenerated = row.role === 'assistant' && isDegenerateTail(row.content)
 
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant' | 'system',
-    content: row.content,
+    content: degenerated ? trimDegenerateTail(row.content) + DEGENERATION_NOTICE : row.content,
     timestamp: row.timestamp,
     reasoning,
     metadata,
     tool_calls: toolCalls as ChatMessage['tool_calls'],
-    blocks: blocks as ChatMessage['blocks'],
+    blocks: degenerated ? freezeProcessAnswer(blocks as ChatMessage['blocks']) : blocks as ChatMessage['blocks'],
     agent_name: agentName,
   }
 }

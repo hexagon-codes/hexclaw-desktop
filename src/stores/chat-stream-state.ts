@@ -7,6 +7,7 @@ import {
   type SessionStreamState,
 } from './chat-stream-helpers'
 import { isDegenerateTail, trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
+import { freezeProcessAnswer } from '@/utils/assistant-process'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -127,6 +128,7 @@ export function createChatStreamStateController(params: {
       upsertStreamState(sessionId, {
         ...merged,
         content: trimDegenerateTail(probe) + DEGENERATION_NOTICE,
+        blocks: freezeProcessAnswer(merged.blocks),
         degenerated: true,
       })
       return true

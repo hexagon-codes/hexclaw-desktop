@@ -40,6 +40,8 @@ export interface RuntimeWireFrame {
   reasoningDisclosure: ReasoningDisclosure | { visibility: 'not_exposed' }
   reasoningReceipt: ReasoningReceipt
   runtimeEvent?: RuntimeEvent
+  blocks?: ContentBlock[]
+  toolCalls?: ToolCall[]
 }
 
 export interface RuntimeWireSnapshot {
@@ -341,6 +343,8 @@ export function mergeRuntimeWireFrame(
       reasoningDisclosure: disclosure ?? { visibility: 'not_exposed' },
       reasoningReceipt,
       runtimeEvent,
+      blocks: Array.isArray(raw.blocks) ? (raw.blocks as ContentBlock[]) : undefined,
+      toolCalls: Array.isArray(raw.tool_calls) ? (raw.tool_calls as ToolCall[]) : undefined,
     },
   }
 }
@@ -461,6 +465,18 @@ export function normalizeThinkingMetadata(
   return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
+/** 沙箱真实执行报告；产物记录不等同于已可下载附件。 */
+export interface SandboxExecution {
+  run_id: string
+  status: string
+  language?: string
+  command?: string[]
+  exit_code: number
+  timeout: boolean
+  error?: string
+  artifacts?: { id: string; name: string; size: number; mime?: string }[]
+}
+
 /** 工具调用 */
 export interface ToolCall {
   id: string
@@ -475,6 +491,9 @@ export interface ToolCall {
   status?: 'running' | 'success' | 'error'
   is_error?: boolean
   duration_ms?: number
+  execution?: SandboxExecution
+  /** 本轮实际注册来源；随调用持久化，不由模型生成。 */
+  origin?: { kind: 'skill' | 'mcp'; name: string; server_name?: string }
 }
 
 /** v0.4.0 G3 通用交互式消息协议（与后端 adapter/interactive.go 对齐） */
@@ -545,7 +564,17 @@ export interface InteractivePayload {
 }
 
 /** 消息内容块 — 强类型替代松散 JSON */
+export interface RetrievalActivity {
+  kind: 'knowledge' | 'memory'
+  status: 'completed' | 'failed'
+  source?: 'facts' | 'history'
+  knowledge_hits?: Record<string, unknown>[]
+  memory_hits?: Record<string, unknown>[]
+  resident_hits?: Record<string, unknown>[]
+}
+
 export type ContentBlock =
+  | { type: 'retrieval'; id: string; retrieval: RetrievalActivity }
   | { type: 'text'; text: string; message_content?: MessageContent }
   | { type: 'thinking'; thinking: string; duration?: number }
   | {

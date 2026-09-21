@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import ToolCallCard from './ToolCallCard.vue'
+import { splitProcessBlocks } from '@/utils/assistant-process'
 import type { ContentBlock, ToolCall } from '@/types/chat'
 import type { RenderManifest } from '@/contracts/message-content'
 
@@ -10,12 +11,17 @@ import type { RenderManifest } from '@/contracts/message-content'
  * （text → 工具卡 → text → 工具卡 …），修复多步 ReAct 被压平成「全文本在前、全工具在后」。
  *
  * 分工：blocks 提供**顺序**；富数据（status/耗时/结果）走扁平 tool_calls，tool_use 块按 id 取。
- * thinking 块不在此渲染（reasoning 走消息级独立思考块）；tool_result 块折叠进对应工具卡，不单独渲染。
+ * thinking 块由共享处理过程渲染；tool_result 块折叠进对应工具卡，不单独渲染。
  */
-const props = defineProps<{ blocks: ContentBlock[]; toolCalls?: ToolCall[]; fallbackContent?: string }>()
+const props = defineProps<{ blocks: ContentBlock[]; toolCalls?: ToolCall[]; fallbackContent?: string; processMode?: boolean }>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 
 const displayBlocks = computed<ContentBlock[]>(() => {
+  if (props.processMode) {
+    const answer = splitProcessBlocks(props.blocks).answer
+    if (answer.length || props.blocks.some(block => block.type === 'text')) return answer
+    return props.fallbackContent ? [{ type: 'text', text: props.fallbackContent }] : []
+  }
   const hasText = props.blocks.some((b) => b.type === 'text' && b.text.trim())
   const fallback = props.fallbackContent?.trim()
   if (hasText || !fallback) return props.blocks

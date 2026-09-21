@@ -1,0 +1,204 @@
+/* 同一回合的公开思考、工具与沙箱共享处理过程；折叠不影响任务推进。 */
+.hc-process {
+  margin: 2px 0 8px;
+  max-width: 720px;
+  min-width: 0;
+  color: var(--hc-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.hc-process__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.hc-process__toggle:disabled {
+  cursor: default;
+}
+.hc-process__toggle:focus-visible,
+.hc-process summary:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.hc-process__chevron {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  transition: transform 160ms ease-out;
+}
+.hc-process__toggle[aria-expanded='true'] .hc-process__chevron {
+  transform: rotate(90deg);
+}
+.hc-process__marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.hc-process__marker svg,
+.hc-process__chevron {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hc-process__spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--hc-border);
+  border-top-color: var(--hc-accent);
+  border-radius: 50%;
+  animation: hc-process-spin 0.8s linear infinite;
+}
+.hc-process__body {
+  margin: 5px 0 0 6px;
+  padding: 0 0 1px 17px;
+  border-left: 1px solid var(--hc-divider, var(--hc-border));
+  overflow-wrap: anywhere;
+}
+.hc-process__step + .hc-process__step {
+  margin-top: 10px;
+}
+.hc-process__reasoning {
+  color: var(--hc-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.hc-process__reasoning p {
+  margin: 0 0 6px;
+}
+.hc-process__notice {
+  margin: 4px 0;
+  color: var(--hc-error);
+  font-size: 12px;
+}
+.hc-process-tool {
+  min-width: 0;
+}
+.hc-process-tool > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+.hc-process-tool > summary::-webkit-details-marker {
+  display: none;
+}
+.hc-process-tool__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 类型前缀保持与名称同字号，以颜色区分层级，窄窗自然换行。 */
+.hc-process-tool__kind {
+  color: var(--hc-text-muted);
+  font-weight: 400;
+}
+.hc-process-tool__meta {
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.hc-process-tool__duration {
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.hc-process-tool__detail {
+  margin: 5px 0 0 21px;
+  font-size: 12px;
+}
+.hc-process-tool__detail pre {
+  margin: 5px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hc-border);
+  border-radius: 8px;
+  background: var(--hc-bg-sidebar);
+  color: var(--hc-text-secondary);
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+}
+.hc-process-tool__detail ul {
+  margin: 5px 0;
+  padding-left: 18px;
+}
+.hc-process-tool__detail a {
+  color: var(--hc-accent);
+}
+.hc-process-tool[data-status='error'] > summary,
+.hc-process-tool[data-status='unknown'] > summary {
+  color: var(--hc-error);
+}
+/* 完成状态让位于活动名称；所有工具与召回共用弱化色。 */
+.hc-process-tool[data-status='success'] > summary .hc-process__marker {
+  color: var(--hc-text-muted);
+}
+@keyframes hc-process-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hc-process__spinner {
+    animation: none;
+  }
+  .hc-process__chevron {
+    transition: none;
+  }
+}
+.hc-process__marker svg {
+  width: 14px;
+  height: 14px;
+}
+.hc-process__reasoning .markdown-body {
+  font-size: 13px;
+  line-height: 1.65;
+}
+.hc-process__reasoning p:last-child {
+  margin-bottom: 0;
+}
+.hc-process__retrieval-hit + .hc-process__retrieval-hit {
+  border-top: 1px solid var(--hc-border);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+.hc-process__retrieval-title {
+  font-weight: 500;
+}
+.hc-process__retrieval-hit p {
+  white-space: pre-wrap;
+  margin: 4px 0;
+}
+
+/* 摘录取消 PDF 提取缩进；完整排版只在原文阅读器中提供。 */
+.hc-process__retrieval-hit .hc-process__excerpt {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  line-height: 1.6;
+}

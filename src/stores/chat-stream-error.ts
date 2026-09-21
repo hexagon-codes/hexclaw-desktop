@@ -86,6 +86,8 @@ export function createChatStreamErrorController(params: {
         'failed',
       ),
       agent_name: streamState?.agentDisplayName,
+      tool_calls: streamState?.toolCalls,
+      blocks: streamState?.blocks,
     }
     if (targetSessionId) {
       appendMessageToSession(targetSessionId, errorMessage)

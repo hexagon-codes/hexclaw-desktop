@@ -77,6 +77,8 @@ export interface StreamCallbacks {
     done?: boolean
     messageContent?: MessageContent
     runtimeFrame?: RuntimeWireFrame
+    blocks?: ChatMessage['blocks']
+    toolCalls?: ChatMessage['tool_calls']
   }) => void
   onMemorySaved?: (content: string) => void
 }
@@ -797,6 +799,8 @@ function openRequestSocket(
           done: msg.done,
           messageContent: msg.message_content,
           runtimeFrame,
+          blocks: msg.blocks,
+          toolCalls: msg.tool_calls,
         })
         if (msg.done) {
           settleResolve({
@@ -804,6 +808,7 @@ function openRequestSocket(
             messageContent: msg.message_content,
             metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
+            blocks: msg.blocks,
             agentName:
               typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })

@@ -64,7 +64,8 @@ export function createChatStreamCancelController(params: {
 
     if (
       preservePartial
-      && (current.thinkingEnabled || current.content.trim() || current.reasoning.trim())
+      && (current.thinkingEnabled || current.content.trim() || current.reasoning.trim()
+        || current.blocks?.length || current.toolCalls?.length)
     ) {
       const normalizedReasoning = current.visibility === 'visible' && current.reasoning
         ? normalizeAssistantReasoning(current.reasoning) || undefined
@@ -85,6 +86,7 @@ export function createChatStreamCancelController(params: {
         reasoning: normalizedReasoning,
         metadata: normalizeThinkingMetadata(
           normalizeRuntimeSnapshotMetadata({
+            thinking_state: 'cancelled',
             reasoning_receipt: reasoningReceipt,
             thinking_duration: reasoningReceipt.reasoning_execution === 'applied'
               ? getStreamThinkingDuration(current) ?? 0
@@ -106,6 +108,8 @@ export function createChatStreamCancelController(params: {
           'cancelled',
         ),
         agent_name: current.agentDisplayName,
+        tool_calls: current.toolCalls,
+        blocks: current.blocks,
       }
       appendMessageToSession(sessionId, partialMessage)
       try {

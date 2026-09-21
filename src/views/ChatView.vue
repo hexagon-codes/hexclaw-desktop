@@ -9,7 +9,6 @@ import {
   Plus,
   Settings,
   Zap,
-  BookOpen,
   Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
@@ -65,8 +64,7 @@ import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { closeImagePreview, releaseImagePreviewResource } from '@/composables/useImagePreview'
 import { useBackendMedia } from '@/composables/useBackendMedia'
-import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
-import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'
+import AssistantProcess from '@/components/chat/AssistantProcess.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
   shouldSendOnEnter,
@@ -93,7 +91,6 @@ import {
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import SubAgentPanel from '@/components/chat/SubAgentPanel.vue'
-import ToolCallCard from '@/components/chat/ToolCallCard.vue'
 import MessageBlocks from '@/components/chat/MessageBlocks.vue'
 import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
@@ -114,7 +111,6 @@ import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { resolveProviderDisplayName } from '@/utils/provider-display-name'
-import { knowledgeHitTitle, knowledgeHitSubtitle } from '@/utils/retrieval-hits'
 import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
@@ -136,7 +132,6 @@ import type {
   ModelReasoningControl,
   ModelReasoningSupport,
 } from '@/types'
-import { parseReasoningReceipt, type ReasoningReceipt } from '@/types/chat'
 import type { RenderManifest } from '@/contracts/message-content'
 import { recordNestedRenderManifest, recordRenderManifest } from '@/contracts/render-evidence'
 import { getDocPreviewFile } from '@/utils/doc-preview'
@@ -177,61 +172,14 @@ const QUERY_MODEL_RETRY_TIMES = 4
 let queryModelSelectionAbort: AbortController | null = null
 const messagesEndRef = ref<HTMLDivElement>()
 const messagesContainerRef = ref<HTMLDivElement>()
-const thinkingContentRef = ref<HTMLDivElement>()
-function bindThinkingContentRef(element: HTMLDivElement | null) {
-  thinkingContentRef.value = element ?? undefined
-}
 const showScrollToBottom = ref(false)
 const userScrolledUp = ref(false)
-
-type ThinkingProgressState = 'running' | 'completed' | 'failed' | 'cancelled'
 
 function messageThinkingElapsed(message: ChatMessage): number {
   const elapsed = Number(message.metadata?.thinking_duration)
   return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
 }
 
-function messageThinkingState(message: ChatMessage): ThinkingProgressState {
-  const state = message.metadata?.thinking_state
-  return state === 'running' || state === 'completed' || state === 'failed' || state === 'cancelled'
-    ? state
-    : 'completed'
-}
-
-function messageReasoningVisibility(message: ChatMessage): 'visible' | 'not_exposed' {
-  if (message.metadata?.reasoning_visibility === 'not_exposed') return 'not_exposed'
-  return message.reasoning ? 'visible' : 'not_exposed'
-}
-
-function hasThinkingProgress(message: ChatMessage): boolean {
-  const metadata = message.metadata
-  const reasoningRequest = metadata?.reasoning_request ?? metadata?.thinking
-  if (
-    reasoningRequest === 'off' ||
-    reasoningRequest === false ||
-    reasoningRequest === 'false' ||
-    reasoningRequest === '0'
-  ) {
-    return false
-  }
-  const thinkingEnabled = metadata?.thinking_enabled
-  if (thinkingEnabled === false || thinkingEnabled === 'false' || thinkingEnabled === '0') {
-    return false
-  }
-  if (metadata?.reasoning_support === 'unsupported' || metadata?.reasoning_support === 'unknown') {
-    return false
-  }
-
-  const state = message.metadata?.thinking_state
-  // completed 只有正数耗时才是可展示证据；0 秒不能因旧 reasoning 文本伪造思考标识。
-  if (messageThinkingElapsed(message) > 0) return true
-  return state === 'running' || state === 'failed' || state === 'cancelled'
-}
-
-function messageReasoningReceipt(message: ChatMessage): ReasoningReceipt | null {
-  const receipt = message.metadata?.reasoning_receipt
-  return receipt === undefined ? null : (parseReasoningReceipt(receipt) ?? null)
-}
 const unreadScenarioResultCount = ref(0)
 const scrollCoordinator = useConversationScrollCoordinator({
   getContainer: () => messagesContainerRef.value,
@@ -551,6 +499,8 @@ const liveAssistantMessage = computed<ChatMessage | null>(() => {
         : undefined,
     timestamp: new Date(stream.startedAt ?? Date.now()).toISOString(),
     agent_name: stream.agentDisplayName,
+    blocks: stream.blocks,
+    tool_calls: stream.toolCalls,
     metadata: {
       thinking_state: stream.thinkingEnabled ? (stream.state ?? 'running') : undefined,
       thinking_duration: stream.thinkingEnabled
@@ -560,6 +510,9 @@ const liveAssistantMessage = computed<ChatMessage | null>(() => {
         : undefined,
       reasoning_visibility: stream.thinkingEnabled ? visibility : undefined,
       recipient_display_name: stream.recipientDisplayName,
+      runtime_events: stream.runtimeEvents,
+      reasoning_receipt: stream.reasoningReceipt,
+      reasoning_disclosure: stream.reasoningDisclosure,
     },
   }
 })
@@ -1468,6 +1421,9 @@ function msgAgentDisplay(raw?: string | null): string {
 
 // 场景化空态（P0-20260708 P0-3）：实例声明了 emptyState 则替换通用「选择一个智能体」引导。
 const scenarioEmptyState = computed(() => scenarioCtx.value?.descriptor.emptyState ?? null)
+const isChatEmpty = computed(
+  () => chatStore.messages.length === 0 && !chatStore.isCurrentStreaming && !scenarioInlineActive.value,
+)
 const scenarioComposerPlaceholder = computed(() => {
   const key = scenarioCtx.value?.descriptor.composer?.placeholderKey
   return key ? t(key) : undefined
@@ -3020,27 +2976,8 @@ watch(
   },
 )
 
-// 思考框「贴底才跟随」阈值：用户在思考框里上滚超过此距离即视为正在阅读上文，
-// 后续流式 reasoning chunk 不再把滚动条抢回底部（BUG-20260626：思考时无法上滚看上面的内容）。
-const THINKING_STICK_THRESHOLD_PX = 32
-
-watch(
-  () => chatStore.isCurrentStreamingReasoning,
-  () => {
-    // 必须在 DOM patch 前量「这次更新前」的几何：内容向下追加时 scrollTop 不变、scrollHeight 增大，
-    // 若在追加后再判距底，刚冒出的高度会被误当成「用户上滚」。flush:'pre' 的 watcher 同步段正是 patch 前。
-    const box = thinkingContentRef.value
-    const wasAtBottom =
-      !box || box.scrollHeight - box.scrollTop - box.clientHeight <= THINKING_STICK_THRESHOLD_PX
-    nextTick(() => {
-      // 仅在用户原本就贴底时才跟随贴底；上滚阅读时保持其滚动位置不被打扰。
-      if (thinkingContentRef.value && wasAtBottom) {
-        thinkingContentRef.value.scrollTop = thinkingContentRef.value.scrollHeight
-      }
-      scrollToBottom()
-    })
-  },
-)
+// 过程更新沿主会话的贴底规则跟随；用户正在阅读上文时不抢滚动位置。
+watch(() => chatStore.isCurrentStreamingReasoning, () => nextTick(scrollToBottom))
 
 // 参数变更时同步到 chatStore
 watch([() => chatTemperature.value, () => chatMaxTokens.value], syncChatParams)
@@ -3154,30 +3091,6 @@ function messageSourceDisplay(message: ChatMessage): string | null {
 function messageFeedbackValue(message: import('@/types').ChatMessage) {
   const feedback = message.metadata?.user_feedback
   return feedback === 'like' || feedback === 'dislike' ? feedback : null
-}
-
-function normalizeHitList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    : []
-}
-
-function getKnowledgeHits(message: import('@/types').ChatMessage) {
-  return normalizeHitList(message.metadata?.knowledge_hits)
-}
-
-function getMemoryHits(message: import('@/types').ChatMessage) {
-  return normalizeHitList(message.metadata?.memory_hits)
-}
-
-// 命中卡展示走 utils/retrieval-hits（BUG-20260711-B：doc_title/source 皆空是后端合法形态，
-// 标题兜底链必须落到 content 摘要，不能整排渲染成「知识库命中」占位卡）。
-function getHitTitle(hit: Record<string, unknown>) {
-  return knowledgeHitTitle(hit, t)
-}
-
-function getHitSubtitle(hit: Record<string, unknown>) {
-  return knowledgeHitSubtitle(hit, t)
 }
 
 async function handleFileUpload(file: File) {
@@ -3333,6 +3246,7 @@ function startSidebarResize(event: MouseEvent) {
     <!-- Main chat area -->
     <div
       class="hc-chat__main"
+      :data-chat-canvas="isChatEmpty ? 'empty' : 'conversation'"
       @dragover.prevent="isDragging = true"
       @dragleave.prevent="isDragging = false"
       @drop.prevent="handleDrop"
@@ -3386,11 +3300,7 @@ function startSidebarResize(event: MouseEvent) {
         @pointerdown="markMessagesUserIntent"
       >
         <div
-          v-if="
-            chatStore.messages.length === 0 &&
-            !chatStore.isCurrentStreaming &&
-            !scenarioInlineActive
-          "
+          v-if="isChatEmpty"
           class="hc-chat__empty"
         >
           <EmptyState
@@ -3468,61 +3378,18 @@ function startSidebarResize(event: MouseEvent) {
                     "
                     :is-handoff="true"
                   />
-                  <AssistantRunStatus
-                    v-if="isLiveAssistantMessage(msg) || messageReasoningReceipt(msg)"
-                    :reasoning-request="
-                      isLiveAssistantMessage(msg)
-                        ? currentLiveStream?.thinkingEnabled
-                          ? 'on'
-                          : 'off'
-                        : (messageReasoningReceipt(msg)?.reasoning_request ?? 'off')
-                    "
-                    :reasoning-support="
-                      isLiveAssistantMessage(msg)
-                        ? (currentLiveStream?.reasoningSupport ?? 'unknown')
-                        : (messageReasoningReceipt(msg)?.reasoning_support ?? 'unknown')
-                    "
-                    :reasoning-execution="
-                      isLiveAssistantMessage(msg)
-                        ? (currentLiveStream?.reasoningExecution ?? 'unknown')
-                        : (messageReasoningReceipt(msg)?.reasoning_execution ?? 'unknown')
-                    "
-                    :has-visible-answer="Boolean(msg.content.trim())"
+                  <AssistantProcess
+                    :message="msg"
+                    :live="isLiveAssistantMessage(msg)"
                     :elapsed-seconds="messageThinkingElapsed(msg)"
-                    :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
-                    :visibility="messageReasoningVisibility(msg)"
-                    :runtime-events="msg.metadata?.runtime_events ?? []"
-                    :default-open="true"
-                    :content-ref="bindThinkingContentRef"
-                  />
-                  <ThinkingProgress
-                    v-else-if="hasThinkingProgress(msg)"
-                    :state="messageThinkingState(msg)"
-                    :elapsed-seconds="messageThinkingElapsed(msg)"
-                    :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
-                    :visibility="messageReasoningVisibility(msg)"
-                    :runtime-events="msg.metadata?.runtime_events ?? []"
-                    :default-open="isLiveAssistantMessage(msg)"
-                    :content-ref="isLiveAssistantMessage(msg) ? bindThinkingContentRef : undefined"
+                    :tool-calls="displayToolCalls(msg)"
+                    @rendered="captureNestedManifest(msg, $event)"
                   />
                   <!-- 子 Agent 协作面板（orchestrate/spawn fan-out 完成后结构化展示） -->
                   <SubAgentPanel
                     v-if="subAgentReportsByMsg.get(msg.id)?.length"
                     :reports="subAgentReportsByMsg.get(msg.id)!"
                   />
-                  <!-- 工具调用卡：因果位 think → act → answer（P0-1）。
-                       有有序内容块时改由气泡内 MessageBlocks 按真实交错序渲染，这里不再单独堆叠（避免重复）。 -->
-                  <div
-                    v-if="!msg.blocks?.length && displayToolCalls(msg).length"
-                    class="hc-msg__tools"
-                  >
-                    <ToolCallCard
-                      v-for="tc in displayToolCalls(msg)"
-                      :key="tc.id"
-                      :call="tc"
-                      @rendered="captureNestedManifest(msg, $event)"
-                    />
-                  </div>
                   <div
                     v-if="!isLiveAssistantMessage(msg) || Boolean(msg.content.trim())"
                     class="hc-msg__bubble-wrap"
@@ -3531,12 +3398,15 @@ function startSidebarResize(event: MouseEvent) {
                       class="hc-msg__bubble hc-msg__bubble--assistant"
                       :class="{
                         'hc-msg__bubble--empty':
-                          !isLiveAssistantMessage(msg) && isEmptyReply(msg.content),
+                          !isLiveAssistantMessage(msg) && isEmptyReply(msg.content)
+                          && !(msg.metadata?.thinking_state === 'cancelled'
+                            && (msg.blocks?.length || msg.tool_calls?.length)),
                       }"
                     >
                       <template v-if="isLiveAssistantMessage(msg)">
+                        <MessageBlocks v-if="msg.blocks?.length" :blocks="msg.blocks" :tool-calls="msg.tool_calls" :fallback-content="sanitizeMessageContent(msg.content)" process-mode />
                         <MarkdownRenderer
-                          v-if="msg.content"
+                          v-else-if="msg.content"
                           :content="sanitizeMessageContent(msg.content)"
                           surface="desktop"
                         />
@@ -3601,11 +3471,11 @@ function startSidebarResize(event: MouseEvent) {
                             <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                           </template>
                         </div>
-                        <!-- 有有序内容块 → 按真实执行序交错渲染 text↔工具卡（多步 ReAct 保真）；
-                           否则回退单串正文（兼容旧消息 / 重载 / 非流式）。 -->
+                        <!-- 工具前的公开解释进入处理过程，最终正文和附件独立交付。 -->
                         <MessageBlocks
-                          v-if="msg.blocks?.length"
+                          v-if="msg.blocks?.length && !msg.metadata?.is_error"
                           :blocks="msg.blocks"
+                          process-mode
                           :tool-calls="msg.tool_calls"
                           :fallback-content="sanitizeMessageContent(msg.content)"
                           @rendered="captureNestedManifest(msg, $event)"
@@ -3662,54 +3532,6 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                   <!-- Meta footer: 时间 · 模型 · Agent 合并一行 -->
                   <!-- (moved to hc-msg__footer below) -->
-                  <div
-                    v-if="msg.metadata?.knowledge_hits || msg.metadata?.memory_hits"
-                    class="hc-msg__sources"
-                  >
-                    <span
-                      v-if="msg.metadata?.knowledge_hits"
-                      class="hc-msg__source-tag hc-msg__source-tag--knowledge"
-                      :title="t('chat.knowledgeHit')"
-                    >
-                      <BookOpen :size="11" /> {{ t('chat.knowledgeHit') }}
-                    </span>
-                    <span
-                      v-if="msg.metadata?.memory_hits"
-                      class="hc-msg__source-tag hc-msg__source-tag--memory"
-                      :title="t('chat.memoryHit')"
-                    >
-                      <Zap :size="11" /> {{ t('chat.memoryHit') }}
-                    </span>
-                  </div>
-                  <div v-if="getKnowledgeHits(msg).length > 0" class="hc-msg__hit-list">
-                    <div
-                      v-for="(hit, hitIdx) in getKnowledgeHits(msg)"
-                      :key="`knowledge-${msg.id}-${hitIdx}`"
-                      class="hc-msg__hit"
-                    >
-                      <div class="hc-msg__hit-title">{{ getHitTitle(hit) }}</div>
-                      <div v-if="getHitSubtitle(hit)" class="hc-msg__hit-subtitle">
-                        {{ getHitSubtitle(hit) }}
-                      </div>
-                    </div>
-                  </div>
-                  <div v-if="getMemoryHits(msg).length > 0" class="hc-msg__hit-list">
-                    <div
-                      v-for="(hit, hitIdx) in getMemoryHits(msg)"
-                      :key="`memory-${msg.id}-${hitIdx}`"
-                      class="hc-msg__hit"
-                    >
-                      <div class="hc-msg__hit-title">
-                        {{ typeof hit.content === 'string' ? hit.content : t('chat.memoryHit') }}
-                      </div>
-                      <div
-                        v-if="typeof hit.source === 'string' && hit.source"
-                        class="hc-msg__hit-subtitle"
-                      >
-                        {{ hit.source }}
-                      </div>
-                    </div>
-                  </div>
                   <!-- Backend auto-extracted memory notification -->
                   <div
                     v-if="
@@ -4556,6 +4378,67 @@ function startSidebarResize(event: MouseEvent) {
      消息文字竖排逐字换行（BUG-20260708）。内部子元素各自 min-width:0 保留 ellipsis。 */
   min-width: 340px;
   position: relative;
+  /* 顶部淡光始终稳定；局部堆叠上下文将主体柔光限定在内容之后。 */
+  isolation: isolate;
+  --chat-glow-top: .10;
+  --chat-glow-core: .19;
+  --chat-glow-wash: .04;
+  background-image: radial-gradient(
+    ellipse 64% 100% at 50% 0%,
+    rgba(95, 179, 234, var(--chat-glow-top)) 0%,
+    rgba(95, 179, 234, .025) 45%,
+    rgba(95, 179, 234, 0) 100%
+  );
+  background-size: 100% 220px;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+
+[data-theme='dark'] .hc-chat__main {
+  --chat-glow-top: .12;
+  --chat-glow-core: .124;
+  --chat-glow-wash: .03;
+}
+
+/* 柔光锚定输入框上沿，宽度最多 880px 并保持 2:1，避免透明边界溢出；输入高度改变时自然跟随。 */
+.hc-chat__main :deep(.hc-composer__box--primary::before) {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -100px;
+  width: min(100%, 880px);
+  aspect-ratio: 2 / 1;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 36% 36% at center,
+      rgba(95, 179, 234, var(--chat-glow-core)) 0%,
+      rgba(95, 179, 234, 0) 100%
+    ),
+    radial-gradient(
+      ellipse closest-side at center,
+      rgba(95, 179, 234, var(--chat-glow-wash)) 0%,
+      rgba(95, 179, 234, 0) 100%
+    );
+  opacity: 0;
+  transition: opacity 220ms ease-out;
+}
+
+.hc-chat__main[data-chat-canvas='empty'] :deep(.hc-composer__box--primary::before) {
+  opacity: 1;
+}
+
+/* K12 场景使用自己的背景；减少动态效果时状态直接切换。 */
+body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary::before) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-chat__main :deep(.hc-composer__box--primary::before) {
+    transition: none;
+  }
 }
 
 /* 拖拽文件 overlay */

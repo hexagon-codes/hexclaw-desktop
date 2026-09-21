@@ -8,17 +8,36 @@ import type { RenderManifest } from '@/contracts/message-content'
 import {
   toolCallStatus,
   resolveToolDisplayName,
+  resolveProcessToolName,
   summarizeToolResult,
   prettyToolJson,
   toolDurationLabel,
 } from '@/utils/tool-call'
 
-const props = defineProps<{ call: ToolCall }>()
+const props = defineProps<{
+  call: ToolCall
+  appearance?: 'activity'
+  settled?: boolean
+  showServer?: boolean
+}>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 const { t } = useI18n()
 
 const status = computed(() => toolCallStatus(props.call))
-const displayName = computed(() => resolveToolDisplayName(props.call.name, t))
+const outcome = computed(() =>
+  props.settled && status.value === 'running' ? 'unknown' : status.value,
+)
+const displayName = computed(() =>
+  props.appearance === 'activity'
+    ? resolveProcessToolName(props.call, t, props.showServer)
+    : resolveToolDisplayName(props.call.name, t),
+)
+const toolKind = computed(() => {
+  const call = props.call
+  if (call.origin?.kind === 'mcp') return 'MCP'
+  if (call.execution || call.name === 'code_exec') return 'Sandbox'
+  return call.origin?.kind === 'skill' ? 'Skill' : ''
+})
 const summary = computed(() => summarizeToolResult(props.call))
 const durationLabel = computed(() => toolDurationLabel(props.call.duration_ms))
 const prettyArgs = computed(() => prettyToolJson(props.call.arguments))
@@ -38,7 +57,59 @@ const statusLabel = computed(() =>
 </script>
 
 <template>
-  <div class="hc-tool" :class="`hc-tool--${status}`">
+  <details v-if="appearance === 'activity'" class="hc-process-tool" :data-status="outcome">
+    <summary>
+      <span class="hc-process__marker" aria-hidden="true">
+        <span v-if="outcome === 'running'" class="hc-process__spinner" />
+        <span v-else-if="outcome === 'error' || outcome === 'unknown'">!</span>
+        <svg v-else viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m8 12 2.5 2.5L16 9" />
+        </svg>
+      </span>
+      <span class="hc-process-tool__name"
+        ><span v-if="toolKind" class="hc-process-tool__kind">{{ toolKind }} · </span
+        >{{ displayName }}</span
+      >
+      <span v-if="outcome === 'unknown'" class="hc-process-tool__meta">Outcome unknown</span>
+      <span v-else-if="outcome === 'error'" class="hc-process-tool__meta">{{ statusLabel }}</span>
+      <span class="hc-process-tool__meta hc-process-tool__duration">{{
+        outcome === 'running' || outcome === 'unknown' ? '' : durationLabel
+      }}</span>
+    </summary>
+    <div class="hc-process-tool__detail">
+      <div class="hc-process-tool__meta">{{ call.name }}</div>
+      <div v-if="call.origin?.kind === 'mcp'" class="hc-process-tool__meta">
+        {{ [call.origin.server_name, call.origin.name].filter(Boolean).join(' · ') }}
+      </div>
+      <template v-if="call.arguments"
+        ><div>{{ t('chat.toolParams') }}</div>
+        <pre>{{ prettyArgs }}</pre>
+      </template>
+      <template v-if="call.execution">
+        <div>{{ call.execution.language }} · Exit code: {{ call.execution.exit_code }}</div>
+        <pre v-if="call.execution.command?.length">{{ call.execution.command.join(' ') }}</pre>
+        <p v-if="call.execution.timeout">Execution timed out</p>
+        <pre v-if="call.execution.error">{{ call.execution.error }}</pre>
+        <ul v-if="call.execution.artifacts?.length">
+          <li v-for="artifact in call.execution.artifacts" :key="artifact.id">
+            {{ artifact.name }} · {{ artifact.size }} B
+          </li>
+        </ul>
+      </template>
+      <template v-if="call.result || call.message_content">
+        <div>{{ t('chat.toolResult') }}</div>
+        <MarkdownRenderer
+          v-if="call.message_content"
+          :content="call.message_content"
+          surface="desktop"
+          @rendered="emit('rendered', $event)"
+        />
+        <pre v-else>{{ prettyResult }}</pre>
+      </template>
+    </div>
+  </details>
+  <div v-else class="hc-tool" :class="`hc-tool--${status}`">
     <div class="hc-tool__head">
       <component
         :is="statusIcon"

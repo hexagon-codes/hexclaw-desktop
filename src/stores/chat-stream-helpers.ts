@@ -18,6 +18,7 @@ import {
 } from '@/types/chat'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
+import { appendProcessBlocks, mergeProcessCalls } from '@/utils/assistant-process'
 
 export type SessionStreamState = {
   sessionId: string
@@ -31,6 +32,8 @@ export type SessionStreamState = {
   assistantMessageAliases: string[]
   lastSequence: number
   runtimeEvents: RuntimeEvent[]
+  blocks?: ChatMessage['blocks']
+  toolCalls?: ChatMessage['tool_calls']
   reasoningDisclosure?: ReasoningDisclosure
   /** 旧会话快照可能缺失；生产构建与归约路径始终写入 canonical 值。 */
   reasoningReceipt?: ReasoningReceipt
@@ -253,6 +256,8 @@ export function mergeStreamChunkState(
           sequence: runtimeFrame.sequence,
           reasoning_disclosure: runtimeFrame.reasoningDisclosure,
           reasoning_receipt: runtimeFrame.reasoningReceipt,
+          blocks: runtimeFrame.blocks,
+          tool_calls: runtimeFrame.toolCalls,
           runtime_event: runtimeFrame.runtimeEvent
             ? (() => {
                 const event = { ...runtimeFrame.runtimeEvent } as Record<string, unknown>
@@ -336,6 +341,8 @@ export function mergeStreamChunkState(
     reasoningSupport: reasoningReceipt.reasoning_support,
     reasoningExecution: reasoningReceipt.reasoning_execution,
     acceptedRuntimeFrames: runtimeSnapshot.acceptedFrames,
+    blocks: appendProcessBlocks(current.blocks, acceptedRuntimeFrame, parsedContent.slice(current.content.length), publicReasoning, hasUntrustedReasoning),
+    toolCalls: mergeProcessCalls(current.toolCalls, acceptedRuntimeFrame?.toolCalls),
     rawContent,
     content: parsedContent,
     explicitReasoning,
@@ -441,6 +448,8 @@ export function buildRecoveredStreamState(
     visibility: disclosure?.visibility ?? metadataVisibility ?? 'not_exposed',
     agentDisplayName,
     recipientDisplayName,
+    blocks: snapshot.blocks?.filter(block => block.type !== 'thinking' || disclosure?.visibility === 'visible'),
+    toolCalls: snapshot.tool_calls,
     rawContent: snapshotContent,
     content: snapshotContent,
     explicitReasoning: publicReasoning,

@@ -183,12 +183,14 @@ export function createChatStreamCompletionController(params: {
       timestamp: new Date().toISOString(),
       reasoning: finalReasoning,
       metadata: finalMetadata,
-      tool_calls: args.toolCalls,
-      blocks: args.blocks,
+      tool_calls: args.toolCalls ?? streamState?.toolCalls,
+      blocks: args.blocks ?? streamState?.blocks,
       agent_name: streamState?.agentDisplayName || args.agentName,
     }
 
     appendMessageToSession(args.sessionId, assistantMessage)
+    // 自动停止的流可能没有后端成功消息，沿现有终态接口保存冻结结果。
+    if (streamState?.degenerated) void msgSvc.persistCancelledReply?.(args.sessionId, assistantMessage)
     bumpLocalSession(args.sessionId)
 
     // 简化标题流程：直接调 suggest-title（不传 expectedTitle），后端无条件生成并写入

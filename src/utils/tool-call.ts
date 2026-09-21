@@ -88,7 +88,20 @@ type Translate = (key: string, fallback?: string) => string
  */
 export function resolveToolDisplayName(name: string, t: Translate): string {
   const base = toolBaseName(name)
+  if (base === 'web_search') return t('chat.toolName.search', base)
   return t('chat.toolName.' + base, base)
+}
+
+/** 过程名称以注册回执为准；MCP 不按后缀套用内置 Skill 的本地化。 */
+export function resolveProcessToolName(call: ToolCall, t: Translate, showServer = false): string {
+  const origin = call.origin
+  if (origin?.kind === 'mcp') {
+    const name = origin.name || call.name
+    return showServer && origin.server_name ? `${origin.server_name} · ${name}` : name
+  }
+  const name = origin?.name || call.name
+  if (name === 'web_search') return t('chat.toolName.search', name)
+  return t('chat.toolName.' + name, name)
 }
 
 /**
@@ -100,7 +113,12 @@ function clampOneLine(s: string, maxLen: number): string {
   const flat = s.replace(/[*`]+/g, '').replace(/\s+/g, ' ').trim()
   const cps = Array.from(flat)
   if (cps.length <= maxLen) return flat
-  return cps.slice(0, maxLen - 1).join('').replace(/\s+$/, '') + '…'
+  return (
+    cps
+      .slice(0, maxLen - 1)
+      .join('')
+      .replace(/\s+$/, '') + '…'
+  )
 }
 
 function scalarStr(v: unknown): string {
