@@ -2,7 +2,12 @@
 export type MemoryType = 'identity' | 'preference' | 'fact' | 'instruction' | 'context' | 'rule'
 
 /** 记忆来源（reflect_profile = 周期画像蒸馏产物，BUG-20260703 P2-2 画像卡按它过滤） */
-export type MemorySource = 'manual' | 'chat_explicit' | 'chat_extract' | 'system' | 'reflect_profile'
+export type MemorySource =
+  | 'manual'
+  | 'chat_explicit'
+  | 'chat_extract'
+  | 'system'
+  | 'reflect_profile'
 
 /** 记忆状态 */
 export type MemoryStatus = 'active' | 'archived'
@@ -25,6 +30,9 @@ export interface MemoryEntry {
   /** 常驻置顶（逃生口）：true = 强制常驻、反思永不自动移动（U1）。 */
   pinned?: boolean
   /** 结构化主语（如「用户画像」）；后端 EntryMeta.Subject 透传 */
+  profile_revision?: string
+  profile_digest?: string
+  manual_correction?: boolean
   subject?: string
 }
 

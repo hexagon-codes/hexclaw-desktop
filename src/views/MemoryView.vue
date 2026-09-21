@@ -10,7 +10,6 @@ import {
   Pencil,
   Trash2,
   X,
-  Check,
   Pin,
   PinOff,
 } from 'lucide-vue-next'
@@ -36,6 +35,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import MemoryEntryEditor from '@/components/memory/MemoryEntryEditor.vue'
 import MemorySettingsPanel from '@/components/memory/MemorySettingsPanel.vue'
 
 const { t } = useI18n()
@@ -44,6 +44,19 @@ const loading = ref(true)
 const errorMsg = ref('')
 const entries = ref<MemoryEntry[]>([])
 const summary = ref('')
+const profileEntry = ref<MemoryEntry | null>(null)
+const settingsPanel = ref<InstanceType<typeof MemorySettingsPanel> | null>(null)
+
+function onProfileLoaded(entry: MemoryEntry | null) {
+  const changed = profileEntry.value?.id !== entry?.id
+  profileEntry.value = entry
+  if (changed) void loadMemory()
+}
+
+async function onProfileSaved() {
+  await loadMemory()
+  if (searchApplied.value) await handleSearch()
+}
 const capacity = ref<{ used: number; max: number; archived?: number } | null>(null)
 const legacyMode = ref(false)
 const legacyContent = ref('')
@@ -55,6 +68,7 @@ const nextCursor = ref('')
 const hasMore = ref(false)
 const totalEntries = ref(0)
 const loadingMore = ref(false)
+let memoryRequestGen = 0
 const movingId = ref<string | null>(null)
 const MEMORY_PAGE_SIZE = 50
 
@@ -90,7 +104,11 @@ let searchAbortController: AbortController | null = null
 const hasVisibleSummary = computed(() => memoryView.value !== 'archived' && !!summary.value)
 const showingSearchResults = computed(() => searching.value || searchApplied.value)
 const supportsStructuredMemory = computed(() => !legacyMode.value)
-const currentMemoryCount = computed(() => capacity.value?.used ?? entries.value.length)
+const currentMemoryCount = computed(() =>
+  capacity.value
+    ? Math.max(0, capacity.value.used - (profileEntry.value ? 1 : 0))
+    : entries.value.length,
+)
 const showMemoryListToolbar = computed(
   () =>
     supportsStructuredMemory.value ||
@@ -175,7 +193,7 @@ function normalizeMemoryText(text: string): string {
 }
 
 const shouldShowSummary = computed(() => {
-  if (!hasVisibleSummary.value) return false
+  if (supportsStructuredMemory.value || !hasVisibleSummary.value) return false
   const normalizedSummary = normalizeMemoryText(summary.value)
   if (!normalizedSummary) return false
   const normalizedEntries = entries.value
@@ -204,6 +222,7 @@ watch(searchQuery, (value) => {
 
 async function loadMemory(reset = true) {
   if (!reset && !nextCursor.value) return
+  const requestGen = ++memoryRequestGen
   if (reset) loading.value = true
   else loadingMore.value = true
   errorMsg.value = ''
@@ -214,14 +233,17 @@ async function loadMemory(reset = true) {
       cursor?: string
       type?: MemoryType
       source?: MemorySource
+      exclude_id?: string
     } = {
       view: memoryView.value,
       limit: MEMORY_PAGE_SIZE,
     }
+    if (profileEntry.value) params.exclude_id = profileEntry.value.id
     if (typeFilter.value !== 'all') params.type = typeFilter.value
     if (sourceFilter.value !== 'all') params.source = sourceFilter.value
     if (!reset) params.cursor = nextCursor.value
     const res = await getMemoryEntries(params)
+    if (requestGen !== memoryRequestGen) return
     legacyMode.value = Boolean(res.legacy_mode)
     legacyContent.value = res.legacy_content ?? ''
     const nextEntries = res.entries || []
@@ -240,11 +262,14 @@ async function loadMemory(reset = true) {
     }
     totalEntries.value = res.total ?? entries.value.length
   } catch (e) {
+    if (requestGen !== memoryRequestGen) return
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.loadFailed', 'Failed to load memory')
   } finally {
-    if (reset) loading.value = false
-    else loadingMore.value = false
+    if (requestGen === memoryRequestGen) {
+      loading.value = false
+      loadingMore.value = false
+    }
   }
 }
 
@@ -282,11 +307,13 @@ function clearSearchState(preserveQuery = false) {
 
 // ─── Single-entry edit ───────────────────────────────────
 function startEdit(entry: MemoryEntry) {
+  if (savingEdit.value) return
   editingId.value = entry.id
   editValue.value = entry.content
 }
 
 function cancelEdit() {
+  if (savingEdit.value) return
   editingId.value = null
   editValue.value = ''
 }
@@ -311,6 +338,7 @@ async function saveEdit(e?: KeyboardEvent) {
     editingId.value = null
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
@@ -346,6 +374,7 @@ async function handleDeleteEntry(id: string) {
     }
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.deleteFailed', 'Failed to delete memory')
@@ -368,6 +397,7 @@ async function confirmArchiveEntry() {
     await archiveMemoryEntry(entry.id)
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.archiveFailed', 'Failed to archive memory')
@@ -384,6 +414,7 @@ async function handleRestoreEntry(entry: MemoryEntry) {
     await restoreMemoryEntry(entry.id)
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.restoreFailed', 'Failed to restore memory')
@@ -401,6 +432,7 @@ async function handleTogglePin(entry: MemoryEntry) {
     await (entry.pinned ? unpinMemoryEntry(entry.id) : pinMemoryEntry(entry.id))
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.pinFailed', 'Failed to pin memory')
   } finally {
@@ -418,6 +450,7 @@ async function handleClearAll() {
     showClearAllConfirm.value = false
     emit('memory:updated')
     await loadMemory()
+    await settingsPanel.value?.syncProfile()
   } catch (e) {
     errorMsg.value =
       e instanceof Error ? e.message : t('memory.clearFailed', 'Failed to clear memory')
@@ -499,7 +532,7 @@ async function handleSearch() {
   searchApplied.value = true
   errorMsg.value = ''
   try {
-    const res = await searchMemory(query)
+    const res = await searchMemory(query, profileEntry.value?.id)
     if (ac.signal.aborted || requestGen !== searchRequestGen) return
     searchResults.value = res.results || []
     vectorResults.value = res.vector_results || []
@@ -551,8 +584,9 @@ async function handleSearch() {
     </div>
 
     <div data-testid="memory-content" class="flex-1 overflow-y-auto p-6">
+      <div class="hc-memory-content-column">
       <!-- BUG-20260703 P2-2：记忆行为设置 + 用户画像暴露面（此前只能手改 yaml/画像埋在列表里） -->
-      <MemorySettingsPanel v-if="supportsStructuredMemory" />
+      <MemorySettingsPanel v-if="supportsStructuredMemory" ref="settingsPanel" @profile-loaded="onProfileLoaded" @profile-saved="onProfileSaved" />
 
       <LoadingState v-if="loading" />
 
@@ -561,7 +595,7 @@ async function handleSearch() {
         <div
           v-if="showMemoryListToolbar"
           data-testid="memory-list-toolbar"
-          class="max-w-2xl mb-4 space-y-2.5"
+          class="mb-4 space-y-2.5"
         >
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex flex-wrap items-center gap-2">
@@ -624,7 +658,7 @@ async function handleSearch() {
         <template v-if="showingSearchResults">
           <LoadingState v-if="searching" />
 
-          <div v-else class="max-w-2xl space-y-4">
+          <div v-else class="space-y-4">
             <div v-if="searchResults.length > 0" class="space-y-3">
               <div class="text-xs font-medium" :style="{ color: 'var(--hc-text-muted)' }">
                 {{ t('memory.searchMatches', { count: searchResults.length }) }}
@@ -693,7 +727,7 @@ async function handleSearch() {
             :description="t('memory.longTermDesc')"
           />
 
-          <div v-else class="max-w-2xl space-y-3">
+          <div v-else class="space-y-3">
             <div
               v-for="entry in entries"
               :key="entry.id"
@@ -707,43 +741,19 @@ async function handleSearch() {
                 :style="{ color: TYPE_COLORS[entry.type] || 'var(--hc-accent)' }"
               />
 
-              <!-- Editing -->
-              <template v-if="editingId === entry.id">
-                <HcClearableField>
-                  <input
-                    v-model="editValue"
-                    data-testid="memory-edit-input"
-                    class="flex-1 rounded-lg border px-2 py-1 text-sm outline-none"
-                    :style="{
-                      background: 'var(--hc-bg-input)',
-                      borderColor: 'var(--hc-border)',
-                      color: 'var(--hc-text-primary)',
-                    }"
-                    @keydown.enter.exact.prevent="saveEdit"
-                    @keydown.escape="cancelEdit"
-                  />
-                </HcClearableField>
-                <button
-                  class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  :style="{ color: 'var(--hc-success, #10b981)' }"
-                  :disabled="savingEdit"
-                  @click="saveEdit()"
-                >
-                  <Check :size="14" />
-                </button>
-                <button
-                  class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                  @click="cancelEdit"
-                >
-                  <X :size="14" />
-                </button>
-              </template>
+              <!-- 原位多行编辑，普通回车换行，组合键显式保存。 -->
+              <MemoryEntryEditor
+                v-if="editingId === entry.id"
+                v-model="editValue"
+                :saving="savingEdit"
+                @save="saveEdit()"
+                @cancel="cancelEdit"
+              />
 
               <!-- Display -->
               <template v-else>
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
+                  <p class="hc-memory-entry-copy text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
                     {{ entry.content }}
                   </p>
                   <div class="flex items-center gap-2 mt-1.5">
@@ -797,7 +807,7 @@ async function handleSearch() {
                   </div>
                 </div>
                 <div
-                  class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  class="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                 >
                   <template v-if="supportsStructuredMemory">
                     <button
@@ -840,6 +850,7 @@ async function handleSearch() {
                   <button
                     class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                     :style="{ color: 'var(--hc-text-muted)' }"
+                    :aria-label="t('common.edit')"
                     @click="startEdit(entry)"
                   >
                     <Pencil :size="12" />
@@ -896,6 +907,7 @@ async function handleSearch() {
           </div>
         </template>
       </template>
+      </div>
     </div>
 
     <Teleport to="body">
@@ -1029,6 +1041,18 @@ async function handleSearch() {
 </template>
 
 <style scoped>
+/* 画像、设置、筛选与全部列表状态共用边界，超宽窗口整列居中。 */
+.hc-memory-content-column {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  min-width: 0;
+}
+
+.hc-memory-entry-copy {
+  overflow-wrap: anywhere;
+}
+
 /* 新建记忆弹窗淡入淡出（对齐 AgentsView showAddAgent 弹窗的 modal 过渡） */
 .modal-enter-active {
   transition: opacity 0.2s ease-out;

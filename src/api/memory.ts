@@ -1,9 +1,16 @@
 import { apiGet, apiPost, apiPut, apiDelete } from './client'
-import type { MemoryEntry, MemoryListResponse, MemoryType, MemorySource, MemoryViewMode } from '@/types'
+import type {
+  MemoryEntry,
+  MemoryListResponse,
+  MemoryType,
+  MemorySource,
+  MemoryViewMode,
+} from '@/types'
 
 export type { MemoryEntry, MemoryListResponse }
 
 export interface MemoryListParams extends Record<string, unknown> {
+  exclude_id?: string
   view?: MemoryViewMode
   limit?: number
   cursor?: string
@@ -55,7 +62,9 @@ function parseLegacyMemoryEntries(content: string): MemoryEntry[] {
   })
 }
 
-function normalizeMemoryListResponse(response: MemoryListResponse | LegacyMemoryResponse): MemoryListResponse {
+function normalizeMemoryListResponse(
+  response: MemoryListResponse | LegacyMemoryResponse,
+): MemoryListResponse {
   if (Array.isArray((response as MemoryListResponse).entries)) {
     return response as MemoryListResponse
   }
@@ -104,12 +113,12 @@ export async function getMemoryEntries(params?: MemoryListParams) {
 }
 
 /** 创建单条记忆 */
-export function createMemoryEntry(
-  content: string,
-  type?: MemoryType,
-  source?: MemorySource,
-) {
-  return apiPost<MemoryEntry>('/api/v1/memory', { content, type: type ?? 'fact', source: source ?? 'manual' })
+export function createMemoryEntry(content: string, type?: MemoryType, source?: MemorySource) {
+  return apiPost<MemoryEntry>('/api/v1/memory', {
+    content,
+    type: type ?? 'fact',
+    source: source ?? 'manual',
+  })
 }
 
 /** 更新单条记忆。
@@ -201,7 +210,10 @@ interface MemorySearchHit {
  *  仅为缺失字段补合成默认值（id=file:line、type=fact、created_at=检索时刻），
  *  已是完整条目的命中（带 id/type）则展开置后原样透传。
  *  修复 MemoryView 渲染：:key=undefined 重复警告 / TYPE_COLORS[undefined] / formatTime(undefined)。 */
-export async function searchMemory(query: string): Promise<{
+export async function searchMemory(
+  query: string,
+  excludeId?: string,
+): Promise<{
   results: MemoryEntry[]
   vector_results: VectorSearchResult[] | null
   total: number
@@ -210,7 +222,7 @@ export async function searchMemory(query: string): Promise<{
     results: MemorySearchHit[] | null
     vector_results: VectorSearchResult[] | null
     total: number
-  }>('/api/v1/memory/search', { q: query })
+  }>('/api/v1/memory/search', { q: query, ...(excludeId ? { exclude_id: excludeId } : {}) })
   const stampedAt = new Date().toISOString() // 行级命中无时间戳，落检索时刻供 formatTime 展示
   const results: MemoryEntry[] = (raw.results ?? []).map((hit) => ({
     type: 'fact' as const,
@@ -257,5 +269,17 @@ export function updateMemoryConfig(patch: MemoryBehaviorUpdate) {
   return apiPut<{ status: string; config: MemoryBehaviorConfig; restart_required: string[] }>(
     '/api/v1/config/memory',
     patch as Record<string, unknown>,
+  )
+}
+
+/** 刷新与自动画像共用源版本和持久回执，客户端不重发。 */
+export function refreshMemoryProfile() {
+  return apiPost<{ action: string }>('/api/v1/memory/profile/refresh', {}, { timeout: 310000 })
+}
+export function editMemoryProfile(revision: string, content: string) {
+  return apiPut<{ message: string }>(
+    '/api/v1/memory/profile',
+    { revision, content },
+    { timeout: 310000 },
   )
 }
