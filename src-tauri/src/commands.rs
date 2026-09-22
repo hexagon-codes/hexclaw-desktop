@@ -19,6 +19,8 @@ use crate::sidecar_client::{read_bounded, SidecarClient};
 
 const MAX_PROXY_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+// 原文件读取与知识库后端既有上传上限一致，不能沿用普通接口响应上限。
+const MAX_KNOWLEDGE_SOURCE_BYTES: usize = 200 * 1024 * 1024;
 const MAX_ACTIVE_SIDECAR_FETCHES: usize = 64;
 
 struct ActiveSidecarFetch {
@@ -224,6 +226,7 @@ mod cancellation_tests {
 fn proxy_method(method: &str) -> Result<reqwest::Method, String> {
     match method.trim().to_ascii_uppercase().as_str() {
         "GET" => Ok(reqwest::Method::GET),
+        "HEAD" => Ok(reqwest::Method::HEAD),
         "POST" => Ok(reqwest::Method::POST),
         "PUT" => Ok(reqwest::Method::PUT),
         "PATCH" => Ok(reqwest::Method::PATCH),
@@ -289,6 +292,17 @@ async fn execute_sidecar_fetch(
     .await?;
     SidecarClient::require_non_redirect(&response)?;
     let status = response.status();
+    let source_path = path.split('?').next().unwrap_or(&path);
+    let knowledge_source = method.trim().eq_ignore_ascii_case("GET")
+        && source_path
+            .strip_prefix("/api/v1/knowledge/documents/")
+            .and_then(|tail| tail.strip_suffix("/source"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'));
+    let response_limit = if knowledge_source {
+        MAX_KNOWLEDGE_SOURCE_BYTES
+    } else {
+        MAX_PROXY_RESPONSE_BYTES
+    };
     let response_headers = response
         .headers()
         .iter()
@@ -300,11 +314,12 @@ async fn execute_sidecar_fetch(
                 .map(|value| (name.as_str().to_owned(), value.to_owned()))
         })
         .collect();
-    let body = await_sidecar_or_cancel(
-        cancellation,
-        read_bounded(response, MAX_PROXY_RESPONSE_BYTES),
-    )
-    .await?;
+    // HEAD 的 Content-Length 表示原文件大小，不代表本次响应包含正文。
+    let body = if method.trim().eq_ignore_ascii_case("HEAD") {
+        Vec::new()
+    } else {
+        await_sidecar_or_cancel(cancellation, read_bounded(response, response_limit)).await?
+    };
     Ok(SidecarFetchResponse {
         status: status.as_u16(),
         headers: response_headers,

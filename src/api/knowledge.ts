@@ -392,6 +392,18 @@ export async function getDocumentContent(doc: KnowledgeDoc): Promise<string> {
 }
 
 /** 通过当前后端的统一鉴权传输获取原文件。 */
+export function checkDocumentSource(id: string, sourceDigest?: string, signal?: AbortSignal) {
+  return api(`/api/v1/knowledge/documents/${encodeURIComponent(id)}/source`, {
+    method: 'HEAD', retry: 0, signal,
+    query: sourceDigest ? { source_digest: sourceDigest } : undefined,
+  })
+}
+
+export function documentSourceStatus(error: unknown): number | undefined {
+  const value = error as { status?: number; statusCode?: number; response?: { status?: number } } | null
+  return value?.status ?? value?.statusCode ?? value?.response?.status
+}
+
 export function getDocumentSource(
   id: string,
   sourceDigest?: string,

@@ -2,13 +2,14 @@
 import { ChevronLeft, ChevronRight, Minus, Plus, Scan } from 'lucide-vue-next'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
-import { getDocumentSource } from '@/api/knowledge'
+import { documentSourceStatus, getDocumentSource } from '@/api/knowledge'
 import { backendScopeKey } from '@/services/backend-context'
 
 const props = withDefaults(
   defineProps<{ documentId: string; sourceDigest?: string; initialPage?: number }>(),
   { initialPage: 1 },
 )
+const emit = defineEmits<{ unavailable: [error: unknown] }>()
 const pageNumber = ref(1)
 const pageDraft = ref('1')
 const totalPages = ref(0)
@@ -135,6 +136,7 @@ async function load() {
     await renderPage()
   } catch (cause) {
     if (version === generation) {
+      if (documentSourceStatus(cause) === 410) emit('unavailable', cause)
       error.value = cause instanceof Error ? cause.message : 'Failed to load PDF source'
       loading.value = false
     }
