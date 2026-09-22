@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
   outline: none;
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hc-accent) 22%, transparent);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 2px color-mix(in srgb, var(--hc-accent) 22%, transparent));
 }
 
 .hc-clearable-field__button:active {

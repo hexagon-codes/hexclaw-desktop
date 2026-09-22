@@ -206,6 +206,4 @@ img[data-image-preview]:focus-visible {
 }
 
 /* 容器承接初始焦点，鼠标恢复焦点不模拟键盘导航。 */
-.hc-image-viewer:focus,
-img[data-image-preview][data-preview-pointer-focus]:focus,
-[data-image-preview-trigger][data-preview-pointer-focus]:focus { outline: none; }
+.hc-image-viewer:focus { outline: none; }

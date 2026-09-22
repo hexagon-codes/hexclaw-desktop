@@ -1249,7 +1249,7 @@ onUnmounted(() => {
 
 .hc-sessions__pin-action:focus-visible,
 .hc-sessions__actions:focus-visible {
-  box-shadow: 0 0 0 2px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 2px var(--hc-accent-subtle));
 }
 
 .hc-sessions__rename-input {

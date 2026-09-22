@@ -8,6 +8,7 @@ import { createPersistPlugin } from './stores/plugins/persist'
 import { logger } from './utils/logger'
 import { installInputAutofixOff } from './utils/input-autofix'
 import { installExternalLinkController } from './utils/external-links'
+import { installFocusOrigin } from './utils/focus-origin'
 import { registerK12Scenario } from './features/k12'
 import HcClearableField from './components/common/HcClearableField.vue'
 
@@ -39,6 +40,8 @@ window.addEventListener('unhandledrejection', (event) => {
   logger.error('未处理的 Promise 拒绝:', event.reason)
 })
 
+const removeFocusOrigin = installFocusOrigin()
+if (import.meta.hot) import.meta.hot.dispose(removeFocusOrigin)
 app.mount('#app')
 
 // 全局关闭 WKWebView 原生「自动改写/自动纠正/首字母大写」：桌面端跑在 macOS WKWebView，

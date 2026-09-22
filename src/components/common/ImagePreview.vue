@@ -122,7 +122,6 @@ function backdrop(event: MouseEvent) {
   if (event.target === dialog.value || event.target === stage.value) emit('close')
 }
 function keyboard(event: KeyboardEvent) {
-  props.returnFocus?.removeAttribute('data-preview-pointer-focus')
   if (event.key === 'Tab') {
     event.preventDefault()
     const buttons = Array.from(
@@ -191,7 +190,6 @@ onBeforeUnmount(() => {
       ref="dialog"
       class="hc-image-viewer"
       tabindex="-1"
-      @pointerdown="returnFocus?.setAttribute('data-preview-pointer-focus', '')"
       :aria-label="t('chat.previewTitle')"
       :data-scale="scale"
       :data-pan-x="panX"

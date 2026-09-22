@@ -93,7 +93,7 @@ defineExpose({
 
 .hc-search:focus-within {
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
 }
 
 .hc-search__icon {
@@ -159,7 +159,7 @@ defineExpose({
   outline: none;
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hc-accent) 22%, transparent);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 2px color-mix(in srgb, var(--hc-accent) 22%, transparent));
 }
 
 .hc-search :deep(.hc-search__clear:active) {

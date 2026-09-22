@@ -164,7 +164,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .kb-rebuild-dialog:focus-visible {
   box-shadow:
-    0 0 0 3px var(--hc-accent-subtle),
+    var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle)),
     var(--hc-shadow-float);
 }
 

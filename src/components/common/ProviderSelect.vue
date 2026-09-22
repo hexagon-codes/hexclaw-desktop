@@ -263,7 +263,7 @@ watch(() => props.modelValue, () => {
 .hc-provider-select__trigger:focus-visible {
   outline: none;
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
 }
 
 .hc-provider-select__name {

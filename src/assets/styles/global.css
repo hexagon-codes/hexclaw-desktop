@@ -294,6 +294,15 @@ body,
 }
 
 /* ─── Focus Ring — Apple-style ──────────────────────────── */
+/* 输入来源覆盖所有 Teleport 和共享控件；真实焦点与普通阴影不变。 */
+html[data-hc-focus-origin='pointer'] {
+  --hc-focus-shadow: 0 0 0 0 transparent;
+}
+
+html[data-hc-focus-origin='pointer'] :focus-visible {
+  outline: none !important;
+}
+
 :focus-visible {
   outline: 2px solid var(--hc-accent);
   outline-offset: 2px;
@@ -441,7 +450,7 @@ body,
 
 .btn:focus-visible,
 .hc-btn:focus-visible {
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
 }
 
 .btn-sm,
@@ -485,7 +494,7 @@ body,
 
 .hc-input:focus {
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
 }
 
 .hc-input::placeholder {
@@ -506,7 +515,7 @@ select.hc-input {
 
 select.hc-input:focus {
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
 }
 
 /* ─── Card Base ─────────────────────────────────────────── */

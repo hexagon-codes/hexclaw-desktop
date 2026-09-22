@@ -314,7 +314,7 @@ onBeforeUnmount(() => {
 
 .hc-voicechat__text:focus {
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+  box-shadow: var(--hc-focus-shadow, 0 0 0 3px rgba(0, 122, 255, 0.12));
 }
 
 .hc-voicechat__bar {

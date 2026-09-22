@@ -1542,7 +1542,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
 .hc-composer__box:focus-within {
   border-color: var(--hc-accent);
   box-shadow:
-    0 0 0 3px var(--hc-accent-subtle),
+    var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle)),
     0 1px 3px rgba(0, 0, 0, 0.06);
 }
 

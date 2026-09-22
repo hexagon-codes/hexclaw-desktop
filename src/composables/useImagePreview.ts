@@ -95,11 +95,6 @@ function readImage(image: HTMLImageElement, fallbackLabel: string): PreviewImage
 
 export function installImagePreview(fallbackLabel: () => string) {
   function open(event: Event) {
-    if (event instanceof KeyboardEvent) {
-      document.querySelectorAll('[data-preview-pointer-focus]').forEach((element) => {
-        element.removeAttribute('data-preview-pointer-focus')
-      })
-    }
     if (
       event instanceof KeyboardEvent &&
       (event.isComposing || !['Enter', ' '].includes(event.key))
@@ -134,7 +129,6 @@ export function installImagePreview(fallbackLabel: () => string) {
     event.preventDefault()
     event.stopPropagation()
     const trigger = target.closest<HTMLElement>('[data-image-preview-trigger]') ?? target
-    trigger.toggleAttribute('data-preview-pointer-focus', !(event instanceof KeyboardEvent))
     trigger.focus({ preventScroll: true })
     imagePreview.value = {
       id: ++generation,
