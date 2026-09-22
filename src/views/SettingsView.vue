@@ -1136,6 +1136,7 @@ function removeModel(provider: ProviderConfig, modelId: string) {
     models,
     selectedModelId: resolveProviderSelectedModelId({ ...provider, models }),
   })
+  delete testProviderResult.value[provider.id]
   autoSave()
 }
 
@@ -1200,6 +1201,7 @@ function saveEditModel() {
         : provider.selectedModelId,
   })
   editingModel.value = null
+  delete testProviderResult.value[providerId]
   autoSave()
 }
 
@@ -1526,6 +1528,7 @@ async function syncRemoteModels(
       catalogStore.getExcludedModelIds(providerModelExclusionScope(currentProvider)),
     )
     if (result.changed) {
+      delete testProviderResult.value[currentProvider.id]
       if (waitForPersistence) {
         markAutoSavePending()
         await flushAutoSave({ force: true })
@@ -1581,6 +1584,13 @@ function closeModelManager() {
   nextTick(() => {
     if (returnFocus?.isConnected) returnFocus.focus()
   })
+}
+
+function handleManagerModelsChange() {
+  const provider = modelManagerProvider.value
+  // 列表变化后清除临时校验结果，持久连接回执由配置存储按连接指纹失效。
+  if (provider) delete testProviderResult.value[provider.id]
+  autoSave()
 }
 
 async function handleManagerResync() {
@@ -2789,7 +2799,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     :provider="modelManagerProvider"
     :syncing="managerSyncing"
     @close="closeModelManager"
-    @change="autoSave()"
+    @change="handleManagerModelsChange"
     @resync="handleManagerResync"
   />
 </template>
@@ -3753,39 +3763,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__config-grid {
+  /* 服务商地址和令牌各占整行，自定义名称独占首行。 */
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px 12px;
-}
-
-@container (min-width: 520px) {
-  /* 内置服务商的地址和令牌各占整行，共用左右边界。 */
-  .hc-provider__config-grid--builtin {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .hc-provider__config-grid--custom {
-    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
-  }
-
-  /* 2026-08-19 批准：自定义卡 Provider 与 Base URL 同行（各半行）、API Key 占整行 */
-  .hc-provider__config-grid--custom .hc-provider__config-key {
-    grid-column: 1 / -1;
-  }
-
-  /* Provider（grid 首项自动行1列1）与 Base URL 同行；API Key 整行后 URL 需显式行，否则落到第3行 */
-  .hc-provider__config-grid--custom .hc-provider__config-url {
-    grid-row: 1;
-    grid-column: 2;
-  }
-}
-
-@container (min-width: 900px) {
-  /* 2026-08-17 批准：custom 字段顺序不变，API Key 列加宽、Base URL 列收窄；
-     2026-08-19 批准：API Key 整行后，custom 网格改为 Provider 与 Base URL 两列同行 */
-  .hc-provider__config-grid--custom {
-    grid-template-columns: minmax(150px, 0.56fr) minmax(220px, 0.82fr);
-  }
 }
 
 .hc-provider__models {
@@ -4250,6 +4231,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-model-chip[data-model-name]:focus-visible::after,
 .hc-model-chip[data-model-name]:has(:focus-visible)::after {
   visibility: visible;
+}
+
+html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
+  visibility: hidden;
 }
 
 .hc-model-chip {
