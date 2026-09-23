@@ -2049,7 +2049,7 @@ export interface CreateImageTaskReq {
   }
   creative_entry?: {
     kind: 'new_work'
-    task_intent: 'writing' | 'artwork'
+    task_intent: 'writing' | 'artwork' | 'unknown'
   }
 }
 

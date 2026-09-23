@@ -648,7 +648,9 @@ async function confirmDelete() {
 
 // ── Add work + ImageTask intake ──────────────────────────────
 const addOpen = ref(false)
-const addType = ref<WorkType>('writing')
+const addType = computed<WorkType | undefined>(() =>
+  photoPreview.value ? creativeProjection(photoImageTask.value)?.work_type : 'writing',
+)
 const addTitle = ref('')
 const addDraft = ref('')
 const addBusy = ref(false)
@@ -666,7 +668,7 @@ let photoFile: File | null = null
 let photoGeneration = 0
 let photoAbort: AbortController | null = null
 
-type CreativePhotoJobStatus = 'processing' | 'awaiting_confirmation' | 'failed' | 'confirmed'
+type CreativePhotoJobStatus = 'processing' | 'failed' | 'confirmed'
 
 interface CreativePhotoJobView {
   dispatch_id: string
@@ -699,6 +701,7 @@ function manualCreativeTaskSettled(dispatch: ImageTaskDispatchDTO): boolean {
   const status = creativeProjection(dispatch)?.status
   return (
     status === 'awaiting_confirmation' ||
+    status === 'unreadable' ||
     status === 'ready' ||
     status === 'promoted' ||
     status === 'failed' ||
@@ -713,11 +716,11 @@ function photoJobView(dispatch: ImageTaskDispatchDTO, sourceAssetID: string): Cr
     dispatch.status === 'failed' ||
     dispatch.status === 'cancelled' ||
     projection?.status === 'failed' ||
-    projection?.status === 'cancelled'
+    projection?.status === 'cancelled' ||
+    projection?.status === 'unreadable' ||
+    projection?.status === 'awaiting_confirmation'
   ) {
     status = 'failed'
-  } else if (projection?.status === 'awaiting_confirmation') {
-    status = 'awaiting_confirmation'
   } else if (projection?.status === 'ready' || projection?.status === 'promoted') {
     status = 'confirmed'
   }
@@ -726,6 +729,12 @@ function photoJobView(dispatch: ImageTaskDispatchDTO, sourceAssetID: string): Cr
     source_asset_id: sourceAssetID,
     status,
     ocr_raw: projection?.canonical_content,
+    error_message:
+      dispatch.failure_kind === 'creative_type_unrecognized'
+        ? t('k12.works.workTypeUnrecognized')
+        : projection?.status === 'unreadable'
+          ? t('k12.works.workUnreadable')
+          : undefined,
     confirmed_version: status === 'confirmed' ? projection?.canonical_version : undefined,
     confirmed_content: status === 'confirmed' ? projection?.canonical_content : undefined,
   }
@@ -775,9 +784,7 @@ function applyPhotoImageTask(dispatch: ImageTaskDispatchDTO, assetID: string) {
   const job = photoJobView(dispatch, assetID)
   photoOCRJob.value = job
   photoOCRRequestError.value = ''
-  if (job.status === 'awaiting_confirmation' && job.ocr_raw) {
-    addDraft.value = job.ocr_raw
-  } else if (job.status === 'confirmed' && job.confirmed_content) {
+  if (job.status === 'confirmed' && job.confirmed_content) {
     addDraft.value = job.confirmed_content
   }
 }
@@ -787,7 +794,6 @@ async function startPhotoOCR() {
   if (!assetID) return
   if (!photoOCRRequestID) photoOCRRequestID = newCommandID('creative-intake')
   const generation = ++photoOCRGeneration
-  const selectedType = addType.value
   photoOCRBusy.value = true
   photoOCRRequestError.value = ''
   photoOCRJob.value = null
@@ -802,21 +808,13 @@ async function startPhotoOCR() {
       route_request: { selection_source: 'auto' },
       creative_entry: {
         kind: 'new_work',
-        task_intent: selectedType === 'writing' ? 'writing' : 'artwork',
+        task_intent: 'unknown',
       },
     })
-    if (
-      generation !== photoOCRGeneration ||
-      assetID !== photoAssetID.value ||
-      selectedType !== addType.value
-    )
-      return
+    if (generation !== photoOCRGeneration || assetID !== photoAssetID.value) return
     await pollManualCreativeTask(
       response.dispatch,
-      () =>
-        generation === photoOCRGeneration &&
-        assetID === photoAssetID.value &&
-        selectedType === addType.value,
+      () => generation === photoOCRGeneration && assetID === photoAssetID.value,
       (dispatch) => applyPhotoImageTask(dispatch, assetID),
     )
   } catch (error) {
@@ -833,6 +831,7 @@ async function retryPhotoOCR() {
     if (!dispatch && photoAssetID.value) await startPhotoOCR()
     return
   }
+  if (!dispatch.retryable) return
   const assetID = photoAssetID.value
   const generation = ++photoOCRGeneration
   photoOCRBusy.value = true
@@ -851,34 +850,6 @@ async function retryPhotoOCR() {
   } catch (error) {
     if (generation !== photoOCRGeneration) return
     photoOCRRequestError.value = (error as Error).message || t('k12.works.ocrFailed')
-  } finally {
-    if (generation === photoOCRGeneration) photoOCRBusy.value = false
-  }
-}
-
-async function confirmPhotoOCR() {
-  const job = photoOCRJob.value
-  const dispatch = photoImageTask.value
-  const content = addDraft.value.trim()
-  if (!job || !dispatch || !content || photoOCRBusy.value) return
-  const generation = ++photoOCRGeneration
-  photoOCRBusy.value = true
-  photoOCRRequestError.value = ''
-  try {
-    const response = await k12ConfirmImageTask(dispatch.dispatch_id, {
-      agent: props.agentId,
-      version: dispatch.version,
-      creative: {
-        action: 'freeze_ocr',
-        canonical_version: creativeProjection(dispatch)?.canonical_version ?? 1,
-        canonical_content: content,
-      },
-    })
-    if (generation !== photoOCRGeneration || job.source_asset_id !== photoAssetID.value) return
-    applyPhotoImageTask(response.dispatch, job.source_asset_id)
-  } catch (error) {
-    if (generation !== photoOCRGeneration) return
-    photoOCRRequestError.value = (error as Error).message || t('k12.works.ocrConfirmFailed')
   } finally {
     if (generation === photoOCRGeneration) photoOCRBusy.value = false
   }
@@ -935,7 +906,7 @@ function acceptPhotoFile(file: File) {
     return
   }
   if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
-  resetPhotoOCR(addType.value === 'writing')
+  resetPhotoOCR(true)
   photoOCRRequestID = newCommandID('creative-intake')
   photoFile = file
   photoAssetID.value = ''
@@ -992,20 +963,10 @@ async function uploadPhoto() {
   }
 }
 
-watch(addType, () => {
-  if (addType.value === 'writing') addTitle.value = ''
-  if (photoAssetID.value) {
-    resetPhotoOCR(addType.value === 'writing')
-    photoOCRRequestID = newCommandID('creative-intake')
-    void startPhotoOCR()
-  }
-})
-
 function openAdd() {
   closeDetails(false)
   const active = document.activeElement
   addOpener = active instanceof HTMLElement ? active : null
-  addType.value = 'writing'
   addTitle.value = ''
   addDraft.value = ''
   addCommandID = newCommandID('create-writing')
@@ -1344,7 +1305,12 @@ defineExpose({ load, openAdd })
                 :aria-label="t('k12.works.previewWork', { name: activeWork.display_name })"
                 data-image-preview-trigger
               >
-                <img :src="workThumbURL(activeWork)" :alt="activeWork.display_name" data-image-preview :data-preview-key="activeWork.work_id" />
+                <img
+                  :src="workThumbURL(activeWork)"
+                  :alt="activeWork.display_name"
+                  data-image-preview
+                  :data-preview-key="activeWork.work_id"
+                />
               </button>
               <div
                 v-if="activeWork.work_type === 'writing' && activeWork.content_markdown"
@@ -1526,37 +1492,9 @@ defineExpose({ load, openAdd })
             </button>
           </div>
           <div class="k12cw-modal__body">
-            <label class="k12cw-modal__field">
-              <span>{{ t('k12.works.typeLabel') }}</span>
-              <div class="k12cw__seg" role="radiogroup" :aria-label="t('k12.works.typeLabel')">
-                <button
-                  type="button"
-                  :class="{ on: addType === 'writing' }"
-                  :aria-pressed="addType === 'writing'"
-                  data-testid="cw-add-type-writing"
-                  @click="addType = 'writing'"
-                >
-                  {{ t('k12.works.writing') }}
-                </button>
-                <button
-                  type="button"
-                  :class="{ on: addType === 'art' }"
-                  :aria-pressed="addType === 'art'"
-                  data-testid="cw-add-type-art"
-                  @click="addType = 'art'"
-                >
-                  {{ t('k12.works.art') }}
-                </button>
-              </div>
-            </label>
-
             <div class="k12cw-modal__field">
               <span>
-                {{
-                  addType === 'writing'
-                    ? t('k12.works.writingPhotoLabel')
-                    : t('k12.works.artPhotoLabel')
-                }}
+                {{ t('k12.works.workImageLabel') }}
               </span>
               <input
                 ref="photoInput"
@@ -1582,15 +1520,17 @@ defineExpose({ load, openAdd })
               >
                 <span class="k12cw__dropicon" aria-hidden="true">📷</span>
                 <b>
-                  {{
-                    addType === 'writing'
-                      ? t('k12.works.writingPhotoChoose')
-                      : t('k12.works.artPhotoChoose')
-                  }}
+                  {{ t('k12.works.workImageChoose') }}
                 </b>
               </div>
               <div v-else class="k12cw__photopreview" data-testid="cw-photo-preview">
-                <img :src="photoPreview" :alt="t('chat.previewOriginal')" data-image-preview role="button" tabindex="0" />
+                <img
+                  :src="photoPreview"
+                  :alt="t('chat.previewOriginal')"
+                  data-image-preview
+                  role="button"
+                  tabindex="0"
+                />
                 <div class="k12cw__photostate">
                   <span v-if="photoUploading" data-testid="cw-photo-progress">
                     {{ t('k12.works.photoUploading') }} {{ photoPercent }}%
@@ -1626,13 +1566,13 @@ defineExpose({ load, openAdd })
               </div>
 
               <div
-                v-if="addType === 'writing' && photoPreview"
+                v-if="photoPreview"
                 class="k12cw__ocr"
                 aria-live="polite"
                 data-testid="cw-ocr-state"
               >
                 <p v-if="photoOCRBusy" data-testid="cw-ocr-processing">
-                  {{ t('k12.works.ocrProcessing') }}
+                  {{ t('k12.works.recognizingWork') }}
                 </p>
                 <div
                   v-else-if="photoOCRRequestError || photoOCRJob?.status === 'failed'"
@@ -1647,27 +1587,15 @@ defineExpose({ load, openAdd })
                   <button
                     type="button"
                     class="hc-btn hc-btn-secondary"
+                    v-if="!photoImageTask || photoImageTask.retryable"
                     data-testid="cw-ocr-retry"
                     @click="retryPhotoOCR"
                   >
                     {{ t('k12.works.ocrRetry') }}
                   </button>
                 </div>
-                <p
-                  v-else-if="photoOCRConfirmed"
-                  class="k12cw__ocr-success"
-                  data-testid="cw-ocr-confirmed"
-                >
-                  {{ t('k12.works.ocrConfirmed') }}
-                </p>
-                <p
-                  v-else-if="
-                    photoOCRJob?.status === 'awaiting_confirmation' ||
-                    photoOCRJob?.status === 'confirmed'
-                  "
-                  data-testid="cw-ocr-awaiting"
-                >
-                  {{ t('k12.works.ocrAwaiting') }}
+                <p v-else-if="photoReady" class="k12cw__ocr-success" data-testid="cw-ocr-confirmed">
+                  {{ t('k12.works.workReady') }}
                 </p>
               </div>
             </div>
@@ -1679,21 +1607,11 @@ defineExpose({ load, openAdd })
                   v-model="addDraft"
                   class="k12cw__input"
                   rows="5"
+                  :readonly="!!photoPreview"
                   :placeholder="t('k12.works.draftPlaceholder')"
                   data-testid="cw-add-draft"
                 ></textarea>
               </HcClearableField>
-              <button
-                v-if="photoPreview && photoOCRJob && !photoOCRConfirmed"
-                type="button"
-                class="hc-btn hc-btn-secondary k12cw__ocr-confirm"
-                :disabled="photoOCRBusy || !addDraft.trim()"
-                data-testid="cw-ocr-confirm"
-                @click="confirmPhotoOCR"
-              >
-                {{ t('k12.works.ocrConfirm') }}
-              </button>
-              <small>{{ t('k12.works.writingRequirement') }}</small>
             </label>
 
             <label v-if="addType === 'art'" class="k12cw-modal__field">
@@ -1706,8 +1624,8 @@ defineExpose({ load, openAdd })
                   data-testid="cw-add-title"
                 />
               </HcClearableField>
-              <small>{{ t('k12.works.artRequirement') }}</small>
             </label>
+            <small>{{ t('k12.works.autoTypeHint') }}</small>
           </div>
           <div class="k12cw-modal__foot">
             <button type="button" class="hc-btn hc-btn-ghost" @click="closeAdd">

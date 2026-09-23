@@ -1603,8 +1603,8 @@ export function assertCurrentImageTaskCreativeEntrySemantics(value: unknown): vo
   exact(entry, ['kind', 'task_intent'], '$.creative_entry')
   required(entry, ['kind', 'task_intent'], '$.creative_entry')
   if (entry.kind !== 'new_work') fail('$.creative_entry.kind', 'new_work')
-  if (!['writing', 'artwork'].includes(String(entry.task_intent))) {
-    fail('$.creative_entry.task_intent', 'writing|artwork')
+  if (!['writing', 'artwork', 'unknown'].includes(String(entry.task_intent))) {
+    fail('$.creative_entry.task_intent', 'writing|artwork|unknown')
   }
 }
 
