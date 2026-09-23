@@ -54,6 +54,8 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
 import KnowledgeSourceDialog from '@/components/knowledge/KnowledgeSourceDialog.vue'
+import MaterialPreparationPanel from '@/components/knowledge/MaterialPreparationPanel.vue'
+import { getMaterialPreparation, getMaterialPreparations, materialPreparationSummary, type MaterialPreparation } from '@/api/k12-materials'
 import { logger } from '@/utils/logger'
 import { formatRelative } from '@/utils/time'
 
@@ -386,6 +388,82 @@ const filteredDocs = computed(() => {
 
 // 当前页（窗口）内的文档；其余通过「加载更多」逐步追加。
 const windowedDocs = computed(() => filteredDocs.value.slice(0, visibleDocCount.value))
+// 准备计数来自服务端当前来源修订，详情与列表共用此投影。
+const preparations = ref<Record<string, MaterialPreparation>>({})
+const preparationListError = ref(false)
+const preparationDetailError = ref('')
+const loadingPreparation = ref(false)
+const originalPage = ref<number | null>(null)
+let preparationListRequest: AbortController | null = null
+let preparationDetailRequest: AbortController | null = null
+let preparationPoll: ReturnType<typeof setTimeout> | null = null
+const selectedPreparation = computed(() => selectedDoc.value ? preparations.value[selectedDoc.value.id] : undefined)
+const selectedHasQuestions = computed(() => !!materialPreparationSummary(selectedPreparation.value))
+const selectedIsPDF = computed(() => !!selectedDoc.value && (selectedDoc.value.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.value.title)))
+const showPreparationDetail = computed(() => selectedHasQuestions.value || !!preparationDetailError.value)
+async function refreshPreparations() {
+  preparationListRequest?.abort()
+  if (preparationPoll) clearTimeout(preparationPoll)
+  preparationPoll = null
+  const ids = windowedDocs.value.map(doc => doc.id)
+  if (!ids.length) { preparations.value = {}; return }
+  const request = new AbortController()
+  preparationListRequest = request
+  const scope = backendScopeKey()
+  try {
+    const result = await getMaterialPreparations(ids, request.signal)
+    if (request.signal.aborted || scope !== backendScopeKey()) return
+    const next: Record<string, MaterialPreparation> = {}
+    for (const entry of result.preparations) {
+      const prior = preparations.value[entry.document_id]
+      next[entry.document_id] = { ...entry, items: prior?.source_revision === entry.source_revision ? prior.items : undefined }
+    }
+    preparations.value = next
+    preparationListError.value = false
+    if (result.preparations.some(entry => (entry.counts.preparing ?? 0) > 0))
+      preparationPoll = setTimeout(() => { void refreshPreparations(); if (showDocDetail.value && selectedDoc.value) void refreshPreparationDetail(selectedDoc.value.id) }, 3000)
+  } catch (error) {
+    if (request.signal.aborted || scope !== backendScopeKey()) return
+    preparations.value = {}
+    preparationListError.value = true
+    logger.warn('[Knowledge] question preparation summaries unavailable', error)
+  }
+}
+async function refreshPreparationDetail(id: string) {
+  preparationDetailRequest?.abort()
+  const request = new AbortController()
+  preparationDetailRequest = request
+  const scope = backendScopeKey()
+  loadingPreparation.value = true
+  preparationDetailError.value = ''
+  try {
+    const detail = await getMaterialPreparation(id, request.signal)
+    if (request.signal.aborted || scope !== backendScopeKey() || selectedDoc.value?.id !== id) return
+    preparations.value = { ...preparations.value, [id]: detail }
+  } catch (error) {
+    if (request.signal.aborted || scope !== backendScopeKey() || selectedDoc.value?.id !== id) return
+    preparationDetailError.value = 'Question preparation is unavailable.'
+    logger.warn('[Knowledge] question preparation details unavailable', error)
+  } finally {
+    if (preparationDetailRequest === request) loadingPreparation.value = false
+  }
+}
+watch(windowedDocs, () => { void refreshPreparations() })
+watch(() => backendScopeKey(), () => {
+  preparationListRequest?.abort()
+  preparationDetailRequest?.abort()
+  preparations.value = {}
+  preparationListError.value = false
+  showDocDetail.value = false
+  originalPage.value = null
+  if (preparationPoll) clearTimeout(preparationPoll)
+})
+watch(showDocDetail, open => { if (!open) { preparationDetailRequest?.abort(); originalPage.value = null } })
+onUnmounted(() => {
+  preparationListRequest?.abort()
+  preparationDetailRequest?.abort()
+  if (preparationPoll) clearTimeout(preparationPoll)
+})
 const hasMoreDocs = computed(() => {
   if (filteredDocs.value.length > visibleDocCount.value) return true
   return !normalizedDocumentSearch.value && docs.value.length < totalDocs.value
@@ -1295,8 +1373,8 @@ async function openDocDetail(doc: KnowledgeDoc) {
   loadingDocContent.value = false
   docContentError.value = ''
 
-  // 如果列表接口未返回正文，主动获取内容。
-  await loadDocContent(doc)
+  // 正文与准备详情分别读取；局部准备失败不影响原文可读。
+  await Promise.all([loadDocContent(doc), refreshPreparationDetail(doc.id)])
 }
 
 async function retryDocContent() {
@@ -1945,6 +2023,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         >
                           {{ getDocumentRowStatus(doc) }}
                         </span>
+                        <span v-if="preparationListError || materialPreparationSummary(preparations[doc.id])" class="knowledge-page__preparation-summary">
+                          {{ preparationListError ? 'Question preparation unavailable' : materialPreparationSummary(preparations[doc.id]) }}
+                        </span>
                       </span>
                       <span
                         v-if="getDocumentBadgeLabel(doc)"
@@ -2581,16 +2662,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     />
 
     <KnowledgeSourceDialog
-      v-if="showDocDetail && !loadingDocContent && selectedDoc && (selectedDoc.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.title))"
+      v-if="showDocDetail && !loadingDocContent && !loadingPreparation && selectedDoc && selectedIsPDF && (!showPreparationDetail || originalPage !== null)"
       :document-id="selectedDoc.id"
       :title="selectedDoc.title"
       :source-digest="selectedDoc.source_digest"
-      @close="showDocDetail = false"
+      :initial-page="originalPage ?? 1"
+      @close="showPreparationDetail ? originalPage = null : showDocDetail = false"
     />
     <Teleport to="body">
       <Transition name="modal">
         <div
-          v-if="showDocDetail && selectedDoc && !(selectedDoc.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.title))"
+          v-if="showDocDetail && selectedDoc && (!selectedIsPDF || (!loadingPreparation && showPreparationDetail))"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
           @click.self="showDocDetail = false"
         >
@@ -2640,6 +2722,15 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   }}
                 </div>
               </div>
+              <p v-if="preparationDetailError" role="alert" class="text-xs" style="color:var(--hc-error)">{{ preparationDetailError }}</p>
+              <MaterialPreparationPanel
+                v-if="selectedHasQuestions && selectedPreparation"
+                :preparation="selectedPreparation"
+                :title="selectedDoc.title"
+                :pdf="selectedIsPDF"
+                @source="originalPage = $event"
+              />
+              <button v-if="selectedIsPDF" type="button" class="knowledge-page__resource-action" @click="originalPage = 1">View original</button>
               <div
                 v-if="selectedDoc.error_message"
                 class="rounded-lg px-3 py-2 text-sm"
@@ -2648,6 +2739,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 {{ getKnowledgeErrorMessage(selectedDoc.error_message, true) }}
               </div>
               <div
+                v-if="!selectedIsPDF"
                 class="rounded-xl border p-4 text-sm leading-6"
                 :style="{
                   background: 'var(--hc-bg-main)',
@@ -2959,6 +3051,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   gap: 8px;
 }
 
+.knowledge-page__preparation-summary {
+  display: block;
+  margin-top: 5px;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .knowledge-page__resource-title,
 .knowledge-page__resource-status {
   min-width: 0;
