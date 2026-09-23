@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useAutomationList } from '@/composables/useAutomationList'
 import { useI18n } from 'vue-i18n'
 
 import {
@@ -55,21 +56,17 @@ function onManagementContentChange(key: string, hasContent: boolean): void {
 // 顶栏搜索词（由 AutomationView 透传）：按 webhook 名过滤可见项。
 const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
 
-const webhooks = ref<Webhook[]>([])
+const { items: webhooks, state: capabilityState, loading, error: loadError, canCreate, load: reloadWebhooks } =
+  useAutomationList<Webhook>('webhook', async () => (await getWebhooks()).webhooks ?? [])
 const filteredWebhooks = computed(() => {
   const q = props.search.trim().toLowerCase()
   if (!q) return webhooks.value
   return webhooks.value.filter((wh) => (wh.name ?? '').toLowerCase().includes(q))
 })
-const loading = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 const deletingIds = ref<Set<string>>(new Set())
 const deleteTarget = ref<Webhook | null>(null)
-const loadError = ref('')
-/** 后端 webhook.enabled=false 时 /api/v1/webhooks 路由不注册（404），按"功能未启用"处理 */
-const featureDisabled = ref(false)
-let loadRequestGen = 0
 
 // Create form —— 对齐后端 RegisterWebhookRequest{name,type,prompt,secret,job_id}
 const form = ref({
@@ -230,6 +227,7 @@ const formJobId = computed<string>({
 })
 
 function openCreateForm() {
+  if (!canCreate.value) return
   resetCreateForm()
   showCreate.value = true
 }
@@ -269,30 +267,8 @@ async function copyWebhookUrl(name: string) {
 }
 
 async function loadWebhooks() {
-  const requestGen = ++loadRequestGen
-  loading.value = true
-  loadError.value = ''
-  featureDisabled.value = false
-  try {
-    const res = await getWebhooks()
-    if (requestGen !== loadRequestGen) return
-    webhooks.value = res?.webhooks ?? []
-    void loadPermissionStatuses()
-  } catch (e) {
-    if (requestGen !== loadRequestGen) return
-    webhooks.value = []
-    const status = (e as { status?: number })?.status
-    if (status === 404) {
-      featureDisabled.value = true
-    } else {
-      loadError.value = (e as Error)?.message || t('webhooks.loadFailed')
-      console.error('Failed to load webhooks:', e)
-    }
-  } finally {
-    if (requestGen === loadRequestGen) {
-      loading.value = false
-    }
-  }
+  await reloadWebhooks()
+  if (canCreate.value) void loadPermissionStatuses()
 }
 
 async function onCreateWebhook() {
@@ -377,14 +353,14 @@ onMounted(() => {
   loadCronJobs()
 })
 
-defineExpose({ loadWebhooks, openCreateForm, form })
+defineExpose({ loadWebhooks, openCreateForm, form, canCreate })
 </script>
 
 <template>
   <div class="webhook-panel">
     <!-- Header：Webhook 计数（仅 count>0 显示；为 0 时下方空状态已足够，不重复提示） -->
     <div
-      v-if="!featureDisabled && webhooks.length > 0 && !hasManagementContent"
+      v-if="canCreate && webhooks.length > 0 && !hasManagementContent"
       class="webhook-panel__header"
     >
       <span class="webhook-panel__count">{{
@@ -392,7 +368,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       }}</span>
     </div>
 
-    <div v-if="hasManagementContent" class="webhook-panel__intro">
+    <div v-if="managementExtensions.length > 0" class="webhook-panel__intro">
       通用 Webhook 可绑定 Cron Job 或 Prompt；K12 Webhook 在创建时绑定 agent、learner 与显式事件集合。所有入口都验签、校验时间窗与 nonce；重复事件返回原回执，不重复执行领域副作用。
     </div>
 
@@ -587,7 +563,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 
     <div class="webhook-panel__grid">
       <section
-        v-for="extension in managementExtensions"
+        v-for="extension in canCreate ? managementExtensions : []"
         :key="extension.key"
         class="webhook-panel__extension-entry"
         :data-testid="`scenario-webhook-manager-${extension.key}`"
@@ -601,13 +577,15 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 
       <!-- List -->
       <div v-if="loading" class="webhook-panel__loading">{{ t('webhooks.loading') }}</div>
-    <div v-else-if="featureDisabled" class="webhook-panel__disabled">
+    <div v-else-if="capabilityState === 'disabled'" class="webhook-panel__disabled">
       <PowerOff :size="32" />
-      <p class="webhook-panel__disabled-title">{{ t('webhooks.disabledTitle') }}</p>
-      <p class="webhook-panel__disabled-desc">{{ t('webhooks.disabledDesc') }}</p>
-      <code class="webhook-panel__disabled-code"
-        >~/.hexclaw/hexclaw.yaml → webhook.enabled: true</code
-      >
+      <p class="webhook-panel__disabled-title">Webhook reception is not enabled</p>
+      <p class="webhook-panel__disabled-desc">Enable this feature in the connected backend configuration.</p>
+
+    </div>
+    <div v-else-if="capabilityState === 'unavailable'" class="webhook-panel__disabled">
+      <PowerOff :size="32" />
+      <p class="webhook-panel__disabled-title">Webhook reception is unavailable</p>
     </div>
     <div v-else-if="loadError" class="webhook-panel__error">
       <PowerOff :size="32" />
@@ -718,6 +696,13 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 </template>
 
 <style scoped>
+/* 主体状态占满内容网格，场景面板空态不另占一列。 */
+.webhook-panel__loading,
+.webhook-panel__disabled,
+.webhook-panel__error,
+.webhook-panel__empty {
+  grid-column: 1 / -1;
+}
 .webhook-panel {
   padding: 16px 26px 48px;
 }

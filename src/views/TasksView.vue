@@ -49,6 +49,7 @@ import {
 } from '@/api/autonomy'
 import type { JobSpec } from '@/types'
 import { useToast } from '@/composables'
+import { useAutomationList } from '@/composables/useAutomationList'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
@@ -61,13 +62,13 @@ const toast = useToast()
 // 顶栏搜索词（由 AutomationView 透传）：按任务名过滤可见任务卡。
 const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
 
-const jobs = ref<CronJob[]>([])
+const { items: jobs, state: capabilityState, loading, error: loadError, canCreate, load: reloadJobs } =
+  useAutomationList<CronJob>('cron', async () => (await getCronJobs()).jobs)
 const filteredJobs = computed(() => {
   const q = props.search.trim().toLowerCase()
   if (!q) return jobs.value
   return jobs.value.filter((j) => (j.name ?? '').toLowerCase().includes(q))
 })
-const loading = ref(true)
 const showForm = ref(false)
 const submitting = ref(false)
 
@@ -199,18 +200,8 @@ function hasRealCompiledAt(spec: JobSpec | null): boolean {
 }
 
 async function loadJobs() {
-  loading.value = true
-  try {
-    const res = await getCronJobs()
-    jobs.value = res.jobs || []
-    // 权限状态刷新不阻塞任务列表（后端未开启治理时静默降级）。
-    void loadPermissionStatuses()
-  } catch (e) {
-    console.error('加载定时任务失败:', e)
-    toast.error(t('tasks.loadJobsFailed', '加载定时任务失败'))
-  } finally {
-    loading.value = false
-  }
+  await reloadJobs()
+  if (canCreate.value) void loadPermissionStatuses()
 }
 
 // ── 自动化权限：静默预检（条件式向导）+ 任务卡阻断徽章 ─────────────
@@ -276,6 +267,7 @@ onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
 onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
+  if (!canCreate.value) return
   form.value = {
     name: '',
     schedule: '',
@@ -770,7 +762,7 @@ function statusText(status: string): string {
   }
 }
 
-defineExpose({ openCreateForm, loadJobs })
+defineExpose({ openCreateForm, loadJobs, canCreate })
 </script>
 
 <template>
@@ -778,6 +770,18 @@ defineExpose({ openCreateForm, loadJobs })
     <div class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
 
+      <EmptyState v-else-if="loadError" :icon="AlertTriangle" :title="loadError" />
+      <EmptyState
+        v-else-if="capabilityState === 'disabled'"
+        :icon="Clock"
+        title="Scheduled tasks are not enabled"
+        description="Enable this feature in the connected backend configuration."
+      />
+      <EmptyState
+        v-else-if="capabilityState === 'unavailable'"
+        :icon="AlertTriangle"
+        title="Scheduled tasks are unavailable"
+      />
       <EmptyState
         v-else-if="filteredJobs.length === 0"
         :icon="Clock"

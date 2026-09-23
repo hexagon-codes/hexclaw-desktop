@@ -52,9 +52,15 @@ const activeTab = computed<AutomationTab>({
   },
 })
 
-const tasksViewRef = ref<{ openCreateForm?: () => void; loadJobs?: () => void }>()
-const webhookPanelRef = ref<{ loadWebhooks?: () => void; openCreateForm?: () => void }>()
+const tasksViewRef = ref<{ openCreateForm?: () => void; loadJobs?: () => void; canCreate?: boolean }>()
+const webhookPanelRef = ref<{ loadWebhooks?: () => void; openCreateForm?: () => void; canCreate?: boolean }>()
 const workflowPanelRef = ref<{ loadWorkflows?: () => void; createWorkflow?: () => void }>()
+
+const primaryActionDisabled = computed(() => {
+  if (activeTab.value === 'tasks') return tasksViewRef.value?.canCreate !== true
+  if (activeTab.value === 'webhooks') return webhookPanelRef.value?.canCreate !== true
+  return false
+})
 
 async function onRefresh() {
   if (activeTab.value === 'tasks') {
@@ -83,6 +89,7 @@ const primaryActionLabel = computed(() => {
 })
 
 function onPrimaryAction() {
+  if (primaryActionDisabled.value) return
   if (activeTab.value === 'webhooks') {
     webhookPanelRef.value?.openCreateForm?.()
   } else if (activeTab.value === 'workflows') {
@@ -109,7 +116,7 @@ function onPrimaryAction() {
           <RefreshCw :size="14" />
         </button>
         <!-- 主按钮按 tab 切换文案：新建任务 / 新建 Webhook / 新建工作流（锚点 prototype au-0/1/2） -->
-        <button class="hc-btn hc-btn-primary" @click="onPrimaryAction">
+        <button class="hc-btn hc-btn-primary" :disabled="primaryActionDisabled" @click="onPrimaryAction">
           <Plus :size="14" />
           {{ primaryActionLabel }}
         </button>

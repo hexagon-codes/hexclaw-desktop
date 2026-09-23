@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Copy, RefreshCw, X } from 'lucide-vue-next'
 
 import { getAgents } from '@/api/agents'
@@ -29,7 +29,7 @@ const emit = defineEmits<{ contentChange: [hasContent: boolean] }>()
 const agents = ref<AgentConfig[]>([])
 const selectedAgentId = ref('')
 const bindings = ref<K12WebhookBinding[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const busy = ref('')
 const error = ref('')
 
@@ -150,6 +150,8 @@ function isK12Agent(agent: AgentConfig): boolean {
 }
 
 async function loadAgents() {
+  loading.value = true
+  error.value = ''
   try {
     const result = await getAgents()
     agents.value = userVisibleAgents(result.agents ?? []).filter(isK12Agent)
@@ -159,6 +161,7 @@ async function loadAgents() {
     await loadBindings()
   } catch (cause) {
     error.value = (cause as Error)?.message || '读取辅导实例失败'
+    loading.value = false
   }
 }
 
@@ -420,11 +423,10 @@ async function copy(value: string) {
   }
 }
 
-onMounted(() => {
-  // 本面板拥有绑定列表和 K12 专属空态；即使零绑定，也不能再叠加通用 Webhook 空态。
-  emit('contentChange', true)
-  void loadAgents()
-})
+// 只有实际内容、加载或错误占用主体；成功零条交由外层统一展示。
+watch(() => loading.value || !!error.value || bindings.value.length > 0,
+  (hasContent) => emit('contentChange', hasContent), { immediate: true })
+onMounted(() => void loadAgents())
 onBeforeUnmount(() => {
   emit('contentChange', false)
   bindingsRequestGeneration++
@@ -457,7 +459,6 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <p v-if="loading" class="k12wh__empty">读取绑定中…</p>
-    <p v-else-if="bindings.length === 0" class="k12wh__empty">暂无 K12 Webhook 绑定。</p>
 
     <article
       v-for="binding in bindings"
@@ -732,6 +733,10 @@ onBeforeUnmount(() => {
 }
 .k12wh--embedded {
   display: contents;
+}
+.k12wh--embedded > .k12wh__empty,
+.k12wh--embedded > .k12wh__error {
+  grid-column: 1 / -1;
 }
 .k12wh--embedded .k12wh__toolbar {
   display: none;
