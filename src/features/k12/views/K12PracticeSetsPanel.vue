@@ -1368,97 +1368,103 @@ async function cancelSet(s: PracticeSetDTO) {
       </div>
     </div>
 
-    <!-- DD-028 自动复批结果：批注原图 + 家长讲题说明，同一结果面查看。 -->
-    <div
-      v-if="regradeResultOpen"
-      class="k12ps__modal"
-      data-testid="ps-regrade-result-modal"
-      @click.self="closeRegradeResult"
-    >
-      <div class="k12ps__mcard k12ps__mcard--result">
-        <header class="k12ps__mhead">
-          <b>{{ t('k12.practice.regradeResultTitle') }}</b>
-          <span class="k12ps__msp" />
-          <button
-            class="k12ps__rm"
-            :aria-label="t('k12.practice.paperClose')"
-            @click="closeRegradeResult"
-          >
-            ✕
-          </button>
-        </header>
-        <div class="k12ps__result-body">
-          <div
-            class="k12ps__result-notice"
-            :class="{
-              'k12ps__result-notice--success': !regradeUnmatched && regradeAttentionCount === 0,
-            }"
-          >
-            {{
-              regradeUnmatched
-                ? t('k12.practice.regradeResultUnmatched')
-                : regradeAttentionCount
-                  ? t('k12.practice.regradeResultNotice', { n: regradeAttentionCount })
-                  : t('k12.practice.regradeResultAllCorrect')
-            }}
+    <!-- 复批结果挂载到根弹层，避免会话内容区裁切原图和标题。 -->
+    <Teleport to="body">
+      <div
+        v-if="regradeResultOpen"
+        class="k12ps__modal"
+        data-testid="ps-regrade-result-modal"
+        @click.self="closeRegradeResult"
+      >
+        <div class="k12ps__mcard k12ps__mcard--result">
+          <header class="k12ps__mhead">
+            <b>{{ t('k12.practice.regradeResultTitle') }}</b>
+            <span class="k12ps__msp" />
+            <button
+              class="k12ps__rm"
+              :aria-label="t('k12.practice.paperClose')"
+              @click="closeRegradeResult"
+            >
+              ✕
+            </button>
+          </header>
+          <div class="k12ps__result-body">
+            <div
+              class="k12ps__result-notice"
+              :class="{
+                'k12ps__result-notice--success': !regradeUnmatched && regradeAttentionCount === 0,
+              }"
+            >
+              {{
+                regradeUnmatched
+                  ? t('k12.practice.regradeResultUnmatched')
+                  : regradeAttentionCount
+                    ? t('k12.practice.regradeResultNotice', { n: regradeAttentionCount })
+                    : t('k12.practice.regradeResultAllCorrect')
+              }}
+            </div>
+            <div class="k12ps__result-workspace">
+              <figure class="k12ps__result-figure">
+                <img
+                  v-if="
+                    practiceAssetURL(
+                      regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id,
+                    )
+                  "
+                  data-testid="ps-regrade-annotated"
+                  data-image-preview
+                  role="button"
+                  tabindex="0"
+                  :src="
+                    practiceAssetURL(
+                      regradeResult.asset?.annotated_asset_id ||
+                        regradeResult.asset?.asset_id ||
+                        '',
+                    )
+                  "
+                  :alt="t('k12.practice.regradeAnnotatedAlt')"
+                />
+                <figcaption>{{ t('k12.practice.regradeAnnotatedCaption') }}</figcaption>
+              </figure>
+              <section class="k12ps__result-guide" data-testid="ps-regrade-markdown">
+                <h3>{{ t('k12.practice.regradeGuideTitle') }}</h3>
+                <MarkdownRenderer
+                  :content="
+                    regradeResult.asset?.result_markdown || t('k12.practice.regradeResultEmpty')
+                  "
+                />
+                <details v-if="regradeCorrectItems.length" class="k12ps__correct-details">
+                  <summary>
+                    {{
+                      t('k12.practice.regradeCorrectCollapsed', {
+                        n: regradeCorrectItems.length,
+                      })
+                    }}
+                  </summary>
+                  <ol>
+                    <li v-for="item in regradeCorrectItems" :key="item.item_id">
+                      {{ item.paper_seq || item.item_id }}. {{ item.question_markdown }}
+                    </li>
+                  </ol>
+                </details>
+              </section>
+            </div>
           </div>
-          <div class="k12ps__result-workspace">
-            <figure class="k12ps__result-figure">
-              <img
-                v-if="
-                  practiceAssetURL(
-                    regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id,
-                  )
-                "
-                data-testid="ps-regrade-annotated"
-                data-image-preview role="button" tabindex="0"
-                :src="
-                  practiceAssetURL(
-                    regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id || '',
-                  )
-                "
-                :alt="t('k12.practice.regradeAnnotatedAlt')"
-              />
-              <figcaption>{{ t('k12.practice.regradeAnnotatedCaption') }}</figcaption>
-            </figure>
-            <section class="k12ps__result-guide" data-testid="ps-regrade-markdown">
-              <h3>{{ t('k12.practice.regradeGuideTitle') }}</h3>
-              <MarkdownRenderer
-                :content="
-                  regradeResult.asset?.result_markdown || t('k12.practice.regradeResultEmpty')
-                "
-              />
-              <details v-if="regradeCorrectItems.length" class="k12ps__correct-details">
-                <summary>
-                  {{
-                    t('k12.practice.regradeCorrectCollapsed', {
-                      n: regradeCorrectItems.length,
-                    })
-                  }}
-                </summary>
-                <ol>
-                  <li v-for="item in regradeCorrectItems" :key="item.item_id">
-                    {{ item.paper_seq || item.item_id }}. {{ item.question_markdown }}
-                  </li>
-                </ol>
-              </details>
-            </section>
-          </div>
+          <footer class="k12ps__mfoot">
+            <button
+              v-if="regradeResult.set?.paper_no"
+              class="k12ps__btn"
+              @click="openRegradeAnswerPaper"
+            >
+              {{ t('k12.practice.paperAnswer') }}
+            </button>
+            <button class="k12ps__btn k12ps__btn--primary" @click="closeRegradeResult">
+              {{ t('k12.practice.paperClose') }}
+            </button>
+          </footer>
         </div>
-        <footer class="k12ps__mfoot">
-          <button
-            v-if="regradeResult.set?.paper_no"
-            class="k12ps__btn"
-            @click="openRegradeAnswerPaper"
-          >
-            {{ t('k12.practice.paperAnswer') }}
-          </button>
-          <button class="k12ps__btn k12ps__btn--primary" @click="closeRegradeResult">
-            {{ t('k12.practice.paperClose') }}
-          </button>
-        </footer>
       </div>
-    </div>
+    </Teleport>
   </section>
 </template>
 
