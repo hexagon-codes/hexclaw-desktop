@@ -23,7 +23,6 @@ import {
   getKnowledgeRecoveryPlan,
   recoverKnowledgeDocument,
   getKnowledgeConfig,
-  getKnowledgeEmbeddingStatus,
   putKnowledgeConfig,
   MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES,
   listKnowledgeOperations,
@@ -31,11 +30,11 @@ import {
 } from '@/api/knowledge'
 import type { KnowledgeSourceCount, KnowledgeRecoveryPlan } from '@/api/knowledge'
 import type {
-  KnowledgeEmbeddingStatus,
   KnowledgeSearchFilter,
   KnowledgeConfig,
 } from '@/api/knowledge'
-import { cancelKnowledgeJob, getKnowledgeJob } from '@/api/knowledge-index'
+import { cancelKnowledgeJob, getKnowledgeJob, getKnowledgeEmbeddingPolicy, type KnowledgeEmbeddingPolicyProjection, type EmbeddingProfile } from '@/api/knowledge-index'
+import { backendScopeKey } from '@/services/backend-context'
 import type { KnowledgeUploadEntry } from '@/stores/knowledge-uploads'
 // DB cache layer removed — data fetched directly from backend API
 import type {
@@ -126,7 +125,9 @@ const newContent = ref('')
 const newSource = ref('')
 const newTitleInput = ref<HTMLInputElement | null>(null)
 const adding = ref(false)
-const embeddingStatus = ref<KnowledgeEmbeddingStatus | null>(null)
+const embeddingPolicy = ref<KnowledgeEmbeddingPolicyProjection | null>(null)
+const embeddingPolicyState = ref<'loading' | 'ready' | 'error'>('loading')
+let embeddingPolicyRead = 0
 
 const showDeleteConfirm = ref(false)
 const deletingDoc = ref<KnowledgeDoc | null>(null)
@@ -216,38 +217,61 @@ async function loadRagConfig() {
   }
 }
 
-async function loadEmbeddingStatus() {
-  if (!knowledgeEnabled.value) return
+function acceptEmbeddingPolicy(next: KnowledgeEmbeddingPolicyProjection) {
+  if (embeddingPolicy.value && next.policy_version < embeddingPolicy.value.policy_version) return
+  embeddingPolicyRead += 1
+  embeddingPolicy.value = next
+  embeddingPolicyState.value = 'ready'
+}
+
+async function refreshUploadEmbeddingPolicy() {
+  const sequence = ++embeddingPolicyRead
+  const scope = backendScopeKey()
+  embeddingPolicy.value = null
+  embeddingPolicyState.value = 'loading'
   try {
-    embeddingStatus.value = await getKnowledgeEmbeddingStatus()
+    const next = await getKnowledgeEmbeddingPolicy('default')
+    if (!isMounted || sequence !== embeddingPolicyRead || scope !== backendScopeKey()) return
+    acceptEmbeddingPolicy(next)
   } catch (error) {
-    embeddingStatus.value = null
-    logger.warn('[Knowledge] embedding status read failed', error)
+    if (!isMounted || sequence !== embeddingPolicyRead || scope !== backendScopeKey()) return
+    embeddingPolicyState.value = 'error'
+    logger.warn('[Knowledge] embedding policy read failed', error)
   }
 }
 
-function embeddingProviderLabel(provider: string | undefined): string {
-  if (provider === 'openai_compatible' || provider === 'openai') return 'OpenAI 兼容'
-  return provider || '自动选择'
+function embeddingProfileLabel(profile: EmbeddingProfile): string {
+  return [profile.provider_name, profile.model_name].filter(Boolean).join(' · ')
 }
 
 const addDocumentIndexNotice = computed(() => {
-  const status = embeddingStatus.value
-  if (!status) return null
-  if (!status.enabled || !status.configured) {
-    return {
-      title: t('knowledge.indexUnconfiguredTitle', '当前索引：未配置'),
-      detail: t(
-        'knowledge.indexBackgroundHint',
-        '文本索引仍可先就绪；配置语义索引后会在后台增强，索引模型可在知识库页统一修改。',
-      ),
-    }
+  if (embeddingPolicyState.value !== 'ready' || !embeddingPolicy.value) {
+    return { title: t(embeddingPolicyState.value === 'error' ? 'knowledge.semanticIndex.loadFailed' : 'common.loading'), detail: '' }
   }
-  const executor = [embeddingProviderLabel(status.provider), status.model].filter(Boolean).join(' · ')
-  return {
-    title: t('knowledge.indexAutoTitle', '当前索引：自动（推荐）'),
-    detail: `${t('knowledge.indexActualPrefix', '实际执行：')}${executor || '自动选择'}；${t('knowledge.indexBackgroundHint', '文本索引先就绪，语义索引在后台增强。索引模型可在知识库页统一修改。')}`,
+  const policy = embeddingPolicy.value
+  const active = policy.active_revision?.state === 'ready' ? policy.active_revision.profile : null
+  const desired = policy.desired_revision
+  const selection = policy.selection
+  const target = selection.kind === 'profile'
+    ? [desired?.profile, policy.active_revision?.profile, ...policy.available_profiles].find((p) => p?.profile_id === selection.profile_id)
+    : desired?.profile ?? active
+  const title = selection.kind === 'auto'
+    ? t('knowledge.indexAutoTitle')
+    : t('knowledge.indexTargetTitle', { profile: selection.kind === 'disabled'
+      ? t('knowledge.semanticIndex.textOnly') : target ? embeddingProfileLabel(target) : t('knowledge.semanticIndex.unavailable') })
+  const detail: string[] = []
+  if (selection.kind !== 'disabled' && active) {
+    detail.push(t(desired ? 'knowledge.indexServingHint' : 'knowledge.indexCurrentHint', { profile: embeddingProfileLabel(active) }))
   }
+  if (selection.kind === 'disabled') {
+    detail.push(t('knowledge.semanticIndex.disabledHint'))
+  } else if (desired) {
+    detail.push(t(desired.state === 'failed' || desired.state === 'retry_wait'
+      ? 'knowledge.semanticIndex.semanticRetryPending' : 'knowledge.indexPreparingHint'))
+  } else {
+    detail.push(t('knowledge.indexBackgroundHint'))
+  }
+  return { title, detail: detail.join(' ') }
 })
 
 // 全量保存（即时生效 + 落盘）。在写入前夹紧到合法区间，与后端校验对齐。
@@ -717,7 +741,6 @@ onMounted(async () => {
     logger.warn('[Knowledge] durable upload recovery failed', error)
   }
   await loadDocs()
-  void loadEmbeddingStatus()
   void loadRagConfig()
   // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
   if (
@@ -1611,6 +1634,7 @@ function openUpload() {
   if (!ensureKnowledgeEnabled()) return
   closeAddDialog()
   showAddDialog.value = true
+  void refreshUploadEmbeddingPolicy()
   void nextTick(() => newTitleInput.value?.focus())
 }
 
@@ -1702,7 +1726,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
           <div class="knowledge-page__active-panel">
             <!-- 仅“全部”面板的第一项：健康态默认折叠；切换回来时重新按默认态挂载。 -->
-            <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
+            <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" @projection="acceptEmbeddingPolicy" />
 
             <!-- Upload progress list -->
             <div v-if="uploadingFiles.length > 0" class="knowledge-page__temporary-list mb-4 space-y-2">

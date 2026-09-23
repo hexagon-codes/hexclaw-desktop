@@ -50,6 +50,7 @@ const IDLE_ACTIVITY: KnowledgeIndexingActivity = {
 }
 
 const { t, locale } = useI18n()
+const emit = defineEmits<{ projection: [value: KnowledgeEmbeddingPolicyProjection] }>()
 const mode = ref<'loading' | 'policy' | 'legacy' | 'error'>('loading')
 const policy = ref<KnowledgeEmbeddingPolicyProjection | null>(null)
 const expanded = ref(false)
@@ -129,6 +130,7 @@ function acceptProjection(next: KnowledgeEmbeddingPolicyProjection) {
   if (policy.value && next.policy_version < policy.value.policy_version) return
   const moveFocusToHeader = Boolean(next.desired_revision && selectorRef.value?.containsFocus())
   policy.value = next
+  emit('projection', next)
   mode.value = 'policy'
   const desiredJobId =
     next.desired_revision && POLLABLE_REVISION_STATES.has(next.desired_revision.state)
@@ -223,6 +225,9 @@ function profileForSelection(selection: EmbeddingSelection): EmbeddingProfile | 
   if (selection.kind !== 'profile') return null
   return (
     policy.value?.available_profiles.find((item) => item.profile_id === selection.profile_id) ??
+    [policy.value?.desired_revision?.profile, policy.value?.active_revision?.profile].find(
+      (profile) => profile?.profile_id === selection.profile_id,
+    ) ??
     null
   )
 }
@@ -293,7 +298,7 @@ const selectionLabel = computed(() => {
   if (!selection) return ''
   if (selection.kind === 'auto') return t('knowledge.semanticIndex.auto', '自动')
   if (selection.kind === 'disabled') return t('knowledge.semanticIndex.textOnly', '仅文本检索')
-  return profileForSelection(selection)?.model_name ?? selection.profile_id
+  return profileForSelection(selection)?.model_name ?? semanticMessage('unavailable')
 })
 
 const summaryRoute = computed(() => {
@@ -803,6 +808,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
             ref="selectorRef"
             :selection="policy.selection"
             :profiles="displayProfiles"
+            :selected-snapshot="profileForSelection(policy.selection)"
             :recommendation-profile-id="policy.recommendation?.profile_id ?? null"
             :labels="selectorLabels"
             :download-progress="downloadProgress"

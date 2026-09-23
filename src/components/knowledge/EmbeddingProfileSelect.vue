@@ -25,6 +25,7 @@ const props = withDefaults(
   defineProps<{
     selection: EmbeddingSelection
     profiles: KnowledgeEmbeddingProfile[]
+    selectedSnapshot?: KnowledgeEmbeddingProfile | null
     recommendationProfileId?: string | null
     labels: SelectLabels
     providerNotice: string
@@ -140,14 +141,15 @@ const selectedIndex = computed(() =>
 )
 const selectedProfile = computed(() => {
   if (props.selection.kind !== 'profile') return null
-  return props.profiles.find((profile) => profile.profile_id === props.selection.profile_id) ?? null
+  return props.profiles.find((profile) => profile.profile_id === props.selection.profile_id)
+    ?? (props.selectedSnapshot?.profile_id === props.selection.profile_id ? props.selectedSnapshot : null)
 })
 const displayLabel = computed(() => {
   if (props.selection.kind === 'auto') {
     return props.labels.autoRecommended ?? `${props.labels.auto}（${props.labels.recommended}）`
   }
   if (props.selection.kind === 'disabled') return props.labels.textOnly
-  return selectedProfile.value?.model_name ?? props.selection.profile_id
+  return selectedProfile.value?.model_name ?? props.labels.unavailable
 })
 const activeDescendant = computed(() =>
   open.value && highlightedIndex.value >= 0 ? optionId(highlightedIndex.value) : undefined,

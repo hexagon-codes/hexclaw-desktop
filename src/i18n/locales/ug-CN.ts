@@ -1303,6 +1303,12 @@ export default {
   },
 
   knowledge: {
+    indexTargetTitle: 'نىشان ئىندېكس: {profile}',
+    indexServingHint: 'نۆۋەتتىكى ئىزدەش: {profile} · مۇلازىمەت داۋاملىشىۋاتىدۇ.',
+    indexCurrentHint: 'نۆۋەتتىكى ئىزدەش: {profile}.',
+    indexPreparingHint: 'نىشان مەنىۋى ئىندېكس ئارقا سۇپىدا تەييارلىنىۋاتىدۇ.',
+    indexAutoTitle: 'نۆۋەتتىكى ئىندېكس: ئاپتوماتىك (تەۋسىيە)',
+    indexBackgroundHint: 'تېكىست ئىندېكسى ئالدى بىلەن تەييار بولىدۇ، مەنىۋى ئىندېكس ئارقا سۇپىدا تەييارلىنىدۇ.',
     closeDialog: 'Close dialog',
     embedding: {
       // ug 占位，待母语校订
