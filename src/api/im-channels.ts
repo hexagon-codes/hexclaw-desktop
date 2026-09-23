@@ -1,5 +1,5 @@
 import { env } from '@/config/env'
-import { backendContext } from '@/services/backend-context'
+import { backendContext, backendScopeKey, backendStorageKey, assertBackendActive } from '@/services/backend-context'
 import { buildDuplicateInstanceNameError } from '@/config/im-channel-errors'
 import {
   CHANNEL_CONFIG_FIELDS,
@@ -432,6 +432,46 @@ export async function testSavedIMInstanceRuntime(
   }
 
   return { success: false, message: 'Instance runtime test did not return a result' }
+}
+
+/** 主动测试使用独立请求身份；普通运行时检查不产生外部消息。 */
+export async function testSavedIMInstanceDelivery(
+  instance: IMInstance,
+  content: string,
+): Promise<{ success: boolean; message: string }> {
+  if (!instance.enabled || instance.type === 'email') return testSavedIMInstanceRuntime(instance)
+  const scope = backendScopeKey()
+  const storageKey = backendStorageKey(`im-test-request:${instance.id}`)
+  let requestID = localStorage.getItem(storageKey)
+  if (!requestID) {
+    const connection = await testSavedIMInstanceRuntime(instance)
+    assertBackendActive(scope)
+    if (!connection.success) return connection
+    requestID = crypto.randomUUID()
+    localStorage.setItem(storageKey, requestID)
+  }
+  try {
+    assertBackendActive(scope)
+    const result = await proxyApiRequest<{
+      success: boolean
+      message: string
+      pending?: boolean
+    }>('POST', `/api/v1/platforms/instances/by-id/${encodeURIComponent(instance.id)}/send-test`, {
+      request_id: requestID,
+      content,
+    })
+    assertBackendActive(scope)
+    if (!result) throw new Error('Test message result is unavailable')
+    if (result.pending === false && localStorage.getItem(storageKey) === requestID) {
+      localStorage.removeItem(storageKey)
+    }
+    return result
+  } catch {
+    return {
+      success: false,
+      message: 'Test message outcome is unknown. Test again to check the same request; no automatic resend.',
+    }
+  }
 }
 
 // ─── 实例运行时控制 ─────────────────────────────────

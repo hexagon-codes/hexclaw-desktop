@@ -13,7 +13,7 @@ import {
   getIMInstances,
   updateIMInstance,
   deleteIMInstance,
-  testSavedIMInstanceRuntime,
+  testSavedIMInstanceDelivery,
   listIMInstancesHealth,
   getChannelMeta,
   getRequiredFieldLabels,
@@ -214,7 +214,7 @@ async function testInstance(inst: IMInstance) {
   busyId.value = inst.id
   delete testResults.value[inst.id]
   try {
-    testResults.value[inst.id] = await testSavedIMInstanceRuntime(inst)
+    testResults.value[inst.id] = await testSavedIMInstanceDelivery(inst, t('connections.test.message'))
   } catch (e) {
     testResults.value[inst.id] = {
       success: false,

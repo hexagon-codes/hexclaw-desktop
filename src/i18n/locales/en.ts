@@ -1839,6 +1839,7 @@ export default {
       detectWarn: 'Provider not recognized, please enter SMTP / IMAP servers manually',
     },
     test: {
+      message: 'HexClaw connection test. This message confirms that the configured IM connection can send messages.',
       unavailable: 'Test endpoint unavailable (backend not ready yet)',
     },
     connectors: {

@@ -1801,6 +1801,7 @@ export default {
       detectWarn: '未识别该邮箱服务商，请手动填写 SMTP / IMAP 服务器',
     },
     test: {
+      message: 'HexClaw 连接测试：收到此消息，表示当前 IM 连接可以正常发送消息。',
       unavailable: '测试端点不可用（后端尚未就绪）',
     },
     connectors: {
