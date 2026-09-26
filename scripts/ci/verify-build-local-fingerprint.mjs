@@ -23,7 +23,11 @@ const APP_BUNDLE = join(
   'macos',
   'HexClaw.app',
 )
-const SIDECAR = join(DESKTOP_ROOT, 'src-tauri', 'binaries', 'hexclaw-x86_64-apple-darwin')
+// 与 Makefile 使用同一 Rust 宿主目标，兼容 Apple Silicon 与 Intel 本机构建。
+const HOST_TRIPLE = execFileSync('rustc', ['-vV'], { encoding: 'utf8' })
+  .match(/^host:\s+(\S+)$/m)?.[1]
+if (!HOST_TRIPLE) throw new Error('Rust host target is unavailable')
+const SIDECAR = join(DESKTOP_ROOT, 'src-tauri', 'binaries', `hexclaw-${HOST_TRIPLE}`)
 const INPUT_FILES = [
   'package.json',
   'pnpm-lock.yaml',
