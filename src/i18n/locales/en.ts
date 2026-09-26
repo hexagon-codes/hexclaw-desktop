@@ -1426,7 +1426,7 @@ export default {
     uploadDoc: 'Upload Document',
     uploadDocument: 'Upload Document',
     uploadFile: 'Drag files here to upload',
-    uploadFileHint: 'Supports PDF, TXT, MD, DOCX · large files process in background',
+    uploadFileHint: 'Supports PDF, TXT, MD, DOCX, JSONL, HEXBANK · large files process in background',
     uploading: 'Uploading...',
     noDocs: 'No Documents',
     noDocsDesc: 'Upload documents or drag & drop files here',

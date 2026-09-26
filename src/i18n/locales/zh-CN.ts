@@ -1400,7 +1400,7 @@ export default {
     uploadDoc: '上传文档',
     uploadDocument: '上传文档',
     uploadFile: '拖放文件到此处上传',
-    uploadFileHint: '支持 PDF, TXT, MD, DOCX · 大文件后台处理',
+    uploadFileHint: '支持 PDF, TXT, MD, DOCX, JSONL, HEXBANK · 大文件后台处理',
     uploading: '上传中...',
     noDocs: '暂无文档',
     noDocsDesc: '添加文档到知识库以供智能体检索',

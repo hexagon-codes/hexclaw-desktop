@@ -64,7 +64,7 @@ import { formatRelative } from '@/utils/time'
 // 否则多模态入库能力在桌面端无入口。所有格式都只走后端持久化异步摄取，
 // 上传失败时不在桌面端再解析/add，避免同一用户意图产生两条状态机和重复文档。
 const IMAGE_TYPES = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
-const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.pptx', '.csv', '.json']
+const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.pptx', '.csv', '.json', '.jsonl', '.hexbank']
 const ACCEPTED_TYPES = [...DOCUMENT_TYPES, ...IMAGE_TYPES]
 
 // 图片入库由后端视觉模型（VLM）转写为文本后再走 RAG 管线。若用户配的模型不具备视觉能力，
@@ -393,11 +393,15 @@ const preparations = ref<Record<string, MaterialPreparation>>({})
 const preparationListError = ref(false)
 const preparationDetailError = ref('')
 const loadingPreparation = ref(false)
+const preparationDetail = ref<MaterialPreparation | null>(null)
 const originalPage = ref<number | null>(null)
 let preparationListRequest: AbortController | null = null
 let preparationDetailRequest: AbortController | null = null
 let preparationPoll: ReturnType<typeof setTimeout> | null = null
-const selectedPreparation = computed(() => selectedDoc.value ? preparations.value[selectedDoc.value.id] : undefined)
+const selectedPreparation = computed(() => selectedDoc.value
+  ? preparationDetail.value?.document_id === selectedDoc.value.id
+    ? preparationDetail.value : preparations.value[selectedDoc.value.id]
+  : undefined)
 const selectedHasQuestions = computed(() => !!materialPreparationSummary(selectedPreparation.value))
 const selectedIsPDF = computed(() => !!selectedDoc.value && (selectedDoc.value.media_type === 'application/pdf' || /\.pdf$/i.test(selectedDoc.value.title)))
 const showPreparationDetail = computed(() => selectedHasQuestions.value || !!preparationDetailError.value)
@@ -420,8 +424,11 @@ async function refreshPreparations() {
     }
     preparations.value = next
     preparationListError.value = false
-    if (result.preparations.some(entry => (entry.counts.preparing ?? 0) > 0))
-      preparationPoll = setTimeout(() => { void refreshPreparations(); if (showDocDetail.value && selectedDoc.value) void refreshPreparationDetail(selectedDoc.value.id) }, 3000)
+    if (result.preparations.some(entry => entry.state === 'preparing' || (entry.counts.preparing ?? 0) > 0))
+      preparationPoll = setTimeout(async () => {
+        await refreshPreparations()
+        if (showDocDetail.value && selectedDoc.value) void refreshPreparationDetail(selectedDoc.value.id, true)
+      }, 3000)
   } catch (error) {
     if (request.signal.aborted || scope !== backendScopeKey()) return
     preparations.value = {}
@@ -429,16 +436,20 @@ async function refreshPreparations() {
     logger.warn('[Knowledge] question preparation summaries unavailable', error)
   }
 }
-async function refreshPreparationDetail(id: string) {
+async function refreshPreparationDetail(id: string, background = false) {
   preparationDetailRequest?.abort()
   const request = new AbortController()
   preparationDetailRequest = request
   const scope = backendScopeKey()
-  loadingPreparation.value = true
+  if (!background) {
+    loadingPreparation.value = true
+    preparationDetail.value = null
+  }
   preparationDetailError.value = ''
   try {
     const detail = await getMaterialPreparation(id, request.signal)
     if (request.signal.aborted || scope !== backendScopeKey() || selectedDoc.value?.id !== id) return
+    preparationDetail.value = detail
     preparations.value = { ...preparations.value, [id]: detail }
   } catch (error) {
     if (request.signal.aborted || scope !== backendScopeKey() || selectedDoc.value?.id !== id) return
@@ -453,12 +464,13 @@ watch(() => backendScopeKey(), () => {
   preparationListRequest?.abort()
   preparationDetailRequest?.abort()
   preparations.value = {}
+  preparationDetail.value = null
   preparationListError.value = false
   showDocDetail.value = false
   originalPage.value = null
   if (preparationPoll) clearTimeout(preparationPoll)
 })
-watch(showDocDetail, open => { if (!open) { preparationDetailRequest?.abort(); originalPage.value = null } })
+watch(showDocDetail, open => { if (!open) { preparationDetailRequest?.abort(); preparationDetail.value = null; originalPage.value = null } })
 onUnmounted(() => {
   preparationListRequest?.abort()
   preparationDetailRequest?.abort()
@@ -2009,7 +2021,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           {{ documentExtension(doc.title) }}
                         </span>
                       </span>
-                      <span class="knowledge-page__document-main flex-1 min-w-0">
+                      <span class="knowledge-page__document-main flex-1 min-w-0" :class="{ 'knowledge-page__document-main--prepared': preparationListError || materialPreparationSummary(preparations[doc.id]) }">
                         <span
                           class="knowledge-page__resource-title"
                           :style="{ color: 'var(--hc-text-primary)' }"
@@ -3053,11 +3065,12 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
 .knowledge-page__preparation-summary {
   display: block;
-  margin-top: 5px;
+  flex-basis: 100%;
   color: var(--hc-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 16px;
 }
+.knowledge-page__document-main--prepared { flex-wrap:wrap; row-gap:4px; }
 .knowledge-page__resource-title,
 .knowledge-page__resource-status {
   min-width: 0;

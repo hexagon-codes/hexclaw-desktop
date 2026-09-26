@@ -23,10 +23,10 @@ const labels: Record<string, string> = { ready: 'Ready', preparing: 'Preparing',
   </section>
 </template>
 <style scoped>
-.material-preparation { border:1px solid var(--hc-border); border-radius:12px; padding:16px; color:var(--hc-text-secondary); }
+.material-preparation { border:1px solid var(--hc-border); border-radius:12px; padding:16px; color:var(--hc-text-primary); }
 .material-preparation h3 { font-size:13px; font-weight:600; color:var(--hc-text-primary); margin:0 0 4px; }
 .material-preparation__summary { font-size:12px; margin:4px 0 14px; color:var(--hc-text-muted); }
-.material-preparation__question { border-bottom:1px solid var(--hc-divider); }
+.material-preparation__question { border-top:1px solid var(--hc-divider); }
 .material-preparation__question summary { display:flex; align-items:center; gap:12px; list-style:none; padding:12px 0; font-size:13px; cursor:pointer; }
 .material-preparation__question summary::-webkit-details-marker { display:none; }
 .material-preparation__question summary svg { flex:none; color:var(--hc-text-muted); }
@@ -34,8 +34,10 @@ const labels: Record<string, string> = { ready: 'Ready', preparing: 'Preparing',
 .material-preparation__number { width:20px; flex:none; color:var(--hc-text-muted); }
 .material-preparation__stem { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .material-preparation__state { color:var(--hc-text-muted); flex:none; font-size:12px; }
-.material-preparation__body { padding:0 0 14px 32px; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
-.material-preparation__answer { font-weight:600; color:var(--hc-text-primary); margin:5px 0; }
+.material-preparation__body { padding:0 0 14px 32px; color:var(--hc-text-secondary); font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+.material-preparation__body :deep(.markdown-body) { font-size:inherit; line-height:inherit; }
+.material-preparation__body :deep(.markdown-body > p) { margin:0; }
+.material-preparation__answer { font-weight:600; color:var(--hc-text-primary); margin:0 0 5px; }
 .material-preparation__source { display:inline-block; color:var(--hc-text-secondary); font-size:12px; margin-top:7px; text-align:left; background:none; border:0; padding:0; }
 button.material-preparation__source:hover { text-decoration:underline; }
 </style>
