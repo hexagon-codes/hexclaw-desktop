@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Wrench, CircleCheck, CircleX, LoaderCircle } from 'lucide-vue-next'
 import type { ToolCall } from '@/types/chat'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import CodeSnippet from './CodeSnippet.vue'
 import type { RenderManifest } from '@/contracts/message-content'
 import {
   toolCallStatus,
@@ -40,8 +41,23 @@ const toolKind = computed(() => {
 })
 const summary = computed(() => summarizeToolResult(props.call))
 const durationLabel = computed(() => toolDurationLabel(props.call.duration_ms))
-const prettyArgs = computed(() => prettyToolJson(props.call.arguments))
-const prettyResult = computed(() => prettyToolJson(props.call.result))
+const sandboxCode = computed(() => {
+  if (toolKind.value !== 'Sandbox') return null
+  try {
+    const value = JSON.parse(props.call.arguments)
+    if (!value || typeof value !== 'object' || typeof value.code !== 'string') return null
+    return { code: value.code, language: typeof value.language === 'string' ? value.language : props.call.execution?.language || 'text' }
+  } catch { return null }
+})
+const prettyArgs = computed(() => {
+  if (!sandboxCode.value) return prettyToolJson(props.call.arguments)
+  const { code: _code, ...parameters } = JSON.parse(props.call.arguments)
+  return JSON.stringify(parameters, null, 2)
+})
+const resultLanguage = computed(() => {
+  try { JSON.parse(props.call.result || ''); return 'json' } catch { return 'text' }
+})
+const prettyResult = computed(() => props.call.result ?? '')
 
 const statusIcon = computed(() =>
   status.value === 'success' ? CircleCheck : status.value === 'error' ? CircleX : LoaderCircle,
@@ -84,13 +100,14 @@ const statusLabel = computed(() =>
       </div>
       <template v-if="call.arguments"
         ><div>{{ t('chat.toolParams') }}</div>
-        <pre>{{ prettyArgs }}</pre>
+        <CodeSnippet :code="prettyArgs" language="json" />
+        <CodeSnippet v-if="sandboxCode" :code="sandboxCode.code" :language="sandboxCode.language" />
       </template>
       <template v-if="call.execution">
         <div>{{ call.execution.language }} · Exit code: {{ call.execution.exit_code }}</div>
-        <pre v-if="call.execution.command?.length">{{ call.execution.command.join(' ') }}</pre>
+        <CodeSnippet v-if="call.execution.command?.length" :code="call.execution.command.join(' ')" language="text" />
         <p v-if="call.execution.timeout">Execution timed out</p>
-        <pre v-if="call.execution.error">{{ call.execution.error }}</pre>
+        <CodeSnippet v-if="call.execution.error" :code="call.execution.error" language="text" />
         <ul v-if="call.execution.artifacts?.length">
           <li v-for="artifact in call.execution.artifacts" :key="artifact.id">
             {{ artifact.name }} · {{ artifact.size }} B
@@ -105,7 +122,7 @@ const statusLabel = computed(() =>
           surface="desktop"
           @rendered="emit('rendered', $event)"
         />
-        <pre v-else>{{ prettyResult }}</pre>
+        <CodeSnippet v-else :code="prettyResult" :language="resultLanguage" />
       </template>
     </div>
   </details>
@@ -125,7 +142,8 @@ const statusLabel = computed(() =>
     <div v-if="summary" class="hc-tool__summary">{{ summary }}</div>
     <details v-if="call.arguments" class="hc-tool__detail">
       <summary>{{ t('chat.toolParams') }}</summary>
-      <pre>{{ prettyArgs }}</pre>
+      <CodeSnippet :code="prettyArgs" language="json" />
+        <CodeSnippet v-if="sandboxCode" :code="sandboxCode.code" :language="sandboxCode.language" />
     </details>
     <details v-if="call.result || call.message_content" class="hc-tool__detail">
       <summary>{{ t('chat.toolResult') }}</summary>
@@ -136,7 +154,7 @@ const statusLabel = computed(() =>
         surface="desktop"
         @rendered="emit('rendered', $event)"
       />
-      <pre v-else>{{ prettyResult }}</pre>
+      <CodeSnippet v-else :code="prettyResult" :language="resultLanguage" />
     </details>
   </div>
 </template>
