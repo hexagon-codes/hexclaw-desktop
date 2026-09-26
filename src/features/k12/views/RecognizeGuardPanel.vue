@@ -19,6 +19,7 @@ import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
+import QuestionReuseActivityRow from '@/components/chat/QuestionReuseActivityRow.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
@@ -63,6 +64,7 @@ import type {
   ImageTaskIntent,
   ParentTeachingGuideDTO,
   PhotoJobResult,
+  PhotoJobItemDTO,
   PhotoJobItemStatus,
   ProblemKind,
   OCRConfirmationReason,
@@ -219,6 +221,7 @@ interface BlankWorksheetGuideItem {
   guide: ParentTeachingGuideDTO
 }
 const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
+const reusedQuestions = ref<PhotoJobItemDTO[]>([])
 const hasBlankWorksheetGuide = computed(() => blankWorksheetGuide.value.length > 0)
 // BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
 const isImageData = computed(() => /^(?:data:image|blob:)/.test(imageB64.value.trim()))
@@ -1584,6 +1587,7 @@ watch(
     sourceFile.value = undefined
     annotatedImage.value = ''
     blankWorksheetGuide.value = []
+    reusedQuestions.value = []
     rows.value = []
     problemProgressSlots.value = []
     taskCoverage.value = null
@@ -1715,6 +1719,7 @@ async function run() {
   restoredFromBinding.value = false
   annotatedImage.value = ''
   blankWorksheetGuide.value = []
+  reusedQuestions.value = []
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
@@ -2180,6 +2185,7 @@ async function completeImageTaskFlow() {
       // intake/work metadata to the homework result mapper; feedback is only
       // rendered when the public result contract actually carries it.
       blankWorksheetGuide.value = []
+      reusedQuestions.value = []
       rows.value = []
       annotatedImage.value = ''
       creativeResult.value = {
@@ -2208,12 +2214,14 @@ function applyPhotoJobResult(result: PhotoJobResult) {
     // Preserve backend item order (the frozen original-question order), and
     // suppress the legacy recognition/grade controls for this separate surface.
     blankWorksheetGuide.value = parentGuides
+    reusedQuestions.value = result.items.filter(item => item.answer_source?.kind === 'asset' && !!item.answer_source.adoption_id)
     annotatedImage.value = ''
     rows.value = []
     confirmed.value = true
     return
   }
   blankWorksheetGuide.value = []
+  reusedQuestions.value = []
   if (
     result.task_intent !== 'completed_homework' ||
     result.result_surface !== 'annotated_homework' ||
@@ -2295,6 +2303,7 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         break
     }
   })
+  reusedQuestions.value = result.items.filter(item => item.answer_source?.kind === 'asset' && !!item.answer_source.adoption_id)
 }
 
 async function coldStart() {
@@ -2443,7 +2452,9 @@ async function coldStart() {
       :ariaLabel="'已作答作业处理状态'"
       :items="homeworkTimelineItems"
       :initially-expanded="homeworkTaskProgressState === 'running'"
-    />
+    >
+      <template #details><QuestionReuseActivityRow :items="reusedQuestions" /></template>
+    </TaskProgressCard>
 
     <div
       v-if="
@@ -2738,6 +2749,8 @@ async function coldStart() {
           : t('k12.recognize.coldStartFallback', { grade: coldStartResult.grade })
       }}
     </div>
+
+    <QuestionReuseActivityRow v-if="hasBlankWorksheetGuide" :items="reusedQuestions" />
 
     <!-- 空白卷使用独立的家长讲题结果面。 -->
     <section

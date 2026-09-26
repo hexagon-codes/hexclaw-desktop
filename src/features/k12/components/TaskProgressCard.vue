@@ -38,6 +38,7 @@ const expanded = ref(props.initiallyExpanded)
 
     <div v-if="expanded && items.length" class="k12-task-progress__timeline">
       <ActivityTimeline :items="items" layout="stacked" running-indicator="typing-dots" />
+      <slot name="details" />
     </div>
   </section>
 </template>

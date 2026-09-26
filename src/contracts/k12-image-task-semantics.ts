@@ -1302,8 +1302,26 @@ function validatePhotoPayload(
   arrayValue(payload.items, `${path}.items`).forEach((value, index) => {
     const itemPath = `${path}.items[${index}]`
     const item = record(value, itemPath)
-    exact(item, ['question', 'status', 'warning', 'grade', 'result_kind', 'parent_guide'], itemPath)
+    exact(item, ['question', 'status', 'warning', 'grade', 'result_kind', 'parent_guide', 'answer_source', 'reuse'], itemPath)
     required(item, ['question', 'status', 'result_kind'], itemPath)
+    if (item.answer_source !== undefined) {
+      const source = record(item.answer_source, `${itemPath}.answer_source`)
+      exact(source, ['kind', 'facts_digest', 'invocation_id', 'asset_id', 'asset_version', 'asset_revision', 'adoption_id'], `${itemPath}.answer_source`)
+      enumValue(source.kind, new Set(['model', 'deterministic', 'asset']), `${itemPath}.answer_source.kind`)
+      stringValue(source.facts_digest, `${itemPath}.answer_source.facts_digest`)
+      for (const key of ['invocation_id', 'asset_id', 'adoption_id']) optionalString(source[key], `${itemPath}.answer_source.${key}`)
+      for (const key of ['asset_version', 'asset_revision']) {
+        if (source[key] !== undefined) numberValue(source[key], `${itemPath}.answer_source.${key}`, true)
+      }
+    }
+    if (item.reuse !== undefined) {
+      const reuse = record(item.reuse, `${itemPath}.reuse`)
+      exact(reuse, ['stem', 'answer', 'source_name', 'document_id', 'source_digest', 'page'], `${itemPath}.reuse`)
+      for (const key of ['stem', 'answer', 'source_name']) stringValue(reuse[key], `${itemPath}.reuse.${key}`)
+      optionalString(reuse.document_id, `${itemPath}.reuse.document_id`)
+      optionalString(reuse.source_digest, `${itemPath}.reuse.source_digest`)
+      if (reuse.page !== undefined) numberValue(reuse.page, `${itemPath}.reuse.page`, true)
+    }
     const question = validateQuestion(item.question, `${itemPath}.question`)
     const status = enumValue(item.status, PHOTO_STATUSES, `${itemPath}.status`)
     if (typeof question.problem_id === 'string') {

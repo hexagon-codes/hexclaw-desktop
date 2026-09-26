@@ -1747,6 +1747,24 @@ export interface ImageTaskHomeworkRecognition {
 /** 逐题批改结果（completed 后可用）；grade 复用 GradeResp wire 形状（判定五值口径）。 */
 export interface PhotoJobItemDTO {
   question: RecognizedQuestion
+  /** 实际答案来源；只有持久采用回执才能显示资产复用。 */
+  answer_source?: {
+    kind: 'model' | 'deterministic' | 'asset'
+    facts_digest: string
+    invocation_id?: string
+    asset_id?: string
+    asset_version?: number
+    asset_revision?: number
+    adoption_id?: string
+  }
+  reuse?: {
+    stem: string
+    answer: string
+    source_name: string
+    document_id?: string
+    source_digest?: string
+    page?: number
+  }
   /** 唯一的逐题展示/副作用状态真相；不得由 grade verdict、badge 或布尔值重推。 */
   status: PhotoJobItemStatus
   warning?: string
