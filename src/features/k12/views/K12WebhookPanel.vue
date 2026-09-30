@@ -22,6 +22,7 @@ import { userVisibleAgents } from '@/utils/imChannelBinding'
 import HcClearableField from '@/components/common/HcClearableField.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { K12_SCENARIO_ID } from '../descriptor'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const toast = useToast()
 const emit = defineEmits<{ contentChange: [hasContent: boolean] }>()
@@ -131,6 +132,7 @@ const formName = ref('')
 const formAgentId = ref('')
 const formEvents = ref<K12WebhookEventType[]>(['k12.submission.requested.v1'])
 const formWorkflows = ref('')
+const originalWorkflows = ref('')
 
 const secretResult = ref<{ title: string; name: string; secret: string } | null>(null)
 const rotateTarget = ref<K12WebhookBinding | null>(null)
@@ -239,6 +241,7 @@ function openCreate() {
   formName.value = ''
   formEvents.value = ['k12.submission.requested.v1']
   formWorkflows.value = ''
+  originalWorkflows.value = ''
   formAgentId.value = selectedAgentId.value || agents.value[0]?.name || ''
   editorOpen.value = true
 }
@@ -249,6 +252,7 @@ function openEdit(binding: K12WebhookBinding) {
   formName.value = binding.name
   formEvents.value = [...binding.allowed_events]
   formWorkflows.value = (binding.allowed_workflows ?? []).join(', ')
+  originalWorkflows.value = formWorkflows.value
   formAgentId.value = binding.agent_id
   editorOpen.value = true
 }
@@ -273,6 +277,9 @@ function workflowIDs(): string[] {
 }
 
 async function submitEditor() {
+  const limitError = inputLimitError(formName.value, 'Webhook name', INPUT_LIMITS.displayName, { original: editorMode.value === 'edit' ? editingName.value : undefined }) ||
+    inputLimitError(formWorkflows.value, 'Allowed workflows', INPUT_LIMITS.jsonBytes, { unit: 'bytes', original: editorMode.value === 'edit' ? originalWorkflows.value : undefined })
+  if (limitError) { toast.error(limitError); return }
   const name = formName.value.trim()
   const workflows = workflowIDs()
   const agentID = formAgentId.value

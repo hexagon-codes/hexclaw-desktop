@@ -27,6 +27,8 @@ import { useK12Store } from '../store'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
+import { isAgentDisplayNameValid } from '@/utils/agent-display-name'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import {
@@ -77,7 +79,17 @@ const learnerID = props.agent?.metadata?.['k12.learner_id'] || `learner-${nanoid
 
 // 档案存在 agent metadata 的 k12.* 键（后端契约）
 const childName = ref(props.agent?.metadata?.['k12.child_name'] ?? '')
+const originalChildName = props.agent?.metadata?.['k12.child_name'] ?? ''
 const childNameInput = ref<HTMLInputElement | null>(null)
+const childNameError = computed(() => inputLimitError(
+  childName.value,
+  'Child name',
+  INPUT_LIMITS.childName,
+  isEdit.value ? { original: originalChildName } : {},
+))
+watch([childName, childNameInput], () => {
+  childNameInput.value?.setCustomValidity(childNameError.value)
+})
 const initialGradeTerm = splitGradeTerm(props.agent?.metadata?.['k12.grade_term'] ?? '五年级上')
 const gradeLevel = ref<PrimaryGrade>(initialGradeTerm.grade)
 const semester = ref<Semester>(initialGradeTerm.semester)
@@ -626,6 +638,15 @@ function automationWorkflowCount(
 
 async function submit() {
   if (!PRIMARY_GRADES.includes(gradeLevel.value as PrimaryGrade)) return
+  if (childNameError.value) {
+    error.value = childNameError.value
+    childNameInput.value?.reportValidity()
+    return
+  }
+  if (!isAgentDisplayNameValid(displayName.value, isEdit.value ? storedDisplayName : undefined)) {
+    error.value = t('agents.displayNameTooLong')
+    return
+  }
   submitting.value = true
   error.value = ''
   try {
@@ -638,7 +659,7 @@ async function submit() {
         throw new Error(curriculumError.value || '请先关联可确认的数学教材并设置当前单元')
       }
       if (!profileBundleKey.value) profileBundleKey.value = newCommandKey('profile-bundle')
-      await k12UpdateProfileBundle({
+      const payload: Parameters<typeof k12UpdateProfileBundle>[0] = {
         agent: props.agent.name,
         idempotency_key: profileBundleKey.value,
         expected_profile_revision: profileRevision.value,
@@ -653,7 +674,7 @@ async function submit() {
           skills: boundSkills(),
         },
         profile: {
-          child_name: childName.value.trim(),
+          child_name: childName.value === originalChildName ? originalChildName : childName.value.trim(),
           grade_term: grade.value,
           subject_textbooks: { ...textbookEditions },
         },
@@ -676,7 +697,12 @@ async function submit() {
           arithmetic_warmup_enabled: weeklySettings.value.arithmetic_warmup_enabled,
           arithmetic_minutes: weeklySettings.value.arithmetic_minutes,
         },
-      })
+      }
+      const limitError = inputLimitError(
+        JSON.stringify(payload), 'Profile request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+      )
+      if (limitError) throw new Error(limitError)
+      await k12UpdateProfileBundle(payload)
       await refreshAgentsAfterPersistence()
       // 档案保存是唯一作用域明确的存量修复触发点：只补该 agent 缺失的默认任务。
       // 失败不回滚已成功的档案，也不写“已完成”标记；下次保存会自然重试。
@@ -697,7 +723,7 @@ async function submit() {
     }
     // 建档事务：registerAgent 一次性初始化基本档案、canonical 六科键与数学派生镜像。
     const name = `${K12_SCENARIO_ID}-${nanoid(8)}`
-    await registerAgent({
+    const payload: Parameters<typeof registerAgent>[0] = {
       name,
       display_name: displayName.value,
       description: cardDescription.value, // 原型卡片副标题：年级 · 分科教材独立绑定 · 年级边界
@@ -713,7 +739,12 @@ async function submit() {
         'k12.child_name': childName.value.trim(),
         'k12.grade_term': grade.value,
       }),
-    })
+    }
+    const limitError = inputLimitError(
+      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+    )
+    if (limitError) throw new Error(limitError)
+    await registerAgent(payload)
     await refreshAgentsAfterPersistence()
     // 建档即初始化四个默认工作流。失败不回滚已成功的档案，但必须等待真实结果并显式告警，
     // 不能 fire-and-forget 后仍宣称提醒已注册（架构 §3.13：不支持时需可见提示）。
@@ -771,6 +802,7 @@ async function submit() {
                 class="k12pf__input"
                 autofocus
                 :placeholder="t('k12.profile.childNamePlaceholder')"
+                :aria-invalid="!!childNameError"
               />
             </label>
 

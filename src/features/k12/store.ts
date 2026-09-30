@@ -462,7 +462,9 @@ export const useK12Store = defineStore('k12', () => {
       automaticRemainingSeconds: dispatch.automatic_remaining_seconds,
       operationDeadlineAt: dispatch.operation_deadline_at,
       taskIntent: dispatch.task_intent,
-      stage: homework?.stage ?? feedbackState ?? creative?.status ?? dispatch.status,
+      stage: isImageTaskOutcomeUnknown(dispatch)
+        ? 'recovering'
+        : homework?.stage ?? feedbackState ?? creative?.status ?? dispatch.status,
       retryable: dispatch.retryable === true,
       questions: homework?.recognition?.questions ?? [],
       subject: homework?.recognition?.subject ?? '',
@@ -489,7 +491,13 @@ export const useK12Store = defineStore('k12', () => {
       : false
   }
 
+  // 图片 facade 的 recovering 是未知回执别名；作品代次的真实恢复不走此判断。
+  function isImageTaskOutcomeUnknown(dispatch: ImageTaskDispatchDTO): boolean {
+    return dispatch.progress.state === 'recovering'
+  }
+
   function readyForTaskShell(dispatch: ImageTaskDispatchDTO): boolean {
+    if (isImageTaskOutcomeUnknown(dispatch)) return true
     if (isFacadeFailure(dispatch) || dispatch.status === 'awaiting_confirmation') return true
     const projection = dispatch.target_projection
     if (projection?.kind === 'homework') {
@@ -537,7 +545,9 @@ export const useK12Store = defineStore('k12', () => {
       const response = await k12GetImageTask(agent, dispatchId, signal)
       throwIfAborted(signal)
       onStatus?.(response.dispatch)
-      if (stop(response.dispatch)) return response.dispatch
+      if (isImageTaskOutcomeUnknown(response.dispatch) || stop(response.dispatch)) {
+        return response.dispatch
+      }
       await waitForPoll(intervalMs, signal)
     }
   }
@@ -630,7 +640,7 @@ export const useK12Store = defineStore('k12', () => {
             signal,
             onStatus,
           )
-      if (isFacadeFailure(dispatch)) {
+      if (isFacadeFailure(dispatch) && !isImageTaskOutcomeUnknown(dispatch)) {
         throw new Error(i18n.global.t('k12.recognize.jobFailed'))
       }
       return imageTaskView(dispatch)
@@ -659,7 +669,7 @@ export const useK12Store = defineStore('k12', () => {
       JOB_POLL_INTERVAL_MS,
       signal,
     )
-    if (isFacadeFailure(dispatch)) {
+    if (isFacadeFailure(dispatch) && !isImageTaskOutcomeUnknown(dispatch)) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }
     return imageTaskView(dispatch)
@@ -736,7 +746,7 @@ export const useK12Store = defineStore('k12', () => {
     const response = await k12GetImageTask(agent, dispatchId, signal)
     throwIfAborted(signal)
     onStatus?.(response.dispatch)
-    const dispatch = resultReady(response.dispatch)
+    const dispatch = resultReady(response.dispatch) || isImageTaskOutcomeUnknown(response.dispatch)
       ? response.dispatch
       : await continuePollingImageTask(
           agent,
@@ -746,6 +756,9 @@ export const useK12Store = defineStore('k12', () => {
           signal,
           onStatus,
         )
+    if (isImageTaskOutcomeUnknown(dispatch)) {
+      throw new Error(i18n.global.t('k12.recognize.outcomeUnknownTitle'))
+    }
     if (isFacadeFailure(dispatch)) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }

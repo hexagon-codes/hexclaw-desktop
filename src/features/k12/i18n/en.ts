@@ -70,7 +70,7 @@ export default {
     filterSubject: 'Subject',
     filterStatus: 'Status',
     stateMachineHint:
-      'Unmastered questions are never auto-hidden. “Skip this week” affects only this week; “No longer review” can be restored.',
+      '“Skip this week” postpones only this week; “No longer review” can be restored here. Mastery is based on actual answers and system assessment.',
     scheduledReview: 'Scheduled',
     deferredThisWeek: 'Skip this week',
     suppressedReview: 'No longer review',
@@ -205,11 +205,11 @@ export default {
     basketMeta:
       'Add explicitly from mistakes, This Week, or notes · duplicate additions are deduplicated',
     basketHint:
-      'The sheet is finalized only after system printing succeeds or a delivery batch is created; cancelling system printing keeps the print queue',
+      'The sheet is finalized after printing succeeds or a delivery task is created; cancelling printing keeps the queued questions.',
     basketEmpty: 'Print queue is empty · add items from mistakes or "Generate review paper".',
     historyTitle: 'Print History',
     historyDesc:
-      'Printed sheets · photo return re-grades automatically; the paper no. printed on the sheet links the return.',
+      'Upload a photo of the completed sheet for automatic grading; the number in its header or footer links it to the sheet.',
     historyEmpty: 'No printed sheets yet; finalized sheets will appear here.',
     blockedGroup: 'Blocked · not yet supported for sheets, skipped when printing',
     remove: 'Remove',
@@ -281,7 +281,7 @@ export default {
     regradeCorrectCollapsed: '{n} other correct item(s) (collapsed)',
     gradeTitle: 'Record results manually',
     gradeHint:
-      'Only for cases without an answer photo or items the system explicitly cannot decide. Blank results are never submitted or treated as correct.',
+      'Only for questions without a photo or that the system cannot assess; blank results are not submitted or counted as correct.',
     gradeCorrect: 'Correct',
     gradeIncorrect: 'Incorrect',
     gradeConfirm: 'Save results',
@@ -289,13 +289,13 @@ export default {
   },
   works: {
     title: 'Works',
-    desc: 'Essays and artwork live here; each upload is saved as an independent work and reviewed automatically, with specific suggestions and no scores.',
+    desc: 'Each uploaded essay or artwork is saved separately and reviewed automatically; suggestions only, no scores.',
     empty: 'No works yet — add the first writing piece or artwork.',
     emptyTitle: 'No works yet',
     emptyValue:
-      'After the first writing piece or artwork is added, this upload and its automatic feedback stay here.',
+      'Add an essay or artwork to save it and get automatic feedback.',
     filterEmptyTitle: 'No works of this type',
-    filterEmptyValue: 'Choose another type to view the other works; existing works are unchanged.',
+    filterEmptyValue: 'Switch types to view other works.',
     loading: 'Loading works…',
     filterLabel: 'Filter by work type',
     filterTypeLabel: 'Type',
@@ -440,7 +440,7 @@ export default {
     title: 'Learning overview',
     titleWithGrade: '{grade} learning overview',
     monthlyNote:
-      'Generated from real grading and re-practice evidence · shows the next action, without meaningless time metrics',
+      'Plan the next practice from grading and review records.',
     loading: 'Loading learning overview…',
     empty:
       'Not enough grading and re-practice evidence yet. The next action will appear after the first grading result.',
@@ -449,7 +449,7 @@ export default {
     consecutiveFail: 'Repeated setback · {topics}',
     weekActionTitle: 'This week’s actions are ready',
     weekActionBody:
-      '{n} questions are in the practice set. Print them for your child; upload the completed sheet for re-grading without manual result entry.',
+      '{n} questions added to the practice set. Print, complete and upload a photo for automatic grading.',
     semesterTotal: '{n} mistakes this semester',
     semesterStatus: 'Mastered {m} · To review {r} · Redone {d}',
     goWeek: 'Go to this week ›',
@@ -501,7 +501,7 @@ export default {
     },
     skillsLabel: 'Built-in skills',
     capabilityNote:
-      'Capabilities are defined by the K12 template; technical Skills are managed centrally in Advanced settings.',
+      'Configured by the K12 template; manage skills in Advanced settings.',
     builtinSkills: {
       photo: '📷 Photo recognition',
       progressive: '💡 Progressive hints',
@@ -516,7 +516,7 @@ export default {
     modelLabel: 'Model',
     modelNote: 'A strong reasoning model is preconfigured — you can leave it',
     twoChildHint:
-      '💡 More than one child? Create one independent instance per child and bind each private-chat target; profiles, learning records, and memory remain isolated.',
+      'Create a tutor for each child and link their private chat; profiles, learning records and memories are stored separately.',
     autoName: "{child}'s Study Assistant · {grade}",
     assistantName: "{child}'s Study Assistant",
     cardDesc: '{grade} · Math textbook and progress linked · Teaching bounded by grade level',
@@ -535,7 +535,7 @@ export default {
     save: 'Save',
     saved: 'Profile updated · teaching scope switched',
     editNote:
-      'Only change this on grade advancement — teaching boundary / recognition / tutoring tips all follow instantly; past mistakes are not rewritten. Reminders on Mar 1 · Sep 1 each year (never auto-changed).',
+      'Update the grade and semester here. Explanations, recognition and tutoring tips follow; past mistakes stay unchanged. Reminders on March 1 and September 1 ask you to confirm the new semester, without changing it automatically.',
     edit: 'Edit profile',
     advancedSkills: 'Advanced · Study assistant skills (preconfigured, adjustable)',
     requiredTag: 'Required',
@@ -563,14 +563,14 @@ export default {
   backup: {
     title: 'Family Learning Archive · Backup / Restore',
     intro:
-      'The archive includes the child profile, learning records, linked content files, and confirmed work-recognition and answer evidence, with a version header and checksum. Learning-insight memory and agent-instance settings are not currently included.',
+      'Backups include the child profile, learning records, linked files, and confirmed work-recognition and answer records; learning-insight memory and tutor settings are excluded.',
     exportLabel: 'Backup',
     exportBtn: 'Export archive',
     restoreLabel: 'Restore',
     dropHint: 'Drop a .hexbak archive here',
     previewCount:
-      'Local preview: {count} records (source: {source}; current target: {target}). The server validates and restores after confirmation.',
-    restored: 'Restored {count} records · checksum OK (idempotent merge)',
+      'Backup contains {count} records: restore from {source} to {target}. Validation and restoration start after confirmation.',
+    restored: 'Restored {count} records; validation passed.',
     restorePending: 'Records verified; local merge will apply once the engine supports it.',
     targetMismatch:
       'This archive belongs to "{source}", but the current profile is "{target}". The restore API cannot safely retarget it; switch to the source profile first.',
@@ -580,7 +580,7 @@ export default {
     impactDetail:
       'Merge {count} records, migrate {assetCount} content files, and exactly replace the target child profile with the archived profile',
     restoreAsWarning:
-      'This is a cross-Tutor migration. The server rewrites record and content-file ownership, recomputes the checksum, and preserves the original archive, pre-restore snapshot, and append-only journal; any failure leaves no partial restore.',
+      'Records and files move to the target profile. The original backup, pre-restore snapshot and migration log are retained; a failure leaves no partial restore.',
     guardianConfirm:
       "I am this child's guardian, have checked the source and target, and explicitly approve this restore migration",
     migrationResult: 'Migration receipt',
@@ -592,7 +592,7 @@ export default {
     rollbackDone: 'Rolled back to the pre-restore snapshot',
     confirmRestore: 'Confirm restore',
     restoring: 'Restoring…',
-    snapshotReady: 'Pre-restore snapshot returned by the server is retained',
+    snapshotReady: 'Pre-restore snapshot retained',
     saveSnapshot: 'Save snapshot',
     errorBadFile: 'Invalid or corrupted archive',
     close: 'Close',
@@ -735,6 +735,8 @@ export default {
       'Questions were recognized, but answer positions could not be located reliably. Grading can continue with text-only results.',
     jobFailed:
       'The photo grading task failed or timed out. Please retry; if a local model is slow, switch to a cloud model in Settings.',
+    outcomeUnknownTitle: 'Processing stopped; result unconfirmed',
+    outcomeUnknownDetail: 'Request outcome is unknown. It will not be submitted again.',
     recorded: 'Saved to mistake book',
     recordDeduplicated: 'Matching record already exists; no duplicate added',
     correctExpand: 'Show solution',

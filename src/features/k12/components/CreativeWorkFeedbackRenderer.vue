@@ -25,6 +25,7 @@ const savedStatus = computed(() => {
   <div
     class="creative-feedback"
     data-testid="creative-work-feedback-renderer"
+    :data-work-type="workType"
     :data-generation-id="generationId"
     :data-feedback-id="feedbackId"
   >
@@ -43,6 +44,10 @@ const savedStatus = computed(() => {
 </template>
 
 <style scoped>
+.creative-feedback[data-work-type='artwork'] :deep(.markdown-body ul) {
+  list-style-type: disc;
+}
+
 .creative-feedback__saved-status {
   display: flex;
   align-items: center;

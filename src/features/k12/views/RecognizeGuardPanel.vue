@@ -372,16 +372,20 @@ const taskContinuesInBackground = computed(() =>
     'projecting',
     'preparing',
     'feedback_pending',
-    'recovering',
   ].includes(currentTaskStage.value),
 )
 const collapsedTaskSummary = computed(() => {
+  if (outcomeUnknown.value) return t('k12.recognize.outcomeUnknownTitle')
   if (currentTaskStage.value === 'awaiting_confirmation') return t('k12.recognize.needsConfirm')
   if (recognitionFailed.value) return taskStageErrorText.value
   return taskContinuesInBackground.value ? '任务已收起 · 后台继续处理' : '任务已收起'
 })
 const collapsedActivityItems = computed<ActivityTimelineItem[]>(() => [
-  { id: 'collapsed-task', state: 'running', label: collapsedTaskSummary.value },
+  {
+    id: 'collapsed-task',
+    state: outcomeUnknown.value ? 'failed' : 'running',
+    label: collapsedTaskSummary.value,
+  },
 ])
 const taskProviderDisplayName = computed(() => frozenProviderDisplayName.value)
 const taskModelDisplayName = computed(() => frozenModelID.value)
@@ -416,7 +420,7 @@ const taskMessageContent = computed(() => {
 const unconfirmedCreativeConflictCount = computed(
   () => creativeConflicts.value.filter((conflict) => !conflict.confirmed).length,
 )
-// recovering 仅表示同一个图片任务正在恢复；不是终态，也不提供二次操作入口。
+// 图片 facade 的 recovering 表示结果未知；保留原任务身份，不把查询视为仍在执行。
 const outcomeUnknown = ref(false)
 const taskStageErrorText = computed(() =>
   isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
@@ -436,12 +440,9 @@ const taskStatusActivityItems = computed<ActivityTimelineItem[]>(() => {
     return [
       {
         id: 'task-recovering',
-        state: 'running',
-        label: ['writing', 'artwork'].includes(currentTaskIntent.value)
-          ? '正在恢复点评结果'
-          : '正在恢复批改结果',
-        detail:
-          '系统正在查询同一个任务的服务端状态；不会重新创建任务或重复提交。恢复后会自动显示结果。',
+        state: 'failed',
+        label: t('k12.recognize.outcomeUnknownTitle'),
+        detail: t('k12.recognize.outcomeUnknownDetail'),
       },
     ]
   }
@@ -733,7 +734,7 @@ function problemAssessmentVisualState(projection: PhotoAssessmentStatusProjectio
 function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
   if (problemIsSkipped(problem)) return '已跳过 · 未判断对错'
   if (problem.source_state === 'awaiting_resolution') return '等待处理题源问题'
-  if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
+  if (problem.operation_state === 'outcome_unknown') return t('k12.recognize.outcomeUnknownTitle')
   const assessment = problemProgressAssessment(problem)
   if (assessment) return problemAssessmentStatusLabel(assessment.status)
   if (problem.disposition_state === 'result') return '已批改'
@@ -743,6 +744,7 @@ function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
 function problemProgressVisualState(problem: ImageTaskProblemProgressDTO): string {
   if (problemIsSkipped(problem)) return 'skipped'
   if (problem.source_state === 'awaiting_resolution') return 'source-issue'
+  if (problem.operation_state === 'outcome_unknown') return 'failed'
   const assessment = problemProgressAssessment(problem)
   if (assessment) return problemAssessmentVisualState(assessment.projection)
   if (problem.disposition_state === 'result') return 'done'
@@ -750,9 +752,10 @@ function problemProgressVisualState(problem: ImageTaskProblemProgressDTO): strin
 }
 
 function problemProgressMarker(problem: ImageTaskProblemProgressDTO): string {
+  const state = problemProgressVisualState(problem)
+  if (state === 'failed') return '!'
   const assessment = problemProgressAssessment(problem)
   if (assessment) return assessment.projection.symbol
-  const state = problemProgressVisualState(problem)
   if (state === 'done') return '✓'
   if (state === 'source-issue') return '!'
   if (state === 'skipped') return '—'
@@ -771,6 +774,7 @@ function problemProgressQuestion(problem: ImageTaskProblemProgressDTO): string {
 
 function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
   const state = problemProgressVisualState(problem)
+  if (problem.operation_state === 'outcome_unknown') return t('k12.recognize.outcomeUnknownDetail')
   const row = rows.value.find((candidate) => candidate.problemId === problem.problem_id)
   const assessment = problemProgressAssessment(problem)
   if (assessment) {
@@ -805,7 +809,6 @@ function problemProgressDetail(problem: ImageTaskProblemProgressDTO): string {
   }
   if (state === 'source-issue') return '正在核对题源信息'
   if (state === 'skipped') return '未判断对错'
-  if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
   return '正在验证计算过程'
 }
 
@@ -1083,7 +1086,7 @@ const subjectOptions = computed(() =>
 function enterOutcomeUnknown(dispatchId: string) {
   currentDispatchId.value = dispatchId
   outcomeUnknown.value = true
-  batchWorking.value = true
+  batchWorking.value = false
   recognizing.value = false
   anchoring.value = false
   recognitionFailed.value = false
@@ -1461,9 +1464,7 @@ function projectImageTaskView(view: ImageTaskView) {
   anchorWarning.value = view.anchorState === 'degraded' ? t('k12.recognize.anchorFailed') : ''
   confirmed.value = view.confirmationState === 'confirmed'
   outcomeUnknown.value = view.stage === 'recovering' || view.stage === 'outcome_unknown'
-  batchWorking.value =
-    outcomeUnknown.value ||
-    ['assessing', 'rendering', 'projecting', 'feedback_pending'].includes(view.stage)
+  batchWorking.value = ['assessing', 'rendering', 'projecting', 'feedback_pending'].includes(view.stage)
   if (outcomeUnknown.value) {
     recognizing.value = false
     anchoring.value = false
@@ -1484,13 +1485,15 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   currentTaskIntent.value = dispatch.task_intent
   const projection = dispatch.target_projection
   currentTaskStage.value =
-    projection?.kind === 'homework'
-      ? projection.stage
-      : projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
-        ? dispatch.progress.state
-        : projection?.kind === 'creative'
-          ? projection.status
-          : dispatch.status
+    dispatch.progress.state === 'recovering'
+      ? 'recovering'
+      : projection?.kind === 'homework'
+        ? projection.stage
+        : projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
+          ? dispatch.progress.state
+          : projection?.kind === 'creative'
+            ? projection.status
+            : dispatch.status
   syncExecutionState(currentTaskStage.value)
   retryable.value = dispatch.retryable === true && taskStageSupportsRetry(currentTaskStage.value)
   if (projection?.kind === 'homework') {
@@ -1542,20 +1545,23 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
     projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
       ? dispatch.progress.state
       : ''
-  recognitionFailed.value = dispatch.status === 'failed' || feedbackState === 'feedback_failed'
+  outcomeUnknown.value = dispatch.progress.state === 'recovering'
+  recognitionFailed.value =
+    !outcomeUnknown.value &&
+    (dispatch.status === 'failed' || feedbackState === 'feedback_failed')
   errMsg.value = recognitionFailed.value
     ? taskFailureMessage(dispatch.task_intent, currentTaskStage.value, retryable.value)
     : ''
   recognizing.value =
-    dispatch.status === 'routing' ||
-    (projection?.kind === 'creative' && projection.status === 'preparing')
-  outcomeUnknown.value = feedbackState === 'recovering'
+    !outcomeUnknown.value &&
+    (dispatch.status === 'routing' ||
+      (projection?.kind === 'creative' && projection.status === 'preparing'))
   batchWorking.value =
-    recognizing.value ||
-    outcomeUnknown.value ||
-    feedbackState === 'feedback_pending' ||
-    (projection?.kind === 'creative' &&
-      (projection.status === 'ready' || projection.status === 'awaiting_confirmation'))
+    !outcomeUnknown.value &&
+    (recognizing.value ||
+      feedbackState === 'feedback_pending' ||
+      (projection?.kind === 'creative' &&
+        (projection.status === 'ready' || projection.status === 'awaiting_confirmation')))
 }
 
 function onFile(e: Event) {
@@ -1633,7 +1639,7 @@ watch(
 )
 
 // 刷新/重启恢复：没有新图片时，只按 session+agent 的最小绑定 GET 同一 dispatch。
-// recovering 仅投影作业链的公开瞬时恢复进度；终态只从同一 facade result 读取。
+// 未知回执停止本轮查询；再次打开只读取原任务，不重新提交。
 onMounted(async () => {
   runtimeClock = setInterval(() => {
     runtimeNowSeconds.value = Math.floor(Date.now() / 1000)
@@ -2201,6 +2207,7 @@ async function completeImageTaskFlow() {
       (error as Error).name === 'AbortError'
     )
       return
+    if (outcomeUnknown.value) return
     throw error
   } finally {
     if (gradingAbort === controller) gradingAbort = null
@@ -2354,7 +2361,7 @@ async function coldStart() {
       >
       <template v-else-if="collapsed">
         <span class="rec-panel__title">{{ taskShellTitle }}</span>
-        <ActivityTimeline v-if="taskContinuesInBackground" :items="collapsedActivityItems" running-indicator="typing-dots" />
+        <ActivityTimeline v-if="taskContinuesInBackground || outcomeUnknown" :items="collapsedActivityItems" running-indicator="typing-dots" />
         <span v-else class="rec-panel__collapsed-summary">{{ collapsedTaskSummary }}</span>
       </template>
       <HcDisclosureButton
@@ -2427,7 +2434,7 @@ async function coldStart() {
       v-if="taskStatusActivityItems.length"
       class="rec-task-activity"
       :data-testid="taskStatusActivityTestID"
-      :role="recognitionFailed ? 'alert' : 'status'"
+      :role="recognitionFailed || outcomeUnknown ? 'alert' : 'status'"
     >
       <ActivityTimeline
         :items="taskStatusActivityItems"

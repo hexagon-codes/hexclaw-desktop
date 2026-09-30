@@ -4,6 +4,7 @@
   当前 UI 不投影 legacy 版本、修改稿、归档、手写点评或观察练习卡。
 -->
 <script setup lang="ts">
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -990,6 +991,13 @@ function closeAdd() {
 
 async function submitAdd() {
   if (!addValid.value || addBusy.value) return
+  if (photoPreview.value && addType.value === 'art') {
+    const limitError = inputLimitError(addTitle.value, 'Work title', INPUT_LIMITS.title)
+    if (limitError) {
+      toast.error(limitError)
+      return
+    }
+  }
   addBusy.value = true
   try {
     if (photoPreview.value) {

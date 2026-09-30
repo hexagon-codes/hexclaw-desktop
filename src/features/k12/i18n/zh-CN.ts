@@ -72,7 +72,7 @@ export default {
     filterStatus: '状态',
     // 原型 2527 口径：未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」是错误宣称）
     stateMachineHint:
-      '本周先不练只延后当周；不再复习可在本列表恢复。只有真实作答与系统判定形成已掌握。',
+      '“本周先不练”只延后本周；“不再复习”可在此恢复。掌握状态以实际作答和系统判定为准。',
     scheduledReview: '待复习',
     deferredThisWeek: '本周先不练',
     suppressedReview: '不再复习',
@@ -206,10 +206,10 @@ export default {
     title: '练习集',
     basketTitle: '待打印',
     basketMeta: '从错题、本周该练或积累明确加入 · 重复加入自动去重',
-    basketHint: '系统打印成功或发送批次创建后才固化；取消系统打印不会清空待打印',
+    basketHint: '打印成功或创建发送任务后定稿；取消打印不清空待打印题目。',
     basketEmpty: '待打印已清空 · 从错题“加入练习集”、本周复习“生成复习卷”里加题。',
     historyTitle: '打印历史',
-    historyDesc: '打印过的卷 · 完成后拍照回传自动复批；卷面号印在纸质卷页眉/页脚用于回传关联。',
+    historyDesc: '做完拍照回传即可自动批改；通过卷面页眉或页脚的编号关联试卷。',
     historyEmpty: '还没有打印过的卷；待打印的题打印或发送后会出现在这里。',
     blockedGroup: '已阻断 · 暂不支持组卷，打印时跳过',
     remove: '移除',
@@ -279,7 +279,7 @@ export default {
     regradeResultEmpty: '批改结论已保存，暂无额外讲解。',
     regradeCorrectCollapsed: '其余 {n} 题已判对（收起）',
     gradeTitle: '手动记结果',
-    gradeHint: '仅用于没有作答照片或系统明确无法判断的题；未填写不会提交，也不会默认算对。',
+    gradeHint: '仅用于无照片或系统无法判断的题；未填写的题不提交、不计为正确。',
     gradeCorrect: '对',
     gradeIncorrect: '错',
     gradeConfirm: '保存结果',
@@ -287,12 +287,12 @@ export default {
   },
   works: {
     title: '作品',
-    desc: '作文和画作都存在这里；每次上传都会保存为一件独立作品并自动点评，只给具体建议，不打分。',
+    desc: '每次上传的作文或画作独立保存并自动点评；只给建议，不打分。',
     empty: '还没有作品——添加第一篇语文写作或第一张美术作品。',
     emptyTitle: '还没有作品',
-    emptyValue: '添加第一篇语文写作或第一张美术作品后，这里会保留本次上传内容和自动点评。',
+    emptyValue: '添加作文或画作，保存作品并获取自动点评。',
     filterEmptyTitle: '当前类型下没有作品',
-    filterEmptyValue: '换一个类型即可查看其他作品，现有作品不会受影响。',
+    filterEmptyValue: '切换类型查看其他作品。',
     loading: '正在加载作品…',
     filterLabel: '作品类型筛选',
     filterTypeLabel: '类型',
@@ -431,7 +431,7 @@ export default {
     // app.html:2352：学情=学习概览（路由器），月报标题口径退役；有年级时用 titleWithGrade
     title: '学习概览',
     titleWithGrade: '{grade}学习概览',
-    monthlyNote: '从真实批改与复练证据生成 · 给出下一步行动，不重复展示无用时长',
+    monthlyNote: '根据批改与复练记录，安排下一步练习。',
     loading: '正在加载学习概览…',
     empty: '还没有足够的批改与复练证据。完成第一次批改后，这里会给出下一步行动。',
     priorityTitle: '需要优先处理',
@@ -439,7 +439,7 @@ export default {
     consecutiveFail: '连续挫败 · {topics}',
     weekActionTitle: '本周行动已经排好',
     weekActionBody:
-      '{n} 道题已加入练习集；打印给孩子做，完成后上传照片即可复批，无需手工回填结果。',
+      '{n} 道题已加入练习集；打印作答后上传照片，自动批改。',
     semesterTotal: '本学期错题共 {n} 条',
     semesterStatus: '已掌握 {m} · 待复习 {r} · 已重做 {d}',
     goWeek: '去本周复习 ›',
@@ -486,7 +486,7 @@ export default {
       art: '美术',
     },
     skillsLabel: '自带能力',
-    capabilityNote: '能力由 K12 模板定义；实际技术 Skill 在高级设置中统一管理。',
+    capabilityNote: '已按 K12 模板配置，可在高级设置中管理技能。',
     builtinSkills: {
       photo: '📷 拍照识题',
       progressive: '💡 渐进讲解',
@@ -501,7 +501,7 @@ export default {
     modelLabel: '模型',
     modelNote: '默认已配好强推理模型，可不管',
     twoChildHint:
-      '💡 有多个孩子？每个孩子创建一个独立实例，并绑定各自的私聊目标；档案、学习记录与记忆天然隔离。',
+      '多个孩子请分别创建辅导助手，并绑定各自的私聊；档案、学习记录和记忆分别保存。',
     autoName: '{child}的辅导助手 · {grade}',
     assistantName: '{child}的辅导助手',
     cardDesc: '{grade} · 数学教材与进度已绑定 · 按年级边界讲解',
@@ -518,7 +518,7 @@ export default {
     save: '保存',
     saved: '档案已更新 · 讲题范围已切换',
     editNote:
-      '升学只改这里，讲题边界 / 识题校验 / 辅导要点全线即时跟随；历史错题不回溯修改。每年 3/1、9/1 会自动提醒确认新学期（不会擅自变更）。',
+      '在此更新年级和学期，讲题、识题与辅导要点随之调整，历史错题不变。每年 3 月 1 日、9 月 1 日提醒确认新学期，不自动修改。',
     edit: '编辑档案',
     advancedSkills: '高级 · 辅导助手的技能（已配好，可微调）',
     requiredTag: '必备',
@@ -544,14 +544,14 @@ export default {
   backup: {
     title: '家庭学习档案 · 备份 / 恢复',
     intro:
-      '归档包含：孩子档案、学习记录、关联内容文件，以及已确认的作品识别与作答证据；带版本头和校验和。学情记忆和智能体实例配置目前不在归档内。',
+      '备份包含孩子档案、学习记录、关联文件及已确认的作品识别和作答记录；不含学情记忆和辅导助手配置。',
     exportLabel: '备份',
     exportBtn: '一键导出归档',
     restoreLabel: '恢复',
     dropHint: '拖放 .hexbak 归档到此处',
     previewCount:
-      '本地预览：归档含 {count} 条记录（来源：{source}；当前目标：{target}）。确认后由服务端校验并恢复。',
-    restored: '已恢复 {count} 条记录 · 校验通过（幂等合并）',
+      '备份含 {count} 条记录：从 {source} 恢复到 {target}。确认后校验并恢复。',
+    restored: '已恢复 {count} 条记录，校验通过。',
     restorePending: '记录已校验；合并到本地将在引擎支持后生效。',
     targetMismatch:
       '归档属于「{source}」，当前档案是「{target}」。现有恢复接口不支持安全改写目标，请切换到原档案后恢复。',
@@ -561,7 +561,7 @@ export default {
     impactDetail:
       '合并 {count} 条记录、迁移 {assetCount} 个内容文件，并以归档内孩子档案精确替换目标档案',
     restoreAsWarning:
-      '这是跨 Tutor 迁移：服务端将重写记录和内容文件归属、重算校验和，并保留原归档、恢复前快照与追加式 journal；任一步失败均不做部分恢复。',
+      '记录和文件将迁移到目标档案；保留原备份、恢复前快照和迁移记录，失败时不做部分恢复。',
     guardianConfirm: '我是该孩子的监护人，已核对来源与目标，并明确同意迁移恢复',
     migrationResult: '迁移收据',
     migrationId: '迁移 ID',
@@ -572,7 +572,7 @@ export default {
     rollbackDone: '已回退到恢复前快照',
     confirmRestore: '确认恢复',
     restoring: '正在恢复…',
-    snapshotReady: '已保留服务端返回的恢复前快照',
+    snapshotReady: '已保留恢复前快照',
     saveSnapshot: '另存快照',
     errorBadFile: '归档文件无效或已损坏',
     close: '关闭',
@@ -704,6 +704,8 @@ export default {
     anchoring: '题目已识别，可先核对；正在后台定位作答位置…',
     anchorFailed: '题目已识别，但作答位置未能可靠定位；批改仍可继续，图片将降级为文字结果。',
     jobFailed: '拍照批改任务失败或超时，请重试；若用本地模型较慢，可在设置切换云端模型。',
+    outcomeUnknownTitle: '处理已停止，结果待核实',
+    outcomeUnknownDetail: '请求结果未知，系统不会重复提交。',
     recorded: '已存入错题本',
     recordDeduplicated: '已有相同记录，本次未重复新增',
     correctExpand: '展开解法',
