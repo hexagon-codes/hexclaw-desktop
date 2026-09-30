@@ -68,6 +68,13 @@ export async function sidecarStreamFetch(
   }
   const onEvent = new Channel<NativeStreamEvent>((event) => {
     if (terminal) return
+    try {
+      assertBackendActive(scope)
+    } catch {
+      void cancelNative().catch(() => undefined)
+      fail('Backend connection changed')
+      return
+    }
     if (event.type === 'open') {
       opened = true
       resolveOpen(

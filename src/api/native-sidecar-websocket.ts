@@ -1,4 +1,4 @@
-import { backendScopeKey } from '@/services/backend-context'
+import { backendScopeKey, assertBackendActive } from '@/services/backend-context'
 /** Browser-compatible facade over the authenticated Rust Sidecar socket. */
 
 import { env } from '@/config/env'
@@ -39,6 +39,7 @@ export class NativeSidecarWebSocket extends EventTarget {
   private socketId: string | null = null
   private browserSocket: WebSocket | null = null
   private closeRequested = false
+  private readonly scope = backendScopeKey()
   private nativeCommandQueue: Promise<void> = Promise.resolve()
 
   constructor(path: string) {
@@ -110,16 +111,31 @@ export class NativeSidecarWebSocket extends EventTarget {
         await invoke(command, args)
       })
       .catch((error) => {
+        try {
+          assertBackendActive(this.scope)
+        } catch {
+          if (!this.closeRequested) this.close()
+          return
+        }
         this.emitError(error instanceof Error ? error.message : String(error))
       })
     return this.nativeCommandQueue
   }
 
   private async connectNative(path: string) {
-    const scope = backendScopeKey()
+    const scope = this.scope
     try {
       const { Channel, invoke } = await import('@tauri-apps/api/core')
+      assertBackendActive(scope)
       const onEvent = new Channel<NativeSocketEvent>((event) => {
+        if (event.type !== 'close') {
+          try {
+            assertBackendActive(scope)
+          } catch {
+            if (!this.closeRequested) this.close()
+            return
+          }
+        }
         if (event.type === 'open') this.emitOpen()
         else if (event.type === 'message') this.emitMessage(event.data ?? '')
         else if (event.type === 'error') this.emitError(event.message ?? 'Sidecar WebSocket failed')
@@ -132,6 +148,12 @@ export class NativeSidecarWebSocket extends EventTarget {
         await this.enqueueNativeCommand('sidecar_socket_close', { socketId: this.socketId })
       }
     } catch (error) {
+      try {
+        assertBackendActive(scope)
+      } catch {
+        this.emitClose()
+        return
+      }
       this.emitError(error instanceof Error ? error.message : String(error))
       this.emitClose()
     }
