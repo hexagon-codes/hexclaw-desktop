@@ -98,9 +98,20 @@ where
     let mut next_health_probe = tokio::time::Instant::now();
 
     loop {
-        match supervisor.observe(instance, SIDECAR_CLEANUP_MODE, SIDECAR_CLEANUP_TIMEOUT)? {
-            StartupOutcome::Running => {}
-            StartupOutcome::Ready => return Ok(()),
+        match supervisor.observe(instance, SIDECAR_CLEANUP_MODE, SIDECAR_CLEANUP_TIMEOUT) {
+            Ok(StartupOutcome::Running) => {}
+            Ok(StartupOutcome::Ready) => return Ok(()),
+            Err(SupervisorError::NotAttached { .. }) => {
+                // 同代次的启动准备尚未完成时只等待原进程挂接，不探测其他进程的端点。
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    return Err(SupervisorError::Timeout { instance, timeout });
+                }
+                tokio::time::sleep_until(std::cmp::min(deadline, now + PROCESS_POLL_INTERVAL))
+                    .await;
+                continue;
+            }
+            Err(error) => return Err(error),
         }
 
         let now = tokio::time::Instant::now();
@@ -214,14 +225,17 @@ pub fn is_ready(_app_handle: &tauri::AppHandle) -> bool {
     SIDECAR_SUPERVISOR.is_ready()
 }
 
-/// 启动 hexclaw sidecar 进程
+/// 启动或复用当前 hexclaw sidecar 进程
 ///
 /// Tauri externalBin 会将 sidecar 放在与主程序同目录 (Contents/MacOS/)。
 /// 在执行任何可能阻塞的准备工作前先登记启动代次，确保 stop 能取消未完成的 spawn。
 pub(crate) fn spawn_sidecar(app: &tauri::AppHandle) -> Result<SidecarInstance, String> {
-    let instance = SIDECAR_SUPERVISOR
-        .begin_start()
-        .map_err(|error| error.to_string())?;
+    let instance = match SIDECAR_SUPERVISOR.begin_start() {
+        Ok(instance) => instance,
+        // 已有进程可能尚未就绪；调用方继续核对同一代次，不能重复启动。
+        Err(SupervisorError::AlreadyActive { instance }) => return Ok(instance),
+        Err(error) => return Err(error.to_string()),
+    };
     let result = spawn_sidecar_generation(app, instance);
     match result {
         Ok(()) => Ok(instance),

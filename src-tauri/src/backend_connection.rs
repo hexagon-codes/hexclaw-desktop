@@ -317,7 +317,7 @@ pub async fn test_backend_connection(candidate: BackendCandidate) -> Result<Back
 pub async fn activate_backend_connection(app: tauri::AppHandle, candidate: BackendCandidate) -> Result<BackendContext, String> {
     let intent = INTENT.fetch_add(1, Ordering::SeqCst) + 1;
     let mut record = candidate_record(candidate)?;
-    if record.kind == "local" && !sidecar::is_ready(&app) {
+    if record.kind == "local" {
         let instance = sidecar::spawn_sidecar(&app)?;
         sidecar::wait_for_healthy(app.clone(), 30, instance).await?;
     }
