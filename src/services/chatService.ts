@@ -11,6 +11,7 @@
 import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
 import { NativeSidecarWebSocket } from '@/api/native-sidecar-websocket'
 import { logger } from '@/utils/logger'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { DESKTOP_USER_ID, USER_CANCELLED_MESSAGE } from '@/constants'
 import type { ChatMessage, ChatAttachment, RuntimeWireFrame, RuntimeWireSnapshot } from '@/types'
@@ -39,6 +40,13 @@ export class ChatRequestError extends Error {
   }
 }
 
+export class ChatPayloadLimitError extends ChatRequestError {
+  constructor(message: string, readonly sessionId: string) {
+    super(message, true)
+    this.name = 'ChatPayloadLimitError'
+  }
+}
+
 export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -61,6 +69,7 @@ export function withTimeout<T>(
 // ─── WebSocket 流式发送 ──────────────────────────────
 
 export interface StreamCallbacks {
+  onPayloadRejected?: (error: ChatPayloadLimitError) => void
   onChunk?: (content: string, reasoning?: string, runtimeFrame?: RuntimeWireFrame) => void
   onDone?: (
     content: string,
@@ -593,6 +602,14 @@ export function sendViaWebSocket(
       chatParams.maxTokens,
       resolvedMetadata,
       requestId,
+      (message) => {
+        const error = new ChatPayloadLimitError(message, sessionId)
+        try {
+          callbacks?.onPayloadRejected?.(error)
+        } finally {
+          fail(error)
+        }
+      },
     )
   })
 }
@@ -705,7 +722,24 @@ function openRequestSocket(
   }, WS_FIRST_REPLY_TIMEOUT_MS)
 
   ws.onopen = () => {
-    ws.send(JSON.stringify(buildPayload()))
+    try {
+      const body = JSON.stringify(buildPayload())
+      const limitError = inputLimitError(
+        body, 'Chat request', INPUT_LIMITS.chatBytes, { unit: 'bytes' },
+      )
+      if (limitError) {
+        const error = new ChatPayloadLimitError(limitError, sessionId)
+        try {
+          callbacks?.onPayloadRejected?.(error)
+        } finally {
+          settleReject(error)
+        }
+        return
+      }
+      ws.send(body)
+    } catch (error) {
+      settleReject(error)
+    }
   }
 
   ws.onmessage = (event: MessageEvent<string>) => {

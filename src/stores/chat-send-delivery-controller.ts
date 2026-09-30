@@ -8,6 +8,7 @@ import type {
   ReasoningPolicy,
 } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import type { ChatPayloadLimitError } from '@/services/chatService'
 import { buildChatRequestMetadata } from './chat-request-metadata'
 import { createChatTransportUnavailableController } from './chat-transport-unavailable'
 import {
@@ -139,6 +140,7 @@ export function createChatSendDeliveryController(params: {
     draftSending: Ref<boolean>
     skillNames?: string[]
     documents?: ChatDocumentRef[]
+    onPayloadRejected?: (error: ChatPayloadLimitError) => void
     samplingSnapshot?: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
@@ -208,6 +210,7 @@ export function createChatSendDeliveryController(params: {
       attachments,
       requestId,
       requestMetadata,
+      onPayloadRejected: args.onPayloadRejected,
       samplingSnapshot: args.samplingSnapshot,
       sending,
       draftSending,

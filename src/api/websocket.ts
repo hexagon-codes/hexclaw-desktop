@@ -1,4 +1,5 @@
 import { logger } from '@/utils/logger'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { NativeSidecarWebSocket } from './native-sidecar-websocket'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { ToolCall, ContentBlock, ReasoningDisclosure, RuntimeEvent } from '@/types'
@@ -349,6 +350,7 @@ class HexClawWS {
     maxTokens?: number,
     metadata?: Record<string, string>,
     requestId?: string,
+    onPayloadRejected?: (message: string) => void,
   ): void {
     if (!this.ws || this.ws.readyState !== NativeSidecarWebSocket.OPEN) {
       this.errorCallbacks.forEach((c) => c.cb('WebSocket is not connected'))
@@ -378,7 +380,16 @@ class HexClawWS {
       msg.metadata = metadata
     }
 
-    this.ws.send(JSON.stringify(msg))
+    const body = JSON.stringify(msg)
+    const limitError = inputLimitError(
+      body, 'Chat request', INPUT_LIMITS.chatBytes, { unit: 'bytes' },
+    )
+    if (limitError) {
+      onPayloadRejected?.(limitError)
+      this.errorCallbacks.forEach((callback) => callback.cb(limitError))
+      return
+    }
+    this.ws.send(body)
     logger.debug(`→ ws: ${content.slice(0, 50)}... (${attachments?.length ?? 0} attachments)`)
   }
 

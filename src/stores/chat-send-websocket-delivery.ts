@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import type { ChatPayloadLimitError } from '@/services/chatService'
 import {
   buildSessionStreamState,
   type ChatSendErrorHandler,
@@ -60,6 +61,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     attachments?: ChatAttachment[]
     requestId: string
     requestMetadata?: Record<string, string>
+    onPayloadRejected?: (error: ChatPayloadLimitError) => void
     samplingSnapshot?: {
       agentRole: string
       chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
@@ -105,6 +107,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       samplingSnapshot?.agentRole ?? agentRole.value,
       attachments,
       {
+        onPayloadRejected: args.onPayloadRejected,
         onChunk: (content, reasoning, runtimeFrame) => {
           // 退化熔断：本次刚判失控复读 → 取消后端流，停止生成、省 token、立刻停转圈。
           if (updateStreamChunk(sessionId, content, reasoning, runtimeFrame)) {

@@ -9,6 +9,7 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { Mic, Loader2, Send, MessageCircle } from 'lucide-vue-next'
 import { voiceChat, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { logger } from '@/utils/logger'
+import { inputLimitError } from '@/utils/input-limits'
 import { audioBlobToWavBase64 } from '@/utils/audio-wav'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { useBackendMedia } from '@/composables/useBackendMedia'
@@ -160,14 +161,23 @@ async function sendAudio(blob: Blob) {
 async function sendText() {
   const t = text.value.trim()
   if (!t || sending.value) return
+  const request = {
+    model: props.modelId,
+    text: t,
+    format: 'wav' as const,
+    voice: voice.value,
+  }
+  const limitError = inputLimitError(
+    JSON.stringify(request), 'Voice chat request', 16 * 1024 * 1024, { unit: 'bytes' },
+  )
+  if (limitError) {
+    lastError.value = limitError
+    emit('error', limitError)
+    return
+  }
   sending.value = true
   try {
-    const result = await voiceChat({
-      model: props.modelId,
-      text: t,
-      format: 'wav',
-      voice: voice.value,
-    })
+    const result = await voiceChat(request)
     emit('exchanged', result, t)
     const src = audioToSrc(result)
     if (src) {

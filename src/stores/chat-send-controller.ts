@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import type { ChatPayloadLimitError } from '@/services/chatService'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -21,6 +22,7 @@ export interface ChatSendOptions {
   backendText?: string | (() => Promise<string | undefined>)
   skillNames?: string[]
   documents?: ChatDocumentRef[]
+  onPayloadRejected?: (error: ChatPayloadLimitError) => void
   /**
    * 内部定向提交目标。用于“编辑即新版本”事务：分支被接受前仍展示源会话，
    * 因而不能从全局 currentSessionId 推断写入目标。
@@ -246,6 +248,7 @@ export function createChatSendController(params: {
         draftSending,
         skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
         documents: options?.documents, // BUG-20260626：透传文档卡片给后端持久化（否则重载丢失退化纯文本）
+        onPayloadRejected: options?.onPayloadRejected,
         samplingSnapshot, // U4：点击瞬间快照，防 Auto-RAG 期间切会话带错 agent/model/thinking
       })
       return result

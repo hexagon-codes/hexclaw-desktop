@@ -20,10 +20,12 @@ import { parseDocument } from '@/utils/file-parser'
 import { registerDocPreview } from '@/utils/doc-preview'
 import { logger } from '@/utils/logger'
 import { normalizeMathMarkdown } from '@/utils/math-content'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { useToast } from './useToast'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
 import type { ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
+import type { ChatPayloadLimitError } from '@/services/chatService'
 import {
   buildConversationAutomationActions,
   CHAT_AUTOMATION_METADATA_KEY,
@@ -208,6 +210,7 @@ export function useChatSend(deps: ChatSendDeps) {
     options?: {
       contextRefs?: import('@/types').ChatContextRef[]
       skillNames?: string[]
+      onPayloadRejected?: (error: ChatPayloadLimitError) => void
       // 预置附件（编辑/重试重发时带回原消息的图片等，BUG-20260625），与 files/preview 合并
       attachments?: ChatAttachment[]
       /** 内部定向发送：编辑版本写入新分支时，当前可见会话仍保持 source。 */
@@ -224,6 +227,15 @@ export function useChatSend(deps: ChatSendDeps) {
       return false
     }
     text = normalizeMathMarkdown(text)
+    const toast = useToast()
+    // 字符串本身已超出请求体边界时提前拒绝；完整元数据与附件仍在实际发送入口校验。
+    const limitError = inputLimitError(
+      JSON.stringify(text), 'Chat request', INPUT_LIMITS.chatBytes, { unit: 'bytes' },
+    )
+    if (limitError) {
+      toast.error(limitError)
+      return false
+    }
 
     // Validate model selection before sending
     // model=undefined means "let backend decide" (Agent mode) — valid
@@ -296,7 +308,6 @@ export function useChatSend(deps: ChatSendDeps) {
           }
         : null
 
-    const toast = useToast()
 
     // 预置附件（编辑/重试重发带回的历史图片等）置前，再叠加本次新上传。
     // 新选图片必须 receipt-first：renderer 只保留当前会话的 blob: 预览引用，
@@ -439,6 +450,7 @@ export function useChatSend(deps: ChatSendDeps) {
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,
       routeSnapshot: options?.routeSnapshot ?? captureRouteSnapshot?.(),
+      onPayloadRejected: options?.onPayloadRejected,
     }
     const sendPromise = chatStore.sendMessage(
       finalText,

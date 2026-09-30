@@ -10,8 +10,9 @@ import {
   syncNativeImagePreviewScope,
   type NativeFileGrant,
 } from '@/api/native-files'
-import { backendStorageKey, registerBackendDraftFlush } from '@/services/backend-context'
+import { backendScopeKey, backendStorageKey, registerBackendDraftFlush } from '@/services/backend-context'
 import { preserveComposerFile, restoreComposerFile, readComposerDraft, writeComposerDraft } from '@/services/composer-drafts'
+import type { ChatPayloadLimitError } from '@/services/chatService'
 import { DESKTOP_USER_ID } from '@/constants'
 import {
   ArrowUp,
@@ -48,6 +49,7 @@ import {
 import { logger } from '@/utils/logger'
 import { shouldSendOnEnter } from '@/utils/chat-compose'
 import { normalizeMathMarkdown } from '@/utils/math-content'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import type {
   ScenarioComposerChip,
   ScenarioComposerImagePayload,
@@ -126,7 +128,11 @@ const props = defineProps<{
   sendHandler?: (
     text: string,
     files: File[],
-    options?: { contextRefs?: ChatContextRef[]; skillNames?: string[] },
+    options?: {
+      contextRefs?: ChatContextRef[]
+      skillNames?: string[]
+      onPayloadRejected?: (error: ChatPayloadLimitError) => void
+    },
   ) => boolean | Promise<boolean>
   /** 当前选中的生成模型 ID（仅在 image_generate / video_generate 模式下使用） */
   genModelId?: string
@@ -477,6 +483,9 @@ function createScenarioImagePreviewOwnership(file: File): ScenarioComposerImageP
 
 const draftLoading = ref(true)
 let draftRevision = 0
+let draftContentRevision = 0
+let draftScopeRevision = 0
+let draftScopeUpdate: Promise<void> = Promise.resolve()
 let draftWrite: Promise<void> = Promise.resolve()
 let activeDraftKey = ''
 const composerDraftKey = () => backendStorageKey(`composer:${props.draftAgentKey ?? ''}:${props.draftScopeKey ?? ''}`)
@@ -548,24 +557,33 @@ async function loadDraft(key: string) {
     throw error
   } finally { if (revision === draftRevision) draftLoading.value = false }
 }
-watch(() => [props.draftScopeKey, props.draftAgentKey], async (_, previous) => {
-  // 首次发送创建会话时仍保留发送中的输入，不恢复另一份草稿。
-  if (previous && !previous[0] && props.draftScopeKey && submitting.value) {
-    const previousKey = activeDraftKey
-    await persistDraft()
-    sentDraftKeys.add(previousKey)
-    activeDraftKey = composerDraftKey()
-    return
-  }
-  try {
-    await persistDraft()
-    nativePreviewScopeGeneration++
-    await loadDraft(composerDraftKey())
-  } catch (error) {
-    draftLoading.value = false
-    voiceToast.error(error instanceof Error ? error.message : String(error))
+watch(() => [props.draftScopeKey, props.draftAgentKey], () => {
+  draftScopeRevision++
+}, { flush: 'sync' })
+watch(() => [props.draftScopeKey, props.draftAgentKey], (_, previous) => {
+  draftScopeUpdate = synchronizeDraft()
+  async function synchronizeDraft() {
+    // 首次发送创建会话时仍保留发送中的输入，不恢复另一份草稿。
+    if (previous && !previous[0] && props.draftScopeKey && submitting.value) {
+      const previousKey = activeDraftKey
+      await persistDraft()
+      sentDraftKeys.add(previousKey)
+      activeDraftKey = composerDraftKey()
+      return
+    }
+    try {
+      await persistDraft()
+      nativePreviewScopeGeneration++
+      await loadDraft(composerDraftKey())
+    } catch (error) {
+      draftLoading.value = false
+      voiceToast.error(error instanceof Error ? error.message : String(error))
+    }
   }
 }, { immediate: true })
+watch([inputText, attachedFiles, mountedSkills, contextChips], () => {
+  if (!draftLoading.value) draftContentRevision++
+}, { deep: true, flush: 'sync' })
 watch([inputText, attachedFiles, mountedSkills, contextChips], () => {
   if (!draftLoading.value) void persistDraft().catch((error) => logger.warn('[ChatInput] Draft persistence failed', error))
 }, { deep: true, flush: 'post' })
@@ -673,18 +691,26 @@ async function handleSend() {
   // 图像生成：直接调 API（默认参数），无 UI 参数面板
   if (composerMode.value === 'image_generate') {
     if (!text || !props.genModelId) return
+    const request = {
+      model: props.genModelId,
+      prompt: text,
+      size: DEFAULT_IMAGE_SIZE,
+      n: DEFAULT_IMAGE_COUNT,
+    }
+    const limitError = inputLimitError(
+      JSON.stringify(request), 'Image generation request', 64 * 1024, { unit: 'bytes' },
+    )
+    if (limitError) {
+      voiceToast.error(limitError)
+      return
+    }
     generating.value = true
     // 乐观上屏（BUG-20260711-C）：先通知父级渲染用户气泡+生成中占位、立刻清空输入框，
     // 不让提示词滞留 composer 干等生成完成。
     emit('generation:start', 'image', text)
     clearDraft()
     try {
-      const result = await generateImage({
-        model: props.genModelId,
-        prompt: text,
-        size: DEFAULT_IMAGE_SIZE,
-        n: DEFAULT_IMAGE_COUNT,
-      })
+      const result = await generateImage(request)
       emit('generated:image', result, text)
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('chat.generate.failedDefault', '生成失败')
@@ -699,19 +725,27 @@ async function handleSend() {
   // 视频生成：submit + poll，默认参数
   if (composerMode.value === 'video_generate') {
     if (!text || !props.genModelId) return
+    const request = {
+      model: props.genModelId,
+      prompt: text,
+      size: DEFAULT_VIDEO_SIZE,
+      with_audio: DEFAULT_VIDEO_WITH_AUDIO,
+      duration: DEFAULT_VIDEO_DURATION,
+    }
+    const limitError = inputLimitError(
+      JSON.stringify(request), 'Video generation request', 64 * 1024, { unit: 'bytes' },
+    )
+    if (limitError) {
+      voiceToast.error(limitError)
+      return
+    }
     generating.value = true
     videoAbort = new AbortController()
     // 乐观上屏（BUG-20260711-C）：视频生成要轮询数分钟，占位/清空必须在 submit 前完成。
     emit('generation:start', 'video', text)
     clearDraft()
     try {
-      const { task_id } = await submitVideoGeneration({
-        model: props.genModelId,
-        prompt: text,
-        size: DEFAULT_VIDEO_SIZE,
-        with_audio: DEFAULT_VIDEO_WITH_AUDIO,
-        duration: DEFAULT_VIDEO_DURATION,
-      })
+      const { task_id } = await submitVideoGeneration(request)
       const final = await pollUntilDone(task_id, { signal: videoAbort.signal })
       if (final.status === 'success' && videoToSrc(final)) {
         emit('generated:video', final, text)
@@ -735,6 +769,13 @@ async function handleSend() {
 
   // 普通 chat / vision（含附图）
   if (!text && files.length === 0) return
+  const limitError = inputLimitError(
+    JSON.stringify(text), 'Chat request', INPUT_LIMITS.chatBytes, { unit: 'bytes' },
+  )
+  if (limitError) {
+    voiceToast.error(limitError)
+    return
+  }
   submitting.value = true
   let handedToSendHandler = false
   try {
@@ -756,13 +797,115 @@ async function handleSend() {
       content: c.content,
     }))
     const skillNames = mountedSkills.value.map((s) => s.name)
+    const sourceBackend = backendScopeKey()
+    const sourceAgent = props.draftAgentKey
+    const sourceScope = props.draftScopeKey
+    const sourceRevision = draftRevision
+    const sourceScopeRevision = draftScopeRevision
+    const sourceContentRevision = draftContentRevision
+    const snapshot = {
+      text: inputText.value,
+      skills: JSON.parse(JSON.stringify(mountedSkills.value)) as Skill[],
+      contexts: JSON.parse(JSON.stringify(contextChips.value)) as ContextChip[],
+      files: await Promise.all(attachedFiles.value.map((item) => preserveComposerFile(item.file))),
+    }
+    let payloadRejected = false
+    let clearing: Promise<void> | undefined
+    let clearedKey = ''
+    let clearedScope: string | undefined
+    let clearedContentRevision = -1
+    let recoveryStarted = false
+    let rejectedSessionId: string | undefined
+    const firstSessionMigration = () => !sourceScope
+      && !!props.draftScopeKey
+      && draftScopeRevision === sourceScopeRevision + 1
+    const sourceIsActive = () => !chatInputUnmounted
+      && sourceBackend === backendScopeKey()
+      && sourceAgent === props.draftAgentKey
+      && (sourceRevision === draftRevision || firstSessionMigration())
+    const recoveryIsActive = () => sourceIsActive()
+      && (draftScopeRevision === sourceScopeRevision
+        || (firstSessionMigration() && props.draftScopeKey === rejectedSessionId))
+      && (clearedKey === activeDraftKey
+        || (firstSessionMigration() && activeDraftKey === composerDraftKey()))
+      && (clearedScope === props.draftScopeKey
+        || (firstSessionMigration() && props.draftScopeKey === rejectedSessionId))
+      && clearedContentRevision === draftContentRevision
+    const restoreRejectedDraft = async () => {
+      if (!clearing || recoveryStarted) return
+      recoveryStarted = true
+      await clearing
+      await draftScopeUpdate
+      if (!recoveryIsActive()) return
+      const restoredFiles: AttachedFile[] = []
+      const restoredAttachmentIds: string[] = []
+      let restored = false
+      try {
+        for (const saved of snapshot.files) {
+          if (!recoveryIsActive()) return
+          let file = await restoreComposerFile(saved)
+          let grant = nativeGrantFromFile(file)
+          const item: AttachedFile = { file, previewGrant: grant?.previewLease ? grant : undefined }
+          restoredFiles.push(item)
+          if (!recoveryIsActive()) return
+          if (grant?.previewLease && currentDraftSessionId()) {
+            nativePreviewRuntimeUsed = true
+            const attachmentId = newNativePreviewAttachmentId()
+            restoredAttachmentIds.push(attachmentId)
+            activeNativePreviewAttachmentIds.add(attachmentId)
+            await synchronizeNativePreviewScope()
+            if (!recoveryIsActive()) {
+              activeNativePreviewAttachmentIds.delete(attachmentId)
+              return
+            }
+            grant = await bindNativeImagePreviewLease(grant, {
+              ownerId: DESKTOP_USER_ID, sessionId: currentDraftSessionId()!, attachmentId,
+            })
+            item.previewGrant = grant
+            file = Object.assign(fileFromNativeGrant(grant), { draftOriginalFile: file })
+          }
+          item.file = file
+          item.previewUrl = grant?.previewLease?.url
+            ?? (file.type.startsWith('image/') && !grant ? URL.createObjectURL(file) : undefined)
+        }
+        if (!recoveryIsActive()) return
+        // 只恢复本机明确未发送的完整草稿；新编辑或作用域切换均优先保留。
+        inputText.value = snapshot.text
+        mountedSkills.value = snapshot.skills
+        contextChips.value = snapshot.contexts
+        attachedFiles.value = restoredFiles
+        restored = true
+        await persistDraft()
+      } finally {
+        if (!restored) {
+          restoredAttachmentIds.forEach((id) => activeNativePreviewAttachmentIds.delete(id))
+          restoredFiles.forEach(releaseAttachmentPreview)
+        }
+      }
+    }
+    const onPayloadRejected = (error: ChatPayloadLimitError) => {
+      payloadRejected = true
+      rejectedSessionId = error.sessionId
+      void restoreRejectedDraft().catch((error) => {
+        voiceToast.error(error instanceof Error ? error.message : String(error))
+      })
+    }
     handedToSendHandler = true
     const accepted = await props.sendHandler(
       text,
       files,
-      contextRefs.length || skillNames.length ? { contextRefs, skillNames } : undefined,
+      { contextRefs, skillNames, onPayloadRejected },
     )
-    if (accepted) await clearSentDrafts()
+    if (accepted && !payloadRejected && sourceIsActive()
+      && sourceContentRevision === draftContentRevision
+      && (!sourceScope || sourceScope === props.draftScopeKey)) {
+      clearing = clearSentDrafts()
+      clearedKey = activeDraftKey
+      clearedScope = props.draftScopeKey
+      clearedContentRevision = draftContentRevision
+      await clearing
+      if (payloadRejected) await restoreRejectedDraft()
+    }
   } catch (error) {
     // 附件恢复发生在父发送入口之前，错误通过已有消息通道显示。
     if (!handedToSendHandler) voiceToast.error(error instanceof Error ? error.message : String(error))

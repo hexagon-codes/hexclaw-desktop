@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { backendLocalStorage } from '@/services/backend-context'
+import { backendLocalStorage, backendScopeKey } from '@/services/backend-context'
 
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Send, StopCircle, Trash2, RotateCcw, ChevronDown } from 'lucide-vue-next'
 import { sendChat } from '@/api/chat'
 import { hexclawWS } from '@/api/websocket'
+import { ChatPayloadLimitError } from '@/services/chatService'
 import { useSettingsStore } from '@/stores/settings'
+import { useToast } from '@/composables/useToast'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import AssistantRunStatus from '@/components/chat/AssistantRunStatus.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
@@ -33,9 +36,12 @@ const QUICK_CHAT_CONFIRMATION_KEY = 'quick-chat'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
+const toast = useToast()
 
 const messages = ref<Message[]>([])
 const inputText = ref('')
+let inputRevision = 0
+watch(inputText, () => { inputRevision++ }, { flush: 'sync' })
 const textareaRef = ref<HTMLTextAreaElement>()
 const streaming = ref(false)
 const streamingContent = ref('')
@@ -333,12 +339,22 @@ function setupWsCallbacks(requestGen: number) {
 }
 
 async function handleSend(retryContent?: string, retryErrorId?: string) {
+  const originalInput = inputText.value
+  const sourceBackend = backendScopeKey()
   const text = normalizeMathMarkdown(retryContent || inputText.value.trim())
   if (!text || streaming.value) return
+  const limitError = inputLimitError(
+    JSON.stringify(text), 'Chat request', INPUT_LIMITS.chatBytes, { unit: 'bytes' },
+  )
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
 
   if (!retryContent) {
     inputText.value = ''
   }
+  const clearedInputRevision = inputRevision
 
   // Remove the failed message if retrying
   if (retryContent && retryErrorId) {
@@ -358,6 +374,12 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
   replySettled = false
   const requestGen = ++responseRequestGen
   const requestId = `quick-${Date.now()}-${requestGen}`
+  const restoreRejectedInput = () => {
+    if (!retryContent && requestGen === responseRequestGen
+      && sourceBackend === backendScopeKey() && inputRevision === clearedInputRevision) {
+      inputText.value = originalInput
+    }
+  }
 
   if (useWebSocket.value && wsConnected.value && hexclawWS.isConnected()) {
     // WebSocket streaming mode
@@ -375,9 +397,10 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       // 锁定信号，否则 provider 解析为空时后端会按内容路由被专属 Agent 抢答。
       buildQuickChatMetadata(),
       requestId,
+      restoreRejectedInput,
     )
   } else {
-    // HTTP fallback
+    // 旧兼容入口同样使用独立 WebSocket，不经过 HTTP。
     try {
       const resp = await sendChat({
         message: text,
@@ -400,11 +423,15 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       })
     } catch (e) {
       if (requestGen !== responseRequestGen) return
+      if (e instanceof ChatPayloadLimitError) {
+        restoreRejectedInput()
+        toast.error(e.message)
+      }
       console.error('发送失败:', e)
       messages.value.push({
         id: Date.now().toString(),
         role: 'assistant',
-        content: t('quickChat.connectionFailed'),
+        content: e instanceof ChatPayloadLimitError ? e.message : t('quickChat.connectionFailed'),
         error: true,
       })
     } finally {
