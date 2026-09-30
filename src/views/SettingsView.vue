@@ -763,7 +763,7 @@ const runtimeApiEndpoint = computed(
   () =>
     backendContext.value?.apiBase ?? `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
-const runtimeLocalStoreFile = computed(() => backendContext.value?.kind === 'remote' ? '远端服务 · 独立数据' : '本机服务 · data.db')
+const runtimeLocalStoreFile = computed(() => backendContext.value?.kind === 'remote' ? '云端服务 · 独立数据' : '本机服务 · data.db')
 const runtimeModeShort = computed(() => {
   const rawMode = runtimeConfig.value?.server.mode?.trim()?.toLowerCase()
   if (!rawMode) return ''

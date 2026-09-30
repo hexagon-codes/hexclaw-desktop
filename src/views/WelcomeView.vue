@@ -29,7 +29,7 @@ let revision = 0
 const savedToken = computed(() => saved.value.some(record => record.kind === 'remote' && record.hasToken && record.apiBase.replace(/\/+$/, '') === address.value.trim().replace(/\/+$/, '')))
 const valid = computed(() => kind.value === 'local' || (/^https?:\/\/[^\s]+$/.test(address.value.trim()) && (!!token.value.trim() || savedToken.value)))
 const service = computed(() => kind.value === 'local' ? '此设备上的本机服务' : address.value.trim())
-const failureMessage = computed(() => `${failure.value}\n目标：${service.value}\n尚未切换，当前仍使用${backendContext.value?.kind === 'remote' ? '远端服务' : '本机服务'}。返回上一步可修改地址或令牌。`)
+const failureMessage = computed(() => `${failure.value}\n目标：${service.value}\n尚未切换，当前仍使用${backendContext.value?.kind === 'remote' ? '云端服务' : '本机服务'}。返回上一步可修改地址或令牌。`)
 const action = computed(() => failure.value ? '重新检查' : checking.value ? '检查中…' : result.value?.defaultModel ? '继续原任务' : '配置模型服务')
 
 async function check() {
@@ -152,13 +152,13 @@ onBeforeUnmount(() => { ++revision; token.value = ''; window.removeEventListener
           <div role="radiogroup" aria-label="首次配置的后端服务">
             <button v-for="option in (['local', 'remote'] as const)" :key="option" type="button" class="wiz-opt" :class="{ sel: kind === option }" role="radio" :aria-checked="kind === option" @click="kind = option">
               <span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><template v-if="option === 'local'"><rect x="3" y="3" width="18" height="13" rx="2" /><path d="M8 21h8M12 16v5" /></template><template v-else><rect x="4" y="3" width="16" height="7" rx="2" /><rect x="4" y="14" width="16" height="7" rx="2" /><path d="M8 6.5h.01M8 17.5h.01" /></template></svg></span>
-              <span class="wiz-copy"><span class="t">{{ option === 'local' ? '本机服务' : '远端服务' }}</span><span class="d">{{ option === 'local' ? '在此设备运行，由 HexClaw 自动管理' : '服务器持续运行，随时在钉钉辅导' }}</span></span><svg class="ck ic-sm" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
+              <span class="wiz-copy"><span class="t">{{ option === 'local' ? '本机服务' : '云端服务' }}</span><span class="d">{{ option === 'local' ? '在此设备运行，由 HexClaw 自动管理' : '服务器持续运行，随时在钉钉辅导' }}</span></span><svg class="ck ic-sm" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
             </button>
           </div>
           <div v-if="kind === 'remote'" class="wiz-remote">
             <label class="mfield"><span>服务地址 *</span><input v-model="address" class="minput" placeholder="https://your-hexclaw.example.com" required spellcheck="false" autocomplete="url" /></label>
-            <label class="mfield"><span>访问令牌 *</span><input v-model="token" type="password" class="minput" :placeholder="savedToken ? '已保存访问令牌' : '输入访问令牌'" :required="!savedToken" aria-describedby="setup-token-hint" autocomplete="off" /><span id="setup-token-hint" class="backend-field-hint">填写远端 HexClaw 服务配置的访问令牌。</span></label>
-            <p class="wiz-scope">会话、学习记录、模型和钉钉连接由远端服务管理。<br />切换不迁移数据；服务器与模型持续可用时，电脑关机不影响钉钉辅导。</p>
+            <label class="mfield"><span>访问令牌 *</span><input v-model="token" type="password" class="minput" :placeholder="savedToken ? '已保存访问令牌' : '输入访问令牌'" :required="!savedToken" aria-describedby="setup-token-hint" autocomplete="off" /><span id="setup-token-hint" class="backend-field-hint">填写云端 HexClaw 服务配置的访问令牌。</span></label>
+            <p class="wiz-scope">会话、学习记录、模型和钉钉连接由云端服务管理。<br />切换不迁移数据；服务器与模型持续可用时，电脑关机不影响钉钉辅导。</p>
           </div>
         </div>
         <div v-else class="wiz-pane on">

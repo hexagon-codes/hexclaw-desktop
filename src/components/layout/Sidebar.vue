@@ -14,7 +14,7 @@ const { t, locale } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
 
-const productVersionLabel = computed(() => backendContext.value?.kind === 'remote' ? `远端 · ${new URL(backendContext.value.apiBase).host}` : `本机服务 · ${appStore.sidecarReady ? '已连接' : '未连接'}`)
+const productVersionLabel = computed(() => backendContext.value?.kind === 'remote' ? `云端 · ${new URL(backendContext.value.apiBase).host}` : `本机服务 · ${appStore.sidecarReady ? '已连接' : '未连接'}`)
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
