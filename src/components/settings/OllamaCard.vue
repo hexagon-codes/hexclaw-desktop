@@ -2,6 +2,7 @@
 import { backendContext, backendScopeKey, assertBackendActive } from '@/services/backend-context'
 import { activeOllamaTarget } from '@/api/ollama'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 // 模型目录：name + 预估 RAM（GB，基于 Q4_K_M 量化）
 interface ModelEntry {
@@ -288,7 +289,12 @@ async function readTarget() {
   targetAddress.value = target.value.custom_base_url
 }
 async function saveTarget() {
-  if (!targetDirty.value || !target.value || targetSaving.value) return
+  if (!target.value || targetSaving.value) return
+  const limitError = targetMode.value === 'custom'
+    ? inputLimitError(targetAddress.value, 'Ollama service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: target.value.custom_base_url })
+    : ''
+  if (limitError) throw new Error(limitError)
+  if (!targetDirty.value) return
   if (targetMode.value === 'custom' && !/^https?:\/\/[^\s]+$/.test(targetAddress.value.trim())) throw new Error('A complete Ollama service URL is required')
   targetSaving.value = true
   const scope = backendScopeKey()
@@ -726,6 +732,8 @@ function resetStallTimer() {
 async function startPull() {
   const model = pullModelName.value.trim()
   if (pulling.value) return
+  const limitError = inputLimitError(pullModelName.value, 'Model ID', INPUT_LIMITS.identifier)
+  if (limitError) { pullError.value = limitError; pullInputError.value = true; return }
   if (!model) {
     pullInputError.value = true
     setTimeout(() => {

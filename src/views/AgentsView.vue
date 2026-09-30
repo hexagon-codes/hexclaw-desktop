@@ -38,6 +38,8 @@ import type {
   ReasoningPolicy,
 } from '@/types'
 import { normalizeReasoningPolicy } from '@/utils/reasoning-policy'
+import { isAgentDisplayNameValid } from '@/utils/agent-display-name'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { logger } from '@/utils/logger'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
@@ -99,9 +101,20 @@ function closeSoulEditor() {
 /** 保存人设(SOUL)；空内容 = 删除 SOUL.md 恢复内置默认。 */
 async function saveSoul() {
   if (soulSaving.value) return
+  const systemPrompt = soulText.value.trim()
+  const limitError = inputLimitError(
+    JSON.stringify({ system_prompt: systemPrompt }),
+    'Assistant request',
+    INPUT_LIMITS.jsonBytes,
+    { unit: 'bytes' },
+  )
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
   soulSaving.value = true
   try {
-    const data = await updateAssistantSoul(soulText.value.trim())
+    const data = await updateAssistantSoul(systemPrompt)
     soulText.value = data.system_prompt ?? ''
     soulIsCustom.value = !!data.is_custom
     if (data.default_prompt) soulDefaultPrompt.value = data.default_prompt
@@ -182,7 +195,11 @@ const editingAgent = ref<AgentConfig>({
   reasoning_policy: { mode: 'inherit' },
 })
 // BUG-20260703 D3：打开弹窗时的 LLM 配置快照——editFormValid「未真改就不校验」的基准。
-const editingOriginal = ref<{ provider: string; model: string }>({ provider: '', model: '' })
+const editingOriginal = ref<{ provider: string; model: string; display_name: string }>({
+  provider: '',
+  model: '',
+  display_name: '',
+})
 // 打开弹窗给 editingAgent 赋值会触发 provider watch；挡掉这一次 sync，防止失效
 // provider 的存量 model 在打开瞬间被清空。
 let suppressEditProviderSync = false
@@ -506,6 +523,7 @@ function openEditAgent(agent: AgentConfig) {
   editingOriginal.value = {
     provider: (agent.provider ?? '').trim(),
     model: (agent.model ?? '').trim(),
+    display_name: agent.display_name ?? '',
   }
   void nextTick(() => {
     suppressEditProviderSync = false
@@ -609,11 +627,15 @@ function closeEditAgentDialog() {
 
 async function handleEditAgent() {
   if (editing.value) return
+  if (!editDisplayNameValid.value) {
+    errorMsg.value = t('agents.displayNameTooLong')
+    return
+  }
   if (!editFormValid.value) return
   errorMsg.value = ''
   editing.value = true
   try {
-    await updateAgent(editingAgent.value.name, {
+    const payload: Parameters<typeof updateAgent>[1] = {
       display_name: editingAgent.value.display_name,
       provider: editingAgent.value.provider,
       model: editingAgent.value.model,
@@ -635,7 +657,12 @@ async function handleEditAgent() {
       ...(editAvatar.value
         ? { metadata: { ...editingAgent.value.metadata, avatar: editAvatar.value } }
         : {}),
-    })
+    }
+    const limitError = inputLimitError(
+      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+    )
+    if (limitError) throw new Error(limitError)
+    await updateAgent(editingAgent.value.name, payload)
     closeEditAgentDialog()
     await loadAgents()
   } catch (e) {
@@ -1007,8 +1034,14 @@ watch(showAddAgent, (isOpen, wasOpen) => {
   }
 })
 
+const newDisplayNameValid = computed(() => isAgentDisplayNameValid(newAgent.value.display_name))
+const editDisplayNameValid = computed(() =>
+  isAgentDisplayNameValid(editingAgent.value.display_name, editingOriginal.value.display_name),
+)
+
 const registerFormValid = computed(() => {
   if (newAgent.value.name.trim() === '') return false
+  if (!newDisplayNameValid.value) return false
   const hasProvider = newAgent.value.provider.trim() !== ''
   const hasModel = newAgent.value.model.trim() !== ''
   // Both empty → use global default LLM (valid)
@@ -1023,6 +1056,7 @@ const registerFormValid = computed(() => {
 
 const editFormValid = computed(() => {
   if (editingAgent.value.name.trim() === '') return false
+  if (!editDisplayNameValid.value) return false
   // 高级参数合法域（BUG-20260703 P2-4）：温度 [0,2] / max_tokens 非负整数
   if (!editTemperatureValid.value || !editMaxTokensValid.value) return false
   const provider = editingAgent.value.provider.trim()
@@ -1042,6 +1076,10 @@ const editFormValid = computed(() => {
 
 async function handleRegisterAgent(andChat = false) {
   if (registering.value) return
+  if (!newDisplayNameValid.value) {
+    errorMsg.value = t('agents.displayNameTooLong')
+    return
+  }
   if (runtimeProviderOptions.value.length === 0) {
     errorMsg.value = t(
       'agents.noRuntimeProviders',
@@ -1078,6 +1116,10 @@ async function handleRegisterAgent(andChat = false) {
         : {}),
     }
     const createdName = payload.name.trim()
+    const limitError = inputLimitError(
+      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+    )
+    if (limitError) throw new Error(limitError)
     await registerAgent(payload)
     closeAddAgentDialog()
     await loadAgents()
@@ -1519,6 +1561,7 @@ async function handleUnregisterAgent() {
                     <input
                       v-model="newAgent.display_name"
                       type="text"
+                      :aria-invalid="!newDisplayNameValid"
                       class="rounded-lg border px-3 py-2 text-sm outline-none"
                       :style="{
                         background: 'var(--hc-bg-input)',
@@ -1531,7 +1574,13 @@ async function handleUnregisterAgent() {
                   <span
                     class="text-[11.5px] leading-snug"
                     :style="{ color: 'var(--hc-text-muted)' }"
-                    >{{ t('agents.displayNameHint') }}</span
+                    >{{
+                      t(
+                        newDisplayNameValid
+                          ? 'agents.displayNameHint'
+                          : 'agents.displayNameTooLong',
+                      )
+                    }}</span
                   >
                 </div>
                 <!-- 人设(SOUL)：自然语言（去 mono，RTL 铁律）+ 快速起草骨架 + 字数 + 专注编辑 -->
@@ -1925,6 +1974,7 @@ async function handleUnregisterAgent() {
                   <input
                     v-model="editingAgent.display_name"
                     type="text"
+                    :aria-invalid="!editDisplayNameValid"
                     class="rounded-lg border px-3 py-2 text-sm outline-none"
                     :style="{
                       background: 'var(--hc-bg-input)',
@@ -1936,7 +1986,9 @@ async function handleUnregisterAgent() {
                 <span
                   class="text-[11.5px] leading-snug"
                   :style="{ color: 'var(--hc-text-muted)' }"
-                  >{{ t('agents.displayNameHint') }}</span
+                  >{{
+                    t(editDisplayNameValid ? 'agents.displayNameHint' : 'agents.displayNameTooLong')
+                  }}</span
                 >
               </div>
               <div class="flex flex-col gap-1.5">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime, formatElapsedSeconds, formatDurationMs } from '@/utils/time'
@@ -321,8 +322,18 @@ function stageProgress(stage: CronCompileStage): number {
   }
 }
 
+function taskInputError(): string {
+  return inputLimitError(form.value.name, 'Task name', INPUT_LIMITS.displayName) ||
+    inputLimitError(form.value.schedule, 'Schedule', INPUT_LIMITS.schedule)
+}
+
 async function handleCreate() {
   if (!formValid.value || submitting.value) return
+  const limitError = taskInputError()
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
   // 静默预检（条件式向导）：全绿一步创建；命中需审批能力才展开审批步骤。
   // 预检不可用（老后端/离线）按全绿放行——运行时权限闸仍兜底，不会静默越权。
   let pf: PreflightResult | null = null
@@ -346,6 +357,11 @@ async function handleCreate() {
 /** 实际提交创建；返回创建成功的 job（授权流程需要 task_ref），失败返回 null。 */
 async function submitCreate(options: { paused?: boolean } = {}): Promise<CronJob | null> {
   if (submitting.value) return null
+  const limitError = taskInputError()
+  if (limitError) {
+    toast.error(limitError)
+    return null
+  }
   submitting.value = true
   createProgress.value = null
   const ctrl = new AbortController()

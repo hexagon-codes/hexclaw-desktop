@@ -8,6 +8,7 @@ import { getLLMConfig } from '@/api/config'
 import { getVersion } from '@/api/system'
 import { isTauri } from '@/utils/platform'
 import { dismissSplash } from '@/utils/splash'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 interface Readiness { context: BackendContext; version: string; defaultModel: string }
 interface SetupCompletion { kind: 'local' | 'remote'; apiBase: string; backendId: string }
@@ -35,6 +36,11 @@ async function check() {
   if (!valid.value || finishing.value) return
   const current = ++revision
   step.value = 1
+  const limitError = kind.value === 'remote'
+    ? inputLimitError(address.value, 'Service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: saved.value.find(record => record.apiBase === address.value)?.apiBase }) ||
+      inputLimitError(token.value, 'Access token', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
+    : ''
+  if (limitError) { failure.value = limitError; result.value = null; return }
   checking.value = true
   failure.value = ''
   result.value = null
@@ -69,6 +75,11 @@ async function continueTask() {
 }
 async function finish() {
   if (!result.value || checking.value || finishing.value) return
+  const limitError = kind.value === 'remote'
+    ? inputLimitError(address.value, 'Service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: saved.value.find(record => record.apiBase === address.value)?.apiBase }) ||
+      inputLimitError(token.value, 'Access token', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
+    : ''
+  if (limitError) { failure.value = limitError; return }
   finishing.value = true
   failure.value = ''
   try {

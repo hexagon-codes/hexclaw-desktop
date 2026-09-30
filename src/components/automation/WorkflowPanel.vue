@@ -7,6 +7,7 @@ import { useToast } from '@/composables'
 import type { CanvasNode } from '@/types'
 import { preflightAutonomy, createAutonomyGrant, type PreflightResult } from '@/api/autonomy'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -22,6 +23,11 @@ const filteredWorkflows = computed(() => {
 
 // 当前编辑工作流名（驱动 store canvas 作为唯一编辑面）
 const currentName = ref('')
+const savedName = computed(() => store.savedWorkflows.find((workflow) => workflow.id === store.currentWorkflowId)?.name)
+const nameError = computed(() => inputLimitError(currentName.value, 'Workflow name', INPUT_LIMITS.displayName, { original: savedName.value }))
+const nameToSave = computed(() => currentName.value === savedName.value
+  ? currentName.value
+  : currentName.value.trim() || t('workflow.defaultName', '新工作流'))
 
 onMounted(async () => {
   await store.loadWorkflows()
@@ -171,6 +177,38 @@ function saveStep() {
   if (!editingId.value) return
   const type = editingType.value
   const f = editForm.value
+  const original = store.savedWorkflows
+    .find((workflow) => workflow.id === store.currentWorkflowId)?.nodes
+    .find((node) => node.id === editingId.value)
+  const originalConfig = original?.config ?? {}
+  const originalRoles = Array.isArray(originalConfig.roles)
+    ? originalConfig.roles.join(', ')
+    : String(originalConfig.roles ?? '')
+  let limitError = inputLimitError(f.label, 'Step name', INPUT_LIMITS.displayName, { original: original?.label })
+  if (!limitError && (type === 'agent' || type === 'parallel')) {
+    limitError = inputLimitError(f.config.model, 'Model ID', INPUT_LIMITS.identifier, { original: original ? String(originalConfig.model ?? '') : undefined })
+  }
+  if (!limitError && type === 'agent') {
+    limitError = inputLimitError(f.config.role, 'Role', INPUT_LIMITS.identifier, { original: original ? String(originalConfig.role ?? '') : undefined })
+  }
+  if (!limitError && type === 'tool') {
+    limitError = inputLimitError(f.config.tool, 'Tool name', INPUT_LIMITS.identifier, { original: original ? String(originalConfig.tool ?? '') : undefined })
+  }
+  if (!limitError && type === 'parallel' && f.config.roles !== originalRoles) {
+    const previousRoles = (Array.isArray(originalConfig.roles)
+      ? originalConfig.roles.map(String)
+      : String(originalConfig.roles ?? '').split(/[,;\n]/))
+    for (const role of f.config.roles.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean)) {
+      limitError = inputLimitError(role, 'Role', INPUT_LIMITS.identifier, {
+        original: previousRoles.includes(role) ? role : undefined,
+      })
+      if (limitError) break
+    }
+  }
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
   const config: Record<string, unknown> = {}
   if (type === 'input') config.value = f.config.value
   if (type === 'agent') {
@@ -189,15 +227,26 @@ function saveStep() {
       try { config.args = JSON.parse(f.config.args) } catch { config.args = f.config.args }
     }
   }
-  store.updateNode(editingId.value, { label: f.label.trim() || editForm.value.label, config })
+  // 未改动的存量字段保持原值，避免归一化使旧值被误认为本次修改。
+  for (const key of ['role', 'model', 'tool'] as const) {
+    if (key in config && originalConfig[key] !== undefined && f.config[key] === String(originalConfig[key])) {
+      config[key] = originalConfig[key]
+    }
+  }
+  if (type === 'parallel' && originalConfig.roles !== undefined && f.config.roles === originalRoles) {
+    config.roles = originalConfig.roles
+  }
+  const label = f.label === original?.label ? f.label : f.label.trim() || f.label
+  store.updateNode(editingId.value, { label, config })
   closeEditStep()
 }
 
 // ── 保存 / 试运行 ─────────────────────────────────────────────
 async function onSave() {
   if (store.nodes.length === 0) { toast.info(t('workflow.emptySaveHint', '请先添加步骤')); return }
+  if (nameError.value) { toast.error(nameError.value); return }
   rebuildLinearEdges()
-  const res = await store.saveWorkflow(currentName.value.trim() || t('workflow.defaultName', '新工作流'))
+  const res = await store.saveWorkflow(nameToSave.value)
   if (res) {
     toast.success(t('workflow.savedOk', '工作流已保存'))
     await store.loadWorkflows()
@@ -205,7 +254,7 @@ async function onSave() {
     // 全绿不打扰；命中高后果能力（如发布内容）才展开审批。
     await runSavePreflight()
   } else {
-    toast.error(t('workflow.saveFailed', '保存失败，请确认引擎已连接'))
+    toast.error(store.error?.message || t('workflow.saveFailed', '保存失败，请确认引擎已连接'))
   }
 }
 
@@ -252,10 +301,15 @@ async function onApprovalChoose(mode: 'grant' | 'later' | 'paused') {
 }
 
 async function onRun() {
+  if (nameError.value) { toast.error(nameError.value); return }
   // 未配置/空工作流不试运行（BUG-20260623）：模型步骤无指令 / 工具步骤未选 → 提示具体原因，不提交执行。
   if (store.runBlockReason) { toast.info(store.runBlockReason); return }
   rebuildLinearEdges()
-  await store.saveWorkflow(currentName.value.trim() || t('workflow.defaultName', '新工作流'))
+  const saved = await store.saveWorkflow(nameToSave.value)
+  if (!saved) {
+    toast.error(store.error?.message || t('workflow.saveFailed', '保存失败，请确认引擎已连接'))
+    return
+  }
   await store.runWorkflow()
   if (store.runStatus === 'unavailable') {
     toast.info(t('workflow.runUnavailable', '工作流引擎未启用，无法试运行'))

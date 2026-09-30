@@ -23,6 +23,7 @@ import {
 } from '@/api/im-channels'
 import type { IMInstance, IMChannelType } from '@/api/im-channels'
 import { setClipboard } from '@/api/desktop'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const props = defineProps<{
   /** null = 新建；传入实例 = 编辑该实例 */
@@ -152,6 +153,23 @@ function toggleSecret(key: string) {
   showSecrets.value[key] = !showSecrets.value[key]
 }
 
+function formLimitError(): string {
+  const nameError = inputLimitError(formName.value, 'Channel name', INPUT_LIMITS.displayName, { original: props.instance?.name })
+  if (nameError) return nameError
+  for (const field of configFields.value) {
+    const secret = field.secret || field.key === 'app_key'
+    const address = /(?:url|host)$/.test(field.key)
+    if (!secret && !address) continue
+    const limit = secret ? INPUT_LIMITS.secretBytes : INPUT_LIMITS.urlBytes
+    const error = inputLimitError(formConfig.value[field.key] ?? '', field.labelEn, limit, {
+      unit: 'bytes',
+      original: props.instance?.config[field.key],
+    })
+    if (error) return error
+  }
+  return ''
+}
+
 async function copyWebhookUrl() {
   const text = getPlatformHookUrl({ name: formName.value, type: formType.value })
   try {
@@ -163,6 +181,8 @@ async function copyWebhookUrl() {
 
 async function handleTest() {
   if (testing.value) return
+  const limitError = formLimitError()
+  if (limitError) { testResult.value = { success: false, message: limitError }; return }
   testing.value = true
   testResult.value = null
   const tempInstance: IMInstance = {
@@ -204,19 +224,24 @@ const errorMsg = ref('')
 
 async function handleSave() {
   if (saving.value) return
+  const limitError = formLimitError()
+  if (limitError) { errorMsg.value = limitError; return }
+  const name = props.instance && formName.value === props.instance.name
+    ? props.instance.name
+    : formName.value.trim() || currentMeta.value.name
   saving.value = true
   errorMsg.value = ''
   try {
     if (mode.value === 'create') {
       await createIMInstance(
-        formName.value.trim() || currentMeta.value.name,
+        name,
         formType.value,
         formConfig.value,
         formEnabled.value,
       )
     } else if (props.instance) {
       const ok = await updateIMInstance(props.instance.id, {
-        name: formName.value.trim() || currentMeta.value.name,
+        name,
         enabled: formEnabled.value,
         config: formConfig.value,
       })

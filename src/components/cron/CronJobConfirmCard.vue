@@ -18,6 +18,10 @@
  */
 import { computed, ref, watch } from 'vue'
 import type { CreateTaskAction } from '@/utils/chat-automation'
+import { useToast } from '@/composables/useToast'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
+
+const toast = useToast()
 
 const props = defineProps<{
   action: CreateTaskAction
@@ -128,6 +132,13 @@ const canSubmit = computed(() => {
 
 function onSubmit() {
   if (!canSubmit.value) return
+  const limitError =
+    inputLimitError(localName.value, 'Task name', INPUT_LIMITS.displayName) ||
+    inputLimitError(localSchedule.value, 'Schedule', INPUT_LIMITS.schedule)
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
   emit('execute', {
     name: localName.value.trim(),
     schedule: localSchedule.value.trim(),
@@ -137,6 +148,11 @@ function onSubmit() {
 }
 
 function onReparse() {
+  const limitError = inputLimitError(localSchedule.value, 'Schedule', INPUT_LIMITS.schedule)
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
   // 用 prompt 作为 reparse 文本（拼上 schedule 提示）
   const combined = `${localSchedule.value} ${localPrompt.value}`.trim()
   emit('reparse', combined)
@@ -189,7 +205,6 @@ function toggleDeliver(channel: string) {
           <input
           v-model="localName"
           class="cron-card__input"
-          maxlength="32"
           placeholder="如：每日新闻"
         />
         </HcClearableField>

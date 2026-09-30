@@ -19,6 +19,7 @@ import { useToast } from '@/composables/useToast'
 import { createConnector, testConnector as apiTestConnector } from '@/api/connectors'
 import { addMcpServer, removeMcpServer } from '@/api/mcp'
 import { MCP_CONNECTOR_SPECS, buildMcpServerConfig } from '@/config/mcp-connectors'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 /** 类型选择器单源：父级从 CONNECTOR_TYPES 投影而来（含 logo / monogram 命中）。 */
 export interface ConnectorTypeItem {
@@ -64,6 +65,14 @@ const currentItem = computed<ConnectorTypeItem | null>(
 
 const currentName = computed(() => currentItem.value?.name ?? formType.value)
 const currentMethod = computed<'native' | 'mcp' | 'oauth' | 'token'>(() => currentItem.value?.method ?? 'native')
+const unchangedName = computed(() => {
+  if (!props.instance) return undefined
+  if (formName.value === props.instance.name) return props.instance.name
+  if (currentMethod.value === 'mcp' && formName.value === props.instance.config.mcp_server) {
+    return props.instance.config.mcp_server
+  }
+  return undefined
+})
 
 // ── token 类(GitHub/Notion 真实只读接入) ──────────────────────
 const formToken = ref('')
@@ -75,10 +84,12 @@ const testDetail = ref('')
 /** 真实测试连接：调后端 /connectors/test（无状态验证 token，不持久化）。 */
 async function runTokenTest() {
   if (testing.value || !formToken.value.trim()) return
+  const limitError = inputLimitError(formToken.value, 'Access token', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
+  if (limitError) { testState.value = 'fail'; testDetail.value = limitError; return }
   testing.value = true
   testState.value = 'idle'
   try {
-    const res = await apiTestConnector(formType.value, formToken.value.trim())
+    const res = await apiTestConnector(formType.value, formToken.value)
     testState.value = res.ok ? 'ok' : 'fail'
     testDetail.value = res.detail
   } catch (e) {
@@ -194,9 +205,29 @@ function connectionSecretRef(owner: string, field: string): string {
   return `sidecar-connection:v1:${owner}:${field}`
 }
 
+function formLimitError(): string {
+  const nameError = inputLimitError(formName.value, 'Connection name', INPUT_LIMITS.displayName, { original: unchangedName.value })
+  if (nameError) return nameError
+  const tokenError = inputLimitError(formToken.value, 'Access token', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
+  if (tokenError) return tokenError
+  for (const field of configFields.value) {
+    const address = field.key === 'url' || field.key === 'host'
+    if (!field.secret && !address) continue
+    const limit = field.secret ? INPUT_LIMITS.secretBytes : INPUT_LIMITS.urlBytes
+    const error = inputLimitError(formConfig.value[field.key] ?? '', field.key, limit, {
+      unit: 'bytes',
+      original: props.instance?.config[field.key],
+    })
+    if (error) return error
+  }
+  return ''
+}
+
 async function handleSave() {
   if (saving.value) return
-  const name = formName.value.trim() || currentName.value
+  const limitError = formLimitError()
+  if (limitError) { toast.error(limitError); return }
+  const name = unchangedName.value ?? (formName.value.trim() || currentName.value)
 
   // 连接名唯一性：MCP 类用 name 作后端 stdio server 的 key，重名会互相覆盖（删一个把另一个也摘了）；
   // 其余类型重名也造成混淆。阻止与其它实例重名（编辑时排除自身）。新建时第一步已 suggestUniqueName，
@@ -218,7 +249,7 @@ async function handleSave() {
     }
     saving.value = true
     try {
-      const created = await createConnector(formType.value, name, formToken.value.trim())
+      const created = await createConnector(formType.value, name, formToken.value)
       await addInstance({
         type: formType.value,
         name: created.name || name,

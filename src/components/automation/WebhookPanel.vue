@@ -37,6 +37,8 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 import { scenarioRegistry } from '@/shell/scenario/registry'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
+import { DESKTOP_USER_ID } from '@/constants'
 
 const { t, te } = useI18n()
 const toast = useToast()
@@ -273,6 +275,10 @@ async function loadWebhooks() {
 
 async function onCreateWebhook() {
   if (creating.value) return
+  const limitError = inputLimitError(form.value.name, 'Webhook name', INPUT_LIMITS.displayName) ||
+    inputLimitError(form.value.secret, 'Webhook secret', INPUT_LIMITS.secretBytes, { unit: 'bytes' }) ||
+    inputLimitError(JSON.stringify({ name: form.value.name, type: form.value.type, prompt: form.value.prompt, secret: form.value.secret, job_id: form.value.jobId, user_id: DESKTOP_USER_ID, enabled: false }), 'Webhook request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' })
+  if (limitError) { toast.error(limitError); return }
   // name 必填；prompt 仅在「未绑定 cron job」时必填——绑定 job 时事件直接触发该 job，prompt 无意义。
   if (!form.value.name.trim()) {
     toast.error(t('webhooks.namePromptRequired', '名称和处理指令为必填'))

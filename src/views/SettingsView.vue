@@ -77,10 +77,21 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t, locale } = useI18n()
 const toast = useToast()
 const settingsStore = useSettingsStore()
+let originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
+
+function providerInputError(provider: ProviderConfig): string {
+  const original = originalProviders.find(item => item.id === provider.id ||
+    (!!provider.providerInstanceId && item.providerInstanceId === provider.providerInstanceId) ||
+    (!!provider.backendKey && item.backendKey === provider.backendKey))
+  return inputLimitError(provider.name, 'Provider name', INPUT_LIMITS.displayName, { original: original?.name }) ||
+    inputLimitError(provider.baseUrl ?? '', 'Base URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: original?.baseUrl ?? (original ? '' : undefined) }) ||
+    inputLimitError(provider.apiKey ?? '', 'API Key', INPUT_LIMITS.secretBytes, { unit: 'bytes', original: original?.apiKey ?? (original ? '' : undefined) })
+}
 const router = useRouter()
 const taskReturn = ref(readModelSettingsReturn())
 const returningToTask = ref(false)
@@ -321,9 +332,14 @@ async function persistSettings({
 } = {}) {
   if (!settingsStore.config) return
 
+  const limitError = settingsStore.config.llm.providers.map(providerInputError).find(Boolean)
+  if (limitError) { toast.error(limitError); throw new Error(limitError) }
+  const savedProviders = settingsStore.config.llm.providers.map(provider => ({ ...provider }))
+
   settingsPersisting.value = true
   try {
     const result = await settingsStore.saveConfig(settingsStore.config)
+    originalProviders = savedProviders
     if (refreshRuntimeInfo) {
       await loadRuntimeInfo()
     }
@@ -446,6 +462,8 @@ async function loadCapabilities() {
 
 /** 手动刷新单个模型的 tool_call 能力探测 */
 async function refreshCapability(provider: ProviderConfig, model: ModelOption) {
+  const limitError = providerInputError(provider)
+  if (limitError) { toast.error(limitError); return }
   if (!isChatModelOption(model)) return
   const key = `${provider.id}:${model.id}`
   if (probingKey.value === key) return
@@ -488,6 +506,7 @@ function probingModel(providerId: string, modelId: string): boolean {
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
+  originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
   // A7: 页面打开后异步拉一次能力缓存（不 block UI，失败降级为 unknown badge）
   void loadCapabilities()
   // U5: 把开机自启开关与系统真实状态对齐
@@ -845,6 +864,8 @@ async function handleAddProvider() {
 
 /** 真正执行 Provider 删除 */
 async function handleDeleteProvider(id: string) {
+  const limitError = settingsStore.config?.llm.providers.filter(provider => provider.id !== id).map(providerInputError).find(Boolean)
+  if (limitError) { toast.error(limitError); return }
   // 保存删除前快照，以便失败时恢复
   const snapshot = settingsStore.config
     ? (JSON.parse(
@@ -860,7 +881,9 @@ async function handleDeleteProvider(id: string) {
   }
   if (settingsStore.config) {
     try {
+      const savedProviders = settingsStore.config.llm.providers.map(provider => ({ ...provider }))
       const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
+      originalProviders = savedProviders
       if (securitySyncFailed) {
         logger.warn('[HexClaw] 删除 Provider 后安全/沙箱配置同步失败')
       }
@@ -1015,6 +1038,8 @@ function handleCustomModelDialogKeydown(event: KeyboardEvent) {
 
 /** 添加自定义模型到 Provider；空 ID 与重复 ID保持 fail-closed。 */
 function addCustomModel(provider: ProviderConfig): boolean {
+  const limitError = inputLimitError(newModelId.value, 'Model ID', INPUT_LIMITS.identifier)
+  if (limitError) { toast.error(limitError); return false }
   const modelId = normalizedNewModelId.value
   if (!modelId || provider.models.some((model) => model.id === modelId)) return false
   if (!catalogStore.clearModelExclusion(providerModelExclusionScope(provider), modelId)) {
@@ -1180,6 +1205,10 @@ function saveEditModel() {
   const { providerId, idx } = editingModel.value
   const provider = settingsStore.config?.llm.providers.find((p) => p.id === providerId)
   if (!provider) return
+  const original = provider.models[idx]
+  const limitError = inputLimitError(editModelForm.value.id, 'Model ID', INPUT_LIMITS.identifier, { original: original?.id }) ||
+    inputLimitError(editModelForm.value.name, 'Model name', INPUT_LIMITS.title, { original: original?.name })
+  if (limitError) { toast.error(limitError); return }
   const previousModelId = provider.models[idx]!.id
 
   const caps = (Object.entries(editModelForm.value.caps) as [ModelCapability, boolean][])
@@ -1287,7 +1316,7 @@ function scheduleAutoTest(provider: ProviderConfig) {
 }
 
 function resolveProviderConnectionApiKey(provider: ProviderConfig): string {
-  const rawApiKey = provider.apiKey?.trim() || ''
+  const rawApiKey = provider.apiKey || ''
   if (!rawApiKey) return ''
   if (isMaskedApiKey(rawApiKey) && provider.providerInstanceId) return ''
   return rawApiKey
@@ -1358,6 +1387,8 @@ function onProviderApiKeyTyped(provider: ProviderConfig, event: Event) {
 
 async function testProvider(provider: ProviderConfig) {
   if (testingProviderIds.value.has(provider.id)) return
+  const limitError = providerInputError(provider)
+  if (limitError) { testProviderResult.value[provider.id] = { ok: false, msg: limitError }; return }
   testingProviderIds.value.add(provider.id)
   delete testProviderResult.value[provider.id]
 
@@ -1498,6 +1529,8 @@ async function syncRemoteModels(
   provider: ProviderConfig,
   { waitForPersistence = false }: { waitForPersistence?: boolean } = {},
 ): Promise<boolean> {
+  const limitError = providerInputError(provider)
+  if (limitError) { toast.error(limitError); return false }
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
   if (!baseUrl && !provider.providerInstanceId) return false

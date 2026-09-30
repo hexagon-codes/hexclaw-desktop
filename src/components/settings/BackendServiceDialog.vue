@@ -6,6 +6,7 @@ import { backendContext, backendPanelOpen, flushBackendDrafts, type BackendConte
 import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
 import { setClipboard } from '@/api/desktop'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const app = useAppStore()
 const chat = useChatStore()
@@ -112,6 +113,11 @@ async function copyLocalToken() {
 
 async function connect(test: boolean) {
   if (!valid.value || pending.value) return
+  const limitError = remote.value
+    ? inputLimitError(address.value, 'Service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: savedCandidate.value?.apiBase }) ||
+      inputLimitError(token.value, 'Access token', INPUT_LIMITS.secretBytes, { unit: 'bytes', original: savedRemoteToken.value })
+    : ''
+  if (limitError) { feedback.value = limitError; failed.value = true; return }
   const revision = editRevision
   pending.value = test ? 'test' : 'connect'; failed.value = false
   const candidate = { kind: kind.value, apiBase: address.value.trim(), apiToken: remote.value && token.value !== savedRemoteToken.value ? token.value || undefined : undefined }
