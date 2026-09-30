@@ -39,6 +39,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SkillPreviewModal from '@/components/skills/SkillPreviewModal.vue'
 import { useAppStore } from '@/stores/app'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -227,6 +228,11 @@ function onUrlInstallEnter(e: KeyboardEvent) {
 function handleUrlInstall() {
   const url = installUrl.value.trim()
   if (!url) return
+  const limitError = inputLimitError(installUrl.value, 'Installation URL', INPUT_LIMITS.urlBytes, { unit: 'bytes' })
+  if (limitError) {
+    installError.value = limitError
+    return
+  }
   if (!url.startsWith('https://')) {
     installError.value = t('skills.installDialog.errorUrlHttps')
     return

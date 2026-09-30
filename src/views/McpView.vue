@@ -33,6 +33,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -368,14 +369,26 @@ async function executeTest(tool: McpTool) {
   try {
     // 参数在本次调用开始时复制，之后切行或编辑不会改变已发送请求。
     const args: Record<string, unknown> = {}
+    const properties = getSchemaProperties(tool)
     for (const [param, val] of Object.entries(testParamsByTool.value[key] ?? {})) {
-      if (!val.trim()) continue
-      try {
-        args[param] = JSON.parse(val)
-      } catch {
+      const property = properties.find((item) => item.key === param)
+      if (!val.trim() && !property?.required) continue
+      if (property?.declaredType === 'string') {
         args[param] = val
+      } else {
+        try { args[param] = JSON.parse(val) }
+        catch { args[param] = val }
+      }
+      if (typeof args[param] === 'string' && property?.maxLength !== undefined) {
+        const error = inputLimitError(args[param] as string, param, property.maxLength)
+        if (error) throw new Error(error)
       }
     }
+    for (const property of properties) {
+      if (property.required && !(property.key in args)) throw new Error(`${property.key} is required.`)
+    }
+    const bodyError = inputLimitError(JSON.stringify({ name: tool.name.trim(), arguments: args, ...(tool.server_name ? { server_name: tool.server_name } : {}) }), 'MCP tool request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' })
+    if (bodyError) throw new Error(bodyError)
     const res = await callMcpTool(tool.name, args, tool.server_name)
     testResultsByTool.value[key] = { output: res.result, error: res.error }
   } catch (e: unknown) {
@@ -389,7 +402,7 @@ async function executeTest(tool: McpTool) {
 
 function getSchemaProperties(
   tool: McpTool,
-): Array<{ key: string; type: string; description: string; required: boolean }> {
+): Array<{ key: string; type: string; description: string; required: boolean; maxLength?: number; declaredType?: string }> {
   if (!tool.input_schema) return []
   const schema = tool.input_schema as Record<string, unknown>
   const props = schema.properties as Record<string, Record<string, unknown>> | undefined
@@ -398,8 +411,10 @@ function getSchemaProperties(
   return Object.entries(props).map(([key, val]) => ({
     key,
     type: (val.type as string) || 'string',
+    declaredType: typeof val.type === 'string' ? val.type : undefined,
     description: (val.description as string) || '',
     required: required.includes(key),
+    maxLength: typeof val.maxLength === 'number' && Number.isInteger(val.maxLength) && val.maxLength >= 0 ? val.maxLength : undefined,
   }))
 }
 
@@ -468,6 +483,7 @@ const transportOptions = computed(() => [
   { value: 'streamable', label: t('mcpManage.transportStreamable') },
 ])
 const newServerEndpoint = ref('')
+const mcpServerRequestBytes = 64 * 1024
 const addingServer = ref(false)
 const removingServers = ref<Set<string>>(new Set())
 const pendingRemoveServer = ref<string | null>(null)
@@ -515,12 +531,19 @@ function closeAddServer() {
 async function handleAddServer() {
   if (addingServer.value) return
   if (!addServerValid.value) return
+  const isStdio = newServerTransport.value === 'stdio'
+  const limitError = inputLimitError(newServerName.value, 'MCP server name', INPUT_LIMITS.displayName) ||
+    (isStdio ? inputLimitError(newServerCommand.value, 'MCP command', mcpServerRequestBytes, { unit: 'bytes' }) ||
+      inputLimitError(newServerArgs.value, 'MCP arguments', mcpServerRequestBytes, { unit: 'bytes' }) :
+      inputLimitError(newServerEndpoint.value, 'MCP endpoint', INPUT_LIMITS.urlBytes, { unit: 'bytes' }))
+  if (limitError) { errorMsg.value = limitError; return }
   addingServer.value = true
   errorMsg.value = ''
   try {
-    const isStdio = newServerTransport.value === 'stdio'
     const args =
       isStdio && newServerArgs.value.trim() ? newServerArgs.value.trim().split(/\s+/) : undefined
+    const bodyError = inputLimitError(JSON.stringify({ name: newServerName.value.trim(), command: isStdio ? newServerCommand.value.trim() : '', args, transport: newServerTransport.value, ...(!isStdio ? { endpoint: newServerEndpoint.value.trim() } : {}) }), 'MCP server request', mcpServerRequestBytes, { unit: 'bytes' })
+    if (bodyError) throw new Error(bodyError)
     await addMcpServer(
       newServerName.value.trim(),
       isStdio ? newServerCommand.value.trim() : '',

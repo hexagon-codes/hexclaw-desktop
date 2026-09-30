@@ -74,6 +74,8 @@ export default {
   },
 
   common: {
+    inputTooLongCharacters: '{field} must be {limit} characters or fewer.',
+    inputTooLongBytes: '{field} must be {limit} bytes or fewer.',
     noResults: 'No results',
     save: 'Save',
     saving: 'Saving…',
@@ -520,6 +522,7 @@ export default {
       "Internal ID (letters/digits) for {'@'}mentions and system lookup; cannot be changed after creation",
     displayName: 'Display Name',
     displayNameHint: 'The name shown in the UI and conversations; editable anytime',
+    displayNameTooLong: 'Display name must be 64 characters or fewer.',
     goal: 'Goal',
     backstory: 'Backstory',
     expertise: 'Expertise',
@@ -778,7 +781,7 @@ export default {
     chatIdHint: 'Required for IM/connection delivery — which chat or group to send to',
     continuousLabel: 'Continuous task',
     continuousHint:
-      'Advance a long goal across multiple runs — each tick does just the next increment, with a checkpoint (survives restart); auto-finishes when the goal is done or stalls.',
+      'Advance the goal across runs and save progress to resume after restart; stop when complete or blocked.',
     deliverChannel: {
       chat: 'Current chat',
       push: 'System push',
@@ -875,15 +878,15 @@ export default {
       autoTitle: 'Auto-approved by the current profile (no approval needed)',
       needsTitle: 'Needs your decision',
       estimateNote:
-        'The capability list is an estimate: misses are caught at runtime, extras never create any grant.',
+        'Capabilities are estimated. Ungranted capabilities still pause execution; estimates do not grant permissions.',
       grantTitle: 'Grant this task only (recommended)',
       grantDesc:
-        'Creates a task-scoped grant: only this task may use these capabilities; global defaults stay unchanged; deleting the task revokes it.',
+        'Allow only this task to use these capabilities. Global settings stay unchanged; deleting the task revokes the grant.',
       laterTitle: 'Skip granting for now',
       laterDesc:
-        'When triggered, ungranted capabilities are intercepted into "pending" — never silently escalated, never silently failed.',
+        'Execution pauses on an ungranted capability and moves to Pending.',
       pausedTitle: 'Save as paused',
-      pausedDesc: 'Freezes the task without scheduling; grant and enable later from the task card.',
+      pausedDesc: 'Save without running; grant and enable from the task card.',
       back: 'Back to editing',
       grantNote: 'Task-scoped grant from create flow',
       grantedAndEnabled: 'Granted and enabled',
@@ -893,7 +896,7 @@ export default {
     },
     blocked: {
       title: 'Permissions for "{name}"',
-      desc: 'The task paused before authorization: pending is not denial — once granted, the next trigger proceeds normally with no silent escalation.',
+      desc: 'Task paused. After approval, execution resumes on the next trigger.',
       needsTitle: 'Capabilities awaiting grant',
       noEntries: 'No record yet — trigger once and the intercepted capabilities appear here',
       logTitle: 'Permission decision log (persisted locally)',
@@ -950,7 +953,7 @@ export default {
     },
     settings: {
       sectionTitle: 'Automation permissions',
-      lede: 'Controls what automation can do unattended. First-line approvals happen in the create flow and task cards; this page covers the global level, pending fallbacks, audit review and effective policy. Recovery candidates require a real execution verification; permission approval cannot fix authentication, data-source or external-service failures.',
+      lede: 'Set unattended task permissions and review pending actions, decisions and effective policies. Grant task permissions during creation or from task cards. Recovery candidates need verification on the next run; grants cannot fix authentication, data-source or external-service failures.',
       currentLabel: 'Current',
       unavailable: 'Automation permission governance unavailable (engine offline or outdated)',
       profileTitle: 'Automation level',
@@ -1014,7 +1017,7 @@ export default {
   workflow: {
     emptyTitle: 'No workflows yet',
     emptyDesc:
-      'Chain Trigger → Model → Tool → Output into a reusable linear flow so the agent runs a task pipeline automatically.',
+      'Connect triggers, models, tools and outputs into a reusable workflow.',
     linearLabel: 'Linear orchestration · Trigger → Model → Tool → Output',
     steps: '{n} steps',
     nodeTrigger: 'Trigger / Input',
@@ -1070,7 +1073,7 @@ export default {
     fieldTool: 'Tool name',
     fieldToolHint: 'e.g. media_generate / send_message',
     fieldArgs: 'Arguments (JSON, optional)',
-    outputNote: 'The output step passes the previous result through as the workflow final output.',
+    outputNote: 'Use the previous result as the workflow’s final output.',
     summaryNoPrompt: '(no instruction set)',
     summaryNoTool: '(no tool selected)',
     summaryOutput: 'Pass through final output',
@@ -1319,7 +1322,7 @@ export default {
       backgroundEnhancing:
         'Large-file text is searchable while the semantic index improves in the background.',
       providerNotice:
-        'Cloud models are provided by the third-party Provider you configure. HexClaw only connects to and calls that service; index and query text is sent to it, and its billing and data-processing terms apply.',
+        'Index and query text is sent to your configured cloud provider; its billing and data-processing terms apply.',
       providerDocs: 'View third-party AI service details ↗',
       updated: 'Index model setting updated',
       conflict: 'This setting changed elsewhere. Please choose again.',
@@ -1365,7 +1368,7 @@ export default {
       cancelRebuildTitle: 'Cancel this rebuild?',
       cancelRebuildLead: 'The current index will not be affected.',
       cancelRebuildDetail:
-        'Completed batches from the new index will not be used for queries; text search and the current semantic index remain available.',
+        'The new index will not be queried; text search and the current semantic index remain available.',
       continueRebuild: 'Continue in background',
       rebuildCancelled: 'Rebuild cancelled · current index remains available',
       download: 'Download',
@@ -1379,10 +1382,10 @@ export default {
       recommendationGeneric: 'The index model is selected from currently available capabilities',
       liveStatusWithAnnouncement: '{announcement}. {status}',
     },
-    authorityReading: 'Reading authoritative status…',
+    authorityReading: 'Updating status…',
     syncingStatus: 'Syncing',
     processing:
-      'Uploaded · parsing & indexing on the server (scans/large files are slower, please wait)',
+      'Uploaded. Parsing and indexing; scans and large files take longer.',
     indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',
@@ -1402,10 +1405,10 @@ export default {
     ragOn: 'On',
     ragOff: 'Off',
     ragFootnote:
-      'Rerank toggle / query expansion / floor / candidate pool take effect immediately; switching the rerank model needs a sidecar restart.',
-    ragRestartHint: 'Rerank model changed — restart the app for it to take effect.',
+      'The rerank toggle, query expansion, relevance threshold and candidate count take effect immediately; changing the rerank model requires restarting the current backend service.',
+    ragRestartHint: 'Rerank model changed. Restart the current backend service for it to take effect.',
     ragLoadFailed:
-      'Unable to read the active configuration. Editing is disabled to avoid overwriting real settings.',
+      'Configuration could not be loaded. Editing is temporarily unavailable.',
     ragSaveFailed: 'Failed to save retrieval settings',
     allSources: 'All sources',
     loadMore: 'Load more',
@@ -1445,7 +1448,7 @@ export default {
     indexUnconfiguredTitle: 'Current index: Not configured',
     indexActualPrefix: 'Actual executor: ',
     indexBackgroundHint:
-      'Text indexing becomes ready first; semantic indexing runs in the background. Change the index model on the Knowledge home page.',
+      'Text indexing becomes ready first; semantic indexing follows. Change the index model on the Knowledge home page.',
     adding: 'Adding...',
     add: 'Add',
     docTitle: 'Title',
@@ -1460,7 +1463,7 @@ export default {
     chunkUnit: 'chunks',
     contextualReady: 'Contextual written',
     connectorIndexing:
-      'Uploaded · backend is parsing and building the index (scans/large files may take longer)',
+      'Uploaded. Parsing and indexing; scans and large files take longer.',
     searchResult: 'Search Result',
     statusProcessing: 'Processing',
     statusIndexed: 'Indexed',
@@ -1507,10 +1510,10 @@ export default {
     uploadAwaitingAcceptance: 'Awaiting server confirmation; reselect the same file to recover',
     uploadReselectToRecover: 'Reselect the same file to recover',
     imageVisionRequired:
-      'Image ingestion needs a vision-capable model. Configure a vision model (VLM) in Settings, then upload the image again.',
+      'Configure a vision model in Settings, then upload the image again.',
     backendDisabled: 'Knowledge is temporarily unavailable. Restart the app and try again.',
     backendDisabledDesc:
-      'HexClaw Desktop prepares the local knowledge base automatically. If it still fails after a restart, check the engine status.',
+      'If it remains unavailable after retrying, check the engine status.',
     parsedContentEmpty:
       'No indexable text was extracted from this file. Check the content or use a backend with OCR support.',
     unsupportedFileType: 'Unsupported file type. Supported: {types}',
@@ -1537,19 +1540,19 @@ export default {
       autoMemoryHint: 'How lasting facts from conversations get written into memory',
       autoMemoryMode: { inline: 'Model decides', extract: 'Background extract', off: 'Off' },
       autoMemoryDesc: {
-        inline: 'The main model saves facts on the fly while replying (default, no extra calls)',
-        extract: 'A background pass extracts facts after each reply (for weak/local models)',
+        inline: 'Automatically saves memories while replying (default, no extra model calls)',
+        extract: 'An extra extraction after each reply, for models with unreliable tool calls.',
         off: 'No automatic capture — manual adds or explicit asks only',
       },
-      recallFloor: 'Recall relevance floor',
+      recallFloor: 'Minimum relevance',
       recallFloorHint:
-        'Memories below this relevance are not injected; only applies with an embedding model, 0 = off',
+        'Memories below this value are not used in replies; requires embeddings. 0 disables filtering.',
       activeRecall: 'Active session recall',
       activeRecallHint:
-        'Before replying, automatically surface relevant context from past sessions',
+        'Find relevant past conversations before replying.',
       profileDistill: 'Periodic profile distillation',
       profileDistillHint:
-        'Periodically synthesizes scattered facts into a stable user profile (source of the card above)',
+        'Periodically summarize memories to update the user profile above.',
       profileTitle: 'User profile',
       profileMeta: 'Generated by periodic distillation',
       restartHint: 'Profile distillation setting saved; restart the app to apply.',
@@ -1839,7 +1842,7 @@ export default {
     email: {
       detectIdle: 'Enter your email to auto-detect the provider and configure SMTP / IMAP',
       detectOk:
-        '✓ Detected {name} · auto-configured SMTP {smtp} / IMAP {imap}, no manual entry needed',
+        'Detected {name}; configured SMTP {smtp} / IMAP {imap}',
       detectWarn: 'Provider not recognized, please enter SMTP / IMAP servers manually',
     },
     test: {
@@ -1860,9 +1863,9 @@ export default {
       // Databases go through MCP (addMcpServer): register / status test / failure hint / required check
       mcpConnected: 'Data connection ready',
       mcpConnecting:
-        'Added — connecting in the background (the first add downloads components; check status via the card Test button shortly)',
+        'Added, connecting. Components download on first use; click Test later to check status.',
       mcpAddFailed:
-        'Add failed: {msg} (the first add downloads MCP components and may be slow — try again shortly)',
+        'Add failed: {msg}. MCP components download on first use; try again later.',
       mcpUnsupported: 'This data source is not supported yet',
       mcpTestConnected: 'Connected — MCP service online',
       mcpTestDisconnected:
@@ -1870,13 +1873,13 @@ export default {
       mcpTestNotConfigured:
         'Connector not configured yet — click “Edit” to fill in the connection details',
       mcpProbeToolMissing:
-        'MCP service is online, but no SQL query tool belonging to this connection was found (cannot determine a probe tool)',
+        'MCP service is online, but no SQL query tool was found for this connection; the test cannot complete.',
       mcpProbeNoInputSchema:
-        'MCP tool “{tool}” exposes no input schema, so a query probe cannot be built safely',
+        'MCP tool “{tool}” has no input format; the query test cannot complete.',
       mcpProbeNoSqlArg: 'MCP tool “{tool}” has no recognizable SQL query field in its inputs',
       fieldRequired: 'Please fill in: {field}',
       nameExists:
-        'A connection with this name already exists — pick another (same name would clash)',
+        'Connection name already exists. Choose another name.',
       tokenRequired: 'Please enter the access token first',
       browse: 'Browse resources',
       resources: 'Resources',
@@ -2244,7 +2247,7 @@ export default {
       noProvidersDesc: 'Click "Add Provider" to configure your LLM models',
       defaultModel: 'Default Model',
       defaultModelHint:
-        'New chats, Quick Chat, and flows without an explicit model will prefer this provider / model.',
+        'New chats, Quick Chat and features without a specified model prefer this model.',
       noEnabledModels: 'Enable at least one model first',
       selectedModel: 'Selected',
       models: 'Models',

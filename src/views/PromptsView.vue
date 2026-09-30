@@ -24,8 +24,11 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useToast } from '@/composables/useToast'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
+const toast = useToast()
 
 const props = withDefaults(
   defineProps<{
@@ -96,6 +99,28 @@ async function savePrompt() {
   const e = editing.value
   if (!e || !e.title?.trim()) return
   actionError.value = ''
+  const original = prompts.value.find((prompt) => prompt.id === e.id)
+  const originalCommand = original
+    ? original.type === 'command' ? (original as PromptEditor).command ?? '/translate' : ''
+    : undefined
+  let limitError =
+    inputLimitError(e.title, 'Prompt title', INPUT_LIMITS.title, { original: original?.title }) ||
+    inputLimitError(e.category ?? '', 'Category', INPUT_LIMITS.identifier, { original: original?.category }) ||
+    (e.type === 'command' ? inputLimitError(e.command ?? '', 'Command', INPUT_LIMITS.identifier, { original: originalCommand }) : '')
+  if (!limitError && e.tool_scope !== original?.tool_scope) {
+    const previousTools = original?.tool_scope.split(',') ?? []
+    for (const tool of (e.tool_scope ?? '').split(',')) {
+      limitError = inputLimitError(tool, 'Tool name', INPUT_LIMITS.identifier, {
+        original: previousTools.includes(tool) ? tool : undefined,
+      })
+      if (limitError) break
+    }
+  }
+  if (limitError) {
+    actionError.value = limitError
+    toast.error(limitError)
+    return
+  }
   try {
     await upsertPrompt({
       id: e.id,

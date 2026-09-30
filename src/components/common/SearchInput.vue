@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { Search } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import HcClearableField from './HcClearableField.vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: string
   placeholder?: string
   fluid?: boolean
@@ -14,11 +15,13 @@ withDefaults(defineProps<{
   clearTestId?: string
   disabled?: boolean
   ariaLabel?: string
+  maxCharacters?: number
 }>(), {
   fluid: false,
   inputTestId: undefined,
   clearTestId: undefined,
   disabled: false,
+  maxCharacters: INPUT_LIMITS.keyword,
 })
 
 const emit = defineEmits<{
@@ -28,16 +31,58 @@ const emit = defineEmits<{
 }>()
 
 const inputRef = ref<HTMLInputElement | null>(null)
+const draft = ref(props.modelValue)
+let composing = false
+let lastEmittedValue = props.modelValue
+
+function validate(report = false): boolean {
+  const error = inputLimitError(draft.value, 'Search', props.maxCharacters)
+  inputRef.value?.setCustomValidity(error)
+  if (report && error) inputRef.value?.reportValidity()
+  return !error
+}
+
+function publishInput(event: Event) {
+  draft.value = (event.target as HTMLInputElement).value
+  if (composing || (event as InputEvent).isComposing) return
+  if (!validate() || draft.value === lastEmittedValue) return
+  lastEmittedValue = draft.value
+  emit('update:modelValue', draft.value)
+}
+
+function endComposition(event: CompositionEvent) {
+  composing = false
+  publishInput(event)
+}
+
+function startComposition() {
+  composing = true
+}
+
+watch(() => props.modelValue, (value) => {
+  draft.value = value
+  lastEmittedValue = value
+  void nextTick(() => validate())
+})
+watch(() => props.maxCharacters, () => { void nextTick(() => validate()) })
 
 // IME 守卫：中文/维语等输入法拼字回车选词时 isComposing 为真（部分环境 keyCode=229），
 // 此时回车用于确认候选词，不应触发搜索提交。参考 ChatView/MemoryView 已有写法。
-function onEnter(e: KeyboardEvent) {
-  if (e.isComposing || e.keyCode === 229) return
-  emit('submit')
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    if (composing || event.isComposing || event.keyCode === 229) return
+    if (!validate(true)) {
+      event.preventDefault()
+      return
+    }
+  }
+  emit('keydown', event)
+  if (event.key === 'Enter') emit('submit')
 }
 
 defineExpose({
   focus: () => inputRef.value?.focus(),
+  validate: () => validate(true),
 })
 </script>
 
@@ -53,7 +98,7 @@ defineExpose({
     >
       <input
         ref="inputRef"
-        :value="modelValue"
+        :value="draft"
         :data-testid="inputTestId"
         data-search-control
         type="text"
@@ -61,9 +106,11 @@ defineExpose({
         :disabled="disabled"
         :placeholder="placeholder || `${t('common.search')}...`"
         :aria-label="ariaLabel || placeholder || `${t('common.search')}...`"
-        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-        @keydown="emit('keydown', $event)"
-        @keydown.enter="onEnter"
+        @input="publishInput"
+        @compositionstart="startComposition"
+        @compositionend="endComposition"
+        @blur="validate(true)"
+        @keydown="onKeydown"
       />
     </HcClearableField>
   </div>

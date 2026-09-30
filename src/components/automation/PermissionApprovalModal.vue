@@ -54,7 +54,8 @@ const needs = computed(() => props.preflight?.needs_decision ?? [])
     <Transition name="modal">
       <div
         v-if="open"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+        class="fixed inset-0 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+        style="z-index: calc(var(--hc-z-modal) + 1)"
         data-testid="permission-approval-modal"
         @click.self="emit('close')"
       >

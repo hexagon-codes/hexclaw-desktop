@@ -58,6 +58,8 @@ import MaterialPreparationPanel from '@/components/knowledge/MaterialPreparation
 import { getMaterialPreparation, getMaterialPreparations, materialPreparationSummary, type MaterialPreparation } from '@/api/k12-materials'
 import { logger } from '@/utils/logger'
 import { formatRelative } from '@/utils/time'
+import { useToast } from '@/composables/useToast'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 // 图片格式走后端多模态入库（视觉模型转写 → 文本 RAG，source_type=image）。
 // 后端 /knowledge/documents multipart 显式支持这些扩展，桌面也须放行，
@@ -102,6 +104,7 @@ const props = withDefaults(
 const knowledgeEnabled = computed(() => props.knowledgeEnabled)
 
 const { t, locale } = useI18n()
+const toast = useToast()
 const appRouter = getCurrentInstance()?.appContext.config.globalProperties.$router as
   | { push?: (location: string) => unknown }
   | undefined
@@ -135,6 +138,7 @@ const showDeleteConfirm = ref(false)
 const deletingDoc = ref<KnowledgeDoc | null>(null)
 
 const searchQuery = ref('')
+const searchInput = ref<InstanceType<typeof SearchInput> | null>(null)
 const searchResults = ref<KnowledgeSearchResult[]>([])
 const searching = ref(false)
 let searchRequestGen = 0
@@ -925,6 +929,12 @@ async function handleAdd() {
     openFilePicker()
     return
   }
+  const limitError = inputLimitError(newTitle.value, 'Document title', INPUT_LIMITS.title)
+  if (limitError) {
+    errorMsg.value = limitError
+    toast.error(limitError)
+    return
+  }
   adding.value = true
   errorMsg.value = ''
   try {
@@ -972,6 +982,12 @@ function closeDeleteConfirm() {
 
 async function handleSearch() {
   if (!ensureKnowledgeEnabled()) return
+  if (searchInput.value?.validate?.() === false) return
+  const limitError = inputLimitError(searchQuery.value, 'Search question', INPUT_LIMITS.knowledgeQuery)
+  if (limitError) {
+    errorMsg.value = limitError
+    return
+  }
   const requestGen = ++searchRequestGen
   if (!searchQuery.value.trim()) {
     searchResults.value = []
@@ -2367,7 +2383,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
                 <div class="flex gap-2 mb-3">
                   <SearchInput
+                    ref="searchInput"
                     v-model="searchQuery"
+                    :max-characters="INPUT_LIMITS.knowledgeQuery"
                     class="flex-1"
                     :fluid="true"
                     :disabled="!knowledgeEnabled"

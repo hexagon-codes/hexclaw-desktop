@@ -21,8 +21,11 @@ import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import type { ChatSession } from '@/types'
+import { useToast } from '@/composables/useToast'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
+const toast = useToast()
 const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const ctxMenu = ref<InstanceType<typeof ContextMenu>>()
@@ -31,6 +34,7 @@ const openMenuSessionId = ref<string | null>(null)
 
 const renamingId = ref<string | null>(null)
 const renameValue = ref('')
+const renameOriginal = ref('')
 const renameInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null)
 const renameRequestSeq = new Map<string, number>()
 const deletingSessionIds = ref<Set<string>>(new Set())
@@ -497,6 +501,7 @@ function startRename(sessionId: string) {
   if (!session) return
   renamingId.value = sessionId
   renameValue.value = session.title || t('chat.newSessionDefault')
+  renameOriginal.value = renameValue.value
   nextTick(() => {
     const input = Array.isArray(renameInputRef.value)
       ? renameInputRef.value[0]
@@ -509,19 +514,26 @@ function startRename(sessionId: string) {
 async function commitRename() {
   const sid = renamingId.value
   if (!sid) return
-  const newTitle = renameValue.value.trim() || t('chat.newSessionDefault')
-  renamingId.value = null
+  const rawTitle = renameValue.value
+  const limitError = inputLimitError(rawTitle, 'Session title', INPUT_LIMITS.title, { original: renameOriginal.value })
+  if (limitError) {
+    toast.error(limitError)
+    return
+  }
+  const newTitle = rawTitle === renameOriginal.value ? rawTitle : rawTitle.trim() || t('chat.newSessionDefault')
   const requestSeq = (renameRequestSeq.get(sid) ?? 0) + 1
   renameRequestSeq.set(sid, requestSeq)
   try {
     await apiUpdateSessionTitle(sid, newTitle)
     if (renameRequestSeq.get(sid) !== requestSeq) return
+    if (renamingId.value === sid && renameValue.value === rawTitle) renamingId.value = null
     // 同 startRename：extraSessions（分页加载）的标题也要本地刷新，否则改名成功但 UI 不变。
     const session =
       chatStore.sessions.find((s) => s.id === sid) ?? mergedSessions.value.find((s) => s.id === sid)
     if (session) session.title = newTitle
   } catch (e) {
     console.error('[SessionList] rename failed:', e)
+    toast.error(e instanceof Error ? e.message : 'Failed to rename session.')
   }
 }
 
@@ -530,6 +542,7 @@ function cancelRename() {
 }
 
 function handleRenameKeydown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
   if (e.key === 'Enter') {
     e.preventDefault()
     commitRename()

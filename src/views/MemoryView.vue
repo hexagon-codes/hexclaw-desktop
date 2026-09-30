@@ -37,6 +37,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import MemoryEntryEditor from '@/components/memory/MemoryEntryEditor.vue'
 import MemorySettingsPanel from '@/components/memory/MemorySettingsPanel.vue'
+import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t } = useI18n()
 
@@ -521,6 +522,11 @@ async function handleSave() {
 async function handleSearch() {
   if (!searchQuery.value.trim()) {
     clearSearchState(true)
+    return
+  }
+  const limitError = inputLimitError(searchQuery.value, 'Search query', INPUT_LIMITS.keyword)
+  if (limitError) {
+    errorMsg.value = limitError
     return
   }
   const requestGen = ++searchRequestGen
