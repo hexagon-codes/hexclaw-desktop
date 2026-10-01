@@ -786,10 +786,6 @@ async function printPaper() {
   }
 }
 
-function onPersistentPrintResult(printed: boolean) {
-  if (!printed) paper.value.error = t('k12.practice.paperPrintFailed')
-}
-
 function onPersistentPrintError(error: Error) {
   paper.value.error = error.message || t('k12.practice.paperPrintFailed')
 }
@@ -836,7 +832,6 @@ async function cancelSet(s: PracticeSetDTO) {
   <section ref="panelRoot" class="k12ps">
     <K12PersistentPrintController
       ref="persistentPrintController"
-      @result="onPersistentPrintResult"
       @error="onPersistentPrintError"
     />
     <K12PrintPreviewModal
