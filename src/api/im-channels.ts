@@ -85,7 +85,12 @@ async function proxyApiRequest<T = Record<string, unknown>>(
 
 const RUNTIME_CONNECTING_RE =
   /(stream\s*未连接|连接中|请稍候重试|connecting|not connected|please.*retry|please.*wait)/i
-const RUNTIME_TEST_RETRY_DELAYS_MS = [300, 900]
+const RUNTIME_TEST_RETRY_DELAYS_MS = [300, 900, 1800, 3000]
+
+function assertConnectionTestActive(scope: string, signal?: AbortSignal): void {
+  assertBackendActive(scope)
+  if (signal?.aborted) throw new Error('Connection test cancelled')
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -384,15 +389,19 @@ export async function getConnections(): Promise<ConnectionSummary[]> {
 /** 对已保存实例执行真实运行时健康检查 */
 export async function testSavedIMInstanceRuntime(
   instance: IMInstance,
+  signal?: AbortSignal,
 ): Promise<{ success: boolean; message: string }> {
   const { invoke } = await import('@tauri-apps/api/core')
+  const scope = backendScopeKey()
 
   try {
+    assertConnectionTestActive(scope, signal)
     await invoke<string>('proxy_api_request', {
       method: 'GET',
       path: '/health',
       body: null,
     })
+    assertConnectionTestActive(scope, signal)
   } catch {
     return { success: false, message: 'Cannot connect to backend. Please ensure Engine is running.' }
   }
@@ -410,11 +419,14 @@ export async function testSavedIMInstanceRuntime(
   try {
     const path = `/api/v1/platforms/instances/by-id/${encodeURIComponent(instance.id)}/test`
     for (let attempt = 0; attempt <= RUNTIME_TEST_RETRY_DELAYS_MS.length; attempt++) {
+      assertConnectionTestActive(scope, signal)
       const result = await proxyApiRequest<{
         success?: boolean
         message?: string
         last_error?: string
       }>('POST', path)
+
+      assertConnectionTestActive(scope, signal)
 
       if (!result) break
       const normalized = normalizeRuntimeTestResult(result)
@@ -438,20 +450,21 @@ export async function testSavedIMInstanceRuntime(
 export async function testSavedIMInstanceDelivery(
   instance: IMInstance,
   content: string,
+  signal?: AbortSignal,
 ): Promise<{ success: boolean; message: string }> {
-  if (!instance.enabled || instance.type === 'email') return testSavedIMInstanceRuntime(instance)
+  if (!instance.enabled || instance.type === 'email') return testSavedIMInstanceRuntime(instance, signal)
   const scope = backendScopeKey()
   const storageKey = backendStorageKey(`im-test-request:${instance.id}`)
   let requestID = localStorage.getItem(storageKey)
   if (!requestID) {
-    const connection = await testSavedIMInstanceRuntime(instance)
-    assertBackendActive(scope)
+    const connection = await testSavedIMInstanceRuntime(instance, signal)
+    assertConnectionTestActive(scope, signal)
     if (!connection.success) return connection
     requestID = crypto.randomUUID()
     localStorage.setItem(storageKey, requestID)
   }
   try {
-    assertBackendActive(scope)
+    assertConnectionTestActive(scope, signal)
     const result = await proxyApiRequest<{
       success: boolean
       message: string
@@ -482,6 +495,8 @@ export interface IMInstanceHealth {
   provider: string
   status: string  // running | stopped | error
   enabled: boolean
+  healthy?: boolean
+  connection_state?: 'connecting' | 'connected' | 'disconnected' | 'credential_invalid'
   last_error?: string
   uptime?: number
 }

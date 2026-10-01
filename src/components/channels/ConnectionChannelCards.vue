@@ -6,7 +6,7 @@
  * 配置 / 编辑复用 ChannelConfigModal；测试 / 停用 / 删除复用 im-channels API。
  * 锚点 = prototype/app.html connections 屏 data-cx=0（通道与账号）。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Zap, Pencil, Trash2, Plug } from 'lucide-vue-next'
 import {
@@ -22,6 +22,7 @@ import {
 import type { IMInstance, IMChannelType, IMInstanceHealth } from '@/api/im-channels'
 import { getCronJobs } from '@/api/tasks'
 import type { CronJob } from '@/types'
+import { backendScopeKey } from '@/services/backend-context'
 import ChannelConfigModal from '@/components/channels/ChannelConfigModal.vue'
 import ChannelAgentBinding from '@/components/channels/ChannelAgentBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -46,6 +47,29 @@ const testResults = ref<Record<string, { success: boolean; message: string }>>({
 // 定时任务引用数据不投影到卡片可见 UI；health 按实例 name 索引。
 const cronJobs = ref<CronJob[]>([])
 const healthByName = ref<Record<string, IMInstanceHealth>>({})
+let active = false
+let viewVersion = 0
+let healthRequest = 0
+let refreshVersion = 0
+let refreshTimer: ReturnType<typeof setTimeout> | undefined
+let testController: AbortController | undefined
+const resultTimers = new Set<ReturnType<typeof setTimeout>>()
+
+function stopHealthRefresh() {
+  refreshVersion++
+  if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+  refreshTimer = undefined
+}
+
+function deactivate() {
+  active = false
+  viewVersion++
+  stopHealthRefresh()
+  testController?.abort()
+  testController = undefined
+  for (const timer of resultTimers) clearTimeout(timer)
+  resultTimers.clear()
+}
 
 // 弹层状态：editing=要编辑的实例（null=新建）；presetType=新建时预选类型
 const modalOpen = ref(false)
@@ -53,42 +77,89 @@ const editing = ref<IMInstance | null>(null)
 const presetType = ref<IMChannelType | null>(null)
 
 async function load() {
+  const version = viewVersion
+  stopHealthRefresh()
+  healthByName.value = {}
   loading.value = true
   errorMsg.value = ''
   try {
-    instances.value = await getIMInstances()
+    const list = await getIMInstances()
+    if (!active || version !== viewVersion) return
+    instances.value = list
   } catch (e) {
+    if (!active || version !== viewVersion) return
     errorMsg.value = e instanceof Error ? e.message : t('imChannels.loadFailed')
   } finally {
-    loading.value = false
+    if (active && version === viewVersion) loading.value = false
   }
+  if (!active || version !== viewVersion) return
   // 定时任务引用数据 / 健康态的任一拉取失败都只优雅退化，
   // 不写 errorMsg、不阻塞卡片渲染。
   void loadReferences()
-  void loadHealth()
+  startHealthRefresh()
 }
 
 async function loadReferences() {
+  const version = viewVersion
   try {
     const { jobs } = await getCronJobs()
-    cronJobs.value = jobs
+    if (active && version === viewVersion) cronJobs.value = jobs
   } catch {
-    cronJobs.value = []
+    if (active && version === viewVersion) cronJobs.value = []
   }
 }
 
 async function loadHealth() {
+  const version = viewVersion
+  const request = ++healthRequest
   try {
     const list = await listIMInstancesHealth()
+    if (!active || version !== viewVersion || request !== healthRequest) return
     const map: Record<string, IMInstanceHealth> = {}
     for (const h of list) map[h.name] = h
     healthByName.value = map
   } catch {
-    healthByName.value = {}
+    if (active && version === viewVersion && request === healthRequest) healthByName.value = {}
   }
 }
 
-onMounted(load)
+// 刷新只读健康状态；握手期间最多等待十二秒，不触发启用或消息投递。
+function startHealthRefresh() {
+  stopHealthRefresh()
+  const version = refreshVersion
+  const deadline = Date.now() + 12_000
+  async function refresh() {
+    if (!active || version !== refreshVersion) return
+    await loadHealth()
+    if (!active || version !== refreshVersion || Date.now() >= deadline) return
+    if (instances.value.some((inst) => inst.enabled && !isIncomplete(inst) &&
+      (!healthByName.value[inst.name] || healthByName.value[inst.name]?.connection_state === 'connecting'))) {
+      refreshTimer = setTimeout(() => { void refresh() }, 1000)
+    }
+  }
+  void refresh()
+}
+
+function activate() {
+  if (active) return
+  active = true
+  void load()
+}
+
+onMounted(activate)
+onActivated(activate)
+onDeactivated(deactivate)
+onBeforeUnmount(deactivate)
+watch(() => backendScopeKey(), () => {
+  const wasActive = active
+  deactivate()
+  instances.value = []
+  healthByName.value = {}
+  testResults.value = {}
+  errorMsg.value = ''
+  busyId.value = null
+  if (wasActive) activate()
+})
 
 const existingNames = computed(() => instances.value.map((i) => i.name))
 
@@ -118,27 +189,28 @@ function isIncomplete(inst: IMInstance): boolean {
   return getRequiredFieldLabels(inst).length > 0
 }
 
-// 实例是否凭证失效：后端 health 报 error 状态或带 last_error（对齐 instances.Instance.Status/LastError）。
+// 只有后端明确的鉴权拒绝能投影为凭证失效，网络与握手错误不作凭据判断。
 function hasCredentialError(inst: IMInstance): boolean {
   const h = healthByName.value[inst.name]
-  if (!h) return false
-  return h.status === 'error' || !!h.last_error
+  return h?.connection_state === 'credential_invalid'
 }
 
-// 状态 pill：凭证失效(red) / 未配置(amber) / 已连接(green) / 已停用(grey)
+// 绿色只由真实健康结果决定；尚未取得结果时保持未连接。
 function statusKind(inst: IMInstance): 'green' | 'amber' | 'red' | 'grey' {
   if (isIncomplete(inst)) return 'amber'
   if (!inst.enabled) return 'grey'
   if (hasCredentialError(inst)) return 'red'
-  return 'green'
+  const h = healthByName.value[inst.name]
+  if (h?.healthy === true) return 'green'
+  return h?.connection_state === 'connecting' ? 'amber' : 'grey'
 }
 
 function statusLabel(inst: IMInstance): string {
   const kind = statusKind(inst)
   if (kind === 'red') return t('connections.legend.invalid')
-  if (kind === 'amber') return t('connections.legend.unconfigured')
+  if (kind === 'amber') return isIncomplete(inst) ? t('connections.legend.unconfigured') : t('imChannels.connecting')
   if (kind === 'green') return t('connections.legend.connected')
-  return t('connections.channels.disabled')
+  return inst.enabled ? t('imChannels.notConnected') : t('connections.channels.disabled')
 }
 
 // 能力 chip：按 provider 派生，镜像后端 connectionCapabilities（email 只收 receive；IM 收+发）。
@@ -181,13 +253,16 @@ async function toggleEnabled(inst: IMInstance) {
     return
   }
   busyId.value = inst.id
+  const version = viewVersion
   try {
     await updateIMInstance(inst.id, { enabled: !inst.enabled })
+    if (!active || version !== viewVersion) return
     await load()
   } catch (e) {
+    if (!active || version !== viewVersion) return
     errorMsg.value = e instanceof Error ? e.message : t('imChannels.updateFailed')
   } finally {
-    busyId.value = null
+    if (active && version === viewVersion) busyId.value = null
   }
 }
 
@@ -212,20 +287,31 @@ async function confirmDeleteInstance() {
 async function testInstance(inst: IMInstance) {
   if (busyId.value) return
   busyId.value = inst.id
+  const version = viewVersion
+  const controller = new AbortController()
+  testController = controller
   delete testResults.value[inst.id]
   try {
-    testResults.value[inst.id] = await testSavedIMInstanceDelivery(inst, t('connections.test.message'))
+    const result = await testSavedIMInstanceDelivery(inst, t('connections.test.message'), controller.signal)
+    if (!active || version !== viewVersion) return
+    testResults.value[inst.id] = result
   } catch (e) {
+    if (!active || version !== viewVersion) return
     testResults.value[inst.id] = {
       success: false,
       message: e instanceof Error ? e.message : t('imChannels.testFailed'),
     }
   } finally {
-    busyId.value = null
-    const id = inst.id
-    setTimeout(() => {
-      delete testResults.value[id]
-    }, 5000)
+    if (active && version === viewVersion) {
+      busyId.value = null
+      testController = undefined
+      startHealthRefresh()
+      const timer = setTimeout(() => {
+        delete testResults.value[inst.id]
+        resultTimers.delete(timer)
+      }, 5000)
+      resultTimers.add(timer)
+    }
   }
 }
 
