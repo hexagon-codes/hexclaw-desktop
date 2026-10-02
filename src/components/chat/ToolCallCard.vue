@@ -49,6 +49,24 @@ const sandboxCode = computed(() => {
     return { code: value.code, language: typeof value.language === 'string' ? value.language : props.call.execution?.language || 'text' }
   } catch { return null }
 })
+const activitySummary = computed(() => {
+  if (toolKind.value === 'Sandbox') {
+    const action = t('chat.toolName.code')
+    return props.call.execution?.language ? `${props.call.execution.language} ${action}` : action
+  }
+  // 活动行只采用成功回执的明确摘要，任意返回和技术字段仍留在详情中。
+  if (outcome.value !== 'success' || !props.call.result) return ''
+  try {
+    const result = JSON.parse(props.call.result)
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return ''
+    for (const key of ['summary', 'message', 'description', 'title']) {
+      if (typeof result[key] !== 'string' || !result[key].trim()) continue
+      const action = summarizeToolResult({ result: JSON.stringify({ summary: result[key] }) })
+      return action === displayName.value ? '' : action
+    }
+  } catch { /* 非结构化返回只在详情中展示。 */ }
+  return ''
+})
 const prettyArgs = computed(() => {
   if (!sandboxCode.value) return prettyToolJson(props.call.arguments)
   const { code: _code, ...parameters } = JSON.parse(props.call.arguments)
@@ -87,6 +105,7 @@ const statusLabel = computed(() =>
         ><span v-if="toolKind" class="hc-process-tool__kind">{{ toolKind }} · </span
         >{{ displayName }}</span
       >
+      <span v-if="activitySummary" class="hc-process-tool__meta">{{ activitySummary }}</span>
       <span v-if="outcome === 'unknown'" class="hc-process-tool__meta">Outcome unknown</span>
       <span v-else-if="outcome === 'error'" class="hc-process-tool__meta">{{ statusLabel }}</span>
       <span class="hc-process-tool__meta hc-process-tool__duration">{{
