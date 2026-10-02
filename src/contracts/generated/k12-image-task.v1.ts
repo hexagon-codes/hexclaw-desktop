@@ -188,6 +188,12 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minLength": 1,
           "type": "string"
         },
+        "source_mode": {
+          "enum": [
+            "semantic",
+            "verified_text"
+          ]
+        },
         "textbook_binding_id": {
           "minLength": 1,
           "type": "string"
@@ -197,7 +203,6 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "type": "string"
         },
         "vector_revision_id": {
-          "minLength": 1,
           "type": "string"
         }
       },
@@ -394,6 +399,12 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "minLength": 1,
           "type": "string"
         },
+        "source_mode": {
+          "enum": [
+            "semantic",
+            "verified_text"
+          ]
+        },
         "textbook_binding_id": {
           "minLength": 1,
           "type": "string"
@@ -403,7 +414,6 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "type": "string"
         },
         "vector_revision_id": {
-          "minLength": 1,
           "type": "string"
         }
       },

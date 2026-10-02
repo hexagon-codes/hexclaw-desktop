@@ -124,6 +124,7 @@ const PROBLEM_GROUNDING_RECEIPT_FIELDS = [
   ...GROUNDING_EVIDENCE_RECEIPT_FIELDS,
 ] as const
 const GROUNDING_OPERATIONS = new Set(['solve', 'grade'])
+const GROUNDING_SOURCE_MODES = new Set(['semantic', 'verified_text'])
 
 function fail(path: string, expected: string): never {
   throw new Error(`${path}: expected ${expected}`)
@@ -240,11 +241,29 @@ function validateGroundingEvidenceReceiptFields(
   receipt: WireRecord,
   path: string,
 ): ValidatedGroundingEvidenceReceipt {
+  // 历史回执缺省为语义检索；已验证教材正文不依赖向量修订。
+  const sourceMode =
+    receipt.source_mode === undefined
+      ? 'semantic'
+      : enumValue(receipt.source_mode, GROUNDING_SOURCE_MODES, `${path}.source_mode`)
+  const vectorRevision = stringValue(
+    receipt.vector_revision_id,
+    `${path}.vector_revision_id`,
+    sourceMode === 'verified_text',
+  )
+  if (
+    vectorRevision.trim() !== vectorRevision ||
+    (sourceMode === 'verified_text' && vectorRevision !== '')
+  ) {
+    fail(
+      `${path}.vector_revision_id`,
+      sourceMode === 'verified_text' ? 'empty for verified text' : 'trimmed durable identity',
+    )
+  }
   for (const key of [
     'textbook_binding_id',
     'textbook_manifest_id',
     'document_id',
-    'vector_revision_id',
     'chunk_id',
   ] as const) {
     const identity = stringValue(receipt[key], `${path}.${key}`)
@@ -259,7 +278,10 @@ function validateGroundingEvidenceReceiptFields(
   digestValue(receipt.citation_digest, `${path}.citation_digest`)
   return {
     raw: receipt,
-    evidenceKey: JSON.stringify(GROUNDING_EVIDENCE_RECEIPT_FIELDS.map((field) => receipt[field])),
+    evidenceKey: JSON.stringify([
+      ...GROUNDING_EVIDENCE_RECEIPT_FIELDS.map((field) => receipt[field]),
+      sourceMode,
+    ]),
   }
 }
 
@@ -268,7 +290,7 @@ function validateGroundingEvidenceReceipts(value: unknown, path: string): WireRe
   return arrayValue(value, path).map((item, index) => {
     const itemPath = `${path}[${index}]`
     const receipt = record(item, itemPath)
-    exact(receipt, GROUNDING_EVIDENCE_RECEIPT_FIELDS, itemPath)
+    exact(receipt, [...GROUNDING_EVIDENCE_RECEIPT_FIELDS, 'source_mode'], itemPath)
     required(receipt, GROUNDING_EVIDENCE_RECEIPT_FIELDS, itemPath)
     const validated = validateGroundingEvidenceReceiptFields(receipt, itemPath)
     if (seen.has(validated.evidenceKey)) fail(itemPath, 'unique evidence receipt')
@@ -285,7 +307,7 @@ function validateProblemGroundingReceipts(
   return arrayValue(value, path).map((item, index) => {
     const itemPath = `${path}[${index}]`
     const receipt = record(item, itemPath)
-    exact(receipt, PROBLEM_GROUNDING_RECEIPT_FIELDS, itemPath)
+    exact(receipt, [...PROBLEM_GROUNDING_RECEIPT_FIELDS, 'source_mode'], itemPath)
     required(receipt, PROBLEM_GROUNDING_RECEIPT_FIELDS, itemPath)
     const problemID = stringValue(receipt.problem_id, `${itemPath}.problem_id`)
     if (problemID.trim() !== problemID) fail(`${itemPath}.problem_id`, 'trimmed public problem id')
@@ -323,8 +345,9 @@ function validateProblemGroundingExactSet(
     grouped.set(receipt.problemID, current)
   }
   if (!hasGrounding) return
-  for (const [problemID, status] of statusByProblem) {
-    const problemReceipts = grouped.get(problemID) ?? []
+  // 只有实际消费教材的题目有按题回执；同页题库复用与本地计算不产生教材调用。
+  for (const [problemID, problemReceipts] of grouped) {
+    const status = statusByProblem.get(problemID)!
     const expected = [...expectedGroundingOperations(status)].sort()
     const operations = [...new Set(problemReceipts.map((receipt) => receipt.operation))].sort()
     if (JSON.stringify(operations) !== JSON.stringify(expected)) {
