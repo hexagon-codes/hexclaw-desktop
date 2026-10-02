@@ -13,29 +13,36 @@ import { deriveAssistantRunPresentation } from './assistant-run-presentation'
 import './assistant-process.css'
 
 const props = defineProps<{
-  message: ChatMessage
+  message?: ChatMessage
   live?: boolean
   elapsedSeconds: number
   toolCalls?: ToolCall[]
+  /** 已有任务回执的只读投影，不生成工具调用或执行来源。 */
+  operations?: readonly {
+    id: string
+    name: string
+    summary?: string
+    status: 'success' | 'error' | 'unknown' | 'running'
+  }[]
 }>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 const { t } = useI18n()
 const expanded = ref(false)
 const bodyID = useId()
-const events = computed(() => props.message.metadata?.runtime_events ?? [])
-const receipt = computed(() => props.message.metadata?.reasoning_receipt)
+const events = computed(() => props.message?.metadata?.runtime_events ?? [])
+const receipt = computed(() => props.message?.metadata?.reasoning_receipt)
 const visibleReasoning = computed(
   () =>
-    props.message.metadata?.reasoning_visibility === 'visible' ||
-    props.message.metadata?.reasoning_disclosure?.visibility === 'visible',
+    props.message?.metadata?.reasoning_visibility === 'visible' ||
+    props.message?.metadata?.reasoning_disclosure?.visibility === 'visible',
 )
 const terminal = computed(
   () =>
     [...events.value].reverse().find((event) => event.kind === 'terminal')?.terminal_status ??
-    (props.live ? undefined : props.message.metadata?.thinking_state),
+    (props.live ? undefined : props.message?.metadata?.thinking_state),
 )
 const calls = computed(() => {
-  const source = props.toolCalls ?? props.message.tool_calls ?? []
+  const source = props.toolCalls ?? props.message?.tool_calls ?? []
   const out = source.map((call) => ({ ...call }))
   for (const event of events.value) {
     if (!event.tool_call_id || !event.tool_name) continue
@@ -65,7 +72,7 @@ const ambiguousMCPNames = computed(() => {
   return new Set([...servers].filter(([, names]) => names.size > 1).map(([name]) => name))
 })
 const steps = computed(() => {
-  const ordered = splitProcessBlocks(props.message.blocks).process.filter(
+  const ordered = splitProcessBlocks(props.message?.blocks).process.filter(
     (block) => block.type !== 'thinking' || visibleReasoning.value,
   )
   const seen = new Set(
@@ -77,7 +84,7 @@ const steps = computed(() => {
   // 旧消息仅有非空命中记录，不推断未记录的阶段顺序或空检索。
   if (!ordered.some((block) => block.type === 'retrieval')) {
     for (const kind of ['knowledge', 'memory'] as const) {
-      const hits = props.message.metadata?.[`${kind}_hits`]
+      const hits = props.message?.metadata?.[`${kind}_hits`]
       if (Array.isArray(hits) && hits.length)
         ordered.push({
           type: 'retrieval',
@@ -98,25 +105,27 @@ const steps = computed(() => {
 })
 const fallbackReasoning = computed(() =>
   visibleReasoning.value && !steps.value.some((block) => block.type === 'thinking')
-    ? props.message.reasoning
+    ? props.message?.reasoning
     : '',
 )
-const hasDetails = computed(() => !!(steps.value.length || fallbackReasoning.value))
+const operations = computed(() => props.operations ?? [])
+const hasDetails = computed(() => !!(steps.value.length || fallbackReasoning.value || operations.value.length))
 const failed = computed(
   () =>
     terminal.value === 'failed' ||
+    operations.value.some((operation) => operation.status === 'error') ||
     calls.value.some((call) => toolCallStatus(call) === 'error') ||
     steps.value.some((block) => block.type === 'retrieval' && block.retrieval.status === 'failed'),
 )
 const pending = computed(() => calls.value.filter((call) => toolCallStatus(call) === 'running'))
-const unknown = computed(() => !props.live && pending.value.length > 0)
+const unknown = computed(() => !props.live && (pending.value.length > 0 || operations.value.some((operation) => operation.status === 'unknown' || operation.status === 'running')))
 const runPresentation = computed(() =>
   deriveAssistantRunPresentation(
     {
       reasoningRequest: receipt.value?.reasoning_request ?? 'off',
       reasoningSupport: receipt.value?.reasoning_support ?? 'unknown',
       reasoningExecution: receipt.value?.reasoning_execution ?? 'unknown',
-      hasVisibleAnswer: !!props.message.content.trim(),
+      hasVisibleAnswer: !!props.message?.content.trim(),
       elapsedSeconds: props.elapsedSeconds,
     },
     {
@@ -131,6 +140,7 @@ const runPresentation = computed(() =>
   ),
 )
 const label = computed(() => {
+  if (operations.value.length && !props.message && !props.toolCalls?.length && !props.live) return '处理过程'
   if (terminal.value === 'cancelled') return 'Cancelled'
   if (failed.value && !props.live)
     return terminal.value === 'failed' ? 'Processing failed' : 'Completed with errors'
@@ -228,6 +238,21 @@ function callFor(id: string, name: string, input: string): ToolCall {
           @rendered="emit('rendered', $event)"
         />
       </div>
+      <div v-for="operation in operations" :key="operation.id" class="hc-process__step">
+        <div class="hc-process-tool" :data-status="operation.status">
+          <div class="hc-process-tool__operation">
+            <span class="hc-process__marker" aria-hidden="true">
+              <span v-if="operation.status === 'running'" class="hc-process__spinner" />
+              <span v-else-if="operation.status === 'error' || operation.status === 'unknown'">!</span>
+              <svg v-else viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
+            </span>
+            <span class="hc-process-tool__name">{{ operation.name }}</span>
+            <span v-if="operation.status === 'success' && operation.summary" class="hc-process-tool__meta">{{ operation.summary }}</span>
+            <span v-if="operation.status === 'unknown'" class="hc-process-tool__meta">Outcome unknown</span>
+            <span v-else-if="operation.status === 'error'" class="hc-process-tool__meta">{{ t('chat.toolFailed', '失败') }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
   <AssistantRunStatus
@@ -235,7 +260,7 @@ function callFor(id: string, name: string, input: string): ToolCall {
     :reasoning-request="receipt?.reasoning_request ?? 'off'"
     :reasoning-support="receipt?.reasoning_support ?? 'unknown'"
     :reasoning-execution="receipt?.reasoning_execution ?? 'unknown'"
-    :has-visible-answer="!!message.content.trim()"
+    :has-visible-answer="!!message?.content.trim()"
     :elapsed-seconds="elapsedSeconds"
   />
 </template>

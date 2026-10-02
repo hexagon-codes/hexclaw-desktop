@@ -19,6 +19,7 @@ import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
+import AssistantProcess from '@/components/chat/AssistantProcess.vue'
 import QuestionReuseActivityRow from '@/components/chat/QuestionReuseActivityRow.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
@@ -61,6 +62,7 @@ import type {
   ImageTaskProblemSourceActionResp,
   ImageTaskCreativeProjectionDTO,
   ImageTaskCreativeResultPayload,
+  ImageTaskOperationReceipt,
   ImageTaskIntent,
   ParentTeachingGuideDTO,
   PhotoJobResult,
@@ -351,7 +353,27 @@ const creativeConflicts = ref<CreativeConflictRow[]>([])
 const creativeResult = ref<{
   taskIntent: 'writing' | 'artwork'
   payload: ImageTaskCreativeResultPayload
+  operationReceipts?: ImageTaskOperationReceipt[]
 } | null>(null)
+// 仅消费同一任务的公开回执；模型操作不伪装成 Skill/MCP，旧记录不补造步骤。
+const creativeProcessOperations = computed(() => {
+  const result = creativeResult.value
+  if (!result) return []
+  const names: Record<string, string> = {
+    classification: '图片识别', writing_ocr: '正文转写', work_feedback: '作品点评',
+  }
+  return (result.operationReceipts ?? []).filter(receipt => names[receipt.operation]).map(receipt => {
+    const status = receipt.status === 'succeeded' ? 'success'
+      : receipt.status === 'failed' ? 'error' : 'unknown'
+    return {
+      id: receipt.invocation_id,
+      name: names[receipt.operation]!,
+      status: status as 'success' | 'error' | 'unknown',
+      summary: status !== 'success' ? undefined : receipt.operation === 'classification'
+        ? `已识别为${result.taskIntent === 'writing' ? '语文写作' : '美术作品'}` : '已完成',
+    }
+  })
+})
 const collapsed = ref(false)
 const taskShellTitle = computed(() => {
   if (currentTaskIntent.value === 'completed_homework') return '已作答作业'
@@ -2197,6 +2219,7 @@ async function completeImageTaskFlow() {
       creativeResult.value = {
         taskIntent: outcome.taskIntent,
         payload: outcome.result,
+        operationReceipts: outcome.operationReceipts,
       }
       confirmed.value = true
     }
@@ -2336,7 +2359,7 @@ async function coldStart() {
     class="rec-panel"
     :class="{
       'rec-panel--conversation': !!initialImage || restoredFromBinding,
-      'rec-panel--collapsed': collapsed,
+      'rec-panel--collapsed': collapsed && currentTaskIntent !== 'writing' && currentTaskIntent !== 'artwork',
       'rec-panel--creative-task':
         currentTaskIntent === 'writing' || currentTaskIntent === 'artwork',
       'rec-panel--homework-running': homeworkTaskProgressState === 'running',
@@ -2349,15 +2372,13 @@ async function coldStart() {
     :style="{ '--photo-process-issue-color': processIssueColor }"
   >
     <div class="rec-panel__head">
-      <span v-if="!initialImage && !restoredFromBinding && !collapsed" class="rec-panel__title"
-        >📷 {{ t('k12.recognize.title') }}</span
-      >
       <span
-        v-else-if="
-          !collapsed && (currentTaskIntent === 'writing' || currentTaskIntent === 'artwork')
-        "
+        v-if="currentTaskIntent === 'writing' || currentTaskIntent === 'artwork'"
         class="rec-panel__title"
         >{{ taskShellTitle }}</span
+      >
+      <span v-else-if="!initialImage && !restoredFromBinding && !collapsed" class="rec-panel__title"
+        >📷 {{ t('k12.recognize.title') }}</span
       >
       <template v-else-if="collapsed">
         <span class="rec-panel__title">{{ taskShellTitle }}</span>
@@ -2365,6 +2386,7 @@ async function coldStart() {
         <span v-else class="rec-panel__collapsed-summary">{{ collapsedTaskSummary }}</span>
       </template>
       <HcDisclosureButton
+        v-if="currentTaskIntent !== 'writing' && currentTaskIntent !== 'artwork'"
         class="rec-panel__x"
         data-testid="recognize-close"
         :expanded="!collapsed"
@@ -2709,6 +2731,7 @@ async function coldStart() {
       :data-intake-status="creativeResult.payload.intake.status"
       :data-work-id="creativeResult.payload.work?.work_id || undefined"
     >
+      <AssistantProcess :operations="creativeProcessOperations" :elapsed-seconds="0" />
       <p v-if="creativeResult.payload.notice" class="rec-creative-result__notice" role="status" data-testid="writing-result-notice">
         {{ creativeResult.payload.notice }}
       </p>

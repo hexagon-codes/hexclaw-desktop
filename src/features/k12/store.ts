@@ -45,6 +45,7 @@ import {
   type ImageTaskCreativeFeedbackState,
   type ImageTaskIntent,
   type ImageTaskResultProjection,
+  type ImageTaskOperationReceipt,
   type ConfirmImageTaskReq,
   type TutorTurnReq,
   type TutorTurnResp,
@@ -91,6 +92,7 @@ export type ImageTaskCompletionOutcome =
       stage: 'promoted' | 'unreadable'
       taskIntent: 'writing' | 'artwork'
       result: Extract<ImageTaskResultProjection, { kind: 'writing' | 'artwork' }>['payload']
+      operationReceipts?: ImageTaskOperationReceipt[]
     }
 
 export interface ImageTaskView {
@@ -785,6 +787,7 @@ export const useK12Store = defineStore('k12', () => {
         stage: projection.result.payload.intake.status === 'unreadable' ? 'unreadable' : 'promoted',
         taskIntent: projection.task_intent,
         result: projection.result.payload,
+        operationReceipts: 'operation_receipts' in projection ? projection.operation_receipts : undefined,
       }
     }
     throw new Error(i18n.global.t('k12.recognize.jobFailed'))
