@@ -145,6 +145,8 @@ const props = defineProps<{
    *  转为 emit('scenario-image', 原始 File + session blob preview) 交场景管道（如 K12 拍照识题回显护栏）。
    *  由父级按当前会话是否场景实例决定，本组件零场景知识（AP-1）。 */
   scenarioImageIntercept?: boolean
+  /** 已附图片改道时等待现有场景入口接纳，接纳前仍由输入草稿保管。 */
+  scenarioImageHandler?: (payload: ScenarioComposerImagePayload) => boolean | Promise<boolean>
 }>()
 
 const emit = defineEmits<{
@@ -162,6 +164,8 @@ const emit = defineEmits<{
   skillAction: [action: 'ai-create' | 'upload-local' | 'add-market']
   /** 场景图片改道：同时外发任务原图与同源的消息附件投影。 */
   'scenario-image': [payload: ScenarioComposerImagePayload]
+  /** Agent 选择传稳定身份；展示名称只保留在输入正文中。 */
+  'agent-selected': [agentId: string]
   /** 结构化预设 chip 的领域无关 action id；由父级转交对应场景 feature。 */
   'preset-chip-action': [actionId: string]
 }>()
@@ -488,6 +492,7 @@ let draftScopeRevision = 0
 let draftScopeUpdate: Promise<void> = Promise.resolve()
 let draftWrite: Promise<void> = Promise.resolve()
 let activeDraftKey = ''
+let pendingMentionAgentKey = ''
 const composerDraftKey = () => backendStorageKey(`composer:${props.draftAgentKey ?? ''}:${props.draftScopeKey ?? ''}`)
 function persistDraft(): Promise<void> {
   if (draftLoading.value || !activeDraftKey) return draftWrite
@@ -563,6 +568,17 @@ watch(() => [props.draftScopeKey, props.draftAgentKey], () => {
 watch(() => [props.draftScopeKey, props.draftAgentKey], (_, previous) => {
   draftScopeUpdate = synchronizeDraft()
   async function synchronizeDraft() {
+    // 同一会话内通过 @ 指定收件人，只迁移当前草稿归属，不载入另一份草稿覆盖输入。
+    if (pendingMentionAgentKey && pendingMentionAgentKey === props.draftAgentKey && previous?.[0] === props.draftScopeKey) {
+      const previousKey = activeDraftKey
+      await persistDraft()
+      activeDraftKey = composerDraftKey()
+      await persistDraft()
+      if (previousKey && previousKey !== activeDraftKey) {
+        await writeComposerDraft(previousKey, { text: '', skills: [], contexts: [], files: [] })
+      }
+      return
+    }
     // 首次发送创建会话时仍保留发送中的输入，不恢复另一份草稿。
     if (previous && !previous[0] && props.draftScopeKey && submitting.value) {
       const previousKey = activeDraftKey
@@ -1070,7 +1086,7 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
   })
 }
 
-function handleMentionSelect(item: MentionSelectItem) {
+async function handleMentionSelect(item: MentionSelectItem) {
   const cursorPos = editorSelection().start
   const text = inputText.value
   const beforeCursor = text.slice(0, cursorPos)
@@ -1079,14 +1095,66 @@ function handleMentionSelect(item: MentionSelectItem) {
   if (atIdx < 0) return
 
   if (item.type === 'agent') {
-    // Agent：插入 @name 文本（路由），行为不变
+    // 正文保留可读名称，实际收件人与场景路由使用稳定身份。
     inputText.value = text.slice(0, atIdx) + `@${item.name} ` + text.slice(cursorPos)
-    nextTick(() => {
+    pendingMentionAgentKey = item.id
+    emit('agent-selected', item.id)
+    try {
+      await nextTick()
+      await draftScopeUpdate
+      if (props.scenarioImageIntercept) {
+        // 图片先附加、后选择场景 Agent 时，转交同一图片，不再进入普通聊天附件管道。
+        const images = attachedFiles.value.filter((attachment) => attachment.file.type.startsWith('image/'))
+        const sourceDraftRevision = draftRevision
+        const sourceBackend = backendScopeKey()
+        submitting.value = true
+        try {
+          for (const image of images) {
+            if (draftRevision !== sourceDraftRevision || sourceBackend !== backendScopeKey()
+              || props.draftAgentKey !== item.id || chatInputUnmounted) break
+            if (!props.scenarioImageHandler) break
+            const ownership = createScenarioImagePreviewOwnership(image.file)
+            let accepted = false
+            let releaseRequested = false
+            const previewOwnership: ScenarioComposerImagePreviewOwnership = {
+              url: ownership.url,
+              release: () => {
+                releaseRequested = true
+                if (accepted) ownership.release()
+              },
+            }
+            try {
+              accepted = await props.scenarioImageHandler(createScenarioImagePayload(image.file, previewOwnership))
+              await draftScopeUpdate
+              if (!accepted) continue
+              if (draftRevision !== sourceDraftRevision || sourceBackend !== backendScopeKey()
+                || props.draftAgentKey !== item.id || chatInputUnmounted) break
+              attachedFiles.value = attachedFiles.value.filter((attachment) => attachment !== image)
+              // 原生预览租约接纳后才转交；普通 blob 预览使用场景的新 ownership。
+              if (!image.previewGrant) releaseAttachmentPreview(image)
+              await persistDraft()
+              for (const key of sentDraftKeys) {
+                await writeComposerDraft(key, { text: '', skills: [], contexts: [], files: [] })
+              }
+              sentDraftKeys.clear()
+            } finally {
+              if (accepted && releaseRequested) ownership.release()
+              else if (!accepted && !image.previewGrant) ownership.release()
+            }
+          }
+        } finally {
+          submitting.value = false
+        }
+      }
       const p = atIdx + item.name.length + 2
       mathEditorRef.value?.setCanonicalSelection(p)
       mathEditorRef.value?.focusEditor()
       handleInput()
-    })
+    } catch (error) {
+      voiceToast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      pendingMentionAgentKey = ''
+    }
     return
   }
 
@@ -1267,6 +1335,19 @@ onUnmounted(() => {
   unlistenNativeGrantDrop?.()
 })
 
+function createScenarioImagePayload(
+  file: File,
+  previewOwnership = createScenarioImagePreviewOwnership(file),
+): ScenarioComposerImagePayload {
+  return {
+    file,
+    previewUrl: previewOwnership.url,
+    previewOwnership,
+    attachment: { type: 'image', name: file.name, mime: file.type, data: previewOwnership.url },
+    contextText: normalizeMathMarkdown(inputText.value.trim()),
+  }
+}
+
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
@@ -1274,15 +1355,7 @@ function addFiles(files: File[]) {
     // 新选图片只保留原始 File（含可能的 native grant）和会话内受控预览；不读 dataURL/Base64。
     // K12 资产层直接消费该 File/grant，得到 receipt 后才持久化同一消息投影。非图片文件不受影响。
     if (isImage && props.scenarioImageIntercept) {
-      const previewOwnership = createScenarioImagePreviewOwnership(file)
-      const previewUrl = previewOwnership.url
-      const attachment: ChatAttachment = {
-        type: 'image',
-        name: file.name,
-        mime: file.type,
-        data: previewUrl,
-      }
-      emit('scenario-image', { file, previewUrl, previewOwnership, attachment })
+      emit('scenario-image', createScenarioImagePayload(file))
       continue
     }
     void preserveComposerFile(file).catch((error) => voiceToast.error(String(error)))

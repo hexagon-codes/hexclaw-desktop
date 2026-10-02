@@ -1162,6 +1162,14 @@ function currentScenarioImageRoute(): ScenarioImageModelRoute | undefined {
   }
   return scenarioImageRoute(selectedProviderKey.value, selectedModel.value)
 }
+
+function handleMentionAgentSelect(agentId: string) {
+  const agent = agentsStore.findAgent(agentId)
+  if (!agent) return
+  chatStore.chatMode = 'agent'
+  chatStore.agentRole = agent.name
+  if (chatStore.currentSessionId) bindSessionAgent(chatStore.currentSessionId, agent.name)
+}
 async function persistScenarioImageMessage(
   message: ChatMessage,
   sessionId: string,
@@ -1184,9 +1192,24 @@ async function handleScenarioImage(
   payload: ScenarioComposerImagePayload,
   targetSessionId?: string,
   frozenRoute?: ScenarioImageModelRoute | null,
+  waitForSourceStored = false,
 ): Promise<boolean> {
   const intendedSessionId = targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
-  const previewOwnership = scenarioImagePreviewOwnership(payload)
+  const originalPreviewOwnership = scenarioImagePreviewOwnership(payload)
+  let resolveSourceStored: ((stored: boolean) => void) | undefined
+  const sourceStored = payload.file && waitForSourceStored
+    ? new Promise<boolean>((resolve) => { resolveSourceStored = resolve })
+    : undefined
+  // 草稿转交只等待原件和消息耐久接纳；后续模型失败不恢复已提交的旧图。
+  const previewOwnership = originalPreviewOwnership && sourceStored
+    ? {
+        url: originalPreviewOwnership.url,
+        release: () => {
+          resolveSourceStored?.(false)
+          originalPreviewOwnership.release()
+        },
+      }
+    : originalPreviewOwnership
   if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
     if (previewOwnership) releaseScenarioImagePreview(previewOwnership)
     return false
@@ -1280,6 +1303,7 @@ async function handleScenarioImage(
         }
       }
       if (currentMessage) void ensureK12AssetBlob(assetId)
+      resolveSourceStored?.(true)
       return true
     }
   } else if (!(await persistScenarioImageMessage(message, sessionId))) {
@@ -1297,7 +1321,10 @@ async function handleScenarioImage(
   queue.push({ message, payload: routedPayload })
   pendingScenarioImageProjections.set(sessionId, queue)
   activateScenarioImageProjection(sessionId)
-  return true
+  return sourceStored ?? true
+}
+function handleScenarioDraftImage(payload: ScenarioComposerImagePayload): Promise<boolean> {
+  return handleScenarioImage(payload, undefined, undefined, true)
 }
 // 场景失败卡片的“重新提交”是一次新的用户 attempt，不是对旧 Job 原地换绑模型。
 // feature 只把原始图片事实上交；shell 在点击时重新冻结当前路由，并用新的持久消息 ID
@@ -3012,6 +3039,7 @@ watch(
     if (prevId === null && draftThinkingPolicy.value.mode !== 'inherit') {
       setSessionThinkingPolicy(newId, draftThinkingPolicy.value)
     }
+    if (prevId === null && chatStore.agentRole) bindSessionAgent(newId, chatStore.agentRole)
     draftThinkingPolicy.value = { mode: 'inherit' }
     thinkingPolicyRevision.value += 1
     applySessionModel(newId, prevId ?? null)
@@ -3984,7 +4012,9 @@ function startSidebarResize(event: MouseEvent) {
             :scenario-placeholder="scenarioComposerPlaceholder"
             :scenario-hint="scenarioComposerHint"
             :scenario-image-intercept="!!(scenarioCtx && chatEnhancement)"
+            :scenario-image-handler="handleScenarioDraftImage"
             @scenario-image="handleScenarioImage"
+            @agent-selected="handleMentionAgentSelect"
             @preset-chip-action="handleScenarioComposerAction"
             :send-handler="handleSend"
             :gen-model-id="selectedModel"
