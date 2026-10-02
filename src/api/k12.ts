@@ -1485,6 +1485,14 @@ export function k12RollbackRestoreAs(
 }
 
 // ── export / mistake-sheet（错题本导出 / 错题卷；md 返回 JSON，pdf/docx 二进制）──
+export interface ExportArchiveAttachment {
+  relative_path: string
+  sha256: string
+  media_type: string
+  byte_size: number
+  data_base64: string
+}
+
 export interface ExportMdResp {
   format: string
   content: string
@@ -1504,6 +1512,7 @@ export interface ExportMdResp {
   }
   artifact_id: string
   render_error?: string
+  attachments?: ExportArchiveAttachment[]
 }
 export function k12ExportMd(agent: string) {
   return apiGet<ExportMdResp>(`${BASE}/export`, { agent, format: 'md' })

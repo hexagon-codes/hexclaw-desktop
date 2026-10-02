@@ -6,7 +6,7 @@
  */
 import type { RecordItem } from '@/contracts'
 import { isTauri } from '@/utils/platform'
-import { renderDocument } from '@/api/k12'
+import { renderDocument, type ExportMdResp } from '@/api/k12'
 
 export interface WorksheetMeta {
   childName: string
@@ -272,6 +272,51 @@ export async function download(
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 0)
   return true
+}
+
+/** 将同一冻结档案的正文、清单与原件打包；全部附件校验完成后才交给保存入口。 */
+export async function buildLearningArchiveZip(archive: ExportMdResp): Promise<Blob> {
+  const { default: JSZip } = await import('jszip')
+  const zip = new JSZip()
+  const attachments = archive.attachments ?? []
+  const { content, attachments: _attachments, ...metadata } = archive
+  void _attachments
+  zip.file('archive.md', content)
+  zip.file(
+    'manifest.json',
+    `${JSON.stringify(
+      {
+        ...metadata,
+        attachments: attachments.map(({ data_base64: _data, ...attachment }) => {
+          void _data
+          return attachment
+        }),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  for (const attachment of attachments) {
+    const path = attachment.relative_path.match(/^attachments\/([a-f0-9]{64})\.[a-z0-9]+$/u)
+    if (!path || path[1] !== attachment.sha256) {
+      throw new Error('Archive export returned an invalid attachment path')
+    }
+    const binary = atob(attachment.data_base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    if (bytes.byteLength !== attachment.byte_size) {
+      throw new Error('Archive export attachment size does not match its metadata')
+    }
+    const hash = await crypto.subtle.digest('SHA-256', bytes)
+    const digest = Array.from(new Uint8Array(hash), (value) =>
+      value.toString(16).padStart(2, '0'),
+    ).join('')
+    if (digest !== attachment.sha256) {
+      throw new Error('Archive export attachment digest does not match its metadata')
+    }
+    zip.file(attachment.relative_path, bytes)
+  }
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/zip' })
 }
 
 /** 文件名：{称呼}_错题本_{起}_{止}.{ext} */

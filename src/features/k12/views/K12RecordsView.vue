@@ -61,7 +61,7 @@ import {
 } from '@/api/k12'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { MISTAKE_SCHEMA } from '../schemas'
-import { worksheetFilename, download } from '../export'
+import { worksheetFilename, download, buildLearningArchiveZip } from '../export'
 import type { RecordCollectionView, RecordItem } from '@/contracts'
 import type {
   K12MistakeStatusFilter,
@@ -1512,11 +1512,13 @@ async function doExportMd() {
     const res = await k12ExportArchive(props.agentId, 'md')
     if ('blob' in res) throw new Error('Archive export returned an invalid Markdown response')
     const d = todayLabel().replace(/-/g, '').slice(4)
-    await download(
-      worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'),
-      res.content,
-      'text/markdown;charset=utf-8',
-    )
+    const filename = worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md')
+    if (res.attachments?.length) {
+      const archive = await buildLearningArchiveZip(res)
+      await download(filename.replace(/\.md$/u, '.zip'), archive, 'application/zip')
+    } else {
+      await download(filename, res.content, 'text/markdown;charset=utf-8')
+    }
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
