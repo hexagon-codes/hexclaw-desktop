@@ -52,7 +52,12 @@ const sandboxCode = computed(() => {
 const activitySummary = computed(() => {
   if (toolKind.value === 'Sandbox') {
     const action = t('chat.toolName.code')
-    return props.call.execution?.language ? `${props.call.execution.language} ${action}` : action
+    let language = props.call.execution?.language
+    if (!language && sandboxCode.value) {
+      const parameters = JSON.parse(props.call.arguments)
+      if (typeof parameters.language === 'string' && parameters.language.trim()) language = sandboxCode.value.language
+    }
+    return language ? `${language} ${action}` : action
   }
   // 活动行只采用成功回执的明确摘要，任意返回和技术字段仍留在详情中。
   if (outcome.value !== 'success' || !props.call.result) return ''
