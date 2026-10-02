@@ -355,12 +355,18 @@ const creativeResult = ref<{
   payload: ImageTaskCreativeResultPayload
   operationReceipts?: ImageTaskOperationReceipt[]
 } | null>(null)
-// 仅消费同一任务的公开回执；模型操作不伪装成 Skill/MCP，旧记录不补造步骤。
+// 仅消费同一任务的公开回执；方法来源附在点评行，不另造 Skill/MCP 步骤。
 const creativeProcessOperations = computed(() => {
   const result = creativeResult.value
   if (!result) return []
+  const writing = result.taskIntent === 'writing'
+  const feedbackSource = result.payload.feedback?.structured_feedback.source_snapshot
+  const methodName = feedbackSource?.source === 'ai'
+    ? feedbackSource.method_ref?.split('@', 1)[0]?.trim() || '' : ''
+  const feedbackAction = t(writing ? 'k12.works.writingProcessAction' : 'k12.works.artProcessAction')
   const names: Record<string, string> = {
-    classification: '图片识别', writing_ocr: '正文转写', work_feedback: '作品点评',
+    classification: '图片识别', writing_ocr: '正文转写',
+    work_feedback: t(writing ? 'k12.works.writingProcessName' : 'k12.works.artProcessName'),
   }
   return (result.operationReceipts ?? []).filter(receipt => names[receipt.operation]).map(receipt => {
     const status = receipt.status === 'succeeded' ? 'success'
@@ -370,7 +376,8 @@ const creativeProcessOperations = computed(() => {
       name: names[receipt.operation]!,
       status: status as 'success' | 'error' | 'unknown',
       summary: status !== 'success' ? undefined : receipt.operation === 'classification'
-        ? `已识别为${result.taskIntent === 'writing' ? '语文写作' : '美术作品'}` : '已完成',
+        ? `已识别为${writing ? '语文写作' : '美术作品'}` : receipt.operation === 'work_feedback'
+          ? feedbackAction + (methodName && methodName !== 'builtin' ? ` · ${methodName}` : '') : '已完成',
     }
   })
 })
