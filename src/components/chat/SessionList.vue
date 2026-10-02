@@ -1268,7 +1268,7 @@ onUnmounted(() => {
 .hc-sessions__rename-input {
   display: block;
   width: 100%;
-  height: 19.5px;
+  min-height: 32px;
   box-sizing: border-box;
   font-size: 13px;
   line-height: 17.5px;
@@ -1276,7 +1276,7 @@ onUnmounted(() => {
   background: var(--hc-bg-input, var(--hc-bg-hover));
   border: 1px solid var(--hc-accent);
   border-radius: 6px;
-  padding: 0 5px;
+  padding: 5px 5px;
   outline: none;
   box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
