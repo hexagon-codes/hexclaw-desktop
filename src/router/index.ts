@@ -130,13 +130,14 @@ router.beforeEach(async (to) => {
     if (!isWelcomeDone()) {
       const hasProvider = (settingsStore.config?.llm.providers?.length ?? 0) > 0
       const welcomeCompleted = settingsStore.config?.general?.welcomeCompleted === true
-      if (!hasProvider && !welcomeCompleted) {
+      // 读取失败不代表首次配置；只用已成功加载的后端配置判断供应商是否为空。
+      if (settingsStore.backendConfigLoaded && !hasProvider && !welcomeCompleted) {
         if (to.path === '/chat' && !readModelSettingsReturn()) {
           saveModelSettingsReturn({ path: to.fullPath, sessionId: null, agentRole: typeof to.query.role === 'string' ? to.query.role : '', chatMode: 'chat' })
         }
         return '/welcome'
       }
-      markWelcomeDone()
+      if (hasProvider || welcomeCompleted) markWelcomeDone()
     }
   } catch (e) {
     logger.error('导航守卫异常，放行以避免页面卡死:', e)

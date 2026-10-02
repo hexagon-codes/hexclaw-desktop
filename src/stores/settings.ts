@@ -88,6 +88,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const loading = ref(false)
   const error = ref<ApiError | null>(null)
   const runtimeProviders = ref<ProviderConfig[] | null>(null)
+  const backendConfigLoaded = ref(false)
   const syncedSecurity = ref<SecurityConfig>({ ...defaultConfig().security })
   const syncedSandbox = ref<SandboxConfig>(fallbackSandbox())
 
@@ -214,6 +215,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function doLoadConfig() {
     loading.value = true
     error.value = null
+    backendConfigLoaded.value = false
 
     try {
       let savedConfig: AppConfig | null = null
@@ -382,6 +384,7 @@ export const useSettingsStore = defineStore('settings', () => {
         if (isTauri() && repairedIdentity) {
           await saveConfig(config.value!)
         }
+        backendConfigLoaded.value = true
         logger.info('LLM 配置加载成功', { providerCount: providers.length })
         return
       } catch (e) {
@@ -668,6 +671,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading,
     error,
     runtimeProviders,
+    backendConfigLoaded,
     enabledProviders,
     availableModels,
     loadConfig,
