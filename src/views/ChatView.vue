@@ -1214,12 +1214,19 @@ async function handleScenarioImage(
     if (previewOwnership) releaseScenarioImagePreview(previewOwnership)
     return false
   }
+  const sourceAgentName = agentsStore.findAgent(chatStore.agentRole)?.name
+  if (!intendedSessionId && !chatStore.hasCustomTitle && chatStore.messages.length === 0 && sourceAgentName) {
+    chatStore.newSession(projectedAgentDisplay(sourceAgentName))
+  }
   const message: ChatMessage = {
     id: nanoid(12),
     role: 'user',
     content: payload.contextText ?? '',
     timestamp: new Date().toISOString(),
-    metadata: { attachments: [payload.attachment] },
+    metadata: {
+      attachments: [payload.attachment],
+      ...(sourceAgentName ? { agent_name: sourceAgentName } : {}),
+    },
   }
   if (previewOwnership) scenarioPendingPreviewOwnerships.set(message.id, previewOwnership)
   // request_id 与可见/持久消息使用同一身份；模型选择也在用户动作发生时冻结，
@@ -1465,18 +1472,38 @@ const scenarioComposerHint = computed(() => {
 // 但深链建会话时标题即被设为 agent 内部名（k12-tutor-xxx）。选中会话若无绑定，用标题解析出 Agent →
 // 恢复 role + 场景增强 + 正确辅导人设，并回写绑定（此后不再依赖标题、抗改名）。依赖 agents 已加载，
 // 故同时观察加载完成标志与 agent 名称集合；只看长度会漏掉 A→B 的同数量替换。
+let recoveryMessageSnapshot = chatStore.messages
+let recoveryMessageSessionId = chatStore.currentSessionId
 watch(
   // 字符串 key 形式（非裸 session-id getter）——避免与「滚动重置」watcher 的源码扫描锚点碰撞
   // （bug-20260628-newsession-scroll-arrow 用 indexOf 首个裸 getter 定位那个 watcher）。
-  () =>
-    JSON.stringify([
+  [
+    () => JSON.stringify([
       chatStore.currentSessionId ?? '',
       agentsStore.agentsLoaded,
       agentsStore.registeredAgents.map((agent) => agent.name).sort(),
     ]),
+    () => chatStore.messages,
+    () => JSON.stringify(chatStore.messages.map((message) => [
+      message.id,
+      message.agent_name,
+      message.metadata?.agent_name,
+      getMessageAttachments(message)
+        .filter((attachment) => attachment.type === 'image')
+        .map(k12AssetIdentity),
+    ])),
+  ],
   () => {
     const sid = chatStore.currentSessionId
-    if (!sid) return
+    // 会话 ID 先于异步消息载入切换，上一会话的消息不能参与新会话归属恢复。
+    if (chatStore.messages !== recoveryMessageSnapshot) {
+      recoveryMessageSnapshot = chatStore.messages
+      recoveryMessageSessionId = sid
+    }
+    if (!sid) {
+      recoveryMessageSessionId = null
+      return
+    }
     // 孤儿绑定守卫（BUG-20260710）：绑定/恢复的 agent 已被删除（agents 加载完成后仍查无此人）
     // → 清 agentRole + 清绑定，会话诚实降级为普通展示。否则前端渲染场景皮肤、后端 role 查无此人
     // 回落默认助理（真机取证：孤儿辅导会话里小蟹自我介绍），双端呈现撕裂；后端同轮已加 fail-loud
@@ -1501,12 +1528,37 @@ watch(
     if (getSessionAgent(sid)) return // 已有绑定，selectSession 已恢复
     const session = chatStore.sessions.find((s) => s.id === sid)
     const title = (session?.title ?? '').trim()
-    if (!title) return
     // 据标题反查绑定 agent：标题可能是内部名（存量未自愈）或**显示名**（已被 session-title-heal
     // 自愈）——必须两者都能反查，否则从「会话」列表打开已自愈的 K12 会话恢复不出 agentRole →
     // 辅导 UI 不显示（BUG-20260712 #A）。
-    const cfg = agentsStore.findAgentByNameOrDisplay(title)
-    if (!cfg) return // 标题既非内部名也非显示名 → 普通会话，不动
+    let cfg = title ? agentsStore.findAgentByNameOrDisplay(title) : undefined
+    if (!cfg && recoveryMessageSessionId === sid) {
+      // 只使用当前会话已保存的明确身份；多个所有者或已删除的 Agent 不作推断。
+      const persistedAgents = new Set<string>()
+      for (const message of chatStore.messages) {
+        if (message.role !== 'user') continue
+        const savedAgent = message.agent_name || message.metadata?.agent_name
+        if (typeof savedAgent === 'string' && savedAgent.trim()) {
+          persistedAgents.add(savedAgent.trim())
+        }
+        for (const attachment of getMessageAttachments(message)) {
+          if (attachment.type !== 'image') continue
+          const owner = k12AssetAgent(k12AssetIdentity(attachment))
+          if (owner) persistedAgents.add(owner)
+        }
+      }
+      if (persistedAgents.size === 1) {
+        const owner = agentsStore.findAgent([...persistedAgents][0]!)
+        if (owner && scenarioRegistry.resolveDescriptor({
+          agentId: owner.name,
+          agentName: projectedAgentDisplay(owner.name),
+          metadata: owner.metadata,
+        }).headerTabs.length) {
+          cfg = owner
+        }
+      }
+    }
+    if (!cfg) return
     chatStore.agentRole = cfg.name
     chatStore.chatMode = 'agent'
     bindSessionAgent(sid, cfg.name)
