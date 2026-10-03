@@ -87,7 +87,6 @@ export default {
     prevMonth: 'Previous month',
     nextMonth: 'Next month',
     add: 'Add',
-    closeDialog: 'Close dialog',
     cancel: 'Cancel',
     back: 'Back',
     create: 'Create',

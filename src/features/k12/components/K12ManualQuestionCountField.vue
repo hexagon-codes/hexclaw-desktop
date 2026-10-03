@@ -131,7 +131,10 @@ function step(delta: number) {
   border-radius: 0;
   background: var(--hc-bg-card);
   color: var(--hc-text-primary);
-  font: 600 12px/1 var(--hc-font);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   text-align: center;
   outline: none;
@@ -155,7 +158,10 @@ function step(delta: number) {
   border-radius: 0;
   background: transparent;
   color: var(--hc-text-secondary);
-  font: 500 15px/1 var(--hc-font);
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1;
   cursor: pointer;
 }
 .manual-count__step:hover {

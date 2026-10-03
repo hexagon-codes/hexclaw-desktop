@@ -379,6 +379,11 @@ export default {
       completed: '«{name}» تاماملاندى',
       failed: '«{name}» تاماملانمىدى',
     },
+    operationProcess: {
+      title: 'بىر تەرەپ قىلىش جەريانى',
+      completed: 'تاماملاندى',
+      unknown: 'نەتىجە نامەلۇم',
+    },
     thinkingOn: 'چوڭقۇر ئويلاش ئېچىلدى (مودېل ئالدى بىلەن ئويلاپ ئاندىن جاۋاب بېرىدۇ، ئاستىراق)',
     thinkingOff: 'چوڭقۇر ئويلاش يېپىلدى (بىۋاسىتە جاۋاب، تېز)',
     toolParams: 'پارامېتىر',
@@ -1123,6 +1128,7 @@ export default {
   },
 
   integration: {
+    searchInstalledSkills: 'ئورنىتىلغان Skill لارنى ئىزدەش...',
     searchMcp: 'Search MCP…', // TODO: verify ug
     searchPrompts: 'Search prompts…', // TODO: verify ug
     searchSkills: 'Search skills…', // TODO: verify ug
@@ -1173,11 +1179,17 @@ export default {
     fBodyPh: 'Prompt مەزمۇنى (Markdown)',
     fBodyCmdPh:
       'پارامېتىر ئۈچۈن $ARGUMENTS ئىشلىتىڭ، مەسىلەن: تۆۋەندىكىنى تەرجىمە قىلىڭ: $ARGUMENTS',
+    fCommand: 'بۇيرۇق (چاقىرىش ئۈچۈن / كىرگۈزۈڭ)',
+    fCommandHint:
+      'قىسقا نام بىلەن بىۋاسىتە چاقىرىش ماھىر ئىشلەتكۈچىلەرنىڭ ئادىتى؛ ھازىرقى نەشرىدە پەقەت / كۆزنىكىدىن ماۋزۇ بويىچە تاللىغىلى بولىدۇ.',
     fModel: 'تەۋسىيە مودېل (ئىختىيارىي)',
     fScope: 'قورال دائىرىسى (پەش بىلەن ئايرىلىدۇ، ئىختىيارىي)',
     fCategoryPh: 'مەسىلەن: يېزىقچىلىق / تەرجىمە / كودلاش (ئىختىيارى)',
     fModelPh: 'بەلگىلەنمىگەن (سۈكۈتتىكى)',
     fScopePh: 'مەسىلەن: web_search, code_exec',
+    scopeNone: 'قورال يوق',
+    scopeKnowledge: 'بىلىم ئامبىرىدىن ئىزدەش',
+    scopeMcp: 'MCP قوراللىرى',
   },
 
   // ئەسلىمە (ئىقتىدار · Prompt ئامبىرى / ئەسلىمە)
@@ -1199,6 +1211,11 @@ export default {
   },
 
   skills: {
+    previewAction: 'ئالدىن كۆرۈش',
+    commandLabel: 'بۇيرۇق',
+    sourceLabel: 'مەنبە',
+    toolchainLabel: 'قورال زەنجىرى',
+    scopeAll: 'قوزغىتىلغان دائىرە: بارلىق سۆھبەتلەر',
     title: 'Skills',
     description: 'ئورنىتىلغان Skills ۋە بازارنى باشقۇرۇش',
     installed: 'ئورنىتىلغان',
@@ -1306,6 +1323,19 @@ export default {
   },
 
   knowledge: {
+    indexUnconfiguredTitle: 'نۆۋەتتىكى ئىندېكس: تەڭشەلمىگەن',
+    indexActualPrefix: 'ئەمەلىي ئىجرا قىلغۇچى: ',
+    uploadFileHint:
+      'PDF, TXT, MD, DOCX, JSONL, HEXBANK نى قوللايدۇ · چوڭ ھۆججەتلەر ئارقا سۇپىدا بىر تەرەپ قىلىنىدۇ',
+    chunkUnit: 'پارچە',
+    contextualReady: 'Contextual يېزىلدى',
+    processingFailed: 'بىر تەرەپ قىلىش مەغلۇپ بولدى',
+    retryDocument: 'قايتا بىر تەرەپ قىلىش',
+    settingsAction: 'تەڭشەكلەرگە بېرىش',
+    vectorCancelShort: 'بىكار قىلىش',
+    uploadReselectFile: 'ھۆججەتنى قايتا تاللاش',
+    uploadDismiss: 'خاتىرىنى ئۆچۈرۈش',
+    uploadDismissFailed: 'يۈكلەش خاتىرىسىنى ئۆچۈرگىلى بولمىدى. قايتا سىناڭ.',
     indexTargetTitle: 'نىشان ئىندېكس: {profile}',
     indexServingHint: 'نۆۋەتتىكى ئىزدەش: {profile} · مۇلازىمەت داۋاملىشىۋاتىدۇ.',
     indexCurrentHint: 'نۆۋەتتىكى ئىزدەش: {profile}.',
@@ -2901,6 +2931,7 @@ export default {
   },
 
   mcpManage: {
+    authorizeServer: 'تەڭشەكلەردە ھوقۇق بېرىش',
     addServer: 'مۇلازىمېتىر قوشۇش',
     addServerTitle: 'MCP مۇلازىمېتىر قوشۇش',
     removeServer: 'چىقىرىۋېتىش',
