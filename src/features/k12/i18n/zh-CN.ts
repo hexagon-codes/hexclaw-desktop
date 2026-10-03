@@ -672,6 +672,18 @@ export default {
       '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
   },
   recognize: {
+    processOperations: {
+      classification: '图片识别',
+      recognizing: '题目与作答识别',
+      locating: '答案区域定位',
+      assessing: '逐题处理',
+      grade: '作答批改',
+      solveGenerate: '解答生成',
+      solveVerify: '解答验算',
+      solve: '题目求解',
+      parentGuide: '家长讲题指南',
+      annotation: '批改图生成',
+    },
     title: '拍照识题 · 回显护栏',
     intro: '拍作业照片先分题、把「我读到的」摆给你核对——读错当场改，再逐题批改，信任链上游不出岔。',
     pickImage: '选择作业照片',

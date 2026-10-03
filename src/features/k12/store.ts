@@ -87,6 +87,7 @@ export type ImageTaskCompletionOutcome =
       stage: 'completed'
       taskIntent: 'completed_homework' | 'blank_worksheet'
       result: PhotoJobResult
+      operationReceipts?: ImageTaskOperationReceipt[]
     }
   | {
       stage: 'promoted' | 'unreadable'
@@ -777,6 +778,7 @@ export const useK12Store = defineStore('k12', () => {
         stage: 'completed',
         taskIntent: projection.task_intent,
         result: projection.result.payload,
+        operationReceipts: 'operation_receipts' in projection ? projection.operation_receipts : undefined,
       }
     }
     if (

@@ -695,6 +695,18 @@ export default {
       'Failed to generate tutoring tips: the model timed out or the network was interrupted. Please retry. Local models can be slow — switch to a faster cloud model in settings.',
   },
   recognize: {
+    processOperations: {
+      classification: 'Image classification',
+      recognizing: 'Question and answer recognition',
+      locating: 'Answer region localization',
+      assessing: 'Question processing',
+      grade: 'Answer grading',
+      solveGenerate: 'Solution generation',
+      solveVerify: 'Solution verification',
+      solve: 'Problem solving',
+      parentGuide: 'Parent teaching guide',
+      annotation: 'Annotated homework image',
+    },
     title: 'Photo capture · echo guard',
     intro:
       'Snap the homework, split it into questions, and show you "what I read" to confirm — fix misreads on the spot, then grade each. No slip at the top of the trust chain.',

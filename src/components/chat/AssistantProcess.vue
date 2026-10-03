@@ -140,7 +140,7 @@ const runPresentation = computed(() =>
   ),
 )
 const label = computed(() => {
-  if (operations.value.length && !props.message && !props.toolCalls?.length && !props.live) return '处理过程'
+  if (operations.value.length && !props.message && !props.toolCalls?.length && !props.live) return t('chat.operationProcess.title')
   if (terminal.value === 'cancelled') return 'Cancelled'
   if (failed.value && !props.live)
     return terminal.value === 'failed' ? 'Processing failed' : 'Completed with errors'
@@ -247,8 +247,8 @@ function callFor(id: string, name: string, input: string): ToolCall {
               <svg v-else viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
             </span>
             <span class="hc-process-tool__name">{{ operation.name }}</span>
-            <span v-if="operation.status === 'success' && operation.summary" class="hc-process-tool__meta">{{ operation.summary }}</span>
-            <span v-if="operation.status === 'unknown'" class="hc-process-tool__meta">Outcome unknown</span>
+            <span v-if="operation.status === 'success'" class="hc-process-tool__meta">{{ operation.summary || t('chat.operationProcess.completed') }}</span>
+            <span v-if="operation.status === 'unknown'" class="hc-process-tool__meta">{{ t('chat.operationProcess.unknown') }}</span>
             <span v-else-if="operation.status === 'error'" class="hc-process-tool__meta">{{ t('chat.toolFailed', '失败') }}</span>
           </div>
         </div>

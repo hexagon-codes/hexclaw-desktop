@@ -362,6 +362,11 @@ export default {
       completed: '「{name}」已完成',
       failed: '「{name}」未完成',
     },
+    operationProcess: {
+      title: '处理过程',
+      completed: '已完成',
+      unknown: '结果未知',
+    },
     thinkingOn: '深度思考已开启（模型会先推理再回答，较慢）',
     thinkingOff: '深度思考已关闭（直接回答，更快）',
     toolParams: '参数',

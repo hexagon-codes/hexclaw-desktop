@@ -363,6 +363,11 @@ export default {
       completed: '“{name}” completed',
       failed: '“{name}” did not complete',
     },
+    operationProcess: {
+      title: 'Processing steps',
+      completed: 'Completed',
+      unknown: 'Outcome unknown',
+    },
     thinkingOn: 'Deep thinking enabled (model reasons before answering, slower)',
     thinkingOff: 'Deep thinking disabled (direct answers, faster)',
     toolParams: 'Params',

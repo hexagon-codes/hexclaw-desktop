@@ -20,7 +20,6 @@ import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
 import AssistantProcess from '@/components/chat/AssistantProcess.vue'
-import QuestionReuseActivityRow from '@/components/chat/QuestionReuseActivityRow.vue'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
@@ -66,7 +65,6 @@ import type {
   ImageTaskIntent,
   ParentTeachingGuideDTO,
   PhotoJobResult,
-  PhotoJobItemDTO,
   PhotoJobItemStatus,
   ProblemKind,
   OCRConfirmationReason,
@@ -223,7 +221,39 @@ interface BlankWorksheetGuideItem {
   guide: ParentTeachingGuideDTO
 }
 const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
-const reusedQuestions = ref<PhotoJobItemDTO[]>([])
+const mathOperationReceipts = ref<ImageTaskOperationReceipt[]>([])
+// 逻辑与物理回执按实际操作聚合，不推断 Skill 调用或调用次数。
+const mathProcessOperations = computed(() => {
+  const names: Record<string, string> = {
+    classification: t('k12.recognize.processOperations.classification'),
+    recognizing: t('k12.recognize.processOperations.recognizing'),
+    locating: t('k12.recognize.processOperations.locating'),
+    assessing: t('k12.recognize.processOperations.assessing'),
+    grade: t('k12.recognize.processOperations.grade'),
+    solve_generate: t('k12.recognize.processOperations.solveGenerate'),
+    solve_verify: t('k12.recognize.processOperations.solveVerify'),
+    solve: t('k12.recognize.processOperations.solve'),
+    parent_guide: t('k12.recognize.processOperations.parentGuide'),
+    annotation: t('k12.recognize.processOperations.annotation'),
+  }
+  type OperationStatus = 'success' | 'error' | 'unknown' | 'running'
+  const statuses = new Map<string, OperationStatus>()
+  const priority: Record<OperationStatus, number> = {
+    success: 0, running: 1, unknown: 2, error: 3,
+  }
+  for (const receipt of mathOperationReceipts.value) {
+    if (!names[receipt.operation]) continue
+    const status: OperationStatus = receipt.status === 'succeeded' ? 'success'
+      : receipt.status === 'failed' ? 'error'
+        : receipt.status === 'running' ? 'running' : 'unknown'
+    const previous = statuses.get(receipt.operation)
+    if (!previous || priority[status] > priority[previous]) statuses.set(receipt.operation, status)
+  }
+  return Object.entries(names).flatMap(([operation, name]) => {
+    const status = statuses.get(operation)
+    return status ? [{ id: operation, name, status }] : []
+  })
+})
 const hasBlankWorksheetGuide = computed(() => blankWorksheetGuide.value.length > 0)
 // BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
 const isImageData = computed(() => /^(?:data:image|blob:)/.test(imageB64.value.trim()))
@@ -1622,7 +1652,7 @@ watch(
     sourceFile.value = undefined
     annotatedImage.value = ''
     blankWorksheetGuide.value = []
-    reusedQuestions.value = []
+    mathOperationReceipts.value = []
     rows.value = []
     problemProgressSlots.value = []
     taskCoverage.value = null
@@ -1754,7 +1784,7 @@ async function run() {
   restoredFromBinding.value = false
   annotatedImage.value = ''
   blankWorksheetGuide.value = []
-  reusedQuestions.value = []
+  mathOperationReceipts.value = []
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
@@ -2214,13 +2244,13 @@ async function completeImageTaskFlow() {
     outcomeUnknown.value = false
     if (outcome.stage === 'completed') {
       creativeResult.value = null
-      applyPhotoJobResult(outcome.result)
+      applyPhotoJobResult(outcome.result, outcome.operationReceipts)
     } else {
       // Creative result is a different discriminated projection. Never feed
       // intake/work metadata to the homework result mapper; feedback is only
       // rendered when the public result contract actually carries it.
       blankWorksheetGuide.value = []
-      reusedQuestions.value = []
+      mathOperationReceipts.value = []
       rows.value = []
       annotatedImage.value = ''
       creativeResult.value = {
@@ -2245,20 +2275,19 @@ async function completeImageTaskFlow() {
 }
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
-function applyPhotoJobResult(result: PhotoJobResult) {
+function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTaskOperationReceipt[]) {
+  mathOperationReceipts.value = operationReceipts ?? []
   const parentGuides = parentTeachingGuideItems(result)
   if (parentGuides.length) {
     // Preserve backend item order (the frozen original-question order), and
     // suppress the legacy recognition/grade controls for this separate surface.
     blankWorksheetGuide.value = parentGuides
-    reusedQuestions.value = result.items.filter(item => item.answer_source?.kind === 'asset' && !!item.answer_source.adoption_id)
     annotatedImage.value = ''
     rows.value = []
     confirmed.value = true
     return
   }
   blankWorksheetGuide.value = []
-  reusedQuestions.value = []
   if (
     result.task_intent !== 'completed_homework' ||
     result.result_surface !== 'annotated_homework' ||
@@ -2340,7 +2369,6 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         break
     }
   })
-  reusedQuestions.value = result.items.filter(item => item.answer_source?.kind === 'asset' && !!item.answer_source.adoption_id)
 }
 
 async function coldStart() {
@@ -2489,7 +2517,7 @@ async function coldStart() {
       :items="homeworkTimelineItems"
       :initially-expanded="homeworkTaskProgressState === 'running'"
     >
-      <template #details><QuestionReuseActivityRow :items="reusedQuestions" /></template>
+      <template #details><AssistantProcess :operations="mathProcessOperations" :elapsed-seconds="0" /></template>
     </TaskProgressCard>
 
     <div
@@ -2787,7 +2815,7 @@ async function coldStart() {
       }}
     </div>
 
-    <QuestionReuseActivityRow v-if="hasBlankWorksheetGuide" :items="reusedQuestions" />
+    <AssistantProcess v-if="hasBlankWorksheetGuide" :operations="mathProcessOperations" :elapsed-seconds="0" />
 
     <!-- 空白卷使用独立的家长讲题结果面。 -->
     <section
