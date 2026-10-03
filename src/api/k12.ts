@@ -2249,7 +2249,8 @@ export type ImageTaskResultResp =
 
 export async function k12CreateImageTask(req: CreateImageTaskReq, signal?: AbortSignal) {
   const response = await apiPost<unknown>(`${BASE}/image-tasks`, req, {
-    timeout: 60_000,
+    // 首次视觉探测最多等待120秒，再为请求接纳与回读预留10秒。
+    timeout: 130_000,
     signal,
   })
   try {
