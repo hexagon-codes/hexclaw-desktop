@@ -367,6 +367,7 @@ function providerCatalogSyncFingerprint(
     provider.locality ?? 'auto',
     provider.privateNetworkAccess?.host ?? '',
     provider.privateNetworkAccess?.allowed ?? false,
+    ...(provider.httpAuthorization ? [provider.httpAuthorization] : []),
   ])
 }
 

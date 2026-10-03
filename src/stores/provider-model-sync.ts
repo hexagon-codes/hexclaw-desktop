@@ -42,6 +42,7 @@ export function syncProviderModelCatalogs(
       providerInstanceId: provider.providerInstanceId,
       locality: provider.locality,
       privateNetworkAccess: provider.privateNetworkAccess,
+      httpAuthorization: provider.httpAuthorization,
     })).then((remoteModels) => {
       if (!remoteModels.length) return
       const target = context.getConfiguredProviders().find((candidate) => candidate.id === provider.id)

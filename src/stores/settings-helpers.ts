@@ -133,6 +133,7 @@ export function providerProbeConnectivityFingerprint(provider: ProviderConfig): 
     provider.locality ?? 'auto',
     provider.privateNetworkAccess?.host ?? '',
     provider.privateNetworkAccess?.allowed ?? false,
+    ...(provider.httpAuthorization ? [provider.httpAuthorization] : []),
   ])
 }
 
@@ -437,6 +438,7 @@ export function backendToProviders(
       localitySource: p.locality_source ?? localProvider?.localitySource,
       confirmedEndpointHost: p.confirmed_endpoint_host ?? localProvider?.confirmedEndpointHost,
       privateNetworkAccess: p.private_network_access ?? localProvider?.privateNetworkAccess,
+      httpAuthorization: p.http_authorization,
       keepAlive: p.keep_alive || localProvider?.keepAlive || '',
       numCtx: p.num_ctx ?? localProvider?.numCtx ?? 0,
     }
@@ -511,6 +513,7 @@ export function providersToBackend(
       locality_source: p.localitySource,
       confirmed_endpoint_host: p.confirmedEndpointHost,
       private_network_access: p.privateNetworkAccess,
+      http_authorization: p.httpAuthorization,
       tools_enabled: p.toolsEnabled ?? null,
       max_tools: p.maxTools ?? 0,
       enabled: p.enabled,

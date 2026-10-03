@@ -120,6 +120,12 @@ export interface PrivateNetworkAccess {
   allowed: boolean
 }
 
+/** 公网 HTTP 授权绑定完整 Base URL，不随地址更改复用。 */
+export interface ProviderHTTPAuthorization {
+  base_url: string
+  allowed: boolean
+}
+
 export interface ProviderProbeReceipt {
   providerInstanceId: string
   outcome: 'passed' | 'failed'
@@ -164,6 +170,7 @@ export interface ProviderConfig {
   confirmedEndpointHost?: string
   /** RFC1918/ULA 访问授权，严格绑定到单个规范化主机。 */
   privateNetworkAccess?: PrivateNetworkAccess
+  httpAuthorization?: ProviderHTTPAuthorization
   /** 是否启用工具注入（undefined/null=自动，true=强制开，false=强制关） */
   toolsEnabled?: boolean | null
   /** 最大注入工具数（0或undefined=不限制） */
@@ -363,6 +370,7 @@ export interface BackendLLMProvider {
   locality_source?: ProviderLocalitySource
   confirmed_endpoint_host?: string
   private_network_access?: PrivateNetworkAccess
+  http_authorization?: ProviderHTTPAuthorization
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
   max_tools?: number // 0=不限制
   enabled?: boolean // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用

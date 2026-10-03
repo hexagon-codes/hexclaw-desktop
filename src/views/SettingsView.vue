@@ -1262,6 +1262,8 @@ function clearProviderProbeState(provider: ProviderConfig) {
 }
 
 function providerConnectionResult(provider: ProviderConfig) {
+  const transient = testProviderResult.value[provider.id]
+  if (transient) return transient
   const receipt = provider.probeReceipt
   if (receipt) {
     return {
@@ -1414,8 +1416,13 @@ async function testProvider(provider: ProviderConfig) {
   try {
     activeProvider = await providerWithStableIdentity(provider)
   } catch (error) {
+    // 保存或身份恢复失败属于本次连接测试结果，不能逃出事件触发整页错误边界。
+    testProviderResult.value[provider.id] = {
+      ok: false,
+      msg: messageFromUnknownError(error),
+    }
     testingProviderIds.value.delete(provider.id)
-    throw error
+    return
   }
 
   if (activeProvider.id !== provider.id) {
@@ -1462,6 +1469,7 @@ async function testProvider(provider: ProviderConfig) {
         providerInstanceId: activeProvider.providerInstanceId,
         locality: effectiveProviderLocality(activeProvider),
         privateNetworkAccess: activeProvider.privateNetworkAccess,
+        httpAuthorization: activeProvider.httpAuthorization,
       },
     )
     const testedAt = parseProviderProbeTime(result.tested_at)
@@ -1543,6 +1551,7 @@ async function syncRemoteModels(
       providerInstanceId: provider.providerInstanceId,
       locality: effectiveProviderLocality(provider),
       privateNetworkAccess: provider.privateNetworkAccess,
+      httpAuthorization: provider.httpAuthorization,
     })
     if (!remoteModels.length) throw new Error('empty model catalog')
     const currentProvider = config.value?.llm.providers.find(

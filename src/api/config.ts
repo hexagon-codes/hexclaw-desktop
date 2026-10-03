@@ -16,6 +16,7 @@ import type {
   LLMConnectionTestResponse,
   ModelReasoningControl,
   PrivateNetworkAccess,
+  ProviderHTTPAuthorization,
   ProviderLocality,
   ProviderCredentialReplacement,
   ProviderType,
@@ -82,6 +83,7 @@ interface ProviderEndpointContext {
   providerInstanceId?: string
   locality?: ProviderLocality
   privateNetworkAccess?: PrivateNetworkAccess
+  httpAuthorization?: ProviderHTTPAuthorization
 }
 
 function assertExternalBaseUrlAllowed(
@@ -168,7 +170,7 @@ export async function testLLMConnection(
   payload: LLMConnectionTestRequest,
   context: Pick<
     ProviderEndpointContext,
-    'providerInstanceId' | 'locality' | 'privateNetworkAccess'
+    'providerInstanceId' | 'locality' | 'privateNetworkAccess' | 'httpAuthorization'
   > = {},
 ): Promise<LLMConnectionTestResponse> {
   assertExternalBaseUrlAllowed(payload.provider.base_url, {
@@ -185,6 +187,7 @@ export async function testLLMConnection(
         provider_instance_id: context.providerInstanceId,
         locality: context.locality,
         private_network_access: context.privateNetworkAccess,
+        http_authorization: context.httpAuthorization,
       },
     }),
   )
@@ -270,6 +273,7 @@ export async function fetchProviderModels(
       api_key: apiKey,
       locality: context.locality,
       private_network_access: context.privateNetworkAccess,
+      http_authorization: context.httpAuthorization,
     }),
   )
   const result = safeJsonParse<{ models?: BackendProviderModel[]; error?: string }>(
