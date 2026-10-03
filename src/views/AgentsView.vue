@@ -897,6 +897,7 @@ function closeScenarioForm() {
 
 function onScenarioCreated() {
   closeScenarioForm()
+  activeTab.value = 'mine'
   void loadAgents()
 }
 
@@ -1123,6 +1124,7 @@ async function handleRegisterAgent(andChat = false) {
     await registerAgent(payload)
     closeAddAgentDialog()
     await loadAgents()
+    activeTab.value = 'mine'
     // 创建并开始对话（增长主动线）：直达与新智能体的第一句对话。
     if (andChat && createdName) enterAgentChat(createdName)
   } catch (e) {
