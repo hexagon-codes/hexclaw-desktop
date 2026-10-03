@@ -505,12 +505,17 @@ const autoDisplayName = computed(() =>
   }),
 )
 const storedDisplayName = props.agent?.display_name ?? ''
-// 仅原自动名称随档案更新；显式名称在预览和保存时均保留原值。
+// 精确对应原称呼的旧自动名称保留“的学习助手”格式；其他显式名称保持原值。
+const displayNameUsesLegacyTemplate =
+  !!originalChildName.trim() && storedDisplayName === `${originalChildName.trim()}的学习助手`
 const displayNameIsAutomatic =
   !storedDisplayName.trim() || storedDisplayName === autoDisplayName.value
-const displayName = computed(() =>
-  displayNameIsAutomatic ? autoDisplayName.value : storedDisplayName,
-)
+const displayName = computed(() => {
+  if (displayNameUsesLegacyTemplate) {
+    return `${childName.value.trim() || t('k12.profile.namePlaceholder')}的学习助手`
+  }
+  return displayNameIsAutomatic ? autoDisplayName.value : storedDisplayName
+})
 
 // 卡片副标题严格采用原型口径，说明分科绑定事实；改年级时与 display_name 同步派生。
 const cardDescription = computed(() => t('k12.profile.cardDesc', { grade: grade.value }))
