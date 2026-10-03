@@ -2,6 +2,8 @@
 
 # HexClaw Desktop User Guide
 
+Applies to `v0.5.0-beta`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -89,14 +91,14 @@ If you only need local packaging for testing:
 - You do not need an updater private key
 - The `Package` workflow disables updater artifacts automatically when the signing key is missing
 - Those packages can be installed manually, but they cannot be used for in-app auto updates
-- macOS targets still require Apple signing / notarization secrets; otherwise the workflow fails early instead of producing browser-downloaded bundles that Gatekeeper treats as "damaged"
+- macOS remains an unsigned DMG distributed through the existing Homebrew Cask; Apple Developer ID signing and notarization are not required
 
 If you want a real auto-update release:
 
 - You must configure the Tauri updater signing private key
 - You must keep `plugins.updater.pubkey` in [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json)
 - You must publish through the tag-driven `Release` workflow so it can generate signed updater artifacts and `latest.json`
-- If macOS targets are included, you must also configure Apple code-signing and notarization secrets
+- Tauri updater artifact signing is independent of Apple code signing; macOS remains an unsigned DMG without additional Apple signing or notarization requirements
 
 See [Auto-Update Release Guide](./updates.en.md) for the full setup.
 
@@ -743,6 +745,7 @@ Both follow the **local-first** principle: data is never uploaded to third-party
 **Experience and Engineering**
 - The sidebar shows the HexClaw product version; the Hexagon engine version is shown separately on the About page.
 - The splash screen is shown for at least 700ms, and packaged Tauri assets use relative paths to reduce cold-start flashing and asset-loading failures.
+- This update fixes CI lint errors and stale test setup/assertions. Unit tests read private prototypes and fixtures with read-only credentials, preserving the existing separation of routine CI, manual packaging, and tag-triggered releases.
 
 **Architecture**
 - Added `scenarioRegistry`, view descriptors, record schemas, VerifyResult, and scenario-extension contracts so scenario packs mount through descriptors without changing the generic shell.

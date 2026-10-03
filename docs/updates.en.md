@@ -2,6 +2,10 @@
 
 # Auto-Update Release Guide
 
+## v0.5.0-beta (2026-10-03)
+
+This version updates CI checks and release documentation; see the [Changelog](../CHANGELOG.md). Routine CI validates source, `Package` builds installers on demand, and a version tag triggers `Release`. Results for these stages are recorded separately; local checks do not establish that a GitHub Release has been published.
+
 HexClaw Desktop uses Tauri updater. To make the in-app “Check for Updates / Download and Install” flow actually work, all 4 conditions below must be true:
 
 1. `plugins.updater.endpoints` in `src-tauri/tauri.conf.json` points to a stable, reachable update feed
@@ -26,7 +30,7 @@ Use this when you want real in-app auto updates.
 
 - The updater private key is required
 - When `TAURI_SIGNING_PRIVATE_KEY` is missing, the `Release` workflow disables updater artifacts automatically and still produces manually installable unsigned packages, but in-app auto updates will not work
-- A successful GitHub Release must contain `latest.json` and signed updater artifacts
+- For auto updates to work, the GitHub Release must contain `latest.json` and signed updater artifacts
 
 ## One-Time Setup
 
@@ -72,11 +76,11 @@ If your private key has no password, the second secret can stay empty or be omit
    - `src-tauri/Cargo.toml`
    - `HEXCLAW_REF` in `Makefile` (it must be `refs/tags/v<version>`)
 2. Commit and push your changes
-3. Create and push a tag, for example:
+3. Verify the release version and matching backend tag, then create and push the release tag. Do not delete or move a published tag. These commands illustrate the entry point:
 
 ```bash
-git tag v0.0.3
-git push origin v0.0.3
+git tag v0.5.0-beta
+git push origin v0.5.0-beta
 ```
 
 4. Wait for the GitHub Actions `Release` workflow to finish
@@ -92,7 +96,7 @@ The desktop app now covers both user-facing paths:
 - a silent update check on launch
 - a manual check/install entry on the **About** page
 
-If you publish an unsigned build, the UI entry still exists, but users will not receive a real installable updater package.
+If the release has no artifacts signed for Tauri updater, the UI entry still exists, but users will not receive an installable updater package. A macOS build without Apple code signing can still have updater-signed artifacts.
 
 ## FAQ
 
@@ -114,8 +118,9 @@ Because the current release is an unsigned DMG (no Apple code signing or notariz
 
 ### What does the workflow validate now?
 
-- When `TAURI_SIGNING_PRIVATE_KEY` is missing, it disables updater artifacts and produces an unsigned build instead.
-- It validates that the versions across `package.json` / `tauri.conf.json` / `Cargo.toml` and `HEXCLAW_REF` in `Makefile` match the tag.
+- Routine `CI` retains lint, type-check, existing unit tests, the web build, and `cargo check`. Tests read private prototypes and fixtures with read-only credentials; model, IM, and native-window acceptance remain outside routine CI.
+- `Package` and `Release` disable updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is missing and still produce manually installable unsigned packages.
+- `Release` validates that the versions across `package.json` / `tauri.conf.json` / `Cargo.toml` and `HEXCLAW_REF` in `Makefile` match the tag.
 
 ### Do prereleases auto-update?
 

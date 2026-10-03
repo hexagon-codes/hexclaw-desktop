@@ -2,6 +2,10 @@
 
 # 自动更新发布说明
 
+## v0.5.0-beta（2026-10-03）
+
+本次版本同步 CI 修复与发布说明，变更见 [Changelog](../CHANGELOG.md)。普通 CI 检查源码；`Package` 手动生成安装包；版本 tag 才触发 `Release`。这些阶段的结果分别记录，不将本地检查通过写成 GitHub Release 已发布。
+
 HexClaw Desktop 使用 Tauri updater。要让应用内“检查更新 / 下载并安装”真正可用，需要同时满足下面 4 个条件：
 
 1. `src-tauri/tauri.conf.json` 中配置了稳定可访问的 `plugins.updater.endpoints`
@@ -26,7 +30,7 @@ HexClaw Desktop 使用 Tauri updater。要让应用内“检查更新 / 下载�
 
 - 必须配置 updater 私钥
 - `Release` 工作流在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时会自动关闭 updater 制品生成，仍会产出可手动安装的未签名包，但应用内自动更新不会生效
-- 发布成功后，GitHub Release 里需要包含 `latest.json` 和对应平台的签名更新包
+- 要让自动更新可用，GitHub Release 里需要包含 `latest.json` 和对应平台的签名更新包
 
 ## 一次性初始化
 
@@ -72,11 +76,11 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `src-tauri/Cargo.toml`
    - `Makefile` 中的 `HEXCLAW_REF`（应为 `refs/tags/v<版本号>`）
 2. 提交代码并推送
-3. 创建并推送 tag，例如：
+3. 核对待发布版本及对应后端 tag，再创建并推送本次 tag；已推送的 tag 不删除或移动。以下命令仅说明入口：
 
 ```bash
-git tag v0.0.3
-git push origin v0.0.3
+git tag v0.5.0-beta
+git push origin v0.5.0-beta
 ```
 
 4. 等待 GitHub Actions 的 `Release` 工作流完成
@@ -92,7 +96,7 @@ git push origin v0.0.3
 - 应用启动后会静默检查更新
 - 用户可在 **关于** 页面手动检查和安装更新
 
-如果你发布的是未签名包，界面仍然会显示检查更新入口，但不会拿到可安装的正式 updater 包。
+如果发布包没有生成带 Tauri updater 签名的更新制品，界面仍然会显示检查更新入口，但不会拿到可安装的正式 updater 包。macOS 未做 Apple 代码签名不等于缺少 updater 签名。
 
 ## 常见问题
 
@@ -114,8 +118,9 @@ Tauri updater 私钥不会。它影响的是自动更新制品签名，不影响
 
 ### workflow 现在会自动验证什么？
 
-- 缺少 `TAURI_SIGNING_PRIVATE_KEY` 时自动关闭 updater 制品生成，改出未签名包
-- 校验三平台版本号（`package.json` / `tauri.conf.json` / `Cargo.toml`）及 `Makefile` 的 `HEXCLAW_REF` 与 tag 一致
+- 普通 `CI` 保留 lint、type-check、既有单测、web build 与 `cargo check`；单测以只读凭据获取私有原型和素材，不把真实模型、IM 或原生窗口验收放入普通 CI。
+- `Package` 和 `Release` 在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时自动关闭 updater 制品生成，仍产出可手动安装的未签名包。
+- `Release` 校验版本号（`package.json` / `tauri.conf.json` / `Cargo.toml`）及 `Makefile` 的 `HEXCLAW_REF` 与 tag 一致。
 
 ### 预发布版本会自动更新吗？
 

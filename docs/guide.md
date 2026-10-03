@@ -2,6 +2,8 @@
 
 # HexClaw Desktop 使用指南
 
+适用版本：`v0.5.0-beta`。本次工程更新见 [Changelog](../CHANGELOG.md)，安装与自动更新的发布条件见[自动更新发布说明](./updates.md)。
+
 ## 目录
 
 - [产品总览](#产品总览)
@@ -89,14 +91,14 @@ HexClaw 已接入 Tauri updater。应用启动后会静默检查更新，用户�
 - 不需要 updater 私钥
 - `Package` 工作流会在缺少签名私钥时自动关闭 updater 制品生成
 - 这类包可以手动安装，但不能用于应用内自动更新
-- macOS 目标仍然必须提供 Apple 签名 / notarization secrets；否则 workflow 会直接失败，避免产出浏览器下载后被系统判定为“已损坏”的包
+- macOS 保持未签名 DMG，通过现有 Homebrew Cask 分发；不要求 Apple Developer ID 签名或公证
 
 如果你要发布正式自动更新版本：
 
 - 必须配置 Tauri updater 签名私钥
 - 必须保留 [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json) 中的 `plugins.updater.pubkey`
 - 必须通过 tag 触发 `Release` 工作流，由它生成带签名的 updater 制品和 `latest.json`
-- 如果包含 macOS 目标，还必须配置 Apple 代码签名和 notarization secrets
+- Tauri updater 制品签名与 Apple 代码签名独立；macOS 仍保持未签名 DMG，不增加 Apple 签名或公证要求
 
 完整步骤见 [自动更新发布说明](./updates.md)。
 
@@ -743,6 +745,7 @@ HexClaw Desktop 和 OpenClaw 面向不同场景，可以互补使用：
 **体验与工程**
 - 侧边栏显示 HexClaw 产品版本；Hexagon 引擎版本在“关于”页单独展示。
 - 启动页最短展示 700ms，打包后的 Tauri 资源使用相对路径，降低冷启动闪屏和资源加载异常风险。
+- 本次修复 CI 的静态检查错误和现有测试装配/断言漂移；单测只读获取私有原型与素材，保持普通 CI、手动打包与版本 tag 发布的现有分工。
 
 **架构**
 - 新增 `scenarioRegistry`、视图描述符、记录 schema、VerifyResult 等场景扩展契约，场景包通过描述符挂载，不改通用 shell。

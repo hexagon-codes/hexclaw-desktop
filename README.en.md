@@ -211,10 +211,13 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 
 ### CI / Packaging / Release Flow
 
-- `push / PR -> CI`: runs lint, type-check, tests, and web build automatically
+- This release uses `v0.5.0-beta`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
+- `push / PR` on `main` runs lint, type-check, existing unit tests, the web build, and `cargo check` automatically
 - `Actions -> Package -> Run workflow`: builds test installers for all platforms and uploads them as workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: builds and publishes the official GitHub Release assets
 - Stable releases automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes DMG SHA256 and pushes Cask update)
+
+Unit tests use authoritative prototypes and existing fixtures from the private `hexclaw-docs` repository. Only the test job checks it out with the read-only `HEXCLAW_DOCS_READ_KEY`. For local runs, keep that repository beside the desktop repository. Routine CI does not invoke models, send IM messages, or operate native windows; those checks remain in the existing functional acceptance workflows.
 
 Before creating a release tag, make sure:
 
@@ -467,6 +470,8 @@ Test file conventions:
 - Test files live alongside source files, named `*.test.ts` or `*.spec.ts`
 - Store tests go in `src/stores/__tests__/`
 - Uses Vitest + @vue/test-utils
+
+Tests that use prototypes or image fixtures need the private `hexclaw-docs` sibling repository. Missing references indicate an incomplete test environment, not a successful functional check.
 
 ## Troubleshooting
 

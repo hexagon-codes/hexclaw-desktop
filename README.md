@@ -214,10 +214,13 @@ brew install --cask hexclaw
 
 ### CI / 打包 / Release 流程
 
-- `push / PR -> CI`: 自动运行 lint、type-check、test、web build
+- 本次版本为 `v0.5.0-beta`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
+- `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、web build 和 `cargo check`
 - `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
 - 正式版发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算 DMG SHA256 → 推送 Cask 更新）
+
+单测使用私有 `hexclaw-docs` 中的权威原型和既有素材。仅单测 job 通过 `HEXCLAW_DOCS_READ_KEY` 只读 checkout；本地运行同组测试时，文档仓库与 desktop 仓库放在同一父目录。普通 CI 不调用模型、不发送 IM 消息，也不执行原生窗口操作；这些真实功能验收沿现有专用流程执行。
 
 正式发布前需要满足：
 
@@ -269,7 +272,7 @@ make dev
 > - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0-beta` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - 本机装机测试使用 `make sidecar-local`，等价于 `HEXCLAW_LOCAL_SRC=../hexclaw HEXCLAW_GOWORK=../go.work make sidecar`，会让 `ai-core`、`hexagon`、`toolkit` 走本地 Go workspace
-> - 本机完整打包使用 `make package-local`，会先运行 `verify-local-deps`，如果任一核心模块未解析到 `/Users/hexagon/work` 下会直接失败；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
+> - 本机完整打包使用 `make package-local`，由打包脚本校验本地 Go workspace，并从 desktop 仓库位置推导同级源码工作区；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
 > - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.2` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
 ### Make 命令
@@ -485,6 +488,8 @@ make test
 - 测试文件与源码同目录，命名为 `*.test.ts` 或 `*.spec.ts`
 - Store 测试放在 `src/stores/__tests__/` 目录
 - 使用 Vitest + @vue/test-utils
+
+涉及原型或图片 fixture 的测试需要同级的私有 `hexclaw-docs`；缺少参考资料属于环境缺失，不能当作功能验收通过。
 
 ## 常见问题
 
