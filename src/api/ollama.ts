@@ -174,7 +174,13 @@ async function consumePullResponse(resp: Response, scope: string, onProgress: (p
       const lines = buffer.split('\n'); buffer = done ? '' : (lines.pop() ?? '')
       for (const line of lines) {
         if (!line.startsWith('data:')) continue
-        const event = JSON.parse(line.slice(5).trim()) as OllamaPullProgress
+        let event: OllamaPullProgress
+        try {
+          event = JSON.parse(line.slice(5).trim()) as OllamaPullProgress
+        } catch {
+          // 单行损坏不替代原操作终态，后续仍需明确成功或失败回执。
+          continue
+        }
         onProgress(event)
         if (event.state && event.state !== 'running') terminal = event
       }

@@ -27,6 +27,7 @@ const setup = () => {
 
   let healthTimer: ReturnType<typeof setInterval> | null = null
   let startupHealthRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let healthCheckGeneration = 0
   let restartPromise: Promise<boolean> | null = null
 
   /** Sidecar 健康观察已确认就绪时同步运行状态。 */
@@ -51,17 +52,20 @@ const setup = () => {
   }
 
   /** 启动期快速恢复健康检查，确认就绪后转为稳定轮询。 */
-  async function recoverInitialHealth(remainingRetries: number) {
+  async function recoverInitialHealth(remainingRetries: number, generation: number) {
+    if (generation !== healthCheckGeneration) return
     try {
       await checkConnection()
     } finally {
+      // 停止或重新启动后，在途首查不能重新创建旧轮询。
+      if (generation !== healthCheckGeneration) return
       if (sidecarReady.value || remainingRetries === 0) {
         healthTimer = setInterval(checkConnection, STEADY_HEALTH_CHECK_INTERVAL_MS)
         return
       }
 
       startupHealthRetryTimer = setTimeout(() => {
-        void recoverInitialHealth(remainingRetries - 1)
+        void recoverInitialHealth(remainingRetries - 1, generation)
       }, STARTUP_HEALTH_RETRY_DELAY_MS)
     }
   }
@@ -69,11 +73,12 @@ const setup = () => {
   /** 启动健康检查轮询 */
   function startHealthCheck() {
     stopHealthCheck()
-    void recoverInitialHealth(STARTUP_HEALTH_RETRY_COUNT)
+    void recoverInitialHealth(STARTUP_HEALTH_RETRY_COUNT, healthCheckGeneration)
   }
 
   /** 停止健康检查轮询 */
   function stopHealthCheck() {
+    healthCheckGeneration++
     if (healthTimer) {
       clearInterval(healthTimer)
       healthTimer = null

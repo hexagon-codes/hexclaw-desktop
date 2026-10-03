@@ -321,6 +321,23 @@ function validateProblemGroundingReceipts(
   })
 }
 
+function validateGroundingEvidenceSummary(
+  evidenceReceipts: WireRecord[],
+  problemReceipts: ValidatedProblemGroundingReceipt[],
+  path: string,
+): void {
+  // 全局教材证据仅汇总实际逐题回执，不要求每道公开题都使用教材。
+  const expected = new Set(problemReceipts.map((receipt) => receipt.evidenceKey))
+  const actual = new Set(
+    evidenceReceipts.map(
+      (receipt, index) => validateGroundingEvidenceReceiptFields(receipt, `${path}[${index}]`).evidenceKey,
+    ),
+  )
+  if (actual.size !== expected.size || [...actual].some((key) => !expected.has(key))) {
+    fail(path, 'deterministic evidence summary from current problem receipts')
+  }
+}
+
 function expectedGroundingOperations(status: string): readonly string[] {
   if (['correct', 'correct_with_process_issue', 'wrong', 'untrusted'].includes(status)) {
     return ['solve', 'grade']
@@ -919,6 +936,11 @@ function normalizeHomeworkProjection(value: unknown, path: string): WireRecord {
   const problemGroundingReceipts = validateProblemGroundingReceipts(
     projection.problem_grounding_receipts,
     `${path}.problem_grounding_receipts`,
+  )
+  validateGroundingEvidenceSummary(
+    groundingEvidenceReceipts,
+    problemGroundingReceipts,
+    `${path}.grounding_evidence_receipts`,
   )
   validateProblemGroundingExactSet(
     problemGroundingReceipts,
@@ -1706,6 +1728,13 @@ export function assertImageTaskResultSemantics(value: unknown): void {
           '$.problem_grounding_receipts',
         )
       : []
+  if (isHomework && hasAuditEnvelope) {
+    validateGroundingEvidenceSummary(
+      groundingEvidenceReceipts,
+      problemGroundingReceipts,
+      '$.grounding_evidence_receipts',
+    )
+  }
   if (response.result === null) return
   const result = record(response.result, '$.result')
   exact(result, ['kind', 'payload'], '$.result')

@@ -35,7 +35,7 @@ import TemplatePopup from './TemplatePopup.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import { useVoice } from '@/composables/useVoice'
 import { useToast } from '@/composables/useToast'
-import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef, ChatAttachment } from '@/types'
+import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef } from '@/types'
 import type { ConnectionSummary } from '@/api/im-channels'
 import { getDocumentContent } from '@/api/knowledge'
 import { listSessionMessages } from '@/api/chat'
@@ -591,6 +591,9 @@ watch(() => [props.draftScopeKey, props.draftAgentKey], (_, previous) => {
       await persistDraft()
       nativePreviewScopeGeneration++
       await loadDraft(composerDraftKey())
+      if (nativePreviewRuntimeUsed) {
+        await enqueueNativePreviewLifecycle(() => synchronizeNativePreviewScope())
+      }
     } catch (error) {
       draftLoading.value = false
       voiceToast.error(error instanceof Error ? error.message : String(error))

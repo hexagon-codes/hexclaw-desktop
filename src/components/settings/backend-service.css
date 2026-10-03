@@ -23,8 +23,6 @@
   .modal-f{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:.5px solid var(--hc-border)}
   .settings-wrap{max-width:600px;width:100%;min-height:100%;display:flex;flex-direction:column;margin:0}
   .settings-wrap.settings-wrap--system{max-width:520px}
-  .screen[data-pane="settings"] .tbar .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
-  .screen[data-pane="settings"] .tbar .seg::-webkit-scrollbar{display:none}
   .runtime-service-card{margin:0 0 22px;padding:14px 16px;border:1px solid var(--hc-border);border-radius:var(--hc-radius-lg);background:linear-gradient(135deg,var(--hc-bg-card),color-mix(in srgb,var(--hc-accent-subtle) 40%,var(--hc-bg-card)));box-shadow:var(--hc-shadow-sm)}
   .runtime-service-card__top{display:flex;align-items:flex-start;gap:12px}
   .runtime-service-card__identity{display:flex;align-items:flex-start;gap:9px;min-width:0;flex:1}

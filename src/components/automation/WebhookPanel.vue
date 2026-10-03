@@ -750,9 +750,6 @@ defineExpose({ loadWebhooks, openCreateForm, form, canCreate })
 :deep(.webhook-panel__extension-manager) {
   display: contents;
 }
-:deep(.k12wh--embedded .k12wh__toolbar) {
-  display: none;
-}
 /* 新建 Webhook 弹窗正文（表单字段纵向排列） */
 .webhook-modal__body {
   display: flex;

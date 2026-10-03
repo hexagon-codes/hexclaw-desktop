@@ -203,7 +203,7 @@ function callFor(id: string, name: string, input: string): ToolCall {
     <div :id="bodyID" class="hc-process__body" :hidden="!expanded">
       <div v-if="fallbackReasoning" class="hc-process__step hc-process__reasoning">
         <span class="hc-process-tool__meta">Summary</span>
-        <MarkdownRenderer :content="fallbackReasoning" surface="desktop" />
+        <MarkdownRenderer :content="fallbackReasoning" surface="desktop" :show-artifacts="false" />
       </div>
       <div
         v-for="(block, index) in steps"
@@ -230,6 +230,7 @@ function callFor(id: string, name: string, input: string): ToolCall {
           v-else-if="block.type === 'thinking'"
           :content="block.thinking"
           surface="desktop"
+          :show-artifacts="false"
         />
         <MarkdownRenderer
           v-else-if="block.type === 'text'"
