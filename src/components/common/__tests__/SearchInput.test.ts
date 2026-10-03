@@ -91,7 +91,7 @@ describe('SearchInput', () => {
 
   it('emits submit on Enter', async () => {
     const wrapper = mountSearchInput({ modelValue: 'hello' })
-    await wrapper.find('input').trigger('keydown.enter')
+    await wrapper.find('input').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('submit')).toHaveLength(1)
   })
 

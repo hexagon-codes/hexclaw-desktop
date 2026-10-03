@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const api = vi.hoisted(() => ({
@@ -26,6 +27,14 @@ vi.mock('@/api/tasks', () => ({
   getCronJobs: () => api.getCronJobs(),
   createCronJob: vi.fn(), deleteCronJob: vi.fn(), pauseCronJob: vi.fn(),
   resumeCronJob: vi.fn(), triggerCronJob: vi.fn(), getCronJobHistory: vi.fn(),
+}))
+vi.mock('@/api/agents', () => ({ getAgents: vi.fn().mockResolvedValue({ agents: [] }) }))
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: false, state: 'disabled' },
+  }),
 }))
 vi.mock('@/api/im-channels', () => ({
   getConnections: () => api.getConnections(),
@@ -71,7 +80,7 @@ describe('U6 · 自动化搜索对任务列表生效', () => {
   it('TasksView 按 search prop 过滤任务卡（仅渲染名称命中项）', async () => {
     const w = mount(TasksView, {
       props: { search: '晨报' },
-      global: { plugins: [i18n()] },
+      global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
     const names = w.findAll('.task-card__name').map((n) => n.text())
@@ -79,7 +88,7 @@ describe('U6 · 自动化搜索对任务列表生效', () => {
   })
 
   it('TasksView 无搜索词时渲染全部任务卡（对照）', async () => {
-    const w = mount(TasksView, { props: { search: '' }, global: { plugins: [i18n()] } })
+    const w = mount(TasksView, { props: { search: '' }, global: { plugins: [createPinia(), i18n()] } })
     await flushPromises()
     expect(w.findAll('.task-card__name')).toHaveLength(2)
   })

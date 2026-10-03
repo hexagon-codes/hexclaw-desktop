@@ -667,7 +667,7 @@ describe('SkillsView', () => {
     ).toBe(false)
   })
 
-  it('uses the shared 1500ms confirmation and retains the uninstall target after failure', async () => {
+  it('uses the shared 800ms confirmation and retains the uninstall target after failure', async () => {
     uninstallSkill.mockRejectedValueOnce(new Error('uninstall failed'))
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const wrapper = mountSkillsView()
@@ -684,7 +684,7 @@ describe('SkillsView', () => {
       expect(dialog.exists()).toBe(true)
       expect(dialog.props('open')).toBe(true)
       expect(dialog.props('confirmationKey')).toBe('demo-skill')
-      expect(dialog.props('confirmDelayMs')).toBe(1_500)
+      expect(dialog.props('confirmDelayMs')).toBe(800)
       expect(dialog.props('title')).toBe('卸载 Skill？')
       expect(dialog.props('message')).toBe('将卸载「demo-skill」，此操作不可撤销。')
       expect(dialog.props('confirmText')).toBe('卸载')
@@ -695,7 +695,7 @@ describe('SkillsView', () => {
       await confirmBtn.trigger('click')
       expect(uninstallSkill).not.toHaveBeenCalled()
 
-      await vi.advanceTimersByTimeAsync(1_499)
+      await vi.advanceTimersByTimeAsync(799)
       confirmBtn = wrapper.findComponent(ConfirmDialog).get('button.hc-dialog__btn--danger')
       expect(confirmBtn.attributes('disabled')).toBeDefined()
 

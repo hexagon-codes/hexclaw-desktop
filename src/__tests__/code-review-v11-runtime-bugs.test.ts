@@ -230,12 +230,6 @@ describe('BUG 13: ChatView handleDrop only processes first file', () => {
 describe('BUG 15: WebSocket reconnect does not re-register callbacks', () => {
   const src = readSrc('api/websocket.ts')
 
-  it('onclose delegates to attemptReconnect instead of firing error callbacks directly', () => {
-    // CHANGED: onclose 不再直接触发 errorCallbacks，而是先重连
-    // errorCallbacks 在 attemptReconnect 达到最大重试次数时才触发
-    expect(src).toMatch(/this\.ws\.onclose\s*=\s*\(\)\s*=>/)
-    expect(src).toContain('this.attemptReconnect()')
-  })
 
   it('clearStreamCallbacks empties chunk, reply, and error callbacks', () => {
     const fnStart = src.indexOf('clearStreamCallbacks')

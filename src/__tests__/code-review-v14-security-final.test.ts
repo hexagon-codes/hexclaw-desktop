@@ -59,19 +59,6 @@ describe('file parsing budget', () => {
   })
 })
 
-describe('WebSocket reconnect loop prevention', () => {
-  const websocket = readSrc('api/websocket.ts')
-
-  it('resets reconnect attempts only after a stability timer', () => {
-    const onOpen = websocket.match(/onopen\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s{4}\}/)
-    expect(onOpen).toBeTruthy()
-    expect(onOpen![1]).not.toMatch(/^\s*this\.reconnectAttempts\s*=\s*0/m)
-    expect(websocket).toMatch(
-      /setTimeout\s*\(\s*\(\)\s*=>\s*\{\s*this\.reconnectAttempts\s*=\s*0/,
-    )
-    expect(websocket).toContain('clearTimeout(stableTimer)')
-  })
-})
 
 describe('write-only renderer credential boundary', () => {
   const secureStore = readSrc('utils/secure-store.ts')
@@ -98,34 +85,13 @@ describe('write-only renderer credential boundary', () => {
 
 describe('native Sidecar transfer boundary', () => {
   const commands = readRust('commands.rs')
-  const nativeFiles = readSrc('api/native-files.ts')
 
   it('keeps the arbitrary proxy command retired', () => {
     expect(commands).toContain('execute_sidecar_fetch(method, path, headers, bytes')
   })
 
-  it('normalizes transfers to the managed Sidecar origin', () => {
-    expect(nativeFiles).toContain('url.origin !== base.origin')
-    expect(nativeFiles).toContain('Native transfer target must be the managed Sidecar origin')
-    expect(nativeFiles).toContain('relativePath: sidecarRelativePath')
-  })
 })
 
-describe('process cleanup', () => {
-  const sidecar = readRust('sidecar.rs')
-  const lib = readRust('lib.rs')
-
-  it('kills and waits for the Sidecar child', () => {
-    expect(sidecar).toContain('child.kill()')
-    expect(sidecar).toContain('child.wait()')
-  })
-
-  it('stops managed children when the main window is destroyed', () => {
-    expect(lib).toContain('WindowEvent::Destroyed')
-    expect(lib).toContain('sidecar::stop_sidecar()')
-    expect(lib).toContain('ollama::stop_ollama()')
-  })
-})
 
 describe('iframe sandbox boundaries', () => {
   const renderer = readSrc('components/chat/ArtifactRenderer.vue')

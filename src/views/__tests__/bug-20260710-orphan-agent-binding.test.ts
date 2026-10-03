@@ -8,7 +8,7 @@
  * 会话回归普通展示（诚实降级），配合后端 fail-loud guard（engine bug_20260710_ghost_agent_role_test）。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -34,6 +34,8 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
 
 // ─── Mock API（复用 ChatView.test.ts 验证过的最小挂载脚手架；补 listSessions/listSessionMessages
 //     让 loadSessions 能返回既有 K12 会话并触发 lastSessionId 自动选中） ───
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
+
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
   sendChat: vi.fn(),
@@ -199,6 +201,8 @@ function mountChatView() {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Object.defineProperty(window, 'matchMedia', {
@@ -246,6 +250,7 @@ describe('BUG-20260710：孤儿绑定（agent 已删除）必须被探测并诚�
     await flushPromises()
     const chatStore = useChatStore()
 
+    await vi.waitFor(() => expect(chatStore.currentSessionId).toBe(ORPHAN_SESSION))
     expect(chatStore.currentSessionId, '前置：lastSessionId 自动选中孤儿会话').toBe(ORPHAN_SESSION)
     // 核心断言①：agentRole 不得停留在已删除的 agent（否则发消息后端回落小蟹/报错，前端却渲染辅导皮肤）
     expect(

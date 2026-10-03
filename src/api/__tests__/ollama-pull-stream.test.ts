@@ -8,11 +8,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
 vi.mock('@/config/env', () => ({ OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://test:9999' } }))
+vi.mock('@/api/client', () => ({
+  apiGet: vi.fn().mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } }),
+  apiPost: vi.fn(), apiPut: vi.fn(), apiDelete: vi.fn(),
+}))
 
 function mockFetchWithChunks(chunks: string[]) {
   const encoder = new TextEncoder()
   let index = 0
   const reader = {
+    releaseLock: vi.fn(),
     read: vi.fn().mockImplementation(() => {
       if (index < chunks.length) {
         return Promise.resolve({ done: false, value: encoder.encode(chunks[index++]!) })
@@ -38,7 +43,7 @@ describe('Bug 3: pullOllamaModel 流最后一行丢失', () => {
   it('最后一行有换行符 — 正常解析（基线）', async () => {
     mockFetchWithChunks([
       'data: {"status":"downloading","completed":500,"total":1000}\n',
-      'data: {"status":"success"}\n',
+      'data: {"status":"success","state":"succeeded"}\n',
     ])
 
     const { pullOllamaModel } = await import('@/api/ollama')
@@ -53,7 +58,7 @@ describe('Bug 3: pullOllamaModel 流最后一行丢失', () => {
   it('最后一行无换行符 — 修复前丢失 success', async () => {
     mockFetchWithChunks([
       'data: {"status":"downloading","completed":500,"total":1000}\n',
-      'data: {"status":"success"}',  // ← 无 \n
+      'data: {"status":"success","state":"succeeded"}',  // ← 无 \n
     ])
 
     const { pullOllamaModel } = await import('@/api/ollama')
@@ -69,7 +74,7 @@ describe('Bug 3: pullOllamaModel 流最后一行丢失', () => {
   it('跨 chunk 拼接 + 最后残留行', async () => {
     mockFetchWithChunks([
       'data: {"status":"pull',
-      'ing","completed":100,"total":200}\ndata: {"status":"success"}',
+      'ing","completed":100,"total":200}\ndata: {"status":"success","state":"succeeded"}',
     ])
 
     const { pullOllamaModel } = await import('@/api/ollama')
@@ -86,7 +91,7 @@ describe('Bug 3: pullOllamaModel 流最后一行丢失', () => {
   it('error 在最后一行无换行符时仍被捕获', async () => {
     mockFetchWithChunks([
       'data: {"status":"downloading","completed":500,"total":1000}\n',
-      'data: {"status":"error","error":"model not found"}', // 无 \n
+      'data: {"status":"error","state":"failed","error":"model not found"}', // 无 \n
     ])
 
     const { pullOllamaModel } = await import('@/api/ollama')

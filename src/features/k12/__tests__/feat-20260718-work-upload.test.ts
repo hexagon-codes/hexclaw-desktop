@@ -186,7 +186,6 @@ describe('任务1 · 照片真实上传', () => {
     const w = render()
     await flushPromises()
     await w.find('[data-testid="cw-add-open"]').trigger('click')
-    await w.find('[data-testid="cw-add-type-art"]').trigger('click')
 
     const file = new File([new Uint8Array([1, 2, 3])], '画.png', { type: 'image/png' })
     await pickPhoto(w, file)
@@ -204,7 +203,8 @@ describe('任务1 · 照片真实上传', () => {
         source_session: 'creative-works:k12-xiaoming',
         source_kind: 'desktop',
         source_asset_refs: ['asset://k12-xiaoming/abc123.png'],
-        creative_entry: { kind: 'new_work', task_intent: 'artwork' },
+        route_request: { selection_source: 'auto' },
+        creative_entry: { kind: 'new_work', task_intent: 'unknown' },
       }),
     )
 

@@ -92,15 +92,15 @@ function dispatchSnapshot(
   return {
     dispatch_id: 'dispatch-progressive-wave-3',
     task_intent: 'completed_homework',
-    status: 'routed',
+    status: 'awaiting_confirmation',
     intent_evidence: ['answer_regions_present'],
     intent_confidence: 0.99,
     confirmation_candidates: [],
     target: { type: 'homework_submission', id: 'submission-progressive-wave-3' },
     target_projection: {
       kind: 'homework',
-      stage: 'assessing',
-      confirmation_state: 'confirmed',
+      stage: 'awaiting_confirmation',
+      confirmation_state: 'pending',
       anchor_state: 'degraded',
       structure_version: options.structureVersion ?? 4,
       recognition: {
@@ -134,7 +134,7 @@ function dispatchSnapshot(
       projection_revision: options.snapshotRevision ?? 8,
       final_artifact: null,
     },
-    progress: { operation: 'homework', state: 'assessing' },
+    progress: { operation: 'homework', state: 'awaiting_confirmation' },
     version: options.snapshotRevision ?? 8,
     created_at: 1,
     updated_at: 2,
@@ -369,7 +369,8 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-describe('BUG-20260726-031 · source-action Desktop orchestration', () => {
+// 历史等待快照只验证保留的题源命令兼容链路，不代表自动批改的新任务操作流。
+describe('source-action legacy snapshot compatibility', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     Object.values(h).forEach((spy) => spy.mockReset())

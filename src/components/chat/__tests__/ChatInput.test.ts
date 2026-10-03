@@ -1,8 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
+
+const composerDrafts = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('@/services/composer-drafts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/composer-drafts')>(),
+  readComposerDraft: async (key: string) => composerDrafts.get(key),
+  writeComposerDraft: async (key: string, draft: unknown) => { composerDrafts.set(key, draft) },
+}))
+
+beforeEach(() => composerDrafts.clear())
 
 vi.mock('@/composables/useVoice', () => ({
   useVoice: () => ({
@@ -41,7 +50,7 @@ function createTestI18n() {
 
 async function mountChatInput(props: Record<string, unknown> = {}) {
   const ChatInput = (await import('../ChatInput.vue')).default
-  return mount(ChatInput, {
+  const wrapper = mount(ChatInput, {
     props,
     global: {
       plugins: [createTestI18n()],
@@ -51,6 +60,8 @@ async function mountChatInput(props: Record<string, unknown> = {}) {
       },
     },
   })
+  await flushPromises()
+  return wrapper
 }
 
 const editor = (wrapper: VueWrapper) =>
@@ -97,7 +108,9 @@ describe('ChatInput attachment capability gating', () => {
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     expect(canonicalSource(wrapper)).toBe('draft message')
   })
 
@@ -109,7 +122,9 @@ describe('ChatInput attachment capability gating', () => {
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     expect(canonicalSource(wrapper)).toBe('')
   })
 

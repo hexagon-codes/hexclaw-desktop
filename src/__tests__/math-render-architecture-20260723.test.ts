@@ -279,18 +279,6 @@ describe('数学公式架构防漂移', () => {
     }
   })
 
-  it('KaTeX CSS 只由 main 入口同步导入', () => {
-    const cssReferences = references.filter(
-      ({ specifier }) => specifier === 'katex/dist/katex.min.css',
-    )
-    expect(cssReferences).toEqual([
-      {
-        file: 'main.ts',
-        kind: 'static',
-        specifier: 'katex/dist/katex.min.css',
-      },
-    ])
-  })
 
   it('ChatInput 与 useChatSend 都在发送边界调用 normalizeMathMarkdown', () => {
     for (const path of ['components/chat/ChatInput.vue', 'composables/useChatSend.ts']) {

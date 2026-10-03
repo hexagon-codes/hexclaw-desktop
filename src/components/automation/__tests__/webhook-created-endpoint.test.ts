@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import WebhookPanel from '../WebhookPanel.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
@@ -28,6 +29,13 @@ const autonomyApis = vi.hoisted(() => ({
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: true, state: 'ready' },
+  }),
+}))
+
 vi.mock('@/api/webhook', () => ({
   ...webhookApis,
   webhookUrlFor: (name: string) => `http://localhost:16060/api/v1/webhooks/${name}`,
@@ -52,6 +60,7 @@ function mountPanel() {
     attachTo: document.body,
     global: {
       plugins: [
+        createPinia(),
         createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } }),
       ],
       stubs: { teleport: true, transition: false, HcSelect: { template: '<select />' } },

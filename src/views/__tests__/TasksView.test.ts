@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import TasksView from '../TasksView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -32,6 +33,15 @@ vi.mock('@/api/tasks', () => ({
   resumeCronJob: taskApis.resumeCronJob,
   triggerCronJob: taskApis.triggerCronJob,
   getCronJobHistory: taskApis.getCronJobHistory,
+}))
+
+vi.mock('@/api/agents', () => ({ getAgents: vi.fn().mockResolvedValue({ agents: [] }) }))
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: false, state: 'disabled' },
+  }),
 }))
 
 vi.mock('@/composables', () => ({
@@ -94,7 +104,7 @@ function mountTasksView() {
   return mount(TasksView, {
     attachTo: document.body,
     global: {
-      plugins: [createTestI18n()],
+      plugins: [createPinia(), createTestI18n()],
       stubs: {
         EmptyState: { template: '<div>empty</div>' },
         LoadingState: { template: '<div>loading</div>' },

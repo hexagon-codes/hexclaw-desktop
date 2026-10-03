@@ -10,8 +10,10 @@ describe('router onboarding flow', () => {
   it('redirects first-time users without any configured provider to /welcome', async () => {
     const store = {
       config: null as null | { llm: { providers: unknown[] } },
+      backendConfigLoaded: false,
       loadConfig: vi.fn(async () => {
         store.config = { llm: { providers: [] } }
+        store.backendConfigLoaded = true
       }),
     }
 

@@ -33,6 +33,7 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
     lastSequence: 0,
     runtimeEvents: [],
     acceptedRuntimeFrames: {},
+    thinkingEnabled: true,
   }
 
   const visibleRuntimeFrame = (sequence: number) => ({
@@ -45,6 +46,12 @@ describe('Bug #1: 思考计时器精确到 reasoning 阶段', () => {
       dialect: 'reasoning_summary',
       provider: 'test',
       model: 'test-model',
+    },
+    reasoningReceipt: {
+      version: 1 as const,
+      reasoning_request: 'on' as const,
+      reasoning_support: 'supported' as const,
+      reasoning_execution: 'applied' as const,
     },
   })
 

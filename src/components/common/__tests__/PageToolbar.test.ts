@@ -39,7 +39,7 @@ describe('PageToolbar', () => {
   it('forwards Enter from the shared search input as a toolbar submit', async () => {
     const wrapper = mountPageToolbar()
 
-    await wrapper.get('input').trigger('keydown.enter')
+    await wrapper.get('input').trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('search-submit')).toHaveLength(1)
   })

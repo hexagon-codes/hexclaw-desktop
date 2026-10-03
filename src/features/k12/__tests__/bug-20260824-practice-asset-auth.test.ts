@@ -93,7 +93,7 @@ function completedPracticeSetWithAssets(
 function render() {
   return shallowMount(K12PracticeSetsPanel, {
     props: { agentId: 'k12-xiaoming' },
-    global: { plugins: [i18n()] },
+    global: { plugins: [i18n()], stubs: { Teleport: true } },
   })
 }
 

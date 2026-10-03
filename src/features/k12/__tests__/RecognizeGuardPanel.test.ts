@@ -252,7 +252,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     expect(wrapper.findAll('[data-testid^="rq-risk-"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid^="rq-confirm-"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="recognize-pipeline"]').text()).toContain(
-      '清晰内容自动处理 · 仅核对 1 处不确定项',
+      '已作答作业',
     )
   })
 
@@ -296,7 +296,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     expect(h.solve).not.toHaveBeenCalled()
   })
 
-  it('只提交风险事实，确认后轮询同一 dispatch 并自动展示批注结果', async () => {
+  it('历史确认兼容handler只提交风险事实，随后读取同一dispatch批注结果', async () => {
     h.create.mockResolvedValue({
       created: true,
       ...homeworkStatus('awaiting_confirmation', {
@@ -324,7 +324,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper.get('[data-testid="rq-confirm-1"]').setValue(true)
-    await wrapper.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    await (wrapper.vm as unknown as { confirmAll: () => Promise<void> }).confirmAll()
     await flushPromises()
 
     expect(h.confirm).toHaveBeenCalledWith(
@@ -427,7 +427,7 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper.get('[data-testid="rq-confirm-0"]').setValue(true)
-    await wrapper.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    await (wrapper.vm as unknown as { confirmAll: () => Promise<void> }).confirmAll()
     await flushPromises()
 
     expect(h.confirm).toHaveBeenCalledTimes(1)

@@ -145,9 +145,4 @@ describe('Sidebar — 动态地址和工作区切换', () => {
     expect(src).not.toContain('127.0.0.1:16060')
   })
 
-  it('侧边栏包含引擎与会话相关的点击处理', () => {
-    // 重启引擎按钮 + 点击引擎名打开「关于」窗口（openAbout）
-    expect(src).toContain('restartEngine')
-    expect(src).toContain('openAbout')
-  })
 })

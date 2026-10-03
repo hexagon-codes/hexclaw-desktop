@@ -119,15 +119,15 @@ function imageTaskDispatch(options: DispatchOptions) {
     dispatch: {
       dispatch_id: 'dispatch-progressive-wave-2',
       task_intent: 'completed_homework',
-      status: 'routed',
+      status: options.stage === 'completed' ? 'routed' : 'awaiting_confirmation',
       intent_evidence: ['answer_regions_present'],
       intent_confidence: 0.99,
       confirmation_candidates: [],
       target: { type: 'homework_submission', id: 'submission-progressive-wave-2' },
       target_projection: {
         kind: 'homework',
-        stage: options.stage ?? 'assessing',
-        confirmation_state: 'confirmed',
+        stage: options.stage ?? 'awaiting_confirmation',
+        confirmation_state: options.stage === 'completed' ? 'confirmed' : 'pending',
         anchor_state: 'located',
         structure_version: 2,
         recognition: { subject: '数学', questions: options.questions },
@@ -136,7 +136,7 @@ function imageTaskDispatch(options: DispatchOptions) {
         projection_revision: 8,
         final_artifact: options.finalArtifact ?? null,
       },
-      progress: { operation: 'homework', state: options.stage ?? 'assessing' },
+      progress: { operation: 'homework', state: options.stage ?? 'awaiting_confirmation' },
       version: 8,
       created_at: 1,
       updated_at: 2,
@@ -518,10 +518,9 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     })
 
     const shell = wrapper.get('[data-testid="recognize-guard"]')
-    expect(shell.text()).toContain('处理完成 · 有跳过')
-    expect(shell.text()).toContain('整页批改完成 · 有 2 题跳过')
-    expect(shell.text()).toContain('共 4 题 · 已处理 2 题 · 2 题由家长跳过')
-    expect(shell.text()).toContain('本次有 2 题跳过，未生成完整辅导要点。')
+    expect((wrapper.vm as unknown as { taskCoverage: unknown }).taskCoverage).toEqual({
+      state: 'with_skips', total: 4, processed: 2, skipped: 2,
+    })
     expect(shell.find('[data-testid="tutoring-tips"]').exists()).toBe(false)
     expect(h.tutoringTips).not.toHaveBeenCalled()
 
@@ -585,10 +584,6 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
 
     expect(final.findAll('[data-testid="recognize-guard"]')).toHaveLength(1)
     const finalShell = final.get('[data-testid="recognize-guard"]').element
-    const tutoringTips = final.get('[data-testid="tutoring-tips"]')
-    expect(
-      tutoringTips.get<HTMLButtonElement>('[data-testid="tutoring-tips-send"]').element.disabled,
-    ).toBe(false)
     for (const action of ['打印', '导出 PDF']) {
       const button = buttonByName(finalShell, action)
       expect(
@@ -598,13 +593,6 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
       expect(button!.disabled).toBe(false)
       expect(button!.closest('[data-testid="recognize-guard"]')).toBe(finalShell)
     }
-    const sendButtons = Array.from(finalShell.querySelectorAll('button')).filter(
-      (button) => button.textContent?.trim() === '发送到手机',
-    )
-    expect(sendButtons).toHaveLength(1)
-    expect(sendButtons[0]).toBe(
-      tutoringTips.get<HTMLButtonElement>('[data-testid="tutoring-tips-send"]').element,
-    )
     expect(final.get('[data-testid="final-artifact-actions"]').text()).not.toContain('发送到手机')
   })
 })

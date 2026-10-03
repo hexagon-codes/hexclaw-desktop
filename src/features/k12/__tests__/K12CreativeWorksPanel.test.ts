@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import ImagePreview from '@/components/common/ImagePreview.vue'
+import { closeImagePreview, imagePreview, installImagePreview } from '@/composables/useImagePreview'
 import k12Zh from '../i18n/zh-CN'
 import K12CreativeWorksPanel from '../views/K12CreativeWorksPanel.vue'
 import type {
@@ -317,6 +319,18 @@ describe('K12CreativeWorksPanel current contract', () => {
   })
 
   it('BUG-20260723-012 opens the immutable artwork preview by keyboard and restores focus on Escape', async () => {
+    // 缩略图使用全应用预览监听器，原生弹层复用共享组件，不再挂载已移除的局部预览。
+    const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+    const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+      configurable: true,
+      value(this: HTMLDialogElement) { this.setAttribute('open', '') },
+    })
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+      configurable: true,
+      value(this: HTMLDialogElement) { this.removeAttribute('open') },
+    })
     h.list.mockResolvedValue({
       items: [
         work({
@@ -329,21 +343,62 @@ describe('K12CreativeWorksPanel current contract', () => {
       ],
     })
     const wrapper = render()
-    await flushPromises()
+    const disposePreview = installImagePreview(() => '图片预览')
+    let viewer: ReturnType<typeof mount> | undefined
+    try {
+      await flushPromises()
 
-    const thumbnail = wrapper.get('[data-testid="cw-thumb"]')
-    ;(thumbnail.element as HTMLElement).focus()
-    await thumbnail.trigger('keydown', { key: 'Enter', keyCode: 13 })
-    await flushPromises()
+      const thumbnail = wrapper.get('[data-testid="cw-thumb"]')
+      Object.defineProperties(thumbnail.element, {
+        complete: { configurable: true, value: true },
+        naturalWidth: { configurable: true, value: 800 },
+        naturalHeight: { configurable: true, value: 600 },
+      })
+      vi.spyOn(thumbnail.element, 'getClientRects').mockReturnValue([
+        new DOMRect(0, 0, 160, 120),
+      ] as unknown as DOMRectList)
+      ;(thumbnail.element as HTMLElement).focus()
+      await thumbnail.trigger('keydown', { key: 'Enter', keyCode: 13 })
+      await flushPromises()
 
-    expect(wrapper.get('[data-testid="cw-image-preview"]').attributes('tabindex')).toBe('-1')
-    expect(document.activeElement).toBe(wrapper.get('[data-testid="cw-image-preview"]').element)
+      const requested = imagePreview.value
+      expect(requested).toBeDefined()
+      expect(requested!.returnFocus).toBe(thumbnail.element)
+      viewer = mount(ImagePreview, {
+        props: {
+          images: requested!.images,
+          initialKey: requested!.initialKey,
+          returnFocus: requested!.returnFocus,
+          onClose: () => {
+            closeImagePreview()
+            viewer?.unmount()
+            viewer = undefined
+          },
+        },
+        attachTo: document.body,
+        global: { plugins: [i18n()] },
+      })
+      await flushPromises()
+      const preview = new DOMWrapper(document.body).get('dialog.hc-image-viewer')
+      expect(preview.attributes('tabindex')).toBe('-1')
+      expect(document.activeElement).toBe(preview.element)
+      expect(preview.get('img').attributes('src')).toBe(thumbnail.attributes('src'))
 
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await flushPromises()
-    expect(wrapper.find('[data-testid="cw-image-preview"]').exists()).toBe(false)
-    expect(document.activeElement).toBe(thumbnail.element)
-    wrapper.unmount()
+      // 浏览器将 Escape 转成原生 dialog cancel 事件。
+      await preview.trigger('cancel')
+      await flushPromises()
+      expect(document.body.querySelector('dialog.hc-image-viewer')).toBeNull()
+      expect(document.activeElement).toBe(thumbnail.element)
+    } finally {
+      viewer?.unmount()
+      disposePreview()
+      wrapper.unmount()
+      if (originalShowModal) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', originalShowModal)
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal
+      if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close
+      vi.unstubAllGlobals()
+    }
   })
 
   it('renders the approved structured detail and exact current action set', async () => {
@@ -501,8 +556,36 @@ describe('K12CreativeWorksPanel current contract', () => {
     expect(modal.find('[data-testid="cw-add-title"]').exists()).toBe(false)
     expect(modal.find('[data-testid="cw-add-task"]').exists()).toBe(false)
     expect(modal.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
+    expect(modal.find('[data-testid="cw-add-type-art"]').exists()).toBe(false)
+    expect(modal.get('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
 
-    await modal.get('[data-testid="cw-add-type-art"]').trigger('click')
+    h.upload.mockResolvedValue({ asset_id: 'asset://agent-1/art-new.png', size: 3 })
+    h.cancelImageTask.mockResolvedValue({})
+    h.createImageTask.mockResolvedValue({
+      created: true,
+      dispatch: {
+        dispatch_id: 'dispatch-art-new',
+        task_intent: 'artwork',
+        status: 'routed',
+        target_projection: {
+          kind: 'creative',
+          intake_id: 'intake-art-new',
+          work_type: 'art',
+          status: 'ready',
+          entry_kind: 'new_work',
+          promotion_policy: 'explicit_commit',
+          commit_required: true,
+          commit_state: 'pending',
+        },
+        version: 1,
+      },
+    })
+    const input = modal.get('[data-testid="cw-add-photo-input"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['art'], 'art.png', { type: 'image/png' })],
+    })
+    await input.trigger('change')
     await flushPromises()
     const artModal = wrapper.get('[data-testid="cw-add-modal"]')
     expect(artModal.find('[data-testid="cw-add-photo-input"]').exists()).toBe(true)
@@ -512,7 +595,11 @@ describe('K12CreativeWorksPanel current contract', () => {
     )
     expect(artModal.find('[data-testid="cw-add-task"]').exists()).toBe(false)
     expect(artModal.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
-    expect(artModal.get('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
+    expect(artModal.get('[data-testid="cw-add-submit"]').attributes('disabled')).toBeUndefined()
+    expect(h.createImageTask).toHaveBeenCalledWith(expect.objectContaining({
+      route_request: { selection_source: 'auto' },
+      creative_entry: { kind: 'new_work', task_intent: 'unknown' },
+    }))
     wrapper.unmount()
   })
 

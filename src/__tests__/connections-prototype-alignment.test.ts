@@ -27,8 +27,6 @@ const modal = readFileSync(
   resolve(SRC, 'components/channels/ConnectorConfigModal.vue'),
   'utf-8',
 )
-// 实例 store（模块级 + localStorage 持久化）。
-const store = readFileSync(resolve(SRC, 'composables/useConnectorInstances.ts'), 'utf-8')
 
 function getByPath(obj: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((acc, key) => {
@@ -119,16 +117,6 @@ describe('ConnectorConfigModal — two-step wizard mirrors ChannelConfigModal', 
   })
 })
 
-describe('useConnectorInstances — module store persisted to localStorage', () => {
-  it('exports the CRUD surface + persists under the agreed key', () => {
-    expect(store).toContain('hexclaw:connectorInstances')
-    expect(store).toContain('addInstance')
-    expect(store).toContain('updateInstance')
-    expect(store).toContain('removeInstance')
-    expect(store).toContain('localStorage')
-    expect(store).toContain('crypto.randomUUID')
-  })
-})
 
 // ─── 数据连接器：扁平 featured 目录（10 源，不分类）────────────────────
 // 期望的扁平类型集合（id / method）；与 CONNECTOR_TYPES 数据结构一一对应。

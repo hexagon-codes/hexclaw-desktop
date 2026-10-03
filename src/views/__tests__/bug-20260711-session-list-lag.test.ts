@@ -9,7 +9,7 @@
  * 脚手架复用 bug-20260709-session-binding-cleared-on-mount.test.ts（已验证的最小集）。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -31,6 +31,8 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRouterPush: vi.fn(),
   mockRouterReplace: vi.fn(),
 }))
+
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
 
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
@@ -177,6 +179,8 @@ function mountChatView() {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Object.defineProperty(window, 'matchMedia', {
@@ -213,6 +217,7 @@ describe('BUG-20260711-G：深链进入 agent 会话后列表必须立即含该�
     await flushPromises()
     const chatStore = useChatStore()
 
+    await vi.waitFor(() => expect(chatStore.currentSessionId).toBeTruthy())
     expect(chatStore.currentSessionId, '前置：深链已建会话').toBeTruthy()
     const found = chatStore.sessions.find((s) => s.id === chatStore.currentSessionId)
     expect(found, '会话列表必须立即含新会话（不等首条回复）').toBeTruthy()

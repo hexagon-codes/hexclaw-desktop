@@ -34,7 +34,7 @@ describe('AgentsView authoritative prototype fidelity', () => {
       /:data-testid="`agent-enter-chat-\$\{agent\.name\}`"\s*@click="enterAgentChat\(agent\.name\)"\s*>\s*\{\{ t\('agents\.enterChat'\) \}\}/s,
     )
     expect(source).toMatch(
-      /<button v-if="!isScenarioAgent\(agent\)" class="hc-btn" @click="openEditAgent\(agent\)">\s*\{\{ t\('common\.edit'\) \}\}/s,
+      /<button\s+v-if="!isScenarioAgent\(agent\)"\s+class="hc-btn"\s+@click="openEditAgent\(agent\)"\s*>\s*\{\{ t\('common\.edit'\) \}\}/s,
     )
     expect(source).toMatch(/class="hc-btn hc-btn-ghost hc-btn--danger"/)
     expect(source).not.toMatch(/<(?:MessageSquare|Trash2)\b/)

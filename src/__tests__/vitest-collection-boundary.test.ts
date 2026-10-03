@@ -6,7 +6,10 @@ import { configDefaults, type ViteUserConfig } from 'vitest/config'
 
 import vitestConfig from '../../vitest.config'
 
-const testConfig = (vitestConfig as ViteUserConfig).test
+const resolvedConfig = typeof vitestConfig === 'function'
+  ? vitestConfig({ command: 'serve', mode: 'test', isSsrBuild: false, isPreview: false })
+  : vitestConfig
+const testConfig = (resolvedConfig as ViteUserConfig).test
 const include = testConfig?.include ?? configDefaults.include
 const exclude = testConfig?.exclude ?? configDefaults.exclude
 

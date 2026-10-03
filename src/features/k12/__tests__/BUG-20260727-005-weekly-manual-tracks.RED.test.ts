@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
-import { nextTick } from 'vue'
+import recordsSource from '../views/K12RecordsView.vue?raw'
 
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
 import panelSource from '../components/K12WeeklyPracticePanel.vue?raw'
@@ -270,14 +270,11 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
     expect(item.find('[role="menuitem"]').exists()).toBe(false)
 
     await actionGroup.get('[data-testid="mistake-suppress-review"]').trigger('click')
-    expect(wrapper.emitted('suppress-item')).toBeUndefined()
-    const confirm = document.body.querySelector<HTMLButtonElement>(
-      '[data-testid="confirm-suppress-review"]',
-    )
-    expect(confirm).not.toBeNull()
-    confirm!.click()
-    await nextTick()
     expect(wrapper.emitted('suppress-item')).toContainEqual([plan.tracks[0].items[0]])
+    // 列表只派发错题身份，持久变更与确认由记录视图统一负责。
+    expect(wrapper.emitted('suppress-item')).toHaveLength(1)
+    expect(recordsSource).toContain('@suppress-item="suppressWeeklyPracticeItem"')
+    expect(recordsSource).toContain('await suppressMistake(source)')
   })
 
   it('shows the exact approved positive empty state when this week has no mistakes', () => {

@@ -42,6 +42,7 @@ vi.mock('@/api/websocket', () => ({
   },
 }))
 vi.mock('@/api/agents', () => ({
+  getAgents: vi.fn().mockResolvedValue({ agents: [] }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
   createRole: vi.fn(),
   updateRole: vi.fn(),
@@ -213,10 +214,12 @@ describe('BUG-20260724: Main Chat reasoning uses the safe Markdown renderer', ()
       content: '160',
       reasoning: '**Planning concise arithmetic explanation**',
       timestamp: '',
+      metadata: { reasoning_disclosure: { visibility: 'visible', source: 'provider', dialect: 'public_summary', provider: 'fixture-provider', model: 'fixture-model' } },
     })
     await flushPromises()
+    await wrapper.get('.hc-process__toggle').trigger('click')
 
-    const reasoning = wrapper.get('.hc-thinking__content')
+    const reasoning = wrapper.get('.hc-process__reasoning')
     expect(reasoning.get('strong').text()).toBe('Planning concise arithmetic explanation')
     expect(reasoning.text()).not.toContain('**')
     wrapper.unmount()
@@ -228,7 +231,7 @@ describe('BUG-20260724: Main Chat reasoning uses the safe Markdown renderer', ()
     )
     await flushPromises()
 
-    const reasoning = wrapper.get('.hc-thinking__content')
+    const reasoning = wrapper.get('.hc-process__reasoning')
     expect(reasoning.get('strong').text()).toBe('Planning concise arithmetic explanation')
     expect(reasoning.text()).not.toContain('**')
     wrapper.unmount()
@@ -240,7 +243,7 @@ describe('BUG-20260724: Main Chat reasoning uses the safe Markdown renderer', ()
     )
     await flushPromises()
 
-    const reasoning = wrapper.get('.hc-thinking__content')
+    const reasoning = wrapper.get('.hc-process__reasoning')
     expect(reasoning.get('strong').text()).toBe('Planning concise arithmetic explanation')
     expect(reasoning.text()).not.toContain('**')
     wrapper.unmount()
@@ -263,10 +266,12 @@ describe('BUG-20260724: Main Chat reasoning uses the safe Markdown renderer', ()
         '```',
       ].join('\n'),
       timestamp: '',
+      metadata: { reasoning_disclosure: { visibility: 'visible', source: 'provider', dialect: 'public_summary', provider: 'fixture-provider', model: 'fixture-model' } },
     })
     await flushPromises()
+    await wrapper.get('.hc-process__toggle').trigger('click')
 
-    const reasoning = wrapper.get('.hc-thinking__content')
+    const reasoning = wrapper.get('.hc-process__reasoning')
     expect(reasoning.get('strong').text()).toBe('safe')
     expect(reasoning.find('script').exists()).toBe(false)
     expect(reasoning.find('[onerror]').exists()).toBe(false)

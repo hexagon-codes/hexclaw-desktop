@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // ═══════════════════════════════════════════════════════════════════
 
 vi.mock('@/config/env', () => ({
+  OLLAMA_BASE: 'http://localhost:11434',
   env: {
     apiBase: 'http://localhost:16060',
     wsBase: 'ws://localhost:16060',
@@ -142,7 +143,8 @@ describe('1. API Request/Response Shape Validation', () => {
       const { getLLMConfig } = await import('@/api/config')
       const config = await getLLMConfig()
 
-      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials')
+      const { backendScopeKey } = await import('@/services/backend-context')
+      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials', { scope: backendScopeKey() })
       expect(config).toBe(nativeConfig)
     })
 
@@ -164,6 +166,7 @@ describe('1. API Request/Response Shape Validation', () => {
       expect(mockInvoke).toHaveBeenCalledWith('apply_llm_config_with_credentials', {
         config,
         replacements: [],
+        scope: (await import('@/services/backend-context')).backendScopeKey(),
       })
     })
 
@@ -234,7 +237,7 @@ describe('1. API Request/Response Shape Validation', () => {
     it('uploadDocument uses FormData with field name "file"', async () => {
       let capturedBody: unknown
       vi.doMock('@/api/client', () => ({
-        apiGet: vi.fn(),
+        apiGet: vi.fn().mockResolvedValue({ operations: [] }),
         apiPost: vi.fn((url: string, body: unknown) => {
           if (body instanceof FormData) capturedBody = body
           return Promise.resolve({
@@ -428,27 +431,28 @@ describe('1. API Request/Response Shape Validation', () => {
 
   describe('ollama.ts — getOllamaStatus / pullOllamaModel', () => {
     const originalFetch = globalThis.fetch
+    const mockOllamaGet = vi.fn()
 
     beforeEach(() => {
       vi.resetModules()
+      mockOllamaGet.mockReset().mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } })
+      vi.doMock('@/api/client', () => ({ apiGet: mockOllamaGet, apiPost: vi.fn(), apiPut: vi.fn(), apiDelete: vi.fn() }))
     })
 
     afterEach(() => {
       globalThis.fetch = originalFetch
     })
 
-    it('getOllamaStatus directly fetches Ollama native API', async () => {
+    it('getOllamaStatus preserves the current backend target projection', async () => {
       vi.resetModules()
-      const mockFetch = vi.fn()
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ models: [{ name: 'qwen3', size: 1000, modified_at: '2024-01-01', details: {} }] }) })
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ version: '0.3.0' }) })
-      vi.stubGlobal('fetch', mockFetch)
+      mockOllamaGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, running: true,
+        reachable: true, model_count: 1, models: [{ name: 'qwen3', size: 1000, modified: '2024-01-01' }] })
       vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaStatus } = await import('@/api/ollama')
       const status = await getOllamaStatus()
 
-      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
+      expect(mockOllamaGet).toHaveBeenCalledExactlyOnceWith('/api/v1/ollama/status')
       expect(status.running).toBe(true)
       expect(status.model_count).toBe(1)
       vi.unstubAllGlobals()
@@ -456,7 +460,8 @@ describe('1. API Request/Response Shape Validation', () => {
 
     it('getOllamaStatus returns not running on error', async () => {
       vi.resetModules()
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')))
+      mockOllamaGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, running: false,
+        reachable: false, error: 'connection refused', model_count: 0 })
       vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaStatus } = await import('@/api/ollama')
@@ -465,14 +470,11 @@ describe('1. API Request/Response Shape Validation', () => {
       vi.unstubAllGlobals()
     })
 
-    it('getOllamaRunning extracts models from Ollama /api/ps', async () => {
+    it('getOllamaRunning extracts models from the current backend projection', async () => {
       vi.resetModules()
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
+      mockOllamaGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
           models: [{ name: 'llama3.1', size: 1000, size_vram: 500, expires_at: '', context_length: 4096 }],
-        }),
-      }))
+      })
       vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaRunning } = await import('@/api/ollama')
@@ -483,10 +485,7 @@ describe('1. API Request/Response Shape Validation', () => {
     })
 
     it('getOllamaRunning returns empty array when data.models is missing', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({}),
-      }))
+      mockOllamaGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1 })
 
       const { getOllamaRunning } = await import('@/api/ollama')
       const models = await getOllamaRunning()
@@ -494,15 +493,16 @@ describe('1. API Request/Response Shape Validation', () => {
       vi.unstubAllGlobals()
     })
 
-    it('pullOllamaModel parses NDJSON stream events (with and without data: prefix)', async () => {
+    it('pullOllamaModel parses backend operation SSE events', async () => {
       const chunks = [
         'data: {"status":"pulling manifest"}\n',
-        '{"status":"downloading","completed":50,"total":100,"digest":"sha256:abc"}\n',
-        'data: {"status":"success"}\n',
+        'data: {"status":"downloading","completed":50,"total":100,"digest":"sha256:abc"}\n',
+        'data: {"status":"success","state":"succeeded"}\n',
       ]
       let chunkIndex = 0
 
       const mockReader = {
+        releaseLock: vi.fn(),
         read: vi.fn(() => {
           if (chunkIndex < chunks.length) {
             const encoder = new TextEncoder()
@@ -524,7 +524,7 @@ describe('1. API Request/Response Shape Validation', () => {
       expect(events).toHaveLength(3)
       expect(events[0]).toEqual({ status: 'pulling manifest' })
       expect(events[1]).toEqual({ status: 'downloading', completed: 50, total: 100, digest: 'sha256:abc' })
-      expect(events[2]).toEqual({ status: 'success' })
+      expect(events[2]).toEqual({ status: 'success', state: 'succeeded' })
     })
 
     it('pullOllamaModel throws on error response with error field', async () => {
@@ -535,7 +535,7 @@ describe('1. API Request/Response Shape Validation', () => {
       }))
 
       const { pullOllamaModel } = await import('@/api/ollama')
-      await expect(pullOllamaModel('nonexistent', vi.fn())).rejects.toThrow('model not found')
+      await expect(pullOllamaModel('nonexistent', vi.fn())).rejects.toThrow('HTTP 400')
     })
 
     it('pullOllamaModel throws when response body is null', async () => {
@@ -545,15 +545,16 @@ describe('1. API Request/Response Shape Validation', () => {
       }))
 
       const { pullOllamaModel } = await import('@/api/ollama')
-      await expect(pullOllamaModel('test', vi.fn())).rejects.toThrow('No response body')
+      await expect(pullOllamaModel('test', vi.fn())).rejects.toThrow('Ollama pull response is unavailable')
     })
 
     it('pullOllamaModel throws on stream event with error field', async () => {
       const chunks = [
-        '{"status":"error","error":"disk full"}\n',
+        'data: {"status":"error","state":"failed","error":"disk full"}\n',
       ]
       let chunkIndex = 0
       const mockReader = {
+        releaseLock: vi.fn(),
         read: vi.fn(() => {
           if (chunkIndex < chunks.length) {
             return Promise.resolve({ done: false, value: new TextEncoder().encode(chunks[chunkIndex++]!) })
@@ -570,7 +571,7 @@ describe('1. API Request/Response Shape Validation', () => {
       const events: unknown[] = []
       // FIXED: pullOllamaModel now tracks stream errors and throws after the loop
       await expect(pullOllamaModel('model', (p) => events.push(p))).rejects.toThrow('disk full')
-      expect(events[0]).toEqual({ status: 'error', error: 'disk full' })
+      expect(events[0]).toEqual({ status: 'error', state: 'failed', error: 'disk full' })
     })
   })
 })
@@ -594,7 +595,9 @@ describe('2. Security Tests', () => {
       const { getLLMConfig } = await import('@/api/config')
       await getLLMConfig()
 
-      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials')
+      expect(mockInvoke).toHaveBeenCalledWith('get_llm_config_with_credentials', {
+        scope: (await import('@/services/backend-context')).backendScopeKey(),
+      })
       expect(mockInvoke).not.toHaveBeenCalledWith('proxy_api_request', expect.anything())
     })
   })

@@ -217,10 +217,9 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
       },
     })
-    const mic = w
-      .findAll('.hc-composer__tool')
-      .find((b) => (b.attributes('title') || '').includes('语音'))
-    expect(mic, '麦克风按钮必须常驻（不可用时点击给出提示，而非整颗消失）').toBeTruthy()
+    const mic = w.find('[data-testid="chat-voice-start"]')
+    expect(mic.exists(), '空草稿的语音入口必须常驻').toBe(true)
+    expect(mic.attributes('aria-label')).toContain('语音')
   })
 })
 

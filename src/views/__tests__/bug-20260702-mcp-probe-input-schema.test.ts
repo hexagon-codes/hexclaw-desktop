@@ -124,7 +124,7 @@ describe('BUG-20260702 MCP 探针：schema 驱动入参 + server_name 精确归�
     await clickTest(wrapper)
 
     // RED：旧代码无视 input_schema，硬调 callMcpTool('run_sql', { sql: ... }) → 键错
-    expect(callMcpTool).toHaveBeenCalledWith('run_sql', { query: 'SELECT 1 AS ok' })
+    expect(callMcpTool).toHaveBeenCalledWith('run_sql', { query: 'SELECT 1 AS ok' }, '生产库')
     expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
   })
 
@@ -176,7 +176,7 @@ describe('BUG-20260702 MCP 探针：schema 驱动入参 + server_name 精确归�
     getMcpServerStatus.mockClear()
     await clickTest(wrapper)
 
-    expect(callMcpTool).toHaveBeenCalledWith('mine_query', { sql: 'SELECT 1 AS ok' })
+    expect(callMcpTool).toHaveBeenCalledWith('mine_query', { sql: 'SELECT 1 AS ok' }, '生产库')
     expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
   })
 })

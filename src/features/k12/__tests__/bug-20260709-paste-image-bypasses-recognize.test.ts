@@ -215,6 +215,7 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
       },
     })
+    await flushPromises()
     const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'cat.png', {
       type: 'image/png',
     })
@@ -222,11 +223,10 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
       items: [{ type: 'image/png', getAsFile: () => file }],
       getData: () => '',
     })
-    await flushPromises()
-    expect(
+    await vi.waitFor(() => expect(
       w.find('.hc-composer__files').exists(),
       '通用会话粘贴图片仍应进附件（vision 路由不受影响）',
-    ).toBe(true)
+    ).toBe(true))
     expect(w.emitted('scenario-image')).toBeFalsy()
   })
 })

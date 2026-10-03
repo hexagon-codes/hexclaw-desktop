@@ -20,24 +20,6 @@ function classAttributesContaining(markup: string, token: string): string[] {
 }
 
 describe('2026-07-23 cross-page layout governance', () => {
-  it('layers Knowledge secondary tabs and the complete active panel through one 18px stack', () => {
-    const knowledge = source('views/KnowledgeView.vue')
-    const stack = cssBlock(knowledge, '.knowledge-page__tab-stack')
-
-    expect(knowledge).toContain('class="knowledge-page__tab-stack"')
-    expect(knowledge).toContain('class="knowledge-page__active-panel"')
-    expect(knowledge).toMatch(
-      /class="knowledge-page__tab-stack"[\s\S]*?<UnderlineTabs[\s\S]*?class="knowledge-page__active-panel"[\s\S]*?knowledge-page__source-filters/,
-    )
-    expect(stack).toMatch(/display:\s*flex/)
-    expect(stack).toMatch(/flex-direction:\s*column/)
-    expect(stack).toMatch(/gap:\s*18px/)
-    expect(
-      classAttributesContaining(knowledge, 'knowledge-page__source-filters').every((className) =>
-        className.includes('flex-wrap'),
-      ),
-    ).toBe(true)
-  })
 
   it('keeps every add-document native control and clearable wrapper on the full form track', () => {
     const knowledge = source('views/KnowledgeView.vue')

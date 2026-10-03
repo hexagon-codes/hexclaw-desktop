@@ -9,6 +9,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
+const mockOllamaTargetGet = vi.hoisted(() => vi.fn())
+vi.mock('@/api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/client')>(),
+  apiGet: mockOllamaTargetGet,
+}))
+
 // ── Hoisted mocks ──────────────────────────────────────────────────
 
 const {
@@ -1382,7 +1388,10 @@ describe('11. Message Service Edge Cases', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('12. Ollama API Edge Cases', () => {
-  it('12.1: pullOllamaModel with non-OK response — should throw with error from body', async () => {
+  beforeEach(() => {
+    mockOllamaTargetGet.mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } })
+  })
+  it('12.1: pullOllamaModel with non-OK response — preserves HTTP failure', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -1394,7 +1403,7 @@ describe('12. Ollama API Edge Cases', () => {
       const actual = await vi.importActual<typeof import('@/api/ollama')>('@/api/ollama')
       await expect(
         actual.pullOllamaModel('nonexistent-model', () => {}),
-      ).rejects.toThrow('model not found')
+      ).rejects.toThrow('HTTP 500')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1411,7 +1420,7 @@ describe('12. Ollama API Edge Cases', () => {
       const actual = await vi.importActual<typeof import('@/api/ollama')>('@/api/ollama')
       await expect(
         actual.pullOllamaModel('some-model', () => {}),
-      ).rejects.toThrow('No response body')
+      ).rejects.toThrow('Ollama pull response is unavailable')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1426,8 +1435,8 @@ describe('12. Ollama API Edge Cases', () => {
       body: new ReadableStream({
         start(controller) {
           const encoder = new TextEncoder()
-          controller.enqueue(encoder.encode('{"status":"downloading","completed":50,"total":100}\n'))
-          controller.enqueue(encoder.encode('{"status":"success"}\n'))
+          controller.enqueue(encoder.encode('data: {"status":"downloading","completed":50,"total":100}\n'))
+          controller.enqueue(encoder.encode('data: {"status":"success","state":"succeeded"}\n'))
           controller.close()
         },
       }),
@@ -1457,7 +1466,7 @@ describe('12. Ollama API Edge Cases', () => {
           const encoder = new TextEncoder()
           controller.enqueue(encoder.encode('not json at all\n'))
           controller.enqueue(encoder.encode('data: also not json\n'))
-          controller.enqueue(encoder.encode('{"status":"success"}\n'))
+          controller.enqueue(encoder.encode('data: {"status":"success","state":"succeeded"}\n'))
           controller.close()
         },
       }),

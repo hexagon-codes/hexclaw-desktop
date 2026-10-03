@@ -22,6 +22,7 @@ vi.mock('@/api/agents', () => ({
 describe('useAgentsStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.mocked(getAgents).mockReset()
   })
 
   it('has empty initial state', () => {
@@ -42,7 +43,7 @@ describe('useAgentsStore', () => {
   })
 
   it('loadAgents 失败返回 false 并保留可观察错误，调用方不得误判刷新成功', async () => {
-    vi.mocked(getAgents).mockRejectedValueOnce(new Error('refresh failed'))
+    vi.mocked(getAgents).mockRejectedValue(new Error('refresh failed'))
     const store = useAgentsStore()
 
     const ok = await store.loadAgents()

@@ -275,6 +275,16 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
     })
     await flushPromises()
 
+    // 已清空的进度不会自动重新关联教材；先主动选择来源再选当前单元。
+    await body().get('[data-testid="k12-textbook-manifest"] button').trigger('click')
+    await flushPromises()
+    const textbookOption = body()
+      .findAll('.hc-select__option')
+      .find((option) => option.text().includes('数学五年级下册.pdf'))
+    expect(textbookOption).toBeDefined()
+    await textbookOption!.trigger('mousedown')
+    await flushPromises()
+
     const unitSelect = body().find('[data-testid="k12-current-unit-value"]')
     await unitSelect.find('button').trigger('click')
     await flushPromises()

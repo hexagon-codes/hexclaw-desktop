@@ -100,7 +100,7 @@ function i18n() {
 
 function dispatch(
   taskIntent: 'completed_homework' | 'blank_worksheet',
-  stage: 'awaiting_confirmation' | 'completed',
+  stage: 'awaiting_confirmation' | 'assessing' | 'completed',
   questions: Array<Record<string, unknown>>,
 ) {
   return {
@@ -164,13 +164,14 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
     document.body.innerHTML = ''
     Object.values(h).forEach((spy) => spy.mockReset())
     h.upload.mockResolvedValue({ asset_id: 'asset://mingming/homework.png', size: 3 })
+    h.get.mockReturnValue(new Promise(() => {}))
     h.tutoringTips.mockResolvedValue({ knowledge_points: [], sections: [] })
   })
 
   it('BUG-20260726-023 uses one chevron disclosure; collapse never closes or cancels', async () => {
     h.create.mockResolvedValue({
       created: true,
-      ...dispatch('completed_homework', 'awaiting_confirmation', [riskQuestion]),
+      ...dispatch('completed_homework', 'assessing', [riskQuestion]),
     })
 
     const wrapper = mountPanel()

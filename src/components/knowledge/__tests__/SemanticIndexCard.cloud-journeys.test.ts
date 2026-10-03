@@ -277,7 +277,7 @@ describe('SemanticIndexCard cloud-model user journeys', () => {
     )
     expect(optionFor(openAIProfile.model_name)?.getAttribute('aria-disabled')).toBeNull()
     expect(optionFor(openAIProfile.model_name)?.textContent).toContain('已配置')
-    expect(document.body.textContent).toContain('索引文本和查询文本会发送至该服务商')
+    expect(document.body.textContent).toContain('索引和查询文本会发送给已配置的云端服务商')
     expect(mocks.applyPolicy).not.toHaveBeenCalled()
     expect(mocks.getJob).not.toHaveBeenCalled()
     expect(mocks.pullModel).not.toHaveBeenCalled()

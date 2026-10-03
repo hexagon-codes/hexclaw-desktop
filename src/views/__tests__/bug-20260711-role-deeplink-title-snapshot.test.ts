@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -33,6 +33,8 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRouterPush: vi.fn(),
   mockRouterReplace: vi.fn(),
 }))
+
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
 
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
@@ -199,6 +201,8 @@ function mountChatView() {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Object.defineProperty(window, 'matchMedia', {
@@ -233,6 +237,7 @@ describe('BUG-20260711：role 深链会话标题快照 display_name（治本）'
     await flushPromises()
     const chatStore = useChatStore()
 
+    await vi.waitFor(() => expect(chatStore.currentSessionId).toBeTruthy())
     expect(chatStore.currentSessionId, '前置：深链应已建会话').toBeTruthy()
     // 核心断言：createSession 落库标题 = 可读显示名（agent 删除后列表仍是「小明的辅导老师」）
     const calls = (createSession as unknown as Mock).mock.calls

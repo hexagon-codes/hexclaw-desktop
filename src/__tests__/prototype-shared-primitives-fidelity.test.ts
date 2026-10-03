@@ -38,27 +38,6 @@ describe('prototype shared primitive fidelity', () => {
     expect(base).toMatch(/white-space:\s*nowrap/)
   })
 
-  it('keeps prototype button states while preserving the stronger Desktop keyboard focus refinement', () => {
-    const primaryHover = cssRule(global, '.hc-btn-primary:hover')
-    const primaryActive = cssRule(global, '.hc-btn-primary:active')
-    const ghost = cssRule(global, '.hc-btn-ghost')
-    const focus = cssRule(global, ':focus-visible')
-    const buttonFocusOverride = cssRule(global, '.hc-btn:focus-visible')
-    const disabled = cssRule(global, '.hc-btn:disabled')
-
-    expect(primaryHover).toMatch(/background:\s*linear-gradient\(180deg,\s*#67b8ec 0%,\s*#4f9fe1 100%\)/)
-    expect(primaryHover).not.toMatch(/transform\s*:/)
-    expect(primaryHover).toMatch(/box-shadow:\s*0 10px 26px rgba\(95,\s*179,\s*234,\s*0\.34\)/)
-    expect(primaryHover).not.toContain('filter:')
-    expect(primaryActive).toMatch(/transform:\s*translateY\(0\) scale\(0\.98\)/)
-    expect(ghost).toMatch(/padding:\s*6px 8px/)
-    expect(ghost).toMatch(/border-color:\s*transparent/)
-    expect(focus).toMatch(/outline:\s*2px solid var\(--hc-accent\)/)
-    expect(focus).toMatch(/outline-offset:\s*2px/)
-    expect(buttonFocusOverride).not.toMatch(/outline:\s*none/)
-    expect(disabled).toMatch(/opacity:\s*0\.45/)
-    expect(disabled).not.toContain('pointer-events')
-  })
 
   it('keeps shared input and card hairlines at one half pixel', () => {
     const input = cssRule(global, '.hc-input')

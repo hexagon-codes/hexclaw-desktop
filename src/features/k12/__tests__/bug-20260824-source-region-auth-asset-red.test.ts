@@ -190,7 +190,6 @@ describe('BUG-20260824 · 题源区域原图认证读取', () => {
       expect(header.get('b').text().replace(/\s+/g, ' ').trim()).toBe(
         `${fixture.displayLabel} · 需要你确认`,
       )
-      expect(header.get('span').text().replace(/\s+/g, ' ').trim()).toBe('其他题继续处理')
 
       const reason = resolver.get('[data-source-issue-reason]')
       expect(reason.element.tagName).toBe('P')

@@ -23,6 +23,7 @@ const mockCompatSend = vi.hoisted(() => vi.fn())
 vi.mock('@/services/chat-service-compat', () => ({ sendViaBackend: mockCompatSend }))
 
 vi.mock('@/config/env', () => ({
+  OLLAMA_BASE: 'http://localhost:11434',
   env: {
     apiBase: 'http://localhost:16060',
     wsBase: 'ws://localhost:16060',
@@ -234,7 +235,7 @@ function buildFetchResponse(
 let fetchSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     buildFetchResponse(buildReadableStream([])),
   )
@@ -346,12 +347,15 @@ describe('client.ts', () => {
 // ===========================================================================
 
 describe('ollama.ts', () => {
+  beforeEach(() => {
+    mockedApiGet.mockReset().mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } } as never)
+  })
   describe('pullOllamaModel()', () => {
     it('streams multiple progress events to onProgress callback', async () => {
       const events = [
-        '{"status":"pulling manifest"}\n',
-        '{"status":"downloading","completed":50,"total":100}\n',
-        '{"status":"success"}\n',
+        'data: {"status":"pulling manifest"}\n',
+        'data: {"status":"downloading","completed":50,"total":100}\n',
+        'data: {"status":"success","state":"succeeded"}\n',
       ]
       fetchSpy.mockResolvedValueOnce(
         buildFetchResponse(buildReadableStream(events), { ok: true }),
@@ -369,8 +373,8 @@ describe('ollama.ts', () => {
 
     it('throws when progress contains error field', async () => {
       const events = [
-        '{"status":"pulling"}\n',
-        '{"status":"error","error":"model not found"}\n',
+        'data: {"status":"pulling"}\n',
+        'data: {"status":"error","state":"failed","error":"model not found"}\n',
       ]
       fetchSpy.mockResolvedValueOnce(
         buildFetchResponse(buildReadableStream(events), { ok: true }),
@@ -382,7 +386,7 @@ describe('ollama.ts', () => {
     })
 
     it('sends request even with empty model name (no validation)', async () => {
-      const events = ['{"status":"success"}\n']
+      const events = ['data: {"status":"success","state":"succeeded"}\n']
       fetchSpy.mockResolvedValueOnce(
         buildFetchResponse(buildReadableStream(events), { ok: true }),
       )
@@ -392,13 +396,13 @@ describe('ollama.ts', () => {
       expect(fetchSpy).toHaveBeenCalledWith(
         'http://localhost:16060/api/v1/ollama/pull',
         expect.objectContaining({
-          body: JSON.stringify({ model: '' }),
+          body: JSON.stringify({ model: '', expected_target_id: 'target-local', expected_target_revision: 1 }),
         }),
       )
     })
 
     it('strips data: prefix from lines correctly', async () => {
-      const events = ['data: {"status":"downloading","completed":10,"total":100}\ndata: {"status":"success"}\n']
+      const events = ['data: {"status":"downloading","completed":10,"total":100}\ndata: {"status":"success","state":"succeeded"}\n']
       fetchSpy.mockResolvedValueOnce(
         buildFetchResponse(buildReadableStream(events), { ok: true }),
       )
@@ -414,7 +418,7 @@ describe('ollama.ts', () => {
     it('silently ignores non-JSON lines', async () => {
       const events = [
         'this is not json\n',
-        '{"status":"success"}\n',
+        'data: {"status":"success","state":"succeeded"}\n',
       ]
       fetchSpy.mockResolvedValueOnce(
         buildFetchResponse(buildReadableStream(events), { ok: true }),
@@ -669,10 +673,9 @@ describe('knowledge.ts', () => {
       expect(content).toBe('Full document content here')
     })
 
-    it('falls back to search when detail API fails', async () => {
-      // First call: getDocument fails
+    it('propagates detail errors without presenting search fragments as a full document', async () => {
+      // 检索片段与完整正文具有不同语义，不能在详情故障时混用。
       mockedApiGet.mockRejectedValueOnce(new Error('404'))
-      // Second call: searchKnowledge calls apiPost
       mockedApiPost.mockResolvedValueOnce({
         result: [
           { content: 'chunk 1', score: 0.9, doc_id: 'doc-1', chunk_index: 0 },
@@ -681,8 +684,8 @@ describe('knowledge.ts', () => {
         ],
       } as never)
 
-      const content = await getDocumentContent(doc)
-      expect(content).toBe('chunk 1\n\nchunk 2')
+      await expect(getDocumentContent(doc)).rejects.toThrow('404')
+      expect(mockedApiPost).not.toHaveBeenCalled()
     })
 
     // BUG-20260718（§15）：detail 与 search 都失败 = 故障，抛错而非伪装成空文档。
@@ -696,6 +699,7 @@ describe('knowledge.ts', () => {
 
   describe('uploadDocument() with progress', () => {
     it('invokes XHR with progress callback (indirect uploadViaXhr test)', async () => {
+      mockedApiGet.mockResolvedValue({ operations: [] } as never)
       // We cannot easily test XHR in jsdom without mocking XMLHttpRequest,
       // so we test the apiPost fallback path (no progress callback)
       mockedApiPost.mockResolvedValueOnce({

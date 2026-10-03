@@ -45,16 +45,15 @@ function render() {
 describe('Bug-20260713：积累 tab 头部对齐原型 rc1', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('积累 tab 有「积累本」标题 + 说明 note（原型 cxsec），且分界规则脚注仍在', async () => {
+  it('积累对象仅保留说明，不重复标题，且分界规则脚注仍在', async () => {
     const w = render()
     await flushPromises()
     await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
     await flushPromises()
 
-    const head = w.find('section .k12rec__reporthead')
-    expect(head.exists(), '积累 tab 应有标题块 reporthead').toBe(true)
-    expect(head.text()).toContain('积累本')
-    expect(head.text()).toContain('收藏驱动')
+    const section = w.get('[data-testid="accum-prototype"]')
+    expect(section.find('.k12rec__reporthead').exists()).toBe(false)
+    expect(section.get('.k12accum__description').text()).toContain('收藏驱动')
     // 原型 footer 分界规则不动
     expect(w.text()).toContain('做错了要改')
   })

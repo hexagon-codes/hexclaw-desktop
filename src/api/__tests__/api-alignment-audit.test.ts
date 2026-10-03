@@ -406,8 +406,7 @@ describe('Ollama API alignment: ollama.ts vs handler_ollama.go', () => {
 
   it('unloadOllamaModel sends correct request body', () => {
     const ollamaSource = readFrontendFile('ollama.ts')
-    // Frontend: JSON.stringify({ model })
-    expect(ollamaSource).toContain('JSON.stringify({ model })')
+    expect(ollamaSource).toContain("apiPost('/api/v1/ollama/unload', { model })")
     // Backend: req.Model (json:"model")
     // ALIGNED
   })
@@ -769,7 +768,7 @@ describe('ChatMessage alignment: types/chat.ts vs storage.MessageRecord', () => 
     expect(chatTypes).toContain('timestamp: string')
     const chatMessageBlock = chatTypes.slice(
       chatTypes.indexOf('export interface ChatMessage {'),
-      chatTypes.indexOf('}', chatTypes.indexOf('blocks?: ContentBlock[]')) + 1,
+      chatTypes.indexOf('\n}', chatTypes.indexOf('export interface ChatMessage {')) + 2,
     )
     expect(chatMessageBlock).toContain('timestamp: string')
     expect(chatMessageBlock).toContain('created_at?: string')

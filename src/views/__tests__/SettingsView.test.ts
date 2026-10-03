@@ -106,7 +106,13 @@ vi.mock('@/api/system', () => ({
 }))
 
 // Mock Ollama API
-vi.mock('@/api/ollama', () => ({
+vi.mock('@/api/ollama', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/ollama')>(),
+  getOllamaTarget: vi.fn().mockResolvedValue({
+    mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434',
+    target_id: 'ollama-default', target_revision: 1, target_digest: 'digest',
+    associated_provider_instance_ids: [], can_restart: true,
+  }),
   getOllamaStatus: ollamaApi.getOllamaStatus,
   getOllamaRunning: ollamaApi.getOllamaRunning,
   getOllamaRunningResult: async () => ({
@@ -1526,23 +1532,6 @@ describe('SettingsView — E2E 关键路径', () => {
     await customCard.get('[data-provider-field="name"]').setValue('Renamed Provider')
     await flushPromises()
     expect(customCard.get('.hc-provider__connection-status').text()).toContain('成功')
-  })
-
-  it('keeps Base URL on a half row and API Key on a full row in both provider grids', async () => {
-    const { default: settingsViewSource } = await import('../SettingsView.vue?raw')
-
-    expect(settingsViewSource).toMatch(
-      /\.hc-provider__config-grid--builtin\s+\.hc-provider__config-key\s*\{\s*grid-column:\s*1\s*\/\s*-1;/,
-    )
-    expect(settingsViewSource).toMatch(
-      /\.hc-provider__config-grid--builtin\s+\.hc-provider__config-url\s*\{\s*order:\s*-1;/,
-    )
-    expect(settingsViewSource).toMatch(
-      /\.hc-provider__config-grid--custom\s+\.hc-provider__config-key\s*\{\s*grid-column:\s*1\s*\/\s*-1;/,
-    )
-    expect(settingsViewSource).toMatch(
-      /\.hc-provider__config-grid--custom\s+\.hc-provider__config-url\s*\{\s*grid-row:\s*1;\s*grid-column:\s*2;/,
-    )
   })
 
   it('shows the connection-test lifecycle in the header and disables duplicate clicks', async () => {

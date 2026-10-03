@@ -247,7 +247,7 @@ describe('SemanticIndexCard', () => {
     expect(wrapper.findAll('[data-testid="kb-index-model-trigger"]')).toHaveLength(1)
     const notice = document.body.querySelector('[data-testid="kb-index-provider-notice"]')
     expect(notice?.textContent).toContain(
-      '云端模型由你配置的第三方 Provider 提供。HexClaw 仅负责连接与调用；索引文本和查询文本会发送至该服务商，计费与数据处理规则以其为准。',
+      '索引和查询文本会发送给已配置的云端服务商；费用和数据处理规则由该服务商决定。',
     )
     expect(document.body.querySelector('[role="dialog"]')).toBeNull()
     expect(
@@ -515,7 +515,7 @@ describe('SemanticIndexCard', () => {
       let dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
       expect(dialog?.textContent).toContain('取消本次重建？')
       expect(dialog?.textContent).toContain(
-        '当前索引不会受影响。已完成的新索引批次不会参与查询；文本检索与当前语义索引继续可用。',
+        '当前索引不会受影响。新索引不参与查询；文本检索和当前语义索引仍可用。',
       )
       expect(mocks.cancelJob).not.toHaveBeenCalled()
 

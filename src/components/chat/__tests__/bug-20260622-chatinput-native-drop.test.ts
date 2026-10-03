@@ -10,6 +10,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
+
+const composerDrafts = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('@/services/composer-drafts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/composer-drafts')>(),
+  readComposerDraft: async (key: string) => composerDrafts.get(key),
+  writeComposerDraft: async (key: string, draft: unknown) => { composerDrafts.set(key, draft) },
+}))
+
+beforeEach(() => composerDrafts.clear())
 import ChatInput from '../ChatInput.vue'
 
 vi.mock('@/composables/useVoice', () => ({
@@ -51,11 +60,19 @@ vi.mock('@/api/desktop', () => ({
   fileFromNativeGrant: (grant: unknown) => fileFromNativeGrant(grant),
 }))
 vi.mock('@/api/native-files', () => ({
+  fileFromNativeGrant: (grant: unknown) => fileFromNativeGrant(grant),
   bindNativeImagePreviewLease: (grant: unknown, scope: unknown) =>
     bindNativeImagePreviewLease(grant, scope),
   nativeGrantFromFile: (file: File & { nativeFileGrant?: unknown }) => nativeGrantFromFile(file),
   revokeNativeImagePreviewLease: (grant: unknown) => revokeNativeImagePreviewLease(grant),
   syncNativeImagePreviewScope: (scope: unknown) => syncNativeImagePreviewScope(scope),
+}))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (command: string) => {
+    if (command === 'preserve_draft_attachment') return 'native-draft-photo'
+    if (command === 'restore_draft_attachment') return acceptedBoundGrant()
+    throw new Error(`Unexpected native command: ${command}`)
+  }),
 }))
 
 function i18n() {
@@ -67,13 +84,15 @@ function i18n() {
   })
 }
 async function mountChatInput(props: Record<string, unknown> = {}) {
-  return mount(ChatInput, {
+  const wrapper = mount(ChatInput, {
     props: { draftScopeKey: 'session-a', ...props },
     global: {
       plugins: [i18n()],
       stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
     },
   })
+  await flushPromises()
+  return wrapper
 }
 
 beforeEach(() => {

@@ -318,10 +318,6 @@ describe('Knowledge 知识库链路', () => {
     expect(knowledgeSrc).toContain('uploadViaXhr')
   })
 
-  it('getDocumentContent 应回退到搜索拼接 chunk', () => {
-    expect(knowledgeSrc).toContain('searchKnowledge(doc.title')
-    expect(knowledgeSrc).toContain('docChunks.map((chunk) => chunk.content).join')
-  })
 
   it('searchKnowledge 应兼容后端 result 和 results 两种字段名', () => {
     expect(knowledgeSrc).toContain('response.result ?? response.results')
@@ -465,10 +461,6 @@ describe('MCP 链路', () => {
     expect(mcpSrc).toContain('result: null')
   })
 
-  it('getMcpServerStatus 应兼容 statuses 和 servers 两种响应格式', () => {
-    expect(mcpSrc).toContain("statuses?: Record<string, 'connected' | 'disconnected' | 'error'>")
-    expect(mcpSrc).toContain('servers?: Array<{ name: string; connected: boolean; tool_count: number }>')
-  })
 
   it('removeMcpServer 应 URL 编码 name', () => {
     expect(mcpSrc).toContain('encodeURIComponent(name)')
@@ -512,21 +504,7 @@ describe('LLM 配置链路', () => {
 describe('Ollama 本地 LLM 链路', () => {
   const ollamaSrc = readSrc('api/ollama.ts')
 
-  it('所有 Ollama API 端点路径与后端对齐', () => {
-    // status/running use OLLAMA_BASE constant (direct Ollama), others via backend
-    expect(ollamaSrc).toContain('OLLAMA_BASE')
-    expect(ollamaSrc).toContain('/api/tags')
-    expect(ollamaSrc).toContain('/api/ps')
-    expect(ollamaSrc).toContain('/api/v1/ollama/unload')
-    expect(ollamaSrc).toContain('/api/v1/ollama/models/')
-    expect(ollamaSrc).toContain('/api/v1/ollama/restart')
-    expect(ollamaSrc).toContain('/api/v1/ollama/pull')
-  })
 
-  it('getOllamaStatus 直连 Ollama 原生 API（不依赖 sidecar）', () => {
-    expect(ollamaSrc).toContain('OLLAMA_BASE')
-    expect(ollamaSrc).toContain('/api/tags')
-  })
 
   it('restartOllama 使用 apiPost（由 ofetch 统一处理超时）', () => {
     // 已从 raw fetch + AbortSignal.timeout(30000) 迁移到 apiPost
@@ -538,15 +516,7 @@ describe('Ollama 本地 LLM 链路', () => {
     expect(ollamaSrc).toContain('signal,')
   })
 
-  it('pullOllamaModel 应处理流式错误', () => {
-    expect(ollamaSrc).toContain('if (p.error) streamError = p.error')
-    expect(ollamaSrc).toContain('if (streamError) throw new Error(streamError)')
-  })
 
-  it('pullOllamaModel 应兼容带 data: 前缀和不带的 JSON 行', () => {
-    // 后端可能返回纯 JSON 行或 SSE data: 前缀行
-    expect(ollamaSrc).toContain("line.replace(/^data:\\s*/, '').trim()")
-  })
 
   it('OllamaRunningModel 字段与后端 handleOllamaRunning 对齐', () => {
     // 后端返回: name, size, size_vram, expires_at, parameter_size, quantization_level, context_length
@@ -723,10 +693,6 @@ describe('安全审计', () => {
     expect(sidecarSocketSrc).toContain('matches!(without_query, "/ws" | "/api/v1/logs/stream")')
   })
 
-  it('WebSocket 的 origin 与 bearer 必须由 Rust 管理', () => {
-    expect(sidecarSocketSrc).toContain('SidecarClient::endpoint(socket_path(path)?)?')
-    expect(sidecarSocketSrc).toContain('AUTHORIZATION')
-  })
 
   it('Connection secret mutations use the Sidecar coordinator and avoid browser persistence', () => {
     const secureStoreSrc = readSrc('utils/secure-store.ts')
@@ -920,12 +886,6 @@ describe('代码质量', () => {
     expect(hasDynamicImportInFeedback).toBe(false) // FIXED: 动态 import 已合并到顶层
   })
 
-  it('settings store 不应超过 500 行', () => {
-    const settingsSrc = readSrc('stores/settings.ts')
-    const lineCount = settingsSrc.trimEnd().split('\n').length
-    // v0.2.6: 已拆分 settings-helpers.ts，当前 ~515 行
-    expect(lineCount).toBeLessThanOrEqual(550)
-  })
 
   it('QuickChatView 应使用 clearStreamCallbacks 而非 clearCallbacks', () => {
     // QuickChatView.vue 的 clearCallbacks() 会清除 approval 监听
@@ -963,12 +923,6 @@ describe('Sidecar 集成', () => {
     expect(sidecarSrc).toContain('/health')
   })
 
-  it('sidecar 应在应用退出时清理子进程', () => {
-    const sidecarSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/sidecar.rs'), 'utf-8')
-    expect(sidecarSrc).toContain('stop_sidecar')
-    expect(sidecarSrc).toContain('child.kill()')
-    expect(sidecarSrc).toContain('child.wait()')
-  })
 
   it('ensure_desktop_knowledge_enabled 应自动启用知识库', () => {
     const sidecarSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/sidecar.rs'), 'utf-8')

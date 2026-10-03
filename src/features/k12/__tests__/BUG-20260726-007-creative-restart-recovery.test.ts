@@ -119,7 +119,7 @@ describe('BUG-20260726-007 creative feedback restart recovery', () => {
     vi.useFakeTimers()
     h.getTask
       .mockResolvedValueOnce(creativeDispatch('feedback_pending'))
-      .mockResolvedValueOnce(creativeDispatch('recovering'))
+      .mockResolvedValueOnce(creativeDispatch('feedback_pending'))
       .mockResolvedValueOnce(creativeDispatch('feedback_ready'))
       .mockResolvedValueOnce(creativeDispatch('feedback_ready'))
     h.getResult.mockResolvedValue(creativeResult())

@@ -957,8 +957,8 @@ describe('Settings Store', () => {
       mockApiOllama.getOllamaStatus.mockResolvedValueOnce({
         running: true,
         models: [
-          { name: 'llama3', size: 1000, modified: '' },
-          { name: 'mistral', size: 2000, modified: '' },
+          { name: 'llama3', size: 1000, modified: '', capabilities: ['completion'] },
+          { name: 'mistral', size: 2000, modified: '', capabilities: ['completion'] },
         ],
       })
       await store.syncOllamaModels()
@@ -1034,18 +1034,19 @@ describe('App Store', () => {
       expect(mockCheckHealth).toHaveBeenCalledTimes(1)
     })
 
-    it('multiple calls create multiple intervals (BUG: no guard)', async () => {
+    it('multiple starts keep one active health polling interval', async () => {
       mockCheckHealth.mockResolvedValue(true)
       const store = await getAppStore()
 
       store.startHealthCheck()
       store.startHealthCheck()
 
-      // Two intervals running — each tick fires checkConnection twice
-      vi.advanceTimersByTime(5000)
+      // 先完成启动期异步检查，再验证下一周期没有叠加轮询。
       await vi.advanceTimersByTimeAsync(0)
-      // Initial: 2 calls (immediate) + 2 from interval tick = 4 total (at minimum)
-      expect(mockCheckHealth.mock.calls.length).toBeGreaterThanOrEqual(4)
+      expect(mockCheckHealth).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(mockCheckHealth).toHaveBeenCalledTimes(3)
+      store.stopHealthCheck()
     })
   })
 
@@ -1224,7 +1225,16 @@ describe('Chat Service', () => {
       })
 
       await p
-      expect(callbacks.onChunk).toHaveBeenCalledWith('answer text', undefined)
+      expect(callbacks.onChunk).toHaveBeenCalledWith('answer text', undefined, expect.objectContaining({
+        sequence: 0,
+        reasoningDisclosure: { visibility: 'not_exposed' },
+        reasoningReceipt: {
+          version: 1,
+          reasoning_request: 'off',
+          reasoning_support: 'unknown',
+          reasoning_execution: 'unknown',
+        },
+      }))
       expect(callbacks.onDone).toHaveBeenCalled()
     })
 

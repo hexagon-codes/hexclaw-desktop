@@ -19,7 +19,7 @@ import {
 } from '../knowledge'
 
 describe('knowledge API', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => vi.resetAllMocks())
 
   // ─── getDocuments ───
   it('calls apiGet with correct path', async () => {
@@ -42,7 +42,7 @@ describe('knowledge API', () => {
     expect(content).toBe('full content')
   })
 
-  it('falls back to search when getDocument fails', async () => {
+  it('propagates a detail failure without presenting search chunks as the full document', async () => {
     apiGet.mockRejectedValueOnce(new Error('404'))
     apiPost.mockResolvedValueOnce({
       result: [
@@ -50,8 +50,9 @@ describe('knowledge API', () => {
         { content: 'chunk2', doc_id: 'd1', chunk_index: 1, score: 0.8 },
       ],
     })
-    const content = await getDocumentContent({ id: 'd1', title: 'Test', chunk_count: 2, created_at: '' })
-    expect(content).toBe('chunk1\n\nchunk2')
+    await expect(getDocumentContent({ id: 'd1', title: 'Test', chunk_count: 2, created_at: '' }))
+      .rejects.toThrow('404')
+    expect(apiPost).not.toHaveBeenCalled()
   })
 
   // BUG-20260718（§15）：detail 与 search 都失败时抛错，不再把故障伪装成空串。

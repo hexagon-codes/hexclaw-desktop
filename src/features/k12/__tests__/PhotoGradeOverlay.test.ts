@@ -118,11 +118,14 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     expect(finalAnswer.text()).toBe('11250 · 正确')
     expect(wrongStep.element.tagName).toBe('SPAN')
     expect(wrongStep.text()).toBe('300 ÷ 2 ÷ 2 = 50')
-    expect(rows).toHaveLength(3)
+    expect(rows).toHaveLength(9)
     expect(rows[1]!.text()).toContain('原因')
     expect(rows[1]!.find('.grade-math').exists()).toBe(false)
-    expect(rows[2]!.text()).toContain('家长怎么讲')
-    expect(rows[2]!.find('.grade-math').exists()).toBe(false)
+    expect(rows[6]!.text()).toContain('家长怎么讲')
+    expect(rows[6]!.find('.grade-math').exists()).toBe(false)
+    expect(rows.slice(2).map((row) => row.get('span').text())).toEqual([
+      '答案', '必要步骤', '本年级方法', '易错点', '家长怎么讲', '可以追问', '怎么检查',
+    ])
 
     const ordinaryWrong = render([
       {
@@ -137,7 +140,7 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     expect(ordinaryWrong.find('.grade-math').exists()).toBe(false)
   })
 
-  it('权威原型：结果以整页摘要 + 原图主体 + 右侧仅展开需关注题呈现', () => {
+  it('权威原型：结果以整页摘要、原图主体和默认展开需关注题呈现', () => {
     const w = render([
       { status: 'correct', bbox: { x: 0.1, y: 0.2, w: 0.15, h: 0.05 }, question: '第 1 题' },
       {

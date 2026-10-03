@@ -11,6 +11,7 @@ import { createI18n } from 'vue-i18n'
 import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import { useKnowledgeUploadsStore } from '@/stores/knowledge-uploads'
 
 const api = vi.hoisted(() => ({
   getDocuments: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('@/api/knowledge', () => ({
   addDocument: (...a: unknown[]) => api.addDocument(...a),
   deleteDocument: (id: string) => api.deleteDocument(id),
   getDocumentContent: (id: string) => api.getDocumentContent(id),
+  listKnowledgeOperations: vi.fn().mockResolvedValue([]),
   reindexDocument: (id: string) => api.reindexDocument(id),
   isKnowledgeUploadEndpointMissing: (e: unknown) => api.isKnowledgeUploadEndpointMissing(e),
   isKnowledgeUploadUnsupportedFormat: (e: unknown) => api.isKnowledgeUploadUnsupportedFormat(e),
@@ -42,7 +44,20 @@ vi.mock('@/api/knowledge', () => ({
 }))
 
 vi.mock('@/utils/file-parser', () => ({ parseDocument: (f: File) => api.parseDocument(f) }))
-vi.mock('@/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('@/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
+vi.mock('@/api/knowledge-index', () => ({
+  getKnowledgeEmbeddingPolicy: vi.fn().mockResolvedValue({
+    policy_version: 1,
+    selection: { kind: 'disabled' },
+    active_revision: null,
+    desired_revision: null,
+    indexing_activity: { state: 'idle', processing_documents: 0, chunks_done: null, chunks_total: null },
+    available_profiles: [],
+    recommendation: null,
+    catalog_version: 1,
+  }),
+  isKnowledgeEmbeddingPolicyUnsupported: vi.fn().mockReturnValue(false),
+}))
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }
@@ -106,11 +121,14 @@ describe('KnowledgeView 图片上传 — 视觉模型引导', () => {
     wrapper.unmount()
   })
 
-  it('非视觉类的图片上传失败仍显示原始错误（不误判）', async () => {
+  it('非视觉类的图片上传失败保留根因并显示恢复状态，不误判为缺失视觉能力', async () => {
     api.uploadDocument.mockRejectedValue(new Error('Network error'))
     const { wrapper } = await mountView()
     await uploadFiles(wrapper, [new File([new Uint8Array([0xff, 0xd8, 0xff])], 'photo.jpg', { type: 'image/jpeg' })])
-    expect(wrapper.text()).toContain('Network error')
+    expect(useKnowledgeUploadsStore().items[0]?.error).toBe('Network error')
+    expect(wrapper.text()).toContain('文件未接收完成；重新选择同一文件恢复')
+    expect(wrapper.text()).not.toContain(zhCN.knowledge.imageVisionRequired)
+    expect(api.parseDocument).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

@@ -67,7 +67,7 @@ vi.mock('@/api/chat', () => ({
 }))
 
 vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: vi.fn().mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] }),
+  getOllamaStatus: vi.fn().mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] }),
 }))
 vi.mock('@/api/settings', () => ({ updateConfig: vi.fn().mockResolvedValue({}) }))
 vi.mock('@/api/config', () => ({

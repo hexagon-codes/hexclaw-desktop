@@ -123,6 +123,7 @@ describe('persistent PrintJob orchestration', () => {
     if (prepared.status !== 'preview') throw new Error('expected preview')
     await expect(prepared.confirm()).resolves.toBe(true)
     expect(h.invoke).toHaveBeenCalledExactlyOnceWith('execute_print_job', {
+      scope: '',
       request: { agent: 'tutor-a', printJobId: 'gprint-a' },
     })
   })
@@ -186,6 +187,7 @@ describe('persistent PrintJob orchestration', () => {
 
       expect(h.getJob).toHaveBeenCalledWith('tutor-a', 'gprint-a')
       expect(h.invoke).toHaveBeenCalledExactlyOnceWith('execute_print_job', {
+        scope: '',
         request: { agent: 'tutor-a', printJobId: 'gprint-a' },
       })
     },

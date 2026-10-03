@@ -43,6 +43,9 @@ describe('BUG-20260703 B3: finalize 思考时长双源（本地实测 vs 后端 
     const controller = buildController(
       {
         sessionId: 's1', requestId: 'r1', rawContent: '', content: '答案',
+        thinkingEnabled: true,
+        visibility: 'visible',
+        reasoningReceipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
         explicitReasoning: '', reasoning: '思考…', reasoningStartTime: 0, reasoningEndTime: 0,
         assistantMessageAliases: [], lastSequence: 0, runtimeEvents: [], acceptedRuntimeFrames: {},
       },
@@ -67,6 +70,9 @@ describe('BUG-20260703 B3: finalize 思考时长双源（本地实测 vs 后端 
     const controller = buildController(
       {
         sessionId: 's1', requestId: 'r1', rawContent: '', content: '答案',
+        thinkingEnabled: true,
+        visibility: 'visible',
+        reasoningReceipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
         explicitReasoning: '', reasoning: '思考…',
         reasoningStartTime: Date.now() - 5000, reasoningEndTime: Date.now() - 1000,
         assistantMessageAliases: [], lastSequence: 0, runtimeEvents: [], acceptedRuntimeFrames: {},

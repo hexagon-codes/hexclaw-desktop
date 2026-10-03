@@ -68,12 +68,6 @@ describe('BUG-20260816-006: 到期复习行对齐架构/原型（图 10 + app.ht
     expect(panel).toMatch(/knowledge_point|knowledgePoint/u)
   })
 
-  it('到期复习只直显本周先不练，长期不再复习复用逐题更多菜单', async () => {
-    const panel = await source('src/features/k12/components/K12WeeklyPracticePanel.vue')
-    expect(panel).toMatch(/本周先不练/u)
-    expect(panel).toMatch(/<K12MistakeReviewMenu/u)
-    expect(panel).not.toMatch(/<K12MistakeReviewMenu[\s\S]{0,240}?display="visible"/u)
-  })
 
   it('前端 WeeklyPracticeItemDTO 必须带 subject / knowledge_point 字段', async () => {
     const api = await source('src/api/k12.ts')

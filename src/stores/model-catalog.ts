@@ -20,7 +20,7 @@ const EXCLUSIONS_STORAGE_KEY = 'hexclaw.model-catalog-exclusions.v1'
 
 /**
  * 小目录（官方直连服务商，如智谱 8 个模型）阈值：
- * ≤ 此值时维持简单形态——同步直接全量进启用列表（provider.models），卡片平铺展示；
+ * ≤ 此值且无手动启用子集时自动启用未排除的目录项；已有子集则保留选择并刷新资料；
  * > 此值视为聚合中转站（OpenRouter 数百模型），只进目录，由模型管理器按需启用。
  */
 export const AUTO_ENABLE_CATALOG_LIMIT = 10
@@ -231,8 +231,8 @@ function modelListSignature(models: ModelOption[], selectedModelId: string | und
 /**
  * 将远端目录投影到 Provider 的“已启用模型”层。
  *
- * - 小目录：目录内模型全部启用；既有但本次未返回的条目继续保留，由目录层投影为 stale。
- * - 大目录：不自动启用或删除任何条目；只刷新已启用项名称。
+ * - 已有手动启用子集或大目录：保留启用选择，刷新既有模型资料并应用持久排除集合。
+ * - 无手动子集的小目录：自动启用未排除目录项；既有暂缺项继续保留，由目录层投影为 stale。
  */
 export function reconcileProviderCatalog(
   target: ProviderConfig,

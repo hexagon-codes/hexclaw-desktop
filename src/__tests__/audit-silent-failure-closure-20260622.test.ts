@@ -60,9 +60,6 @@ describe('SF SettingsView — 用户主动操作失败已 surface 到 toast', ()
 describe('SF TasksView — 加载/暂停/删除失败已 surface 到 toast', () => {
   const src = read('views/TasksView.vue')
 
-  it('SF-7 loadJobs 失败 → toast.error', () => {
-    expect(catchOf(fnBody(src, 'async function loadJobs'))).toContain('toast.error')
-  })
   it('SF-8 handlePauseResume 失败 → toast.error', () => {
     expect(catchOf(fnBody(src, 'async function handlePauseResume'))).toContain('toast.error')
   })

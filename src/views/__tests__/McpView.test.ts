@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import type { McpTool } from '@/types'
 
 // ─── Mock MCP API ───────────────────────────────────
 const mockGetMcpServers = vi.fn()
@@ -97,6 +98,12 @@ async function mountMcpView(props: { embeddedSearch?: string } = {}) {
       },
     },
   })
+}
+
+function installedTool(wrapper: Awaited<ReturnType<typeof mountMcpView>>, name: string): McpTool {
+  const tool = (wrapper.vm as unknown as { tools: McpTool[] }).tools.find((item) => item.name === name)
+  if (!tool) throw new Error(`Missing fixture tool: ${name}`)
+  return tool
 }
 
 describe('McpView — MCP 全链路', () => {
@@ -680,14 +687,14 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testingTool: string | null
       testParams: Record<string, string>
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
 
-    expect(vm.testingTool).toBe('read_file')
+    expect(vm.testingTool).toBe(JSON.stringify(['', 'read_file']))
     expect(vm.testParams).toHaveProperty('path')
     expect(vm.testParams.path).toBe('')
   })
@@ -699,15 +706,15 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testParams: Record<string, string>
-      executeTest: (name: string) => Promise<void>
+      executeTest: (tool: McpTool) => Promise<void>
       testResult: { output?: unknown; error?: string } | null
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
     vm.testParams.path = '/etc/hosts'
-    await vm.executeTest('read_file')
+    await vm.executeTest(installedTool(wrapper, 'read_file'))
     await flushPromises()
 
     expect(mockCallMcpTool).toHaveBeenCalledWith('read_file', { path: '/etc/hosts' })
@@ -722,33 +729,37 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
-      executeTest: (name: string) => Promise<void>
+      openTestForm: (tool: McpTool) => void
+      testParams: Record<string, string>
+      executeTest: (tool: McpTool) => Promise<void>
       testResult: { output?: unknown; error?: string } | null
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
-    await vm.executeTest('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
+    vm.testParams.path = '/etc/hosts'
+    await vm.executeTest(installedTool(wrapper, 'read_file'))
     await flushPromises()
 
     expect(vm.testResult?.error).toBe('Permission denied')
   })
 
-  it('参数值为空时不传递', async () => {
+  it('可选参数值为空时不传递', async () => {
     mockCallMcpTool.mockResolvedValue({ result: 'ok' })
     const wrapper = await mountMcpView()
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testParams: Record<string, string>
-      executeTest: (name: string) => Promise<void>
+      executeTest: (tool: McpTool) => Promise<void>
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
+    const tool = installedTool(wrapper, 'read_file')
+    tool.input_schema!.required = []
+    vm.openTestForm(tool)
     vm.testParams.path = ''
-    await vm.executeTest('read_file')
+    await vm.executeTest(tool)
     await flushPromises()
 
     // 空值不传
@@ -762,14 +773,16 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testParams: Record<string, string>
-      executeTest: (name: string) => Promise<void>
+      executeTest: (tool: McpTool) => Promise<void>
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
+    const tool = installedTool(wrapper, 'read_file')
+    tool.input_schema!.properties = { path: { type: 'object' } }
+    vm.openTestForm(tool)
     vm.testParams.path = '{"nested": true}'
-    await vm.executeTest('read_file')
+    await vm.executeTest(tool)
     await flushPromises()
 
     expect(mockCallMcpTool).toHaveBeenCalledWith('read_file', { path: { nested: true } })
@@ -781,14 +794,14 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testingTool: string | null
       getSchemaProperties: (tool: unknown) => unknown[]
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('search')
+    vm.openTestForm(installedTool(wrapper, 'search'))
 
-    expect(vm.testingTool).toBe('search')
+    expect(vm.testingTool).toBe(JSON.stringify(['', 'search']))
     // search 没有 input_schema
     const tools = (wrapper.vm as unknown as { tools: { name: string; input_schema?: unknown }[] })
       .tools
@@ -804,17 +817,19 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
-      executeTest: (name: string) => Promise<void>
-      isTestRunning: (name: string) => boolean
+      openTestForm: (tool: McpTool) => void
+      testParams: Record<string, string>
+      executeTest: (tool: McpTool) => Promise<void>
+      isTestRunning: (tool: McpTool) => boolean
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
-    vm.executeTest('read_file') // 不 await
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
+    vm.testParams.path = '/etc/hosts'
+    void vm.executeTest(installedTool(wrapper, 'read_file'))
 
     await wrapper.vm.$nextTick()
-    expect(vm.isTestRunning('read_file')).toBe(true)
-    expect(vm.isTestRunning('search')).toBe(false)
+    expect(vm.isTestRunning(installedTool(wrapper, 'read_file'))).toBe(true)
+    expect(vm.isTestRunning(installedTool(wrapper, 'search'))).toBe(false)
   })
 
   it('同一个工具测试进行中时不应重复触发第二次执行', async () => {
@@ -831,15 +846,17 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
-      executeTest: (name: string) => Promise<void>
+      openTestForm: (tool: McpTool) => void
+      testParams: Record<string, string>
+      executeTest: (tool: McpTool) => Promise<void>
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
+    vm.testParams.path = '/etc/hosts'
 
-    void vm.executeTest('read_file')
+    void vm.executeTest(installedTool(wrapper, 'read_file'))
     await flushPromises()
-    void vm.executeTest('read_file')
+    void vm.executeTest(installedTool(wrapper, 'read_file'))
     await flushPromises()
 
     expect(mockCallMcpTool).toHaveBeenCalledTimes(1)
@@ -1489,14 +1506,14 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       testingTool: string | null
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
-    expect(vm.testingTool).toBe('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
+    expect(vm.testingTool).toBe(JSON.stringify(['', 'read_file']))
 
-    vm.openTestForm('read_file')
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
     expect(vm.testingTool).toBeNull()
   })
 
@@ -1506,15 +1523,15 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      openTestForm: (name: string) => void
+      openTestForm: (tool: McpTool) => void
       toggleTool: (name: string) => void
       testingTool: string | null
       expandedTool: string | null
     }
     vm.activeTab = 'tools'
-    vm.openTestForm('read_file')
-    vm.toggleTool('read_file') // 展开
-    vm.toggleTool('read_file') // 折叠
+    vm.openTestForm(installedTool(wrapper, 'read_file'))
+    vm.toggleTool(JSON.stringify(['', 'read_file']))
+    vm.toggleTool(JSON.stringify(['', 'read_file']))
     expect(vm.testingTool).toBeNull()
   })
 

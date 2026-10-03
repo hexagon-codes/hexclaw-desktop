@@ -11,7 +11,7 @@
  * 测试失败即证明 bug 存在。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -35,6 +35,8 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
 
 // ─── Mock API（复用 ChatView.test.ts 验证过的最小挂载脚手架；补 listSessions/listSessionMessages
 //     让 loadSessions 能返回既有 K12 会话并触发 lastSessionId 自动选中） ───
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
+
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
   sendChat: vi.fn(),
@@ -211,6 +213,8 @@ function mountChatView() {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Object.defineProperty(window, 'matchMedia', {
@@ -248,6 +252,7 @@ describe('审计单-High-1：绑定会话在普通挂载（无 ?role=）后不�
     const chatStore = useChatStore()
 
     // loadSessions→getLastSessionId→selectSession 应已自动选中 K12 会话
+    await vi.waitFor(() => expect(chatStore.currentSessionId).toBe(K12_SESSION))
     expect(chatStore.currentSessionId, '前置：lastSessionId 自动选中 K12 会话').toBe(K12_SESSION)
     // 绑定仍在 localStorage（未被 prune）
     expect(getSessionAgent(K12_SESSION), '前置：session→agent 绑定存在').toBe(K12_AGENT)

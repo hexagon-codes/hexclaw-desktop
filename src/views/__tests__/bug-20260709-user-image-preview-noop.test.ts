@@ -10,7 +10,8 @@
  * 无 zoom-in 语义，白名单豁免。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, DOMWrapper, enableAutoUnmount } from '@vue/test-utils'
+import ImagePreviewHost from '@/components/common/ImagePreviewHost.vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -160,7 +161,14 @@ async function mountWithMessages() {
   setActivePinia(pinia)
   const settingsStore = useSettingsStore()
   settingsStore.config = buildConfig() as unknown as typeof settingsStore.config
+  mount(ImagePreviewHost, {
+    attachTo: document.body,
+    global: {
+      plugins: [pinia, createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zhCN } })],
+    },
+  })
   const wrapper = mount(ChatView, {
+    attachTo: document.body,
     global: {
       plugins: [pinia, createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })],
       stubs: {
@@ -182,8 +190,12 @@ async function mountWithMessages() {
   return wrapper
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -193,9 +205,22 @@ beforeAll(() => {
   })
 })
 
+async function openLoadedImage(image: DOMWrapper<Element>) {
+  const element = image.element as HTMLImageElement
+  Object.defineProperties(element, { complete: { configurable: true, value: true },
+    naturalWidth: { configurable: true, value: 640 }, naturalHeight: { configurable: true, value: 480 } })
+  const rect = new DOMRect(0, 0, 640, 480)
+  element.getClientRects = () => [rect] as unknown as DOMRectList
+  const group = element.closest('[data-image-preview-group]') ?? element
+  group.getClientRects = () => [rect] as unknown as DOMRectList
+  await image.trigger('click')
+  await flushPromises()
+}
+
 describe('BUG-20260709 用户发送的图片点击放大无反应', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(globalThis as Record<string, unknown>).isTauri = true
@@ -205,6 +230,7 @@ describe('BUG-20260709 用户发送的图片点击放大无反应', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     delete (globalThis as Record<string, unknown>).isTauri
   })
 
@@ -212,28 +238,28 @@ describe('BUG-20260709 用户发送的图片点击放大无反应', () => {
     const w = await mountWithMessages()
     const userImg = w.find('.hc-msg__bubble--user .hc-msg__attachment-img')
     expect(userImg.exists(), '前置：用户气泡渲染了附件图').toBe(true)
-    await userImg.trigger('click')
+    await openLoadedImage(userImg)
     await flushPromises()
-    const backdrop = w.find('.hc-img-preview__backdrop')
+    const backdrop = new DOMWrapper(document.body).find('.hc-image-viewer')
     expect(backdrop.exists(), '点击用户图片应打开预览 modal（当前无 click 绑定=点了没反应）').toBe(true)
-    expect(w.find('.hc-img-preview__img').attributes('src')).toBe(IMG_DATA)
+    expect(new DOMWrapper(document.body).find('.hc-image-viewer__image img').attributes('src')).toBe(IMG_DATA)
   })
 
   it('对照：助手气泡的附件图点击放大正常（修复不得破坏既有路径）', async () => {
     const w = await mountWithMessages()
     const aiImg = w.find('.hc-msg__bubble--assistant .hc-msg__attachment-img')
     expect(aiImg.exists(), '前置：助手气泡渲染了附件图').toBe(true)
-    await aiImg.trigger('click')
+    await openLoadedImage(aiImg)
     await flushPromises()
-    expect(w.find('.hc-img-preview__backdrop').exists()).toBe(true)
+    expect(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(true)
   })
 
   it('预览打开后点击背板关闭（放大→收起闭环）', async () => {
     const w = await mountWithMessages()
-    await w.find('.hc-msg__bubble--assistant .hc-msg__attachment-img').trigger('click')
+    await openLoadedImage(w.find('.hc-msg__bubble--assistant .hc-msg__attachment-img'))
     await flushPromises()
-    await w.find('.hc-img-preview__backdrop').trigger('click')
+    await new DOMWrapper(document.body).find('.hc-image-viewer').trigger('cancel')
     await flushPromises()
-    expect(w.find('.hc-img-preview__backdrop').exists()).toBe(false)
+    expect(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
   })
 })

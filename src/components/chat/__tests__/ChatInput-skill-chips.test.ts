@@ -7,6 +7,15 @@ import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
+const composerDrafts = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('@/services/composer-drafts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/composer-drafts')>(),
+  readComposerDraft: async (key: string) => composerDrafts.get(key),
+  writeComposerDraft: async (key: string, draft: unknown) => { composerDrafts.set(key, draft) },
+}))
+
+beforeEach(() => composerDrafts.clear())
+
 const { voiceRefs } = vi.hoisted(() => ({ voiceRefs: { api: null as unknown as Record<string, unknown> } }))
 vi.mock('@/composables/useVoice', () => ({ useVoice: () => voiceRefs.api }))
 vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ thinkingEnabled: false }) }))
@@ -31,11 +40,13 @@ function i18n() {
 
 async function mountChatInput(props: Record<string, unknown> = {}) {
   const ChatInput = (await import('../ChatInput.vue')).default
-  return mount(ChatInput, {
+  const wrapper = mount(ChatInput, {
     props,
     attachTo: document.body,
     global: { plugins: [i18n()], stubs: { MentionPopup: true, TemplatePopup: PaletteStub } },
   })
+  await flushPromises()
+  return wrapper
 }
 
 beforeEach(() => {
@@ -107,6 +118,7 @@ describe('ChatInput 已挂载技能 chip', () => {
     expect(sendHandler).toHaveBeenCalledWith('你在哪里？', [], {
       contextRefs: [],
       skillNames: ['stocks'],
+      onPayloadRejected: expect.any(Function),
     })
   })
 
@@ -125,7 +137,9 @@ describe('ChatInput 已挂载技能 chip', () => {
     await w.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('请用三点总结：$ARGUMENTS', [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith('请用三点总结：$ARGUMENTS', [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
   })
 
   it('skillAction 从面板透传为 ChatInput 的 skillAction 事件', async () => {

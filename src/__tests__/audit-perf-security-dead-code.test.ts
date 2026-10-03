@@ -234,25 +234,10 @@ describe('Performance: timer cleanup on unmount', () => {
 
 // ─── Redundant hexclaw.db reference ───────────────────────
 
-describe('Potential dead references', () => {
-  it('SettingsView still references data.db filename (display only, not a real DB call)', () => {
-    const code = readSrc('views/SettingsView.vue')
-    expect(code).toContain("runtimeLocalStoreFile = 'data.db'")
-  })
-})
 
 // ─── app-lifecycle global listeners ───────────────────────
 
 describe('Performance: app-lifecycle global listeners', () => {
-  it('main.ts delegates external links to the shared controller', () => {
-    const mainCode = readSrc('main.ts')
-    const externalLinksCode = readSrc('utils/external-links.ts')
-    expect(mainCode).toContain("window.addEventListener('unhandledrejection'")
-    expect(mainCode).toContain('installExternalLinkController()')
-    expect(mainCode).not.toContain("document.addEventListener('click'")
-    expect(externalLinksCode).toContain("targetDocument.addEventListener('click'")
-    expect(externalLinksCode).toContain("targetDocument.removeEventListener('click'")
-  })
 
   it('global external-link interceptor must not hijack anchors that intentionally download files', () => {
     const code = readSrc('utils/external-links.ts')

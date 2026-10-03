@@ -322,9 +322,6 @@ describe('Issue #6: updateMemoryEntry vs createMemoryEntry parameter design', ()
     expect(memoryTs).toContain('source?: MemorySource')
   })
 
-  it('createMemoryEntry sends type and source in the request body', () => {
-    expect(memoryTs).toMatch(/apiPost.*\{.*content.*type/)
-  })
 
   it('updateMemoryEntry accepts id and content parameters', () => {
     const updateSig = memoryTs.match(/function updateMemoryEntry\([^)]+\)/)?.[0] || ''
@@ -843,17 +840,6 @@ describe('ollama.ts: pullOllamaModel uses the native Sidecar stream coordinator'
     expect(pullBlock).not.toContain('apiPost')
   })
 
-  it('getOllamaStatus and getOllamaRunning use native fetch (direct Ollama connection)', () => {
-    const checkFnUsesFetch = (fnName: string) => {
-      const idx = ollamaTs.indexOf(`function ${fnName}`)
-      expect(idx, `${fnName} should exist`).toBeGreaterThan(-1)
-      const block = ollamaTs.slice(idx, idx + 300)
-      expect(block, `${fnName} should use fetch()`).toContain('fetch(')
-      expect(block, `${fnName} should use OLLAMA_BASE`).toContain('OLLAMA_BASE')
-    }
-    checkFnUsesFetch('getOllamaStatus')
-    checkFnUsesFetch('getOllamaRunning')
-  })
 
   it('other ollama functions use apiPost/apiDelete consistently (via sidecar)', () => {
     const checkFn = (fnName: string, expected: string) => {

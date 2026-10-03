@@ -50,7 +50,7 @@ import { useK12Store } from '../store'
 
 const originalImage = 'data:image/png;base64,T1JJR0lOQUw='
 const annotatedBase64 = 'QU5OT1RBVEVE'
-const homeworkFixtureSHA256 = '0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861'
+const homeworkFixtureSHA256 = 'ea9eaa64056019ae4b19c0e663e42ec3c2de170eba4719af1ed29b0aa15490a3'
 const question = {
   problem_id: 'problem-1',
   question: '4÷0.5=',
@@ -68,7 +68,7 @@ const conflictQuestion = {
 }
 
 function fixtureDataURL(name: string, expectedSHA256: string) {
-  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test', name))
+  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test/测试素材', name))
   expect(createHash('sha256').update(bytes).digest('hex')).toBe(expectedSHA256)
   return `data:image/png;base64,${bytes.toString('base64')}`
 }
@@ -231,7 +231,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(h.cancelTask).not.toHaveBeenCalled()
   })
 
-  it('家长确认后自动轮询同一个 dispatch 并渲染终态，不再要求第二次点击“批改整张作业”', async () => {
+  it('历史确认快照经兼容handler自动轮询同一dispatch并渲染终态', async () => {
     vi.useFakeTimers()
     h.createTask.mockResolvedValue({ created: true, ...status('queued', 'pending') })
     h.getTask
@@ -248,7 +248,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper.get('[data-testid="rq-confirm-0"]').setValue(true)
-    await wrapper.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    void (wrapper.vm as unknown as { confirmAll: () => Promise<void> }).confirmAll()
     await vi.advanceTimersByTimeAsync(2_501)
     await flushPromises()
 
@@ -274,7 +274,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper.get('[data-testid="rq-confirm-0"]').setValue(true)
-    await wrapper.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    void (wrapper.vm as unknown as { confirmAll: () => Promise<void> }).confirmAll()
     await vi.advanceTimersByTimeAsync(0)
     await flushPromises()
 
@@ -284,11 +284,11 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(wrapper.findAll('.pg-overlay__mark')).toHaveLength(0)
   })
 
-  it('recovering 只作为同 dispatch 轮询中的恢复快照，随后 completed 自动返回结果', async () => {
+  it('持久处理快照只轮询同 dispatch，随后 completed 自动返回结果', async () => {
     vi.useFakeTimers()
     h.getTask
       .mockResolvedValueOnce(status('assessing'))
-      .mockResolvedValueOnce(status('recovering'))
+      .mockResolvedValueOnce(status('assessing'))
       .mockResolvedValueOnce(status('completed'))
     h.getResult.mockResolvedValue(terminalResult())
 
@@ -312,7 +312,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(h.retryTask).not.toHaveBeenCalled()
   })
 
-  it('刷新恢复 unknown 只轮询绑定的同一 dispatch，零 create/retry/cancel/人工恢复入口并自动收敛', async () => {
+  it('刷新恢复 unknown 只读取绑定快照后停驻，零 create/retry/cancel/人工重发入口', async () => {
     vi.useFakeTimers()
     localStorage.setItem(
       K12_IMAGE_TASK_BINDINGS_KEY,
@@ -337,7 +337,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     const wrapper = mountRestoredPanel()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('正在恢复批改结果')
+    expect(wrapper.text()).toContain('处理已停止，结果待核实')
     expect(wrapper.find('[data-testid="recognize-stage-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recognize-grade-all"]').exists()).toBe(false)
@@ -346,7 +346,6 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(wrapper.get('[data-testid="task-shell-metadata"]').text()).toContain(
       'HexClaw-GPT·gpt-5.6-sol·小王的辅导助手·五年级下',
     )
-    expect(wrapper.find('[data-testid="message-fork"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()
@@ -357,8 +356,9 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     await vi.advanceTimersByTimeAsync(2_501)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(true)
-    expect(h.getTask).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(false)
+    expect(h.getTask).toHaveBeenCalledTimes(1)
+    expect(h.getResult).not.toHaveBeenCalled()
     expect(
       h.getTask.mock.calls.every(
         ([agent, dispatchId]) => agent === 'mingming' && dispatchId === 'dispatch-1',
@@ -369,7 +369,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(h.cancelTask).not.toHaveBeenCalled()
   })
 
-  it('恢复期间只显示瞬时进度，不再提供永久“结果待核实”卡和只读详情弹窗', async () => {
+  it('持续处理期间显示原任务进度，不提供结果未知弹窗或重复提交', async () => {
     vi.useFakeTimers()
     h.createTask.mockResolvedValue({ created: true, ...status('queued', 'pending') })
     h.getTask
@@ -378,7 +378,7 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
           recognition: { questions: [conflictQuestion], subject: '数学' },
         }),
       )
-      .mockResolvedValueOnce(status('recovering'))
+      .mockResolvedValueOnce(status('assessing'))
       .mockResolvedValueOnce(status('completed'))
     h.confirmTask.mockResolvedValue(status('assessing'))
     h.getResult.mockResolvedValue(terminalResult())
@@ -386,11 +386,11 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper.get('[data-testid="rq-confirm-0"]').setValue(true)
-    await wrapper.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    void (wrapper.vm as unknown as { confirmAll: () => Promise<void> }).confirmAll()
     await vi.advanceTimersByTimeAsync(0)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('正在恢复批改结果')
+    expect(wrapper.text()).toContain('已作答作业')
     expect(wrapper.text()).not.toContain('结果待核实')
     expect(wrapper.find('[data-testid="recognize-outcome-status"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()

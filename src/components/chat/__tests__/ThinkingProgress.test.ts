@@ -163,12 +163,16 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
   it('is the single lifecycle renderer consumed by both history and streaming branches', () => {
     const chatViewPath = resolve(process.cwd(), 'src/views/ChatView.vue')
     const source = readFileSync(chatViewPath, 'utf8')
-    const usages = source.match(/<ThinkingProgress\b/g) ?? []
+    const usages = source.match(/<AssistantProcess\b/g) ?? []
 
     expect(source).toContain(
-      "import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'",
+      "import AssistantProcess from '@/components/chat/AssistantProcess.vue'",
     )
     expect(usages).toHaveLength(1)
+    const processSource = readFileSync(resolve(process.cwd(), 'src/components/chat/AssistantProcess.vue'), 'utf8')
+    const runSource = readFileSync(resolve(process.cwd(), 'src/components/chat/AssistantRunStatus.vue'), 'utf8')
+    expect(processSource.match(/<AssistantRunStatus\b/g) ?? []).toHaveLength(1)
+    expect(runSource.match(/<ThinkingProgress\b/g) ?? []).toHaveLength(1)
   })
 
   it('matches the approved completed icon, disclosure, aria-label, and natural-height contract', () => {
@@ -197,6 +201,6 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 shared thinking lifecycle', () => {
     )
     const chatViewSource = readFileSync(resolve(process.cwd(), 'src/views/ChatView.vue'), 'utf8')
     expect(chatViewSource).not.toContain('ResearchProgress')
-    expect(chatViewSource.match(/<ThinkingProgress\b/g) ?? []).toHaveLength(1)
+    expect(chatViewSource.match(/<AssistantProcess\b/g) ?? []).toHaveLength(1)
   })
 })

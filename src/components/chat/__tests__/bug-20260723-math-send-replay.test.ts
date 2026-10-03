@@ -1,8 +1,17 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import zhCN from '@/i18n/locales/zh-CN'
+
+const composerDrafts = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('@/services/composer-drafts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/composer-drafts')>(),
+  readComposerDraft: async (key: string) => composerDrafts.get(key),
+  writeComposerDraft: async (key: string, draft: unknown) => { composerDrafts.set(key, draft) },
+}))
+
+beforeEach(() => composerDrafts.clear())
 
 const listSessionMessages = vi.hoisted(() => vi.fn())
 
@@ -73,6 +82,7 @@ describe('BUG-20260723 · complete math source survives send and history replay'
       },
       attachTo: document.body,
     })
+    await flushPromises()
     const input = wrapper.get('[data-testid="chat-input"]')
     const clipboardData = {
       items: [] as unknown[],
@@ -102,7 +112,9 @@ describe('BUG-20260723 · complete math source survives send and history replay'
 
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
-    expect(sendHandler).toHaveBeenCalledWith(FULL_SOURCE, [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith(FULL_SOURCE, [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     wrapper.unmount()
   })
 
@@ -144,6 +156,7 @@ describe('BUG-20260723 · complete math source survives send and history replay'
         },
       },
     })
+    await flushPromises()
 
     const composer = wrapper.get('[data-testid="chat-input"]')
     composer.element.textContent = FULL_SOURCE
@@ -151,7 +164,9 @@ describe('BUG-20260723 · complete math source survives send and history replay'
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith(FULL_SOURCE, [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith(FULL_SOURCE, [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     expect(sendMessage).toHaveBeenCalledWith(
       FULL_SOURCE,
       undefined,

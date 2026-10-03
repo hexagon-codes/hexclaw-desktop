@@ -4,7 +4,7 @@
  * getOllamaStatus / getOllamaRunning / unloadOllamaModel /
  * deleteOllamaModel / restartOllama + error paths
  *
- * getOllamaStatus/getOllamaRunning 直连 Ollama 原生 API（fetch）。
+ * getOllamaStatus/getOllamaRunning 消费当前后端的目标投影。
  * unloadOllamaModel/deleteOllamaModel/restartOllama 走 ofetch（apiPost/apiDelete）。
  * pullOllamaModel 仍用 raw fetch。
  */
@@ -32,34 +32,35 @@ import {
 
 describe('Ollama API Edge Cases', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
+    mockOfetch.mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } })
+    localStorage.clear()
   })
 
   // ─── getOllamaStatus ────────────────────────────
 
   describe('getOllamaStatus', () => {
     it('returns status on success', async () => {
-      mockFetchFn
-        .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: 'm1', size: 100, modified_at: '2024-01-01' }] }), { status: 200 }))
-        .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.3.0' }), { status: 200 }))
+      mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, running: true,
+        version: '0.3.0', model_count: 1, models: [{ name: 'm1', size: 100, modified: '2024-01-01' }] })
       const result = await getOllamaStatus()
       expect(result.running).toBe(true)
       expect(result.version).toBe('0.3.0')
     })
 
     it('returns { running: false } on error (no longer throws)', async () => {
-      mockFetchFn.mockRejectedValue(new Error('500'))
+      mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, running: false,
+        reachable: false, error: 'ECONNREFUSED', model_count: 0 })
       const result = await getOllamaStatus()
       expect(result.running).toBe(false)
     })
 
-    it('calls Ollama native endpoints directly', async () => {
-      mockFetchFn
-        .mockResolvedValueOnce(new Response(JSON.stringify({ models: [] }), { status: 200 }))
-        .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.5.0' }), { status: 200 }))
+    it('calls the current backend status endpoint', async () => {
+      mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, running: true,
+        version: '0.5.0', model_count: 0, models: [] })
       await getOllamaStatus()
-      expect(mockFetchFn).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
-      expect(mockFetchFn).toHaveBeenCalledWith('http://localhost:11434/api/version', expect.anything())
+      expect(mockOfetch).toHaveBeenCalledExactlyOnceWith('/api/v1/ollama/status', expect.objectContaining({ method: 'GET' }))
+      expect(mockFetchFn).not.toHaveBeenCalled()
     })
   })
 
@@ -67,22 +68,22 @@ describe('Ollama API Edge Cases', () => {
 
   describe('getOllamaRunning', () => {
     it('returns running models', async () => {
-      mockFetchFn.mockResolvedValue(new Response(JSON.stringify({
+      mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
         models: [{ name: 'llama3.1', size: 4000000, size_vram: 3000000, expires_at: '2024-01-01', context_length: 8192 }],
-      }), { status: 200 }))
+      })
       const result = await getOllamaRunning()
       expect(result).toHaveLength(1)
       expect(result[0]!.name).toBe('llama3.1')
     })
 
     it('returns empty array when no models field', async () => {
-      mockFetchFn.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }))
+      mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1 })
       const result = await getOllamaRunning()
       expect(result).toEqual([])
     })
 
     it('returns empty array on error (no longer throws)', async () => {
-      mockFetchFn.mockRejectedValue(new Error('503'))
+      mockOfetch.mockRejectedValueOnce(new Error('503'))
       const result = await getOllamaRunning()
       expect(result).toEqual([])
     })
@@ -151,7 +152,7 @@ describe('Ollama API Edge Cases', () => {
     it('throws on non-ok response with error body', async () => {
       mockFetchFn.mockResolvedValue(new Response(JSON.stringify({ error: 'model not found' }), { status: 404 }))
       const onProgress = vi.fn()
-      await expect(pullOllamaModel('bad-model', onProgress)).rejects.toThrow('model not found')
+      await expect(pullOllamaModel('bad-model', onProgress)).rejects.toThrow('HTTP 404')
     })
 
     it('throws on non-ok response with non-JSON body', async () => {
@@ -165,13 +166,13 @@ describe('Ollama API Edge Cases', () => {
       Object.defineProperty(resp, 'body', { value: null })
       mockFetchFn.mockResolvedValue(resp)
       const onProgress = vi.fn()
-      await expect(pullOllamaModel('model', onProgress)).rejects.toThrow('No response body')
+      await expect(pullOllamaModel('model', onProgress)).rejects.toThrow('Ollama pull response is unavailable')
     })
 
     it('throws when stream contains error field', async () => {
       const body = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"status":"downloading"}\n{"error":"disk full"}\n'))
+          controller.enqueue(new TextEncoder().encode('data: {"status":"downloading"}\ndata: {"status":"error","state":"failed","error":"disk full"}\n'))
           controller.close()
         },
       })
@@ -185,7 +186,7 @@ describe('Ollama API Edge Cases', () => {
     it('calls onProgress for each JSON line', async () => {
       const body = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"status":"pulling","completed":50,"total":100}\n{"status":"success"}\n'))
+          controller.enqueue(new TextEncoder().encode('data: {"status":"pulling","completed":50,"total":100}\ndata: {"status":"success","state":"succeeded"}\n'))
           controller.close()
         },
       })
@@ -200,7 +201,7 @@ describe('Ollama API Edge Cases', () => {
     it('handles data: prefix in SSE format', async () => {
       const body = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('data: {"status":"success"}\n'))
+          controller.enqueue(new TextEncoder().encode('data: {"status":"success","state":"succeeded"}\n'))
           controller.close()
         },
       })

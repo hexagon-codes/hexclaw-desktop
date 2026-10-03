@@ -588,7 +588,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
     await k12Api.k12GetImageTaskResult('tutor/小明', 'dispatch / 1', controller.signal)
 
     expect(client.apiPost).toHaveBeenNthCalledWith(1, '/api/k12/image-tasks', createRequest, {
-      timeout: 60_000,
+      timeout: 130_000,
       signal: controller.signal,
     })
     expect(client.apiGet).toHaveBeenNthCalledWith(
@@ -810,6 +810,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
         {
           invocation_id: 'inv-assessing',
           operation: 'assessing',
+          execution_kind: 'provider',
           canonical_input_digest: sourceImageDigest,
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -822,6 +823,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
           parent_invocation_id: 'inv-recognizing',
           physical_unit: 'whole_page',
           operation: 'recognizing',
+          execution_kind: 'provider',
           canonical_input_digest: sourceImageDigest,
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -839,6 +841,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
         {
           invocation_id: 'annotation:artifact-1',
           operation: 'annotation',
+          execution_kind: 'local_deterministic',
           canonical_input_digest: sourceImageDigest,
           status: 'succeeded',
           attempt: 1,

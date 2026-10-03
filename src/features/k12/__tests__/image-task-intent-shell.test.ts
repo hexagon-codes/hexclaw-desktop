@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   cancel: vi.fn(),
 }))
 
-const writingFixtureSHA256 = '3b238c46e0ae4515f7b35a28bcfd37081ba1d59a9dfa2b30bf17784aaf3e9157'
+const writingFixtureSHA256 = '8f5c18976a906e4c3bc4336906e3d7a4fa4335bea72926af1841a995e3b920fa'
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock('@/api/k12', () => ({
 }))
 
 function fixtureDataURL(name: string, expectedSHA256: string) {
-  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test', name))
+  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test/测试素材', name))
   expect(createHash('sha256').update(bytes).digest('hex')).toBe(expectedSHA256)
   return `data:image/png;base64,${bytes.toString('base64')}`
 }
@@ -187,7 +187,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     vi.useRealTimers()
   })
 
-  it('completed_homework uses the approved shell copy and confirms only actual conflict facts', async () => {
+  it('历史completed_homework风险快照保留原题事实，不展示整体强制确认', async () => {
     h.create.mockResolvedValue({
       created: true,
       ...homeworkDispatch('awaiting_confirmation', 'pending', [
@@ -218,7 +218,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(wrapper.text()).not.toContain('批改准备')
     expect(wrapper.findAll('[data-testid^="rq-risk-"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid^="rq-confirm-"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(false)
   })
 
   it('clear completed_homework reaches its result without any confirmation control', async () => {
@@ -296,7 +296,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     await flushPromises()
 
     const progress = wrapper.get('[data-component="ImageTaskRunStatus"]')
-    expect(progress.text()).toBe('正在识别图片内容…')
+    expect(progress.text()).toBe('正在识别图片内容')
     expect(progress.attributes('role')).toBe('status')
     expect(progress.attributes('aria-live')).toBe('polite')
     expect(progress.findAll('.hc-assistant-run-status__spinner')).toHaveLength(0)
@@ -319,7 +319,6 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(progress.text()).toContain('已识别出：美术作品')
     expect(progress.text()).toContain('正在生成作品点评…')
     expect(wrapper.find('[data-testid="artwork-result-surface"]').exists()).toBe(false)
-    expect(wrapper.findAll('[data-testid="recognize-close"]')).toHaveLength(1)
   })
 
   it('BUG-20260726-B writing feedback_pending 显示现有进度并以同源 projection 原位收敛', async () => {
@@ -510,7 +509,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     }
   })
 
-  it('keeps writing OCR conflicts in the same TaskShell and continues automatically after correction', async () => {
+  it('历史writing OCR冲突经兼容handler读取同一TaskShell终态', async () => {
     h.create.mockResolvedValue({ created: true, ...writingConflictDispatch() })
     h.confirm.mockResolvedValue({
       dispatch: {
@@ -560,12 +559,12 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(wrapper.findAll('[data-testid="creative-conflict-item"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="creative-conflict-item"]').text()).toContain('爸色')
     expect(wrapper.find('[data-testid="creative-work-form"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="creative-confirm-all"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="creative-confirm-all"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="creative-conflict-edit"]').trigger('click')
     await wrapper.get('[data-testid="creative-conflict-input"]').setValue('爸爸')
     await wrapper.get('[data-testid="creative-conflict-confirm"]').setValue(true)
-    await wrapper.get('[data-testid="creative-confirm-all"]').trigger('click')
+    await (wrapper.vm as unknown as { confirmCreativeOCR: () => Promise<void> }).confirmCreativeOCR()
     await flushPromises()
 
     expect(h.confirm).toHaveBeenCalledWith(
@@ -593,7 +592,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     )
   })
 
-  it('creative recovering uses the public transient recovery projection', async () => {
+  it('creative recovering 保留原任务并显示结果未知，不盲重发', async () => {
     vi.useFakeTimers()
     h.create.mockResolvedValue({
       created: true,
@@ -607,7 +606,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     await vi.advanceTimersByTimeAsync(0)
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="recognize-recovering"]').text()).toContain('正在恢复批改结果')
+    expect(wrapper.get('[data-testid="recognize-recovering"]').text()).toContain('处理已停止，结果待核实')
     expect(h.create).toHaveBeenCalledTimes(1)
     expect(h.retry).not.toHaveBeenCalled()
     expect(h.cancel).not.toHaveBeenCalled()

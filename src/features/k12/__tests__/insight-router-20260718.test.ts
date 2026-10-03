@@ -98,7 +98,7 @@ describe('学情标题（原型 2613：月报口径退役）', () => {
     const w = await mountInsight({ grade: '五年级上' })
     const title = w.find('[data-testid="insight-title"]')
     expect(title.text()).toBe('五年级上学习概览')
-    expect(w.text()).toContain('从真实批改与复练证据生成')
+    expect(w.text()).toContain('根据批改与复练记录，安排下一步练习。')
     expect(w.text()).not.toContain('学情报告')
     expect(w.text()).not.toContain('每月 1 日自动生成')
   })

@@ -202,20 +202,27 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     )
   })
 
-  it('同一 dispatch 从 recovering 恢复到 completed，不 confirm/retry/create', async () => {
+  it('同一 dispatch 遇 recovering 停止，后续查询 completed 不 confirm/retry/create', async () => {
     vi.useFakeTimers()
+    bind()
     h.getTask
       .mockResolvedValueOnce(status('assessing'))
       .mockResolvedValueOnce(status('recovering'))
       .mockResolvedValueOnce(status('completed'))
     h.getResult.mockResolvedValue(result())
 
-    const promise = useK12Store().completeImageTask('mingming', 'dispatch-unknown', {})
+    const store = useK12Store()
+    const promise = store.completeImageTask('mingming', 'dispatch-unknown', {})
+    const stopped = promise.catch((error: unknown) => error)
     await vi.advanceTimersByTimeAsync(0)
     expect(h.getResult).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(5_001)
 
-    await expect(promise).resolves.toMatchObject({ stage: 'completed' })
+    expect(await stopped).toMatchObject({ message: 'k12.recognize.outcomeUnknownTitle' })
+    expect(h.getTask).toHaveBeenCalledTimes(2)
+    expect(h.getResult).not.toHaveBeenCalled()
+    expect(getImageTaskBinding('session-1', 'mingming')?.dispatchId).toBe('dispatch-unknown')
+    await expect(store.completeImageTask('mingming', 'dispatch-unknown', {})).resolves.toMatchObject({ stage: 'completed' })
     expect(h.getTask).toHaveBeenCalledTimes(3)
     expect(h.confirmTask).not.toHaveBeenCalled()
     expect(h.retryTask).not.toHaveBeenCalled()
@@ -236,7 +243,7 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
 
   it('恢复轮询响应 AbortSignal，中止后不再 GET/result/retry', async () => {
     vi.useFakeTimers()
-    h.getTask.mockResolvedValue(status('recovering'))
+    h.getTask.mockResolvedValue(status('assessing'))
     const controller = new AbortController()
     const promise = useK12Store().completeImageTask(
       'mingming',
@@ -272,7 +279,7 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     )
   })
 
-  it('识题阶段 unknown 后仍只轮询原 dispatch，恢复停点后回显', async () => {
+  it('识题阶段 unknown 停止轮询，保留原 dispatch 不重发', async () => {
     vi.useFakeTimers()
     h.createTask.mockResolvedValue({ created: true, ...status('queued', 'pending') })
     h.getTask
@@ -292,15 +299,17 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     await vi.advanceTimersByTimeAsync(2_501)
 
     await expect(promise).resolves.toMatchObject({
-      stage: 'awaiting_confirmation',
+      stage: 'recovering',
       dispatchId: 'dispatch-unknown',
     })
-    expect(h.getTask).toHaveBeenCalledTimes(2)
+    expect(h.getTask).toHaveBeenCalledTimes(1)
+    expect(getImageTaskBinding('session-1', 'mingming')?.dispatchId).toBe('dispatch-unknown')
+    expect(h.getResult).not.toHaveBeenCalled()
     expect(h.confirmTask).not.toHaveBeenCalled()
     expect(h.retryTask).not.toHaveBeenCalled()
   })
 
-  it('恢复组件把 unknown 投影为瞬时进度，completed 后自动展示同 dispatch 结果', async () => {
+  it('恢复组件把 unknown 显示为静态失败状态，停止轮询且不重发', async () => {
     vi.useFakeTimers()
     bind()
     h.getTask
@@ -316,14 +325,18 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     const wrapper = mountRestoredPanel()
     await vi.advanceTimersByTimeAsync(0)
     await flushPromises()
-    expect(wrapper.text()).toContain('正在恢复批改结果')
-    expect(wrapper.text()).not.toContain('结果待核实')
+    expect(wrapper.text()).toContain('处理已停止，结果待核实')
+    expect(wrapper.text()).toContain('请求结果未知，系统不会重复提交。')
+    expect(wrapper.find('[data-activity-state="failed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-activity-state="running"]').exists()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(2_501)
     await flushPromises()
-    expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recognize-outcome-status"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()
+    expect(h.getTask).toHaveBeenCalledTimes(1)
+    expect(h.getResult).not.toHaveBeenCalled()
     expect(h.createTask).not.toHaveBeenCalled()
     expect(h.retryTask).not.toHaveBeenCalled()
   })
@@ -343,7 +356,7 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     expect(getImageTaskBinding('session-1', 'mingming')).not.toBeNull()
   })
 
-  it('恢复 awaiting_confirmation 回显既有识别结果，不创建新任务', async () => {
+  it('恢复历史 awaiting_confirmation 回显识别结果并允许主动纠错，不显示批量继续', async () => {
     bind()
     h.getTask.mockResolvedValue(
       status('awaiting_confirmation', 'pending', {
@@ -354,7 +367,8 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
     const wrapper = mountRestoredPanel()
     await flushPromises()
     expect(wrapper.findAll('[data-testid="rq-item"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="recognize-correct"]').exists()).toBe(true)
     expect(wrapper.emitted('close')).toBeUndefined()
     expect(h.createTask).not.toHaveBeenCalled()
   })

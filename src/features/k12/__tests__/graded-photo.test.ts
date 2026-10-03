@@ -178,8 +178,7 @@ describe('批改图片像素级导出', () => {
     ])
 
     expect(path).toBe('作业批改_2026-08-22_1500.png')
-    expect(saveBlobInAppMock).toHaveBeenCalledOnce()
-    expect(saveBlobInAppMock).toHaveBeenCalledWith(
+    expect(saveBlobInAppMock).toHaveBeenCalledExactlyOnceWith(
       pngBlob,
       expect.stringMatching(/^作业批改_\d{4}-\d{2}-\d{2}_\d{4}\.png$/),
     )

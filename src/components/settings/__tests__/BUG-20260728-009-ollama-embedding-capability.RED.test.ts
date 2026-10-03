@@ -11,8 +11,11 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push }),
 }))
 
-vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: () => getStatus(),
+vi.mock('@/api/ollama', async () => ({
+  activeOllamaTarget: (await import('vue')).shallowRef(null),
+  getOllamaTarget: vi.fn().mockResolvedValue({ mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434', target_id: 'ollama-local', target_revision: 1, target_digest: 'test-target', associated_provider_instance_ids: [], can_restart: true }),
+  resumeOllamaPulls: vi.fn().mockResolvedValue(undefined),
+  getOllamaStatus: async () => ({ can_restart: true, target_id: 'ollama-local', target_revision: 1, ...await getStatus() }),
   pullOllamaModel: vi.fn(),
   getOllamaRunning: vi.fn().mockResolvedValue([]),
   getOllamaRunningResult: vi.fn().mockResolvedValue({ models: [], reachable: true }),

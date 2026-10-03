@@ -5,6 +5,15 @@ import { createI18n } from 'vue-i18n'
 import { ref, nextTick } from 'vue'
 import chatInputSource from '../ChatInput.vue?raw'
 import zhCN from '@/i18n/locales/zh-CN'
+
+const composerDrafts = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('@/services/composer-drafts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/composer-drafts')>(),
+  readComposerDraft: async (key: string) => composerDrafts.get(key),
+  writeComposerDraft: async (key: string, draft: unknown) => { composerDrafts.set(key, draft) },
+}))
+
+beforeEach(() => composerDrafts.clear())
 import enUS from '@/i18n/locales/en'
 import ugCN from '@/i18n/locales/ug-CN'
 
@@ -48,13 +57,15 @@ function createTestI18n(locale = 'zh-CN') {
 
 async function mountChatInput(props: Record<string, unknown> = {}, locale = 'zh-CN') {
   const ChatInput = (await import('../ChatInput.vue')).default
-  return mount(ChatInput, {
+  const wrapper = mount(ChatInput, {
     props,
     global: {
       plugins: [createTestI18n(locale)],
       stubs: { MentionPopup: MentionStub, TemplatePopup: PaletteStub },
     },
   })
+  await flushPromises()
+  return wrapper
 }
 
 const tools = (w: VueWrapper) => w.findAll('.hc-composer__tool')
@@ -241,7 +252,9 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     await w.get('[data-testid="chat-voice-send"]').trigger('click')
     await flushPromises()
     expect(voiceRefs.api.finishListening).toHaveBeenCalledTimes(1)
-    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)
   })
 
@@ -262,7 +275,9 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     await w.get('[data-testid="chat-voice-send"]').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], undefined)
+    expect(sendHandler).toHaveBeenCalledWith('整段语音转写', [], {
+      contextRefs: [], skillNames: [], onPayloadRejected: expect.any(Function),
+    })
     expect(existingErrorCarrier).toHaveBeenCalledWith('Send failed')
     expect(canonicalSource(w)).toBe('整段语音转写')
     expect(w.find('[data-testid="chat-voice-panel"]').exists()).toBe(false)

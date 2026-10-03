@@ -21,8 +21,11 @@ vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
   updateLLMConfig: vi.fn().mockResolvedValue({}),
 }))
-vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: () => mockGetOllamaStatus(),
+vi.mock('@/api/ollama', async () => ({
+  activeOllamaTarget: (await import('vue')).shallowRef(null),
+  getOllamaTarget: vi.fn().mockResolvedValue({ mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434', target_id: 'ollama-local', target_revision: 1, target_digest: 'test-target', associated_provider_instance_ids: [], can_restart: true }),
+  resumeOllamaPulls: vi.fn().mockResolvedValue(undefined),
+  getOllamaStatus: async () => ({ can_restart: true, target_id: 'ollama-local', target_revision: 1, ...await mockGetOllamaStatus() }),
   pullOllamaModel: vi.fn(),
   getOllamaRunning: vi.fn().mockResolvedValue([]),
   getOllamaRunningResult: vi.fn().mockResolvedValue({ models: [], reachable: true }),
@@ -74,7 +77,7 @@ describe('Store — Ollama 模型同步全场景', () => {
     const store = await getStore()
     store.config = makeConfig([{}])
     store.runtimeProviders = store.config!.llm.providers
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'llama3.3', size: 4e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }, { name: 'llama3.3', size: 4e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(2)
     expect(store.availableModels.map(m => m.modelId)).toEqual(['qwen3:8b', 'llama3.3'])
@@ -84,34 +87,34 @@ describe('Store — Ollama 模型同步全场景', () => {
     const store = await getStore()
     store.config = makeConfig([{}])
     store.runtimeProviders = store.config!.llm.providers
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
 
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'phi4', size: 3e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'phi4', size: 3e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
     expect(store.availableModels[0]!.modelId).toBe('phi4')
   })
 
-  it('场景: Ollama 未运行 → 不清空已有缓存', async () => {
+  it('场景: Ollama 未运行 → 不提供已有缓存中的模型', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
     store.runtimeProviders = store.config!.llm.providers
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
 
     mockGetOllamaStatus.mockResolvedValue({ running: false, model_count: 0 })
     await store.syncOllamaModels()
-    expect(store.availableModels).toHaveLength(1) // 保留
+    expect(store.availableModels).toHaveLength(0)
   })
 
   it('场景: API 报错 → 不影响已有缓存', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
     store.runtimeProviders = store.config!.llm.providers
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
 
     mockGetOllamaStatus.mockRejectedValueOnce(new Error('timeout'))
@@ -134,7 +137,7 @@ describe('Store — Ollama 模型同步全场景', () => {
     ])
     store.runtimeProviders = store.config!.llm.providers
 
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
 
     expect(store.availableModels).toHaveLength(2)
@@ -161,7 +164,7 @@ describe('Store — Ollama 模型同步全场景', () => {
     store.addProvider({ name: 'Ollama (本地)', type: 'ollama', enabled: true, apiKey: '', baseUrl: 'http://localhost:11434/v1', models: [] })
     store.runtimeProviders = [...store.config!.llm.providers]
 
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
 
     expect(store.availableModels).toHaveLength(1)
@@ -195,8 +198,8 @@ describe('OllamaCard UI — 全状态场景', () => {
     mockGetOllamaStatus.mockResolvedValue({
       running: true, associated: true, version: '0.4.1', model_count: 2,
       models: [
-        { name: 'qwen3:8b', size: 5e9, parameter_size: '8B', quantization_level: 'Q4_K_M' },
-        { name: 'llama3.3', size: 4.2e9 },
+        { name: 'qwen3:8b', size: 5e9, parameter_size: '8B', quantization_level: 'Q4_K_M', capabilities: ['completion'] },
+        { name: 'llama3.3', size: 4.2e9, capabilities: ['completion'] },
       ],
     })
     const w = await mountCard()
@@ -304,7 +307,7 @@ describe('OllamaCard UI — 全状态场景', () => {
   })
 
   it('goChat — 调用 refreshModels 后跳转', async () => {
-    mockGetOllamaStatus.mockResolvedValue({ running: true, associated: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, associated: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     const w = await mountCard()
     await flushPromises()
     const vm = w.vm as any
@@ -340,7 +343,7 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     store.runtimeProviders = [...store.config!.llm.providers]
 
     // Step 2: syncOllamaModels
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'deepseek-r1:7b', size: 4.7e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }, { name: 'deepseek-r1:7b', size: 4.7e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
 
     // Step 3: 验证
@@ -361,12 +364,12 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     store.runtimeProviders = store.config!.llm.providers
 
     // 下载前: 1 个模型
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
 
     // 下载后: 2 个模型
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'phi4', size: 3e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }, { name: 'phi4', size: 3e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(2)
     expect(store.availableModels.map(m => m.modelId)).toContain('phi4')
@@ -384,12 +387,12 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     store.runtimeProviders = store.config!.llm.providers
 
     // 删除前
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'phi4', size: 3e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }, { name: 'phi4', size: 3e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(2)
 
     // 删除后
-    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
+    mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
     expect(store.availableModels[0]!.modelId).toBe('qwen3:8b')

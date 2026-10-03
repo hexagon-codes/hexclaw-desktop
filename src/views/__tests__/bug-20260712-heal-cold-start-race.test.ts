@@ -10,7 +10,7 @@
  * 本测试模拟冷启动：挂载时后端全挂 → 稍后数据就绪 → 自愈必须补跑。未修复代码 FAIL。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -35,6 +35,8 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRouterPush: vi.fn(),
   mockRouterReplace: vi.fn(),
 }))
+
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
 
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
@@ -168,6 +170,8 @@ function mountChatView() {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Object.defineProperty(window, 'matchMedia', {
@@ -207,6 +211,7 @@ describe('BUG-20260712-K：自愈必须数据就绪驱动（冷启动 sidecar �
     mountChatView()
     await flushPromises()
 
+    await vi.waitFor(() => expect(mockListSessions).toHaveBeenCalledTimes(1))
     expect(mockGetAgents).toHaveBeenCalledTimes(1)
     expect(mockListSessions).toHaveBeenCalledTimes(1)
     expect(mockGetAgents.mock.invocationCallOrder[0]).toBeLessThan(

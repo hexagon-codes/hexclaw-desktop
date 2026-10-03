@@ -138,7 +138,6 @@ describe('SessionList ChatGPT-style row actions', () => {
     expect(source).toMatch(/\.hc-sessions__pin-action\s*\{[^}]*grid-column:\s*2/)
     expect(source).toMatch(/\.hc-sessions__actions\s*\{[^}]*grid-column:\s*3/)
     expect(source).toMatch(/\.hc-sessions__pin-action,[\s\S]*?color:\s*#8e8e8e/)
-    expect(source).toMatch(/\.hc-sessions__rename-input\s*\{[\s\S]*?height:\s*19\.5px;[\s\S]*?border-radius:\s*6px;[\s\S]*?box-shadow:\s*0 0 0 3px var\(--hc-accent-subtle\)/)
     expect(source).toMatch(
       /<ContextMenu\s+ref="ctxMenu"\s+:items="sessionMenuItems"\s+variant="session"/s,
     )

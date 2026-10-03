@@ -91,7 +91,13 @@ vi.mock('@/api/system', () => ({
   getStats: vi.fn().mockResolvedValue({}),
 }))
 
-vi.mock('@/api/ollama', () => ({
+vi.mock('@/api/ollama', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/ollama')>(),
+  getOllamaTarget: vi.fn().mockResolvedValue({
+    mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434',
+    target_id: 'ollama-default', target_revision: 1, target_digest: 'digest',
+    associated_provider_instance_ids: [], can_restart: true,
+  }),
   getOllamaStatus: vi.fn().mockResolvedValue({
     running: false,
     associated: false,

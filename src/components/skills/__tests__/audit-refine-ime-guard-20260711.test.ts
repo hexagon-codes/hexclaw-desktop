@@ -19,6 +19,11 @@ const SRC = join(__dirname, '../../..')
 // switch/button 等 Enter 激活是 a11y 标准，无输入法参与，不存在组字冲突。
 const WHITELIST: { file: string; expr: string; reason: string }[] = [
   {
+    file: 'components/layout/Sidebar.vue',
+    expr: 'backendPanelOpen = true',
+    reason: 'role="button" 的后端服务入口为非文本控件，Enter 仅执行键盘激活',
+  },
+  {
     file: 'components/settings/ModelManagerModal.vue',
     expr: 'toggleModel(m)',
     reason: 'role="switch" ARIA 开关行（非文本输入），Enter/Space 激活是标准键盘 a11y，无 IME',

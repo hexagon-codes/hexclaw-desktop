@@ -214,9 +214,9 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
     expect(w.find('[data-testid="ps-paper-modal"]').text()).toContain('重试成功')
   })
 
-  it('持久 PrintJob 返回 false → 不算成功，弹层内显示错误且打印按钮可重试', async () => {
+  it('持久 PrintJob 请求失败 → 不算成功，弹层内显示错误且打印按钮可重试', async () => {
     h.listSpy.mockResolvedValue({ items: [historySet()] })
-    h.printSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    h.printSpy.mockRejectedValueOnce(new Error('未能唤起打印')).mockResolvedValueOnce(true)
     const w = render()
     await flushPromises()
     await w.find('[data-testid="ps-paper-question"]').trigger('click')

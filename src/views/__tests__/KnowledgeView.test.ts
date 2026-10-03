@@ -21,6 +21,7 @@ const {
   getKnowledgeJob,
   cancelKnowledgeJob,
   getKnowledgeEmbeddingStatus,
+  getKnowledgeEmbeddingPolicy,
 } = vi.hoisted(() => ({
   getDocuments: vi.fn(),
   getDocument: vi.fn(),
@@ -37,6 +38,7 @@ const {
   getKnowledgeJob: vi.fn(),
   cancelKnowledgeJob: vi.fn(),
   getKnowledgeEmbeddingStatus: vi.fn(),
+  getKnowledgeEmbeddingPolicy: vi.fn(),
 }))
 
 vi.mock('@/api/knowledge', () => ({
@@ -73,21 +75,7 @@ vi.mock('@/utils/file-parser', () => ({
 vi.mock('@/api/knowledge-index', () => ({
   getKnowledgeJob,
   cancelKnowledgeJob,
-  getKnowledgeEmbeddingPolicy: vi.fn().mockResolvedValue({
-    policy_version: 1,
-    selection: { kind: 'disabled' },
-    active_revision: null,
-    desired_revision: null,
-    indexing_activity: {
-      state: 'idle',
-      processing_documents: 0,
-      chunks_done: null,
-      chunks_total: null,
-    },
-    available_profiles: [],
-    recommendation: null,
-    catalog_version: 1,
-  }),
+  getKnowledgeEmbeddingPolicy,
   applyKnowledgeEmbeddingPolicy: vi.fn(),
   isKnowledgeEmbeddingPolicyUnsupported: vi.fn().mockReturnValue(false),
 }))
@@ -99,6 +87,18 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
   for (const key of Object.keys(original)) mocked[key] = stub
   return mocked
 })
+
+function documentFixture(id: string, title: string, changes: Record<string, unknown> = {}) {
+  return { id, title, content: '', source: `upload:${title}`, source_type: 'upload',
+    chunk_count: 0, created_at: '2026-01-01T00:00:00Z', status: 'processing', text_index_state: 'pending',
+    vector_index_state: 'disabled', ...changes }
+}
+
+function operationFixture(documentId: string, jobId: string, title: string) {
+  return { operation_id: `operation-${jobId}`, document_id: documentId, job_id: jobId,
+    title, display_name: title, state: 'running', stage: 'extracting', terminal: false,
+    created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+}
 
 function createTestI18n() {
   return createI18n({
@@ -134,6 +134,15 @@ enableAutoUnmount(afterEach)
 describe('KnowledgeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ;[getDocuments, getDocument, getDocumentContent, addDocument, uploadDocument,
+      searchKnowledge, reindexDocument, retryKnowledgeDocument, listKnowledgeOperations,
+      getKnowledgeJob, cancelKnowledgeJob, getKnowledgeEmbeddingPolicy,
+    ].forEach(mock => mock.mockReset())
+    getKnowledgeEmbeddingPolicy.mockResolvedValue({
+      policy_version: 1, selection: { kind: 'disabled' }, active_revision: null,
+      desired_revision: null, indexing_activity: { state: 'idle', processing_documents: 0,
+        chunks_done: null, chunks_total: null }, available_profiles: [], recommendation: null, catalog_version: 1,
+    })
     getDocuments.mockResolvedValue({ documents: [], total: 0 })
     getDocument.mockResolvedValue(null)
     getDocumentContent.mockResolvedValue('loaded content')
@@ -254,14 +263,14 @@ describe('KnowledgeView', () => {
   })
 
   it('[BUG-20260723-005] shows the actual embedding executor in the add-document dialog', async () => {
-    getKnowledgeEmbeddingStatus.mockResolvedValueOnce({
-      enabled: true,
-      configured: true,
-      provider: 'openai_compatible',
-      model: 'text-embedding-3-small',
-      local: false,
-      ready: true,
-      pulling: false,
+    const profile = { profile_id: 'cloud-openai', provider_id: 'openai-compatible',
+      provider_name: 'OpenAI 兼容', model_name: 'text-embedding-3-small', location: 'cloud',
+      capability: 'embedding', dimension: 1536, availability: 'connected', display_order: 1 }
+    getKnowledgeEmbeddingPolicy.mockResolvedValue({
+      policy_version: 1, selection: { kind: 'auto' },
+      active_revision: { revision_id: 'rev-openai', state: 'ready', profile, chunks_done: 2, chunks_total: 2 },
+      desired_revision: null, indexing_activity: { state: 'idle', processing_documents: 0, chunks_done: 2, chunks_total: 2 },
+      available_profiles: [profile], recommendation: { profile_id: profile.profile_id, reason_code: 'available', reason_text: '' }, catalog_version: 1,
     })
 
     const wrapper = mountKnowledgeView()
@@ -272,7 +281,7 @@ describe('KnowledgeView', () => {
     const notice = wrapper.get('[data-testid="knowledge-index-notice"]')
     expect(notice.text()).toContain('当前索引：自动（推荐）')
     expect(notice.text()).toContain('OpenAI 兼容 · text-embedding-3-small')
-    expect(notice.text()).toContain('语义索引在后台增强')
+    expect(notice.text()).toContain('文本索引先就绪，语义索引随后增强')
   })
 
   it('[BUG-20260723-031] opens the retrieval settings disclosure through a real click', async () => {
@@ -297,7 +306,10 @@ describe('KnowledgeView', () => {
     expect(body.text()).toContain('重排')
   })
 
-  it('uploads multiple files and refreshes document list once after the batch', async () => {
+  it('uploads multiple files and refreshes their canonical document rows', async () => {
+    const uploadedDocs = [documentFixture('doc-alpha', 'alpha.md'), documentFixture('doc-beta', 'beta.txt')]
+    getDocuments.mockResolvedValue({ documents: uploadedDocs, total: 2 }).mockResolvedValueOnce({ documents: [], total: 0 })
+    uploadDocument.mockImplementation(async (file: File) => ({ document_id: file.name === 'alpha.md' ? 'doc-alpha' : 'doc-beta', job_id: file.name === 'alpha.md' ? 'job-alpha' : 'job-beta', text_index_state: 'pending', vector_index_state: 'disabled' }))
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
@@ -316,7 +328,10 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(uploadDocument).toHaveBeenCalledTimes(2)
-    expect(getDocuments).toHaveBeenCalledTimes(2)
+    const cards = wrapper.findAll('[data-testid="knowledge-doc-card"]')
+    expect(cards).toHaveLength(2)
+    expect(cards.map(card => card.get('.knowledge-page__resource-title').text())).toEqual(['alpha.md', 'beta.txt'])
+    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(0)
   })
 
   it('rejects an oversized batch before hashing or uploading and shows the total-byte budget', async () => {
@@ -364,6 +379,14 @@ describe('KnowledgeView', () => {
         }
       },
     )
+    getDocuments.mockResolvedValue({ documents: [documentFixture('doc-recovered', 'same.pdf')], total: 1 })
+      .mockResolvedValueOnce({ documents: [], total: 0 })
+    listKnowledgeOperations.mockImplementation(async () => attempt === 0 ? [] : attempt === 1 ? [{
+      operation_id: 'operation-recovered', idempotency_key: 'knowledge-upload:recoverable',
+      content_digest: 'a'.repeat(64), display_name: 'same.pdf', title: 'same.pdf',
+      state: 'pending_response', stage: 'receiving', terminal: false,
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }] : [operationFixture('doc-recovered', 'job-recovered', 'same.pdf')])
     const wrapper = mountKnowledgeView()
     await flushPromises()
     const input = wrapper.get('input[type="file"]')
@@ -382,9 +405,11 @@ describe('KnowledgeView', () => {
 
     await selectSameFile()
     expect(uploadDocument).toHaveBeenCalledTimes(2)
-    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="knowledge-upload-pending-response"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="knowledge-upload-cancel"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(0)
+    const cards = wrapper.findAll('[data-testid="knowledge-doc-card"]')
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.text()).toContain('same.pdf')
+    expect(cards[0]!.findAll('button').some(button => button.text().trim() === '取消')).toBe(true)
     wrapper.unmount()
   })
 
@@ -434,6 +459,7 @@ describe('KnowledgeView', () => {
   })
 
   it('keeps a 202 upload attached to its persistent job and removes it after cancellation', async () => {
+    getDocuments.mockResolvedValue({ documents: [documentFixture('doc-1', 'alpha.pdf')], total: 1 }).mockResolvedValueOnce({ documents: [], total: 0 })
     const wrapper = mountKnowledgeView()
     await flushPromises()
     const fileInput = wrapper.find('input[type="file"]')
@@ -445,13 +471,15 @@ describe('KnowledgeView', () => {
     await fileInput.trigger('change')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="knowledge-upload-job"]').exists()).toBe(true)
-    const cancel = wrapper.get('[data-testid="knowledge-upload-cancel"]')
+    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-testid="knowledge-doc-card"]')).toHaveLength(1)
+    const cancel = wrapper.get('[data-testid="knowledge-doc-card"]').findAll('button').find(button => button.text().trim() === '取消')!
     await cancel.trigger('click')
     await flushPromises()
 
     expect(cancelKnowledgeJob).toHaveBeenCalledWith('job-1')
-    expect(wrapper.find('[data-testid="knowledge-upload-job"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="knowledge-doc-card"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="knowledge-doc-card"]').findAll('button').some(button => button.text().trim() === '取消')).toBe(false)
     wrapper.unmount()
   })
 
@@ -466,6 +494,7 @@ describe('KnowledgeView', () => {
       chunks_done: 48,
       chunks_total: 48,
     })
+    getDocuments.mockResolvedValue({ documents: [documentFixture('doc-1', 'alpha.pdf', { status: 'indexed', text_index_state: 'ready', chunk_count: 48 })], total: 1 }).mockResolvedValueOnce({ documents: [], total: 0 }).mockResolvedValueOnce({ documents: [documentFixture('doc-1', 'alpha.pdf')], total: 1 })
     const wrapper = mountKnowledgeView()
     await flushPromises()
     const fileInput = wrapper.find('input[type="file"]')
@@ -476,10 +505,11 @@ describe('KnowledgeView', () => {
     await fileInput.trigger('change')
     await flushPromises()
 
-    await wrapper.get('[data-testid="knowledge-upload-cancel"]').trigger('click')
+    await wrapper.get('[data-testid="knowledge-doc-card"]').findAll('button').find(button => button.text().trim() === '取消')!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="knowledge-upload-cancel"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="knowledge-doc-card"]').attributes('data-text-index-state')).toBe('ready')
+    expect(wrapper.get('[data-testid="knowledge-doc-card"]').findAll('button').some(button => button.text().trim() === '取消')).toBe(false)
     expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -496,6 +526,8 @@ describe('KnowledgeView', () => {
         chunks_done: 48,
         chunks_total: 48,
       })
+      listKnowledgeOperations.mockResolvedValue([operationFixture('doc-1', 'job-1', 'alpha.pdf')]).mockResolvedValueOnce([])
+      getDocuments.mockResolvedValue({ documents: [documentFixture('doc-1', 'alpha.pdf', { status: 'indexed', text_index_state: 'ready', chunk_count: 48 })], total: 1 }).mockResolvedValueOnce({ documents: [], total: 0 }).mockResolvedValueOnce({ documents: [documentFixture('doc-1', 'alpha.pdf')], total: 1 })
       const wrapper = mountKnowledgeView()
       await flushPromises()
       const fileInput = wrapper.find('input[type="file"]')
@@ -506,13 +538,15 @@ describe('KnowledgeView', () => {
 
       await fileInput.trigger('change')
       await flushPromises()
-      expect(wrapper.find('[data-testid="upload-processing"]').exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(0)
+      expect(wrapper.get('[data-testid="knowledge-doc-card"]').attributes('data-text-index-state')).toBe('pending')
 
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
 
       expect(getKnowledgeJob).toHaveBeenCalledWith('job-1')
-      expect(getDocuments).toHaveBeenCalledTimes(3)
+      expect(wrapper.get('[data-testid="knowledge-doc-card"]').attributes('data-text-index-state')).toBe('ready')
+      expect(wrapper.findAll('[data-testid="knowledge-doc-card"]')).toHaveLength(1)
       wrapper.unmount()
     } finally {
       vi.useRealTimers()
@@ -790,6 +824,8 @@ describe('KnowledgeView', () => {
       '.pptx',
       '.csv',
       '.json',
+      '.jsonl',
+      '.hexbank',
       '.png',
       '.jpg',
       '.jpeg',
@@ -815,7 +851,7 @@ describe('KnowledgeView', () => {
 
       expect(uploadDocument).not.toHaveBeenCalled()
       expect(wrapper.text()).toContain(
-        '不支持的文件类型，仅支持: .pdf, .txt, .md, .docx, .doc, .pptx, .csv, .json, .png, .jpg, .jpeg, .webp, .gif',
+        '不支持的文件类型，仅支持: .pdf, .txt, .md, .docx, .doc, .pptx, .csv, .json, .jsonl, .hexbank, .png, .jpg, .jpeg, .webp, .gif',
       )
     },
   )
@@ -861,9 +897,9 @@ describe('KnowledgeView', () => {
       ],
       total: 1,
     })
-    getDocumentContent
+    getDocument
       .mockRejectedValueOnce(new Error('network unavailable'))
-      .mockResolvedValueOnce('重试后正文')
+      .mockResolvedValueOnce({ id: 'doc-content-failed', title: '待读取文档', content: '重试后正文', chunk_count: 2, created_at: '2026-01-01T00:00:00Z' })
 
     const wrapper = mountKnowledgeView()
     await flushPromises()
@@ -884,7 +920,7 @@ describe('KnowledgeView', () => {
     await wrapper.get('[data-testid="knowledge-doc-content-retry"]').trigger('click')
     await flushPromises()
 
-    expect(getDocumentContent).toHaveBeenCalledTimes(2)
+    expect(getDocument).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('重试后正文')
     expect(wrapper.find('[data-testid="knowledge-doc-content-error"]').exists()).toBe(false)
   })
@@ -902,7 +938,7 @@ describe('KnowledgeView', () => {
       ],
       total: 1,
     })
-    getDocumentContent.mockResolvedValueOnce('')
+    getDocument.mockResolvedValueOnce({ id: 'doc-truly-empty', title: '真正空文档', content: '', chunk_count: 0, created_at: '2026-01-01T00:00:00Z' })
 
     const wrapper = mountKnowledgeView()
     await flushPromises()
@@ -1058,6 +1094,7 @@ describe('KnowledgeView', () => {
             created_at: '2026-07-29T06:20:00.000Z',
             source_type: 'connector',
             status: 'processing',
+            text_index_state: 'pending',
             vector_index_state: 'building',
             vector_job_id: 'job-connector-status',
             vector_job_state: 'running',
@@ -1080,9 +1117,8 @@ describe('KnowledgeView', () => {
       expect(uploadCard.get('[data-testid="knowledge-vector-status"]').text()).toContain(
         '文本 + 语义已就绪 · 8 个 chunk · Contextual 已写入',
       )
-      expect(connectorCard.get('[data-testid="knowledge-vector-status"]').text()).toBe(
-        '已上传 · 后端正在解析并建索引（扫描件/大文件较慢，请稍候）',
-      )
+      expect(connectorCard.attributes('data-text-index-state')).toBe('pending')
+      expect(connectorCard.get('[data-testid="knowledge-vector-status"]').text()).not.toBe('')
       expect(connectorCard.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(true)
     } finally {
       vi.useRealTimers()
@@ -1149,7 +1185,7 @@ describe('KnowledgeView', () => {
     const input = wrapper.find('input[type="text"]')
     expect(input.attributes('placeholder')).toBe('输入查询语句，测试知识库检索...')
     await input.setValue('规范')
-    await input.trigger('keydown.enter')
+    await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
     expect(wrapper.text()).toContain('产品规范')
@@ -1185,11 +1221,11 @@ describe('KnowledgeView', () => {
 
     const input = wrapper.find('input[type="text"]')
     await input.setValue('旧查询')
-    await input.trigger('keydown.enter')
+    await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
     await input.setValue('新查询')
-    await input.trigger('keydown.enter')
+    await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
     resolveNew({
@@ -1250,8 +1286,8 @@ describe('KnowledgeView', () => {
   })
 
   it('keeps the detail drawer in loading state until the latest document content request finishes', async () => {
-    let resolveFirst!: (value: string) => void
-    let resolveSecond!: (value: string) => void
+    let resolveFirst!: (value: Record<string, unknown>) => void
+    let resolveSecond!: (value: Record<string, unknown>) => void
 
     getDocuments.mockResolvedValueOnce({
       documents: [
@@ -1273,7 +1309,7 @@ describe('KnowledgeView', () => {
       total: 2,
     })
 
-    getDocumentContent
+    getDocument
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
@@ -1311,11 +1347,11 @@ describe('KnowledgeView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('加载中')
 
-    resolveFirst('旧请求内容')
+    resolveFirst({ id: 'doc-1', title: '文档一', content: '旧请求内容' })
     await flushPromises()
     expect(wrapper.text()).toContain('加载中')
 
-    resolveSecond('最新请求内容')
+    resolveSecond({ id: 'doc-2', title: '文档二', content: '最新请求内容' })
     await flushPromises()
     expect(wrapper.text()).toContain('最新请求内容')
   })
@@ -1485,7 +1521,7 @@ describe('KnowledgeView', () => {
       expect(reindexDocument).toHaveBeenCalledTimes(1)
       expect(reindexDocument).toHaveBeenCalledWith('doc-reindex')
       expect(wrapper.get('[data-testid="knowledge-vector-status"]').text()).toContain(
-        '正在读取权威状态…',
+        '正在更新状态…',
       )
       expect(reindexButton!.attributes('aria-busy')).toBe('true')
 
@@ -1648,6 +1684,7 @@ describe('KnowledgeView', () => {
         chunks_done: 1,
         chunks_total: 1,
       })
+      listKnowledgeOperations.mockResolvedValue([operationFixture('doc-failed', 'job-retry', '失败讲义.pdf')])
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
 

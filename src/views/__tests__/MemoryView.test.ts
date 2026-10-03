@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -134,8 +134,14 @@ function getEntryDeleteButton(wrapper: ReturnType<typeof mountMemoryView>, index
 }
 
 describe('MemoryView', () => {
+  afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     getMemoryEntries.mockResolvedValue({
       entries: [entry('m1', '用户偏好中文回复', 'preference')],
       summary: '最近在检查知识库和 MCP 配置',
@@ -278,7 +284,7 @@ describe('MemoryView', () => {
     await vm.submitToolbarSearch()
     await flushPromises()
 
-    expect(searchMemory).toHaveBeenCalledWith('中文')
+    expect(searchMemory).toHaveBeenCalledWith('中文', undefined)
     expect(wrapper.text()).toContain('命中: 偏好中文')
   })
 
@@ -575,7 +581,7 @@ describe('MemoryView', () => {
     vm.startEdit(entry('m1', '用户偏好中文回复'))
     await flushPromises()
 
-    const input = wrapper.get('input')
+    const input = wrapper.get('[data-testid="memory-edit-input"]')
     await input.setValue('更新后的记忆')
 
     void vm.saveEdit()

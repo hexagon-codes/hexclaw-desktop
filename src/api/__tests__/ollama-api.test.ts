@@ -5,7 +5,7 @@
  * deleteOllamaModel, restartOllama, and pullOllamaModel (stream parsing,
  * error handling, AbortSignal).
  *
- * getOllamaStatus/getOllamaRunning use native fetch directly to Ollama.
+ * getOllamaStatus/getOllamaRunning 消费当前后端的目标投影。
  * unloadOllamaModel/deleteOllamaModel/restartOllama use ofetch (apiPost/apiDelete).
  * pullOllamaModel uses raw fetch.
  */
@@ -57,37 +57,35 @@ function mockFetchStream(chunks: string[], ok = true, status = 200) {
 
 describe('Ollama API', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
+    mockOfetch.mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } })
+    localStorage.clear()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  // ─── 1. getOllamaStatus calls Ollama native API directly ────────
-  it('getOllamaStatus calls Ollama native endpoints and returns status', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: 'm1', size: 100, modified_at: '2024-01-01' }] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.5.1' }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+  // ─── 1. getOllamaStatus 查询当前后端 ────────
+  it('getOllamaStatus calls the current backend and returns the target status', async () => {
+    mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
+      running: true, version: '0.5.1', model_count: 1,
+      models: [{ name: 'm1', size: 100, modified: '2024-01-01' }] })
 
     const result = await getOllamaStatus()
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/version', expect.anything())
+    expect(mockOfetch).toHaveBeenCalledExactlyOnceWith('/api/v1/ollama/status', expect.objectContaining({ method: 'GET' }))
     expect(result.running).toBe(true)
     expect(result.version).toBe('0.5.1')
     expect(result.model_count).toBe(1)
   })
 
-  // ─── 2. getOllamaRunning calls Ollama /api/ps directly ─────────
-  it('getOllamaRunning returns models array from native Ollama /api/ps', async () => {
+  // ─── 2. getOllamaRunning 消费后端运行模型投影 ─────────
+  it('getOllamaRunning returns models from the current backend projection', async () => {
     const models = [
       { name: 'llama3.1', size: 4_000_000, size_vram: 3_000_000, expires_at: '2024-12-01', context_length: 8192 },
     ]
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ models }), { status: 200 }),
-    ))
+    mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, models })
 
     const result = await getOllamaRunning()
 
@@ -97,9 +95,7 @@ describe('Ollama API', () => {
 
   // ─── 3. getOllamaRunning returns [] when models undefined
   it('getOllamaRunning returns empty array when models is undefined', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({}), { status: 200 }),
-    ))
+    mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1 })
 
     const result = await getOllamaRunning()
 
@@ -108,9 +104,7 @@ describe('Ollama API', () => {
 
   // ─── 4. getOllamaRunning returns [] when models null-ish
   it('getOllamaRunning returns empty array when models is null', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ models: null }), { status: 200 }),
-    ))
+    mockOfetch.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1, models: null })
 
     const result = await getOllamaRunning()
 
@@ -170,8 +164,8 @@ describe('Ollama API', () => {
     // ─── 9. stream parsing with progress callbacks ──────
     it('parses single-line, multi-line, and error in stream', async () => {
       mockFetchStream([
-        '{"status":"pulling","completed":50,"total":100}\n',
-        '{"status":"downloading","completed":75,"total":100}\n{"status":"success"}\n',
+        'data: {"status":"pulling","completed":50,"total":100}\n',
+        'data: {"status":"downloading","completed":75,"total":100}\ndata: {"status":"success","state":"succeeded"}\n',
       ])
 
       const progress: Array<{ status: string; completed?: number }> = []
@@ -187,7 +181,7 @@ describe('Ollama API', () => {
     it('parses data: SSE prefix lines', async () => {
       mockFetchStream([
         'data: {"status":"pulling","completed":10,"total":100}\n',
-        'data: {"status":"success"}\n',
+        'data: {"status":"success","state":"succeeded"}\n',
       ])
 
       const progress: Array<{ status: string }> = []
@@ -198,17 +192,17 @@ describe('Ollama API', () => {
       expect(progress[1]!.status).toBe('success')
     })
 
-    it('does not fail when the stream ends after writing manifest without an explicit success event', async () => {
+    it('keeps the outcome unknown when the stream ends without a terminal state', async () => {
       mockFetchStream([
-        '{"status":"pulling manifest"}\n',
-        '{"status":"verifying sha256 digest"}\n{"status":"writing manifest"}\n',
+        'data: {"status":"pulling manifest"}\n',
+        'data: {"status":"verifying sha256 digest"}\ndata: {"status":"writing manifest"}\n',
       ])
 
       const progress: Array<{ status: string }> = []
 
       await expect(
         pullOllamaModel('llama3.1', (p) => progress.push(p as typeof progress[0])),
-      ).resolves.toBeUndefined()
+      ).rejects.toThrow('Ollama pull outcome is unknown')
 
       expect(progress).toEqual([
         { status: 'pulling manifest' },
@@ -219,8 +213,8 @@ describe('Ollama API', () => {
 
     it('throws when stream contains an error field', async () => {
       mockFetchStream([
-        '{"status":"downloading","completed":50,"total":100}\n',
-        '{"status":"error","error":"disk full"}\n',
+        'data: {"status":"downloading","completed":50,"total":100}\n',
+        'data: {"status":"error","state":"failed","error":"disk full"}\n',
       ])
 
       const progress = vi.fn()
@@ -237,7 +231,7 @@ describe('Ollama API', () => {
       expect(progress).not.toHaveBeenCalled()
     })
 
-    it('throws with server error message from JSON body', async () => {
+    it('rejects a failed HTTP request without claiming a terminal operation result', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
         ok: false,
         status: 400,
@@ -246,7 +240,7 @@ describe('Ollama API', () => {
       }))
 
       const progress = vi.fn()
-      await expect(pullOllamaModel('bad', progress)).rejects.toThrow('invalid model name')
+      await expect(pullOllamaModel('bad', progress)).rejects.toThrow('HTTP 400')
     })
 
     // ─── 11. throws when no response body ───────────────
@@ -259,7 +253,7 @@ describe('Ollama API', () => {
       }))
 
       const progress = vi.fn()
-      await expect(pullOllamaModel('llama3.1', progress)).rejects.toThrow('No response body')
+      await expect(pullOllamaModel('llama3.1', progress)).rejects.toThrow('Ollama pull response is unavailable')
     })
 
     // ─── 12. handles AbortSignal ────────────────────────
@@ -267,6 +261,10 @@ describe('Ollama API', () => {
       const controller = new AbortController()
       const fetchMock = vi.fn().mockImplementation(() => {
         return new Promise((_resolve, reject) => {
+          if (controller.signal.aborted) {
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+            return
+          }
           controller.signal.addEventListener('abort', () => {
             reject(new DOMException('The operation was aborted.', 'AbortError'))
           })

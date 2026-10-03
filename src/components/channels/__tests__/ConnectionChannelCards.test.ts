@@ -7,13 +7,13 @@ import zhCN from '@/i18n/locales/zh-CN'
 const {
   getIMInstances,
   updateIMInstance,
-  testSavedIMInstanceRuntime,
+  testSavedIMInstanceDelivery,
   listIMInstancesHealth,
   getCronJobs,
 } = vi.hoisted(() => ({
   getIMInstances: vi.fn(),
   updateIMInstance: vi.fn(),
-  testSavedIMInstanceRuntime: vi.fn(),
+  testSavedIMInstanceDelivery: vi.fn(),
   listIMInstancesHealth: vi.fn(),
   getCronJobs: vi.fn(),
 }))
@@ -24,7 +24,7 @@ vi.mock('@/api/im-channels', async () => {
     ...actual,
     getIMInstances,
     updateIMInstance,
-    testSavedIMInstanceRuntime,
+    testSavedIMInstanceDelivery,
     listIMInstancesHealth,
   }
 })
@@ -73,10 +73,12 @@ describe('ConnectionChannelCards', () => {
       },
     ])
     updateIMInstance.mockResolvedValue(true)
-    testSavedIMInstanceRuntime.mockResolvedValue({ success: true, message: 'ok' })
-    // 默认：无引用任务、无健康异常（各用例按需覆盖）
+    testSavedIMInstanceDelivery.mockResolvedValue({ success: true, message: 'ok' })
+    // 默认：无引用任务，当前实例健康接口已确认连接成功。
     getCronJobs.mockResolvedValue({ jobs: [], total: 0 })
-    listIMInstancesHealth.mockResolvedValue([])
+    listIMInstancesHealth.mockResolvedValue([
+      { name: '飞书 · 日报机器人', provider: 'feishu', status: 'running', enabled: true, healthy: true, connection_state: 'connected' },
+    ])
   })
 
   it('renders the instance card; email placeholder card is no longer shown (email added via top + Add)', async () => {
@@ -86,7 +88,7 @@ describe('ConnectionChannelCards', () => {
     expect(wrapper.text()).toContain('飞书 · 日报机器人')
     // 邮箱占位卡已移除：不再常驻渲染「邮箱（SMTP / IMAP）」配置卡
     expect(wrapper.text()).not.toContain(zhCN.connections.channels.emailName)
-    // 已启用且配置完整 → 已连接 pill
+    // 健康接口确认连接成功后显示已连接。
     expect(wrapper.find('.hc-cxpill--green').exists()).toBe(true)
   })
 
@@ -120,7 +122,7 @@ describe('ConnectionChannelCards', () => {
     expect(updateIMInstance).toHaveBeenCalledWith('feishu-1', { enabled: false })
   })
 
-  it('runs a runtime test through testSavedIMInstanceRuntime', async () => {
+  it('runs a delivery test through testSavedIMInstanceDelivery', async () => {
     const wrapper = mountCards()
     await flushPromises()
 
@@ -131,7 +133,7 @@ describe('ConnectionChannelCards', () => {
     await testBtn!.trigger('click')
     await flushPromises()
 
-    expect(testSavedIMInstanceRuntime).toHaveBeenCalledTimes(1)
+    expect(testSavedIMInstanceDelivery).toHaveBeenCalledTimes(1)
     expect(wrapper.find('.hc-cxcard__testresult.is-ok').exists()).toBe(true)
   })
 
@@ -183,9 +185,9 @@ describe('ConnectionChannelCards', () => {
     expect(wrapper.find('.hc-cxstream__alert').exists()).toBe(false)
   })
 
-  it('renders a red credential-invalid pill when instance health reports an error', async () => {
+  it('renders a red credential-invalid pill when instance health reports an authentication failure', async () => {
     listIMInstancesHealth.mockResolvedValue([
-      { name: '飞书 · 日报机器人', provider: 'feishu', status: 'error', enabled: true, last_error: 'token expired' },
+      { name: '飞书 · 日报机器人', provider: 'feishu', status: 'error', enabled: true, healthy: false, connection_state: 'credential_invalid', last_error: 'token expired' },
     ])
     const wrapper = mountCards()
     await flushPromises()
@@ -199,7 +201,7 @@ describe('ConnectionChannelCards', () => {
 
   it('keeps the green pill when health is reported healthy (no last_error)', async () => {
     listIMInstancesHealth.mockResolvedValue([
-      { name: '飞书 · 日报机器人', provider: 'feishu', status: 'running', enabled: true },
+      { name: '飞书 · 日报机器人', provider: 'feishu', status: 'running', enabled: true, healthy: true, connection_state: 'connected' },
     ])
     const wrapper = mountCards()
     await flushPromises()

@@ -113,7 +113,7 @@ describe('BUG-20260725-010/011 candidate selection', () => {
 })
 
 describe('BUG-20260725-013/017 review actions', () => {
-  it('requires the all-mistakes more menu and explicit confirmation before suppressing', async () => {
+  it('emits suppression once from the all-mistakes menu without a second confirmation', async () => {
     const wrapper = mount(K12MistakeReviewMenu, {
       props: { suppressed: false },
       attachTo: document.body,
@@ -121,14 +121,10 @@ describe('BUG-20260725-013/017 review actions', () => {
     expect(wrapper.text()).not.toContain('不再复习')
     await wrapper.get('[aria-label="更多错题操作"]').trigger('click')
     await wrapper.get('[role="menuitem"]').trigger('click')
-    expect(document.body.textContent).toContain('不会把它标记为已掌握')
-    const confirm = document.body.querySelector<HTMLButtonElement>(
-      '[data-testid="confirm-suppress-review"]',
-    )
-    expect(confirm).not.toBeNull()
-    confirm!.click()
     await wrapper.vm.$nextTick()
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
     expect(wrapper.emitted('suppress')).toHaveLength(1)
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

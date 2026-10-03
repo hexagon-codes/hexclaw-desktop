@@ -135,7 +135,7 @@ describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
 
     expect(getMcpServerStatus).toHaveBeenCalledTimes(1)
     expect(addMcpServer).not.toHaveBeenCalled()
-    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' })
+    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' }, '生产库')
     expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
   })
 

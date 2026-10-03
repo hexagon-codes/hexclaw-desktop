@@ -61,15 +61,6 @@ describe('UI-4 CanvasView 不可达死代码已移除', () => {
 
 // UI-8 [中][已修] PromptsView 增删改不再无 try/catch——失败 surface 到 actionError。
 // 砍薄版（§5）：saveMemory/removeMemory 随记忆薄版 Tab 移除（记忆管理已迁至 MemoryView）。
-describe('UI-8 PromptsView 增删改失败已 surface（不再无 try/catch 静默）', () => {
-  const fns = ['savePrompt', 'confirmRemovePrompt']
-  it.each(fns)('%s 有 try/catch 且失败写 actionError', (name) => {
-    const src = read('views/PromptsView.vue')
-    const fn = src.slice(src.indexOf(`async function ${name}`), src.indexOf(`async function ${name}`) + 700)
-    expect(fn, `${name} 应有 catch`).toContain('} catch (err)')
-    expect(fn, `${name} catch 应 surface actionError`).toContain('actionError.value =')
-  })
-})
 
 // UI-7 [高][已修] SettingsView 保存失败不再静默——catch 置 saveFailed，按钮显示「保存失败」。
 describe('UI-7 SettingsView 保存失败已 surface（不再仅 logger.error）', () => {

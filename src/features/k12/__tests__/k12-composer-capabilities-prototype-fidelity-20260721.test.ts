@@ -120,6 +120,7 @@ describe('K12 composer 能力入口 · app.html 唯一权威', () => {
       attachTo: document.body,
     })
     wrappers.push(wrapper)
+    await flushPromises()
     ;(wrapper.vm as unknown as { setInput: (text: string, focus?: boolean) => void }).setInput(
       '帮我写一条明天下午 3 点开家长会的通知',
       true,

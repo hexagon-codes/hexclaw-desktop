@@ -84,16 +84,16 @@ describe('managed Sidecar native transfer URL', () => {
       validateManagedSidecarURL('http://localhost:16060/api/v1/files/generated/result.png'),
     ).not.toThrow()
     expect(() => validateManagedSidecarURL('https://example.com/result.png')).toThrow(
-      'managed Sidecar origin',
+      'active backend',
     )
     expect(() => validateManagedSidecarURL('http://user@localhost:16060/result.png')).toThrow(
-      'managed Sidecar origin',
+      'active backend',
     )
     expect(() => validateManagedSidecarURL('http://localhost:16060/result.png#fragment')).toThrow(
-      'managed Sidecar origin',
+      'active backend',
     )
     expect(() => validateManagedSidecarURL('data:image/png;base64,AAAA')).toThrow(
-      'managed Sidecar origin',
+      'active backend',
     )
   })
 })

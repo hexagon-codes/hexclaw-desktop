@@ -86,8 +86,11 @@ vi.mock('vue-router', () => ({
   createMemoryHistory: vi.fn(),
 }))
 
-vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: () => mockGetOllamaStatus(),
+vi.mock('@/api/ollama', async () => ({
+  activeOllamaTarget: (await import('vue')).shallowRef(null),
+  getOllamaTarget: vi.fn().mockResolvedValue({ mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434', target_id: 'ollama-local', target_revision: 1, target_digest: 'test-target', associated_provider_instance_ids: [], can_restart: true }),
+  resumeOllamaPulls: vi.fn().mockResolvedValue(undefined),
+  getOllamaStatus: async () => ({ can_restart: true, target_id: 'ollama-local', target_revision: 1, ...await mockGetOllamaStatus() }),
   pullOllamaModel: (model: string, cb: (p: unknown) => void, signal?: AbortSignal) =>
     mockPullOllamaModel(model, cb, signal),
   getOllamaRunning: () => mockGetOllamaRunning(),
@@ -210,18 +213,6 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { LazyStore: MockLazyStore }
 })
 
-vi.mock('markdown-it', () => ({
-  // 普通函数（非箭头）：markdown-it 既支持 `MarkdownIt()` 也支持 `new MarkdownIt()`。
-  // renderPromptPreview 用 `new MarkdownIt()`，箭头函数不可构造会抛错。
-  default: function MarkdownIt() {
-    return {
-      render: (s: string) => `<p>${s}</p>`,
-      renderer: { rules: { fence: null } },
-      utils: { escapeHtml: (s: string) => s },
-    }
-  },
-}))
-
 vi.mock('@/utils/file-parser', () => ({
   parseDocument: vi.fn().mockResolvedValue({ text: 'parsed', fileName: 'test' }),
   isDocumentFile: vi.fn().mockReturnValue(false),
@@ -312,7 +303,7 @@ describe('OllamaCard — edge cases', () => {
       associated: true,
       version: '0.3.14',
       model_count: 1,
-      models: [{ name: 'qwen3:8b', size: 5_000_000_000, parameter_size: '8B' }],
+      models: [{ name: 'qwen3:8b', size: 5_000_000_000, parameter_size: '8B', capabilities: ['completion'] }],
     })
     const wrapper = await mountOllamaCard()
     await flushPromises()

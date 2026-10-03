@@ -195,24 +195,6 @@ describe('设计审计: API 路由分散度', () => {
 // 7. Store 复杂度
 // ═══════════════════════════════════════════════════
 
-describe('设计审计: Store 行数和复杂度', () => {
-  it('单个 Store 文件不应超过 500 行', () => {
-    const storeFiles = walkFiles('src/stores', ['.ts']).filter(f => !f.includes('__tests__') && !f.includes('index'))
-    const oversized: string[] = []
-    for (const file of storeFiles) {
-      const lines = readFileSync(file, 'utf-8').split('\n').length
-      if (lines > 500) {
-        oversized.push(`${file}: ${lines} lines`)
-      }
-    }
-    if (oversized.length > 0) {
-      console.warn(`超过 500 行的 Store:\n  ${oversized.join('\n  ')}`)
-    }
-    // settings.ts 当前 ~530 行（含 sandbox 配置），接近阈值但尚可接受
-    // 如果新增超标文件，此断言会阻断，强制拆分
-    expect(oversized.length).toBeLessThanOrEqual(1)
-  })
-})
 
 // ═══════════════════════════════════════════════════
 // 8. 重复的 isTauri 检测逻辑

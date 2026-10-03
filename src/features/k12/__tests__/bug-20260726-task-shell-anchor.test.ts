@@ -117,7 +117,7 @@ describe('BUG-20260726-009 · TaskShell source message anchor', () => {
 
   it('同一会话存在非终态任务时，共享执行锁在创建第二个图片消息前拒绝提交', () => {
     expect(chatViewSource).toMatch(
-      /if \(intendedSessionId && chatStore\.isSessionExecuting\(intendedSessionId\)\) \{\s*return false\s*\}/,
+      /if \(intendedSessionId && chatStore\.isSessionExecuting\(intendedSessionId\)\) \{\s*if \(previewOwnership\) releaseScenarioImagePreview\(previewOwnership\)\s*return false\s*\}/,
     )
   })
 })

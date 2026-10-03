@@ -5,7 +5,7 @@
  *
  * 期望：
  *   - 大目录（> AUTO_ENABLE_CATALOG_LIMIT）只写入 catalog store，不污染 provider.models
- *   - 小目录（≤ 阈值）维持原有"全量合并进启用列表"行为
+ *   - 小目录（≤ 阈值）保留手动启用子集；无手动子集时自动启用未排除的目录项
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
@@ -89,9 +89,9 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     MOCK_BACKEND_CONFIG.providers.openRouter.models = ['moonshotai/kimi-k2.6:free'] as never
   })
 
-  it('配置加载后非阻塞刷新小目录并自动持久化完整的四模型集合', async () => {
+  it('配置加载后非阻塞刷新小目录，保留手动子集并持久化资料更新', async () => {
     const remoteModels: CatalogModel[] = [
-      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+      { id: 'moonshotai/kimi-k2.6:free', name: 'Refreshed Kimi', capabilities: ['text', 'vision'] },
       { id: 'proxy/model-b', name: 'Model B' },
       { id: 'proxy/model-c', name: 'Model C' },
       { id: 'proxy/model-d', name: 'Model D' },
@@ -99,6 +99,7 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     mockFetchProviderModels.mockResolvedValue(remoteModels)
 
     const { useSettingsStore } = await import('../settings')
+    const { useModelCatalogStore } = await import('../model-catalog')
     const store = useSettingsStore()
 
     await store.loadConfig()
@@ -106,14 +107,27 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     await flushPromises()
     await flushPromises()
     expect(mockFetchProviderModels).toHaveBeenCalledTimes(1)
+    expect(useModelCatalogStore().getCatalog(store.config!.llm.providers[0]!.id)).toMatchObject({
+      source: 'remote',
+      models: remoteModels,
+    })
     expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(
-      remoteModels.map((model) => model.id),
+      ['moonshotai/kimi-k2.6:free'],
     )
+    expect(store.config!.llm.providers[0]!.models[0]).toMatchObject({
+      name: 'Refreshed Kimi',
+      capabilities: ['text', 'vision'],
+    })
+    expect(store.config!.llm.providers[0]!.selectedModelId).toBe('moonshotai/kimi-k2.6:free')
+    expect(store.config!.llm.defaultModel).toBe('moonshotai/kimi-k2.6:free')
     expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(1)
     const persisted = mockUpdateLLMConfig.mock.calls[0]![0] as {
-      providers: Record<string, { models?: string[] }>
+      providers: Record<string, { models?: string[]; model_specs?: unknown[] }>
     }
-    expect(persisted.providers.openRouter?.models).toEqual(remoteModels.map((model) => model.id))
+    expect(persisted.providers.openRouter?.models).toEqual(['moonshotai/kimi-k2.6:free'])
+    expect(persisted.providers.openRouter?.model_specs).toMatchObject([
+      { id: 'moonshotai/kimi-k2.6:free', display_name: 'Refreshed Kimi', capabilities: ['text', 'vision'] },
+    ])
   }, 10_000)
 
   it('配置加载后把十一模型目录写入 catalog，但不自动扩张已启用集合', async () => {
@@ -195,8 +209,11 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
       .mockImplementationOnce(() => secondCatalog.promise)
 
     const { useSettingsStore } = await import('../settings')
+    const { useModelCatalogStore } = await import('../model-catalog')
     const store = useSettingsStore()
+    const catalogStore = useModelCatalogStore()
     await store.loadConfig()
+    const providerId = store.config!.llm.providers[0]!.id
     await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(1))
 
     const reloadBackend = deferred<typeof MOCK_BACKEND_CONFIG>()
@@ -212,22 +229,27 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).not.toContain(
       'stale-before-reload',
     )
+    expect(catalogStore.getCatalog(providerId)).toBeNull()
+    expect(mockUpdateLLMConfig).not.toHaveBeenCalled()
 
     reloadBackend.resolve(MOCK_BACKEND_CONFIG)
     await reload
     await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(2))
-    secondCatalog.resolve([
-      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+    const freshModels: CatalogModel[] = [
+      { id: 'moonshotai/kimi-k2.6:free', name: 'Fresh Kimi', capabilities: ['text', 'vision'] },
       { id: 'fresh-after-reload', name: 'Fresh After Reload' },
-    ])
+    ]
+    secondCatalog.resolve(freshModels)
     await vi.waitFor(() =>
-      expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toContain(
-        'fresh-after-reload',
-      ),
+      expect(catalogStore.getCatalog(providerId)).toMatchObject({ source: 'remote', models: freshModels }),
     )
-    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).not.toContain(
-      'stale-before-reload',
-    )
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(['moonshotai/kimi-k2.6:free'])
+    expect(store.config!.llm.providers[0]!.models[0]).toMatchObject({
+      name: 'Fresh Kimi',
+      capabilities: ['text', 'vision'],
+    })
+    expect(store.config!.llm.providers[0]!.selectedModelId).toBe('moonshotai/kimi-k2.6:free')
+    expect(store.config!.llm.defaultModel).toBe('moonshotai/kimi-k2.6:free')
   })
 
   it('大目录（300 个）：provider.models 保持启用子集，全量进 catalog', async () => {

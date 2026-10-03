@@ -52,9 +52,6 @@ describe('prototype shared-control fidelity', () => {
     expect(cssRule(raw, '.hc-provider-select__trigger:hover')).toMatch(
       /background:\s*var\(--hc-bg-hover\)/,
     )
-    expect(cssRule(raw, '.hc-provider-select__trigger:focus-visible')).toMatch(
-      /box-shadow:\s*0 0 0 3px var\(--hc-accent-subtle\)/,
-    )
     expect(cssRule(raw, '.hc-provider-select__arrow')).toMatch(/right:\s*11px/)
     expect(menu).toMatch(/border:\s*0\.5px solid var\(--hc-border\)/)
     expect(menu).toMatch(/backdrop-filter:\s*blur\(24px\) saturate\(160%\)/)

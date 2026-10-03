@@ -466,8 +466,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
 
-    expect(h.profileBundleSpy).toHaveBeenCalledOnce()
-    expect(h.profileBundleSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(h.profileBundleSpy).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       agent_config: expect.objectContaining({ display_name: '小红的辅导老师' }),
       curriculum_progress: expect.objectContaining({
         textbook_manifest_id: 'manifest-math-1',
@@ -907,13 +906,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     const root = B().find('.k12pf')
     expect(root.find('[data-testid="k12-profile-authority"]').exists()).toBe(true)
     expect(root.find('[data-testid="k12-profile-capability-note"]').text()).toBe(
-      '能力由 K12 模板定义；实际技术 Skill 在高级设置中统一管理。',
+      '已按 K12 模板配置，可在高级设置中管理技能。',
     )
     expect(root.find('[data-testid="k12-profile-mounted-skills"] summary').text()).toBe(
       '挂载 Skill · 已挂载 7 个',
     )
     expect(root.find('.k12pf__intro').text()).toBe(
-      '升学只改这里，讲题边界 / 识题校验 / 辅导要点全线即时跟随；历史错题不回溯修改。每年 3/1、9/1 会自动提醒确认新学期（不会擅自变更）。',
+      '在此更新年级和学期，讲题、识题与辅导要点随之调整，历史错题不变。每年 3 月 1 日、9 月 1 日提醒确认新学期，不自动修改。',
     )
   })
 })

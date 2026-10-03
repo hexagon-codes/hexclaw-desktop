@@ -17,7 +17,6 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
-import HcSelect from '@/components/common/HcSelect.vue'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
@@ -174,7 +173,7 @@ function render(metadata: Record<string, string>) {
 
 /** 打开识题面板 → 识题（公共前置动作）。BUG-20260711-E：手动 toggle 已删，
  *  入口=composer 图片自动改道（composerImage prop → 护栏自动 run）。 */
-async function recognizeOnce(w: ReturnType<typeof render>) {
+async function recognizeOnce(w: ReturnType<typeof render>, completed = false) {
   await w.setProps({
     composerImage: {
       dataUrl: 'data:image/png;base64,Zm9v',
@@ -194,7 +193,9 @@ async function recognizeOnce(w: ReturnType<typeof render>) {
     },
   })
   await flushPromises()
-  expect(w.findComponent(RecognizeGuardPanel).find('[data-testid="rq-item"]').exists(), '前置：识题回显护栏出题').toBe(true)
+  expect(w.findComponent(RecognizeGuardPanel).find(
+    completed ? '[data-testid="photo-grade-overlay"]' : '[data-testid="rq-item"]',
+  ).exists()).toBe(true)
 }
 
 describe('审计单-High-2：K12 grade/coldStart/tutoringTips 必须用 agents.name 作 API agent（非 display name）', () => {
@@ -216,44 +217,26 @@ describe('审计单-High-2：K12 grade/coldStart/tutoringTips 必须用 agents.n
   })
 
   it('★image-task：识题/批改 facade 的 agent 必须是 agentId（内部名），不得是 display name', async () => {
+    k12CreateImageTask.mockResolvedValue({ created: true, ...homeworkDispatch('completed', 'confirmed') })
     const w = render({ 'k12.grade_term': '五年级上' })
-    await recognizeOnce(w)
+    await recognizeOnce(w, true)
 
     expect(k12CreateImageTask).toHaveBeenCalledTimes(1)
     expect((k12CreateImageTask.mock.calls[0]![0] as { agent: string }).agent).toBe(AGENT_ID)
 
-    w.findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
-    await flushPromises()
-    const panel = w.findComponent(RecognizeGuardPanel)
-    await panel.find('[data-testid="rq-confirm-0"]').setValue(true)
-    await panel.find('[data-testid="recognize-confirm-all"]').trigger('click')
-    await flushPromises()
-
-    expect(k12ConfirmImageTask).toHaveBeenCalledTimes(1)
-    const req = k12ConfirmImageTask.mock.calls[0]![1] as { agent: string }
-    expect(
-      req.agent,
-      `image-task confirm 的 agent 应为 agents.name（隔离键），实际发送「${req.agent}」——display name 会写错孩子作用域`,
-    ).toBe(AGENT_ID)
+    expect(k12GetImageTaskResult).toHaveBeenCalledWith(AGENT_ID, 'dispatch-1', expect.any(AbortSignal))
+    expect(k12ConfirmImageTask).not.toHaveBeenCalled()
   })
 
-  it('★tutoringTips（整体确认后内联辅导要点）：API agent 必须是 agentId（内部名）', async () => {
+  it('终态讲题内容沿内部agent的唯一结果读取，不二次请求独立tutoringTips', async () => {
+    k12CreateImageTask.mockResolvedValue({ created: true, ...homeworkDispatch('completed', 'confirmed') })
     const w = render({ 'k12.grade_term': '五年级上' })
-    await recognizeOnce(w)
+    await recognizeOnce(w, true)
 
     expect(k12TutoringTips).not.toHaveBeenCalled()
-    w.findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
-    await flushPromises()
-    const panel = w.findComponent(RecognizeGuardPanel)
-    await panel.find('[data-testid="rq-confirm-0"]').setValue(true)
-    await panel.find('[data-testid="recognize-confirm-all"]').trigger('click')
-    await flushPromises()
-    expect(k12TutoringTips).toHaveBeenCalledTimes(1)
-    const req = k12TutoringTips.mock.calls[0]![0] as { agent: string }
-    expect(
-      req.agent,
-      `tutoring-tips 的 agent 应为 agents.name（隔离键），实际发送「${req.agent}」——display name 导致 profile 查找失败`,
-    ).toBe(AGENT_ID)
+    expect(k12GetImageTaskResult).toHaveBeenCalledWith(AGENT_ID, 'dispatch-1', expect.any(AbortSignal))
+    expect(k12GetImageTaskResult).toHaveBeenCalledTimes(1)
+    expect(k12ConfirmImageTask).not.toHaveBeenCalled()
   })
 
   it('★coldStart（无年级冷启动倒查建档）：k12ColdStart 的 agent 必须是 agentId（内部名）', async () => {

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
+import ImagePreviewHost from '@/components/common/ImagePreviewHost.vue'
+import { imagePreview } from '@/composables/useImagePreview'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
@@ -342,8 +344,14 @@ function mountChatView(options?: {
   options?.setup?.()
   const i18n = createTestI18n(options?.locale)
 
+  const previewHost = mount(ImagePreviewHost, {
+    attachTo: document.body,
+    global: { plugins: [pinia, i18n] },
+  })
+  mountedChatViews.add(previewHost)
+
   const wrapper = mount(ChatView, {
-    attachTo: options?.attachTo,
+    attachTo: options?.attachTo ?? document.body,
     global: {
       plugins: [pinia, i18n],
       stubs: {
@@ -367,6 +375,22 @@ function mountChatView(options?: {
 
 function chatEditor(wrapper: ReturnType<typeof mountChatView>) {
   return wrapper.get<HTMLElement>('[data-testid="chat-input"]')
+}
+
+async function openLoadedUserImage(wrapper: ReturnType<typeof mountChatView>) {
+  const image = wrapper.get<HTMLImageElement>('[data-testid="chat-message-user"] img')
+  // jsdom 不解码 blob 图片；装配已加载的图片尺寸和可见几何，再走 document 的真实预览入口。
+  Object.defineProperties(image.element, {
+    complete: { configurable: true, value: true },
+    naturalWidth: { configurable: true, value: 640 },
+    naturalHeight: { configurable: true, value: 480 },
+  })
+  const rect = new DOMRect(0, 0, 640, 480)
+  image.element.getClientRects = () => [rect] as unknown as DOMRectList
+  const group = image.element.closest('[data-image-preview-group]') ?? image.element
+  group.getClientRects = () => [rect] as unknown as DOMRectList
+  await image.trigger('click')
+  await flushPromises()
 }
 
 async function setChatDraft(wrapper: ReturnType<typeof mountChatView>, value: string) {
@@ -419,6 +443,12 @@ function installReasoningStatusFixture(
         : 'preparing',
     reasoningSupport: fixture.reasoningSupport,
     reasoningExecution: fixture.reasoningExecution,
+    reasoningReceipt: {
+      version: 1,
+      reasoning_request: fixture.thinkingEnabled ? 'on' : 'off',
+      reasoning_support: fixture.reasoningSupport,
+      reasoning_execution: fixture.reasoningExecution,
+    },
   } as unknown as (typeof store.activeStreams)[string]
   store.messages.push({
     id: `${fixture.sessionId}-user`,
@@ -471,6 +501,8 @@ function expectNeutralAssistantRunStatus(
 // jsdom 不提供 scrollIntoView 和 matchMedia，需要手动补齐
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -487,6 +519,11 @@ beforeAll(() => {
 describe('ChatView — E2E 关键路径', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(globalThis as Record<string, unknown>).isTauri = true
@@ -537,6 +574,7 @@ describe('ChatView — E2E 关键路径', () => {
       if (wrapper.exists()) wrapper.unmount()
     }
     mountedChatViews.clear()
+    vi.unstubAllGlobals()
     delete (globalThis as Record<string, unknown>).isTauri
   })
 
@@ -898,7 +936,7 @@ describe('ChatView — E2E 关键路径', () => {
 
     expect(builtinSkillMessage.get('.hc-msg__name').text()).toBe('内置技能智能体')
     expect(builtinSkillMessage.get('.agent-badge__name').text()).toBe('内置技能智能体')
-    expect(builtinSkillMessage.find('.hc-msg__tools').exists()).toBe(true)
+    expect(builtinSkillMessage.find('[data-component="AssistantProcess"]').exists()).toBe(true)
     expect(builtinSkillMessage.get('.hc-msg__meta').text()).toBe('内置技能 · 未调用模型')
     expect(builtinSkillMessage.get('.hc-msg__meta').text()).not.toContain('内置技能智能体')
     expect(builtinSkillMessage.get('.hc-msg__meta').text()).not.toContain('OpenAI')
@@ -1173,6 +1211,12 @@ describe('ChatView — E2E 关键路径', () => {
           thinking_state: 'completed',
           thinking_duration: 2,
           reasoning_visibility: 'not_exposed',
+          reasoning_receipt: {
+            version: 1,
+            reasoning_request: 'on',
+            reasoning_support: 'supported',
+            reasoning_execution: 'applied',
+          },
         },
       },
     ]
@@ -1447,6 +1491,9 @@ describe('ChatView — E2E 关键路径', () => {
 
     await menu.get('[data-testid="chat-thinking-mode"]').trigger('click')
     await flushPromises()
+    expect(wrapper.find('[data-testid="chat-thinking-settings"]').exists()).toBe(false)
+    await control.trigger('click')
+    await flushPromises()
 
     let enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
     expect(enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('role')).toBe(
@@ -1462,6 +1509,9 @@ describe('ChatView — E2E 关键路径', () => {
     await enabledMenu.get('[data-testid="chat-thinking-effort-low"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('.hc-chat__thinking-control').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="chat-thinking-settings"]').exists()).toBe(false)
+    await control.trigger('click')
+    await flushPromises()
     enabledMenu = wrapper.get('[data-testid="chat-thinking-settings"]')
     expect(
       enabledMenu.get('[data-testid="chat-thinking-effort-low"]').attributes('aria-checked'),
@@ -1558,6 +1608,8 @@ describe('ChatView — E2E 关键路径', () => {
     await wrapper.get('.hc-chat__thinking-control').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="chat-thinking-mode"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('.hc-chat__thinking-control').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="chat-thinking-effort-low"]').trigger('click')
     await flushPromises()
@@ -2089,15 +2141,15 @@ describe('ChatView — E2E 关键路径', () => {
       expect.soft(pendingImageSrc).not.toMatch(/^https?:/)
       expect.soft(revokeObjectURL).not.toHaveBeenCalledWith('blob:scenario-local-photo')
 
-      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      await openLoadedUserImage(wrapper)
       expect
-        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
+        .soft(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src'))
         .toBe('blob:scenario-local-photo')
       const previewAtRevoke: Array<{ url: string; preview: string }> = []
       revokeObjectURL.mockImplementation((url) => {
         previewAtRevoke.push({
           url,
-          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+          preview: imagePreview.value?.images[0]?.src ?? '',
         })
       })
 
@@ -2109,16 +2161,16 @@ describe('ChatView — E2E 关键路径', () => {
       expect
         .soft(wrapper.get('[data-testid="chat-message-user"] img').attributes('src'))
         .toBe('blob:k12-authenticated-photo')
-      expect
-        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
-        .toBe('blob:k12-authenticated-photo')
+      expect.soft(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
+      await openLoadedUserImage(wrapper)
+      expect(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src')).toBe('blob:k12-authenticated-photo')
       expect.soft(wrapper.findAll('[src="blob:scenario-local-photo"]')).toHaveLength(0)
       expect
         .soft(previewAtRevoke.filter(({ url }) => url === 'blob:scenario-local-photo'))
         .toEqual([
           {
             url: 'blob:scenario-local-photo',
-            preview: 'blob:k12-authenticated-photo',
+            preview: '',
           },
         ])
       expect
@@ -2132,7 +2184,7 @@ describe('ChatView — E2E 关键路径', () => {
     }
   })
 
-  it('native opaque preview 在认证资产替换后安全转移放大层并只释放一次', async () => {
+  it('native opaque preview 在认证资产替换时先关闭旧源预览并可重新打开并只释放一次', async () => {
     const authenticatedBlob = new Blob(['native-authenticated-image'], { type: 'image/png' })
     let resolveAssetBlob!: (blob: Blob | null) => void
     mockK12GetAssetBlob.mockReturnValueOnce(
@@ -2170,8 +2222,8 @@ describe('ChatView — E2E 关键路径', () => {
       expect(wrapper.get('[data-testid="chat-message-user"] img').attributes('src')).toBe(
         payload.previewUrl,
       )
-      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
-      expect(wrapper.get('.hc-img-preview__img').attributes('src')).toBe(payload.previewUrl)
+      await openLoadedUserImage(wrapper)
+      expect(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src')).toBe(payload.previewUrl)
       expect(release).not.toHaveBeenCalled()
 
       resolveAssetBlob(authenticatedBlob)
@@ -2182,9 +2234,9 @@ describe('ChatView — E2E 关键路径', () => {
       expect(wrapper.get('[data-testid="chat-message-user"] img').attributes('src')).toBe(
         'blob:k12-native-authenticated',
       )
-      expect(wrapper.get('.hc-img-preview__img').attributes('src')).toBe(
-        'blob:k12-native-authenticated',
-      )
+      expect(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
+      await openLoadedUserImage(wrapper)
+      expect(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src')).toBe('blob:k12-native-authenticated')
       expect(release).toHaveBeenCalledTimes(1)
       wrapper.unmount()
       expect(release).toHaveBeenCalledTimes(1)
@@ -2400,15 +2452,15 @@ describe('ChatView — E2E 关键路径', () => {
       expect.soft(restoredSrc).toBe('blob:k12-history-photo')
       expect.soft(restoredSrc).not.toMatch(/^https?:/)
 
-      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
+      await openLoadedUserImage(wrapper)
       expect
-        .soft(wrapper.get('.hc-img-preview__img').attributes('src'))
+        .soft(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src'))
         .toBe('blob:k12-history-photo')
       const previewAtRevoke: Array<{ url: string; preview: string }> = []
       revokeObjectURL.mockImplementation((url) => {
         previewAtRevoke.push({
           url,
-          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+          preview: imagePreview.value?.images[0]?.src ?? '',
         })
       })
 
@@ -2432,7 +2484,7 @@ describe('ChatView — E2E 关键路径', () => {
       ]
       await flushPromises()
 
-      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect.soft(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
       expect.soft(wrapper.findAll('[src="blob:k12-history-photo"]')).toHaveLength(0)
       expect
         .soft(previewAtRevoke.filter(({ url }) => url === 'blob:k12-history-photo'))
@@ -2495,20 +2547,20 @@ describe('ChatView — E2E 关键路径', () => {
       await flushPromises()
       await flushPromises()
 
-      await wrapper.get('[data-testid="chat-message-user"] img').trigger('click')
-      expect.soft(wrapper.get('.hc-img-preview__img').attributes('src')).toBe('blob:owner-a')
+      await openLoadedUserImage(wrapper)
+      expect.soft(new DOMWrapper(document.body).get('.hc-image-viewer__image img').attributes('src')).toBe('blob:owner-a')
       const previewAtRevoke: Array<{ url: string; preview: string }> = []
       revokeObjectURL.mockImplementation((url) => {
         previewAtRevoke.push({
           url,
-          preview: (wrapper.vm as unknown as { previewImageSrc: string }).previewImageSrc,
+          preview: imagePreview.value?.images[0]?.src ?? '',
         })
       })
 
       store.currentSessionId = 'owner-b-session'
       await flushPromises()
 
-      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect.soft(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
       expect
         .soft(previewAtRevoke.filter(({ url }) => url === 'blob:owner-a'))
         .toEqual([{ url: 'blob:owner-a', preview: '' }])
@@ -2543,7 +2595,7 @@ describe('ChatView — E2E 关键路径', () => {
       expect
         .soft(wrapper.get('[data-testid="chat-message-user"] img').attributes('src'))
         .toBe('blob:owner-b')
-      expect.soft(wrapper.find('.hc-img-preview__backdrop').exists()).toBe(false)
+      expect.soft(new DOMWrapper(document.body).find('.hc-image-viewer').exists()).toBe(false)
       expect.soft(wrapper.html()).not.toContain('blob:owner-a')
       expect.soft(wrapper.html()).not.toContain('asset://owner-a')
     } finally {
@@ -2758,7 +2810,7 @@ describe('ChatView — E2E 关键路径', () => {
         expect.objectContaining({
           id: revisedMessage.id,
           content: '',
-          metadata: { attachments: [attachment] },
+          metadata: expect.objectContaining({ attachments: [attachment] }),
         }),
       )
       expect(vm.scenarioComposerImage).toEqual({
@@ -2999,7 +3051,7 @@ describe('ChatView — E2E 关键路径', () => {
         expect.objectContaining({
           id: revisedMessage.id,
           content: '请按五年级方法详细讲解',
-          metadata: { attachments: [attachment] },
+          metadata: expect.objectContaining({ attachments: [attachment] }),
         }),
       )
       expect(vm.scenarioComposerImage).toMatchObject({

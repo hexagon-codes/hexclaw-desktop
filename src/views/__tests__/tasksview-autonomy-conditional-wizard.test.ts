@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import TasksView from '../TasksView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
@@ -37,6 +38,14 @@ const toast = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/tasks', () => ({ ...taskApis }))
+vi.mock('@/api/agents', () => ({ getAgents: vi.fn().mockResolvedValue({ agents: [] }) }))
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: false, state: 'disabled' },
+  }),
+}))
 vi.mock('@/api/autonomy', () => ({ ...autonomyApis }))
 vi.mock('@/api/webhook', () => ({
   updateWebhookEnabled: vi.fn(),
@@ -69,7 +78,7 @@ function mountTasksView() {
   return mount(TasksView, {
     attachTo: document.body,
     global: {
-      plugins: [createTestI18n()],
+      plugins: [createPinia(), createTestI18n()],
       stubs: {
         EmptyState: { template: '<div>empty</div>' },
         LoadingState: { template: '<div>loading</div>' },

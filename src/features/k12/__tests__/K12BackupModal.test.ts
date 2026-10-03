@@ -93,8 +93,8 @@ describe('K12BackupModal 恢复安全门', () => {
   it('归档范围只陈述当前 v5 后端真实能力，不声称已备份学情记忆或实例配置', () => {
     const w = render()
     const intro = w.get('.k12bk__intro').text()
-    expect(intro).toContain('孩子档案、学习记录、关联内容文件')
-    expect(intro).toContain('学情记忆和智能体实例配置目前不在归档内')
+    expect(intro).toContain('孩子档案、学习记录、关联文件及已确认的作品识别和作答记录')
+    expect(intro).toContain('不含学情记忆和辅导助手配置')
     expect(intro).not.toContain('学情记忆 · 实例配置')
   })
 

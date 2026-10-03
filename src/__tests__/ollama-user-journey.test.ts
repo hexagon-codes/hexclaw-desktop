@@ -21,9 +21,9 @@ const REAL_STATUS_RUNNING = {
   associated: true,
   model_count: 3,
   models: [
-    { name: 'qwen3:8b', size: 4_920_000_000, modified: '2026-03-28T10:15:00+08:00', family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' },
-    { name: 'deepseek-r1:7b', size: 4_680_000_000, modified: '2026-03-25T14:22:00+08:00', family: 'deepseek', parameter_size: '7.6B', quantization_level: 'Q4_0' },
-    { name: 'qwen3-embedding:8b', size: 4_680_000_000, modified: '2026-03-20T09:00:00+08:00', family: 'qwen3', parameter_size: '8B', quantization_level: 'Q4_K_M' },
+    { name: 'qwen3:8b', size: 4_920_000_000, modified: '2026-03-28T10:15:00+08:00', family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M', capabilities: ['completion'] },
+    { name: 'deepseek-r1:7b', size: 4_680_000_000, modified: '2026-03-25T14:22:00+08:00', family: 'deepseek', parameter_size: '7.6B', quantization_level: 'Q4_0', capabilities: ['completion'] },
+    { name: 'qwen3-embedding:8b', size: 4_680_000_000, modified: '2026-03-20T09:00:00+08:00', family: 'qwen3', parameter_size: '8B', quantization_level: 'Q4_K_M', capabilities: ['embedding'] },
   ],
 }
 
@@ -61,8 +61,11 @@ const mockUnloadOllamaModel = vi.fn()
 const mockDeleteOllamaModel = vi.fn()
 const mockRestartOllama = vi.fn()
 
-vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: () => mockGetOllamaStatus(),
+vi.mock('@/api/ollama', async () => ({
+  activeOllamaTarget: (await import('vue')).shallowRef(null),
+  getOllamaTarget: vi.fn().mockResolvedValue({ mode: 'default', custom_base_url: '', resolved_base_url: 'http://127.0.0.1:11434', target_id: 'ollama-local', target_revision: 1, target_digest: 'test-target', associated_provider_instance_ids: [], can_restart: true }),
+  resumeOllamaPulls: vi.fn().mockResolvedValue(undefined),
+  getOllamaStatus: async () => ({ can_restart: true, target_id: 'ollama-local', target_revision: 1, ...await mockGetOllamaStatus() }),
   pullOllamaModel: (m: string, cb: (p: unknown) => void, s?: AbortSignal) => mockPullOllamaModel(m, cb, s),
   getOllamaRunning: () => mockGetOllamaRunning(),
   getOllamaRunningResult: async () => ({

@@ -34,7 +34,7 @@ describe('BUG-20260726-027/028 · one shared session execution lock', () => {
   })
 
   it('reuses the existing SessionList execution marker for durable tasks', () => {
-    expect(sessionListSource).toContain('chatStore.isSessionExecuting(sessionId)')
+    expect(sessionListSource).toContain('chatStore.isSessionExecutionRunning(sessionId)')
   })
 
   it('binds the current-session durable lock to the existing red stop/disabled composer state', () => {

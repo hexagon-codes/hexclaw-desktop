@@ -159,14 +159,14 @@ describe('原型 c8a194e 对齐 · 错题本行动卡与档案区（20260709 定
 
   it('⑥ 学情（顶栏一等 Tab · K12InsightPanel）标题=学习概览 + 证据来源 note（原型 2613 月报口径退役）', async () => {
     // IA 迁移（2026-07-18）：学情从二级 Tab 抽到 K12InsightPanel；
-    // 20260718 原型 2613：「学情报告·每月1日自动生成」→「学习概览 · 从真实批改与复练证据生成」
+    // 学习概览只依据批改与复练记录安排后续练习，不采用月报口径。
     const w = mount(K12InsightPanel, {
       props: { agentId: 'mingming' },
       global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
     expect(w.text(), '学情标题应为学习概览（无 grade 时通用文案）').toContain('学习概览')
-    expect(w.text(), '学情 note 应说明证据来源').toContain('从真实批改与复练证据生成')
+    expect(w.text(), '学情 note 应说明证据来源').toContain('根据批改与复练记录，安排下一步练习。')
     expect(w.text()).not.toContain('学情报告')
     expect(w.text()).not.toContain('每月 1 日自动生成')
   })

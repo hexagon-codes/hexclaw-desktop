@@ -717,10 +717,9 @@ describe('Chain 3: Knowledge Lifecycle', () => {
     )
   })
 
-  it('getDocumentContent falls back to search when detail API fails', async () => {
-    // First call (getDocument inside getDocumentContent) rejects
+  it('getDocumentContent preserves detail failure rather than substituting search fragments', async () => {
+    // 预置可检索片段，确认详情失败仍只返回该故障。
     mockFetch.mockRejectedValueOnce(new Error('404 not found'))
-    // Second call (searchKnowledge inside getDocumentContent) resolves
     mockFetch.mockResolvedValueOnce({
       result: [
         { content: 'chunk A', doc_id: 'doc-x', chunk_index: 0, score: 0.9 },
@@ -729,14 +728,17 @@ describe('Chain 3: Knowledge Lifecycle', () => {
     })
 
     const { getDocumentContent } = await import('../knowledge')
-    const content = await getDocumentContent({
+    await expect(getDocumentContent({
       id: 'doc-x',
       title: 'Fallback Test',
       chunk_count: 2,
       created_at: '',
-    })
+    })).rejects.toThrow('404 not found')
 
-    expect(content).toBe('chunk A\n\nchunk B')
+    expect(mockFetch).toHaveBeenCalledExactlyOnceWith(
+      '/api/v1/knowledge/documents/doc-x',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('searchKnowledge passes query and default top_k', async () => {

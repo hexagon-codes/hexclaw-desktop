@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import zhCN from '@/i18n/locales/zh-CN'
@@ -11,6 +12,13 @@ const apis = vi.hoisted(() => ({
   getWebhooks: vi.fn(),
   getK12Webhooks: vi.fn(),
   getAgents: vi.fn(),
+}))
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: true, state: 'ready' },
+  }),
 }))
 
 vi.mock('@/api/webhook', () => ({
@@ -86,6 +94,7 @@ describe('WebhookPanel K12 management entry', () => {
     const wrapper = mount(WebhookPanel, {
       global: {
         plugins: [
+          createPinia(),
           createI18n({
             legacy: false,
             locale: 'zh-CN',

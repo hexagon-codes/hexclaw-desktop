@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import zhCN from '@/i18n/locales/zh-CN'
 import WebhookPanel from '../WebhookPanel.vue'
 
@@ -19,7 +20,7 @@ function createTestI18n() {
 function mountPanel() {
   return mount(WebhookPanel, {
     attachTo: document.body,
-    global: { plugins: [createTestI18n()], stubs: { teleport: true } },
+    global: { plugins: [createPinia(), createTestI18n()], stubs: { teleport: true } },
   })
 }
 
@@ -28,6 +29,13 @@ const createWebhook = vi.hoisted(() => vi.fn())
 const deleteWebhook = vi.hoisted(() => vi.fn())
 const getCronJobs = vi.hoisted(() => vi.fn())
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: true, state: 'ready' },
+  }),
+}))
 
 vi.mock('@/api/webhook', () => ({
   getWebhooks, createWebhook, deleteWebhook,

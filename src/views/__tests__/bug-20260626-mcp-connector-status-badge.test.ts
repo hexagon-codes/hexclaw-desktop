@@ -194,7 +194,7 @@ describe('bug-20260626 MCP 连接器状态徽章 = 真实在线状态（不再�
     await testBtn!.trigger('click')
     await flushPromises()
 
-    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' })
+    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' }, '测试会话数据库')
     expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
     expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
   })

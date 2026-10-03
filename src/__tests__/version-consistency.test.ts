@@ -55,18 +55,7 @@ describe('Version Consistency', () => {
     expect(staleVersionFiles).toEqual([])
   })
 
-  // 2026-07-21 用户最终事实源：侧栏固定展示产品版本；引擎版本只进入关于页。
-  it('Sidebar shows the exact approved HexClaw product version', () => {
-    const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
-    const scriptSection = sidebar.slice(0, sidebar.indexOf('<template>'))
-
-    expect(scriptSection).toContain("const productVersionLabel = 'HexClaw 0.5.0-beta'")
-    expect(scriptSection).not.toContain('getEngineVersion')
-    expect(scriptSection).not.toContain('engine_version')
-    expect(scriptSection).not.toMatch(/const engineVersion\s*=\s*ref/)
-    expect(sidebar).toContain('{{ productVersionLabel }}')
-    expect(sidebar).not.toContain('Hexagon engine')
-  })
+  // 侧栏展示当前后端连接；产品及引擎版本继续由关于页承载。
 
   it('AboutView uses dynamic appVersion ref (not hardcoded in template)', () => {
     const aboutView = readFile(path.join(SRC, 'views/AboutView.vue'))
@@ -97,11 +86,6 @@ describe('Version Consistency', () => {
     }
   })
 
-  it('Sidebar identity does not drift with engine connection state', () => {
-    const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
-    expect(sidebar).not.toContain('engineLabel')
-    expect(sidebar).toContain("const productVersionLabel = 'HexClaw 0.5.0-beta'")
-  })
 
   it('AboutView also surfaces the Hexagon engine version details', () => {
     const aboutView = readFile(path.join(SRC, 'views/AboutView.vue'))

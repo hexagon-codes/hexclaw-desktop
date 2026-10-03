@@ -138,13 +138,15 @@ describe('K12WebhookPanel', () => {
     expect(dialog.find('[data-testid="k12-webhook-editor-agent"]').exists()).toBe(true)
   })
 
-  it('owns its empty state, so the generic Webhook empty state stays suppressed with zero bindings', async () => {
+  it('leaves the single empty state to the generic Webhook list with zero bindings', async () => {
     hooks.list.mockResolvedValueOnce({ k12_bindings: [], total: 0 })
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂无 K12 Webhook 绑定')
-    expect(wrapper.emitted('contentChange')).toEqual([[true]])
+    expect(wrapper.text()).not.toContain('暂无 K12 Webhook 绑定')
+    expect(wrapper.find('.k12-webhook-card').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="k12-webhook-create-open"]').text()).toBe('新建绑定')
+    expect(wrapper.emitted('contentChange')).toEqual([[true], [false]])
   })
 
   it('aggregates bindings across child scopes without a page-level owner selector', async () => {

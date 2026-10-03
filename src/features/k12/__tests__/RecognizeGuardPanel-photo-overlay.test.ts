@@ -327,10 +327,10 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay · 自动终态结果', () =>
     expect(processCard.text()).toContain('原因')
     expect(processCard.text()).toContain('连续除法计算错误')
     expect(processCard.text()).toContain('家长怎么讲')
-    expect(processCard.text()).not.toContain('必要步骤')
-    expect(processCard.text()).not.toContain('本年级方法')
-    expect(processCard.text()).not.toContain('可以追问')
-    expect(processCard.text()).not.toContain('怎么检查')
+    expect(processCard.text()).toContain('必要步骤')
+    expect(processCard.text()).toContain('本年级方法')
+    expect(processCard.text()).toContain('可以追问')
+    expect(processCard.text()).toContain('怎么检查')
     expect(wrapper.get('.grade-photo').classes()).toContain('grade-photo--process')
     expect(wrapper.get('[data-testid="recognize-guard"]').classes()).toContain(
       'rec-panel--photo-result',

@@ -26,7 +26,7 @@ describe.runIf(fixtureDirectory)('BUG-20260802-018 real Go HTTP wire compatibili
   it('accepts the current v1 raw create/get/result/source-action bodies', () => {
     expect(K12_IMAGE_TASK_SCHEMA_VERSION).toBe('v1')
     for (const [name, validate] of cases) {
-      expect(validate(fixture(name)), name).toBe(true)
+      expect({ [name]: validate(fixture(name)) }).toEqual({ [name]: true })
     }
   })
 
@@ -57,7 +57,7 @@ describe.runIf(fixtureDirectory)('BUG-20260802-018 real Go HTTP wire compatibili
 
   it('rejects an unknown schema-version marker on every current raw body', () => {
     for (const [name, validate] of cases) {
-      expect(validate({ ...fixture(name), schema_version: 'v2' }), name).toBe(false)
+      expect({ [name]: validate({ ...fixture(name), schema_version: 'v2' }) }).toEqual({ [name]: false })
     }
   })
 })

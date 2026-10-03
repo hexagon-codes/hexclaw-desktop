@@ -559,7 +559,10 @@ describe('AgentsView', () => {
   it('uses available runtime models for Ollama providers when registering', async () => {
     getOllamaStatus.mockResolvedValue({
       running: true,
-      models: [{ name: 'qwen3.5:9b' }, { name: 'qwen3:0.6b' }],
+      models: [
+        { name: 'qwen3.5:9b', capabilities: ['completion'] },
+        { name: 'qwen3:0.6b', capabilities: ['completion'] },
+      ],
     })
 
     const wrapper = await mountView()

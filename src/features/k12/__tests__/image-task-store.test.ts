@@ -433,7 +433,7 @@ describe('K12 store ImageTaskDispatch adoption', () => {
     expect(h.get).not.toHaveBeenCalled()
   })
 
-  it('keeps polling the same promoted creative dispatch until durable feedback is ready', async () => {
+  it('stops on an unknown creative dispatch and later reads durable feedback from the same dispatch', async () => {
     vi.useFakeTimers()
     const creativeDispatch = (state: string) =>
       dispatch({
@@ -491,7 +491,9 @@ describe('K12 store ImageTaskDispatch adoption', () => {
       undefined,
       onStatus,
     )
+    const stopped = completion.catch((error: unknown) => error)
     await vi.advanceTimersByTimeAsync(2_500)
+    expect(await stopped).toMatchObject({ message: 'k12.recognize.outcomeUnknownTitle' })
     expect(h.getResult).not.toHaveBeenCalled()
     expect(onStatus).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -500,7 +502,13 @@ describe('K12 store ImageTaskDispatch adoption', () => {
     )
 
     await vi.advanceTimersByTimeAsync(2_500)
-    await expect(completion).resolves.toMatchObject({
+    expect(h.get).toHaveBeenCalledTimes(2)
+    expect(h.getResult).not.toHaveBeenCalled()
+    await expect(useK12Store().completeImageTask(
+      'mingming',
+      'dispatch-1',
+      { sourceSession: 'session-creative' },
+    )).resolves.toMatchObject({
       stage: 'promoted',
       taskIntent: 'artwork',
       result: {

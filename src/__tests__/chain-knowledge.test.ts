@@ -50,7 +50,7 @@ vi.mock('@/config/env', () => ({
 // ── Setup ──────────────────────────────────────────────────────────
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
 })
 
 afterEach(() => {
@@ -80,6 +80,7 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
   })
 
   it('D2: uploadDocument posts to the durable asynchronous documents endpoint', async () => {
+    mockApiGet.mockResolvedValue({ operations: [] })
     // For uploadDocument without onProgress, it uses apiPost
     mockApiPost.mockResolvedValueOnce({
       operation_id: 'operation-new',
@@ -171,11 +172,10 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
     expect(mockApiDelete).toHaveBeenCalledWith('/api/v1/knowledge/documents/doc%2Fspecial%26id')
   })
 
-  it('D5: getDocumentContent tries detail API first, falls back to search', async () => {
-    // First call: getDocument (detail API) fails
+  it('D5: getDocumentContent propagates detail errors without synthesizing full text from search', async () => {
+    // 搜索仍可返回片段，但详情故障不能让片段冒充全文。
     mockApiGet.mockRejectedValueOnce(new Error('Not found'))
 
-    // Second call: searchKnowledge fallback
     mockApiPost.mockResolvedValueOnce({
       result: [
         { content: 'Chunk 1', score: 0.9, doc_id: 'doc-1', doc_title: 'Test Doc', chunk_index: 0 },
@@ -184,16 +184,14 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
     })
 
     const { getDocumentContent } = await import('@/api/knowledge')
-    const content = await getDocumentContent({
+    await expect(getDocumentContent({
       id: 'doc-1',
       title: 'Test Doc',
       chunk_count: 2,
       created_at: '2026-01-01',
-    })
+    })).rejects.toThrow('Not found')
 
-    // Should have assembled content from chunks
-    expect(content).toContain('Chunk 1')
-    expect(content).toContain('Chunk 2')
+    expect(mockApiPost).not.toHaveBeenCalled()
   })
 
   it('D5b: getDocumentContent returns detail content when available', async () => {

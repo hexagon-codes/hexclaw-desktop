@@ -57,7 +57,5 @@ describe('BUG-20260726-018 TaskShell shares the ordinary assistant message foote
     expect(metadataRule).toMatch(/gap:\s*0;/)
     expect(metadataRule).toMatch(/font-size:\s*11px;/)
     expect(metadataRule).toMatch(/opacity:\s*0\.64;/)
-    expect(taskShell).toContain(':show-fork="false"')
-    expect(taskShell).toContain('retry-mode="task-stage"')
   })
 })

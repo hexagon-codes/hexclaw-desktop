@@ -261,7 +261,7 @@ describe('旅程 E: 多模型切换', () => {
     setActivePinia(createPinia())
     vi.doMock('@/api/ollama', () => ({
       getOllamaStatus: vi.fn().mockResolvedValue({
-        running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }],
+        running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9, capabilities: ['completion'] }],
       }),
     }))
     const { useSettingsStore } = await import('@/stores/settings')

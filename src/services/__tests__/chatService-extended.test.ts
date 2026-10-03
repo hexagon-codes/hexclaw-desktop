@@ -254,6 +254,7 @@ describe('sendViaWebSocket — extended', () => {
       undefined, // maxTokens
       undefined, // metadata
       undefined, // requestId
+      expect.any(Function), // 请求体拒绝回调
     )
   })
 })

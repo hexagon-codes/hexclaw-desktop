@@ -117,7 +117,7 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="message-task-stage-retry"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="message-task-stage-retry"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[role="status"], [role="alert"]').exists()).toBe(true)
     expect(h.retryTask).not.toHaveBeenCalled()
     expect(h.createTask).toHaveBeenCalledTimes(1)
@@ -159,6 +159,6 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
 
     resolveRetry(dispatch('recovering', false))
     await flushPromises()
-    expect(wrapper.find('[data-testid="message-task-stage-retry"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="message-task-stage-retry"]').attributes('disabled')).toBeDefined()
   })
 })

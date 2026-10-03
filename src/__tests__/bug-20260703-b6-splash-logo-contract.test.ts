@@ -15,7 +15,6 @@ import { resolve } from 'node:path'
  */
 describe('BUG-20260703 B6: splash logo 内联契约', () => {
   const html = readFileSync(resolve(process.cwd(), 'index.html'), 'utf-8')
-  const layout = readFileSync(resolve(process.cwd(), 'src/components/layout/AppLayout.vue'), 'utf-8')
   const viteConfig = readFileSync(resolve(process.cwd(), 'vite.config.ts'), 'utf-8')
 
   it('splash 结构存在（#splash-screen + .splash-logo img）', () => {
@@ -41,11 +40,6 @@ describe('BUG-20260703 B6: splash logo 内联契约', () => {
     expect(buf.length).toBeGreaterThan(1000)
   })
 
-  it('快速探活时仍保留最短展示时间，避免 logo 在首帧前被撤掉', () => {
-    expect(html).toContain('data-shown-at')
-    expect(layout).toContain('MIN_SPLASH_MS')
-    expect(layout).toMatch(/performance\.now\(\)[\s\S]*?shownAt/)
-  })
 
   it('Tauri 生产构建使用相对资源路径', () => {
     const relativeBase = /base:\s*['"]\.\/['"]/

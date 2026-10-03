@@ -275,7 +275,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(imageEvents?.[imageEvents.length - 1]).toEqual([''])
   })
 
-  it('BUG-20260724-003 失败面板显式重试把不可变原图事实上交 shell 创建新 attempt', async () => {
+  it('失败面板重试把原消息身份交给共享 shell，不自行重发原图', async () => {
     const attachment = {
       type: 'image' as const,
       name: 'homework.png',
@@ -329,7 +329,11 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
       .click()
     await flushPromises()
 
-    expect(w.emitted('scenarioImageAttempt')).toEqual([[originalAttempt]])
+    expect(w.emitted('messageAction')).toEqual([[{
+      sourceMessageId: originalAttempt.requestId,
+      action: 'retry',
+    }]])
+    expect(w.emitted('scenarioImageAttempt')).toBeUndefined()
   })
 
   it('TaskShell 释放事件只透传同一会话执行身份', async () => {

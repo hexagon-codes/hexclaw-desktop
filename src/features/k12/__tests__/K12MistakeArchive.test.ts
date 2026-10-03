@@ -384,17 +384,11 @@ describe('BUG-20260725-017 · controlled suppression and restore', () => {
     expect(menu.props('display')).toBe('visible')
     expect(menu.find('.mistake-more__trigger').exists()).toBe(false)
     await menu.get('[data-testid="mistake-suppress-review"]').trigger('click')
-    expect(document.body.querySelector('[role="alertdialog"]')).not.toBeNull()
-    expect(h.suppressMistake).not.toHaveBeenCalled()
-
-    const confirm = document.body.querySelector<HTMLButtonElement>(
-      '[data-testid="confirm-suppress-review"]',
-    )
-    if (!confirm) throw new Error('missing suppress confirmation')
-    confirm.click()
     await flushPromises()
 
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
     expect(h.suppressMistake).toHaveBeenCalledOnce()
+    expect(undoButton('m1')).not.toBeNull()
   })
 
   it('replays an outcome-unknown suppression once with the exact same idempotency key', async () => {

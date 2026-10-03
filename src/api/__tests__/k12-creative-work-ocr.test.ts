@@ -113,7 +113,7 @@ describe('K12 manual creative image API contract', () => {
       expect.objectContaining({
         creative_entry: { kind: 'new_work', task_intent: 'writing' },
       }),
-      { timeout: 60_000, signal: undefined },
+      { timeout: 130_000, signal: undefined },
     )
     expect(client.apiPost).toHaveBeenNthCalledWith(
       2,

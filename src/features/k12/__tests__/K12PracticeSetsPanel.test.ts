@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { DOMWrapper, mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
@@ -844,7 +844,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(w.find('.practice-timeline').exists()).toBe(false)
   })
 
-  it('assigned 回传必须先选照片和照片覆盖题；空输入不调用 submit', async () => {
+  it('assigned 回传选照片后自动匹配覆盖题；空输入不调用 submit', async () => {
     h.listSpy.mockResolvedValue({
       items: [historySet({ status: 'assigned', status_label: '待完成' })],
     })
@@ -856,22 +856,21 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       .trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="ps-return-modal"]').exists()).toBe(true)
-    expect(w.find('[data-testid="ps-return-confirm"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="ps-return-confirm"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ps-return-item-q9"]').exists()).toBe(false)
     expect(h.submitSpy).not.toHaveBeenCalled()
 
     const file = new File(['png'], 'answer.png', { type: 'image/png' })
     const input = w.find('[data-testid="ps-return-file"]')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await w.find('[data-testid="ps-return-item-q9"]').setValue(true)
-    await w.find('[data-testid="ps-return-confirm"]').trigger('click')
     await flushPromises()
 
     expect(h.uploadSpy).toHaveBeenCalledWith('k12-xiaoming', file)
     expect(h.submitSpy).toHaveBeenCalledWith('k12-xiaoming', 'hist1', {
       return_id: expect.any(String),
-      item_ids: ['q9'],
       asset_id: 'asset://k12-xiaoming/return.png',
+      auto_match: true,
     })
   })
 
@@ -920,8 +919,6 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     const firstFile = new File(['one'], 'one.png', { type: 'image/png' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [firstFile] })
     await input.trigger('change')
-    await w.find('[data-testid="ps-return-item-q1"]').setValue(true)
-    await w.find('[data-testid="ps-return-confirm"]').trigger('click')
     await flushPromises()
 
     expect(w.findAll('[data-testid="ps-return-asset"]')).toHaveLength(1)
@@ -934,8 +931,6 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     const secondFile = new File(['two'], 'two.png', { type: 'image/png' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [secondFile] })
     await input.trigger('change')
-    await w.find('[data-testid="ps-return-item-q2"]').setValue(true)
-    await w.find('[data-testid="ps-return-confirm"]').trigger('click')
     await flushPromises()
 
     const batches = w.findAll('[data-testid="ps-return-asset"]')
@@ -978,8 +973,6 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     const input = w.find('[data-testid="ps-return-file"]')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await w.find('[data-testid="ps-return-item-q9"]').setValue(true)
-    await w.find('[data-testid="ps-return-confirm"]').trigger('click')
     await flushPromises()
 
     expect(w.find('[data-testid="ps-return-error"]').text()).toContain('结果未知')
@@ -1113,7 +1106,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-regrade-result-open"]').trigger('click')
     await flushPromises()
 
-    const modal = w.find('[data-testid="ps-regrade-result-modal"]')
+    const modal = new DOMWrapper(document.body).find('[data-testid="ps-regrade-result-modal"]')
     expect(modal.exists()).toBe(true)
     expect(modal.find('[data-testid="ps-regrade-annotated"]').attributes('src')).toBe(
       'blob:practice-asset',

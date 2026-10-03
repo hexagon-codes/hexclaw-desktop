@@ -204,6 +204,7 @@ describe('chatService', () => {
       1024,
       undefined,
       undefined,
+      expect.any(Function),
     )
   })
 
@@ -235,6 +236,7 @@ describe('chatService', () => {
       undefined,
       { thinking: 'on' },
       undefined,
+      expect.any(Function),
     )
   })
 
@@ -259,6 +261,7 @@ describe('chatService', () => {
       undefined,
       { thinking: 'off' },
       undefined,
+      expect.any(Function),
     )
   })
 
@@ -291,6 +294,7 @@ describe('chatService', () => {
       undefined,
       { thinking: 'on' },
       undefined,
+      expect.any(Function),
     )
   })
 
@@ -314,6 +318,7 @@ describe('chatService', () => {
       undefined,
       undefined,
       undefined,
+      expect.any(Function),
     )
   })
 

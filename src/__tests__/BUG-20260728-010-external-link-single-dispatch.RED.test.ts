@@ -16,7 +16,8 @@ const harness = vi.hoisted(() => {
   }
 })
 
-vi.mock('vue', () => ({
+vi.mock('vue', async (importOriginal) => ({
+  ...await importOriginal<typeof import('vue')>(),
   createApp: vi.fn(() => harness.app),
 }))
 
@@ -46,7 +47,7 @@ function freshDocument(): Document {
 
 async function installApplicationEntry(): Promise<void> {
   vi.resetModules()
-  await import('../main')
+  await import('../bootstrap')
 }
 
 function appendExternalLink(testDocument: Document): HTMLAnchorElement {

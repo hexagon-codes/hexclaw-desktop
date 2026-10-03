@@ -238,7 +238,7 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
       /\.k12mistakes\s*:deep\(\.rl-btn\)\s*\{[^}]*display:\s*inline-flex[^}]*font-family:\s*inherit[^}]*line-height:\s*18px/s,
     )
     expect(zhCNSource).toContain(
-      '本周先不练只延后当周；不再复习可在本列表恢复。只有真实作答与系统判定形成已掌握。',
+      '“本周先不练”只延后本周；“不再复习”可在此恢复。掌握状态以实际作答和系统判定为准。',
     )
     expect(zhCNSource).toContain(
       '题目档案只负责查找与管理；到期行动在“本周该练”，长期保存的题在“练习集”。',

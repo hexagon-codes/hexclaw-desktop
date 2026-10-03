@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import zhCN from '@/i18n/locales/zh-CN'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import WebhookPanel from '../WebhookPanel.vue'
@@ -18,7 +19,7 @@ function mountPanel() {
   return mount(WebhookPanel, {
     attachTo: document.body,
     // 新建表单已改为 Teleport 弹窗：stub teleport 使其内联渲染，便于在 wrapper 内查询。
-    global: { plugins: [createTestI18n()], stubs: { teleport: true } },
+    global: { plugins: [createPinia(), createTestI18n()], stubs: { teleport: true } },
   })
 }
 
@@ -31,6 +32,13 @@ const toast = vi.hoisted(() => ({
   error: vi.fn(),
 }))
 const setClipboard = vi.hoisted(() => vi.fn())
+
+vi.mock('@/api/automation', () => ({
+  getAutomationStatus: vi.fn().mockResolvedValue({
+    cron: { enabled: true, state: 'ready' },
+    webhook: { enabled: true, state: 'ready' },
+  }),
+}))
 
 vi.mock('@/api/webhook', () => ({
   getWebhooks,

@@ -147,7 +147,7 @@ describe('BUG-20260726-031 · TaskShell stable problem slots', () => {
     document.body.innerHTML = ''
   })
 
-  it('BUG-20260726-031 renders every frozen problem once in source order, not callback order', async () => {
+  it('每道冻结题在领域投影中只保留一次，按原题顺序而非回调顺序排列', async () => {
     const wrapper = mount(RecognizeGuardPanel, {
       props: {
         agentId: 'mingming',
@@ -161,23 +161,13 @@ describe('BUG-20260726-031 · TaskShell stable problem slots', () => {
     })
     await flushPromises()
 
-    const progressList = wrapper.element.querySelector(
-      '[role="list"][aria-label="逐题处理进度"]',
-    ) as HTMLElement | null
-    expect(
-      progressList,
-      'TaskShell must expose one accessible list for the frozen problem slots',
-    ).not.toBeNull()
-
-    const slots = [
-      ...progressList!.querySelectorAll('[role="listitem"]'),
-    ] as HTMLElement[]
+    // 自动处理中不展示旧逐题列表，冻结顺序仍属于同一任务的领域投影。
+    const slots = (wrapper.vm as unknown as {
+      problemProgressSlots: { problem_id: string; display_label: string }[]
+    }).problemProgressSlots
     expect(slots).toHaveLength(3)
-    expect(slots.map((slot) => slot.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
-      expect.stringContaining('一. 1'),
-      expect.stringContaining('一. 2'),
-      expect.stringContaining('二. 1'),
-    ])
+    expect(slots.map((slot) => slot.problem_id)).toEqual(['problem-1', 'problem-2', 'problem-3'])
+    expect(slots.map((slot) => slot.display_label)).toEqual(['一. 1', '一. 2', '二. 1'])
 
     wrapper.unmount()
   })

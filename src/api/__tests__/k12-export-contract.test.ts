@@ -59,6 +59,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12GetPracticePrintJobPaper',
   'k12GetPracticeSet',
   'k12GetPrintArtifactContent',
+  'k12GetProfile',
   'k12GetTextbookBindingOptions',
   'k12GetViewDescriptor',
   'k12GetWeeklyPracticeHistory',

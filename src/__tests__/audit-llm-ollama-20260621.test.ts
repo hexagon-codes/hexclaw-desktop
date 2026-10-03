@@ -12,6 +12,15 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const { mockOllamaApiGet, mockOllamaApiPost } = vi.hoisted(() => ({
+  mockOllamaApiGet: vi.fn(), mockOllamaApiPost: vi.fn(),
+}))
+vi.mock('@/api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/client')>(),
+  apiGet: mockOllamaApiGet,
+  apiPost: mockOllamaApiPost,
+}))
+
 // ───────────────────────────────────────────────────────────────────────────
 // 复刻被测纯逻辑（与生产源码保持字节级一致；引用 file:line 注明出处）
 // ───────────────────────────────────────────────────────────────────────────
@@ -235,6 +244,7 @@ function makeStreamingResponse(chunks: string[], ok = true, status = 200): Respo
   const body = {
     getReader() {
       return {
+        releaseLock: vi.fn(),
         read() {
           if (i < chunks.length) {
             const value = encoder.encode(chunks[i])
@@ -260,6 +270,7 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
 
   beforeEach(async () => {
     vi.resetModules()
+    mockOllamaApiGet.mockReset().mockResolvedValue({ ollama: { target_id: 'target-local', target_revision: 1 } })
     pullOllamaModel = (await import('@/api/ollama')).pullOllamaModel
   })
   afterEach(() => {
@@ -273,7 +284,7 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
       makeStreamingResponse([
         'data: {"status":"downloading","comple',
         'ted":50,"total":100}\n',
-        'data: {"status":"success"}\n',
+        'data: {"status":"success","state":"succeeded"}\n',
       ]),
     ) as unknown as typeof fetch
 
@@ -288,7 +299,7 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
     globalThis.fetch = vi.fn().mockResolvedValue(
       makeStreamingResponse([
         'data: {"status":"pulling manifest"}\n',
-        'data: {"error":"pull model manifest: file does not exist"}\n',
+        'data: {"state":"failed","error":"pull model manifest: file does not exist"}\n',
       ]),
     ) as unknown as typeof fetch
 
@@ -297,22 +308,22 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
     )
   })
 
-  it('GREEN：空 body / 无任何事件 → reject "Download interrupted"', async () => {
+  it('GREEN：无任何事件的断流保留结果未知', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       makeStreamingResponse([]), // 立即 done，无事件
     ) as unknown as typeof fetch
 
-    await expect(pullOllamaModel('x', () => {})).rejects.toThrow(/interrupted/i)
+    await expect(pullOllamaModel('x', () => {})).rejects.toThrow(/outcome is unknown/i)
   })
 
-  it('GREEN：非 200 响应 → 抛后端 error 文案', async () => {
+  it('GREEN：非 200 响应保留 HTTP 失败，不虚报操作终态', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 502,
       json: () => Promise.resolve({ error: 'Ollama 连接失败: dial tcp' }),
     } as unknown as Response) as unknown as typeof fetch
 
-    await expect(pullOllamaModel('x', () => {})).rejects.toThrow(/Ollama 连接失败/)
+    await expect(pullOllamaModel('x', () => {})).rejects.toThrow(/HTTP 502/)
   })
 
   it('RED-候选：缓冲区残留的最后一行（缺尾换行）在流结束时被解析', async () => {
@@ -321,7 +332,7 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
     // 验证：单个无尾换行的成功事件也应被消费（否则完成判定失败 → 假"interrupted"）。
     globalThis.fetch = vi.fn().mockResolvedValue(
       makeStreamingResponse([
-        'data: {"status":"success"}', // 注意：没有结尾 \n
+        'data: {"status":"success","state":"succeeded"}', // 注意：没有结尾 \n
       ]),
     ) as unknown as typeof fetch
 
@@ -338,12 +349,13 @@ describe('E6 pullOllamaModel 进度流解析（半行/data:前缀/错误行/完�
 //   src/api/ollama.ts:37-84  直连 Ollama 原生 API（不经 sidecar）
 //   后端等价物 handler_ollama.go:39-163（字段名需对齐）
 // ───────────────────────────────────────────────────────────────────────────
-describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
+describe('E7 当前后端 Ollama 状态/运行模型投影与容错', () => {
   const realFetch = globalThis.fetch
   let api: typeof import('@/api/ollama')
 
   beforeEach(async () => {
     vi.resetModules()
+    mockOllamaApiGet.mockReset()
     api = await import('@/api/ollama')
   })
   afterEach(() => {
@@ -351,29 +363,11 @@ describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
     vi.restoreAllMocks()
   })
 
-  it('GREEN：tags 200 + version 200 → running=true，modified_at 映射为 modified', async () => {
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/api/tags')) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              models: [
-                {
-                  name: 'qwen3.5:9b',
-                  size: 6_000_000_000,
-                  modified_at: '2026-06-21T00:00:00Z',
-                  details: { family: 'qwen', parameter_size: '9B', quantization_level: 'Q4_K_M' },
-                },
-              ],
-            }),
-        } as unknown as Response)
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ version: '0.5.0' }),
-      } as unknown as Response)
-    }) as unknown as typeof fetch
+  it('GREEN：后端存活投影保留模型、版本与目标身份', async () => {
+    mockOllamaApiGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
+      running: true, version: '0.5.0', model_count: 1,
+      models: [{ name: 'qwen3.5:9b', size: 6_000_000_000, modified: '2026-06-21T00:00:00Z',
+        family: 'qwen', parameter_size: '9B', quantization_level: 'Q4_K_M' }] })
 
     const status = await api.getOllamaStatus()
     expect(status.running).toBe(true)
@@ -389,7 +383,8 @@ describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
   })
 
   it('GREEN：tags 请求失败 → 安全降级 running=false 不抛异常（BUG-20260718：并标记 reachable=false/error 区分不可达）', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch
+    mockOllamaApiGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
+      running: false, reachable: false, error: 'ECONNREFUSED', models: [], associated: false, model_count: 0 })
     const status = await api.getOllamaStatus()
     expect(status.running).toBe(false)
     expect(status.models).toEqual([])
@@ -400,20 +395,15 @@ describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
     expect(status.error).toBeTruthy()
   })
 
-  it('GREEN：getOllamaRunning context_length 缺失 → 兜底 0（与后端 int 默认对齐）', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          models: [{ name: 'm', size: 1, size_vram: 1, expires_at: 'x' /* 无 context_length */ }],
-        }),
-    } as unknown as Response) as unknown as typeof fetch
+  it('GREEN：getOllamaRunning 保留后端 context_length 默认投影', async () => {
+    mockOllamaApiGet.mockResolvedValueOnce({ target_id: 'target-local', target_revision: 1,
+      models: [{ name: 'm', size: 1, size_vram: 1, expires_at: 'x', context_length: 0 }] })
     const running = await api.getOllamaRunning()
     expect(running[0]?.context_length).toBe(0)
   })
 
   it('GREEN：/api/ps 非 200 → 返回空数组', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 } as unknown as Response) as unknown as typeof fetch
+    mockOllamaApiGet.mockRejectedValueOnce(new Error('HTTP 500'))
     expect(await api.getOllamaRunning()).toEqual([])
   })
 })
@@ -424,7 +414,7 @@ describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
 //   注意：unload/delete/restart 走后端 apiPost/apiDelete（ollama.ts:96-107）
 //   → load 与 unload 走不同传输层，非对称（取证记录）
 // ───────────────────────────────────────────────────────────────────────────
-describe('E8 loadOllamaModel 传输层非对称（load 直连 / unload 经后端）', () => {
+describe('E8 loadOllamaModel 使用当前后端目标', () => {
   const realFetch = globalThis.fetch
   let api: typeof import('@/api/ollama')
 
@@ -437,20 +427,17 @@ describe('E8 loadOllamaModel 传输层非对称（load 直连 / unload 经后端
     vi.restoreAllMocks()
   })
 
-  it('GREEN：load 直接打 OLLAMA_BASE/api/generate（不经 16060 后端）', async () => {
-    const spy = vi.fn().mockResolvedValue({ ok: true } as unknown as Response)
+  it('GREEN：load 由当前后端访问已保存的目标', async () => {
+    mockOllamaApiPost.mockReset().mockResolvedValue(undefined)
+    const spy = vi.fn()
     globalThis.fetch = spy as unknown as typeof fetch
     await api.loadOllamaModel('qwen3.5:9b')
-    expect(spy).toHaveBeenCalledTimes(1)
-    const calledUrl = spy.mock.calls[0]?.[0] as string
-    // 取证：load 走 11434 直连，而 unload(ollama.ts:96) 走后端 /api/v1/ollama/unload。
-    // 在非 Tauri(web) 环境下 load 受浏览器 CORS 约束、unload 不受 → 行为不一致风险。
-    expect(calledUrl).toContain('11434')
-    expect(calledUrl).not.toContain('16060')
+    expect(mockOllamaApiPost).toHaveBeenCalledExactlyOnceWith('/api/v1/ollama/load', { model: 'qwen3.5:9b' })
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('GREEN：load 返回非 ok → 抛含状态码的错误', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404 } as unknown as Response) as unknown as typeof fetch
+    mockOllamaApiPost.mockRejectedValueOnce(new Error('HTTP 404'))
     await expect(api.loadOllamaModel('nope')).rejects.toThrow(/404/)
   })
 })

@@ -28,7 +28,7 @@ function mountInput() {
 describe('R6 · SearchInput 回车 IME 守卫', () => {
   it('输入法组字中回车（isComposing=true）不触发 submit', async () => {
     const w = mountInput()
-    await w.find('input').trigger('keydown.enter', { isComposing: true })
+    await w.find('input').trigger('keydown', { key: 'Enter', isComposing: true })
     expect(w.emitted('submit'), 'IME 组字回车不应 submit').toBeUndefined()
   })
 
@@ -43,7 +43,7 @@ describe('R6 · SearchInput 回车 IME 守卫', () => {
 
   it('正常回车（非组字）触发 submit', async () => {
     const w = mountInput()
-    await w.find('input').trigger('keydown.enter', { isComposing: false })
+    await w.find('input').trigger('keydown', { key: 'Enter', isComposing: false })
     expect(w.emitted('submit'), '正常回车应 submit').toHaveLength(1)
   })
 })

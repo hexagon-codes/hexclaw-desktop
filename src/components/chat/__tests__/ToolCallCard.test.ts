@@ -78,12 +78,12 @@ describe('ToolCallCard —— P0-2/P1-3/P2-5', () => {
     expect(summary.text()).toContain('temp: 27')
   })
 
-  it('参数/结果折叠区存在，结果美化为缩进 JSON（P2）', () => {
+  it('参数/结果折叠区存在，代码块保留原始 JSON 结果', () => {
     const w = mountCard(base)
     const details = w.findAll('details')
     expect(details.length).toBe(2)
     const pre = w.findAll('pre').map((p) => p.text())
-    expect(pre.some((x) => x.includes('"temp": 27'))).toBe(true)
+    expect(pre).toContain('{"temp":27,"humidity":74}')
   })
 
   it('canonical 工具结果走统一 Markdown/LaTeX 渲染协议', () => {

@@ -50,24 +50,6 @@ describe('BUG-20260818-001: Provider 卡头恒一行 + 状态三态 + 眼睛一�
     expect(view).toMatch(/import\s*\{[^}]*readProviderApiKey/)
   })
 
-  it('Provider 编辑表单 DOM 先放 Base URL、后放整行 API Key', async () => {
-    const view = await source('src/views/SettingsView.vue')
-    const nameIndex = view.indexOf('data-provider-field="name"')
-    const baseUrlIndex = view.indexOf('data-provider-field="base-url"')
-    const apiKeyIndex = view.indexOf('data-provider-field="api-key"')
-
-    expect(nameIndex).toBeGreaterThanOrEqual(0)
-    expect(baseUrlIndex).toBeGreaterThan(nameIndex)
-    expect(apiKeyIndex).toBeGreaterThan(baseUrlIndex)
-
-    // 内置卡的 Base URL 位于左窄列；API Key 独占下一行。
-    expect(view).toContain('.hc-provider__config-grid--builtin .hc-provider__config-url')
-    expect(view).toContain('order: -1')
-    expect(view).toContain('grid-column: 1 / -1')
-    // 自定义卡保持 Provider 与 Base URL 同行、API Key 下一整行。
-    expect(view).toContain('minmax(150px, 0.56fr)')
-    expect(view).toContain('minmax(220px, 0.82fr)')
-  })
 })
 
 describe('BUG-20260818-002: 本周该练教材进度卡两态单行', () => {
@@ -119,14 +101,6 @@ describe('BUG-20260818-003: 全部错题行内动作按钮全部常显', () => {
     expect(mistakesBlock).toContain('display="visible"')
   })
 
-  it('全部错题行保持内容驱动高度与次级文本色', async () => {
-    const records = await source('src/features/k12/views/K12RecordsView.vue')
-    const rowRule = records.match(/\.k12mistakes\s*:deep\(\.rl-row\)\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(rowRule).toContain('min-height: 52px')
-    expect(rowRule).toContain('height: auto')
-    expect(rowRule).not.toContain('height: 48px')
-    expect(rowRule).toContain('color: var(--hc-text-secondary)')
-  })
 })
 
 describe('BUG-20260818-004: 作品说明文案单行', () => {

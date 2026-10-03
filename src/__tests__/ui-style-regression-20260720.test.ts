@@ -9,21 +9,6 @@ function source(relativePath: string): string {
 }
 
 describe('desktop page density and responsive style contracts', () => {
-  it('keeps provider model capsules dense and capability labels on one line', () => {
-    const settings = source('views/SettingsView.vue')
-
-    expect(settings).toMatch(
-      /\.hc-model-chips\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*172px\),\s*1fr\)\)/s,
-    )
-    expect(settings).toMatch(/\.hc-model-chip__cap\s*\{[^}]*white-space:\s*nowrap/s)
-    expect(settings).toMatch(/\.hc-model-chip__name\s*\{[^}]*flex:\s*1 1 auto/s)
-    expect(settings).toMatch(
-      /\.hc-model-chip__free-label\s*\{[^}]*flex:\s*none[^}]*white-space:\s*nowrap/s,
-    )
-    expect(settings).toMatch(
-      /\.hc-model-chip__cap\s*\{[^}]*flex:\s*none[^}]*white-space:\s*nowrap/s,
-    )
-  })
 
   it('renders the MCP marketplace through the shared adaptive capability grid', () => {
     const mcp = source('views/McpView.vue')
@@ -78,15 +63,4 @@ describe('desktop page density and responsive style contracts', () => {
     expect(works).toContain('class="k12cw-detail-modal"')
   })
 
-  it('keeps the creative-work image preview below the desktop titlebar safe area', () => {
-    const works = source('features/k12/views/K12CreativeWorksPanel.vue')
-
-    expect(works).toMatch(
-      /\.k12cw-image-preview\s*\{[^}]*top:\s*var\(--hc-titlebar-height\);[^}]*right:\s*0;[^}]*bottom:\s*0;[^}]*left:\s*0;/s,
-    )
-    expect(works).not.toMatch(/\.k12cw-image-preview\s*\{[^}]*inset:\s*0;/s)
-    expect(works).toMatch(
-      /\.k12cw-image-preview\s*>\s*img\s*\{[^}]*max-height:\s*calc\(100vh - var\(--hc-titlebar-height\) - 48px\);/s,
-    )
-  })
 })

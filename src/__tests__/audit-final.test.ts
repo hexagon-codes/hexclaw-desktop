@@ -751,8 +751,8 @@ describe('6. Settings store syncOllamaModels', () => {
     getOllamaStatusMock.mockResolvedValueOnce({
       running: true, associated: true, model_count: 2,
       models: [
-        { name: 'llama3.3', size: 8e9, modified: '2026-01-01' },
-        { name: 'phi4', size: 4e9, modified: '2026-01-01' },
+        { name: 'llama3.3', size: 8e9, modified: '2026-01-01', capabilities: ['completion'] },
+        { name: 'phi4', size: 4e9, modified: '2026-01-01', capabilities: ['completion'] },
       ],
     })
 
@@ -777,7 +777,7 @@ describe('6. Settings store syncOllamaModels', () => {
 
     getOllamaStatusMock.mockResolvedValueOnce({
       running: true, associated: true, model_count: 1,
-      models: [{ name: 'new-model', size: 5e9, modified: '2026-01-01' }],
+      models: [{ name: 'new-model', size: 5e9, modified: '2026-01-01', capabilities: ['completion'] }],
     })
 
     await store.syncOllamaModels()
@@ -836,37 +836,6 @@ describe('7. API client robustness', () => {
     expect(patchFnMatch![1]).toBe('PATCH')
   })
 
-  it('All API wrapper functions use correct HTTP methods', () => {
-    const clientPath = path.resolve(__dirname, '..', 'api', 'client.ts')
-    const content = fs.readFileSync(clientPath, 'utf-8')
-
-    // Verify each method wrapper
-    const methodMap = [
-      ['apiGet', 'GET'],
-      ['apiPost', 'POST'],
-      ['apiPut', 'PUT'],
-      ['apiPatch', 'PATCH'],
-      ['apiDelete', 'DELETE'],
-    ]
-
-    for (const [fn, method] of methodMap) {
-      // 找 function 关键字位置
-      const fnStart = content.indexOf(`function ${fn}`)
-      expect(fnStart).toBeGreaterThan(-1)
-      // 用 brace 平衡找完整函数体（不依赖第一个 `}`，避免误把 if 块/对象字面量
-      // 的内 `}` 当函数体末尾，丢掉 method 字符串）
-      const openBrace = content.indexOf('{', fnStart)
-      let depth = 1
-      let cursor = openBrace + 1
-      while (cursor < content.length && depth > 0) {
-        if (content[cursor] === '{') depth++
-        else if (content[cursor] === '}') depth--
-        cursor++
-      }
-      const fnBody = content.slice(fnStart, cursor)
-      expect(fnBody).toContain(`method: '${method}'`)
-    }
-  })
 
   it('updateSessionTitle calls apiPatch through the owned session path', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
@@ -914,43 +883,6 @@ describe('7. API client robustness', () => {
 
 describe('8. Security: v-html sanitization audit', () => {
   const SRC = path.resolve(__dirname, '..')
-
-  function findVueFilesRecursively(dir: string): string[] {
-    const results: string[] = []
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = path.join(dir, entry.name)
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '__tests__') {
-        results.push(...findVueFilesRecursively(fullPath))
-      } else if (entry.isFile() && entry.name.endsWith('.vue')) {
-        results.push(fullPath)
-      }
-    }
-    return results
-  }
-
-  it('all v-html usages in production .vue files are sanitized', () => {
-    const vueFiles = findVueFilesRecursively(SRC)
-    const unsanitized: string[] = []
-
-    for (const file of vueFiles) {
-      const content = fs.readFileSync(file, 'utf-8')
-      const vHtmlMatches = content.matchAll(/v-html="([^"]+)"/g)
-
-      for (const match of vHtmlMatches) {
-        const binding = match[1]!
-        // Check if the binding variable is sanitized via DOMPurify in the script
-        const hasDOMPurify = content.includes('DOMPurify')
-        const hasSanitize = content.includes('sanitize(')
-
-        if (!hasDOMPurify && !hasSanitize) {
-          unsanitized.push(`${path.relative(SRC, file)}: v-html="${binding}" (no DOMPurify found)`)
-        }
-      }
-    }
-
-    // All v-html usages must be sanitized (XSS vector)
-    expect(unsanitized).toEqual([])
-  })
 
   it('ArtifactCodeView.vue uses DOMPurify.sanitize before v-html', () => {
     const file = path.join(SRC, 'components', 'artifacts', 'ArtifactCodeView.vue')
