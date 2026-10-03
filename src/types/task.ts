@@ -34,6 +34,8 @@ export interface CronJob {
 
   /** v2: 用户原始需求（仅供 UI 展示） */
   source_prompt: string
+  /** 调用方的稳定来源键；展示名称不改变任务归属。 */
+  source_key?: string
   /** v2: 编译后的可执行规约；null 表示旧任务被清理（理论上不应出现） */
   spec: JobSpec | null
 

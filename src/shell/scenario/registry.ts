@@ -9,7 +9,7 @@
  */
 import type { Component } from 'vue'
 import type { InstanceViewDescriptor, RecordSchema } from '@/contracts'
-import type { ChatAttachment } from '@/types'
+import type { AgentConfig, ChatAttachment, CronJob } from '@/types'
 import { EMPTY_VIEW_DESCRIPTOR } from '@/contracts'
 
 /** 解析描述符时传入的实例上下文（来自 agent 实例） */
@@ -29,6 +29,17 @@ export interface ScenarioIdentityProjection {
 
 /** 身份投影解析器：场景包只从自身权威 metadata 生成，缺少事实时返回 null。 */
 export type IdentityProjectionResolver = (ctx: ScenarioContext) => ScenarioIdentityProjection | null
+
+/** 场景定时任务的只读展示；不改写持久任务名称和稳定来源键。 */
+export interface CronJobPresentation {
+  displayName: string
+  deleteNotice?: string
+}
+
+export type CronJobPresentationResolver = (
+  job: CronJob,
+  agents: readonly AgentConfig[],
+) => CronJobPresentation | null
 
 /**
  * 场景投影到通用 composer 的结构化 chip。shell 只转发稳定 action id，
@@ -147,6 +158,7 @@ interface RegistryState {
   schemas: Map<string, RecordSchema>
   resolvers: DescriptorResolver[]
   identityProjectionResolvers: IdentityProjectionResolver[]
+  cronJobPresentationResolvers: CronJobPresentationResolver[]
   actionHandlers: Map<string, ActionHandler>
   /** 会话增强组件（场景包提供；chat shell 只用 <component :is> 渲染，不 import 场景包） */
   chatEnhancement: Component | null
@@ -173,6 +185,7 @@ function createState(): RegistryState {
     schemas: new Map(),
     resolvers: [],
     identityProjectionResolvers: [],
+    cronJobPresentationResolvers: [],
     actionHandlers: new Map(),
     chatEnhancement: null,
     agentCardExtension: null,
@@ -240,6 +253,18 @@ export const scenarioRegistry = {
       return projection.displayName
     }
     return raw
+  },
+
+  /** 任务显示与删除说明由所属场景解析；未命中时保留原任务名称。 */
+  registerCronJobPresentationResolver(resolver: CronJobPresentationResolver): void {
+    state.cronJobPresentationResolvers.push(resolver)
+  },
+  projectCronJobPresentation(job: CronJob, agents: readonly AgentConfig[]): CronJobPresentation {
+    for (const resolve of state.cronJobPresentationResolvers) {
+      const presentation = resolve(job, agents)
+      if (presentation) return presentation
+    }
+    return { displayName: job.name }
   },
 
   /** 注册会话增强组件（场景包提供，如 K12 头部 tab + 记录视图 + 侧栏） */

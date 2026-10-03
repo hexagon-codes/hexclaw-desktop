@@ -39,9 +39,15 @@ import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { DESKTOP_USER_ID } from '@/constants'
+import { useAgentsStore } from '@/stores/agents'
 
 const { t, te } = useI18n()
 const toast = useToast()
+const agentsStore = useAgentsStore()
+
+function cronJobDisplayName(job: CronJob): string {
+  return scenarioRegistry.projectCronJobPresentation(job, agentsStore.registeredAgents).displayName
+}
 
 // 场景包经 registry 注入自己的管理面板；通用 Webhook 不认识任何领域。
 const managementExtensions = scenarioRegistry.webhookManagementExtensions
@@ -152,7 +158,7 @@ function webhookCardTitle(webhook: Webhook): string {
 function webhookBindingLabel(webhook: Webhook): string {
   if (!webhook.job_id) return '绑定：Prompt'
   const job = cronJobs.value.find((item) => item.id === webhook.job_id)
-  return `绑定：${job?.name ?? 'Cron Job'}`
+  return `绑定：${job ? cronJobDisplayName(job) : 'Cron Job'}`
 }
 
 function webhookLastEventLabel(webhook: Webhook): string {
@@ -219,7 +225,7 @@ async function copyText(text: string, okMsg: string) {
 const cronJobs = ref<CronJob[]>([])
 const jobOptions = computed(() => [
   { value: '', label: t('webhooks.jobNone', '不绑定任务（执行处理指令）') },
-  ...cronJobs.value.map((j) => ({ value: j.id, label: j.name })),
+  ...cronJobs.value.map((j) => ({ value: j.id, label: cronJobDisplayName(j) })),
 ])
 const formJobId = computed<string>({
   get: () => form.value.jobId,
@@ -346,7 +352,7 @@ async function onDeleteWebhook() {
 
 async function loadCronJobs() {
   try {
-    const res = await getCronJobs()
+    const [res] = await Promise.all([getCronJobs(), agentsStore.loadAgents()])
     cronJobs.value = res?.jobs ?? []
   } catch {
     // 取不到 cron 列表不阻塞建 webhook，仅「绑定任务」下拉为空

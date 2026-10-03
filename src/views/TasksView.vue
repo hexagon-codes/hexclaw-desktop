@@ -56,9 +56,16 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useAgentsStore } from '@/stores/agents'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const { t } = useI18n()
 const toast = useToast()
+const agentsStore = useAgentsStore()
+
+function taskPresentation(job: CronJob) {
+  return scenarioRegistry.projectCronJobPresentation(job, agentsStore.registeredAgents)
+}
 
 // 顶栏搜索词（由 AutomationView 透传）：按任务名过滤可见任务卡。
 const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
@@ -68,7 +75,9 @@ const { items: jobs, state: capabilityState, loading, error: loadError, canCreat
 const filteredJobs = computed(() => {
   const q = props.search.trim().toLowerCase()
   if (!q) return jobs.value
-  return jobs.value.filter((j) => (j.name ?? '').toLowerCase().includes(q))
+  return jobs.value.filter(
+    (j) => taskPresentation(j).displayName.toLowerCase().includes(q) || j.name.toLowerCase().includes(q),
+  )
 })
 const showForm = ref(false)
 const submitting = ref(false)
@@ -138,6 +147,13 @@ const triggeringJobs = ref<Set<string>>(new Set())
 const pausingJobs = ref<Set<string>>(new Set())
 const deletingJobs = ref<Set<string>>(new Set())
 const pendingDeleteJob = ref<CronJob | null>(null)
+const deleteConfirmMessage = computed(() => {
+  const job = pendingDeleteJob.value
+  if (!job) return ''
+  const presentation = taskPresentation(job)
+  const message = t('tasks.confirmDelete', { name: presentation.displayName })
+  return presentation.deleteNotice ? `${message}\n${presentation.deleteNotice}` : message
+})
 const jobHistories = ref<Record<string, CronJobRun[]>>({})
 const expandedJobId = ref<string | null>(null)
 const expandedRunId = ref<string | null>(null)
@@ -201,7 +217,7 @@ function hasRealCompiledAt(spec: JobSpec | null): boolean {
 }
 
 async function loadJobs() {
-  await reloadJobs()
+  await Promise.all([reloadJobs(), agentsStore.loadAgents()])
   if (canCreate.value) void loadPermissionStatuses()
 }
 
@@ -214,6 +230,12 @@ const approvalBusy = ref(false)
 const permissionStatuses = ref<Map<string, AutonomyTaskStatus>>(new Map())
 const blockedOpen = ref(false)
 const blockedTask = ref<AutonomyTaskStatus | null>(null)
+const displayedBlockedTask = computed(() => {
+  const task = blockedTask.value
+  if (!task) return null
+  const job = jobs.value.find((candidate) => candidate.id === task.task_ref.replace(/^cron:/, ''))
+  return job ? { ...task, name: taskPresentation(job).displayName } : task
+})
 
 async function loadPermissionStatuses() {
   try {
@@ -810,7 +832,7 @@ defineExpose({ openCreateForm, loadJobs, canCreate })
           <!-- Card header -->
           <div class="task-card__header">
             <div class="task-card__title-row">
-              <span class="task-card__name">{{ job.name }}</span>
+              <span class="task-card__name">{{ taskPresentation(job).displayName }}</span>
               <span
                 class="task-card__status"
                 :style="{ color: statusColor(job.status), background: statusBg(job.status) }"
@@ -1309,14 +1331,14 @@ defineExpose({ openCreateForm, loadJobs, canCreate })
   />
   <PermissionBlockedModal
     :open="blockedOpen"
-    :task="blockedTask"
+    :task="displayedBlockedTask"
     @close="blockedOpen = false"
     @resolved="onBlockedResolved"
   />
   <ConfirmDialog
     :open="!!pendingDeleteJob"
     :title="t('tasks.deleteConfirmTitle', '删除任务？')"
-    :message="pendingDeleteJob ? t('tasks.confirmDelete', { name: pendingDeleteJob.name }) : ''"
+    :message="deleteConfirmMessage"
     :confirm-text="t('common.delete')"
     :cancel-text="t('common.cancel')"
     :confirmation-key="pendingDeleteJob?.id"
