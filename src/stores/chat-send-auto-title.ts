@@ -18,6 +18,10 @@ export function createChatSendAutoTitleController(params: {
   } = params
 
   function seedAutoTitle(sessionId: string, text: string) {
+    if (!text.trim()) {
+      setPendingSuggestedTitleExpectation(sessionId, defaultSessionTitle)
+      return
+    }
     const tempTitle = text.slice(0, 30) + (text.length > 30 ? '...' : '')
     setLocalSessionTitle(sessionId, tempTitle)
     setPendingSuggestedTitleExpectation(sessionId, tempTitle)
