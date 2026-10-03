@@ -865,19 +865,6 @@ async function readDirectChildIdentities(helper, parentPid) {
   return identities
 }
 
-async function waitForDirectChildIdentities(helper, child, timeoutMilliseconds = 15_000) {
-  const deadline = Date.now() + timeoutMilliseconds
-  while (Date.now() < deadline) {
-    const identities = await readDirectChildIdentities(helper, child.pid)
-    if (identities.length > 0) return identities
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`harness exited before publishing child identities: code=${child.exitCode} signal=${child.signalCode}`)
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  throw new Error(`timed out waiting for direct children of harness ${child.pid}`)
-}
-
 async function terminateVerifiedOwnedProcess(helper, expected) {
   if (!processExists(expected.pid)) return
   const current = await readStrictProcessIdentity(helper, expected.pid)
@@ -1536,7 +1523,7 @@ test('REG-FIX-20260727-MISSING-LLM-STARTUP-011 publishes verified watchdog readi
 
   const bootstrap = await waitForHarnessBootstrap(harness, callerPaths.TMPDIR, capturePath, () => harnessOutput)
   assert.equal(bootstrap.kind, 'ready', JSON.stringify(bootstrap))
-  const { isolatedHome, ownership } = bootstrap
+  const { ownership } = bootstrap
   const { ready } = ownership
   await verifyPublishedProcessIdentity(startIdentityHelper, ownership.supervisor, [harness.pid])
   await verifyPublishedProcessIdentity(startIdentityHelper, ownership.watchdog, [harness.pid])

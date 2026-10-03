@@ -196,7 +196,7 @@ function fixtureReceipt(data) {
   }
 }
 
-function createFixture(port, data) {
+function createFixture(port) {
   const state = {
     reports: [],
     unexpectedRequests: [],

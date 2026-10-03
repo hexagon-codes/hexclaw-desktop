@@ -3,13 +3,11 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
 import {
-  cp,
   lstat,
   mkdir,
   open,
   readdir,
   realpath,
-  rename,
   rm,
   rmdir,
   symlink,

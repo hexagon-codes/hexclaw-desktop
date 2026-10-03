@@ -187,10 +187,6 @@ function validateCandidate() {
   }
 }
 
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function renderNetworkSandboxProfile(sidecarPort, fixturePort) {
   return `(version 1)
 (allow default)

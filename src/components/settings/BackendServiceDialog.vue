@@ -56,7 +56,7 @@ watch(backendPanelOpen, async (open, _previous, onCleanup) => {
 })
 
 // 令牌属于对应地址的保存记录；换目标清空，迟到读取不能覆盖新的输入。
-watch([backendPanelOpen, kind, () => address.value.trim().replace(/\/+$/, ''), () => savedCandidate.value?.connectionId], async ([open, target, _address, connectionId], _previous, onCleanup) => {
+watch([backendPanelOpen, kind, () => address.value.trim().replace(/\/+$/, ''), () => savedCandidate.value?.connectionId], async ([open, target, , connectionId], _previous, onCleanup) => {
   let active = true
   token.value = ''; savedRemoteToken.value = ''; visible.value = false
   remoteTokenLoading.value = false

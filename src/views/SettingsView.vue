@@ -14,7 +14,6 @@ import {
   ChevronUp,
   Loader2,
   CheckCircle,
-  XCircle,
   RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
@@ -598,13 +597,6 @@ const customModelDialogProvider = computed(
       (provider) => provider.id === customModelDialogProviderId.value,
     ) ?? null,
 )
-const customModelCapabilityOptions = computed(() => [
-  { value: 'text', label: '文本' },
-  { value: 'vision', label: '视觉' },
-  { value: 'image_generation', label: '绘图' },
-  { value: 'video_generation', label: '视频生成' },
-  { value: 'embedding', label: 'Embedding' },
-])
 const normalizedNewModelId = computed(() => newModelId.value.trim())
 const customModelIdIsDuplicate = computed(() => {
   const provider = customModelDialogProvider.value

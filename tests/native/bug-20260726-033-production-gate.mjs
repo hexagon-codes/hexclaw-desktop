@@ -8,9 +8,8 @@
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import {
-  createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -440,7 +439,6 @@ async function main() {
     cases.identity_before = { status: 'PASS', evidence: 'before.json' }
 
     const originalLabels = beforePrefs.appleLanguages?.includes('zh') ? expectedChinese : expectedEnglish
-    const originalLocale = beforePrefs.appleLanguages?.includes('zh') ? 'zh-Hans-CN' : 'en-US'
     const originalQuitLabel = originalLabels === expectedChinese ? '退出 HexClaw' : 'Quit HexClaw'
 
     const lightMenu = await openTrayMenu(

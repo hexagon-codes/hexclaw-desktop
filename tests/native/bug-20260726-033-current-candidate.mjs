@@ -7,7 +7,7 @@
  * 候选 PID/专用端口收窄。不得把全局外观切换或全局 Cmd+Q 当作自动化手段。
  */
 import assert from 'node:assert/strict'
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,

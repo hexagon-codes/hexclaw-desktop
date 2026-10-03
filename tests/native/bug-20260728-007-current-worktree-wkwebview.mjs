@@ -456,7 +456,7 @@ function createFixtureServer(port) {
   }
 }
 
-function renderConfig(sandbox, sidecarPort, fixtureOrigin) {
+function renderConfig(sandbox, sidecarPort) {
   return `server:
   host: 127.0.0.1
   port: ${sidecarPort}

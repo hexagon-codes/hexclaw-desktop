@@ -74,7 +74,8 @@ const activitySummary = computed(() => {
 })
 const prettyArgs = computed(() => {
   if (!sandboxCode.value) return prettyToolJson(props.call.arguments)
-  const { code: _code, ...parameters } = JSON.parse(props.call.arguments)
+  const parameters = JSON.parse(props.call.arguments)
+  delete parameters.code
   return JSON.stringify(parameters, null, 2)
 })
 const resultLanguage = computed(() => {

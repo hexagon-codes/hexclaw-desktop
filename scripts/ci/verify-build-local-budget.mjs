@@ -23,9 +23,8 @@ function previousBaseline() {
 
 const baseline = previousBaseline()
 const startedAt = Date.now()
-let status
 try {
-  status = execFileSync('make', ['build-local'], { stdio: 'inherit' })
+  execFileSync('make', ['build-local'], { stdio: 'inherit' })
 } catch {
   process.exitCode = 1
   console.error('BUILD-LOCAL FAILED: make build-local exited non-zero')

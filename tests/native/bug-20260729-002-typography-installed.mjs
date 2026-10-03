@@ -13,7 +13,6 @@ import { createHash } from 'node:crypto'
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -39,7 +38,6 @@ const evidenceRoot = join(
   docsRoot,
   'test/evidence/bug-20260729-002-global-typography-current/installed-current-source',
 )
-const browserEvidenceRoot = dirname(evidenceRoot)
 const pixelDiffTool = join(repoRoot, 'tests/e2e/tools/visual_pixel_diff.py')
 const browserVisualSpec = join(
   repoRoot,

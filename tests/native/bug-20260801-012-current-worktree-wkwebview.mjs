@@ -928,18 +928,6 @@ async function waitForHealth(port, processHandle) {
   throw new Error(`Sidecar health timed out on loopback port ${port}`)
 }
 
-async function waitForReport(state, stage, timeout = 60_000) {
-  const deadline = Date.now() + timeout
-  while (Date.now() < deadline) {
-    const report = state.reports.find((entry) => entry.stage === stage)
-    if (report) return report
-    const error = state.reports.find((entry) => entry.stage === 'fixture-error')
-    if (error) throw new Error(`WKWebView fixture failed: ${error.message}`)
-    await sleep(100)
-  }
-  throw new Error(`timed out waiting for WKWebView report: ${stage}`)
-}
-
 async function waitForReportCount(state, stage, count, timeout = 60_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {

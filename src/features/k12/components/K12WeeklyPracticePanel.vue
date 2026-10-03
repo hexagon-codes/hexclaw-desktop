@@ -148,14 +148,6 @@ const generationLabels: Record<WeeklyPracticeItemDTO['generation_method'], strin
   ai_generated: 'AI生成',
   rule_generated: '规则生成',
 }
-const sourceLabels: Record<string, string> = {
-  mistake: '真实错题',
-  curriculum: '已确认教材进度',
-  textbook: '已确认教材进度',
-  learned_scope: '已学运算范围',
-  arithmetic: '已学运算范围',
-}
-
 const visibleTracks = computed<WeeklyPracticeTrackDTO[]>(() => {
   const tracks = props.plan?.tracks ?? []
   const bySection = new Map(tracks.map((track) => [track.plan_section, track]))

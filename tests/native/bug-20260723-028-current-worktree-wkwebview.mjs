@@ -9,18 +9,14 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import {
   chmodSync,
-  cpSync,
   createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
-  statSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { createServer } from 'node:http'
@@ -58,10 +54,6 @@ const AGENT = 'k12-modal-track-fixture'
 const SESSION = 'k12-modal-track-session'
 const commandTimeoutMs = 15 * 60 * 1000
 const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
-
-function sha256(value) {
-  return createHash('sha256').update(value).digest('hex')
-}
 
 function json(response, status, value) {
   const body = JSON.stringify(value)

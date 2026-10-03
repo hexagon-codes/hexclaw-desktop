@@ -74,33 +74,6 @@ const mcpTools = [
   },
 ]
 
-const styleKeys = [
-  'display',
-  'position',
-  'boxSizing',
-  'width',
-  'height',
-  'minWidth',
-  'minHeight',
-  'paddingTop',
-  'paddingRight',
-  'paddingBottom',
-  'paddingLeft',
-  'gap',
-  'borderTopWidth',
-  'borderRightWidth',
-  'borderBottomWidth',
-  'borderLeftWidth',
-  'borderRadius',
-  'backgroundColor',
-  'color',
-  'fontSize',
-  'fontWeight',
-  'lineHeight',
-  'overflowX',
-  'whiteSpace',
-]
-
 const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds))
 
 function sha256(value) {
@@ -952,7 +925,7 @@ async function captureReference(fixture) {
     await page.locator('.screen.on [data-sub="in1"] .mcp-row[data-mcp-panel="servers"]').first().waitFor({ state: 'visible' })
     await page.addStyleTag({ content: '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}' })
     await page.evaluate(async () => { await document.fonts.ready; await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
-    const serverTarget = page.locator('.screen.on [data-sub="in1"] .mcp-row[data-mcp-panel="servers"]').first()
+    page.locator('.screen.on [data-sub="in1"] .mcp-row[data-mcp-panel="servers"]').first()
     const serverSnapshot = await page.evaluate(snapshotFromDom)
     const serverRoot = serverSnapshot.root
     const serverPath = join(evidenceRoot, 'reference-servers.png')
@@ -969,16 +942,6 @@ async function captureReference(fixture) {
   } finally {
     await context.close()
     await browser.close()
-  }
-}
-
-function windowStateEnvironment(report) {
-  return {
-    viewport,
-    devicePixelRatio: report?.environment?.devicePixelRatio,
-    locale: report?.environment?.locale,
-    timezone: report?.environment?.timezone,
-    route: report?.environment?.route,
   }
 }
 
