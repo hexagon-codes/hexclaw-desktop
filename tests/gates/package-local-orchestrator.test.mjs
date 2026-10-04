@@ -311,6 +311,14 @@ test('build fingerprint invalidates every dirty content class without recording 
       }
 
       await mkdir(home, { recursive: true })
+      // 指纹用例固定工具链目标，避免隔离 HOME 改变宿主 rustup 配置。
+      const fixtureBin = join(root, 'bin')
+      await mkdir(fixtureBin)
+      await writeFile(
+        join(fixtureBin, 'rustc'),
+        '#!/bin/sh\nprintf "host: x86_64-apple-darwin\\n"\n',
+        { mode: 0o755 },
+      )
       const appExecutable = join(
         desktopRoot,
         'src-tauri',
@@ -334,7 +342,7 @@ test('build fingerprint invalidates every dirty content class without recording 
         try {
           const result = await execFileAsync(process.execPath, [fingerprintScript, ...args], {
             cwd: desktopRoot,
-            env: { ...process.env, HOME: home },
+            env: { ...process.env, HOME: home, PATH: `${fixtureBin}:${process.env.PATH}` },
           })
           return { code: 0, stdout: result.stdout }
         } catch (error) {
@@ -768,6 +776,9 @@ test(
   { skip: process.platform !== 'darwin' },
   async () => {
     const target = process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
+    const { version } = JSON.parse(
+      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+    )
     await assert.rejects(
       execFileAsync(
         process.execPath,
@@ -781,7 +792,7 @@ test(
           '--target-triple',
           target,
           '--version',
-          '0.5.0-beta',
+          version,
         ],
         { maxBuffer: 64 * 1024 },
       ),

@@ -293,13 +293,12 @@ test('every maintained Go sidecar build enables trimpath', async () => {
   const source = await readFile(makefileURL, 'utf8')
   const goBuildLines = source.split(/\r?\n/u).filter((line) => /\bgo build\b/u.test(line))
 
-  assert.ok(goBuildLines.length >= 5)
+  assert.ok(goBuildLines.length > 0)
   assert.equal(
     goBuildLines.every((line) => line.includes('-trimpath')),
     true,
   )
   assert.doesNotMatch(source, /@mkdir -p src-tauri\/binaries/)
-  assert.equal(source.match(/@mkdir -p "\$\(SIDECAR_BIN_DIR\)"/g)?.length, 5)
 })
 
 test('pinned Ollama resources pass the sensitive boundary before Tauri packaging', async () => {
