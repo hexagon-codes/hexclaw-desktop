@@ -215,7 +215,7 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 - `push / PR` on `main` runs lint, type-check, existing unit tests, package gates, the web build, and `cargo check` automatically
 - `Actions -> Release -> Run workflow`: set `ref` to a fixed commit SHA, reuse the CI gates, and build four-platform test installers as workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: use the same gates and installer build flow, keep the Release as a draft, and publish it after every platform build succeeds
-- Stable releases automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes DMG SHA256 and pushes Cask update)
+- All published releases, including betas, automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes both DMG SHA256 values and pushes the Cask update); the one-line installer also selects the latest published release
 
 Unit tests use authoritative prototypes and existing fixtures from the private `hexclaw-docs` repository. Only the test job checks it out with the read-only `HEXCLAW_DOCS_READ_KEY`; the repository variable `HEXCLAW_DOCS_TEST_REF` pins the validated reference commit. For local runs, keep that repository beside the desktop repository. Routine CI does not invoke models, send IM messages, or operate native windows; those checks remain in the existing functional acceptance workflows.
 

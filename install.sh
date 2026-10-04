@@ -4,7 +4,7 @@
 #
 # What this script does:
 #   1. Detects your Mac's CPU architecture (Apple Silicon / Intel)
-#   2. Downloads the latest .dmg from GitHub Releases
+#   2. 下载最新已公开的 .dmg，包含预发布版
 #   3. Mounts it, copies HexClaw.app to /Applications
 #   4. Removes the quarantine flag so Gatekeeper won't block it
 #   5. Cleans up
@@ -41,16 +41,10 @@ case "$ARCH" in
 esac
 info "Detected architecture: ${BOLD}${ARCH}${RESET} (${DMG_ARCH})"
 
-# ─── Fetch latest release tag ────────────────────────
-info "Fetching latest release from GitHub..."
-LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '"v[^"]*"' | tr -d '"')
-
-if [[ -z "$LATEST_TAG" ]]; then
-  # Fallback: list all releases and pick the first tag
-  LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" \
-    | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '"v[^"]*"' | tr -d '"')
-fi
+# 未认证的公开列表不包含 Draft，并包含已公开的预发布版。
+info "Fetching latest published release from GitHub..."
+LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" \
+  | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '"v[^"]*"' | tr -d '"' || true)
 
 [[ -n "$LATEST_TAG" ]] || fail "Could not determine latest release. Check https://github.com/${REPO}/releases"
 

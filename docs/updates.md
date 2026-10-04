@@ -97,7 +97,7 @@ git push origin v0.5.0-beta.3
 
 ### Homebrew Cask 与 Beta 发布
 
-`Release` 的 `update-tap` 只自动更新稳定版本。含 `-` 的预发布 tag（包括 `v0.5.0-beta.3`）会跳过该任务，Beta 的 Cask 需要单独更新。
+`Release` 的 `update-tap` 在每次 tag Release 公开后自动更新 Cask，稳定版与 Beta 使用同一流程；手动试打包不更新 Tap。一键安装也从公开 Release 列表选择最新版本，包含 Beta，不安装 Draft。
 
 先发布并确认 Desktop 的两种 macOS DMG 均可下载，再更新 [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb)：版本应对应 Desktop Release；ARM 与 Intel 的 SHA256 分别来自实际发布的 `HexClaw_<版本>_aarch64.dmg` 和 `HexClaw_<版本>_x64.dmg`；核对两种架构的 URL 均指向该版本的正确安装包。后端 tag 发布成功不能代替 Desktop 安装包与 Cask 的验证。macOS 继续使用未签名 DMG，不增加 Apple 代码签名或 notarization。
 
