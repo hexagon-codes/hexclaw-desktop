@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -188,21 +188,29 @@ test('pinned Ollama v0.32.13 provenance allowlist covers every fixed archive pay
   for (const digest of fixedDigests) assert.match(source, new RegExp(`'${digest}'`, 'u'))
 })
 
-test('pinned Pandoc public build paths are allowed only for the exact binary', async (t) => {
+test('Pandoc public build paths require an allowed digest and resource location', async (t) => {
   const paths = await fixture('pandoc-public-provenance')
   t.after(() => rm(paths.root, { recursive: true, force: true }))
-  const source = fileURLToPath(new URL('../../src-tauri/binaries/pandoc-aarch64-apple-darwin', import.meta.url))
+  // 摘要与位置合同使用自足样本，不依赖工作区中已经下载的渲染引擎。
+  const payload = Buffer.from('/Users/admin/pandoc-build/source.hs\0')
+  const adapters = {
+    pandocProvenanceSHA256: new Set([createHash('sha256').update(payload).digest('hex')]),
+  }
   const bundled = join(paths.distRoot, 'pandoc-aarch64-apple-darwin')
-  await copyFile(source, bundled)
+  const moved = join(paths.distRoot, 'not-pandoc.bin')
+  await writeFile(bundled, payload)
 
   const verify = await loadBoundary()
-  assert.equal((await verify(paths)).findingCount, 0)
-
-  await rename(bundled, join(paths.distRoot, 'not-pandoc.bin'))
   await assert.rejects(verify(paths), /\[path:user-home\]/u)
+  assert.equal((await verify(paths, adapters)).findingCount, 0)
 
-  await writeFile(bundled, '/Users/admin/not-the-pinned-pandoc\\0')
-  await assert.rejects(verify(paths), /\[path:user-home\]/u)
+  await rename(bundled, moved)
+  await assert.rejects(verify(paths, adapters), /\[path:user-home\]/u)
+
+  await rename(moved, bundled)
+  assert.equal((await verify(paths, adapters)).findingCount, 0)
+  await writeFile(bundled, Buffer.concat([payload, Buffer.from([1])]))
+  await assert.rejects(verify(paths, adapters), /\[path:user-home\]/u)
 })
 
 test('public Ollama CI provenance remains allowed across a scan chunk boundary', async (t) => {

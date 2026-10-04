@@ -292,7 +292,7 @@ test('build fingerprint invalidates every dirty content class without recording 
           ]) {
             const target = join(repoRoot, file)
             await mkdir(dirname(target), { recursive: true })
-            await writeFile(target, `${file}\n`)
+            await writeFile(target, file.endsWith('.json') ? '{}\n' : `${file}\n`)
           }
         }
         await execFileAsync('git', ['-C', repoRoot, 'add', '.'])
@@ -346,7 +346,7 @@ test('build fingerprint invalidates every dirty content class without recording 
           })
           return { code: 0, stdout: result.stdout }
         } catch (error) {
-          return { code: error.code, stdout: error.stdout ?? '' }
+          return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }
         }
       }
       const gitStatus = async () =>
@@ -359,7 +359,7 @@ test('build fingerprint invalidates every dirty content class without recording 
       assert.notEqual(statusBefore, '')
 
       const initialMiss = await runFingerprint()
-      assert.equal(initialMiss.code, 2)
+      assert.equal(initialMiss.code, 2, initialMiss.stderr)
       assert.match(initialMiss.stdout, /fingerprint miss/u)
       const initialStateText = await readFile(statePath, 'utf8')
       const manifestWrite = await runFingerprint(['--write-manifest'])

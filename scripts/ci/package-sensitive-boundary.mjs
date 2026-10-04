@@ -281,6 +281,18 @@ function ollamaProvenanceDigests(adapters) {
   return configured
 }
 
+function pandocProvenanceDigests(adapters) {
+  const configured = adapters?.pandocProvenanceSHA256
+  if (configured === undefined) return PANDOC_PUBLIC_PROVENANCE_SHA256
+  if (
+    !(configured instanceof Set) ||
+    [...configured].some((value) => typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value))
+  ) {
+    fail('input:pandoc-provenance')
+  }
+  return configured
+}
+
 function scanLimits(overrides = {}) {
   const limits = {
     maxEntries: overrides.maxEntries ?? MAX_SCAN_ENTRIES,
@@ -543,6 +555,7 @@ async function scanFile(
   limits,
   observations,
   allowedOllamaProvenance,
+  allowedPandocProvenance,
 ) {
   let handle
   try {
@@ -596,7 +609,7 @@ async function scanFile(
    if (observedOllamaProvenance && !allowedOllamaProvenance.has(sha256 ?? '')) {
      fail('path:user-home', displayPath)
    }
-    if (observedPandocProvenance && !PANDOC_PUBLIC_PROVENANCE_SHA256.has(sha256 ?? '')) {
+    if (observedPandocProvenance && !allowedPandocProvenance.has(sha256 ?? '')) {
       fail('path:user-home', displayPath)
     }
    const after = await handle.stat({ bigint: true })
@@ -616,6 +629,7 @@ async function scanRoot(
   limits,
   observations = {},
   allowedOllamaProvenance = OLLAMA_PUBLIC_PROVENANCE_SHA256,
+  allowedPandocProvenance = PANDOC_PUBLIC_PROVENANCE_SHA256,
 ) {
   const rootMetadata = await lstat(root).catch(() => undefined)
   if (!rootMetadata?.isDirectory() || rootMetadata.isSymbolicLink()) {
@@ -645,7 +659,15 @@ async function scanRoot(
         fail('file:symbolic-link', displayPath)
       }
       if (!metadata.isFile()) fail('file:non-regular', displayPath)
-      await scanFile(pathname, displayPath, budget, limits, observations, allowedOllamaProvenance)
+      await scanFile(
+        pathname,
+        displayPath,
+        budget,
+        limits,
+        observations,
+        allowedOllamaProvenance,
+        allowedPandocProvenance,
+      )
     }
   }
   await visit(root)
@@ -656,12 +678,28 @@ async function scanRoot(
   })
 }
 
-async function scanPackageRoots(options, limits, allowedOllamaProvenance) {
+async function scanPackageRoots(options, limits, allowedOllamaProvenance, allowedPandocProvenance) {
   const distRoot = requireAbsoluteDirectory(options?.distRoot, 'dist-root')
   const appBundle = requireAbsoluteDirectory(options?.appBundle, 'app-bundle')
   const budget = { bytes: 0, entries: 0, files: 0 }
-  const dist = await scanRoot(distRoot, 'dist', budget, limits, {}, allowedOllamaProvenance)
-  const app = await scanRoot(appBundle, 'HexClaw.app', budget, limits, {}, allowedOllamaProvenance)
+  const dist = await scanRoot(
+    distRoot,
+    'dist',
+    budget,
+    limits,
+    {},
+    allowedOllamaProvenance,
+    allowedPandocProvenance,
+  )
+  const app = await scanRoot(
+    appBundle,
+    'HexClaw.app',
+    budget,
+    limits,
+    {},
+    allowedOllamaProvenance,
+    allowedPandocProvenance,
+  )
   if (
     budget.entries > limits.maxEntries ||
     budget.files > limits.maxFiles ||
@@ -695,6 +733,7 @@ export async function verifyPackageSensitiveBoundary(options, adapters = {}) {
       { distRoot, appBundle },
       limits,
       ollamaProvenanceDigests(adapters),
+      pandocProvenanceDigests(adapters),
     )
     return Object.freeze({ ...result, metadataVerified: process.platform === 'darwin' })
   } catch (error) {
@@ -719,6 +758,7 @@ export async function verifyPackageRootBoundary(options, adapters = {}) {
       limits,
       {},
       ollamaProvenanceDigests(adapters),
+      pandocProvenanceDigests(adapters),
     )
     return Object.freeze({ findingCount: 0, ...result, scannedRoots: 1 })
   } catch (error) {
