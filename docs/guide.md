@@ -2,7 +2,7 @@
 
 # HexClaw Desktop 使用指南
 
-适用 Desktop 版本：`v0.5.0-beta.2`，内置后端源码来自 `v0.5.0-beta.1`。本次工程更新见 [Changelog](../CHANGELOG.md)，安装与自动更新的发布条件见[自动更新发布说明](./updates.md)。
+适用 Desktop 版本：`v0.5.0-beta.3`，内置后端源码来自 `v0.5.0-beta.1`。本次工程更新见 [Changelog](../CHANGELOG.md)，安装与自动更新的发布条件见[自动更新发布说明](./updates.md)。
 
 ## 目录
 
@@ -89,7 +89,7 @@ HexClaw 已接入 Tauri updater。应用启动后会静默检查更新，用户�
 如果你只是本地打包测试：
 
 - 不需要 updater 私钥
-- `Package` 工作流会在缺少签名私钥时自动关闭 updater 制品生成
+- 手动触发 `Release` 并指定固定提交 SHA 构建测试安装包；缺少签名私钥时自动关闭 updater 制品生成
 - 这类包可以手动安装，但不能用于应用内自动更新
 - macOS 保持未签名 DMG，通过现有 Homebrew Cask 分发；不要求 Apple Developer ID 签名或公证
 

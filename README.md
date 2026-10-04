@@ -214,20 +214,27 @@ brew install --cask hexclaw
 
 ### CI / 打包 / Release 流程
 
-- 本次 Desktop 版本为 `v0.5.0-beta.2`，后端源码继续固定为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
+- 本次 Desktop 版本为 `v0.5.0-beta.3`，后端源码继续固定为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
 - `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、打包门禁、web build 和 `cargo check`
-- `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
-- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
+- `Actions -> Release -> Run workflow`: 在 `ref` 中指定固定提交 SHA，复用 CI 门禁并构建四平台测试安装包，产物保存在 workflow artifacts
+- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 复用同一门禁与安装包构建流程，保持 Release 为 Draft，全部平台构建成功后统一公开
 - 正式版发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算 DMG SHA256 → 推送 Cask 更新）
 
-单测使用私有 `hexclaw-docs` 中的权威原型和既有素材。仅单测 job 通过 `HEXCLAW_DOCS_READ_KEY` 只读 checkout；本地运行同组测试时，文档仓库与 desktop 仓库放在同一父目录。普通 CI 不调用模型、不发送 IM 消息，也不执行原生窗口操作；这些真实功能验收沿现有专用流程执行。
+单测使用私有 `hexclaw-docs` 中的权威原型和既有素材。仅单测 job 通过 `HEXCLAW_DOCS_READ_KEY` 只读 checkout，仓库变量 `HEXCLAW_DOCS_TEST_REF` 固定已验收的测试引用 commit；本地运行同组测试时，文档仓库与 desktop 仓库放在同一父目录。普通 CI 不调用模型、不发送 IM 消息，也不执行原生窗口操作；这些真实功能验收沿现有专用流程执行。
 
 正式发布前需要满足：
 
-- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 Desktop tag 一致（当前为 `v0.5.0-beta.2`）
+- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 Desktop tag 一致（当前为 `v0.5.0-beta.3`）
 - `Makefile` 的 `HEXCLAW_REF` 固定为合法后端 SemVer tag（当前为 `refs/tags/v0.5.0-beta.1`），独立于 Desktop 版号；内置 Sidecar 制品身份使用所属 Desktop 发行版号，不改变后端源码来源
 - `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
 - GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
+
+提交并推送后，可用当前提交的真实 SHA 触发测试安装包构建：
+
+```bash
+DESKTOP_REF="$(git rev-parse HEAD)"
+gh workflow run release.yml -f ref="$DESKTOP_REF"
+```
 
 > macOS 产物为 unsigned DMG，用户通过 `curl | bash` 一键安装脚本或 Homebrew 安装，自动处理 Gatekeeper。
 

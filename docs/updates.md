@@ -2,9 +2,9 @@
 
 # 自动更新发布说明
 
-## v0.5.0-beta.2（2026-10-04）
+## v0.5.0-beta.3（2026-10-04）
 
-本次 Desktop 版本为 `v0.5.0-beta.2`，后端源码继续固定为 `v0.5.0-beta.1`，变更见 [Changelog](../CHANGELOG.md)。普通 CI 检查源码并提前运行打包门禁；`Package` 手动生成安装包；Desktop 版本 tag 才触发 `Release`。这些阶段的结果分别记录，不将本地检查通过写成 GitHub Release 已发布。
+本次 Desktop 版本为 `v0.5.0-beta.3`，后端源码继续固定为 `v0.5.0-beta.1`，变更见 [Changelog](../CHANGELOG.md)。工作流保留 `CI` 与 `Release` 两个入口，共用同一组现有门禁；`Release` 手动触发时只生成测试安装包，Desktop 版本 tag 触发时构建 Draft Release，全部平台构建成功后才公开。各阶段的结果分别记录，不将本地检查通过写成 GitHub Release 已发布。
 
 HexClaw Desktop 使用 Tauri updater。要让应用内“检查更新 / 下载并安装”真正可用，需要同时满足下面 4 个条件：
 
@@ -20,7 +20,7 @@ HexClaw Desktop 使用 Tauri updater。要让应用内“检查更新 / 下载�
 适合 UI 调试、内部测试、手动安装。
 
 - 可以没有 updater 私钥
-- `Package` 工作流会在缺少私钥时自动关闭 updater 制品生成
+- `Release` 手动打包和 tag 发布均会在缺少私钥时自动关闭 updater 制品生成
 - 产物仍然可以手动安装
 - 但应用内自动更新不会生效
 
@@ -76,22 +76,28 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `src-tauri/Cargo.toml`
    - `src-tauri/Cargo.lock` 中 `hexclaw-desktop` 的根包版本
 2. 核对 `Makefile` 中的 `HEXCLAW_REF` 为固定、已存在的后端 SemVer tag，当前为 `refs/tags/v0.5.0-beta.1`。后端来源版号独立于 Desktop 版号；内置 Sidecar 制品身份随 Desktop 发行版号注入。
-3. 提交代码并推送，确认普通 CI 与 `Package` 四平台安装包构建通过，再创建并推送本次 Desktop tag；已推送的 tag 不删除或移动。以下命令仅说明入口：
+3. 提交代码并推送，确认普通 CI 通过。使用已推送的固定提交 SHA 手动触发 `Release`，确认四平台测试安装包构建通过；手动运行只上传 workflow artifacts，不发布 GitHub Release：
 
 ```bash
-git tag v0.5.0-beta.2
-git push origin v0.5.0-beta.2
+DESKTOP_REF="$(git rev-parse HEAD)"
+gh workflow run release.yml -f ref="$DESKTOP_REF"
 ```
 
-4. 等待 GitHub Actions 的 `Release` 工作流完成
-5. 确认 Release 附件里包含：
-   - `latest.json`
+4. 核对上述构建结果，再创建并推送本次 Desktop tag；已推送的 tag 不删除或移动。以下命令仅说明入口：
+
+```bash
+git tag v0.5.0-beta.3
+git push origin v0.5.0-beta.3
+```
+
+5. 等待 tag 触发的 `Release` 工作流完成；构建期间 Release 保持 Draft，全部平台构建成功后才公开
+6. 确认公开 Release 附件里包含：
    - macOS / Windows / Linux 对应安装包
-   - 对应平台的 updater 签名产物
+   - 启用 updater 签名时的 `latest.json` 和对应平台签名更新产物
 
 ### Homebrew Cask 与 Beta 发布
 
-`Release` 的 `update-tap` 只自动更新稳定版本。含 `-` 的预发布 tag（包括 `v0.5.0-beta.2`）会跳过该任务，Beta 的 Cask 需要单独更新。
+`Release` 的 `update-tap` 只自动更新稳定版本。含 `-` 的预发布 tag（包括 `v0.5.0-beta.3`）会跳过该任务，Beta 的 Cask 需要单独更新。
 
 先发布并确认 Desktop 的两种 macOS DMG 均可下载，再更新 [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb)：版本应对应 Desktop Release；ARM 与 Intel 的 SHA256 分别来自实际发布的 `HexClaw_<版本>_aarch64.dmg` 和 `HexClaw_<版本>_x64.dmg`；核对两种架构的 URL 均指向该版本的正确安装包。后端 tag 发布成功不能代替 Desktop 安装包与 Cask 的验证。macOS 继续使用未签名 DMG，不增加 Apple 代码签名或 notarization。
 
@@ -124,8 +130,9 @@ Tauri updater 私钥不会。它影响的是自动更新制品签名，不影响
 
 ### workflow 现在会自动验证什么？
 
-- 普通 `CI` 保留 lint、type-check、既有单测、打包门禁、web build 与 `cargo check`；单测以只读凭据获取私有原型和素材，不把真实模型、IM 或原生窗口验收放入普通 CI。
-- `Package` 和 `Release` 在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时自动关闭 updater 制品生成，仍产出可手动安装的未签名包。
+- 普通 `CI` 保留 lint、type-check、既有单测、打包门禁、web build 与 `cargo check`；`Release` 复用相同的 CI 门禁。单测以只读凭据获取私有原型和素材，不把真实模型、IM 或原生窗口验收放入普通 CI。
+- `Release` 手动打包与 tag 发布使用相同的四平台安装包构建步骤；手动运行只上传 workflow artifacts，tag 运行在全部构建成功后公开 Draft Release。
+- `Release` 在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时自动关闭 updater 制品生成，仍产出可手动安装的未签名包。
 - `Release` 校验 Desktop 版本号（`package.json` / `tauri.conf.json` / `Cargo.toml`）与发布 tag 一致，并独立校验 `Makefile` 的 `HEXCLAW_REF` 是固定的合法后端 SemVer tag。后端源码不要求与 Desktop 同版；内置 Sidecar 制品身份仍与 Desktop 发行版一致。
 
 ### 预发布版本会自动更新吗？

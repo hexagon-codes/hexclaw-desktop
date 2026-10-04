@@ -2,7 +2,7 @@
 
 # HexClaw Desktop User Guide
 
-Applies to Desktop `v0.5.0-beta.2`, with bundled backend source from `v0.5.0-beta.1`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
+Applies to Desktop `v0.5.0-beta.3`, with bundled backend source from `v0.5.0-beta.1`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
 
 ## Table of Contents
 
@@ -89,7 +89,7 @@ HexClaw already integrates Tauri updater. The app performs a silent update check
 If you only need local packaging for testing:
 
 - You do not need an updater private key
-- The `Package` workflow disables updater artifacts automatically when the signing key is missing
+- Trigger `Release` manually with a fixed commit SHA to build test installers; it disables updater artifacts automatically when the signing key is missing
 - Those packages can be installed manually, but they cannot be used for in-app auto updates
 - macOS remains an unsigned DMG distributed through the existing Homebrew Cask; Apple Developer ID signing and notarization are not required
 
