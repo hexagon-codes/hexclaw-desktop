@@ -326,7 +326,7 @@ jobs:
   update-tap:
     name: Update Homebrew Tap
     needs: [validate, publish]
-    if: github.event_name == 'push' && needs.validate.outputs.prerelease != 'true'
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - name: Download macOS DMGs and compute SHA256

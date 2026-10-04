@@ -218,7 +218,7 @@ brew install --cask hexclaw
 - `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、打包门禁、web build 和 `cargo check`
 - `Actions -> Release -> Run workflow`: 在 `ref` 中指定固定提交 SHA，复用 CI 门禁并构建四平台测试安装包，产物保存在 workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 复用同一门禁与安装包构建流程，保持 Release 为 Draft，全部平台构建成功后统一公开
-- 正式版发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算 DMG SHA256 → 推送 Cask 更新）
+- 所有已公开版本（含 Beta）发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算两种 DMG 的 SHA256 → 推送 Cask 更新）；一键安装同样选择最新已公开版本
 
 单测使用私有 `hexclaw-docs` 中的权威原型和既有素材。仅单测 job 通过 `HEXCLAW_DOCS_READ_KEY` 只读 checkout，仓库变量 `HEXCLAW_DOCS_TEST_REF` 固定已验收的测试引用 commit；本地运行同组测试时，文档仓库与 desktop 仓库放在同一父目录。普通 CI 不调用模型、不发送 IM 消息，也不执行原生窗口操作；这些真实功能验收沿现有专用流程执行。
 

@@ -12,6 +12,9 @@
 - 合并手动打包与 tag 发布入口到 `Release`：手动指定固定提交 SHA 生成四平台测试安装包，产物保存在 workflow artifacts；tag 触发正式发布。
 - tag 构建期间保持 GitHub Release 为 Draft，全部平台安装包构建成功后统一公开，避免发布不完整资产。
 
+### 安装与分发
+- 一键安装支持最新已公开版本，包括 Beta；Homebrew Cask 在每次 tag Release 公开后同步版本与两种 macOS DMG 摘要。
+
 ## v0.5.0-beta.2（2026-10-04）
 
 ### 版本与后端
