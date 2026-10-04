@@ -6,7 +6,7 @@ const readRoot = (file: string) => readFileSync(resolve(process.cwd(), file), 'u
 
 describe('package workflow · release artifact contract', () => {
   it('stages every Tauri external binary and bundled Ollama resource', () => {
-    const workflow = readRoot('.github/workflows/package.yml')
+    const workflow = readRoot('.github/workflows/release.yml')
 
     expect(workflow).toContain('Download Ollama binary')
     expect(workflow).toContain('release/scripts/render-bundle.sh src-tauri/binaries')

@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit to package without publishing'
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -18,71 +25,83 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
-      - name: Validate version and updater config
-        run: node ./scripts/ci/verify-release.mjs "${GITHUB_REF_NAME}"
-
-      - name: Detect prerelease tag
+      - name: Validate metadata and resolve package source
         id: meta
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          node ./scripts/ci/verify-release.mjs "$TAG"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
   checks:
-    name: Lint, Type Check & Test
+    name: CI Checks
+    needs: [validate]
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+    secrets:
+      HEXCLAW_DOCS_READ_KEY: ${{ secrets.HEXCLAW_DOCS_READ_KEY }}
+
+  prepare-release:
+    name: Prepare Draft Release
+    needs: [validate, checks]
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.release.outputs.id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Checkout test references
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: hexagon-codes/hexclaw-docs
-          ssh-key: ${{ secrets.HEXCLAW_DOCS_READ_KEY }}
-          persist-credentials: false
-          path: .ci-docs
-
-      - name: Prepare reference path
-        run: mv .ci-docs ../hexclaw-docs
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Install test dependencies
+      - name: Resolve draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Type Check
-        run: pnpm type-check
-
-      - name: Test
-        run: pnpm test:unit
-
-      - name: Package Security Gates
-        run: pnpm test:package-gates
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "push" ]]; then
+            exit 0
+          fi
+          # Draft 不能按 tag 查询，使用列表复用失败运行已创建的 Release。
+          RELEASE_ID="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id")"
+          if [[ -z "$RELEASE_ID" ]]; then
+            RELEASE_ID="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$SOURCE_SHA" \
+              -f name="HexClaw Desktop ${RELEASE_TAG}" \
+              -f body='See the generated release notes below for changes in this version.' \
+              -F draft=true \
+              -F prerelease="$PRERELEASE" \
+              -F generate_release_notes=true \
+              --jq '.id')"
+          fi
+          echo "id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.target }})
-    needs: [validate, checks]
+    needs: [validate, checks, prepare-release]
     permissions:
       contents: write
     defaults:
@@ -124,6 +143,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
 
       # --- Go sidecar build ---
       - name: Resolve hexclaw backend ref
@@ -246,6 +267,7 @@ jobs:
           if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
             args="$args --bundles nsis"
           fi
+          args="$args -- --locked"
           echo "args=$args" >> "$GITHUB_OUTPUT"
 
       - name: Build Tauri app
@@ -255,20 +277,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'HexClaw Desktop ${{ github.ref_name }}'
-          releaseBody: |
-            See the generated release notes below for changes in this version.
-          generateReleaseNotes: true
-          releaseDraft: false
-          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          releaseId: ${{ needs.prepare-release.outputs.id }}
+          tagName: ${{ github.event_name == 'push' && needs.validate.outputs.tag || '' }}
           args: ${{ steps.tauri_args.outputs.args }}
           retryAttempts: 2
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: hexclaw-${{ github.ref_name }}-${{ matrix.target }}
+          name: hexclaw-${{ needs.validate.outputs.tag }}-${{ matrix.target }}
           if-no-files-found: error
           path: |
             ${{ startsWith(matrix.target, 'aarch64-apple-darwin') && 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg' || '' }}
@@ -277,27 +294,53 @@ jobs:
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
 
-  update-tap:
-    name: Update Homebrew Tap
-    needs: [validate, build]
-    if: needs.validate.outputs.prerelease != 'true'
+      - name: Upload updater artifacts and signatures
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hexclaw-updater-${{ needs.validate.outputs.tag }}-${{ matrix.target }}
+          if-no-files-found: warn
+          path: |
+            ${{ startsWith(matrix.target, 'aarch64-apple-darwin') && 'src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz*' || '' }}
+            ${{ startsWith(matrix.target, 'x86_64-apple-darwin') && 'src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz*' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage.sig' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz*' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig' || '' }}
+
+  publish:
+    name: Publish Release
+    needs: [validate, prepare-release, build]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
-      - name: Wait for release assets to be available
-        run: sleep 30
+      - name: Publish completed draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.id }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false -F prerelease="$PRERELEASE" --silent
 
+  update-tap:
+    name: Update Homebrew Tap
+    needs: [validate, publish]
+    if: github.event_name == 'push' && needs.validate.outputs.prerelease != 'true'
+    runs-on: ubuntu-24.04
+    steps:
       - name: Download macOS DMGs and compute SHA256
         id: sha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
           REPO="hexagon-codes/hexclaw-desktop"
 
-          # Output keys stay sha_aarch64 / sha_x86_64 (consumed by Update Cask), but the
-          # release DMG filenames use aarch64 / x64 — map the Intel suffix to x64 so the
-          # download hits the real asset (HexClaw_<ver>_x64.dmg) and the Intel sha updates.
+          # 输出键与 Cask 对应，Intel 安装包文件名使用 x64 后缀。
           for ARCH in aarch64 x86_64; do
             case "$ARCH" in
               x86_64) DMG_ARCH="x64" ;;
@@ -306,8 +349,9 @@ jobs:
             DMG="HexClaw_${VERSION}_${DMG_ARCH}.dmg"
             URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG}"
             echo "Downloading ${DMG}..."
-            curl -fSL -o "/tmp/${DMG}" "$URL" || { echo "::warning::DMG not found: ${DMG}"; continue; }
+            curl -fSL -o "/tmp/${DMG}" "$URL"
             SHA=$(sha256sum "/tmp/${DMG}" | awk '{print $1}')
+            [[ "$SHA" =~ ^[0-9a-f]{64}$ ]]
             echo "SHA256 (${ARCH}): ${SHA}"
             echo "sha_${ARCH}=${SHA}" >> "$GITHUB_OUTPUT"
           done
@@ -322,19 +366,17 @@ jobs:
 
       - name: Update Cask
         run: |
+          set -euo pipefail
           VERSION="${{ steps.sha.outputs.version }}"
           SHA_ARM="${{ steps.sha.outputs.sha_aarch64 }}"
           SHA_INTEL="${{ steps.sha.outputs.sha_x86_64 }}"
           CASK="homebrew-tap/Casks/hexclaw.rb"
+          [[ "$SHA_ARM" =~ ^[0-9a-f]{64}$ && "$SHA_INTEL" =~ ^[0-9a-f]{64}$ ]]
 
           sed -i "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
 
-          if [[ -n "$SHA_ARM" ]]; then
-            sed -i "/on_arm/,/end/{s/sha256 .*/sha256 \"${SHA_ARM}\"/;}" "$CASK"
-          fi
-          if [[ -n "$SHA_INTEL" ]]; then
-            sed -i "/on_intel/,/end/{s/sha256 .*/sha256 \"${SHA_INTEL}\"/;}" "$CASK"
-          fi
+          sed -i "/on_arm/,/end/{s/sha256 .*/sha256 \"${SHA_ARM}\"/;}" "$CASK"
+          sed -i "/on_intel/,/end/{s/sha256 .*/sha256 \"${SHA_INTEL}\"/;}" "$CASK"
 
           echo "Updated Cask to ${VERSION}"
           cat "$CASK"

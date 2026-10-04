@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const repoRoot = new URL('../../', import.meta.url)
-const workflowPaths = ['.github/workflows/package.yml', '.github/workflows/release.yml']
+const workflowPaths = ['.github/workflows/release.yml']
 
 const expectedMatrix = [
   {

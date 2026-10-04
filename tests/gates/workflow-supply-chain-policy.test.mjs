@@ -7,7 +7,11 @@ import test from 'node:test'
 const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const WORKFLOW_DIRECTORY = path.join(REPOSITORY_ROOT, '.github', 'workflows')
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i
-const ALLOWED_WRITE_GRANTS = new Set(['release.yml:build:contents'])
+const ALLOWED_WRITE_GRANTS = new Set([
+  'release.yml:build:contents',
+  'release.yml:publish:contents',
+  'release.yml:prepare-release:contents',
+])
 
 function issue(file, line, rule, detail) {
   return `${file}:${line} [${rule}] ${detail}`
@@ -123,5 +127,5 @@ test('repository workflows use immutable dependencies and least-privilege tokens
   }
 
   assert.deepEqual(violations, [], violations.join('\n'))
-  assert.deepEqual(new Set(writeGrants), ALLOWED_WRITE_GRANTS, 'release publishing must be the only write-capable job')
+  assert.deepEqual(new Set(writeGrants), ALLOWED_WRITE_GRANTS, 'release building and publishing must be the only write-capable jobs')
 })

@@ -694,10 +694,9 @@ test('currently staged sidecar embeds the canonical Tauri release version', asyn
 })
 
 test('all local and CI sidecar build paths inject Desktop version identity and verify before bundling', async () => {
-  const [makefile, packageLocal, packageWorkflow, releaseWorkflow] = await Promise.all([
+  const [makefile, packageLocal, releaseWorkflow] = await Promise.all([
     readRepoFile('Makefile'),
     readRepoFile('scripts/ci/package-local.mjs'),
-    readRepoFile('.github/workflows/package.yml'),
     readRepoFile('.github/workflows/release.yml'),
   ])
 
@@ -726,23 +725,22 @@ test('all local and CI sidecar build paths inject Desktop version identity and v
     'local sidecar version gate must execute before Tauri bundling',
   )
 
-  for (const workflow of [packageWorkflow, releaseWorkflow]) {
-    assert.doesNotMatch(workflow, /VERSION="\$\(git describe --tags --always --dirty/)
-    assert.match(
-      workflow,
-      /DESKTOP_VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version\.replace\(\/\^v\/, ''\)"\)"/,
-    )
-    assert.match(workflow, /verify-sidecar-version\.mjs/)
-    assert.match(
-      workflow,
-      /-X main\.sidecarVersionIdentity=hexclaw-sidecar-version=\$\{VERSION\};/u,
-    )
-    assert.doesNotMatch(workflow, /verify-sidecar-version\.mjs[^\n]*DESKTOP_VERSION/)
-    assert.ok(
-      workflow.indexOf('verify-sidecar-version.mjs') < workflow.indexOf('tauri-apps/tauri-action'),
-      'CI sidecar version gate must execute before Tauri bundling',
-    )
-  }
+  assert.doesNotMatch(releaseWorkflow, /VERSION="\$\(git describe --tags --always --dirty/)
+  assert.match(
+    releaseWorkflow,
+    /DESKTOP_VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version\.replace\(\/\^v\/, ''\)"\)"/,
+  )
+  assert.match(releaseWorkflow, /verify-sidecar-version\.mjs/)
+  assert.match(
+    releaseWorkflow,
+    /-X main\.sidecarVersionIdentity=hexclaw-sidecar-version=\$\{VERSION\};/u,
+  )
+  assert.doesNotMatch(releaseWorkflow, /verify-sidecar-version\.mjs[^\n]*DESKTOP_VERSION/)
+  assert.ok(
+    releaseWorkflow.indexOf('verify-sidecar-version.mjs') <
+      releaseWorkflow.indexOf('tauri-apps/tauri-action'),
+    'CI sidecar version gate must execute before Tauri bundling',
+  )
 })
 
 test('package-local sidecar and Ollama inspections bind the dependency Go copy to its source digest', async () => {

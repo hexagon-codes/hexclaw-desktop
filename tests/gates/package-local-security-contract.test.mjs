@@ -9,7 +9,7 @@ const makefileURL = new URL('../../Makefile', import.meta.url)
 const makefilePath = fileURLToPath(makefileURL)
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const packageManifestURL = new URL('../../package.json', import.meta.url)
-const packageWorkflowURL = new URL('../../.github/workflows/package.yml', import.meta.url)
+const ciWorkflowURL = new URL('../../.github/workflows/ci.yml', import.meta.url)
 const releaseWorkflowURL = new URL('../../.github/workflows/release.yml', import.meta.url)
 const orchestratorURL = new URL('../../scripts/ci/package-local.mjs', import.meta.url)
 const dependencyProvenanceURL = new URL(
@@ -30,10 +30,10 @@ function targetRecipe(source, name, nextName) {
   return source.slice(start, end)
 }
 
-test('package and release workflows execute the focused package security gates', async () => {
-  const [packageManifest, ...workflows] = await Promise.all([
+test('the unified release executes the focused package security gates through CI', async () => {
+  const [packageManifest, ciWorkflow, releaseWorkflow] = await Promise.all([
     readFile(packageManifestURL, 'utf8').then(JSON.parse),
-    readFile(packageWorkflowURL, 'utf8'),
+    readFile(ciWorkflowURL, 'utf8'),
     readFile(releaseWorkflowURL, 'utf8'),
   ])
   const command = packageManifest.scripts?.['test:package-gates']
@@ -48,9 +48,13 @@ test('package and release workflows execute the focused package security gates',
   ]) {
     assert.equal(command.includes(pathname), true, `${pathname} must be collected`)
   }
-  for (const workflow of workflows) {
-    assert.match(workflow, /run:\s*pnpm test:package-gates/u)
-  }
+  assert.match(ciWorkflow, /run:\s*pnpm test:package-gates/u)
+  const checksJob = releaseWorkflow.match(
+    /^  checks:\n([\s\S]*?)(?=^  [a-zA-Z0-9_-]+:)/mu,
+  )?.[1]
+  assert.equal(typeof checksJob, 'string', 'release must define the CI checks job')
+  assert.match(checksJob, /^    uses:\s*\.\/\.github\/workflows\/ci\.yml$/mu)
+  assert.match(checksJob, /^      ref:\s*\$\{\{\s*needs\.validate\.outputs\.sha\s*\}\}$/mu)
 })
 
 test('Make owns no package state and delegates only to the fixed Node orchestrator', async () => {
