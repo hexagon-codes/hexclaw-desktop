@@ -726,7 +726,9 @@ def publish_outputs(stage, destination, expected, source_mode):
     reject(len(expected_names) != 2 or len(set(expected_names)) != 2)
     reject(exact_regular_names(stage) != expected_names)
     for name in expected_names:
-        descriptor = os.open(os.path.join(stage, name), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # Windows 的 FlushFileBuffers 要求可写文件句柄。
+        access_mode = os.O_RDWR if os.name == "nt" else os.O_RDONLY
+        descriptor = os.open(os.path.join(stage, name), access_mode | getattr(os, "O_NOFOLLOW", 0))
         try:
             os.fsync(descriptor)
         finally:
