@@ -7,6 +7,7 @@ import {
   assertBinaryArchitectureInfo,
   assertBinaryContainsTargetArchitecture,
   describeBinaryTarget,
+  parseBinaryArchitecture,
   withSecureBinarySnapshot,
   withSecureFileSnapshot,
 } from './binary-architecture.mjs'
@@ -479,7 +480,9 @@ export async function inspectSidecarArtifact(binaryPath, expectedVersion, option
 }
 
 async function main() {
-  const [binaryPath, explicitExpectedVersion, explicitTargetTriple] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+  const ciBuild = argv[0] === '--ci-build'
+  const [binaryPath, explicitExpectedVersion, explicitTargetTriple] = ciBuild ? argv.slice(1) : argv
   if (!binaryPath) {
     console.error(
       'Usage: set the package Go toolchain identity and private generation, then verify-sidecar-version.mjs <sidecar-binary> [expected-version] [target-triple]',
@@ -500,15 +503,42 @@ async function main() {
   if (typeof expectedVersion !== 'string' || expectedVersion.length === 0) {
     throw new Error('Desktop release version is invalid')
   }
-  const artifact = await inspectSidecarArtifact(binaryPath, expectedVersion, {
-    goToolchain: {
-      executable: process.env.HEXCLAW_PACKAGE_GO_EXECUTABLE,
-      executableSha256: process.env.HEXCLAW_PACKAGE_GO_SHA256,
-      goroot: process.env.HEXCLAW_PACKAGE_GO_GOROOT,
-    },
-    snapshotRoot: process.env.HEXCLAW_PACKAGE_PRIVATE_GENERATION,
-    targetTriple: explicitTargetTriple,
-  })
+  let artifact
+  if (ciBuild) {
+    // CI 校验刚构建的跨平台制品；POSIX 私有快照仅用于本地装机生命周期。
+    const targetTriple = inferSidecarTarget(binaryPath)
+    if (explicitTargetTriple && explicitTargetTriple !== targetTriple) {
+      throw new Error('explicit target must match the sidecar filename')
+    }
+    const bytes = await readFile(binaryPath)
+    const metadata = execFileSync(
+      process.platform === 'win32' ? 'go.exe' : 'go',
+      ['version', '-m', binaryPath],
+      {
+        encoding: 'utf8',
+        timeout: GO_METADATA_TIMEOUT_MS,
+        maxBuffer: GO_METADATA_MAX_BUFFER_BYTES,
+      },
+    )
+    artifact = {
+      ...assertSidecarArtifact({
+        metadata,
+        architecture: parseBinaryArchitecture(bytes),
+        targetTriple,
+      }),
+      version: assertEmbeddedSidecarVersion(bytes, expectedVersion),
+    }
+  } else {
+    artifact = await inspectSidecarArtifact(binaryPath, expectedVersion, {
+      goToolchain: {
+        executable: process.env.HEXCLAW_PACKAGE_GO_EXECUTABLE,
+        executableSha256: process.env.HEXCLAW_PACKAGE_GO_SHA256,
+        goroot: process.env.HEXCLAW_PACKAGE_GO_GOROOT,
+      },
+      snapshotRoot: process.env.HEXCLAW_PACKAGE_PRIVATE_GENERATION,
+      targetTriple: explicitTargetTriple,
+    })
+  }
   console.log(`Sidecar artifact verified: ${artifact.version} (${artifact.targetTriple})`)
 }
 

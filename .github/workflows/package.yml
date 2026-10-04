@@ -24,6 +24,17 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - name: Checkout test references
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: hexagon-codes/hexclaw-docs
+          ssh-key: ${{ secrets.HEXCLAW_DOCS_READ_KEY }}
+          persist-credentials: false
+          path: .ci-docs
+
+      - name: Prepare reference path
+        run: mv .ci-docs ../hexclaw-docs
+
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -32,6 +43,11 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
 
       - name: Lint
         run: pnpm lint
@@ -123,10 +139,10 @@ jobs:
           VERSION="${DESKTOP_VERSION}"
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go build -ldflags="-s -w -X main.version=${VERSION} -X main.sidecarVersionIdentity=hexclaw-sidecar-version=${VERSION}; -X main.commit=${COMMIT} -X main.date=${DATE}" \
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.sidecarVersionIdentity=hexclaw-sidecar-version=${VERSION}; -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
           cd ..
-          node ./scripts/ci/verify-sidecar-version.mjs "src-tauri/binaries/${{ matrix.sidecar_name }}"
+          node ./scripts/ci/verify-sidecar-version.mjs --ci-build "src-tauri/binaries/${{ matrix.sidecar_name }}"
 
       - name: Download Ollama binary
         shell: bash
