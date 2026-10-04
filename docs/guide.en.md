@@ -2,7 +2,7 @@
 
 # HexClaw Desktop User Guide
 
-Applies to `v0.5.0-beta`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
+Applies to `v0.5.0-beta.1`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
 
 ## Table of Contents
 

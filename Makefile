@@ -7,7 +7,7 @@ override .SHELLFLAGS := -c
 .PHONY: dev build build-local package-local verify-package-local clean verify-local-deps verify-sidecar-version sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
-HEXCLAW_REF ?= refs/tags/v0.5.0-beta
+HEXCLAW_REF ?= refs/tags/v0.5.0-beta.1
 HEXCLAW_SRC_DIR ?= /tmp/hexclaw-gith-src
 HEXCLAW_LOCAL_SRC ?=
 DESKTOP_ROOT := $(CURDIR)

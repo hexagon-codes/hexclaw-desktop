@@ -2,7 +2,7 @@
 
 # 自动更新发布说明
 
-## v0.5.0-beta（2026-10-03）
+## v0.5.0-beta.1（2026-10-04）
 
 本次版本同步 CI 修复与发布说明，变更见 [Changelog](../CHANGELOG.md)。普通 CI 检查源码；`Package` 手动生成安装包；版本 tag 才触发 `Release`。这些阶段的结果分别记录，不将本地检查通过写成 GitHub Release 已发布。
 
@@ -74,13 +74,14 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - `src-tauri/Cargo.lock` 中 `hexclaw-desktop` 的根包版本
    - `Makefile` 中的 `HEXCLAW_REF`（应为 `refs/tags/v<版本号>`）
 2. 提交代码并推送
 3. 核对待发布版本及对应后端 tag，再创建并推送本次 tag；已推送的 tag 不删除或移动。以下命令仅说明入口：
 
 ```bash
-git tag v0.5.0-beta
-git push origin v0.5.0-beta
+git tag v0.5.0-beta.1
+git push origin v0.5.0-beta.1
 ```
 
 4. 等待 GitHub Actions 的 `Release` 工作流完成
@@ -88,6 +89,12 @@ git push origin v0.5.0-beta
    - `latest.json`
    - macOS / Windows / Linux 对应安装包
    - 对应平台的 updater 签名产物
+
+### Homebrew Cask 与 Beta 发布
+
+`Release` 的 `update-tap` 只自动更新稳定版本。含 `-` 的预发布 tag（包括 `v0.5.0-beta.1`）会跳过该任务，Beta 的 Cask 需要单独更新。
+
+先发布并确认 Desktop 的两种 macOS DMG 均可下载，再更新 [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb)：版本应对应 Desktop Release；ARM 与 Intel 的 SHA256 分别来自实际发布的 `HexClaw_<版本>_aarch64.dmg` 和 `HexClaw_<版本>_x64.dmg`；核对两种架构的 URL 均指向该版本的正确安装包。后端 tag 发布成功不能代替 Desktop 安装包与 Cask 的验证。macOS 继续使用未签名 DMG，不增加 Apple 代码签名或 notarization。
 
 ## 应用内体验
 

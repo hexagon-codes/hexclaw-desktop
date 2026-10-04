@@ -211,7 +211,7 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 
 ### CI / Packaging / Release Flow
 
-- This release uses `v0.5.0-beta`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
+- This release uses `v0.5.0-beta.1`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
 - `push / PR` on `main` runs lint, type-check, existing unit tests, the web build, and `cargo check` automatically
 - `Actions -> Package -> Run workflow`: builds test installers for all platforms and uploads them as workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: builds and publishes the official GitHub Release assets
@@ -221,8 +221,8 @@ Unit tests use authoritative prototypes and existing fixtures from the private `
 
 Before creating a release tag, make sure:
 
-- `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` versions match the tag (currently `v0.5.0-beta`)
-- `HEXCLAW_REF` in `Makefile` is `refs/tags/v0.5.0-beta` for the same backend release
+- The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, along with the root package version in `src-tauri/Cargo.lock`, match the tag (currently `v0.5.0-beta.1`)
+- `HEXCLAW_REF` in `Makefile` is `refs/tags/v0.5.0-beta.1` for the same backend release
 - the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
 - GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` (optional, for Tauri auto-update signing)
 
@@ -252,7 +252,7 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.5.0-beta by default)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.5.0-beta.1 by default)
 make sidecar
 
 # 4. Start development mode
@@ -260,7 +260,7 @@ make dev
 ```
 
 > **Note**:
-> - `make sidecar` pulls `refs/tags/v0.5.0-beta` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - `make sidecar` pulls `refs/tags/v0.5.0-beta.1` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
@@ -502,7 +502,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` compilation fails
 
 1. Verify Go >= 1.25 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta.1`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen

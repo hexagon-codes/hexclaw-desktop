@@ -214,7 +214,7 @@ brew install --cask hexclaw
 
 ### CI / 打包 / Release 流程
 
-- 本次版本为 `v0.5.0-beta`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
+- 本次版本为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
 - `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、web build 和 `cargo check`
 - `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
@@ -224,8 +224,8 @@ brew install --cask hexclaw
 
 正式发布前需要满足：
 
-- `package.json`、`src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml` 的版本号和 tag 一致（当前为 `v0.5.0-beta`）
-- `Makefile` 的 `HEXCLAW_REF` 为同一版本的 `refs/tags/v0.5.0-beta`
+- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 tag 一致（当前为 `v0.5.0-beta.1`）
+- `Makefile` 的 `HEXCLAW_REF` 为同一版本的 `refs/tags/v0.5.0-beta.1`
 - `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
 - GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
 
@@ -255,7 +255,7 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.5.0-beta)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.5.0-beta.1)
 make sidecar
 
 # 本机全生态联调/装机测试：使用 ../hexclaw 和 ../go.work 中的本地最新代码
@@ -269,7 +269,7 @@ make dev
 ```
 
 > **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0-beta` 到 `/tmp/hexclaw-gith-src` 并编译
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0-beta.1` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - 本机装机测试使用 `make sidecar-local`，等价于 `HEXCLAW_LOCAL_SRC=../hexclaw HEXCLAW_GOWORK=../go.work make sidecar`，会让 `ai-core`、`hexagon`、`toolkit` 走本地 Go workspace
 > - 本机完整打包使用 `make package-local`，由打包脚本校验本地 Go workspace，并从 desktop 仓库位置推导同级源码工作区；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
@@ -520,7 +520,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` 编译失败
 
 1. 确认 Go >= 1.25 已安装: `go version`
-2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta`
+2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta.1`
 3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
 
 ### `make dev` 启动后白屏

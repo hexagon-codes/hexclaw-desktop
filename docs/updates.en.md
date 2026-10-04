@@ -2,7 +2,7 @@
 
 # Auto-Update Release Guide
 
-## v0.5.0-beta (2026-10-03)
+## v0.5.0-beta.1 (2026-10-04)
 
 This version updates CI checks and release documentation; see the [Changelog](../CHANGELOG.md). Routine CI validates source, `Package` builds installers on demand, and a version tag triggers `Release`. Results for these stages are recorded separately; local checks do not establish that a GitHub Release has been published.
 
@@ -74,13 +74,14 @@ If your private key has no password, the second secret can stay empty or be omit
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - the `hexclaw-desktop` root package version in `src-tauri/Cargo.lock`
    - `HEXCLAW_REF` in `Makefile` (it must be `refs/tags/v<version>`)
 2. Commit and push your changes
 3. Verify the release version and matching backend tag, then create and push the release tag. Do not delete or move a published tag. These commands illustrate the entry point:
 
 ```bash
-git tag v0.5.0-beta
-git push origin v0.5.0-beta
+git tag v0.5.0-beta.1
+git push origin v0.5.0-beta.1
 ```
 
 4. Wait for the GitHub Actions `Release` workflow to finish
@@ -88,6 +89,12 @@ git push origin v0.5.0-beta
    - `latest.json`
    - platform installers for macOS / Windows / Linux
    - the matching signed updater artifacts
+
+### Homebrew Cask and Beta Releases
+
+The `Release` workflow runs `update-tap` automatically only for stable versions. Prerelease tags containing `-`, including `v0.5.0-beta.1`, skip this job, so a Beta Cask needs a separate update.
+
+Publish the Desktop release and confirm that both macOS DMGs are downloadable before updating the [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb). Its version must match the Desktop Release. Calculate the ARM and Intel SHA256 values from the published `HexClaw_<version>_aarch64.dmg` and `HexClaw_<version>_x64.dmg`, respectively, and verify that both architecture URLs point to the correct installers for that version. A successful backend tag release does not verify the Desktop installers or Cask. macOS distribution continues to use unsigned DMGs without Apple code signing or notarization.
 
 ## In-App Experience
 
