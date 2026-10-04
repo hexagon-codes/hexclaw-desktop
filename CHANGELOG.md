@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0-beta.2（2026-10-04）
+
+### 版本与后端
+- Desktop 版本更新为 `v0.5.0-beta.2`，同步 Node、Tauri、Cargo 元数据与 Cargo 根包锁版本；后端源码继续固定为 `refs/tags/v0.5.0-beta.1`。
+- Desktop 发布 tag 与应用元数据保持一致，后端来源独立校验为固定的合法 SemVer tag；内置 Sidecar 制品身份继续使用所属 Desktop 发行版号。
+
+### CI 与打包
+- Pandoc 打包门禁改用自足 fixture，消除对开发机已下载二进制的依赖，并保留正式制品的默认摘要与资源位置校验。
+- 修正构建指纹测试的临时 JSON 配置，使 Node 22 能正常加载测试目录，保留源码变化导致指纹失效的行为检查。
+- 普通 CI 提前运行与 `Package` / `Release` 相同的打包门禁，及时发现干净 Runner 的环境差异。
+- 固定渲染构建脚本中 Python / Bash 字段协议的 LF 输出，避免 Windows Python 的 CRLF 污染工作目录和二进制字节数。
+
 ## v0.5.0-beta.1（2026-10-04）
 
 ### 版本与后端

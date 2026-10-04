@@ -214,8 +214,8 @@ brew install --cask hexclaw
 
 ### CI / 打包 / Release 流程
 
-- 本次版本为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
-- `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、web build 和 `cargo check`
+- 本次 Desktop 版本为 `v0.5.0-beta.2`，后端源码继续固定为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
+- `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、打包门禁、web build 和 `cargo check`
 - `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
 - 正式版发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算 DMG SHA256 → 推送 Cask 更新）
@@ -224,8 +224,8 @@ brew install --cask hexclaw
 
 正式发布前需要满足：
 
-- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 tag 一致（当前为 `v0.5.0-beta.1`）
-- `Makefile` 的 `HEXCLAW_REF` 为同一版本的 `refs/tags/v0.5.0-beta.1`
+- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 Desktop tag 一致（当前为 `v0.5.0-beta.2`）
+- `Makefile` 的 `HEXCLAW_REF` 固定为合法后端 SemVer tag（当前为 `refs/tags/v0.5.0-beta.1`），独立于 Desktop 版号；内置 Sidecar 制品身份使用所属 Desktop 发行版号，不改变后端源码来源
 - `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
 - GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
 

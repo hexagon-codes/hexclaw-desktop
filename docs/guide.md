@@ -2,7 +2,7 @@
 
 # HexClaw Desktop 使用指南
 
-适用版本：`v0.5.0-beta.1`。本次工程更新见 [Changelog](../CHANGELOG.md)，安装与自动更新的发布条件见[自动更新发布说明](./updates.md)。
+适用 Desktop 版本：`v0.5.0-beta.2`，内置后端源码来自 `v0.5.0-beta.1`。本次工程更新见 [Changelog](../CHANGELOG.md)，安装与自动更新的发布条件见[自动更新发布说明](./updates.md)。
 
 ## 目录
 

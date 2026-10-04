@@ -17,8 +17,12 @@ if (!semverPattern.test(version)) {
   process.exit(1)
 }
 
-const packageJson = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
-const tauriConfig = JSON.parse(await readFile(new URL('../../src-tauri/tauri.conf.json', import.meta.url), 'utf8'))
+const packageJson = JSON.parse(
+  await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+)
+const tauriConfig = JSON.parse(
+  await readFile(new URL('../../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+)
 const cargoToml = await readFile(new URL('../../src-tauri/Cargo.toml', import.meta.url), 'utf8')
 const makefile = await readFile(new URL('../../Makefile', import.meta.url), 'utf8')
 
@@ -33,11 +37,13 @@ if (tauriConfig.version !== version) {
 }
 
 const backendRefMatch = makefile.match(/^HEXCLAW_REF\s*\?=\s*(\S+)\s*$/m)
-const expectedBackendRef = `refs/tags/v${version}`
+const backendVersion = backendRefMatch?.[1].match(/^refs\/tags\/v(.+)$/)?.[1]
 if (!backendRefMatch) {
   errors.push('Could not find HEXCLAW_REF in Makefile.')
-} else if (backendRefMatch[1] !== expectedBackendRef) {
-  errors.push(`Makefile HEXCLAW_REF (${backendRefMatch[1]}) must match release tag via ${expectedBackendRef}.`)
+} else if (!backendVersion || !semverPattern.test(backendVersion)) {
+  errors.push(
+    `Makefile HEXCLAW_REF (${backendRefMatch[1]}) must be a fixed SemVer tag via refs/tags/v<version>.`,
+  )
 }
 
 const packageSection = cargoToml.match(/\[package\]([\s\S]*?)(?:\n\[|$)/)?.[1] ?? ''
@@ -50,16 +56,22 @@ if (!cargoVersionMatch) {
 
 const updaterPubkey = tauriConfig.plugins?.updater?.pubkey
 if (typeof updaterPubkey !== 'string' || updaterPubkey.trim() === '') {
-  errors.push('src-tauri/tauri.conf.json plugins.updater.pubkey is empty. Commit the Tauri updater public key before creating a release tag.')
+  errors.push(
+    'src-tauri/tauri.conf.json plugins.updater.pubkey is empty. Commit the Tauri updater public key before creating a release tag.',
+  )
 }
 
 const updaterEndpoints = tauriConfig.plugins?.updater?.endpoints
 if (!Array.isArray(updaterEndpoints) || updaterEndpoints.length === 0) {
-  errors.push('src-tauri/tauri.conf.json plugins.updater.endpoints is empty. Configure at least one updater endpoint before creating a release tag.')
+  errors.push(
+    'src-tauri/tauri.conf.json plugins.updater.endpoints is empty. Configure at least one updater endpoint before creating a release tag.',
+  )
 }
 
 if (tauriConfig.bundle?.createUpdaterArtifacts !== true) {
-  errors.push('src-tauri/tauri.conf.json bundle.createUpdaterArtifacts must be true for Tauri updater releases.')
+  errors.push(
+    'src-tauri/tauri.conf.json bundle.createUpdaterArtifacts must be true for Tauri updater releases.',
+  )
 }
 
 if (errors.length > 0) {

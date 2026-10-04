@@ -211,8 +211,8 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 
 ### CI / Packaging / Release Flow
 
-- This release uses `v0.5.0-beta.1`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
-- `push / PR` on `main` runs lint, type-check, existing unit tests, the web build, and `cargo check` automatically
+- This Desktop release uses `v0.5.0-beta.2` and keeps backend source pinned to `v0.5.0-beta.1`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
+- `push / PR` on `main` runs lint, type-check, existing unit tests, package gates, the web build, and `cargo check` automatically
 - `Actions -> Package -> Run workflow`: builds test installers for all platforms and uploads them as workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: builds and publishes the official GitHub Release assets
 - Stable releases automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes DMG SHA256 and pushes Cask update)
@@ -221,8 +221,8 @@ Unit tests use authoritative prototypes and existing fixtures from the private `
 
 Before creating a release tag, make sure:
 
-- The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, along with the root package version in `src-tauri/Cargo.lock`, match the tag (currently `v0.5.0-beta.1`)
-- `HEXCLAW_REF` in `Makefile` is `refs/tags/v0.5.0-beta.1` for the same backend release
+- The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, along with the root package version in `src-tauri/Cargo.lock`, match the Desktop tag (currently `v0.5.0-beta.2`)
+- `HEXCLAW_REF` in `Makefile` is a fixed valid backend SemVer tag (currently `refs/tags/v0.5.0-beta.1`), independent of the Desktop version; the bundled Sidecar artifact identity uses its Desktop release version while its backend source remains pinned to that ref
 - the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
 - GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` (optional, for Tauri auto-update signing)
 

@@ -2,9 +2,9 @@
 
 # Auto-Update Release Guide
 
-## v0.5.0-beta.1 (2026-10-04)
+## v0.5.0-beta.2 (2026-10-04)
 
-This version updates CI checks and release documentation; see the [Changelog](../CHANGELOG.md). Routine CI validates source, `Package` builds installers on demand, and a version tag triggers `Release`. Results for these stages are recorded separately; local checks do not establish that a GitHub Release has been published.
+This Desktop version is `v0.5.0-beta.2`, with backend source kept at `v0.5.0-beta.1`; see the [Changelog](../CHANGELOG.md). Routine CI validates source and runs package gates early, `Package` builds installers on demand, and a Desktop version tag triggers `Release`. Results for these stages are recorded separately; local checks do not establish that a GitHub Release has been published.
 
 HexClaw Desktop uses Tauri updater. To make the in-app “Check for Updates / Download and Install” flow actually work, all 4 conditions below must be true:
 
@@ -75,13 +75,12 @@ If your private key has no password, the second secret can stay empty or be omit
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - the `hexclaw-desktop` root package version in `src-tauri/Cargo.lock`
-   - `HEXCLAW_REF` in `Makefile` (it must be `refs/tags/v<version>`)
-2. Commit and push your changes
-3. Verify the release version and matching backend tag, then create and push the release tag. Do not delete or move a published tag. These commands illustrate the entry point:
+2. Verify that `HEXCLAW_REF` in `Makefile` pins an existing backend SemVer tag, currently `refs/tags/v0.5.0-beta.1`. The backend source version is independent of the Desktop version; the bundled Sidecar artifact identity is injected from its Desktop release version.
+3. Commit and push your changes, confirm that routine CI and the four-platform `Package` installer builds pass, then create and push the Desktop release tag. Do not delete or move a published tag. These commands illustrate the entry point:
 
 ```bash
-git tag v0.5.0-beta.1
-git push origin v0.5.0-beta.1
+git tag v0.5.0-beta.2
+git push origin v0.5.0-beta.2
 ```
 
 4. Wait for the GitHub Actions `Release` workflow to finish
@@ -92,7 +91,7 @@ git push origin v0.5.0-beta.1
 
 ### Homebrew Cask and Beta Releases
 
-The `Release` workflow runs `update-tap` automatically only for stable versions. Prerelease tags containing `-`, including `v0.5.0-beta.1`, skip this job, so a Beta Cask needs a separate update.
+The `Release` workflow runs `update-tap` automatically only for stable versions. Prerelease tags containing `-`, including `v0.5.0-beta.2`, skip this job, so a Beta Cask needs a separate update.
 
 Publish the Desktop release and confirm that both macOS DMGs are downloadable before updating the [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb). Its version must match the Desktop Release. Calculate the ARM and Intel SHA256 values from the published `HexClaw_<version>_aarch64.dmg` and `HexClaw_<version>_x64.dmg`, respectively, and verify that both architecture URLs point to the correct installers for that version. A successful backend tag release does not verify the Desktop installers or Cask. macOS distribution continues to use unsigned DMGs without Apple code signing or notarization.
 
@@ -125,9 +124,9 @@ Because the current release is an unsigned DMG (no Apple code signing or notariz
 
 ### What does the workflow validate now?
 
-- Routine `CI` retains lint, type-check, existing unit tests, the web build, and `cargo check`. Tests read private prototypes and fixtures with read-only credentials; model, IM, and native-window acceptance remain outside routine CI.
+- Routine `CI` retains lint, type-check, existing unit tests, package gates, the web build, and `cargo check`. Tests read private prototypes and fixtures with read-only credentials; model, IM, and native-window acceptance remain outside routine CI.
 - `Package` and `Release` disable updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is missing and still produce manually installable unsigned packages.
-- `Release` validates that the versions across `package.json` / `tauri.conf.json` / `Cargo.toml` and `HEXCLAW_REF` in `Makefile` match the tag.
+- `Release` validates that the Desktop versions across `package.json` / `tauri.conf.json` / `Cargo.toml` match the release tag and independently checks that `HEXCLAW_REF` in `Makefile` is a fixed valid backend SemVer tag. The backend source does not have to share the Desktop version; the bundled Sidecar artifact identity still matches its Desktop release version.
 
 ### Do prereleases auto-update?
 

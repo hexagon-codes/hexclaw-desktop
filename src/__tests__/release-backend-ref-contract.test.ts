@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,17 +9,21 @@ const readPackageVersion = () => {
   return manifest.version
 }
 
-describe('release · desktop/backend 版本锁步', () => {
-  it('桌面默认构建与发布版本匹配的 backend sidecar', () => {
-    const version = readPackageVersion()
+describe('release · desktop 版本与固定 backend 来源', () => {
+  it('桌面默认构建使用固定的 backend 版本 tag', () => {
     const backendRef = readRoot('Makefile').match(/^HEXCLAW_REF\s*\?=\s*(\S+)\s*$/m)?.[1]
-    expect(backendRef).toBe(`refs/tags/v${version}`)
+    expect(backendRef).toMatch(
+      /^refs\/tags\/v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
+    )
   })
 
-  it('release 校验脚本会校验 HEXCLAW_REF，防止桌面版本升级而 sidecar 倒退', () => {
-    const source = readRoot('scripts/ci/verify-release.mjs')
-    expect(source).toContain("readFile(new URL('../../Makefile', import.meta.url)")
-    expect(source).toContain('HEXCLAW_REF')
-    expect(source).toContain('refs/tags/v${version}')
+  it('release 校验接受当前桌面版本及其独立固定 backend 来源', () => {
+    const tag = `v${readPackageVersion()}`
+    const result = spawnSync(process.execPath, [resolve('scripts/ci/verify-release.mjs'), tag], {
+      encoding: 'utf8',
+    })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain(`Release metadata verified for ${tag}.`)
   })
 })
