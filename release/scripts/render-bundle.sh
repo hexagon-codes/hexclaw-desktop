@@ -144,16 +144,19 @@ def safe_git_oid(value):
     return value
 
 
-def file_identity(value):
-    return (
+def file_identity(value, *, across_apis=False):
+    # Windows 路径 stat 的执行位和 ctime 与句柄 fstat 含义不同。
+    windows_path_compare = across_apis and os.name == "nt"
+    metadata = (
         value.st_dev,
         value.st_ino,
-        value.st_mode,
+        stat.S_IFMT(value.st_mode) if windows_path_compare else value.st_mode,
         value.st_nlink,
         value.st_size,
         value.st_mtime_ns,
-        value.st_ctime_ns,
     )
+    # 同一句柄前后仍比较完整元数据，检测读取期间的变化。
+    return metadata if windows_path_compare else (*metadata, value.st_ctime_ns)
 
 
 def secure_file_bytes(path, maximum, expected_size=None, expected_sha256=None):
@@ -161,11 +164,12 @@ def secure_file_bytes(path, maximum, expected_size=None, expected_sha256=None):
     before_path = os.lstat(path)
     reject(not stat.S_ISREG(before_path.st_mode) or before_path.st_nlink != 1)
     reject(before_path.st_size < 1 or before_path.st_size > maximum)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     try:
         before = os.fstat(descriptor)
-        reject(file_identity(before_path) != file_identity(before))
+        reject(not stat.S_ISREG(before.st_mode) or before.st_nlink != 1)
+        reject(file_identity(before_path, across_apis=True) != file_identity(before, across_apis=True))
         chunks = []
         total = 0
         digest = hashlib.sha256()
@@ -555,7 +559,8 @@ def open_output(path):
     parent = os.path.dirname(path)
     parent_info = os.lstat(parent)
     reject(not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode))
-    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    return os.open(path, flags, 0o700)
 
 
 def extract_one(args):
@@ -826,7 +831,16 @@ def main():
 
 try:
     main()
-except Exception:
+except Exception as error:
+    # 预编译暂存保留代码位置；其他命令保持既有的分类错误协议。
+    if len(sys.argv) > 1 and sys.argv[1] in ("manifest-platform", "extract-one", "prepare-prebuilt", "publish-prebuilt"):
+        locations = []
+        current = error.__traceback__
+        while current is not None:
+            locations.append((current.tb_frame.f_code.co_name, current.tb_lineno))
+            current = current.tb_next
+        function, line = locations[-2] if len(locations) > 1 and locations[-1][0] == "reject" else locations[-1]
+        sys.stderr.write(f"Render helper failed: {type(error).__name__} at {function}:{line}.\n")
     sys.exit(1)
 PY
 }
