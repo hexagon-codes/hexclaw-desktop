@@ -100,6 +100,9 @@ import tempfile
 import urllib.parse
 import zipfile
 
+# Bash 字段协议统一使用 LF，避免 Windows 文本流追加 CR。
+sys.stdout.reconfigure(newline="\n")
+
 SEPARATOR = "\x1f"
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_TOOL_BYTES = 1024 * 1024 * 1024
