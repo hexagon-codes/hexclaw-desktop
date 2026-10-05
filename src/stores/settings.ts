@@ -128,6 +128,7 @@ export const useSettingsStore = defineStore('settings', () => {
   let latestSaveRevision = 0
   /** 最近一次服务端 GET/提交成功的非敏感条件写入快照。 */
   let llmConfigConditions: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null = null
+  let configBackendStorageKey = backendStorageKey(CONFIG_STORE_KEY)
 
   function recordLLMConfigConditions(
     snapshot?: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'>,
@@ -213,6 +214,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function doLoadConfig() {
+    const loadBackendStorageKey = backendStorageKey(CONFIG_STORE_KEY)
     loading.value = true
     error.value = null
     backendConfigLoaded.value = false
@@ -256,8 +258,9 @@ export const useSettingsStore = defineStore('settings', () => {
         enabled: false,
         strategy: 'cost-aware',
       }
-      const existingLlm = config.value?.llm ?? defaults.llm
-      const previousLoadedProviders = cloneProviders(config.value?.llm.providers ?? [])
+      const currentLlm = configBackendStorageKey === loadBackendStorageKey ? config.value?.llm : undefined
+      const existingLlm = currentLlm ?? defaults.llm
+      const previousLoadedProviders = cloneProviders(currentLlm?.providers ?? [])
       const persistedLlm = savedConfig?.llm
         ? {
             providers: cloneProviders(savedConfig.llm.providers ?? []),
@@ -283,6 +286,11 @@ export const useSettingsStore = defineStore('settings', () => {
               strategy: existingLlm.routing?.strategy || defaultRouting.strategy,
             },
           }
+      // 同一后端重载期间保留当前凭据投影，脱敏持久化副本的空值不表示删除。
+      // 首次加载先恢复临时快照；后端回读仍负责发布完整权威配置及真实删除状态。
+      persistedLlm.providers = currentLlm
+        ? cloneProviders(currentLlm.providers)
+        : await restoreProviderApiKeys(persistedLlm.providers)
       if (savedConfig) {
         config.value = {
           llm: persistedLlm,
@@ -296,9 +304,9 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         config.value = { ...defaults, llm: persistedLlm }
       }
+      configBackendStorageKey = loadBackendStorageKey
       providerSync.invalidateTransitions(previousLoadedProviders, config.value!.llm.providers)
 
-      config.value!.llm.providers = await restoreProviderApiKeys(config.value!.llm.providers)
       config.value!.llm.defaultProviderId = resolveDefaultModelProviderId(
         config.value!.llm.providers,
         config.value!.llm.defaultModel,

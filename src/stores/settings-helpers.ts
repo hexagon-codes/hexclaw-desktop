@@ -419,8 +419,12 @@ export function backendToProviders(
       // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
       enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
-      apiKey: p.api_key || (p.credential_ref ? '********' : localProvider?.apiKey || ''),
-      apiKeyLength: p.api_key_length ?? localProvider?.apiKeyLength,
+      apiKey:
+        p.credential_present === false
+          ? ''
+          : p.api_key || (p.credential_ref ? '********' : localProvider?.apiKey || ''),
+      apiKeyLength:
+        p.credential_present === false ? 0 : p.api_key_length ?? localProvider?.apiKeyLength,
       credentialRef: p.credential_ref,
       credentialPresent: p.credential_present,
       // effective_models 是 GET 的只读投影；其 capability 与静态声明的路由授权
