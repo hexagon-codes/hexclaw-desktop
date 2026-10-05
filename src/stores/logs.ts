@@ -6,7 +6,27 @@ import { logger } from '@/utils/logger'
 import type { LogEntry, LogStats, LogQuery, ApiError } from '@/types'
 import type { NativeSidecarWebSocket } from '@/api/native-sidecar-websocket'
 
-const MAX_ENTRIES = 1000
+const MAX_ENTRIES = 8000
+const MEASUREMENT_FIELDS = new Set(['elapsed_ms', 'duration_ms', 'latency_ms', 'retry_delay_ms'])
+
+export interface LogGroup {
+  key: string
+  records: LogEntry[]
+  first: LogEntry
+  latest: LogEntry
+}
+
+// 对象字段顺序不参与事件身份，数组顺序及字段值仍保持原义。
+function canonicalLogValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalLogValue)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, item]) => [key, canonicalLogValue(item)]),
+    )
+  }
+  return value
+}
 
 export const useLogsStore = defineStore('logs', () => {
   const entries = ref<LogEntry[]>([])
@@ -160,25 +180,102 @@ export const useLogsStore = defineStore('logs', () => {
   const mode = ref<'live' | 'history'>('live')
   const historyEntries = ref<LogEntry[]>([])
   const historyLoading = ref(false)
+  const historyTotal = ref(0)
+  const historyOffset = ref(0)
+  const historyLimit = 500
+  const historyQuery = ref<LogQuery | null>(null)
+  const historyPage = computed(() => Math.floor(historyOffset.value / historyLimit) + 1)
+  const historyPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyLimit)))
+  const historyHasResults = computed(() => historyQuery.value !== null)
+  let historyGeneration = 0
 
   /** 展示用条目：history 模式用服务端查询结果（newest-first），live 模式用本地过滤缓冲 */
   const displayedEntries = computed(() =>
     mode.value === 'history' ? historyEntries.value : filteredEntries.value,
   )
 
-  /** 在全部历史中检索（服务端过滤），切到 history 模式 */
-  async function searchHistory(query: LogQuery = {}) {
-    historyLoading.value = true
-    const [res] = await trySafe(() => getLogs({ limit: 500, ...query }), '搜索历史日志')
-    historyEntries.value = res?.logs ?? []
+  // 只投影当前原始结果，不维护跨窗口计数；测量字段保留在每条原始记录中。
+  const displayedGroups = computed<LogGroup[]>(() => {
+    const groups = new Map<string, LogGroup>()
+    const direction = mode.value === 'history' ? -1 : 1
+    for (const entry of displayedEntries.value) {
+      const fields = Object.fromEntries(
+        Object.entries(entry.fields ?? {}).filter(([key]) => !MEASUREMENT_FIELDS.has(key)),
+      )
+      const key = JSON.stringify(canonicalLogValue({
+        message: entry.message,
+        source: entry.source,
+        domain: entry.domain,
+        level: entry.level,
+        trace_id: entry.trace_id ?? '',
+        fields,
+      }))
+      const group = groups.get(key)
+      if (!group) {
+        groups.set(key, { key, records: [entry], first: entry, latest: entry })
+        continue
+      }
+      group.records.push(entry)
+      const timestamp = Date.parse(entry.timestamp)
+      const firstTime = Date.parse(group.first.timestamp)
+      const latestTime = Date.parse(group.latest.timestamp)
+      // 同一毫秒内沿原始记录顺序取首末，历史结果与实时流的顺序相反。
+      if (timestamp < firstTime || (timestamp === firstTime && direction === -1)) group.first = entry
+      if (timestamp > latestTime || (timestamp === latestTime && direction === 1)) group.latest = entry
+    }
+    return [...groups.values()].sort((a, b) =>
+      direction * (Date.parse(a.latest.timestamp) - Date.parse(b.latest.timestamp)),
+    )
+  })
+
+  /** 只在成功后替换当前页，离开历史后的迟到响应不再提交。 */
+  async function loadHistoryPage(query: LogQuery, offset: number) {
+    const generation = ++historyGeneration
     mode.value = 'history'
+    historyLoading.value = true
+    const [res, err] = await trySafe(
+      () => getLogs({ ...query, history: true, limit: historyLimit, offset }),
+      '搜索历史日志',
+    )
+    if (generation !== historyGeneration || mode.value !== 'history') return
+    error.value = err
+    if (res) {
+      historyEntries.value = res.logs
+      historyTotal.value = res.total
+      historyOffset.value = res.total === 0 ? 0 : offset
+      historyQuery.value = { ...query }
+    }
     historyLoading.value = false
+    return err
+  }
+
+  /** 新查询捕获最近七天的默认范围，分页只复用已成功提交的条件。 */
+  async function searchHistory(query: LogQuery = {}) {
+    if (historyLoading.value) return
+    let boundedQuery = query
+    if (query.start_time === undefined && query.end_time === undefined) {
+      const end = new Date()
+      boundedQuery = {
+        ...query,
+        start_time: new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        end_time: end.toISOString(),
+      }
+    }
+    return loadHistoryPage(boundedQuery, 0)
+  }
+
+  /** 翻页使用已提交范围，不读取尚未提交的日期输入。 */
+  async function changeHistoryPage(direction: -1 | 1) {
+    const offset = historyOffset.value + direction * historyLimit
+    if (historyLoading.value || !historyQuery.value || offset < 0 || offset >= historyTotal.value) return
+    return loadHistoryPage(historyQuery.value, offset)
   }
 
   /** 退出历史检索，回到实时流 */
   function exitHistory() {
+    historyGeneration++
+    historyLoading.value = false
     mode.value = 'live'
-    historyEntries.value = []
   }
 
   return {
@@ -193,7 +290,14 @@ export const useLogsStore = defineStore('logs', () => {
     mode,
     historyEntries,
     historyLoading,
+    historyTotal,
+    historyOffset,
+    historyLimit,
+    historyPage,
+    historyPages,
+    historyHasResults,
     displayedEntries,
+    displayedGroups,
     connect,
     disconnect,
     loadHistory,
@@ -201,6 +305,7 @@ export const useLogsStore = defineStore('logs', () => {
     setFilter,
     clear,
     searchHistory,
+    changeHistoryPage,
     exitHistory,
   }
 })

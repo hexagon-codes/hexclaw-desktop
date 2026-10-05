@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { formatLogTime } from '@/utils/time'
 import { ScrollText, Eraser, Download, RefreshCw, Search, Copy, X, ArrowDown } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
+import type { LogGroup } from '@/stores/logs'
 import { useToast } from '@/composables/useToast'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
@@ -11,7 +12,7 @@ import SearchInput from '@/components/common/SearchInput.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { saveBlobInApp } from '@/utils/download'
 import { isTauri } from '@/utils/platform'
-import type { LogEntry } from '@/types'
+import type { LogEntry, LogQuery } from '@/types'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -50,7 +51,7 @@ const selectedDomain = computed<string>({
 })
 
 // ── 展示数据：history 模式 = 服务端检索结果；live 模式 = 本地过滤缓冲 ──
-const displayed = computed<LogEntry[]>(() => logsStore.displayedEntries)
+const displayed = computed(() => logsStore.displayedGroups)
 
 // ─────────────────────────── 虚拟滚动 ───────────────────────────
 // 行等高（折叠单行，详情移入抽屉），故定高窗口化即可，无需测量/第三方库。
@@ -98,24 +99,28 @@ function onScroll() {
 
 // 新日志到达：跟随中则贴底；否则亮起浮标（history 模式不自动滚）
 watch(
-  () => displayed.value.length,
-  (n, old) => {
-    if (logsStore.mode === 'history') return
+  () => {
+    const entries = logsStore.displayedEntries
+    return entries[entries.length - 1]?.id
+  },
+  (id, old) => {
+    if (logsStore.mode === 'history' || !id || id === old) return
     if (following.value) jumpToBottom()
-    else if (n > old) hasNew.value = true
+    else hasNew.value = true
   },
 )
 
 // ─────────────────────────── 详情抽屉 ───────────────────────────
-const selectedId = ref<string | null>(null)
-const selected = computed<LogEntry | null>(
-  () => displayed.value.find((e) => e.id === selectedId.value) ?? null,
+const selectedKey = ref<string | null>(null)
+const selectedGroup = computed<LogGroup | null>(
+  () => displayed.value.find((group) => group.key === selectedKey.value) ?? null,
 )
-function selectRow(e: LogEntry) {
-  selectedId.value = selectedId.value === e.id ? null : e.id
+const selected = computed(() => selectedGroup.value?.latest ?? null)
+function selectRow(group: LogGroup) {
+  selectedKey.value = selectedKey.value === group.key ? null : group.key
 }
 function closeDetail() {
-  selectedId.value = null
+  selectedKey.value = null
 }
 // 结构化字段（fields）→ KV 列表
 const selectedFields = computed<[string, unknown][]>(() =>
@@ -125,15 +130,15 @@ const selectedFields = computed<[string, unknown][]>(() =>
 // ─────────────────────────── 键盘导航（a11y）───────────────────────────
 function onKeydown(e: KeyboardEvent) {
   const list = displayed.value
-  if (e.key === 'Escape') { selectedId.value = null; return }
+  if (e.key === 'Escape') { selectedKey.value = null; return }
   if (!list.length || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return
   e.preventDefault()
-  const cur = list.findIndex((x) => x.id === selectedId.value)
+  const cur = list.findIndex((group) => group.key === selectedKey.value)
   const next =
     e.key === 'ArrowDown'
       ? Math.min(list.length - 1, cur + 1)
       : Math.max(0, cur < 0 ? list.length - 1 : cur - 1)
-  selectedId.value = list[next]!.id
+  selectedKey.value = list[next]!.key
   scrollIndexIntoView(next)
 }
 function scrollIndexIntoView(i: number) {
@@ -160,15 +165,63 @@ function logLine(e: LogEntry): string {
 }
 
 // ─────────────────────────── 历史检索 ───────────────────────────
+const historyStart = ref('')
+const historyEnd = ref('')
+let historyFilter: LogQuery = {}
+
+function localDateTime(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000)
+  return local.toISOString().slice(0, 19)
+}
+
+function beginHistory(query: LogQuery) {
+  if (logsStore.historyLoading) return
+  const end = new Date()
+  historyStart.value = localDateTime(new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000))
+  historyEnd.value = localDateTime(end)
+  historyFilter = query
+  void queryHistory()
+}
+
 function searchHistory() {
-  void logsStore.searchHistory({
+  beginHistory({
     keyword: logsStore.filter.keyword,
     level: logsStore.filter.level,
     domain: logsStore.filter.domain,
   })
 }
 function searchByTrace(traceId: string) {
-  void logsStore.searchHistory({ keyword: traceId })
+  beginHistory({ keyword: traceId })
+}
+async function queryHistory() {
+  if (logsStore.historyLoading) return
+  const start = new Date(historyStart.value)
+  const end = new Date(historyEnd.value)
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) {
+    toast.error('Invalid history time range')
+    return
+  }
+  const err = await logsStore.searchHistory({
+    ...historyFilter,
+    start_time: start.toISOString(),
+    end_time: end.toISOString(),
+  })
+  if (err === undefined) return
+  if (err) toast.error(err.message)
+  else if (logsStore.mode === 'history') resetHistoryScroll()
+}
+async function changeHistoryPage(direction: -1 | 1) {
+  const err = await logsStore.changeHistoryPage(direction)
+  if (err === undefined) return
+  if (err) toast.error(err.message)
+  else if (logsStore.mode === 'history') resetHistoryScroll()
+}
+function resetHistoryScroll() {
+  selectedKey.value = null
+  nextTick(() => {
+    if (viewport.value) viewport.value.scrollTop = 0
+    scrollTop.value = 0
+  })
 }
 // 改动级别 / 关键词即退出历史模式，回到实时（避免双重过滤语义混淆）
 watch([activeLevel, () => logsStore.filter.keyword, () => logsStore.filter.domain], () => {
@@ -206,14 +259,14 @@ async function refreshLogs() {
 
 function clearLogs() {
   logsStore.clear()
-  selectedId.value = null
+  selectedKey.value = null
   hasNew.value = false
 }
 
 function exportLogs() {
-  const entries = displayed.value
+  const entries = logsStore.displayedEntries
   if (entries.length === 0) return
-  const blob = new Blob([entries.map(logLine).join('\n')], { type: 'text/plain;charset=utf-8' })
+  const blob = new Blob([entries.map(entry => JSON.stringify(entry)).join('\n')], { type: 'text/plain;charset=utf-8' })
   const filename = `hexclaw-logs-${new Date().toISOString().slice(0, 10)}.log`
   if (isTauri()) {
     void saveBlobInApp(blob, filename)
@@ -241,6 +294,7 @@ onMounted(() => {
   })
 })
 onUnmounted(() => {
+  logsStore.exitHistory()
   logsStore.disconnect()
   ro?.disconnect()
 })
@@ -300,10 +354,22 @@ onUnmounted(() => {
 
     <!-- 历史检索结果横幅 -->
     <div v-if="logsStore.mode === 'history'" class="hc-logs__histbar">
-      <span>{{ t('logs.historyResults', '历史搜索结果') }} · {{ logsStore.historyEntries.length }} {{ t('logs.entryUnit', '条') }}</span>
-      <button class="hc-logs__histbar-back" @click="logsStore.exitHistory()">
-        {{ t('logs.backToLive', '返回实时') }}
-      </button>
+      <span>{{ t('logs.historyResults', '历史搜索结果') }} · {{ logsStore.historyTotal }} {{ t('logs.entryUnit', '条') }}</span>
+      <label>
+        {{ t('logs.historyStart') }}
+        <input v-model="historyStart" class="hc-input" type="datetime-local" step="1" :aria-label="t('logs.historyStartTime')" :disabled="logsStore.historyLoading" />
+      </label>
+      <label>
+        {{ t('logs.historyEnd') }}
+        <input v-model="historyEnd" class="hc-input" type="datetime-local" step="1" :aria-label="t('logs.historyEndTime')" :disabled="logsStore.historyLoading" />
+      </label>
+      <button class="btn hc-logs__histbar-query" :disabled="logsStore.historyLoading" @click="queryHistory">{{ t('logs.queryHistory') }}</button>
+      <div class="hc-logs__histbar-pages">
+        <button class="btn btn-ghost hc-logs__histbar-back" :disabled="logsStore.historyLoading || logsStore.historyOffset === 0" @click="changeHistoryPage(-1)">{{ t('logs.previousPage') }}</button>
+        <span>{{ t('logs.historyPage', { page: logsStore.historyPage, pages: logsStore.historyPages }) }}</span>
+        <button class="btn btn-ghost hc-logs__histbar-back" :disabled="logsStore.historyLoading || logsStore.historyOffset + logsStore.historyLimit >= logsStore.historyTotal" @click="changeHistoryPage(1)">{{ t('logs.nextPage') }}</button>
+        <button class="btn btn-ghost hc-logs__histbar-back" @click="logsStore.exitHistory()">{{ t('logs.backToLive', '返回实时') }}</button>
+      </div>
     </div>
 
     <!-- 日志流（虚拟滚动）。行等高，详情走底部抽屉。 -->
@@ -312,34 +378,41 @@ onUnmounted(() => {
       class="hc-logs__stream"
       tabindex="0"
       role="listbox"
-      :aria-activedescendant="selectedId ? `log-${selectedId}` : undefined"
+      :aria-activedescendant="selected ? `log-${selected.id}` : undefined"
       @scroll="onScroll"
       @keydown="onKeydown"
     >
       <div class="hc-logs__sizer" :style="{ height: `${totalHeight}px` }">
         <div class="hc-logs__window" :style="{ transform: `translateY(${offsetY}px)` }">
           <div
-            v-for="entry in visibleEntries"
-            :id="`log-${entry.id}`"
-            :key="entry.id"
+            v-for="group in visibleEntries"
+            :id="`log-${group.latest.id}`"
+            :key="group.key"
             class="hc-logs__row"
             :class="[
-              `hc-logs__row--${entry.level}`,
-              { 'hc-logs__row--selected': entry.id === selectedId },
+              `hc-logs__row--${group.latest.level}`,
+              { 'hc-logs__row--selected': group.key === selectedKey },
             ]"
             role="option"
-            :aria-selected="entry.id === selectedId"
-            @click="selectRow(entry)"
+            :aria-selected="group.key === selectedKey"
+            @click="selectRow(group)"
           >
-            <span class="hc-logs__row-time" :title="entry.timestamp">{{ formatLogTime(entry.timestamp) }}</span>
-            <span class="hc-logs__row-level" :class="`hc-logs__row-level--${entry.level}`">{{ entry.level }}</span>
-            <span class="hc-logs__row-source">{{ entry.source }}</span>
-            <span class="hc-logs__row-msg">{{ entry.message }}</span>
+            <span class="hc-logs__row-time" :title="group.latest.timestamp">{{ formatLogTime(group.latest.timestamp) }}</span>
+            <span class="hc-logs__row-level" :class="`hc-logs__row-level--${group.latest.level}`">{{ group.latest.level }}</span>
+            <span class="hc-logs__row-source">{{ group.latest.source }}</span>
+            <span class="hc-logs__row-msg">
+              <span class="hc-logs__row-msg-text">{{ group.latest.message }}</span>
+              <span
+                v-if="group.records.length > 1"
+                class="hc-logs__repeat"
+                :title="t('logs.repeatCountTitle', { count: group.records.length })"
+              >×{{ group.records.length }}</span>
+            </span>
             <button
               class="hc-logs__row-copy"
               :title="t('logs.copyLine', '复制此行')"
               :aria-label="t('logs.copyLine', '复制此行')"
-              @click.stop="copy(logLine(entry))"
+              @click.stop="copy(logLine(group.latest))"
             >
               <Copy :size="12" />
             </button>
@@ -347,7 +420,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="displayed.length === 0" class="hc-logs__empty">
+      <div v-if="displayed.length === 0 && (logsStore.mode !== 'history' || (!logsStore.historyLoading && logsStore.historyHasResults))" class="hc-logs__empty">
         <ScrollText :size="40" class="hc-logs__empty-icon" />
         <p>{{ logsStore.mode === 'history'
           ? t('logs.noHistoryMatch', '无匹配的历史日志')
@@ -393,6 +466,17 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+        <table v-if="selectedGroup" class="hc-logs__kv">
+          <tbody>
+            <tr><td class="hc-logs__kv-key">{{ t('logs.repeatCount') }}</td><td class="hc-logs__kv-val">{{ selectedGroup.records.length }}</td></tr>
+            <tr><td class="hc-logs__kv-key">{{ t('logs.firstTime') }}</td><td class="hc-logs__kv-val">{{ selectedGroup.first.timestamp }}</td></tr>
+            <tr><td class="hc-logs__kv-key">{{ t('logs.latestTime') }}</td><td class="hc-logs__kv-val">{{ selectedGroup.latest.timestamp }}</td></tr>
+          </tbody>
+        </table>
+        <details v-if="selectedGroup" :key="selectedGroup.key" class="hc-logs__raw-records">
+          <summary>{{ t('logs.rawRecords') }}</summary>
+          <pre>{{ JSON.stringify(selectedGroup.records, null, 2) }}</pre>
+        </details>
       </div>
     </div>
 
@@ -404,7 +488,7 @@ onUnmounted(() => {
       >
         {{ logsStore.connected ? t('logs.running', '运行中') : t('logs.disconnected', '已断开') }}
       </span>
-      <span>{{ displayed.length }} {{ t('logs.entryUnit', '条') }}</span>
+      <span>{{ logsStore.displayedEntries.length }} {{ t('logs.entryUnit', '条') }}</span>
       <span class="hc-logs__statusbar-sep">
         <span class="hc-logs__count-err">{{ t('logs.levelError', '错误') }} {{ logsStore.levelCounts.error }}</span>
         ·
@@ -507,21 +591,36 @@ onUnmounted(() => {
 .hc-logs__histbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 20px;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 16px;
   font-size: 12px;
-  color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-  border-bottom: 0.5px solid var(--hc-divider);
+  color: var(--hc-text-secondary);
+  background: var(--hc-bg-card);
+  border-bottom: 0.5px solid var(--hc-border);
   flex-shrink: 0;
 }
-.hc-logs__histbar-back {
-  border: none;
-  background: transparent;
-  color: var(--hc-accent);
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: underline;
+.hc-logs__histbar label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.hc-logs__histbar .hc-input {
+  width: 176px;
+  height: 28px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.hc-logs__histbar-pages {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.hc-logs__histbar .btn {
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 /* ─── Log stream (虚拟滚动) ─── */
@@ -606,9 +705,23 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   color: var(--hc-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.hc-logs__row-msg-text {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.hc-logs__repeat {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-muted);
 }
 .hc-logs__row-copy {
   flex-shrink: 0;
@@ -729,6 +842,17 @@ onUnmounted(() => {
 }
 .hc-logs__kv-val {
   color: var(--hc-text-primary);
+  word-break: break-word;
+}
+.hc-logs__raw-records {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+}
+.hc-logs__raw-records summary { cursor: pointer; }
+.hc-logs__raw-records pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

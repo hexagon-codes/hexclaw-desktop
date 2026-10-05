@@ -12,12 +12,14 @@ export interface LogEntry {
 
 /** 日志查询参数 */
 export interface LogQuery {
+  /** 显式查询磁盘历史，时间两端为包含关系。 */
+  history?: boolean
   level?: string
   source?: string
   domain?: string
   keyword?: string
-  start_time?: string
-  end_time?: string
+  start_time?: string // RFC3339Nano
+  end_time?: string // RFC3339Nano
   limit?: number
   offset?: number
 }

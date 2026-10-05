@@ -10,7 +10,9 @@ export function getLogs(query?: LogQuery) {
   const q: Record<string, unknown> = {}
   if (query) {
     for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined) q[k] = v
+      // 内部时间字段保留兼容名称，HTTP 边界使用后端约定的 start/end。
+      const key = k === 'start_time' ? 'start' : k === 'end_time' ? 'end' : k
+      if (v !== undefined) q[key] = v
     }
   }
   return apiGet<{ logs: LogEntry[]; total: number }>('/api/v1/logs', Object.keys(q).length > 0 ? q : undefined)
