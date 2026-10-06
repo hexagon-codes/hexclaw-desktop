@@ -1,9 +1,9 @@
-import { backendContext, backendStorageKey, backendLocalStorage } from '@/services/backend-context'
+import { backendContext, backendStorageKey, backendLocalStorage, backendScopeKey } from '@/services/backend-context'
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
-import { getLLMConfig, updateLLMConfig } from '@/api/config'
+import { getLLMConfig } from '@/api/config'
 import { getOllamaStatus, saveOllamaTarget, type OllamaTarget } from '@/api/ollama'
 import { updateConfig } from '@/api/settings'
 import { isTauri } from '@/utils/platform'
@@ -34,7 +34,6 @@ import {
   invalidateChangedProviderProbeReceipt,
   mergeProviderRuntimeIdentities,
   resolveLoadedDefaultSelection,
-  withLLMConfigConditions,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 import { createSettingsProviderSync } from './settings-provider-sync'
@@ -115,6 +114,14 @@ export const useSettingsStore = defineStore('settings', () => {
   const cloneSecurity = (security: SecurityConfig): SecurityConfig => ({ ...security })
   const cloneSandbox = (sandbox: SandboxConfig): SandboxConfig => ({ ...sandbox })
 
+  /** 客户端副本只保存配置；连接回执始终从服务端 SQLite 投影恢复。 */
+  function withoutProviderProbeReceipts(providers: ProviderConfig[]): ProviderConfig[] {
+    return cloneProviders(providers).map((provider) => {
+      delete provider.probeReceipt
+      return provider
+    })
+  }
+
   /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
   const availableModels = computed(() =>
     collectAvailableChatModels(enabledProviders.value, ollamaModelsCache.value),
@@ -128,23 +135,28 @@ export const useSettingsStore = defineStore('settings', () => {
   let latestSaveRevision = 0
   /** 最近一次服务端 GET/提交成功的非敏感条件写入快照。 */
   let llmConfigConditions: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null = null
+  let llmConfigBaseline: BackendLLMConfig | null = null
+  let llmConfigScope = backendScopeKey()
   let configBackendStorageKey = backendStorageKey(CONFIG_STORE_KEY)
 
   function recordLLMConfigConditions(
-    snapshot?: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'>,
+    snapshot?: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> & Partial<BackendLLMConfig>,
   ) {
+    llmConfigScope = backendScopeKey()
     const revision = snapshot?.config_revision
     const digest = snapshot?.config_digest?.trim()
     llmConfigConditions =
       Number.isSafeInteger(revision) && (revision ?? -1) >= 0 && digest
         ? { config_revision: revision, config_digest: digest }
         : null
+    if (snapshot?.providers) llmConfigBaseline = JSON.parse(JSON.stringify(snapshot))
   }
 
   const providerSync = createSettingsProviderSync({
     getConfig: () => config.value,
     getRuntimeProviders: () => runtimeProviders.value,
-    getLLMConfigConditions: () => llmConfigConditions,
+    getLLMConfigConditions: () => llmConfigScope === backendScopeKey() ? llmConfigConditions : null,
+    getLLMConfigBaseline: () => llmConfigScope === backendScopeKey() ? llmConfigBaseline : null,
     recordLLMConfigConditions,
   })
 
@@ -263,7 +275,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const previousLoadedProviders = cloneProviders(currentLlm?.providers ?? [])
       const persistedLlm = savedConfig?.llm
         ? {
-            providers: cloneProviders(savedConfig.llm.providers ?? []),
+            providers: withoutProviderProbeReceipts(savedConfig.llm.providers ?? []),
             defaultModel: savedConfig.llm.defaultModel ?? '',
             defaultProviderId: savedConfig.llm.defaultProviderId ?? '',
             defaultReasoningPolicy: normalizeDefaultReasoningPolicy(
@@ -273,6 +285,8 @@ export const useSettingsStore = defineStore('settings', () => {
               enabled: savedConfig.llm.routing?.enabled ?? defaultRouting.enabled,
               strategy: savedConfig.llm.routing?.strategy || defaultRouting.strategy,
             },
+            tools: savedConfig.llm.tools ?? existingLlm.tools,
+            agentMode: savedConfig.llm.agentMode ?? existingLlm.agentMode,
           }
         : {
             providers: cloneProviders(existingLlm.providers),
@@ -285,6 +299,8 @@ export const useSettingsStore = defineStore('settings', () => {
               enabled: existingLlm.routing?.enabled ?? defaultRouting.enabled,
               strategy: existingLlm.routing?.strategy || defaultRouting.strategy,
             },
+            tools: existingLlm.tools,
+            agentMode: existingLlm.agentMode,
           }
       // 同一后端重载期间保留当前凭据投影，脱敏持久化副本的空值不表示删除。
       // 首次加载先恢复临时快照；后端回读仍负责发布完整权威配置及真实删除状态。
@@ -421,6 +437,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   /** 保存配置 — LLM 配置保存到后端 API，其余保存到 Tauri Store */
   async function saveConfig(newConfig: AppConfig): Promise<{ securitySyncFailed: boolean }> {
+    const origin = providerSync.captureOrigin()
     // 深拷贝去掉 Vue 响应式代理，确保序列化正确
     const requestedConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
     const previousSecurity = cloneSecurity(syncedSecurity.value)
@@ -464,21 +481,18 @@ export const useSettingsStore = defineStore('settings', () => {
 
       // LLM 配置保存到后端 API
       try {
-        const backendConfig = withLLMConfigConditions(
-          providersToBackend(
+        const backendConfig = providersToBackend(
             plainConfig.llm.providers,
             plainConfig.llm.defaultModel,
             plainConfig.llm.defaultProviderId ?? '',
             plainConfig.llm.routing,
             plainConfig.llm.defaultReasoningPolicy,
-          ),
-          llmConfigConditions,
         )
-        const mutation = await updateLLMConfig(
+        await providerSync.persistLLMConfig(
           backendConfig,
           providerCredentialReplacements(plainConfig.llm.providers),
+          origin,
         )
-        recordLLMConfigConditions(mutation)
         logger.debug('LLM 配置已保存到后端', {
           providerCount: Object.keys(backendConfig.providers).length,
           defaultProvider: backendConfig.default,
@@ -516,9 +530,7 @@ export const useSettingsStore = defineStore('settings', () => {
         }
       } catch (e) {
         logger.error('LLM 配置保存到后端失败', e)
-        if (isTauri()) {
-          throw e
-        }
+        throw e
       }
 
       let liveConfigForPersistence = plainConfig
@@ -555,7 +567,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const configToSave: AppConfig = {
         ...liveConfigForPersistence,
         llm: {
-          providers: plainConfig.llm.providers.map((p) => ({
+          providers: withoutProviderProbeReceipts(plainConfig.llm.providers).map((p) => ({
             ...p,
             apiKey: '',
           })),
@@ -565,6 +577,8 @@ export const useSettingsStore = defineStore('settings', () => {
             plainConfig.llm.defaultReasoningPolicy,
           ),
           routing: plainConfig.llm.routing,
+          tools: plainConfig.llm.tools,
+          agentMode: plainConfig.llm.agentMode,
         },
       }
 

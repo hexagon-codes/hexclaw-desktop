@@ -41,7 +41,7 @@ export default {
     engineRunning: '引擎运行中',
     engineStarting: '引擎启动中…',
     engineStopped: '引擎已停止',
-    restartEngine: '重启引擎',
+    restartEngine: '重启服务',
     collapse: '收起',
     // 旧 key 兼容（子页面内部仍可能引用）
     tasks: '定时任务',

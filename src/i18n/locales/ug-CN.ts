@@ -51,7 +51,7 @@ export default {
     engineRunning: 'ماتور ئىشلەۋاتىدۇ',
     engineStarting: 'ماتور قوزغىلىۋاتىدۇ…',
     engineStopped: 'ماتور توختىدى',
-    restartEngine: 'ماتورنى قايتا قوزغىتىش',
+    restartEngine: 'مۇلازىمەتنى قايتا قوزغىتىش',
     collapse: 'يىغىش',
     tasks: 'ۋاقىتلىق ۋەزىپە',
     skills: 'Skills',

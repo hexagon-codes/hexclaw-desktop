@@ -422,7 +422,7 @@ export function backendToProviders(
       providerInstanceId: p.provider_instance_id ?? localProvider?.providerInstanceId,
       probeReceipt,
       backendKey: name,
-      name: localProvider?.name ?? (p.display_name?.trim() || name),
+      name: p.display_name?.trim() || localProvider?.name || name,
       type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],
       // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
       enabled: p.enabled ?? true,
@@ -453,6 +453,8 @@ export function backendToProviders(
       httpAuthorization: p.http_authorization,
       keepAlive: p.keep_alive || localProvider?.keepAlive || '',
       numCtx: p.num_ctx ?? localProvider?.numCtx ?? 0,
+      toolsEnabled: p.tools_enabled === undefined ? localProvider?.toolsEnabled : p.tools_enabled,
+      maxTools: p.max_tools ?? localProvider?.maxTools,
     }
     nextProvider.selectedModelId = resolveProviderSelectedModelId(nextProvider, p.model)
     return nextProvider
@@ -568,6 +570,120 @@ export function providersToBackend(
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
     default_reasoning_policy: normalizeDefaultReasoningPolicy(defaultReasoningPolicy),
   }
+}
+
+/** 按原基线合并独立编辑；同字段冲突保留草稿，不覆盖当前服务端配置。 */
+export function mergeLLMConfigChanges(
+  baseline: BackendLLMConfig,
+  draft: BackendLLMConfig,
+  current: BackendLLMConfig,
+): BackendLLMConfig {
+  // 只比较设置页可编辑的同形投影；输出保留服务端的原始配置及非编辑字段。
+  const project = (value: BackendLLMConfig) => {
+    const providers = backendToProviders(value)
+    const selected = providers.find((provider) => provider.backendKey === value.default)
+    return providersToBackend(
+      providers,
+      value.providers[value.default]?.model ?? '',
+      selected?.id ?? '',
+      value.routing,
+      value.default_reasoning_policy,
+    )
+  }
+  const original = project(baseline)
+  const latest = project(current)
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical)
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonical(item)]))
+    }
+    return value
+  }
+  const equal = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
+  const conflict = () => { throw new Error('LLM configuration is stale') }
+  const merge = <T>(before: T, requested: T, live: T): T => {
+    if (equal(requested, before)) return live
+    if (equal(live, before) || equal(requested, live)) return requested
+    return conflict()
+  }
+  const identity = (key: string, provider: BackendLLMConfig['providers'][string]) =>
+    provider.provider_instance_id ? `instance:${provider.provider_instance_id}` : `key:${key}`
+  const index = (value: BackendLLMConfig) => new Map(Object.entries(value.providers)
+    .map(([key, provider]) => {
+      const comparable = { ...provider }
+      delete comparable.api_key_mutation
+      return [identity(key, provider), { key, provider: comparable }]
+    }))
+  const beforeById = index(original)
+  const requestedById = index(draft)
+  const currentById = index(latest)
+  const result: BackendLLMConfig = JSON.parse(JSON.stringify(current))
+  result.providers = {}
+  const groups = [
+    ['base_url', 'locality', 'locality_source', 'confirmed_endpoint_host', 'private_network_access', 'http_authorization'],
+    ['model', 'models', 'model_specs'],
+    ['display_name'], ['compatible'], ['tools_enabled'], ['max_tools'], ['enabled'], ['keep_alive'], ['num_ctx'],
+  ] as const
+  const stripReadOnly = (provider: BackendLLMConfig['providers'][string]) => {
+    const copy: BackendLLMProvider = {
+      base_url: provider.base_url, model: provider.model, compatible: provider.compatible,
+      ...Object.fromEntries(['provider_instance_id', ...groups.flat()].flatMap((field) =>
+        provider[field as keyof typeof provider] === undefined ? [] : [[field, provider[field as keyof typeof provider]]],
+      )),
+    }
+    copy.api_key_mutation = { mode: 'preserve' }
+    return copy
+  }
+  for (const id of new Set([...beforeById.keys(), ...requestedById.keys(), ...currentById.keys()])) {
+    const before = beforeById.get(id)
+    const requested = requestedById.get(id)
+    const live = currentById.get(id)
+    if (!before || !requested || !live) {
+      const entry = merge(before, requested, live)
+      if (entry) {
+        const raw = live && entry === live ? current.providers[live.key]! : entry.provider
+        if (result.providers[entry.key]) conflict()
+        result.providers[entry.key] = stripReadOnly(raw)
+      }
+      continue
+    }
+    // 脱敏 GET 无法证明凭据没有被另一客户端轮换，显式改 Key 不自动覆盖。
+    const mutation = draft.providers[requested.key]?.api_key_mutation
+    const originalCredential = baseline.providers[before.key]!
+    const hadCredential = originalCredential.credential_present !== false &&
+      !!(originalCredential.credential_ref || originalCredential.api_key)
+    if (mutation?.mode === 'replace' || (mutation?.mode === 'delete' && hadCredential)) conflict()
+    const merged = stripReadOnly(current.providers[live.key]!)
+    for (const fields of groups) {
+      const beforeValues = fields.map((field) => before.provider[field])
+      const requestedValues = fields.map((field) => requested.provider[field])
+      const currentValues = fields.map((field) => live.provider[field])
+      const values = merge(beforeValues, requestedValues, currentValues)
+      if (values === currentValues) continue
+      fields.forEach((field, position) => {
+        if (values[position] === undefined) delete merged[field]
+        else Object.assign(merged, { [field]: values[position] })
+      })
+    }
+    if (result.providers[live.key]) conflict()
+    result.providers[live.key] = merged
+  }
+  const defaultIdentity = (value: BackendLLMConfig) => {
+    const provider = value.providers[value.default]
+    return provider ? identity(value.default, provider) : ''
+  }
+  const selectedIdentity = merge(defaultIdentity(original), defaultIdentity(draft), defaultIdentity(latest))
+  result.default = Object.entries(result.providers).find(([key, provider]) => identity(key, provider) === selectedIdentity)?.[0] ?? ''
+  if (selectedIdentity && !result.default) conflict()
+  result.routing = {
+    enabled: merge(original.routing.enabled, draft.routing.enabled, latest.routing.enabled),
+    strategy: merge(original.routing.strategy, draft.routing.strategy, latest.routing.strategy),
+  }
+  result.default_reasoning_policy = merge(original.default_reasoning_policy, draft.default_reasoning_policy, latest.default_reasoning_policy)
+  delete result.expected_config_revision
+  delete result.expected_config_digest
+  return result
 }
 
 /** 将最近一次 GET 的完整非敏感版本快照附加到一次配置写入。 */

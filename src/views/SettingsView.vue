@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import BackendServiceCard from '@/components/settings/BackendServiceCard.vue'
-import { backendContext, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
+import { backendContext, backendScopeKey, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
@@ -27,15 +27,17 @@ import {
 } from '@/stores/model-catalog'
 import {
   canonicalizeModelOption,
+  backendToProviders,
   isChatModelOption,
   normalizeModelCapabilities,
+  providerProbeConnectivityFingerprint,
+  reconcileDefaultSelection,
   resolveProviderSelectedModelId,
 } from '@/stores/settings-helpers'
 import { getRuntimeConfig } from '@/api/settings'
 import {
   getLLMConfig,
   testLLMConnection,
-  probeLLMModelCapability,
   fetchProviderModels,
   readProviderApiKey,
 } from '@/api/config'
@@ -1152,33 +1154,64 @@ async function confirmDeleteModel() {
   const target = pendingDeleteModel.value
   if (!target) return
 
-  const provider = settingsStore.config?.llm.providers.find((p) => p.id === target.providerId)
-  if (!provider) return
-  const model = provider.models.find((candidate) => candidate.id === target.modelId)
-  if (!model || !isProviderModelRemovable(provider, model)) {
-    pendingDeleteModel.value = null
-    return
-  }
-
-  const previousModels = [...provider.models]
-  const previousSelectedModelId = provider.selectedModelId
-  const exclusionScope = providerModelExclusionScope(provider)
-  if (!catalogStore.excludeModel(exclusionScope, target.modelId)) {
-    toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
-    return
-  }
-  removeModel(provider, target.modelId)
   try {
-    await flushAutoSave({ force: true })
-    pendingDeleteModel.value = null
-  } catch (e) {
-    catalogStore.clearModelExclusion(exclusionScope, target.modelId)
-    settingsStore.updateProvider(provider.id, {
-      models: previousModels,
-      selectedModelId: previousSelectedModelId,
-    })
-    logger.error('[Settings] 删除模型持久化失败:', e)
-    toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
+    const llm = settingsStore.config?.llm
+    const provider = llm?.providers.find((p) => p.id === target.providerId)
+    if (!llm || !provider) return
+    const modelIndex = provider.models.findIndex((candidate) => candidate.id === target.modelId)
+    const model = provider.models[modelIndex]
+    if (!model || !isProviderModelRemovable(provider, model)) return
+
+    const previousSelectedModelId = provider.selectedModelId
+    const previousDefaultProviderId = llm.defaultProviderId
+    const previousDefaultModel = llm.defaultModel
+    const providerInstanceId = provider.providerInstanceId
+    const exclusionScope = providerModelExclusionScope(provider)
+    const previouslyExcluded = catalogStore.getExcludedModelIds(exclusionScope).has(target.modelId)
+    if (!catalogStore.excludeModel(exclusionScope, target.modelId)) {
+      if (!previouslyExcluded) catalogStore.clearModelExclusion(exclusionScope, target.modelId)
+      toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
+      return
+    }
+    removeModel(provider, target.modelId)
+    const removedSelectedModelId = settingsStore.config?.llm.providers.find((p) => p.id === provider.id)?.selectedModelId
+    const removedDefaultProviderId = settingsStore.config?.llm.defaultProviderId
+    const removedDefaultModel = settingsStore.config?.llm.defaultModel
+    try {
+      await flushAutoSave({ force: true })
+    } catch (e) {
+      if (!previouslyExcluded) catalogStore.clearModelExclusion(exclusionScope, target.modelId)
+      const currentLlm = settingsStore.config?.llm
+      const currentProvider = currentLlm?.providers.find((p) =>
+        p.id === provider.id && p.providerInstanceId === providerInstanceId,
+      )
+      if (currentLlm && currentProvider) {
+        // 只补回本次删除的模型，保留保存期间其它模型的编辑。
+        const models = [...currentProvider.models]
+        if (!models.some((candidate) => candidate.id === target.modelId)) {
+          models.splice(Math.min(modelIndex, models.length), 0, model)
+        }
+        const updates: Partial<ProviderConfig> = { models }
+        if (currentProvider.selectedModelId === removedSelectedModelId) {
+          updates.selectedModelId = previousSelectedModelId
+        }
+        const currentDefaultProviderId = currentLlm.defaultProviderId
+        const currentDefaultModel = currentLlm.defaultModel
+        const restoreDefault = (
+          previousDefaultProviderId !== removedDefaultProviderId || previousDefaultModel !== removedDefaultModel
+        ) && currentDefaultProviderId === removedDefaultProviderId && currentDefaultModel === removedDefaultModel
+        settingsStore.updateProvider(currentProvider.id, updates)
+        // 更新 Provider 会协调默认选择；仅恢复仍属于本次删除的绑定。
+        currentLlm.defaultProviderId = restoreDefault ? previousDefaultProviderId : currentDefaultProviderId
+        currentLlm.defaultModel = restoreDefault ? previousDefaultModel : currentDefaultModel
+        reconcileDefaultSelection(currentLlm)
+      }
+      logger.error('[Settings] 删除模型持久化失败:', e)
+      toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
+    }
+  } finally {
+    // 旧请求结束时不能关闭后来选择的另一个删除目标。
+    if (pendingDeleteModel.value === target) pendingDeleteModel.value = null
   }
 }
 
@@ -1219,8 +1252,9 @@ function saveEditModel() {
 
 // ─── Provider 连接测试 ────────────────────────────────
 const testingProviderIds = ref(new Set<string>())
+const providerTestGenerations = new Map<string, number>()
 const testProviderResult = ref<
-  Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>
+  Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud'; receiptBacked?: boolean }>
 >({})
 
 /** 眼睛显示后的明文 API Key（仅独立展示层、内存短驻，关闭眼睛即清除，不写入表单保存值） */
@@ -1240,13 +1274,14 @@ function restoreProviderApiKeyFocus(provider: ProviderConfig) {
 }
 
 function clearProviderProbeState(provider: ProviderConfig) {
+  providerTestGenerations.set(provider.id, (providerTestGenerations.get(provider.id) ?? 0) + 1)
   provider.probeReceipt = undefined
   delete testProviderResult.value[provider.id]
 }
 
 function providerConnectionResult(provider: ProviderConfig) {
   const transient = testProviderResult.value[provider.id]
-  if (transient) return transient
+  if (transient && transient.receiptBacked !== false) return transient
   const receipt = provider.probeReceipt
   if (receipt) {
     return {
@@ -1259,7 +1294,15 @@ function providerConnectionResult(provider: ProviderConfig) {
       locality: receipt.locality,
     }
   }
-  return testProviderResult.value[provider.id]
+  return undefined
+}
+
+/** 请求错误详情可以临时显示，但不能替代服务端连接事实。 */
+function providerConnectionError(provider: ProviderConfig) {
+  const transient = testProviderResult.value[provider.id]
+  if (transient && !transient.ok) return transient
+  const result = providerConnectionResult(provider)
+  return result && !result.ok ? result : undefined
 }
 
 function parseProviderProbeTime(value: string | number | undefined): number | undefined {
@@ -1428,10 +1471,19 @@ async function testProvider(provider: ProviderConfig) {
     return
   }
 
-  try {
-    if (!activeProvider.providerInstanceId) {
-      throw new Error(t('settings.llm.connectionFailed'))
+  if (!activeProvider.providerInstanceId) {
+    const failure = { ok: false, msg: t('settings.llm.connectionFailed') }
+    testProviderResult.value[provider.id] = failure
+    if (activeProvider.id !== provider.id) {
+      testProviderResult.value[activeProvider.id] = failure
     }
+    testingProviderIds.value.delete(provider.id)
+    return
+  }
+
+  let currentTestProvider: (() => ProviderConfig | undefined) | undefined
+  let refreshTestReceipt: (() => Promise<ProviderConfig | undefined>) | undefined
+  try {
     const activePreferred =
       activeProvider.models?.find(
         (model) => model.id === activeProvider.selectedModelId && isChatModelOption(model),
@@ -1439,6 +1491,34 @@ async function testProvider(provider: ProviderConfig) {
       activeProvider.models?.find((model) => model.capabilities?.includes('embedding'))
     const activeModelId = (activePreferred?.id || selectedModelId).trim()
     const preset = PROVIDER_PRESETS[activeProvider.type]
+    const testedScope = backendScopeKey()
+    const testedFingerprint = providerProbeConnectivityFingerprint(activeProvider)
+    const testedInstanceId = activeProvider.providerInstanceId
+    const testedGeneration = providerTestGenerations.get(activeProvider.id) ?? 0
+    currentTestProvider = () => {
+      const currentProvider = config.value?.llm.providers.find(
+        (candidate) => candidate.providerInstanceId === testedInstanceId,
+      )
+      return currentProvider &&
+        backendScopeKey() === testedScope &&
+        (providerTestGenerations.get(currentProvider.id) ?? 0) === testedGeneration &&
+        providerProbeConnectivityFingerprint(currentProvider) === testedFingerprint
+        ? currentProvider
+        : undefined
+    }
+    refreshTestReceipt = async () => {
+      const snapshot = await getLLMConfig()
+      const currentProvider = currentTestProvider?.()
+      if (!currentProvider) return undefined
+      const restoredProvider = backendToProviders(snapshot, [currentProvider]).find(
+        (candidate) => candidate.providerInstanceId === testedInstanceId,
+      )
+      currentProvider.probeReceipt = restoredProvider &&
+        providerProbeConnectivityFingerprint(restoredProvider) === testedFingerprint
+        ? restoredProvider.probeReceipt
+        : undefined
+      return currentProvider
+    }
     const result = await testLLMConnection(
       {
         provider: {
@@ -1455,14 +1535,16 @@ async function testProvider(provider: ProviderConfig) {
         httpAuthorization: activeProvider.httpAuthorization,
       },
     )
+    const currentProvider = currentTestProvider()
+    if (!currentProvider) return
     const testedAt = parseProviderProbeTime(result.tested_at)
 
     // 成功与失败都以持久回执为准，页面卸载不能丢失最近一次连接结论。
     if (result.persisted && testedAt !== undefined) {
-      activeProvider.probeReceipt = {
-        providerInstanceId: activeProvider.providerInstanceId,
+      currentProvider.probeReceipt = {
+        providerInstanceId: testedInstanceId,
         outcome: result.ok ? 'passed' : 'failed',
-        locality: effectiveProviderLocality(activeProvider),
+        locality: effectiveProviderLocality(currentProvider),
         latencyMs: result.latency_ms ?? 0,
         testedAt,
         ...(result.error_code ? { errorCode: result.error_code } : {}),
@@ -1473,42 +1555,46 @@ async function testProvider(provider: ProviderConfig) {
             }
           : {}),
       }
-      delete testProviderResult.value[activeProvider.id]
+      delete testProviderResult.value[currentProvider.id]
       delete testProviderResult.value[provider.id]
     } else {
-      activeProvider.probeReceipt = undefined
-      const transient = {
-        ok: result.ok,
-        msg: result.ok
-          ? t('settings.llm.connectionOk')
-          : result.error_message || result.message || t('settings.llm.connectionFailed'),
-      }
-      testProviderResult.value[provider.id] = transient
-      if (activeProvider.id !== provider.id) {
-        testProviderResult.value[activeProvider.id] = transient
+      // 未持久化结果不能冒充连接事实，回读后没有当前回执即维持未测试。
+      delete testProviderResult.value[provider.id]
+      if (!result.ok) {
+        testProviderResult.value[currentProvider.id] = {
+          ok: false,
+          msg: result.error_message || result.message || t('settings.llm.connectionFailed'),
+          receiptBacked: false,
+        }
       }
     }
-    // 模型能力与连接结果各自持久化；能力探测失败不覆盖已确认的连接回执。
-    if (result.ok && activeProvider.providerInstanceId && activePreferred && isChatModelOption(activePreferred)) {
-      try {
-        await probeLLMModelCapability(activeProvider.providerInstanceId, activeModelId)
-      } catch (error) {
-        logger.warn('[Settings] 模型文本能力探测失败:', error)
-        toast.error(t('settings.llm.probeFailed', '能力探测失败，请重试'))
-      }
+    // 同次连接请求已由服务端保存模型能力回执；这里只读恢复，不再次调用模型。
+    // 回读仅更新匹配连接的回执，不能用整份快照覆盖请求期间的新编辑。
+    try {
+      await refreshTestReceipt()
+    } catch (error) {
+      logger.warn('[Settings] Provider receipt readback failed:', error)
     }
     // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
-    if (result.ok && activeProvider.type !== 'ollama') {
-      syncRemoteModels(activeProvider)
+    const providerAfterReadback = currentTestProvider()
+    if (result.ok && providerAfterReadback && providerAfterReadback.type !== 'ollama') {
+      syncRemoteModels(providerAfterReadback)
     }
   } catch (e) {
-    const failed = {
+    // 请求结果未知时仅查询回执，不重发；配置已变化的旧错误不能覆盖当前卡片。
+    const currentProvider = currentTestProvider?.()
+    if (!currentProvider) return
+    logger.warn('[Settings] Provider connection test request failed:', e)
+    delete testProviderResult.value[provider.id]
+    testProviderResult.value[currentProvider.id] = {
       ok: false,
       msg: messageFromUnknownError(e),
+      receiptBacked: false,
     }
-    testProviderResult.value[provider.id] = failed
-    if (activeProvider.id !== provider.id) {
-      testProviderResult.value[activeProvider.id] = failed
+    try {
+      await refreshTestReceipt?.()
+    } catch (error) {
+      logger.warn('[Settings] Provider receipt readback failed:', error)
     }
   } finally {
     testingProviderIds.value.delete(provider.id)
@@ -2130,12 +2216,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   </div>
 
                   <p
-                    v-if="
-                      providerConnectionResult(provider) && !providerConnectionResult(provider)!.ok
-                    "
+                    v-if="providerConnectionError(provider)"
                     class="hc-provider__connection-detail"
                   >
-                    {{ providerConnectionResult(provider)!.msg }}
+                    {{ providerConnectionError(provider)!.msg }}
                   </p>
 
                   <div

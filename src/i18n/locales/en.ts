@@ -38,7 +38,7 @@ export default {
     engineRunning: 'Engine running',
     engineStarting: 'Engine starting…',
     engineStopped: 'Engine stopped',
-    restartEngine: 'Restart engine',
+    restartEngine: 'Restart service',
     collapse: 'Collapse',
     tasks: 'Tasks',
     skills: 'Skills',

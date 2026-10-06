@@ -1,11 +1,14 @@
-import { updateLLMConfig } from '@/api/config'
-import type { AppConfig, BackendLLMConfig, ProviderConfig } from '@/types'
+import { getLLMConfig, updateLLMConfig } from '@/api/config'
+import { backendScopeKey } from '@/services/backend-context'
+import { messageFromUnknownError } from '@/utils/errors'
+import type { AppConfig, BackendLLMConfig, ProviderConfig, ProviderCredentialReplacement } from '@/types'
 import { logger } from '@/utils/logger'
 import { invalidateProviderCatalogSync } from './model-catalog'
 import { syncProviderModelCatalogs } from './provider-model-sync'
 import {
   invalidateChangedProviderProbeReceipt,
   materializeProviderApiKeys,
+  mergeLLMConfigChanges,
   providerCredentialReplacements,
   providersToBackend,
   withLLMConfigConditions,
@@ -15,8 +18,9 @@ interface SettingsProviderSyncContext {
   getConfig: () => AppConfig | null
   getRuntimeProviders: () => ProviderConfig[] | null
   getLLMConfigConditions: () => Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null
+  getLLMConfigBaseline: () => BackendLLMConfig | null
   recordLLMConfigConditions: (
-    receipt: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'>,
+    receipt: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> & Partial<BackendLLMConfig>,
   ) => void
 }
 
@@ -26,6 +30,62 @@ interface SettingsProviderSyncContext {
  */
 export function createSettingsProviderSync(context: SettingsProviderSyncContext) {
   let persistenceQueue: Promise<void> = Promise.resolve()
+
+  function captureOrigin() {
+    const baseline = context.getLLMConfigBaseline()
+    return {
+      scope: backendScopeKey(),
+      baseline: baseline ? JSON.parse(JSON.stringify(baseline)) as BackendLLMConfig : null,
+    }
+  }
+
+  function isConfigStale(error: unknown) {
+    const message = messageFromUnknownError(error)
+    if (message === 'LLM configuration is stale') return true
+    try {
+      const body = JSON.parse(message)
+      return body.code === 'LLM_CONFIG_STALE' && body.message === 'LLM configuration is stale'
+    } catch { return false }
+  }
+
+  async function persistLLMConfig(
+    draft: BackendLLMConfig,
+    replacements: ProviderCredentialReplacement[],
+    origin = captureOrigin(),
+  ) {
+    const assertScope = () => {
+      if (backendScopeKey() !== origin.scope) throw new Error('Backend connection changed during configuration save')
+    }
+    assertScope()
+    const latest = context.getLLMConfigBaseline()
+    // 设置页不编辑缓存及推理路由，完整写入须保留来源快照中的这些字段。
+    let payload = origin.baseline ? { ...origin.baseline, ...draft, cache: origin.baseline.cache } : draft
+    if (origin.baseline && latest && origin.baseline.config_digest !== latest.config_digest) {
+      if (replacements.length) throw new Error('LLM configuration is stale')
+      payload = mergeLLMConfigChanges(origin.baseline, draft, latest)
+    }
+    const submit = async (value: BackendLLMConfig) => {
+      assertScope()
+      const receipt = await updateLLMConfig(
+        withLLMConfigConditions(value, context.getLLMConfigConditions()), replacements,
+      )
+      assertScope()
+      context.recordLLMConfigConditions({ ...value, ...receipt })
+      return receipt
+    }
+    try {
+      return await submit(payload)
+    } catch (error) {
+      // 只有明确未提交的条件冲突允许读回后提交一次；网络未知不重放。
+      if (!isConfigStale(error) || !origin.baseline || replacements.length) throw error
+      assertScope()
+      const current = await getLLMConfig()
+      assertScope()
+      context.recordLLMConfigConditions(current)
+      payload = mergeLLMConfigChanges(origin.baseline, draft, current)
+      return submit(payload)
+    }
+  }
 
   function enqueue(persist: () => Promise<void>): Promise<void> {
     const queued = persistenceQueue.catch(() => undefined).then(persist)
@@ -59,21 +119,20 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
       const current = context.getConfig()
       if (!current) return
       const snapshot: AppConfig = JSON.parse(JSON.stringify(current))
+      const origin = captureOrigin()
       snapshot.llm.providers = await materializeProviderApiKeys(snapshot.llm.providers)
-      const backendConfig = withLLMConfigConditions(
-        providersToBackend(
+      const backendConfig = providersToBackend(
           snapshot.llm.providers,
           snapshot.llm.defaultModel,
           snapshot.llm.defaultProviderId ?? '',
           snapshot.llm.routing,
-        ),
-        context.getLLMConfigConditions(),
+          snapshot.llm.defaultReasoningPolicy,
       )
-      const receipt = await updateLLMConfig(
+      await persistLLMConfig(
         backendConfig,
         providerCredentialReplacements(snapshot.llm.providers),
+        origin,
       )
-      context.recordLLMConfigConditions(receipt)
     })
     void queued.catch((error) => {
       logger.warn('自动启用的小目录模型持久化失败，将在下次显式保存时重试', error)
@@ -90,6 +149,8 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
 
   return {
     enqueue,
+    captureOrigin,
+    persistLLMConfig,
     invalidate: invalidateProviderCatalogSync,
     invalidateAll,
     invalidateTransitions,

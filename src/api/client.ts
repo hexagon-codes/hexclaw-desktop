@@ -34,7 +34,8 @@ export async function sidecarFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const scope = backendScopeKey()
+  const requestHeaders = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+  const scope = requestHeaders.get('x-hexclaw-connection-scope') ?? backendScopeKey()
   assertBackendActive(scope)
   const path = managedSidecarPath(input)
   if (!isTauri() || !path) return globalThis.fetch(input, init)
