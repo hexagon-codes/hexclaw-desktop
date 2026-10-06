@@ -45,6 +45,7 @@ import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ModelSelector from '@/components/common/ModelSelector.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -976,10 +977,6 @@ const newAgentProviderOptions = computed(() => [
   { value: '', label: followGlobalLabel() },
   ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label })),
 ])
-const newAgentModelOptions = computed(() => [
-  { value: '', label: t('settings.llm.models') },
-  ...modelsForProvider(newAgent.value.provider).map((m) => ({ value: m.id, label: m.name })),
-])
 const editAgentProviderOptions = computed(() => {
   // 始终带「使用全局默认」(value:'') 占位——否则走全局默认(provider='')的 agent 编辑时
   // HcSelect 的 v-model='' 无匹配项 → 下拉空白显示异常（bug 2026-06-22）。
@@ -990,19 +987,6 @@ const editAgentProviderOptions = computed(() => {
   const cur = editingAgent.value.provider
   // 当前 provider 不在 runtime 列表时，补一个 "(invalid)" 选项保持选中态
   if (cur && !runtimeProviderOptions.value.some((p) => p.key === cur)) {
-    opts.push({ value: cur, label: `${cur} (invalid)` })
-  }
-  return opts
-})
-const editAgentModelOptions = computed(() => {
-  const models = modelsForProvider(editingAgent.value.provider)
-  // 同理始终带 value:'' 占位，空 model 才有可匹配项（不空白）。
-  const opts = [
-    { value: '', label: t('settings.llm.models') },
-    ...models.map((m) => ({ value: m.id, label: m.name })),
-  ]
-  const cur = editingAgent.value.model
-  if (cur && !models.some((m) => m.id === cur)) {
     opts.push({ value: cur, label: `${cur} (invalid)` })
   }
   return opts
@@ -1688,10 +1672,11 @@ async function handleUnregisterAgent() {
                           :style="{ color: 'var(--hc-text-secondary)' }"
                           >{{ t('agents.model') }}</label
                         >
-                        <HcSelect
+                        <ModelSelector
                           v-if="newAgent.provider"
                           v-model="newAgent.model"
-                          :options="newAgentModelOptions"
+                          :provider-key="newAgent.provider"
+                          :empty-label="t('settings.llm.models')"
                         />
                         <div
                           v-else
@@ -2096,10 +2081,12 @@ async function handleUnregisterAgent() {
                         :style="{ color: 'var(--hc-text-secondary)' }"
                         >{{ t('agents.model') }}</label
                       >
-                      <HcSelect
+                      <ModelSelector
                         v-if="editingAgent.provider"
                         v-model="editingAgent.model"
-                        :options="editAgentModelOptions"
+                        :provider-key="editingAgent.provider"
+                        :empty-label="t('settings.llm.models')"
+                        preserve-invalid
                       />
                       <div
                         v-else

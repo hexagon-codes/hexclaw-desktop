@@ -2,7 +2,11 @@ import { backendLocalStorage } from '@/services/backend-context'
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
-import { canonicalizeModelOption, resolveProviderSelectedModelId } from '@/config/model-contract'
+import {
+  canonicalizeModelOption,
+  mergeCatalogModelCapabilities,
+  resolveProviderSelectedModelId,
+} from '@/config/model-contract'
 import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
 
 /**
@@ -266,7 +270,7 @@ export function reconcileProviderCatalog(
         return canonicalizeModelOption({
           ...withoutReasoningContract(model),
           name: remote.name || model.name || remote.id,
-          ...(remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
+          capabilities: mergeCatalogModelCapabilities(remote, model),
           ...reasoningContractFrom(remote, model, presetById.get(model.id)),
         })
       })
@@ -281,7 +285,9 @@ export function reconcileProviderCatalog(
           return canonicalizeModelOption({
             ...withoutReasoningContract(existing),
             name: remote.name || existing.name || remote.id,
-            ...(!existing.isCustom && remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
+            ...(!existing.isCustom
+              ? { capabilities: mergeCatalogModelCapabilities(remote, existing) }
+              : {}),
             ...reasoningContractFrom(remote, existing, preset),
           })
         }

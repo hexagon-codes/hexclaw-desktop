@@ -12,6 +12,7 @@ import {
   Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import ModelSelector from '@/components/common/ModelSelector.vue'
 import { useAppStore } from '@/stores/app'
 import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
 import {
@@ -1657,36 +1658,6 @@ function modelKindLabel(modelId: string, caps: import('@/types').ModelCapability
   if (caps.includes('code')) return '代码专项模型'
   return '文本对话模型'
 }
-
-const groupedModels = computed(() => {
-  const groups: Record<
-    string,
-    {
-      providerName: string
-      models: {
-        providerKey: string
-        modelId: string
-        modelName: string
-        capabilities: import('@/types').ModelCapability[]
-      }[]
-    }
-  > = {}
-  // 全模型可见 — 选中后由 ChatView 按 capability 切换 composer
-  // （chat / image-gen / video-gen 三种模式共用同一个会话流）。
-  for (const m of settingsStore.availableModels) {
-    const caps = effectiveCaps(m.capabilities)
-    if (!groups[m.providerId]) {
-      groups[m.providerId] = { providerName: m.providerName, models: [] }
-    }
-    groups[m.providerId]!.models.push({
-      providerKey: m.providerKey,
-      modelId: m.modelId,
-      modelName: m.modelName,
-      capabilities: caps,
-    })
-  }
-  return groups
-})
 
 // 当前选中的模型类别。voice_chat 优先级高于 chat — 一旦后端注册了语音对话 Provider
 // 且当前模型在白名单（gpt-4o-audio-preview 等），即使有 text 能力也走 voice_chat 模式。
@@ -4098,77 +4069,69 @@ function startSidebarResize(event: MouseEvent) {
                   class="hc-model-selector__dropdown hc-model-selector__dropdown--up"
                   @mouseleave="showModelSelector = false"
                 >
-                  <button
-                    class="hc-model-selector__item hc-model-selector__item--auto"
-                    :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
-                    @click="selectModel('auto')"
+                  <ModelSelector
+                    mode="menu"
+                    :model-value="`${selectedProviderId}::${selectedModel}`"
+                    :is-usable="(model) => isModelUsable(model.modelId, model.capabilities)"
+                    :model-title="
+                      (model) =>
+                        !isModelUsable(model.modelId, model.capabilities)
+                          ? '该生成模型暂未接入后端 Provider'
+                          : modelKindLabel(model.modelId, model.capabilities)
+                    "
+                    @select="
+                      (model) =>
+                        selectModel(
+                          model.modelId,
+                          model.providerId,
+                          model.providerKey,
+                          model.providerName,
+                        )
+                    "
                   >
-                    <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
-                    <span class="hc-model-selector__item-name">Auto</span>
-                  </button>
-                  <div class="hc-model-selector__divider" />
-                  <template v-if="Object.keys(groupedModels).length > 0">
-                    <div
-                      v-for="(group, pid) in groupedModels"
-                      :key="pid"
-                      class="hc-model-selector__group"
-                    >
-                      <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
+                    <template #before>
                       <button
-                        v-for="m in group.models"
-                        :key="m.modelId"
-                        class="hc-model-selector__item"
-                        :class="{
-                          'hc-model-selector__item--active':
-                            selectedModel === m.modelId && selectedProviderId === pid,
-                          'hc-model-selector__item--disabled': !isModelUsable(
-                            m.modelId,
-                            m.capabilities,
-                          ),
-                        }"
-                        :disabled="!isModelUsable(m.modelId, m.capabilities)"
-                        :title="
-                          !isModelUsable(m.modelId, m.capabilities)
-                            ? '该生成模型暂未接入后端 Provider'
-                            : modelKindLabel(m.modelId, m.capabilities)
-                        "
-                        @click="
-                          isModelUsable(m.modelId, m.capabilities) &&
-                          selectModel(m.modelId, String(pid), m.providerKey, group.providerName)
-                        "
+                        class="hc-model-selector__item hc-model-selector__item--auto"
+                        :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
+                        @click="selectModel('auto')"
                       >
-                        <span
-                          class="hc-model-selector__item-kind"
-                          role="img"
-                          :aria-label="modelKindLabel(m.modelId, m.capabilities)"
-                          >{{ modelKindEmoji(m.modelId, m.capabilities) }}</span
-                        >
-                        <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
-                        <span
-                          v-if="!isModelUsable(m.modelId, m.capabilities)"
-                          class="hc-model-selector__item-tag"
-                          >暂未支持</span
-                        >
-                        <span
-                          v-else-if="selectedModel === m.modelId && selectedProviderId === pid"
-                          style="color: var(--hc-accent); margin-left: auto"
-                          >✓</span
-                        >
+                        <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
+                        <span class="hc-model-selector__item-name">Auto</span>
                       </button>
-                    </div>
-                  </template>
-                  <div v-else class="hc-model-selector__empty">
-                    <template v-if="settingsStore.enabledProviders.length > 0">{{
-                      t('chat.noModels')
-                    }}</template>
-                    <button
-                      v-else
-                      class="hc-model-selector__add-link"
-                      @click="openProviderSettings"
-                    >
-                      {{ t('settings.llm.noProvidersDesc') }}
-                    </button>
-                  </div>
+                      <div class="hc-model-selector__divider" />
+                    </template>
+                    <template #model="{ model, selected }">
+                      <span
+                        class="hc-model-selector__item-kind"
+                        role="img"
+                        :aria-label="modelKindLabel(model.modelId, model.capabilities)"
+                        >{{ modelKindEmoji(model.modelId, model.capabilities) }}</span
+                      >
+                      <span class="hc-model-selector__item-name">{{ model.modelName }}</span>
+                      <span
+                        v-if="!isModelUsable(model.modelId, model.capabilities)"
+                        class="hc-model-selector__item-tag"
+                        >暂未支持</span
+                      >
+                      <span v-else-if="selected" style="color: var(--hc-accent); margin-left: auto"
+                        >✓</span
+                      >
+                    </template>
+                    <template #empty>
+                      <div class="hc-model-selector__empty">
+                        <template v-if="settingsStore.enabledProviders.length > 0">{{
+                          t('chat.noModels')
+                        }}</template>
+                        <button
+                          v-else
+                          class="hc-model-selector__add-link"
+                          @click="openProviderSettings"
+                        >
+                          {{ t('settings.llm.noProvidersDesc') }}
+                        </button>
+                      </div>
+                    </template>
+                  </ModelSelector>
                 </div>
               </div>
               <div class="hc-thinking-selector">
@@ -5550,39 +5513,6 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
   padding: 4px;
 }
 
-.hc-model-selector__group {
-  padding: 4px 0;
-}
-
-.hc-model-selector__group + .hc-model-selector__group {
-  border-top: 1px solid var(--hc-divider);
-}
-
-.hc-model-selector__group-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--hc-text-muted);
-  padding: 4px 8px 2px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.hc-model-selector__item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  background: transparent;
-  color: var(--hc-text-secondary);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--hc-radius-sm);
-  transition: background 0.1s;
-}
-
 .hc-model-selector__item-name {
   flex: 1;
   min-width: 0;
@@ -5621,27 +5551,6 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
   margin-left: 2px;
 }
 
-.hc-model-selector__item:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-
-.hc-model-selector__item--active {
-  background: var(--hc-accent-subtle);
-  color: var(--hc-accent);
-  font-weight: 500;
-}
-
-.hc-model-selector__item--disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.hc-model-selector__item--disabled:hover {
-  background: transparent;
-  color: var(--hc-text-secondary);
-}
-
 .hc-model-selector__item-kind {
   flex-shrink: 0;
   width: 18px;
@@ -5658,11 +5567,6 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
   border-radius: 8px;
   background: color-mix(in srgb, var(--hc-warning, #f59e0b) 14%, transparent);
   color: var(--hc-warning, #f59e0b);
-}
-
-.hc-model-selector__item--auto {
-  display: flex;
-  align-items: center;
 }
 
 .hc-model-selector__item-hint {

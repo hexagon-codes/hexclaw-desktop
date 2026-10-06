@@ -68,6 +68,7 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ModelSelector from '@/components/common/ModelSelector.vue'
 import ReasoningPolicySelect from '@/components/settings/ReasoningPolicySelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
@@ -629,26 +630,13 @@ const sandboxNetworkEnabled = computed({
 })
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const editableProviders = computed(() => config.value?.llm.providers ?? [])
-const defaultModelOptions = computed(() =>
-  settingsStore.availableModels.map((m) => ({
-    value: `${m.providerId}::${m.modelId}`,
-    providerId: m.providerId,
-    modelId: m.modelId,
-    label: `${m.providerName} / ${m.modelName}`,
-  })),
-)
-// HcSelect 投影：默认模型下拉，首项为「无可用模型」空值占位（替代原生空 <option>）
-const defaultModelSelectOptions = computed(() => [
-  { value: '', label: t('settings.llm.noEnabledModels') },
-  ...defaultModelOptions.value.map((option) => ({ value: option.value, label: option.label })),
-])
 const selectedDefaultModelValue = computed({
   get() {
     const llmConfig = config.value?.llm
     if (!llmConfig?.defaultModel) return ''
     const providerId =
       llmConfig.defaultProviderId ||
-      defaultModelOptions.value.find((option) => option.modelId === llmConfig.defaultModel)
+      settingsStore.availableModels.find((option) => option.modelId === llmConfig.defaultModel)
         ?.providerId ||
       ''
     return providerId ? `${providerId}::${llmConfig.defaultModel}` : ''
@@ -662,9 +650,12 @@ const selectedDefaultModelValue = computed({
       return
     }
 
-    const [providerId, modelId = ''] = value.split('::', 2)
-    config.value.llm.defaultProviderId = providerId
-    config.value.llm.defaultModel = modelId
+    const model = settingsStore.availableModels.find(
+      (entry) => `${entry.providerId}::${entry.modelId}` === value,
+    )
+    if (!model) return
+    config.value.llm.defaultProviderId = model.providerId
+    config.value.llm.defaultModel = model.modelId
     autoSave()
   },
 })
@@ -1578,6 +1569,13 @@ async function syncRemoteModels(
   }
 }
 
+// 卡片预览上限独立于目录自动启用阈值，不截断配置和模型管理器的完整列表。
+const PROVIDER_MODEL_PREVIEW_LIMIT = 10
+
+function providerModelPreview(provider: ProviderConfig): ModelOption[] {
+  return provider.models.slice(0, PROVIDER_MODEL_PREVIEW_LIMIT)
+}
+
 function providerCatalogCount(providerId: string): number {
   return catalogStore.getCatalog(providerId)?.models.length ?? 0
 }
@@ -1779,12 +1777,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 >
               </span>
               <div class="hc-settings__row-right">
-                <HcSelect
+                <ModelSelector
                   v-model="selectedDefaultModelValue"
                   data-testid="llm-default-model-select"
                   class="hc-settings__select"
-                  :options="defaultModelSelectOptions"
-                  :disabled="defaultModelOptions.length === 0"
+                  :empty-label="t('settings.llm.noEnabledModels')"
+                  disable-when-empty
                 />
               </div>
             </div>
@@ -2226,7 +2224,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </div>
                     </div>
                     <div class="hc-model-chips">
-                      <template v-for="model in provider.models" :key="model.id">
+                      <template v-for="model in providerModelPreview(provider)" :key="model.id">
                         <!-- 非对话模型不参与当前模型选择，也不暴露聊天/tool-call 探测。 -->
                         <div
                           v-if="!isChatModelOption(model)"

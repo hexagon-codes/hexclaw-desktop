@@ -7,6 +7,7 @@ import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-
 import {
   canonicalizeModelOption,
   isChatModelOption,
+  mergeCatalogModelCapabilities,
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
@@ -305,7 +306,7 @@ function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelO
           ...cloneModelOption(existing),
           id: m.id,
           name: m.name || m.id,
-          ...(m.capabilities ? { capabilities: [...m.capabilities] } : {}),
+          capabilities: mergeCatalogModelCapabilities(m, existing),
         },
         m,
       ),
@@ -316,7 +317,7 @@ function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelO
       {
         id: m.id,
         name: m.name || m.id,
-        capabilities: [...(m.capabilities ?? [])],
+        capabilities: mergeCatalogModelCapabilities(m),
       },
       m,
     ),

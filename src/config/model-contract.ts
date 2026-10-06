@@ -49,6 +49,19 @@ export function normalizeModelCapabilities(
   return model.capabilities ?? ['text']
 }
 
+/** 目录空能力仅表示未知，不能覆盖同一已启用模型的明确合同。 */
+export function mergeCatalogModelCapabilities(
+  catalogModel: Pick<CatalogModel, 'capabilities'>,
+  existingModel?: Pick<ModelOption, 'id' | 'capabilities'>,
+): ModelCapability[] {
+  const capabilities = catalogModel.capabilities?.length
+    ? catalogModel.capabilities
+    : existingModel
+      ? normalizeModelCapabilities(existingModel)
+      : catalogModel.capabilities ?? []
+  return [...capabilities]
+}
+
 /** 不可信配置或旧数据只能收敛到精确三态，不能从模型 ID 补猜。 */
 export function normalizeModelReasoningSupport(value: unknown): ModelReasoningSupport {
   if (value === 'supported' || value === 'unsupported') return value

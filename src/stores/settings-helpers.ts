@@ -235,7 +235,15 @@ export function mergeConfigProvidersWithRuntime(
         providerMatchesBackendKey(c, x.backendKey || '') ||
         providerMatchesBackendKey(c, x.name || ''),
     )
-    if (r) out.push({ ...c, ...r, id: c.id, enabled: c.enabled })
+    // 配置拥有启用模型名单和选择，旧运行快照不能撤销本次模型编辑。
+    if (r) out.push({
+      ...c,
+      ...r,
+      id: c.id,
+      enabled: c.enabled,
+      models: c.models,
+      selectedModelId: c.selectedModelId,
+    })
     else out.push(c)
   }
   for (const r of runtimeProviders) {
