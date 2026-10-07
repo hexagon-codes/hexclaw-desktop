@@ -22,14 +22,22 @@ Use this for UI testing, internal QA, or manual installation.
 - You can build without an updater private key
 - Both manual packaging and tag publication in `Release` disable updater artifacts automatically when the signing key is missing
 - The resulting packages can still be installed manually
-- In-app auto updates will not work
+- A package built without the signing key and with updater artifact generation disabled cannot be an update target; the installed app can still check its configured feed for later valid signed versions
+
+After preparing bundled components using the [README source development steps](../README.en.md#source-development), you can disable updater artifact generation for a single local build if you only need manually installable packages:
+
+```bash
+pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+This overrides only that build, without changing the project defaults or CI. Release artifacts intended for automatic updates still use the signing flow below.
 
 ### Production Releases
 
 Use this when you want real in-app auto updates.
 
 - The updater private key is required
-- When `TAURI_SIGNING_PRIVATE_KEY` is missing, the `Release` workflow disables updater artifacts automatically and still produces manually installable unsigned packages, but in-app auto updates will not work
+- When `TAURI_SIGNING_PRIVATE_KEY` is missing, the `Release` workflow disables updater artifacts automatically and still produces manually installable packages, but that version cannot be an updater target
 - For auto updates to work, the GitHub Release must contain `latest.json` and signed updater artifacts
 
 ## One-Time Setup
@@ -50,9 +58,11 @@ This gives you:
 Write the generated public key into [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json):
 
 ```json
-"plugins": {
-  "updater": {
-    "pubkey": "..."
+{
+  "plugins": {
+    "updater": {
+      "pubkey": "..."
+    }
   }
 }
 ```
@@ -86,8 +96,9 @@ gh workflow run release.yml -f ref="$DESKTOP_REF"
 4. Verify those build results, then create and push the Desktop release tag. Do not delete or move a published tag. These commands illustrate the entry point:
 
 ```bash
-git tag v0.5.0-beta.3
-git push origin v0.5.0-beta.3
+DESKTOP_TAG="v$(node -p "require('./package.json').version.replace(/^v/, '')")"
+git tag "$DESKTOP_TAG"
+git push origin "$DESKTOP_TAG"
 ```
 
 5. Wait for the tag-triggered `Release` workflow to finish; the Release remains a draft during builds and becomes public only after every platform succeeds
@@ -97,7 +108,7 @@ git push origin v0.5.0-beta.3
 
 ### Homebrew Cask and Beta Releases
 
-The `Release` workflow runs `update-tap` automatically only for stable versions. Prerelease tags containing `-`, including `v0.5.0-beta.3`, skip this job, so a Beta Cask needs a separate update.
+The `Release` workflow updates the Cask after each tag Release is published, using the same flow for stable and Beta versions. Manual packaging does not update the Tap. The one-line installer selects the latest published Release, including Beta, and does not install Draft releases.
 
 Publish the Desktop release and confirm that both macOS DMGs are downloadable before updating the [Homebrew Cask](https://github.com/hexagon-codes/homebrew-tap/blob/main/Casks/hexclaw.rb). Its version must match the Desktop Release. Calculate the ARM and Intel SHA256 values from the published `HexClaw_<version>_aarch64.dmg` and `HexClaw_<version>_x64.dmg`, respectively, and verify that both architecture URLs point to the correct installers for that version. A successful backend tag release does not verify the Desktop installers or Cask. macOS distribution continues to use unsigned DMGs without Apple code signing or notarization.
 
@@ -108,7 +119,7 @@ The desktop app now covers both user-facing paths:
 - a silent update check on launch
 - a manual check/install entry on the **About** page
 
-If the release has no artifacts signed for Tauri updater, the UI entry still exists, but users will not receive an installable updater package. A macOS build without Apple code signing can still have updater-signed artifacts.
+A version without Tauri-signed updater artifacts cannot be installed through the updater, but its update-check entry remains available and can read later valid versions from the configured feed. The feed must provide the correct platform artifact and signature, with a target version accepted by the updater. A macOS build without Apple code signing can still have updater-signed artifacts.
 
 ## FAQ
 
@@ -117,7 +128,11 @@ If the release has no artifacts signed for Tauri updater, the UI entry still exi
 Because [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json) enables:
 
 ```json
-"createUpdaterArtifacts": true
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  }
+}
 ```
 
 That tells Tauri to generate updater artifacts and sign them during build. If `TAURI_SIGNING_PRIVATE_KEY` is not exported in your shell, Tauri reports the missing signing key.

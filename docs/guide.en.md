@@ -42,13 +42,23 @@ Then come back to this guide for the detailed workflow and page-level instructio
 
 ### System Requirements
 
-| Platform | Minimum Version |
+| Platform | Runtime requirements |
 |----------|----------------|
-| macOS | 11.0 (Big Sur) or later |
+| macOS | 14 (Sonoma) or later for the current bundled local inference and document-rendering components; Apple Silicon / Intel |
 | Windows | 10 (1809) or later |
-| Linux | Ubuntu 20.04 / Fedora 36 or later |
+| Linux | Release builds use Ubuntu 22.04; the runtime must provide WebKitGTK 4.1 and other Tauri dependencies |
+
+The app shell's configured macOS 11 minimum does not describe the compatibility of bundled components. See the [Ollama macOS requirements](https://docs.ollama.com/macos) and [Tauri Linux distribution dependencies](https://v2.tauri.app/distribute/debian/).
 
 ### Installation
+
+**macOS: one-line install (recommended)**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/bb3c12ec91eec91798b67c292bc8c85c4481dc2b/install.sh | bash
+```
+
+The script detects Apple Silicon or Intel, downloads a published installer (including prereleases), and installs it at `/Applications/HexClaw.app`.
 
 **macOS (Homebrew)**
 
@@ -62,18 +72,17 @@ brew install --cask hexclaw
 1. Go to the [GitHub Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) page
 2. Download the installer for your platform:
    - macOS: `.dmg` file — double-click and drag to Applications
-   - Windows: `.msi` or `.exe` installer
+   - Windows: `.exe` (NSIS) installer
    - Linux: `.deb` (Debian/Ubuntu) or `.AppImage`
 3. Launch HexClaw
 
 ### First Launch
 
-1. **Start the app** — double-click the HexClaw icon
-2. **Wait for engine** — the status indicator in the sidebar bottom turns from red to green (Engine running)
-3. **Configure LLM** — go to **Settings → LLM Configuration**, select a Provider and enter your API Key
-4. **Start chatting** — switch to the Chat page and send your first message
+1. **Choose a service** — use the local service during initial setup, or enter the address and access token for a cloud HexClaw service.
+2. **Check the model** — start a task directly if the selected service already has a working default model; otherwise configure a Provider and model. Online models need the required credentials and address plus a connection test. Local models need a working Ollama instance and a downloaded model, without a cloud API Key.
+3. **Start chatting** — open Chat and send your first message or attachment.
 
-> **Tip**: Even without an LLM API Key, the HexClaw engine starts normally. You can browse the interface, manage Agents and Skills, but AI chat will not be available.
+Local and cloud services keep separate conversations, model configurations, and business data. Switching services does not migrate or merge them. The service can start without a configured model; AI tasks need an available model, while local Ollama models do not need a cloud API key.
 
 ### macOS Security Warning
 
@@ -90,7 +99,7 @@ If you only need local packaging for testing:
 
 - You do not need an updater private key
 - Trigger `Release` manually with a fixed commit SHA to build test installers; it disables updater artifacts automatically when the signing key is missing
-- Those packages can be installed manually, but they cannot be used for in-app auto updates
+- These packages can be installed manually. A version without signed updater artifacts cannot be an update target; an installed app can still check for and install a later valid signed version
 - macOS remains an unsigned DMG distributed through the existing Homebrew Cask; Apple Developer ID signing and notarization are not required
 
 If you want a real auto-update release:
@@ -106,23 +115,11 @@ See [Auto-Update Release Guide](./updates.en.md) for the full setup.
 
 ## Interface Overview
 
-HexClaw uses a classic three-column layout:
+The window contains sidebar navigation and the active page. Chat can include a session list, conversation area, and an output preview when needed. The example below shows the K12 skin; other pages and tasks display their own content.
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Title Bar (HexClaw Logo + Window Controls)           │
-├──────┬───────────────────────────────────────────────┤
-│      │                                               │
-│Sidebar│           Main Content Area                  │
-│      │                                               │
-│  Nav  │  (Chat/Agent/Settings page content)          │
-│      │                                               │
-│      │                                               │
-│  ───  │                                               │
-│Status │                                               │
-│Settings│                                              │
-└──────┴───────────────────────────────────────────────┘
-```
+![K12 workspace showing an annotated homework image](../.github/assets/desktop-k12-workspace.png)
+
+This is the same official tutorial image used in the [README](../README.en.md); see its caption for version scope. Homework content is an **AI-generated example, not real student work**.
 
 ### Sidebar Navigation
 
@@ -138,29 +135,29 @@ The navigation uses a grouped design with 8 top-level entries. The app opens to 
 
 | Page | Description | Sub-tabs |
 |------|-------------|----------|
-| Agents | Agent templates, running instances, routing rules, conference mode | — |
-| Knowledge | Knowledge and memory management | Knowledge · Memory |
-| Automation | Scheduled tasks and Webhook notifications | Tasks · Webhooks |
+| Agents | Role templates, registered instances, the default Agent, and personas | — |
+| Knowledge | Knowledge and memory management | Documents · Long-term Memory |
+| Automation | Scheduled tasks, Webhooks, and workflows | Scheduled Tasks · Webhooks · Workflows |
 
 **Connections**
 
 | Page | Description | Sub-tabs |
 |------|-------------|----------|
-| IM Channels | Feishu / DingTalk / WeCom / Discord / Telegram remote task entries | — |
-| Integration | External tools and service integration | Skills · MCP · Prompts |
+| Connections | IM channels, accounts, and data connectors for the active service, including Lark and DingTalk task entry points | — |
+| Capabilities | External tools and service integration | Skills · MCP · Prompt Library |
 
 **System**
 
 | Page | Description |
 |------|-------------|
 | Logs | Real-time runtime log viewing and filtering |
-| Settings | LLM providers, security, notifications, webhooks, theme, locale, etc. |
+| Settings | LLM configuration, automation permissions, and system settings; Webhooks are managed in Automation |
 
 ### Engine Status Indicator
 
 The sidebar bottom shows the HexClaw Engine runtime status:
 
-- **Green + "Engine running"** — backend service is healthy, all features available
+- **Green + "Engine running"** — the active backend is ready; model and tool availability depends on their configuration and actual results
 - **Red + "Engine stopped"** — backend service is not ready, AI features unavailable
 
 ---
@@ -195,17 +192,13 @@ These badges are rendered from generic contracts, not from a K12-only component.
 
 Supported LLM Providers:
 
-| Provider | Model Examples |
-|----------|---------------|
-| OpenAI | gpt-4o, gpt-4o-mini |
-| DeepSeek | deepseek-chat, deepseek-coder |
-| Anthropic | claude-sonnet-4-20250514 |
-| Google Gemini | gemini-2.0-flash |
-| Qwen (Alibaba) | qwen-max, qwen-plus |
-| Doubao (Ark) | doubao-pro |
-| Ollama | llama3, mistral (local models) |
+| Connection | Prerequisites |
+| --- | --- |
+| Online Providers such as OpenAI, DeepSeek, Anthropic, Gemini, Qwen, and Doubao | Configure the relevant credentials/address on the active service and enable available models |
+| Custom OpenAI-compatible service | The service's compatible endpoint, credentials, and model ID |
+| Ollama local models | Ollama must be reachable from the executing service, with the selected model downloaded |
 
-Configure in **Settings → LLM Configuration**: select Provider, enter API Key and model name.
+If the active service already has an available default model, start a task directly. Otherwise select a Provider and model in **Settings → LLM Configuration**. Online models need the required API Key and address; local Ollama models do not need a cloud API Key.
 
 ### Quick Chat
 
@@ -217,13 +210,10 @@ Press `⌘+Shift+H` (macOS) or `Ctrl+Shift+H` (Windows/Linux) to summon the Quic
 
 ### Creating an Agent
 
-1. Go to the **Agents** page
-2. Click "New Agent"
-3. Fill in:
-   - **Name** — display name of the Agent
-   - **Goal** — description of the Agent's working goal
-   - **Backstory** — role background and behavioral rules
-4. Save to start using
+1. Open **Agents**, choose Create Agent, then start blank or apply a template.
+2. Set the internal name, then the display name and Persona (SOUL) as needed. The internal name is used for `@` mentions and system lookup and cannot be changed after creation; the display name remains editable.
+3. Select a Provider/model, reasoning policy, sampling settings, and Skills as needed; leave inherited settings at their defaults when appropriate.
+4. Save and enter the instance's conversation from its Agent card.
 
 ### Agent Role Templates
 
@@ -231,16 +221,18 @@ Built-in preset roles:
 
 | Role | Use Case |
 |------|----------|
-| Assistant | General-purpose assistant |
-| Researcher | Information research |
-| Writer | Content writing |
-| Coder | Code development |
-| Translator | Translation |
-| Analyst | Data analysis |
+| General Assistant | General questions, task planning, and organization |
+| Support Agent | Troubleshooting, responses, and ticket workflows |
+| Content Writer | Social copy, titles, and topic suggestions |
+| Coding Buddy | Code reading, debugging, and command execution |
+| Translator | Translation and terminology |
+| Daily Report / Email Assistant | Reports, email drafts, and replies |
+| Data Analyst / Knowledge Q&A / Research Assistant | Data interpretation, knowledge retrieval, and research |
+| Meeting Notes | Turn existing discussion content into notes and action items |
 
 ### Multi-Agent Collaboration
 
-Supports multiple Agents collaborating in the same session. Use Agent conference mode to have multiple roles engage in cross-discussion.
+Route channel messages to an Agent through Connections. For multi-role tasks, a workflow parallel step can call configured roles and merge their results; see [Workflows](#workflows-workflows-tab).
 
 ### Scenario Templates
 
@@ -266,33 +258,39 @@ K12 Homework Tutor is the current built-in scenario pack. It is not a separate p
 
 After creating a Homework Tutor, you can enter it from:
 
-- **Agent card**: click “Tutor” to enter chat, or “Mistakes” to open the record view
-- **Chat page**: select the study assistant session, then use the top “Tutor / Mistakes” tabs
+- **Agent card**: enter the child's tutoring conversation and view that instance's learning records and reports
+- **Chat page**: select the corresponding tutor conversation, then use Tutoring, Learning Records, and Insights to view tasks and records
 
 ### Tutoring Flow
 
 In the “Tutor” tab you can:
 
 - Type a problem or paste a homework photo
-- Use progressive hints: directional hint → specific hint → full explanation
-- Provide the child's answer so the system can tailor the next hint
+- Receive teaching tips and the complete solution for parents, without unlocking the answer through three successive stages
+- Optionally provide the child's answer so the explanation can address the actual response
 - Read verification badges that distinguish program verification, model review, out-of-scope handling, and unverifiable answers
 
-For homework photos, the frontend calls `/api/k12/recognize` to extract structured problems. After you confirm the recognized problems, each one can be graded separately. Once confirmed, the chat stream automatically inlines a “Tutoring tips for this homework” block that tells the parent how to teach it and where the pitfalls are, so there is no separate panel to open.
+After you send a homework image, the task automatically recognizes, evaluates, and generates results. You do not need to confirm recognized problems or grade them one at a time. The main output of image grading is the original image with annotations; processing status or explanatory text does not replace that final image. Image solving, writing review, and artwork review return results for their respective tasks.
+
+Content that remains unreadable after automatic recognition is marked as unrecognizable in the result and forms part of the task's final outcome. Readable problems are completed normally. Unreadable content is not guessed, assigned invented answers, marked wrong, or recorded as a mistake or mastery conclusion. You can voluntarily send a clearer photo as a new input.
+
+Technical failures, including Provider timeouts, unknown call outcomes, and protocol errors, are reported separately and are not disguised as unrecognizable content. Avoid repeatedly sending the same request when its outcome is unknown.
+
+The desktop and connected DingTalk channels share the same image-task progression and final outcomes. You do not need to classify a photo as new homework or returned practice. The system links reliably matched historical problems within the current child's scope. If no reliable match is available, it still returns the image without changing historical review status.
 
 ### Mistake Book, Notebook, and Insights
 
-The “Mistakes” tab contains three subviews:
+View the following in the child's Learning Records and Insights:
 
 - **Mistakes**: the first screen leads with the “Due this week” review queue, showing problems due for review with topic, error cause, and review status; supports “one more to practice” and “mark mastered”. “All mistakes” is a collapsible archive you expand when needed. You can also “Log a mistake” by hand to file offline homework and in-class mistakes
 - **Notes**: Chinese / English phrases, poems, grammar points, and writing materials
 - **Insights**: new mistakes, review completion, top weak topics, and repeated-setback alerts
 
-Mistake status moves through `To review → Explained → Redone → Mastered → Archived`. The due review queue is returned by the backend and rendered by the frontend through record schemas.
+Review records and mastery are tracked separately. Reviewed does not mean mastered, and an incorrect answer remains due for review. Review evidence is accumulated only for answers actually covered and reliably evaluated; unreadable content is excluded, and replaying the same task does not count twice.
 
 ### Tutoring Tips for This Homework
 
-After you confirm the recognized problems, the chat stream automatically inlines a “Tutoring tips for this homework” block. It combines this homework's problems, mistakes, and insights into a one-page “how to teach” card, so the parent never has to open a separate panel.
+When a task returns “Tutoring tips for this homework,” the content appears directly in the conversation. It combines the homework's problems, mistakes, and insights to explain how to teach them. Parents do not need to confirm recognized problems or open a separate panel.
 
 Each section carries a source label, such as:
 
@@ -305,16 +303,16 @@ The inline tips support copying the text so you can paste it into phone IM.
 
 ### Backup, Export, and Automation
 
-- The Mistake Book can generate a “Review paper”: use “One-tap review paper” (zero config, auto-built from the due review queue) or “Custom paper” (customize item count, topics, and other parameters), then print or export as PDF / Word
+- The Mistake Book can generate a review paper from the due review queue or customize the source scope, item count, variants per source, and difficulty. Print or export using the formats offered by the output preview
 - Family learning archives can be exported and restored as `.hexbak` files with version header and checksum
 - After profile creation, HexClaw attempts to register default automation jobs. If cron is not enabled in the current runtime, it degrades silently and does not block creation
-- When IM is bound, family-chat messages can be routed to the correct child's study assistant instance
+- Bind a parent's one-to-one direct conversation with the bot to a child instance; that conversation then routes by the binding. K12 does not accept group-chat bindings
 
 ---
 
 ## Knowledge Center
 
-The Knowledge Center combines document knowledge base and long-term memory management, accessible via in-page tabs.
+Open Knowledge in the sidebar, then switch between Documents and Long-term Memory.
 
 ### Knowledge Base (Documents Tab)
 
@@ -322,67 +320,67 @@ RAG (Retrieval-Augmented Generation) based knowledge management:
 
 #### Upload Documents
 
-1. Go to the **Knowledge Center** page, select the **Documents** tab
-2. Click "Upload Document"
-3. Supported formats: PDF / Markdown / TXT / DOCX
-4. Documents are automatically parsed, chunked, and vectorized
+1. Open **Knowledge**, select **Documents**, then add a document or upload a file.
+2. The current upload entry accepts PDF, Markdown, TXT, DOC/DOCX, PPTX, CSV, JSON/JSONL, HexBank, and PNG/JPEG/WebP/GIF images. Processing depends on the service's parser and model dependencies.
+3. Inspect persistent processing, source-content, and index states after upload. Images need a vision model for transcription; vector indexing needs an available Embedding service.
+4. Check readable source content, keyword retrieval, and vector retrieval separately. Upload acceptance does not mean all processing is complete. Use the document retry/recovery entry for failures while preserving completed work.
 
 #### Using the Knowledge Base
 
-During conversations, Auto-RAG automatically searches the knowledge base before sending each message. Hits with a relevance score >= 0.35 are injected into the backend context, giving the AI more accurate reference material. The user still sees only their original question in the chat UI; the knowledge context is visible only on the backend side.
+The active HexClaw engine retrieves knowledge according to service configuration and task policy, then adds matching evidence to the model context. Retrieval eligibility, result count, and relevance thresholds depend on configuration and the task. The desktop does not independently retrieve and append hidden text before sending. When the task returns source evidence, inspect it alongside the answer.
 
 You can also search documents and rebuild indexes.
 
 #### Document Detail View
 
-Click a document in the knowledge base list to view its full content. The system first tries `GET /documents/{id}` to fetch the complete body; if the backend does not support that endpoint, it falls back to searching the document title and reassembling the content from chunks in order.
+Open a document to read its complete content from the active service document-detail endpoint, with processing details loaded separately. A source read failure exposes an error and retry action. Search chunks are not assembled into a substitute for the complete source, and a processing-detail failure does not replace the source read result.
 
 ### Memory System (Memory Tab)
 
 HexClaw supports cross-session long-term memory:
 
-- **Short-term memory** — current session context (up to 50 turns, auto-summarized when exceeded)
+- **Session context** — current conversation history; when enabled, compaction summarizes older messages at the configured message threshold and retains recent content, rather than imposing a fixed 50-turn limit
 - **Long-term memory** — cross-session persistent knowledge and preferences
 - **Semantic search** — retrieve relevant memories based on vector similarity
 
-In the Knowledge Center's **Memory** tab you can view, search, edit, and clear stored memories.
+Use **Knowledge → Long-term Memory** to inspect, search, and manage persistent entries and adjust memory behavior or the user profile. Clearing memory acts on the active service; confirm the intended data scope first.
 
 ---
 
 ## Automation
 
-The Automation page combines scheduled tasks and workflow canvas, accessible via in-page tabs.
+The Automation page manages scheduled tasks, Webhooks, and workflows through in-page tabs.
 
 ### Scheduled Tasks (Tasks Tab)
 
 Use Cron expressions to periodically execute Agent tasks:
 
-1. Go to the **Automation** page, select the **Tasks** tab
+1. Go to **Automation**, then select **Scheduled Tasks**
 2. Click "New Task"
 3. Configure:
    - **Name** — task description
    - **Cron expression** — e.g. `0 9 * * *` (daily at 9:00)
    - **Prompt** — the Agent instruction to execute
 4. Tasks support pause/resume/manual trigger, with execution history
-5. Results are sent as system notifications
+5. View task notices in the in-app notification center and inspect the actual output in execution history
 
-### Workflow Canvas (Canvas Tab)
+### Workflows (Workflows Tab)
 
-Visually orchestrate Agent workflows:
+Edit Agent workflows as ordered steps:
 
-1. Go to the **Automation** page, select the **Canvas** tab
-2. Choose from the template gallery or create manually
-3. Add nodes (Agent / Tool / Condition / Output)
-4. Connect nodes to establish execution flow
-5. Click "Run" to execute the entire workflow
+1. Go to **Automation** and select **Workflows**
+2. Create a workflow or open an existing one
+3. Add and configure input, model processing, tool, parallel fan-out, or output steps
+4. Move steps up or down to set execution order, then save
+5. Click Run and inspect step status and the final output
 
-Supports DAG (Directed Acyclic Graph) execution engine with automatic parallel processing of independent nodes. Includes built-in templates (daily digest, email classification, research pipeline, code review, etc.).
+The current desktop editor builds linear connections in step order. A parallel fan-out step can call multiple configured roles and combine their results. It does not provide a drag-and-connect canvas for editing arbitrary DAGs.
 
 ---
 
 ## Integration
 
-The Integration page manages external tool capabilities, with three sub-tabs: Skills, MCP, and Prompts.
+The Capabilities page manages tool integrations through Skills, MCP, and Prompt Library tabs.
 
 ### Skill System (Skills Tab)
 
@@ -396,7 +394,7 @@ Skills are external tool capabilities that Agents can invoke.
 
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is a standardized AI tool integration protocol.
 
-1. Go to the **Integration** page, select the **MCP** tab
+1. Go to **Capabilities**, then select **MCP**
 2. Click "Add Server"
 3. Configure the connection:
    - **stdio** — local process communication
@@ -413,11 +411,11 @@ The Prompt Library manages reusable prompt templates. You can create, search, an
 
 ## IM Channels
 
-IM Channels are a separate top-level entry for starting tasks remotely outside the desktop UI.
+Manage IM channels for the active service in Connections to start tasks remotely outside the desktop UI.
 
 Chat with AI remotely via IM channels:
 
-1. Go to the **IM Channels** page
+1. Go to **Connections** and manage IM channels
 2. Click "Add Channel"
 3. Supported IM platforms:
    - **Lark** (飞书)
@@ -427,8 +425,10 @@ Chat with AI remotely via IM channels:
    - **Discord**
    - **Telegram**
    - **WeChat** (微信)
-4. Enter the corresponding platform's Bot Token or Webhook URL
+4. Enter the selected platform's credentials, reception mode, and required connection parameters. Fields differ by platform; see the [HexClaw channel configuration guide](https://github.com/hexagon-codes/hexclaw/blob/main/docs/install.en.md)
 5. Test channel connectivity online
+
+Image tasks received through connected channels use the same Agent execution flow and return annotated images or other actual task outputs without a separate recognition confirmation step. A connectivity test establishes connection status; receiving the task output establishes that the task completed. In cloud mode, the selected cloud service manages channels and tasks. When the server, models, and connections remain available, shutting down the computer does not stop DingTalk tutoring.
 
 ---
 
@@ -448,51 +448,44 @@ Real-time log viewing and filtering:
 
 ## Settings & Configuration
 
+Settings has three areas: **LLM Configuration, Automation Permissions, and System Settings**. Manage Webhooks in **Automation → Webhooks** and persistent memory in **Knowledge → Long-term Memory**.
+
 ### LLM Configuration
 
 | Option | Description |
 |--------|-------------|
 | Provider | LLM service provider |
-| Model | Model name |
+| Default model | Select the active service's default chat model from enabled models |
+| Model management | Fetch the model catalog, add custom models, and enable or disable the models you need |
 | API Key | Provider API key |
 | Base URL | Custom API endpoint (optional) |
-| Temperature | Generation randomness (0-2), passed through to backend (WebSocket and HTTP paths) |
-| Max Tokens | Maximum output token count, passed through to backend (WebSocket and HTTP paths) |
+| Connection test | Check the Provider interface connection; task completion still requires an actual answer or output |
 
-### Security Configuration
+### Automation Permissions
 
-| Option | Description |
-|--------|-------------|
-| Security Gateway | Enable/disable request security checks |
-| Injection Detection | Prompt injection protection |
-| PII Filtering | Automatic sensitive personal information masking |
-| Content Filtering | Harmful content interception |
-| Single Token Limit | Max tokens per request |
-| Rate Limit | Max requests per minute |
+In **Settings → Automation Permissions**, choose Function First, Strict Approval, or Full Access, then inspect pending tasks, task-specific grants, audit records, and the effective policy matrix. Full Access requires an additional confirmation. Individual task approvals take place in the creation flow or task cards.
 
-### Appearance
+Permission approval does not establish that a model, connector, or external service is available, or that a task has succeeded. Inspect automation execution states and results in **Automation**.
 
-- **Theme**: Light / Dark / Follow system
-- Changes take effect immediately
+### System Settings
 
-### Notification Settings
+- **Theme**: Light / Dark / Follow system, applied immediately
+- **Language and startup**: Select the interface language and configure launch at login
+- **Local and cloud services**: Inspect connection status and manage backend services
+- **Runtime options**: Persistent memory and sandbox network toggles
+- **System information**: Inspect the version, storage file, knowledge index, and API address
 
-- System notification toggle
-- Sound alerts
-- Agent task completion notifications
-- Heartbeat check notifications
+### Notifications
+
+The in-app notification center collects approvals, task results, channel messages, and service state changes. Mark notifications as read and open their related pages. Business notifications can also appear as in-app toasts; the current Settings page has no separate notification or sound toggle.
 
 ### Runtime Engine
 
-View backend engine runtime status, including:
+Inspect the selected local/cloud service and connection state in the Settings service card; view Desktop, backend, and component versions in About. Hexagon and ai-core are engine/capability libraries used by the backend, not separate services you must start.
 
-| Component | Description |
-|-----------|-------------|
-| HexClaw Engine | Go backend service (port 16060) |
-| Hexagon Agent Engine | AI Agent core engine |
-| ai-core | LLM capability foundation |
+A healthy service connection does not prove that the selected model, knowledge processing, or delivery task succeeded; inspect the actual task result.
 
-Each component shows runtime status (green/red), version, and key info. Click the refresh button to manually refresh status.
+The desktop manages the local Sidecar's lifecycle; the server manages the cloud service. Switching services does not migrate conversations, learning records, model settings, or channel connections.
 
 ---
 
@@ -512,8 +505,8 @@ Each component shows runtime status (green/red), version, and key info. Click th
 | `⌘+2` | Switch to Agents page |
 | `⌘+3` | Switch to Knowledge page |
 | `⌘+4` | Switch to Automation page |
-| `⌘+5` | Switch to IM Channels page |
-| `⌘+6` | Switch to Integration page |
+| `⌘+5` | Switch to Connections |
+| `⌘+6` | Switch to Capabilities |
 | `⌘+7` | Switch to Logs page |
 | `⌘+8` | Switch to Settings page |
 | `⌘+N` | New conversation |
@@ -551,7 +544,9 @@ When the main window is closed, HexClaw minimizes to the system tray rather than
 
 ### Engine Status Red (Engine stopped)
 
-**Cause**: The HexClaw backend Sidecar process has not started or is unhealthy.
+**Cause**: The selected HexClaw service is not ready. In local mode, the Sidecar may not have started or may be unhealthy. In cloud mode, check the service address, access token, and server availability.
+
+The process and port checks below apply only to the local service. Cloud mode does not require a local Sidecar, and the desktop does not restart cloud processes.
 
 **Steps to diagnose**:
 
@@ -575,8 +570,8 @@ curl http://localhost:16060/health
 ### Chat Not Responding
 
 1. Confirm engine status is green (Engine running)
-2. Confirm LLM API Key is configured in settings
-3. Check network connection (LLM Provider API access required)
+2. Confirm that the active service has an available model; online models need the corresponding Provider credentials, while local models need working Ollama and a downloaded model
+3. Check connectivity from the executing service to the selected model
 4. Check the Logs page for detailed error information
 
 ### App Crash
@@ -589,199 +584,54 @@ Check system logs:
 # macOS
 /Applications/HexClaw.app/Contents/MacOS/hexclaw-desktop
 
-# View sidecar logs
-~/.hexclaw/hexclaw.log
+# Read local Sidecar logs
+tail -n 100 ~/.hexclaw/hexclaw.log
 ```
 
 ### Reset App Data
 
-To completely reset:
+For a complete local reset on macOS, quit Desktop, stop any HexClaw service using the same data directory, and back up the data you want to keep first.
+
+> **Warning**: The commands below delete local conversations, Agents, model settings, memory, and desktop connection information. They cannot be directly undone and do not delete data on a cloud backend.
 
 ```bash
 # Delete app data
 rm -rf ~/.hexclaw
 
-# Delete app config (Tauri Store)
-rm -rf ~/Library/Application\ Support/com.hexagon-codes.hexclaw
+# Delete desktop app data
+rm -rf ~/Library/Application\ Support/com.hexclaw.desktop
 ```
 
-> **Warning**: This will erase all conversation history, Agent configurations, and memory data. This action is irreversible.
 
 ---
 
-## HexClaw Desktop vs OpenClaw Feature Comparison
+## Choosing an execution environment
 
-[OpenClaw](https://github.com/openclaw/openclaw) is a local-first personal AI assistant platform known for its broad messaging platform integrations and local gateway architecture. HexClaw Desktop is positioned as an enterprise-grade secure AI Agent desktop client, emphasizing security and Agent orchestration. Here is a detailed comparison:
+HexClaw Desktop suits users who want to work with conversations, knowledge, tools, automation, and homework tutoring in one native workspace. Choose where tasks execute:
 
-### Product Positioning
+| Need | Setup |
+| --- | --- |
+| Run on this computer | Use the app-managed local Sidecar and configure models and tools available on this device |
+| Continue server-side work while the computer is off | Deploy a cloud HexClaw service, configure its models/tools/IM bindings, then connect using the service address and token |
+| Use an online model | Provide credentials and network access from the executing service; that Provider receives the task content sent to it |
+| Use a local model | Make Ollama and the selected model available to the executing service; tool and document-rendering dependencies remain separate |
 
-| Dimension | HexClaw Desktop | OpenClaw |
-|-----------|----------------|----------|
-| Positioning | Enterprise-grade secure AI Agent desktop client | Local-first personal AI assistant |
-| Target users | Enterprise / Team / Developer | Individual / Power user |
-| Core philosophy | Security + Agent orchestration + visualization | Local + Fast + Always-on |
-| License | Apache-2.0 | MIT |
+Local and cloud services store their own sessions, records, configuration, and connections. Switching services does not automatically synchronize or migrate those data. Shared cloud access does not by itself establish a team-management or cross-device synchronization feature.
 
-### Architecture & Tech Stack
-
-| Dimension | HexClaw Desktop | OpenClaw |
-|-----------|----------------|----------|
-| Client tech | Tauri v2 + Vue 3 + TypeScript | Node.js >= 22 + TypeScript |
-| Backend engine | Go (HexClaw Engine + Hexagon Agent) | Node.js (Gateway + WebSocket) |
-| Installation | Native desktop packages (.dmg/.msi/.deb) | `npm install -g openclaw` |
-| Runtime | Standalone desktop app (Sidecar backend) | CLI + background daemon |
-| Data storage | SQLite + Qdrant (vector) | Local filesystem |
-| Communication | Tauri IPC + REST API | WebSocket control plane (`ws://127.0.0.1:18789`) |
-
-### LLM Provider Support
-
-| Provider | HexClaw Desktop | OpenClaw |
-|----------|----------------|----------|
-| OpenAI | ✅ | ✅ |
-| Anthropic (Claude) | ✅ | ✅ |
-| DeepSeek | ✅ | ✅ (via OpenAI compat) |
-| Google Gemini | ✅ | ✅ |
-| Qwen (Alibaba) | ✅ | - |
-| Doubao (Ark) | ✅ | - |
-| Ollama (local models) | ✅ | ✅ |
-| Custom/third-party | ✅ | ✅ (OpenAI compat) |
-| Multi-provider management | ✅ (OpenCat standard) | ✅ |
-| In-chat model switching | ✅ | ✅ |
-
-### Core Feature Comparison
-
-| Feature | HexClaw Desktop | OpenClaw |
-|---------|----------------|----------|
-| AI multi-turn chat | ✅ | ✅ |
-| Streaming output (SSE) | ✅ | ✅ |
-| Session management (create/delete/search) | ✅ | ✅ |
-| Chat export | ✅ | - |
-| Agent role system | ✅ (custom roles + templates) | ✅ (multi-Agent routing) |
-| Multi-Agent collaboration | ✅ (Agent conference mode) | ✅ (Session tool coordination) |
-| Workflow canvas | ✅ (DAG visual orchestration) | ✅ (A2UI visual workspace) |
-| Skill system | ✅ (built-in + marketplace) | ✅ (Bundled + Managed + ClawHub) |
-| MCP tool integration | ✅ (stdio/SSE/HTTP) | - |
-| Knowledge base (RAG) | ✅ (PDF/MD/TXT/DOCX) | - |
-| Long-term memory | ✅ (semantic retrieval) | ✅ (Context/Memory) |
-| Scheduled tasks (Cron) | ✅ | ✅ (Scheduler) |
-| Team collaboration | ✅ | - |
-| Token/cost tracking | - | ✅ |
-
-### Security Features
-
-| Security | HexClaw Desktop | OpenClaw |
-|---------|----------------|----------|
-| Security gateway | ✅ | - |
-| Prompt injection detection | ✅ | - |
-| PII auto-masking | ✅ | - |
-| Content filtering | ✅ | - |
-| API Key encrypted storage | ✅ (AES-GCM / Tauri Store) | ✅ (local config file) |
-| Rate limiting | ✅ | - |
-| DM pairing approval | - | ✅ |
-
-### Messaging Platforms & Access
-
-| Channel | HexClaw Desktop | OpenClaw |
-|---------|----------------|----------|
-| Native desktop UI | ✅ | - |
-| Quick Chat window | ✅ | - |
-| System tray | ✅ | ✅ (menu bar app) |
-| WhatsApp / Telegram / Slack | - | ✅ |
-| Discord / Signal / iMessage | - | ✅ |
-| Lark / LINE / Teams | - | ✅ |
-| Web chat | - | ✅ |
-| Voice interaction | - | ✅ (wake word + TTS) |
-
-### Deployment & Operations
-
-| Dimension | HexClaw Desktop | OpenClaw |
-|-----------|----------------|----------|
-| Installation | Homebrew / DMG / MSI | npm / Docker / Nix |
-| Remote access | - | ✅ (SSH / Tailscale) |
-| Multi-device sync | - | ✅ (macOS + iOS + Android nodes) |
-| Auto update | ✅ (Tauri Updater) | ✅ (stable/beta/dev channels) |
-| Browser control | - | ✅ (Chrome DevTools Protocol) |
-
-### Which Should You Choose?
-
-**Choose HexClaw Desktop if you need:**
-- Enterprise-grade security (injection detection, PII filtering, content review)
-- Visual Agent workflow orchestration (DAG Canvas)
-- RAG knowledge base and semantic memory
-- Native Chinese LLM support (Qwen, Doubao)
-- Team collaboration and centralized management
-- A polished native desktop experience
-
-**Choose OpenClaw if you need:**
-- Unified AI management across 20+ messaging platforms
-- Local gateway + remote access (Tailscale)
-- Voice interaction and wake words
-- Multi-device node coordination (Mac + iPhone + Android)
-- Browser automation
-- Lightweight CLI-driven workflow without a GUI
-
-### Complementary, Not Competing
-
-HexClaw Desktop and OpenClaw serve different scenarios and can be used together:
-
-- **OpenClaw** excels at "connecting everything" — unifying AI interaction across all messaging platforms, ideal for individuals integrating all chat tools into one AI assistant
-- **HexClaw Desktop** excels at "security and orchestration" — providing enterprise-grade security, visual workflows, and knowledge management, ideal for scenarios requiring fine-grained control and team collaboration
-
-Both follow the **local-first** principle: data is never uploaded to third-party servers, and users retain full control of their privacy.
+For other products such as [OpenClaw](https://github.com/openclaw/openclaw), use that project's current official documentation to evaluate its features, installation, and boundaries. This guide describes HexClaw's implementation and usage paths.
 
 ---
 
 ## Changelog
 
-### v0.5.0-beta
-
-**New Features**
-- Built-in K12 Homework Tutor scenario pack: Homework Tutor template, child profile, default skill binding, and enhanced Tutor / Mistakes views.
-- Added Mistake Book (first screen leads with the “Due this week” review queue, a collapsible “All mistakes” archive, and manual “Log a mistake” entry), Notebook (compact one-line records, low-frequency subject filters, details, and manual entries), insights, inline “Tutoring tips for this homework” (auto-shown after you confirm recognized problems), review-paper (one-tap / custom) print/export, and `.hexbak` family learning archive backup/restore.
-- The study assistant display name is “{child}'s Study Assistant”; tutoring tips are shown inline only after recognition is confirmed; paper generation uses “Review paper”; the Mistake Book first screen leads with the review queue and supports manual entry; the study-time metric is not provided.
-- Chat messages now support verification badges and record chips, rendered from generic contracts for program verification, model review, out-of-scope, unverifiable, and record-save states.
-- Markdown rendering supports GitHub-style task lists, strikethrough, and tables, as well as KaTeX math and mhchem chemistry formulas. Tutoring explanations, grading details, retry problems, and record details use the same renderer.
-
-**Experience and Engineering**
-- The sidebar shows the HexClaw product version; the Hexagon engine version is shown separately on the About page.
-- The splash screen is shown for at least 700ms, and packaged Tauri assets use relative paths to reduce cold-start flashing and asset-loading failures.
-- This update fixes CI lint errors and stale test setup/assertions. Unit tests read private prototypes and fixtures with read-only credentials, preserving the existing separation of routine CI, manual packaging, and tag-triggered releases.
-
-**Architecture**
-- Added `scenarioRegistry`, view descriptors, record schemas, VerifyResult, and scenario-extension contracts so scenario packs mount through descriptors without changing the generic shell.
-- Added frontend `/api/k12/*` type contracts covering recognition, grading, review queue, tutoring tips, insights, profile, backup, export, IM binding, and automation provisioning.
-- LLM providers now use a three-layer model contract—catalog, enabled pool, and current default. Catalogs with up to 10 models are enabled automatically; larger catalogs are curated and explicitly applied in the model manager, while chat defaults are restricted to chat-capable models.
-
-### v0.3.0
-
-**Bug Fixes**
-- Fixed Ollama model prewarming not working in desktop app (CSP missing port 11434)
-- Fixed prewarming triggering even when user selected a non-Ollama provider
-- Fixed agent session title not updating in sidebar after navigation
-- Fixed MCP server tools remaining visible after server deletion
-- Fixed empty AI replies displaying as regular message bubbles (now shows notice style)
-- Fixed streaming tool calls not executing (switched to full tool execution loop)
-- Fixed reasoning/thinking content lost after closing and reopening sessions (backend now persists reasoning in metadata)
-
-**New Features**
-- Dynamic model discovery: automatically fetches available models from provider API after successful connection test
-- Auto-test on API Key input: debounced 1.5s auto-validation when typing API Key
-- Chip-style model selector: replaced card list with compact clickable chips
-- MCP `~` path expansion: cross-platform home directory support in server args
-- Feishu thinking placeholder: shows "🤔 Thinking..." while AI processes, then replaces with final reply
-- Adaptive chat width: `min(90%, 960px)` for wider messages on large screens
-
-**UI Improvements**
-- Settings save button label changed to "Save Config"
-- Removed non-functional search box from settings toolbar
-- Model chips show "Dynamically fetched · just synced" hint below
+Version changes are maintained in [CHANGELOG](../CHANGELOG.md). This guide describes current usage; historical interfaces and flows belong to their matching versions.
 
 ---
 
 ## More Help
 
+- **Development and contributions**: [Contributing guide](../CONTRIBUTING.en.md)
 - **GitHub Issues**: [Submit a bug or feature request](https://github.com/hexagon-codes/hexclaw-desktop/issues)
-- **GitHub Discussions**: [Community discussion](https://github.com/hexagon-codes/hexclaw-desktop/discussions)
 - **HexClaw AI**: ai@hexclaw.net
 - **HexClaw Support**: support@hexclaw.net
 - **About page**: System menu → HexClaw → About HexClaw

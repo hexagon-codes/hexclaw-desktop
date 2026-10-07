@@ -22,14 +22,22 @@ HexClaw Desktop 使用 Tauri updater。要让应用内“检查更新 / 下载�
 - 可以没有 updater 私钥
 - `Release` 手动打包和 tag 发布均会在缺少私钥时自动关闭 updater 制品生成
 - 产物仍然可以手动安装
-- 但应用内自动更新不会生效
+- 未配置签名私钥且关闭 updater 制品生成的包不能作为自动更新目标；安装后仍可从配置的更新源检查后续有效签名版本
+
+按 [README 源码开发步骤](../README.md#源码开发)准备随包组件后，如果仅需本机手动安装包，可在本次构建中关闭 updater 制品生成：
+
+```bash
+pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+这个配置只覆盖本次构建，不修改项目默认配置或 CI。需要自动更新的发布制品仍按下述签名流程准备。
 
 ### 正式发布
 
 适合让应用内自动更新真正可用。
 
 - 必须配置 updater 私钥
-- `Release` 工作流在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时会自动关闭 updater 制品生成，仍会产出可手动安装的未签名包，但应用内自动更新不会生效
+- `Release` 工作流在缺少 `TAURI_SIGNING_PRIVATE_KEY` 时会自动关闭 updater 制品生成，仍会产出可手动安装的包，但该版本不能作为 updater 更新目标
 - 要让自动更新可用，GitHub Release 里需要包含 `latest.json` 和对应平台的签名更新包
 
 ## 一次性初始化
@@ -50,9 +58,11 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
 把生成出来的 public key 写入 [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json) 的：
 
 ```json
-"plugins": {
-  "updater": {
-    "pubkey": "..."
+{
+  "plugins": {
+    "updater": {
+      "pubkey": "..."
+    }
   }
 }
 ```
@@ -86,8 +96,9 @@ gh workflow run release.yml -f ref="$DESKTOP_REF"
 4. 核对上述构建结果，再创建并推送本次 Desktop tag；已推送的 tag 不删除或移动。以下命令仅说明入口：
 
 ```bash
-git tag v0.5.0-beta.3
-git push origin v0.5.0-beta.3
+DESKTOP_TAG="v$(node -p "require('./package.json').version.replace(/^v/, '')")"
+git tag "$DESKTOP_TAG"
+git push origin "$DESKTOP_TAG"
 ```
 
 5. 等待 tag 触发的 `Release` 工作流完成；构建期间 Release 保持 Draft，全部平台构建成功后才公开
@@ -108,7 +119,7 @@ git push origin v0.5.0-beta.3
 - 应用启动后会静默检查更新
 - 用户可在 **关于** 页面手动检查和安装更新
 
-如果发布包没有生成带 Tauri updater 签名的更新制品，界面仍然会显示检查更新入口，但不会拿到可安装的正式 updater 包。macOS 未做 Apple 代码签名不等于缺少 updater 签名。
+未生成 Tauri 签名更新制品的版本不能通过 updater 安装，但它的检查更新入口仍然存在，可以读取配置更新源中的后续有效版本。更新源需提供对应平台制品和有效签名，且目标版本满足 updater 的版本判断。macOS 未做 Apple 代码签名不等于缺少 updater 签名。
 
 ## 常见问题
 
@@ -117,7 +128,11 @@ git push origin v0.5.0-beta.3
 因为 [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json) 开启了：
 
 ```json
-"createUpdaterArtifacts": true
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  }
+}
 ```
 
 这表示构建时会额外生成 updater 制品并尝试签名。如果当前 shell 没有导出 `TAURI_SIGNING_PRIVATE_KEY`，就会报错。
