@@ -521,21 +521,33 @@ async function uploadDocumentExclusive(
   }
 }
 
-/**
- * Retry the durable failed generation. The idempotency identity is derived
- * from the Sidecar-owned failed Job, never from renderer persistence.
- */
+/** 重试当前失败任务；幂等身份来自后端持久任务，不使用渲染端账本。 */
 export async function retryKnowledgeDocument(id: string): Promise<KnowledgeUploadResponse> {
   const documentId = id.trim()
   if (!documentId) throw new Error('document_id is required')
   const current = (await listKnowledgeOperations()).find(
     (operation) => operation.document_id === documentId && operation.state === 'failed',
   )
-  if (!current?.job_id) throw new Error('failed knowledge operation is unavailable')
+  let failedJobId = current?.job_id
+  if (!failedJobId) {
+    // 正文已成功的 upload operation 不投影向量子任务，需读取当前文档的失败身份。
+    const document = await getDocument(documentId)
+    if (
+      document.status === 'indexed' &&
+      document.text_index_state === 'ready' &&
+      document.vector_index_state === 'failed' &&
+      document.vector_job_state === 'failed' &&
+      document.vector_outcome_unknown !== true &&
+      document.text_outcome_unknown !== true
+    ) {
+      failedJobId = document.vector_job_id
+    }
+  }
+  if (!failedJobId) throw new Error('failed knowledge operation is unavailable')
   return apiPost<KnowledgeUploadResponse>(
     `/api/v1/knowledge/documents/${encodeURIComponent(documentId)}/retry`,
     undefined,
-    { headers: { 'Idempotency-Key': `knowledge-retry:v2:${current.job_id}` } },
+    { headers: { 'Idempotency-Key': `knowledge-retry:v2:${failedJobId}` } },
   )
 }
 

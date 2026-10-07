@@ -1250,10 +1250,13 @@ function isReadingDocumentProjection(doc: KnowledgeDoc): boolean {
 
 function getDocumentRowStatus(doc: KnowledgeDoc): string {
   if (isReadingDocumentProjection(doc)) return t('knowledge.authorityReading')
-  if (doc.text_outcome_unknown) return '结果待核实，文件已保留'
+  const failure = doc.error_message
+    ? getKnowledgeErrorMessage(doc.error_message, true, true)
+    : ''
+  if (doc.text_outcome_unknown) return failure || '结果待核实，文件已保留'
   const structuredFacts = getStructuredDocumentFacts(doc)
-  if (structuredFacts.length > 0) return structuredFacts.join('\n')
-  if (doc.error_message) return getKnowledgeErrorMessage(doc.error_message, true)
+  if (structuredFacts.length > 0) return [failure, ...structuredFacts].filter(Boolean).join('\n')
+  if (failure) return failure
   if (
     getDocStatus(doc) === 'processing' &&
     doc.source_type?.trim().toLowerCase() === 'connector' &&
@@ -1307,10 +1310,16 @@ function getDocumentBadgeStyle(doc: KnowledgeDoc) {
   return getDocStatusStyle(doc)
 }
 
-function getKnowledgeErrorMessage(rawMessage: string | undefined, hasDurableIdentity: boolean): string {
+function getKnowledgeErrorMessage(
+  rawMessage: string | undefined,
+  hasDurableIdentity: boolean,
+  serverFailure = false,
+): string {
+  // 服务端任务已提供脱敏失败原因；本地接纳结果未知仍沿既有恢复语义展示。
+  const raw = rawMessage?.trim() || ''
+  if (serverFailure) return raw || t('knowledge.uploadFailed')
   // 内部错误码、阶段名和 invocation outcome 只留在本地日志；家长只需知道
   // 当前材料是否已接收，以及是否可以用同一文件安全恢复同一代次。
-  const raw = rawMessage?.trim() || ''
   const normalized = raw.toLowerCase()
   const technical =
     normalized.includes('upload_failed') ||
@@ -2766,7 +2775,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 class="rounded-lg px-3 py-2 text-sm"
                 style="background: #ef444415; color: #dc2626"
               >
-                {{ getKnowledgeErrorMessage(selectedDoc.error_message, true) }}
+                {{ getKnowledgeErrorMessage(selectedDoc.error_message, true, true) }}
               </div>
               <div
                 v-if="!selectedIsPDF"

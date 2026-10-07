@@ -107,4 +107,66 @@ describe('Knowledge failed-document Sidecar retry identity', () => {
     expect(raw).not.toContain('retainRetryIntent')
     expect(raw).not.toContain('localStorage')
   })
+
+  it('retries the failed vector child when the upload operation already succeeded, including after restart', async () => {
+    const document = {
+      id: 'doc-vector', status: 'indexed', text_index_state: 'ready',
+      vector_index_state: 'failed', vector_job_state: 'failed',
+      vector_job_id: 'job-vector-failed', vector_outcome_unknown: false,
+    }
+    apiGet.mockImplementation(async (path: string) =>
+      path.includes('/operations')
+        ? { operations: [{ ...failedOperation('doc-vector', 'job-ingest'), state: 'succeeded', stage: 'text_indexing' }] }
+        : document,
+    )
+    apiPost.mockResolvedValue({ ...accepted, document_id: 'doc-vector', text_index_state: 'ready', vector_index_state: 'pending' })
+    const first = await import('../knowledge')
+    await first.retryKnowledgeDocument('doc-vector')
+    vi.resetModules()
+    const restarted = await import('../knowledge')
+    await restarted.retryKnowledgeDocument('doc-vector')
+
+    expect(apiGet).toHaveBeenCalledWith('/api/v1/knowledge/documents/doc-vector')
+    expect(apiPost.mock.calls[0]?.[0]).toBe('/api/v1/knowledge/documents/doc-vector/retry')
+    expect(apiPost.mock.calls[0]?.[1]).toBeUndefined()
+    expect(retryKey(apiPost.mock.calls[0]!)).toBe('knowledge-retry:v2:job-vector-failed')
+    expect(retryKey(apiPost.mock.calls[1]!)).toBe(retryKey(apiPost.mock.calls[0]!))
+    expect(apiPost.mock.calls.every((call) => !String(call[0]).includes('/reindex'))).toBe(true)
+    expect(localStorage.length).toBe(0)
+  })
+
+  it('uses the new failed vector identity after a later failure', async () => {
+    let jobId = 'job-vector-first-failure'
+    apiGet.mockImplementation(async (path: string) =>
+      path.includes('/operations') ? { operations: [] } : {
+        id: 'doc-vector', status: 'indexed', text_index_state: 'ready',
+        vector_index_state: 'failed', vector_job_state: 'failed', vector_job_id: jobId,
+      },
+    )
+    apiPost.mockResolvedValue(accepted)
+    const { retryKnowledgeDocument } = await import('../knowledge')
+    await retryKnowledgeDocument('doc-vector')
+    jobId = 'job-vector-second-failure'
+    await retryKnowledgeDocument('doc-vector')
+    expect(retryKey(apiPost.mock.calls[0]!)).toBe('knowledge-retry:v2:job-vector-first-failure')
+    expect(retryKey(apiPost.mock.calls[1]!)).toBe('knowledge-retry:v2:job-vector-second-failure')
+  })
+
+  it.each([
+    { state: 'queued', outcomeUnknown: false },
+    { state: 'running', outcomeUnknown: false },
+    { state: 'retry_wait', outcomeUnknown: false },
+    { state: 'failed', outcomeUnknown: true },
+  ])('does not resend vector state $state, unknown=$outcomeUnknown', async ({ state, outcomeUnknown }) => {
+    apiGet.mockImplementation(async (path: string) =>
+      path.includes('/operations') ? { operations: [] } : {
+        id: 'doc-vector', status: 'indexed', text_index_state: 'ready',
+        vector_index_state: 'failed', vector_job_state: state,
+        vector_job_id: 'job-vector', vector_outcome_unknown: outcomeUnknown,
+      },
+    )
+    const { retryKnowledgeDocument } = await import('../knowledge')
+    await expect(retryKnowledgeDocument('doc-vector')).rejects.toThrow('failed knowledge operation is unavailable')
+    expect(apiPost).not.toHaveBeenCalled()
+  })
 })
