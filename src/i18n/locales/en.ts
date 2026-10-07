@@ -2222,6 +2222,8 @@ export default {
       modelStaleLabel: 'Removed',
       newModelsFound: 'New models found in this sync',
       title: 'LLM Providers',
+      modelServices: 'Model services',
+      serviceProvider: 'Provider',
       probeFailed: 'Capability probe failed, please retry',
       deleteProviderFailed: 'Delete failed, changes restored',
       syncModelsFailed: 'Failed to sync model list — check the connection',

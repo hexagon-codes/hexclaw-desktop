@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import BackendServiceCard from '@/components/settings/BackendServiceCard.vue'
-import { backendContext, backendScopeKey, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
+import { backendContext, backendScopeKey, backendLocalStorage, backendStorageKey, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
@@ -17,6 +17,7 @@ import {
   RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
+  GripVertical,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import {
@@ -55,7 +56,10 @@ import { useAboutWindow } from '@/composables/useAboutWindow'
 import { useToast } from '@/composables'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
-import { MODEL_CAPABILITY_DISPLAY } from '@/config/model-capability-display'
+import {
+  displayModelCapabilities as displayCapabilities,
+  MODEL_CAPABILITY_DISPLAY,
+} from '@/config/model-capability-display'
 import { getOllamaTarget } from '@/api/ollama'
 import { isCatalogModelFree } from '@/types'
 import type {
@@ -68,6 +72,7 @@ import type {
 } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
+import HcModal from '@/components/common/HcModal.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ModelSelector from '@/components/common/ModelSelector.vue'
@@ -130,6 +135,20 @@ const editingProviderId = ref<string | null>(null)
 const shownApiKeys = ref<Record<string, boolean>>({})
 const showAddProvider = ref(false)
 const addProviderType = ref<ProviderType>('openai')
+const addingProvider = ref(false)
+let addProviderSession = 0
+const addProviderDraft = ref({ name: '', baseUrl: '', apiKey: '' })
+const showAddProviderKey = ref(false)
+const settingsContentRef = ref<HTMLElement | null>(null)
+const providerListRef = ref<HTMLElement | null>(null)
+const providerOrderIds = ref<string[]>([])
+const providerOrderFeedback = ref('')
+const providerDropTarget = ref<{ id: string; after: boolean } | null>(null)
+const draggingProviderId = ref<string | null>(null)
+let providerIgnoreNextClick = false
+let providerTextGesture = false
+let providerControlPointerGesture = false
+let providerDrag: { id: string; scope: string; pointerId: number; header: HTMLElement; startX: number; startY: number; x: number; y: number; offsetX: number; offsetY: number; active: boolean; frame: number; preview: HTMLElement | null } | null = null
 
 // 自定义模型输入（多选，仅系统自动识别的能力）
 const newModelId = ref('')
@@ -187,6 +206,11 @@ const runtimeInfoLoading = ref(false)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 const autoTestTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 let autoSavePromise: Promise<void> | null = null
+let settingsOwnerSession = 0
+let autoSavePromiseOwnerSession: number | null = null
+let autoSavePromiseScope = ''
+let settingsPersistOperation = 0
+let toolbarSaveSession = 0
 let hasPendingAutoSave = false
 let autoSaveGeneration = 0
 let persistedAutoSaveGeneration = 0
@@ -195,7 +219,7 @@ let closingAfterFlush = false
 
 // tab 序：AI 能力域配置（LLM/自动化权限）相邻靠前，平台工具类（系统设置）居尾。
 const sections = computed(() => [
-  { key: 'llm', label: t('settings.llm.title'), icon: Key },
+  { key: 'llm', label: t('settings.llm.modelServices', 'Model services'), icon: Key },
   {
     key: 'automation',
     label: t('autonomy.settings.sectionTitle', '自动化权限'),
@@ -267,6 +291,30 @@ function handleRoutingToggle() {
 }
 
 const isDirty = ref(false)
+const persistedSettingsSignature = ref('')
+
+// 连接回执、能力探测与后端身份回填不是用户编辑，不参与保存按钮的差异判断。
+function editableSettingsSignature(owner = settingsStore.config) {
+  // 后端补齐的合同默认值与系统推导位置是同一配置语义；显式用户位置和模式保持原值。
+  const comparableOwner = owner ? {
+    ...owner,
+    llm: {
+      ...owner.llm,
+      providers: owner.llm.providers.map(provider => ({
+        ...provider,
+        locality: provider.localitySource === 'user' ? provider.locality : resolveEffectiveProviderLocality(provider),
+        modelSpecsMode: provider.modelSpecsMode ?? 'legacy',
+        keepAlive: provider.keepAlive || '',
+        numCtx: provider.numCtx ?? 0,
+        toolsEnabled: provider.toolsEnabled ?? null,
+        maxTools: provider.maxTools ?? 0,
+      })),
+    },
+  } : owner
+  return JSON.stringify(comparableOwner, (key, value) =>
+    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength'].includes(key) ? undefined : value,
+  ) ?? ''
+}
 
 const maxToolsDisplay = computed(() => {
   const v = config.value?.llm.tools?.maxTools ?? 0
@@ -284,16 +332,148 @@ function stepMaxTools(delta: number) {
   autoSave()
 }
 
-const nonOllamaProviders = computed(
-  () => config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
-)
+function providerOrderId(provider: ProviderConfig) { return provider.providerInstanceId || provider.id }
+const nonOllamaProviders = computed(() => {
+  const providers = config.value?.llm.providers.filter(p => p.type !== 'ollama') ?? []
+  const ranks = new Map(providerOrderIds.value.map((id, index) => [id, index]))
+  return [...providers].sort((a, b) => (ranks.get(providerOrderId(a)) ?? Number.MAX_SAFE_INTEGER) - (ranks.get(providerOrderId(b)) ?? Number.MAX_SAFE_INTEGER))
+})
+
+const PROVIDER_ORDER_KEY = 'settings-provider-display-order-v1'
+function restoreProviderOrder() {
+  cancelProviderDrag()
+  try {
+    const value: unknown = JSON.parse(backendLocalStorage.getItem(PROVIDER_ORDER_KEY) || '[]')
+    providerOrderIds.value = Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string'))] : []
+  } catch { providerOrderIds.value = [] }
+}
+watch(() => backendStorageKey(PROVIDER_ORDER_KEY), restoreProviderOrder, { immediate: true })
+
+function commitProviderOrder(ids: string[], movedId: string) {
+  const previous = providerOrderIds.value
+  providerOrderIds.value = ids
+  try {
+    // 仅持久化稳定身份的显示偏好，不写配置、凭据或连接测试状态。
+    backendLocalStorage.setItem(PROVIDER_ORDER_KEY, JSON.stringify(ids))
+    const index = ids.indexOf(movedId)
+    providerOrderFeedback.value = `Provider moved to position ${index + 1} of ${ids.length}`
+  } catch {
+    providerOrderIds.value = previous
+    providerOrderFeedback.value = 'Provider order could not be saved'
+    toast.error('Provider order could not be saved')
+  }
+}
+
+function cancelProviderDrag() {
+  const state = providerDrag
+  if (state) {
+    if (state.frame) cancelAnimationFrame(state.frame)
+    if (state.header.hasPointerCapture(state.pointerId)) state.header.releasePointerCapture(state.pointerId)
+    state.preview?.remove()
+  }
+  providerDrag = null
+  draggingProviderId.value = null
+  providerDropTarget.value = null
+}
+
+function updateProviderDropTarget() {
+  const state = providerDrag, list = providerListRef.value
+  providerDropTarget.value = null
+  if (!state || !list) return
+  const bounds = list.getBoundingClientRect()
+  if (state.x < bounds.left || state.x > bounds.right || state.y < bounds.top - 12 || state.y > bounds.bottom + 12) return
+  const cards = [...list.querySelectorAll<HTMLElement>('[data-provider-order-id]')].filter(card => card.dataset.providerOrderId !== state.id)
+  const target = cards.find(card => state.y < card.getBoundingClientRect().bottom) ?? cards[cards.length - 1]
+  if (!target?.dataset.providerOrderId) return
+  const rect = target.getBoundingClientRect()
+  providerDropTarget.value = { id: target.dataset.providerOrderId, after: state.y > rect.top + rect.height / 2 }
+}
+
+function providerDragFrame() {
+  const state = providerDrag
+  if (!state?.active) return
+  if (!state.header.isConnected || state.scope !== backendStorageKey(PROVIDER_ORDER_KEY)) { cancelProviderDrag(); return }
+  const content = settingsContentRef.value, bounds = content?.getBoundingClientRect()
+  if (content && bounds && state.x >= bounds.left && state.x <= bounds.right) {
+    if (state.y < bounds.top + 36) content.scrollTop -= 10
+    else if (state.y > bounds.bottom - 36) content.scrollTop += 10
+  }
+  if (state.preview) { state.preview.style.left = `${state.x - state.offsetX}px`; state.preview.style.top = `${state.y - state.offsetY}px` }
+  updateProviderDropTarget()
+  state.frame = requestAnimationFrame(providerDragFrame)
+}
+
+function startProviderPointer(event: PointerEvent, provider: ProviderConfig) {
+  if (event.button !== 0 || !event.isPrimary) return
+  providerIgnoreNextClick = false
+  providerTextGesture = false
+  providerControlPointerGesture = false
+  cancelProviderDrag()
+  const target = event.target instanceof HTMLElement ? event.target : event.target instanceof Element ? event.target.parentElement : null
+  if (!target) return
+  if (target.closest('.hc-provider__card-meta,.hc-provider__connection-status')) { providerTextGesture = true; return }
+  if (target.closest('a,input,textarea,select,[contenteditable],button:not(.hc-provider__drag-handle)')) { providerControlPointerGesture = true; return }
+  const header = event.currentTarget as HTMLElement
+  const rect = header.closest('.hc-provider__card')?.getBoundingClientRect() ?? header.getBoundingClientRect()
+  providerDrag = { id: providerOrderId(provider), scope: backendStorageKey(PROVIDER_ORDER_KEY), pointerId: event.pointerId, header, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, active: false, frame: 0, preview: null }
+}
+
+function moveProviderPointer(event: PointerEvent) {
+  const state = providerDrag
+  if (!state || state.pointerId !== event.pointerId) return
+  state.x = event.clientX; state.y = event.clientY
+  if (!state.active) {
+    if (Math.hypot(state.x - state.startX, state.y - state.startY) < 8) return
+    state.active = true
+    providerIgnoreNextClick = true
+    draggingProviderId.value = state.id
+    state.header.setPointerCapture(state.pointerId)
+    const preview = document.createElement('div'), clone = state.header.cloneNode(true) as HTMLElement
+    const originals = [state.header, ...state.header.querySelectorAll<HTMLElement>('*')]
+    const copies = [clone, ...clone.querySelectorAll<HTMLElement>('*')]
+    const properties = ['display', 'grid-template-columns', 'grid-column', 'grid-row', 'gap', 'align-items', 'font-family', 'font-size', 'font-weight', 'line-height', 'color', 'background-color', 'border', 'border-radius', 'padding', 'width', 'height']
+    // 预览只复制卡头排版，不包含正文 API Key，也不承载交互或页面身份。
+    originals.forEach((node, index) => { const style = getComputedStyle(node); properties.forEach(property => copies[index]!.style.setProperty(property, style.getPropertyValue(property))); copies[index]!.removeAttribute('id') })
+    preview.style.cssText = `position:fixed;z-index:1800;padding:14px 20px;box-sizing:border-box;border:1px solid var(--hc-border-hl);border-radius:12px;background:var(--hc-bg-elevated);box-shadow:var(--hc-shadow-md);pointer-events:none;opacity:.96;width:${state.header.closest('.hc-provider__card')?.getBoundingClientRect().width ?? state.header.getBoundingClientRect().width}px`
+    preview.inert = true; preview.setAttribute('aria-hidden', 'true'); preview.append(clone); document.body.append(preview)
+    state.preview = preview
+    providerDragFrame()
+  }
+  event.preventDefault()
+}
+
+function finishProviderPointer(event: PointerEvent) {
+  const state = providerDrag
+  if (!state || state.pointerId !== event.pointerId) return
+  if (!state.active) { cancelProviderDrag(); return }
+  event.preventDefault()
+  state.x = event.clientX; state.y = event.clientY
+  updateProviderDropTarget()
+  const target = providerDropTarget.value
+  const ids = nonOllamaProviders.value.map(providerOrderId)
+  if (target && state.scope === backendStorageKey(PROVIDER_ORDER_KEY)) {
+    const remaining = ids.filter(id => id !== state.id), index = remaining.indexOf(target.id)
+    if (index >= 0) { remaining.splice(index + (target.after ? 1 : 0), 0, state.id); commitProviderOrder(remaining, state.id) }
+  }
+  cancelProviderDrag()
+}
+
+function handleProviderSortKeydown(event: KeyboardEvent, provider?: ProviderConfig) {
+  if (event.key === 'Escape' && providerDrag) { providerIgnoreNextClick = true; cancelProviderDrag(); event.preventDefault(); return }
+  if (!provider || !event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+  event.preventDefault(); event.stopPropagation(); cancelProviderDrag()
+  const ids = nonOllamaProviders.value.map(providerOrderId), id = providerOrderId(provider), index = ids.indexOf(id), next = index + (event.key === 'ArrowUp' ? -1 : 1)
+  if (next < 0 || next >= ids.length) return
+  ids.splice(index, 1); ids.splice(next, 0, id); commitProviderOrder(ids, id)
+  nextTick(() => providerListRef.value?.querySelector<HTMLButtonElement>(`[data-provider-order-id="${CSS.escape(id)}"] .hc-provider__drag-handle`)?.focus())
+}
 
 function isDesktopRuntime() {
   return !!(globalThis as Record<string, unknown>).isTauri
 }
 
 function hasUnsavedChanges() {
-  return hasPendingAutoSave || autoSaveTimer !== null
+  return isDirty.value || !!newModelId.value.trim()
 }
 
 function hasUnfinishedSettingsPersistence() {
@@ -302,14 +482,15 @@ function hasUnfinishedSettingsPersistence() {
 
 function markAutoSavePending() {
   autoSaveGeneration += 1
-  hasPendingAutoSave = true
-  isDirty.value = true
+  refreshAutoSaveDirtyState()
 }
 
 function refreshAutoSaveDirtyState() {
-  hasPendingAutoSave = persistedAutoSaveGeneration < autoSaveGeneration
-  isDirty.value = hasPendingAutoSave
+  isDirty.value = !!persistedSettingsSignature.value && editableSettingsSignature() !== persistedSettingsSignature.value
+  hasPendingAutoSave = isDirty.value && persistedAutoSaveGeneration < autoSaveGeneration
 }
+
+watch(editableSettingsSignature, refreshAutoSaveDirtyState)
 
 function resetPendingModelDraft() {
   newModelId.value = ''
@@ -334,23 +515,36 @@ async function persistSettings({
 } = {}) {
   if (!settingsStore.config) return
 
-  const limitError = settingsStore.config.llm.providers.map(providerInputError).find(Boolean)
+  const owner = settingsStore.config
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
+  const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
+  const limitError = owner.llm.providers.map(providerInputError).find(Boolean)
   if (limitError) { toast.error(limitError); throw new Error(limitError) }
-  const savedProviders = settingsStore.config.llm.providers.map(provider => ({ ...provider }))
+  const savedProviders = owner.llm.providers.map(provider => ({ ...provider }))
+  const submittedSignature = editableSettingsSignature(owner)
+  const submittedGeneration = autoSaveGeneration
+  const operation = ++settingsPersistOperation
+  const feedbackSession = toolbarSaveSession
 
   settingsPersisting.value = true
   try {
-    const result = await settingsStore.saveConfig(settingsStore.config)
+    const result = await settingsStore.saveConfig(owner)
+    if (!isCurrentOwner()) return
     originalProviders = savedProviders
+    // 共享保存会规范化配置快照；只有没有后来编辑时才承认该规范化结果。
+    persistedSettingsSignature.value = submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature
     if (refreshRuntimeInfo) {
       await loadRuntimeInfo()
     }
-    if (showSavedFeedback && !result.securitySyncFailed) {
+    if (showSavedFeedback && !result.securitySyncFailed && isCurrentOwner() && feedbackSession === toolbarSaveSession) {
       saved.value = true
-      setTimeout(() => { saved.value = false }, 2000)
+      setTimeout(() => {
+        if (isCurrentOwner() && feedbackSession === toolbarSaveSession) saved.value = false
+      }, 2000)
     }
   } finally {
-    settingsPersisting.value = false
+    if (operation === settingsPersistOperation) settingsPersisting.value = false
   }
 }
 
@@ -370,35 +564,50 @@ async function flushAutoSave({
 
   const hasPendingModelDraft = !!newModelId.value.trim()
   const shouldSave = force || hasPendingAutoSave || hasPendingModelDraft
+  const owner = settingsStore.config
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
+  const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
+  if (!owner) return
   if (!shouldSave) {
     if (autoSavePromise) {
-      await autoSavePromise
+      const sameOwner = autoSavePromiseOwnerSession === ownerSession && autoSavePromiseScope === scope
+      try { await autoSavePromise } catch (error) { if (sameOwner) throw error }
     }
     return
   }
-  if (!settingsStore.config) return
   if ((force || hasPendingModelDraft) && persistedAutoSaveGeneration >= autoSaveGeneration) {
     markAutoSavePending()
   }
   while (persistedAutoSaveGeneration < autoSaveGeneration) {
+    if (!isCurrentOwner()) return
     if (autoSavePromise) {
-      await autoSavePromise
+      const sameOwner = autoSavePromiseOwnerSession === ownerSession && autoSavePromiseScope === scope
+      // 等待旧 owner 的操作收口，但旧失败不能冒充当前 owner 的保存失败。
+      try { await autoSavePromise } catch (error) { if (sameOwner) throw error }
+      if (!isCurrentOwner()) return
       continue
     }
 
     const savingGeneration = autoSaveGeneration
     hasPendingAutoSave = false
-    isDirty.value = false
-    autoSavePromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
+    autoSavePromiseOwnerSession = ownerSession
+    autoSavePromiseScope = scope
+    const savingPromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
+    autoSavePromise = savingPromise
     try {
-      await autoSavePromise
-      persistedAutoSaveGeneration = Math.max(persistedAutoSaveGeneration, savingGeneration)
+      await savingPromise
+      if (isCurrentOwner()) persistedAutoSaveGeneration = Math.max(persistedAutoSaveGeneration, savingGeneration)
     } catch (e) {
-      refreshAutoSaveDirtyState()
+      if (isCurrentOwner()) refreshAutoSaveDirtyState()
       throw e
     } finally {
-      autoSavePromise = null
-      refreshAutoSaveDirtyState()
+      if (autoSavePromise === savingPromise) {
+        autoSavePromise = null
+        autoSavePromiseOwnerSession = null
+        autoSavePromiseScope = ''
+      }
+      if (isCurrentOwner()) refreshAutoSaveDirtyState()
     }
   }
 }
@@ -408,7 +617,16 @@ function handleBeforeUnload() {
   void flushAutoSave({ force: true })
 }
 
-function toggleEditingProvider(providerId: string) {
+function toggleEditingProvider(providerId: string, explicitControl = false) {
+  if (!explicitControl) {
+    if (providerIgnoreNextClick) { providerIgnoreNextClick = false; return }
+    if (providerTextGesture) { providerTextGesture = false; return }
+    // 从按钮按下后移出产生的共同祖先 click 不属于卡头展开手势。
+    if (providerControlPointerGesture) { providerControlPointerGesture = false; return }
+  }
+  providerIgnoreNextClick = false
+  providerTextGesture = false
+  providerControlPointerGesture = false
   editingProviderId.value = editingProviderId.value === providerId ? null : providerId
 }
 
@@ -509,6 +727,8 @@ onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
   originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
+  persistedSettingsSignature.value = editableSettingsSignature()
+  refreshAutoSaveDirtyState()
   // A7: 页面打开后异步拉一次能力缓存（不 block UI，失败降级为 unknown badge）
   void loadCapabilities()
   // U5: 把开机自启开关与系统真实状态对齐
@@ -516,6 +736,10 @@ onMounted(async () => {
 
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('pointermove', moveProviderPointer, { passive: false })
+    window.addEventListener('pointerup', finishProviderPointer)
+    window.addEventListener('pointercancel', cancelProviderDrag)
+    window.addEventListener('keydown', handleProviderSortKeydown)
   }
 
   if (isDesktopRuntime()) {
@@ -554,7 +778,15 @@ onBeforeUnmount(() => {
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('beforeunload', handleBeforeUnload)
+    window.removeEventListener('pointermove', moveProviderPointer)
+    window.removeEventListener('pointerup', finishProviderPointer)
+    window.removeEventListener('pointercancel', cancelProviderDrag)
+    window.removeEventListener('keydown', handleProviderSortKeydown)
   }
+  cancelProviderDrag()
+  modelManagerSession += 1
+  managerSyncing.value = false
+  addProviderDraft.value.apiKey = ''
   unlistenCloseRequested?.()
   unlistenCloseRequested = null
   editingModel.value = null
@@ -574,6 +806,7 @@ onBeforeUnmount(() => {
 })
 
 watch(activeSection, (val) => {
+  cancelProviderDrag()
   if (val === 'system') {
     loadRuntimeInfo()
   }
@@ -588,6 +821,7 @@ watch(editingProviderId, () => {
 const config = computed(() => settingsStore.config)
 const modelManagerProviderId = ref<string | null>(null)
 const managerSyncing = ref(false)
+let modelManagerSession = 0
 let modelManagerReturnFocus: HTMLElement | null = null
 const modelManagerProvider = computed(
   () =>
@@ -813,7 +1047,36 @@ async function handleAssociateOllama() {
   }
 }
 
+function resetAddProviderDraft(type: ProviderType) {
+  const preset = PROVIDER_PRESETS[type]
+  addProviderDraft.value = { name: '', baseUrl: preset.defaultBaseUrl || '', apiKey: '' }
+  showAddProviderKey.value = false
+}
+watch(addProviderType, (type, previous) => {
+  if (type !== previous && showAddProvider.value) resetAddProviderDraft(type)
+})
+function openAddProvider() {
+  addProviderSession += 1
+  addProviderType.value = 'openai'
+  resetAddProviderDraft('openai')
+  showAddProvider.value = true
+}
+function closeAddProvider() {
+  if (addingProvider.value) return
+  addProviderSession += 1
+  showAddProvider.value = false
+  addProviderDraft.value = { name: '', baseUrl: '', apiKey: '' }
+  showAddProviderKey.value = false
+}
+
 async function handleAddProvider() {
+  if (addingProvider.value || !settingsStore.config) return
+  const owner = settingsStore.config
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
+  const session = addProviderSession
+  const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
+  const isCurrentSession = () => isCurrentOwner() && session === addProviderSession && showAddProvider.value
   const preset = PROVIDER_PRESETS[addProviderType.value]
 
   // 防止重复添加 Ollama（只允许一个）
@@ -824,31 +1087,89 @@ async function handleAddProvider() {
       return
     }
     await handleAssociateOllama()
+    if (!isCurrentSession()) return
     showAddProvider.value = false
     const provider = settingsStore.config?.llm.providers.find((item) => item.type === 'ollama')
     if (provider) editingProviderId.value = provider.id
     return
   }
 
-  settingsStore.addProvider({
-    name: preset.name,
+  const draft = addProviderDraft.value
+  const limitError = inputLimitError(draft.name, 'Provider name', INPUT_LIMITS.displayName) ||
+    inputLimitError(draft.baseUrl, 'Base URL', INPUT_LIMITS.urlBytes, { unit: 'bytes' }) ||
+    inputLimitError(draft.apiKey, 'API Key', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
+  if (limitError) { toast.error(limitError); return }
+  const previousDefaultModel = owner.llm.defaultModel
+  const previousDefaultProviderId = owner.llm.defaultProviderId
+  const previousEditingId = editingProviderId.value
+  const provider = settingsStore.addProvider({
+    name: preset.type === 'custom' ? draft.name.trim() || preset.name : preset.name,
     type: preset.type,
     enabled: true,
-    apiKey: '',
-    baseUrl: preset.defaultBaseUrl,
+    apiKey: draft.apiKey,
+    baseUrl: draft.baseUrl.trim(),
     models: [...preset.defaultModels],
   })
-  showAddProvider.value = false
-  // 自动展开编辑
-  const providers = settingsStore.config?.llm?.providers
-  if (providers?.length) {
-    editingProviderId.value = providers[providers.length - 1]!.id
+  if (!provider) return
+  const addedDefaultModel = owner.llm.defaultModel
+  const addedDefaultProviderId = owner.llm.defaultProviderId
+  addingProvider.value = true
+  try {
+    markAutoSavePending()
+    await flushAutoSave({ force: true })
+    if (!isCurrentSession()) return
+    editingProviderId.value = provider.id
+    addingProvider.value = false
+    closeAddProvider()
+    const current = settingsStore.config?.llm.providers.find(item => item.id === provider.id || (provider.providerInstanceId && item.providerInstanceId === provider.providerInstanceId))
+    if (current) {
+      // 自定义服务没有预设聊天模型时，先恢复目录，再使用已有连接测试链路。
+      void (async () => {
+        if (!isCurrentOwner()) return
+        if (!current.models.length) await syncRemoteModels(current, { waitForPersistence: true })
+        if (!isCurrentOwner()) return
+        await testProvider(current)
+      })()
+    }
+  } catch (error) {
+    // 新增保存失败只撤回本次新增项，不覆盖其他已存在配置。
+    const rollbackOwner = isCurrentOwner() ? settingsStore.config : owner
+    if (isCurrentOwner()) settingsStore.removeProvider(provider.id)
+    else owner.llm.providers = owner.llm.providers.filter(item => item.id !== provider.id)
+    if (rollbackOwner && rollbackOwner.llm.defaultModel === addedDefaultModel && rollbackOwner.llm.defaultProviderId === addedDefaultProviderId) {
+      rollbackOwner.llm.defaultModel = previousDefaultModel
+      rollbackOwner.llm.defaultProviderId = previousDefaultProviderId
+    }
+    if (isCurrentSession()) {
+      editingProviderId.value = previousEditingId
+      refreshAutoSaveDirtyState()
+      toast.error(messageFromUnknownError(error))
+    }
+  } finally {
+    if (isCurrentSession()) addingProvider.value = false
   }
-  autoSave()
 }
+
+watch(() => backendScopeKey(), () => {
+  // 后端切换只使页面添加会话失效，已进入原持久化链的请求继续使用自己的后端快照。
+  addProviderSession += 1
+  settingsOwnerSession += 1
+  showAddProvider.value = false
+  addingProvider.value = false
+  addProviderDraft.value = { name: '', baseUrl: '', apiKey: '' }
+  showAddProviderKey.value = false
+  settingsPersisting.value = false
+  toolbarSaveSession += 1
+  saved.value = false
+  saveFailed.value = false
+})
 
 /** 真正执行 Provider 删除 */
 async function handleDeleteProvider(id: string) {
+  const owner = settingsStore.config
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
+  const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
   const limitError = settingsStore.config?.llm.providers.filter(provider => provider.id !== id).map(providerInputError).find(Boolean)
   if (limitError) { toast.error(limitError); return }
   // 保存删除前快照，以便失败时恢复
@@ -867,19 +1188,25 @@ async function handleDeleteProvider(id: string) {
   if (settingsStore.config) {
     try {
       const savedProviders = settingsStore.config.llm.providers.map(provider => ({ ...provider }))
+      const submittedSignature = editableSettingsSignature(owner)
+      const submittedGeneration = autoSaveGeneration
       const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
+      if (!isCurrentOwner()) return
       originalProviders = savedProviders
+      persistedSettingsSignature.value = submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature
+      refreshAutoSaveDirtyState()
       if (securitySyncFailed) {
         logger.warn('[HexClaw] 删除 Provider 后安全/沙箱配置同步失败')
       }
     } catch (e) {
       logger.error('[HexClaw] 删除 Provider 后保存失败，已恢复:', e)
       // 恢复 UI 到删除前状态
-      if (snapshot && settingsStore.config) {
-        settingsStore.config.llm.providers = snapshot
-        editingProviderId.value = prevEditingId
+      if (snapshot && owner) {
+        const rollbackOwner = isCurrentOwner() ? settingsStore.config : owner
+        if (rollbackOwner) rollbackOwner.llm.providers = snapshot
+        if (isCurrentOwner()) editingProviderId.value = prevEditingId
       }
-      toast.error(t('settings.llm.deleteProviderFailed', '删除失败，已恢复'))
+      if (isCurrentOwner()) toast.error(t('settings.llm.deleteProviderFailed', '删除失败，已恢复'))
     }
   }
 }
@@ -1691,11 +2018,15 @@ function providerHasNewModels(providerId: string): boolean {
 }
 
 function openModelManager(providerId: string, event: MouseEvent) {
+  modelManagerSession += 1
+  managerSyncing.value = false
   modelManagerReturnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   modelManagerProviderId.value = providerId
 }
 
 function closeModelManager() {
+  modelManagerSession += 1
+  managerSyncing.value = false
   modelManagerProviderId.value = null
   const returnFocus = modelManagerReturnFocus
   modelManagerReturnFocus = null
@@ -1715,13 +2046,15 @@ async function handleManagerResync() {
   const provider = modelManagerProvider.value
   if (!provider || managerSyncing.value) return
   managerSyncing.value = true
+  const session = modelManagerSession
+  const isCurrent = () => session === modelManagerSession && modelManagerProviderId.value === provider.id
   try {
     const ok = await syncRemoteModels(provider, { waitForPersistence: true })
-    if (!ok) {
+    if (!ok && isCurrent()) {
       toast.error(t('settings.llm.syncModelsFailed', '同步模型列表失败，请检查连接'))
     }
   } finally {
-    managerSyncing.value = false
+    if (isCurrent()) managerSyncing.value = false
   }
 }
 
@@ -1748,6 +2081,11 @@ function isStaleModel(provider: ProviderConfig, model: ModelOption): boolean {
 function autoSave() {
   markAutoSavePending()
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  if (!isDirty.value) {
+    autoSaveTimer = null
+    if (!autoSavePromise) persistedAutoSaveGeneration = autoSaveGeneration
+    return
+  }
   autoSaveTimer = setTimeout(async () => {
     try {
       await flushAutoSave()
@@ -1764,8 +2102,15 @@ function selectProviderModel(provider: ProviderConfig, modelId: string) {
 
 async function onToolbarReset() {
   if (!settingsStore.config) return
+  // 显式重置开始新编辑会话，正常保存的快照替换不改变会话身份。
+  settingsOwnerSession += 1
+  toolbarSaveSession += 1
+  saved.value = false
+  saveFailed.value = false
   try {
     await settingsStore.loadConfig({ force: true })
+    persistedSettingsSignature.value = editableSettingsSignature()
+    refreshAutoSaveDirtyState()
     saved.value = false
   } catch (e) {
     logger.error('[HexClaw] Reset failed:', e)
@@ -1774,6 +2119,10 @@ async function onToolbarReset() {
 }
 
 async function saveConfig() {
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
+  const session = ++toolbarSaveSession
+  const isCurrentSession = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope && session === toolbarSaveSession
   saveFailed.value = false
   try {
     await flushAutoSave({
@@ -1783,25 +2132,22 @@ async function saveConfig() {
     })
   } catch (e) {
     logger.error('保存配置失败:', e)
+    if (!isCurrentSession()) return
     // 保存失败不能静默：清成功态 + 置失败态，按钮显示「保存失败，请重试」（4s 后复位）
     saved.value = false
     saveFailed.value = true
     setTimeout(() => {
-      saveFailed.value = false
+      if (isCurrentSession()) saveFailed.value = false
     }, 4000)
   }
 }
 
-/** 渲染层只消费已合并的模型能力声明，缺失的历史记录按文本能力展示。 */
-function displayCapabilities(model: ModelOption): ModelCapability[] {
-  return model.capabilities ?? ['text']
-}
 </script>
 
 <template>
   <div
     class="hc-settings"
-    :inert="customModelDialogProviderId || modelManagerProviderId ? true : undefined"
+    :inert="showAddProvider || customModelDialogProviderId || modelManagerProviderId ? true : undefined"
   >
     <PageToolbar>
       <template #tabs>
@@ -1818,10 +2164,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
         <button
           class="hc-btn hc-btn-primary"
           :class="{ 'hc-settings__btn--saved': saved, 'hc-settings__btn--failed': saveFailed }"
-          :disabled="!hasUnsavedChanges() && !saved"
+          :disabled="settingsPersisting || !hasUnsavedChanges()"
           @click="saveConfig"
         >
-          <CheckCircle v-if="saved" :size="14" />
+          <Loader2 v-if="settingsPersisting" :size="14" class="animate-spin" />
+          <CheckCircle v-else-if="saved" :size="14" />
           {{
             saved
               ? t('common.saved')
@@ -1837,12 +2184,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     </PageToolbar>
 
     <div class="hc-settings__body">
-      <div class="hc-settings__content">
+      <div ref="settingsContentRef" class="hc-settings__content">
         <LoadingState v-if="settingsStore.loading && !config" />
 
         <template v-if="config">
           <!-- LLM Providers -->
-          <div v-if="activeSection === 'llm'" class="hc-settings__section" style="max-width: 600px">
+          <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--llm">
             <div v-if="taskReturn" class="hc-settings__task-return" data-task-return>
               <div>
                 <span>{{ returnModelReady ? '默认模型已选好，可以继续原任务。' : '配置模型后继续原任务，已填写的内容会保留。' }}</span>
@@ -2001,25 +2348,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <span class="hc-settings__sep-line"></span>
               <button
                 class="hc-btn hc-btn-sm hc-settings__sep-action"
-                @click="showAddProvider = !showAddProvider"
+                @click="openAddProvider"
               >
                 <Plus :size="14" />
                 {{ t('settings.llm.addProvider') }}
               </button>
-            </div>
-
-            <!-- 添加 Provider 面板 -->
-            <div v-if="showAddProvider" class="hc-provider__add-panel">
-              <label class="hc-settings__label">{{ t('settings.llm.selectProvider') }}</label>
-              <ProviderSelect v-model="addProviderType" :include-custom="true" />
-              <div class="hc-provider__add-actions">
-                <button class="hc-btn hc-btn-sm" @click="showAddProvider = false">
-                  {{ t('common.cancel') }}
-                </button>
-                <button class="hc-btn hc-btn-primary hc-btn-sm" @click="handleAddProvider">
-                  {{ t('common.confirm') }}
-                </button>
-              </div>
             </div>
 
             <!-- 本地 LLM (Ollama) 卡片 -->
@@ -2029,16 +2362,25 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             />
 
             <!-- Provider 列表（本地 Ollama 常驻，故不再额外渲染「尚未添加服务商」空态；对齐原型） -->
-            <div class="hc-provider__list">
+            <div ref="providerListRef" class="hc-provider__list">
+              <span id="provider-order-hint" class="hc-provider__sr-only">拖动卡头非交互区域排序；也可在排序柄上按 Alt + ↑ / ↓。排序仅调整显示，不影响模型路由。</span>
+              <span class="hc-provider__sr-only" aria-live="polite">{{ providerOrderFeedback }}</span>
               <div
                 v-for="provider in nonOllamaProviders"
                 :key="provider.id"
                 class="hc-provider__card"
-                :class="{ 'hc-provider__card--disabled': !provider.enabled }"
+                :class="{
+                  'hc-provider__card--disabled': !provider.enabled,
+                  'hc-provider__card--dragging': draggingProviderId === providerOrderId(provider),
+                  'hc-provider__drop-before': providerDropTarget?.id === providerOrderId(provider) && !providerDropTarget.after,
+                  'hc-provider__drop-after': providerDropTarget?.id === providerOrderId(provider) && providerDropTarget.after,
+                }"
                 :data-provider-type="provider.type"
+                :data-provider-order-id="providerOrderId(provider)"
               >
                 <!-- Provider 头部 -->
-                <div class="hc-provider__card-head" @click="toggleEditingProvider(provider.id)">
+                <div class="hc-provider__card-head" @pointerdown="startProviderPointer($event, provider)" @click="toggleEditingProvider(provider.id)">
+                  <button type="button" class="hc-provider__drag-handle" :aria-label="`排序 ${provider.name}`" aria-describedby="provider-order-hint" title="拖动卡头排序；Alt + ↑ / ↓ 调整顺序。仅影响显示，不改变模型路由。" @click.stop @keydown="handleProviderSortKeydown($event, provider)"><GripVertical :size="18" /></button>
                   <div class="hc-provider__card-info">
                     <div class="hc-provider__logo">
                       <img
@@ -2071,6 +2413,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           !providerConnectionResult(provider)!.ok,
                       }"
                       aria-live="polite"
+                      title="上次连接测试结果，非实时健康状态"
                       :aria-label="
                         providerConnectionResult(provider)?.ok
                           ? t('settings.llm.testSuccess', '成功')
@@ -2107,13 +2450,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     </button>
                     <button
                       type="button"
-                      class="hc-provider__delete-btn"
-                      @click.stop="openDeleteProviderConfirm(provider.id)"
-                    >
-                      {{ t('settings.llm.deleteAction', '删除') }}
-                    </button>
-                    <button
-                      type="button"
                       class="hc-provider__toggle"
                       :class="{ 'hc-provider__toggle--on': provider.enabled }"
                       :title="
@@ -2126,11 +2462,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     >
                       <span class="hc-provider__toggle-knob" aria-hidden="true" />
                     </button>
-                    <component
-                      :is="editingProviderId === provider.id ? ChevronUp : ChevronDown"
-                      :size="16"
-                      class="hc-provider__chevron"
-                    />
+                    <button type="button" class="hc-provider__expand" :aria-expanded="editingProviderId === provider.id" :aria-label="`${editingProviderId === provider.id ? '收起' : '展开'} ${provider.name}`" @click.stop="toggleEditingProvider(provider.id, true)"><component :is="editingProviderId === provider.id ? ChevronUp : ChevronDown" :size="16" /></button>
                   </div>
                 </div>
 
@@ -2486,6 +2818,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </button>
                     </div>
                   </div>
+                  <div class="hc-provider__management-actions">
+                    <button type="button" class="hc-provider__delete-btn" @click="openDeleteProviderConfirm(provider.id)">{{ t('settings.llm.deleteAction', '删除') }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2695,6 +3030,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
       </div>
     </div>
   </div>
+
+  <HcModal :open="showAddProvider" :title="t('settings.llm.addProvider')" :busy="addingProvider" initial-focus=".hc-provider-select__trigger" @close="closeAddProvider">
+    <form class="hc-provider__add-form" :inert="addingProvider ? true : undefined" @submit.prevent="handleAddProvider">
+      <div class="hc-provider__add-field"><label>{{ t('settings.llm.serviceProvider', 'Provider') }}</label><ProviderSelect v-model="addProviderType" :include-custom="true" /></div>
+      <div v-if="addProviderType === 'custom'" class="hc-provider__add-field"><label for="add-provider-name">名称</label><HcClearableField><input id="add-provider-name" v-model="addProviderDraft.name" class="hc-input" autocomplete="off" placeholder="服务商名称" /></HcClearableField></div>
+      <div class="hc-provider__add-field"><label for="add-provider-url">Base URL</label><HcClearableField><input id="add-provider-url" v-model="addProviderDraft.baseUrl" class="hc-input" autocomplete="off" spellcheck="false" /></HcClearableField></div>
+      <div class="hc-provider__add-field"><label for="add-provider-key">API Key</label><div class="hc-settings__input-group"><HcClearableField :trailing="38"><input id="add-provider-key" v-model="addProviderDraft.apiKey" class="hc-input" :type="showAddProviderKey ? 'text' : 'password'" :placeholder="PROVIDER_PRESETS[addProviderType].placeholder || 'API Key'" autocomplete="off" spellcheck="false" /></HcClearableField><button type="button" class="hc-settings__eye-btn" :aria-label="showAddProviderKey ? '隐藏 API Key' : '显示 API Key'" @click="showAddProviderKey = !showAddProviderKey"><Eye :size="15" /></button></div></div>
+    </form>
+    <template #footer><button type="button" class="hc-btn" :disabled="addingProvider" @click="closeAddProvider">{{ t('common.cancel') }}</button><button type="button" class="hc-btn hc-btn-primary" :disabled="addingProvider" @click="handleAddProvider"><Loader2 v-if="addingProvider" :size="14" class="animate-spin" />{{ t('common.add', '添加') }}</button></template>
+  </HcModal>
 
   <!-- 添加自定义模型：轻量弹窗，不在 Provider 卡片中保留内联编辑表单。 -->
   <Teleport to="body">
@@ -2911,6 +3256,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
   <ModelManagerModal
     v-if="modelManagerProvider"
+    :key="modelManagerProvider.id"
     :open="!!modelManagerProvider"
     :provider="modelManagerProvider"
     :syncing="managerSyncing"
@@ -2921,6 +3267,66 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 </template>
 
 <style scoped>
+/* 模型服务的长控件共用右侧 360px 轨道；短开关与计数器沿同一右边界。 */
+.hc-settings__section.hc-settings__section--llm{container-name:model-settings}
+.hc-settings__section--llm .hc-settings__row{min-height:48px}
+.hc-settings__section--llm .hc-settings__row-label{font-size:14px;min-width:0;flex-shrink:1}
+.hc-settings__section--llm .hc-settings__row-right{width:360px;min-width:0;gap:12px;justify-content:flex-end}
+.hc-settings__section--llm .hc-settings__select{width:100%;min-width:0}
+.hc-settings__section--llm [data-testid="llm-routing-strategy-select"] :deep(.hc-select__trigger),.hc-settings__section--llm [data-testid="llm-agent-mode-select"] :deep(.hc-select__trigger){height:34px;min-height:34px;font-size:13px;line-height:normal}
+.hc-settings__section--llm .hc-settings__row-right:has(.hc-toggle) .hc-settings__select{width:314px}
+.hc-settings__section--llm .hc-settings__row-right>.hc-toggle{margin:0;flex:0 0 34px}
+.hc-settings__section--llm .hc-settings__sub{position:relative;padding-left:0;border-left:0;margin-left:0;margin-top:0}
+.hc-settings__section--llm .hc-settings__sub::before{content:'';position:absolute;left:4px;top:4px;bottom:4px;width:1px;background:var(--hc-border-hl)}
+.hc-settings__section--llm .hc-settings__sub .hc-settings__row{min-height:48px}
+.hc-settings__section--llm .hc-settings__sub .hc-settings__row-label{padding-left:16px;font-size:12px}
+.hc-settings__section--llm .hc-settings__sep{margin-top:28px}
+.hc-settings__section--llm>.hc-settings__sep:first-child{margin-top:0}
+.hc-settings__section--llm .hc-settings__sep-label{font-size:14px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--hc-text-secondary)}
+.hc-settings__section--llm .hc-provider__card{backdrop-filter:saturate(160%) blur(16px);-webkit-backdrop-filter:saturate(160%) blur(16px)}
+.hc-settings__section--llm .hc-settings__sep-action{padding:7px 10px;border:1px solid var(--hc-border);border-radius:8px;background:var(--hc-bg-input);font-size:13px;font-weight:500;line-height:1.5;min-height:0}
+:global([data-theme="light"] .hc-settings__section--llm .hc-settings__sep-action){color:#2879b9}
+.hc-provider__add-form{display:grid;gap:16px}
+.hc-provider__add-field{display:grid;gap:7px;min-width:0}
+.hc-provider__add-field>label{font-size:12px;font-weight:600;line-height:18px;color:var(--hc-text-secondary)}
+.hc-provider__add-field .hc-input{width:100%;font:inherit;font-size:13px;line-height:1.5}
+.hc-provider__add-field .hc-settings__input-group .hc-input{padding-right:70px}
+.hc-provider__management-actions{display:flex;justify-content:flex-end;padding-top:12px;margin-top:8px;border-top:1px solid var(--hc-border)}
+.hc-provider__drag-handle{grid-column:1;display:grid;place-items:center;width:28px;height:32px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--hc-text-muted);opacity:.45;cursor:grab;touch-action:none;user-select:none}
+.hc-provider__card:hover .hc-provider__drag-handle,.hc-provider__drag-handle:focus-visible{opacity:1}
+.hc-provider__drag-handle:focus-visible,.hc-provider__expand:focus-visible{outline:2px solid var(--hc-accent);outline-offset:2px}
+.hc-provider__drag-handle:active,.hc-provider__card-head:active{cursor:grabbing}
+.hc-provider__expand{grid-column:7;display:grid;place-items:center;width:24px;height:32px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--hc-text-muted);cursor:pointer}
+.hc-provider__expand:hover{background:var(--hc-bg-hover);color:var(--hc-accent)}
+.hc-provider__card.hc-provider__card--dragging{opacity:.45}
+.hc-provider__drop-before::before,.hc-provider__drop-after::after{content:'';position:absolute;left:0;right:0;height:2px;background:var(--hc-accent);border-radius:2px;pointer-events:none}
+.hc-provider__drop-before::before{top:-5px}.hc-provider__drop-after::after{bottom:-5px}
+.hc-provider__sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:global([data-theme="dark"] .hc-settings__section--llm .hc-model-chip--manage),:global([data-theme="dark"] .hc-settings__section--llm .hc-model-chip--add){color:#a8b3c2}
+:global([data-theme="light"] .hc-settings__section--llm .hc-provider__connection-detail),:global([data-theme="light"] .hc-settings__section--llm .hc-provider__delete-btn){color:#c62828}
+:global([data-theme="light"] .hc-settings__section--llm .hc-provider__connection-status--ok){color:#1b7e3c}
+:global([data-theme="light"] .hc-settings__section--llm .hc-provider__connection-status--error){color:#c62828}
+:global([data-theme="dark"] .hc-settings__section--llm .hc-provider__connection-status:not(.hc-provider__connection-status--testing):not(.hc-provider__connection-status--ok):not(.hc-provider__connection-status--error)){color:#a8b3c2}
+@container model-settings (max-width:620px){
+  .hc-settings__section--llm .hc-provider__card-head{grid-template-columns:28px 34px minmax(0,1fr) 34px 24px;gap:8px 12px}
+  .hc-settings__section--llm .hc-provider__drag-handle{grid-column:1;grid-row:1/3;align-self:start}
+  .hc-settings__section--llm .hc-provider__logo{grid-column:2;grid-row:1}
+  .hc-settings__section--llm .hc-provider__card-identity{grid-column:3;grid-row:1}
+  .hc-settings__section--llm .hc-provider__toggle{grid-column:4;grid-row:1}
+  .hc-settings__section--llm .hc-provider__expand{grid-column:5;grid-row:1}
+  .hc-settings__section--llm .hc-provider__connection-status{grid-column:2/4;grid-row:2;justify-content:flex-start}
+  .hc-settings__section--llm .hc-provider__test-btn{grid-column:4/6;grid-row:2;justify-self:end}
+}
+@container model-settings (max-width:500px){
+  .hc-settings__section--llm .hc-settings__row{gap:8px;min-height:48px;padding:6px 0}
+  .hc-settings__section--llm .hc-settings__row-right{width:auto}
+  .hc-settings__section--llm .hc-settings__row:has(.hc-settings__select){display:grid;grid-template-columns:minmax(0,1fr);min-height:60px}
+  .hc-settings__section--llm .hc-settings__row:has(.hc-settings__select)>.hc-settings__row-label{grid-column:1/-1}
+  .hc-settings__section--llm .hc-settings__row:has(.hc-settings__select)>.hc-settings__row-right{width:100%;grid-column:1/-1}
+  .hc-settings__section--llm .hc-settings__row-right:has(.hc-toggle) .hc-settings__select{width:auto;flex:1;min-width:0}
+}
+@media(prefers-reduced-motion:reduce){.hc-settings__section.hc-settings__section--llm,.hc-settings__section--llm .hc-provider__connection-status--ok{animation:none}}
+
 .hc-settings__task-return {
   margin-bottom: 16px;
   border: 0.5px solid var(--hc-border);
@@ -2972,23 +3378,25 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-settings__section {
-  max-width: 520px;
+  max-width: 760px;
   width: 100%;
   min-height: 100%;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+  container-name: settings-content;
   animation: hc-fade-in 0.25s ease-out;
 }
 
 .hc-settings__section--storage {
-  max-width: 600px;
+  max-width: 760px;
   margin: 0;
   padding-right: 4px;
 }
 
-/* 自动化权限：三档卡片 + 策略矩阵需要比表单列更宽的呼吸空间 */
+/* 三个设置分区沿同一内容宽度，不因标签切换改变共同边界。 */
 .hc-settings__section--automation {
-  max-width: 640px;
+  max-width: 760px;
 }
 
 .hc-settings__section-title {
@@ -3547,7 +3955,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-provider__list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  gap: 12px;
   margin-top: 8px;
 }
 
@@ -3576,12 +3984,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
   box-sizing: border-box;
-  padding: 14px 16px;
-  border-radius: var(--hc-radius-md);
+  padding: 16px 20px;
+  border-radius: 16px;
   background: var(--hc-bg-card);
   border: 0.5px solid var(--hc-border);
   overflow: visible;
@@ -3598,31 +4007,26 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: 28px 34px minmax(0, 1fr) 128px 64px 34px 24px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  min-height: 39px;
+  min-height: 44px;
   margin: 0;
-  cursor: pointer;
-  user-select: none;
+  cursor: grab;
 }
 
 .hc-provider__card-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1 1 auto;
+  display: contents;
 }
 
 .hc-provider__card-info::after {
-  content: '';
-  min-width: 0;
-  flex: 1 1 0;
+  display: none;
 }
 
 .hc-provider__logo {
+  grid-column: 2;
   display: grid;
   place-items: center;
   width: 34px;
@@ -3645,6 +4049,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-identity {
+  grid-column: 3;
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
@@ -3669,8 +4074,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__card-name {
-  font-size: 14px;
-  line-height: 21px;
+  font-size: 16px;
+  line-height: 1.4;
   font-weight: 600;
   color: var(--hc-text-primary);
   min-width: 0;
@@ -3678,20 +4083,24 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: none;
 }
 
 .hc-provider__card-meta {
   overflow: hidden;
   color: var(--hc-text-secondary);
-  font-size: 12px;
-  line-height: 18px;
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.5;
   min-height: 0;
   white-space: nowrap;
   text-overflow: ellipsis;
+  cursor: text;
+  user-select: text;
 }
 
 .hc-provider__card-actions {
-  display: flex;
+  display: contents;
   margin-left: auto;
   margin-right: 0;
   align-items: center;
@@ -3703,15 +4112,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-provider__connection-status {
   display: flex;
   align-items: center;
-  gap: 5px;
+  grid-column: 4;
+  justify-content: flex-start;
+  width: 128px;
+  gap: 7px;
   min-height: 26px;
   box-sizing: border-box;
-  padding: 3px 8px;
-  border-radius: 8px;
+  padding: 0;
+  border-radius: 0;
   color: var(--hc-text-muted);
-  background: var(--hc-bg-hover);
-  font-size: 11.5px;
-  font-weight: 600;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: text;
+  user-select: text;
   white-space: nowrap;
   transition:
     color 0.18s,
@@ -3721,18 +4135,18 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-provider__connection-status--testing {
   color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
+  background: transparent;
 }
 
 .hc-provider__connection-status--ok {
   color: var(--hc-success);
-  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+  background: transparent;
   animation: hc-provider-status-pop 0.22s ease-out;
 }
 
 .hc-provider__connection-status--error {
   color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+  background: transparent;
 }
 
 .hc-provider__connection-dot {
@@ -3755,10 +4169,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__test-btn {
+  grid-column: 5;
+  width: 64px;
+  height: 34px;
   flex: 0 0 auto;
-  justify-content: normal;
+  justify-content: center;
   gap: 6px;
-  padding: 8px 14px;
+  padding: 7px 10px;
   border-color: rgba(95, 179, 234, 0.5);
   background: transparent;
   color: #3f8fd4;
@@ -3778,20 +4195,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__connection-status {
-  min-width: 0;
-  background: rgba(63, 143, 212, 0.1);
+  min-width: 128px;
+  background: transparent;
 }
 
 .hc-provider__connection-status--testing {
-  background: rgba(95, 179, 234, 0.14);
+  background: transparent;
 }
 
 .hc-provider__connection-status--ok {
-  background: color-mix(in srgb, var(--hc-success) 13%, transparent);
+  background: transparent;
 }
 
 .hc-provider__connection-status--error {
-  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
+  background: transparent;
 }
 
 .hc-provider__config-grid--builtin {
@@ -3822,13 +4239,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-provider__toggle {
+  grid-column: 6;
   position: relative;
   width: 34px;
   height: 20px;
   flex: 0 0 34px;
   padding: 2px;
-  /* 与原型原生 checkbox 的 WebKit 有效外边距保持同一控制器栅格。 */
-  margin: 3px 3px 3px 4px;
+  /* 固定 34px 轨道不叠加原生 checkbox 外边距。 */
+  margin: 0;
   border: none;
   border-radius: 999px;
   background: var(--hc-text-muted);
@@ -3836,13 +4254,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   align-items: center;
   transition: background 0.15s ease;
-}
-
-/* WebKit 的原生 checkbox 使用左右 2px 外边距；自绘开关保留同一操作组栅格。 */
-@supports (font: -apple-system-body) {
-  .hc-provider__toggle {
-    margin: 3px 2px;
-  }
 }
 
 .hc-provider__toggle--on {
@@ -4767,7 +5178,7 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
 
 @media (max-width: 1100px) {
   .hc-settings__content {
-    padding: 14px 18px;
+    padding: 16px 24px;
   }
 }
 

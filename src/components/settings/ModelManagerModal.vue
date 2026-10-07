@@ -12,6 +12,7 @@ import {
 } from '@/config/model-contract'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
 import type { CatalogModel, ModelCapability, ModelOption, ProviderConfig } from '@/types'
+import { displayModelCapabilities, MODEL_CAPABILITY_DISPLAY } from '@/config/model-capability-display'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 
@@ -333,6 +334,11 @@ function normalizeAgainstCatalog(model: ModelOption): ModelOption {
 function capabilitiesOf(m: CatalogModel): ModelCapability[] {
   const enabledModel = draftModels.value.find((model) => model.id === m.id)
   return modelOptionFromCatalog(m, enabledModel).capabilities ?? []
+}
+
+function displayCapabilitiesOf(m: CatalogModel) {
+  const enabledModel = draftModels.value.find((model) => model.id === m.id)
+  return displayModelCapabilities(modelOptionFromCatalog(m, enabledModel), [])
 }
 
 function isStaleCatalogModel(modelId: string): boolean {
@@ -721,6 +727,14 @@ function handleKeydown(e: KeyboardEvent) {
                       </span>
                       <span v-if="isStaleCatalogModel(m.id)" class="mm-badge mm-badge--stale">
                         {{ t('settings.llm.modelStaleLabel', '已下架') }}
+                      </span>
+                      <span
+                        v-if="displayCapabilitiesOf(m).includes('thinking')"
+                        class="mm-badge"
+                        :title="MODEL_CAPABILITY_DISPLAY.thinking.title"
+                      >
+                        {{ MODEL_CAPABILITY_DISPLAY.thinking.icon }}
+                        {{ MODEL_CAPABILITY_DISPLAY.thinking.label }}
                       </span>
                       <template v-if="hasMetadata">
                         <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">

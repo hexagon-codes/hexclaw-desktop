@@ -131,12 +131,10 @@ function isModelTooLarge(name: string): boolean {
 }
 import { useI18n } from 'vue-i18n'
 import {
-  Server,
+  Database,
   Loader2,
-  CheckCircle,
   RefreshCw,
-  AlertCircle,
-  Circle,
+  ChevronDown,
   Download,
   ExternalLink,
   Power,
@@ -275,6 +273,21 @@ const stateLabel = computed(() => {
   return ''
 })
 
+// 首次检测终态决定初始层级；用户的展开选择优先，后续刷新不抢回布局。
+const expanded = ref(true)
+let initialExpansionResolved = false
+let manualExpansionSelected = false
+watch([state, () => status.value?.models?.length], ([currentState, modelCount]) => {
+  if (initialExpansionResolved || currentState === 'detecting' || currentState === 'waiting_install') return
+  initialExpansionResolved = true
+  if (!manualExpansionSelected) expanded.value = currentState !== 'associated' || !modelCount
+})
+function toggleExpanded() {
+  manualExpansionSelected = true
+  expanded.value = !expanded.value
+  if (!expanded.value) showModelDropdown.value = false
+}
+
 const target = ref<OllamaTarget | null>(null)
 const targetMode = ref<'default' | 'custom'>('default')
 const targetAddress = ref('')
@@ -282,7 +295,19 @@ const targetSaving = ref(false)
 const targetDirty = computed(() => !!target.value && (targetMode.value !== target.value.mode || (targetMode.value === 'custom' && targetAddress.value.trim() !== target.value.custom_base_url)))
 const remoteBackend = computed(() => backendContext.value?.kind === 'remote')
 const managedLocal = computed(() => !remoteBackend.value && targetMode.value === 'default' && !!status.value?.can_restart)
-const targetHint = computed(() => `访问目标：${targetMode.value === 'custom' ? targetAddress.value || '待填写目标地址' : target.value?.resolved_base_url || 'http://127.0.0.1:11434'}\n模型运行和下载位置：${targetMode.value === 'custom' ? '目标 Ollama 所在设备' : remoteBackend.value ? '后端服务器' : '此设备'}。${!remoteBackend.value && targetMode.value === 'default' ? '由 HexClaw 自动检测或启动。' : ''}`)
+const targetInputAddress = computed({
+  get: () => targetMode.value === 'custom' ? targetAddress.value : target.value?.resolved_base_url || 'http://127.0.0.1:11434',
+  set: (address: string) => { if (targetMode.value === 'custom') targetAddress.value = address },
+})
+const targetAccessSummary = computed(() => `${remoteBackend.value ? '云端后端访问' : '本机后端访问'} · ${targetInputAddress.value || '待填写目标地址'}`)
+const targetStorageSummary = computed(() => `模型运行与下载：${targetMode.value === 'custom' ? '目标 Ollama 所在设备' : remoteBackend.value ? '后端服务器' : '此设备'}。`)
+const targetNote = computed(() => targetMode.value === 'custom'
+  ? remoteBackend.value
+    ? '填写云端后端可访问的地址。127.0.0.1 指后端服务器；访问此设备需使用其可达网络地址。'
+    : '填写本机后端可访问的 Ollama 地址，可使用其他端口或设备。'
+  : remoteBackend.value
+    ? '默认地址指向当前后端服务器。'
+    : '默认地址指向此设备。由 HexClaw 自动检测或启动 Ollama。')
 async function readTarget() {
   target.value = await getOllamaTarget()
   targetMode.value = target.value.mode
@@ -893,26 +918,21 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 </script>
 
 <template>
-  <div class="ollama-card" :class="`ollama-card--${state}`">
-    <!-- Header -->
-    <div class="ollama-card__header">
-      <div class="ollama-card__header-left">
-        <Server :size="16" class="ollama-card__icon" />
-        <div class="ollama-card__header-info">
+  <div class="ollama-card" :class="[`ollama-card--${state}`, { 'ollama-card--expanded': expanded }]">
+    <!-- 折叠仍保留访问主体与模型位置，卡头只承载状态、刷新和展开。 -->
+    <div class="ollama-card__header" @click="toggleExpanded">
+      <span class="ollama-card__icon"><Database :size="24" /></span>
+      <div class="ollama-card__header-info">
+        <div class="ollama-card__title">Ollama
           <a
             href="https://ollama.com"
             target="_blank"
             rel="noopener noreferrer"
-            class="ollama-card__title"
+            class="ollama-card__title-link"
+            aria-label="打开 Ollama 官网"
             title="ollama.com"
             @click.stop
-            >Ollama<ExternalLink :size="10" class="ollama-card__title-link"
-          /></a>
-          <div v-if="status?.version" class="ollama-card__meta">
-            {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} ·
-            {{ status.model_count }}
-            {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}
-          </div>
+          ><ExternalLink :size="14" /></a>
         </div>
       </div>
 
@@ -930,39 +950,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
             :size="11"
             class="ollama-card__spin"
           />
-          <CheckCircle v-else-if="state === 'associated'" :size="11" />
-          <AlertCircle v-else-if="state === 'error'" :size="11" />
-          <Circle v-else :size="11" />
+          <span v-else class="ollama-card__badge-dot" />
           {{ stateLabel }}
         </span>
-        <span class="ollama-card__header-divider"></span>
-        <!-- 重启：仅异常/未运行时显示 -->
-        <button
-          v-if="managedLocal"
-          class="ollama-card__refresh"
-          :disabled="restarting"
-          :title="t('settings.ollama.restartEngine', '启动引擎')"
-          @click="handleRestart"
-        >
-          <Loader2 v-if="restarting" :size="13" class="ollama-card__spin" />
-          <Power v-else :size="13" />
-        </button>
-        <!-- 启用/禁用 Provider -->
-        <button
-          v-if="state === 'associated'"
-          class="ollama-card__refresh"
-          :title="
-            hasOllamaProvider
-              ? t('settings.llm.enabled', '已启用')
-              : t('settings.llm.disabled', '已禁用')
-          "
-          @click.stop="toggleOllamaProvider"
-        >
-          <Power
-            :size="13"
-            :class="hasOllamaProvider ? 'ollama-card__power--on' : 'ollama-card__power--off'"
-          />
-        </button>
         <!-- 刷新：始终可用，正常时低调 -->
         <button
           class="ollama-card__refresh"
@@ -971,19 +961,63 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
           }"
           :disabled="detecting || waitingInstall"
           :title="t('common.refresh', '刷新')"
-          @click="detect"
+          :aria-label="t('common.refresh', '刷新')"
+          @click.stop="detect"
         >
           <RefreshCw :size="13" />
         </button>
+        <button
+          type="button"
+          class="ollama-card__expand"
+          :aria-label="expanded ? '收起 Ollama 设置' : '展开 Ollama 设置'"
+          :aria-expanded="expanded"
+          aria-controls="ollamaProviderDetails"
+          @click.stop="toggleExpanded"
+        ><ChevronDown :size="14" :class="{ 'is-expanded': expanded }" /></button>
+      </div>
+      <div class="ollama-card__summary" @click.stop>
+        <span>{{ targetAccessSummary }}</span>
+        <span>{{ targetStorageSummary }}</span>
       </div>
     </div>
 
-    <div class="ollama-runtime" data-ollama-runtime :data-ollama-runtime-mode="targetMode">
-      <div class="ollama-runtime__head"><div class="ollama-runtime__title"><b>连接方式</b><span>由当前后端访问 Ollama，模型文件保存在目标设备。</span></div><span class="ollama-runtime__effective">{{ remoteBackend ? '云端后端发起请求' : '本机后端发起请求' }}</span></div>
-      <div class="ollama-runtime__options" role="radiogroup" aria-label="Ollama 连接方式"><button v-for="mode in (['default', 'custom'] as const)" :key="mode" class="ollama-runtime__option" :class="{ 'is-active': targetMode === mode }" role="radio" :aria-checked="targetMode === mode" :disabled="targetSaving" @click="selectTargetMode(mode)">{{ mode === 'default' ? '默认地址' : '自定义地址' }}</button></div>
-      <div class="ollama-runtime__hint">{{ targetHint }}</div>
-      <div v-if="targetMode === 'custom'" class="ollama-runtime__custom"><div class="provider-config-field"><label for="ollamaCustomUrl">Ollama 服务地址</label><span class="provider-clearable"><input id="ollamaCustomUrl" v-model="targetAddress" class="minput" spellcheck="false" placeholder="http://192.168.1.20:11434" :disabled="targetSaving" @change="testTarget"><button class="provider-clear-button" aria-label="清除 Ollama 服务地址" @click="targetAddress = ''">×</button></span></div><button class="btn btn-test" :disabled="targetSaving || detecting" @click="testTarget">{{ detecting ? '测试中…' : '测试连接' }}</button><p class="ollama-runtime__custom-note">{{ remoteBackend ? '填写云端后端可访问的地址。127.0.0.1 指后端服务器；访问此设备需使用其可达网络地址。' : '填写本机后端可访问的 Ollama 地址，可使用其他端口或设备。' }}</p></div>
-    </div>
+    <div v-show="expanded" id="ollamaProviderDetails" class="ollama-card__details">
+      <div class="ollama-runtime" data-ollama-runtime :data-ollama-runtime-mode="targetMode">
+        <div class="ollama-runtime__head"><b>连接方式</b></div>
+        <div class="ollama-runtime__options" role="radiogroup" aria-label="Ollama 连接方式">
+          <button v-for="mode in (['default', 'custom'] as const)" :key="mode" type="button"
+            class="ollama-runtime__option" :class="{ 'is-active': targetMode === mode }"
+            role="radio" :aria-checked="targetMode === mode" :disabled="targetSaving"
+            @click="selectTargetMode(mode)">{{ mode === 'default' ? '默认地址' : '自定义地址' }}</button>
+        </div>
+        <div class="ollama-runtime__custom" :class="{ 'ollama-runtime__custom--default': targetMode === 'default' }">
+          <div class="provider-config-field">
+            <label for="ollamaCustomUrl">访问目标</label>
+            <span class="provider-clearable">
+              <!-- 默认地址只读而非禁用，保持键盘聚焦、文本选择与复制。 -->
+              <input id="ollamaCustomUrl" v-model="targetInputAddress" class="minput"
+                spellcheck="false" placeholder="http://192.168.1.20:11434"
+                :readonly="targetMode === 'default'" :disabled="targetMode === 'custom' && targetSaving"
+                @change="targetMode === 'custom' && testTarget()">
+              <button v-if="targetMode === 'custom' && targetAddress" type="button"
+                class="provider-clear-button" aria-label="清除 Ollama 服务地址"
+                :disabled="targetSaving" @click="targetAddress = ''">×</button>
+            </span>
+          </div>
+          <button v-if="targetMode === 'custom'" class="btn btn-test"
+            :disabled="targetSaving || detecting" @click="testTarget">{{ detecting ? '测试中…' : '测试连接' }}</button>
+          <p class="ollama-runtime__custom-note">{{ targetNote }}</p>
+        </div>
+      </div>
+      <div v-if="status?.version || state === 'associated'" class="ollama-card__model-heading">
+        <span v-if="status?.version" class="ollama-card__meta">自托管 · {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} · {{ status.model_count }} {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}</span>
+        <button
+          v-if="state === 'associated'"
+          class="ollama-card__refresh ollama-card__provider-toggle"
+          :title="hasOllamaProvider ? t('settings.llm.enabled', '已启用') : t('settings.llm.disabled', '已禁用')"
+          @click.stop="toggleOllamaProvider"
+        ><Power :size="13" :class="hasOllamaProvider ? 'ollama-card__power--on' : 'ollama-card__power--off'" /></button>
+      </div>
     <!-- Body -->
     <Transition v-if="!targetDirty" name="ollama-body" mode="out-in">
       <!-- Detecting -->
@@ -1059,7 +1093,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
         <div v-if="status.models?.length" class="ollama-card__models">
           <div v-for="m in status.models" :key="m.name" class="ollama-card__model">
             <div class="ollama-card__model-left">
-              <span class="ollama-card__model-name">{{ m.name }}</span>
+              <span class="ollama-card__model-name" :title="m.name">{{ m.name }}</span>
+              <div class="ollama-card__model-caps">
               <span
                 v-for="cap in modelCaps(m)"
                 :key="cap"
@@ -1069,6 +1104,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
                 >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
                 {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
               >
+              </div>
             </div>
             <div class="ollama-card__model-right">
               <span class="ollama-card__model-meta">
@@ -1269,20 +1305,25 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
       </div>
     </Transition>
 
-    <!-- 模型驻留时长(BUG-20260710 P1):16GB 机可调短换内存;空=后端默认 30m -->
+    <!-- 驻留时长与连接字段同起点，重启仅用于应用管理的本机默认实例。 -->
     <div class="ollama-card__keepalive" data-testid="ollama-keepalive">
       <span class="ollama-card__keepalive-label">{{ t('settings.ollama.keepAliveLabel') }}</span>
-      <span class="ollama-card__keepalive-sp" />
       <HcSelect
         v-model="keepAlive"
         :options="keepAliveOptions"
         class="ollama-card__keepalive-select"
       />
+      <button v-if="managedLocal" class="btn ollama-card__restart"
+        :disabled="restarting" @click="handleRestart">
+        <Loader2 v-if="restarting" :size="13" class="ollama-card__spin" />
+        {{ restarting ? t('settings.ollama.restarting', '重启中…') : t('settings.ollama.restart', '重启 Ollama') }}
+      </button>
     </div>
 
     <!-- Footer -->
     <div class="ollama-card__footer">
       {{ t('settings.ollama.otherLocal') }}
+    </div>
     </div>
 
     <ConfirmDialog
@@ -1305,14 +1346,17 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 <style scoped>
 .ollama-card {
   border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-lg);
+  border-radius: 16px;
   background: var(--hc-bg-card);
-  transition: border-color 0.3s;
-  margin-bottom: 12px;
+  backdrop-filter: saturate(160%) blur(16px);
+  -webkit-backdrop-filter: saturate(160%) blur(16px);
+  padding: 14px 20px;
+  transition: border-color 0.2s;
+  margin-bottom: 0;
 }
 
-.ollama-card--associated {
-  border-color: color-mix(in srgb, var(--hc-success) 25%, var(--hc-border));
+.ollama-card:hover {
+  border-color: var(--hc-border-hl);
 }
 
 .ollama-card--error {
@@ -1325,27 +1369,30 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 /* ─── Header ────────────────────────────────────────── */
 .ollama-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-}
-
-.ollama-card__header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 12px;
+  cursor: pointer;
 }
 
 .ollama-card__icon {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
   color: var(--hc-text-muted);
 }
 
 .ollama-card__title {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1.4;
   color: var(--hc-text-primary);
   text-decoration: none;
   transition: color 0.15s;
@@ -1356,39 +1403,93 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 }
 
 .ollama-card__title-link {
-  display: inline;
-  margin-left: 3px;
-  opacity: 0.4;
-  vertical-align: -1px;
-  transition: opacity 0.15s;
+  display: grid;
+  place-items: center;
+  color: var(--hc-text-muted);
 }
 
-.ollama-card__title-link svg {
-  vertical-align: -1px;
-}
-
-.ollama-card__title:hover .ollama-card__title-link {
-  opacity: 0.8;
+.ollama-card__title-link:hover {
+  color: var(--hc-accent);
 }
 
 .ollama-card__header-right {
+  grid-column: 3;
+  grid-row: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
+}
+
+.ollama-card__summary {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.ollama-card__expand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+}
+
+.ollama-card__expand:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-accent);
+}
+
+.ollama-card__expand .is-expanded {
+  transform: rotate(180deg);
+}
+
+.ollama-card__expand:focus-visible,
+.ollama-card__refresh:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+}
+
+.ollama-card__details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--hc-border);
 }
 
 /* ─── Badge ─────────────────────────────────────────── */
 .ollama-card__badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: 6px;
+  font-size: 12px;
   font-weight: 500;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
+  white-space: nowrap;
   transition:
     background 0.2s,
     color 0.2s;
+}
+
+.ollama-card__badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .ollama-card__badge--detecting,
@@ -1417,8 +1518,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: none;
   border: 1px solid transparent;
   cursor: pointer;
@@ -1472,7 +1574,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 /* ─── Body ──────────────────────────────────────────── */
 .ollama-card__body {
-  padding: 0 14px 12px;
+  padding: 0;
 }
 
 .ollama-card__hint {
@@ -1487,9 +1589,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  border-radius: var(--hc-radius-sm);
-  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 18px;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid var(--hc-border);
@@ -1631,56 +1734,78 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 /* ─── Header info ──────────────────────────────────── */
 .ollama-card__header-info {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 .ollama-card__meta {
-  font-size: 11px;
-  color: var(--hc-text-muted);
-  margin-top: 1px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  line-height: 1.5;
 }
-.ollama-card__header-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--hc-border-subtle, var(--hc-border));
-  margin: 0 2px;
+.ollama-card__model-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ollama-card__provider-toggle {
+  margin-left: auto;
   flex-shrink: 0;
 }
 
 /* ─── Associated details ────────────────────────────── */
 
-.ollama-card__model {
+.ollama-card__models {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 0;
-  font-size: 12px;
-  border-bottom: 1px solid var(--hc-border-subtle);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--hc-bg-input);
 }
 
-.ollama-card__model:last-child {
-  border-bottom: none;
+.ollama-card__model {
+  display: grid;
+  grid-template-columns: minmax(112px, 1.05fr) minmax(172px, 1.45fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.ollama-card__model + .ollama-card__model {
+  border-top: 1px solid var(--hc-border-subtle, var(--hc-border));
 }
 
 .ollama-card__model-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+  display: contents;
 }
 
 .ollama-card__model-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  display: contents;
 }
 
 .ollama-card__model-name {
-  font-family: 'SF Mono', ui-monospace, monospace;
-  font-weight: 500;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--hc-text-primary);
+}
+
+.ollama-card__model-caps {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
 }
 
 .ollama-card__cap {
@@ -1689,9 +1814,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   gap: 2px;
   padding: 1px 5px;
   border-radius: 3px;
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 500;
-  margin-left: 4px;
   white-space: nowrap;
 }
 
@@ -1730,6 +1854,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 }
 
 .ollama-card__model-status {
+  grid-column: 3;
+  grid-row: 1;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1803,14 +1929,22 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 }
 
 .ollama-card__model-meta {
-  color: var(--hc-text-muted);
-  font-size: 11px;
+  grid-column: 4;
+  grid-row: 1;
+  white-space: nowrap;
+  color: var(--hc-text-secondary);
+  font-size: 11.5px;
 }
 
 .ollama-card__model-actions {
+  grid-column: 5;
+  grid-row: 1;
   display: flex;
-  gap: 2px;
-  opacity: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+  opacity: 1;
   transition: opacity 0.12s;
   flex-shrink: 0;
 }
@@ -1819,11 +1953,12 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 }
 
 .ollama-card__model-btn {
-  padding: 2px 8px;
-  font-size: 11px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
-  background: transparent;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border: .5px solid var(--hc-border);
+  border-radius: 8px;
+  background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
   cursor: pointer;
   transition:
@@ -1857,16 +1992,19 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 }
 
 .ollama-card__model-btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  background: var(--hc-bg-hover);
   color: var(--hc-error);
-  border-color: color-mix(in srgb, var(--hc-error) 30%, var(--hc-border));
+  border-color: transparent;
+}
+
+.ollama-card__model-btn--danger {
+  background: transparent;
+  border-color: transparent;
 }
 
 /* ─── Pull Model ───────────────────────────────────── */
 .ollama-card__pull {
   margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--hc-border-subtle);
 }
 
 .ollama-card__pull-input {
@@ -1877,11 +2015,12 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 .ollama-card__pull-field {
   width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
-  font-size: 12px;
-  font-family: 'SF Mono', ui-monospace, monospace;
+  min-width: 0;
+  padding: 8px 12px;
+  border: .5px solid var(--hc-border);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
   background: var(--hc-bg-input);
   color: var(--hc-text-primary);
   outline: none;
@@ -1890,6 +2029,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 .ollama-card__pull-field:focus {
   border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
 
 .ollama-card__pull-field--error {
@@ -1924,6 +2064,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 .ollama-card__pull-field-wrap {
   position: relative;
   flex: 1;
+  min-width: 0;
 }
 
 .ollama-card__model-dropdown {
@@ -2083,10 +2224,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
 /* ─── Footer ────────────────────────────────────────── */
 .ollama-card__footer {
-  font-size: 11px;
-  color: var(--hc-text-muted);
+  font-size: 12px;
+  color: var(--hc-text-secondary);
   border-top: 1px solid var(--hc-border-subtle);
-  padding: 8px 14px;
+  padding: 8px 0 0;
   line-height: 1.5;
 }
 
@@ -2108,46 +2249,187 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   transform: translateY(4px);
 }
 .ollama-card__keepalive {
-  display: flex;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 360px) auto;
+  justify-content: start;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-top: 0.5px solid var(--hc-border);
+  gap: 16px;
+  min-height: 48px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hc-border);
 }
 .ollama-card__keepalive-label {
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--hc-text-primary);
 }
-.ollama-card__keepalive-sp {
-  flex: 1;
-}
 .ollama-card__keepalive-select {
-  width: 150px;
+  width: 100%;
+  min-width: 0;
 }
 </style>
 
 <style scoped>
-  .ollama-runtime{display:flex;flex-direction:column;gap:9px;margin:12px 0 10px;padding:12px;border:1px solid var(--hc-border);border-radius:12px;background:var(--hc-bg-input)}
-  .ollama-runtime__head{display:flex;align-items:flex-start;gap:10px;min-width:0}
-  .ollama-runtime__title{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
-  .ollama-runtime__title b{font-size:12.5px;color:var(--hc-text-primary)}
-  .ollama-runtime__title span{color:var(--hc-text-secondary);font-size:12px;line-height:1.5}
-  .ollama-runtime__effective{flex:none;padding:3px 8px;border-radius:7px;background:var(--hc-accent-subtle);color:var(--hc-accent);font-size:10.5px;font-weight:650;white-space:nowrap}
-  .ollama-runtime__options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-  .ollama-runtime__option{min-width:0;min-height:34px;padding:7px 8px;border:1px solid var(--hc-border);border-radius:9px;background:var(--hc-bg-card);color:var(--hc-text-secondary);font:inherit;font-size:11.5px;cursor:pointer;transition:border-color .16s,background .16s,color .16s,box-shadow .16s}
-  .ollama-runtime__option:hover{border-color:var(--hc-border-hl);background:var(--hc-bg-hover);color:var(--hc-text-primary)}
-  .ollama-runtime__option.is-active{border-color:var(--hc-accent);background:var(--hc-accent-subtle);color:var(--hc-accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--hc-accent) 15%,transparent)}
-  .ollama-runtime__option:focus-visible{outline:2px solid var(--hc-accent);outline-offset:2px}
-  .ollama-runtime__hint{color:var(--hc-text-secondary);font-size:12px;line-height:1.6;white-space:pre-line}
-  .ollama-runtime__custom{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:6px 8px;padding-top:9px;border-top:1px solid var(--hc-border-subtle,var(--hc-border))}
-  .ollama-runtime__custom[hidden]{display:none}
-  .ollama-runtime__custom .provider-config-field{min-width:0}
-  .ollama-runtime__custom .btn{height:34px;white-space:nowrap}
-  .ollama-runtime__custom-note{grid-column:1/-1;margin:0;color:var(--hc-text-secondary);font-size:12px;line-height:1.6}
-  @media (max-width:720px){.ollama-runtime__options{grid-template-columns:1fr}.ollama-runtime__custom{grid-template-columns:1fr}.ollama-runtime__custom .btn{width:100%}}
-  @media (prefers-reduced-motion:reduce){.ollama-runtime__option{transition:none}}
-
-.provider-config-field{display:flex;flex-direction:column;gap:6px;font-size:12px}.provider-clearable{display:flex;align-items:center;position:relative}.provider-clearable .minput{width:100%;padding-right:28px}.provider-clear-button{position:absolute;right:5px;border:0;background:transparent;color:var(--hc-text-muted)}
+.ollama-runtime {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+}
+.ollama-runtime__head b {
+  font-size: 13px;
+  color: var(--hc-text-primary);
+}
+.ollama-runtime__options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-self: start;
+  width: 360px;
+  max-width: 100%;
+  padding: 2px;
+  border: 1px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+}
+.ollama-runtime__option {
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .16s, color .16s;
+}
+.ollama-runtime__option:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+.ollama-runtime__option.is-active {
+  background: #2879b9;
+  color: #fff;
+}
+.ollama-runtime__option:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+}
+.ollama-runtime__custom {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 16px;
+}
+.ollama-runtime__custom--default {
+  grid-template-columns: 170px minmax(0, 1fr);
+}
+.provider-config-field {
+  display: contents;
+}
+.provider-config-field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+}
+.provider-clearable {
+  display: flex;
+  align-items: center;
+  position: relative;
+  min-width: 0;
+}
+.provider-clearable .minput {
+  width: 100%;
+  padding-right: 28px;
+}
+.provider-clear-button {
+  position: absolute;
+  right: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+}
+.ollama-runtime__custom .btn {
+  height: 34px;
+  white-space: nowrap;
+}
+.ollama-runtime__custom-note {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+/* 默认字段保留选择与复制，使用中性焦点区分自定义地址的编辑态。 */
+#ollamaCustomUrl[readonly] {
+  background: #f1f3f5;
+  border-color: #c6cdd5;
+  color: var(--hc-text-primary);
+  cursor: text;
+  caret-color: transparent;
+  box-shadow: none;
+}
+#ollamaCustomUrl[readonly]:focus {
+  border-color: #687787;
+  box-shadow: 0 0 0 2px rgba(104, 119, 135, .22);
+}
+:global([data-theme="dark"] .ollama-card #ollamaCustomUrl[readonly]) {
+  background: #1b2532;
+  border-color: #475464;
+}
+:global([data-theme="dark"] .ollama-card #ollamaCustomUrl[readonly]:focus) {
+  border-color: #a8b3c2;
+  box-shadow: 0 0 0 2px rgba(168, 179, 194, .22);
+}
+:global([data-theme="light"] .ollama-card .ollama-card__badge--associated) {
+  color: #1b7e3c;
+}
+:global([data-theme="light"] .ollama-card .ollama-card__error-msg),
+:global([data-theme="light"] .ollama-card .ollama-card__model-btn--danger),
+:global([data-theme="light"] .ollama-card .ollama-card__model-btn--danger:hover:not(:disabled)) {
+  color: #c62828;
+}
+.ollama-card__restart {
+  height: 32px;
+  white-space: nowrap;
+}
+.ollama-card__action-btn--primary {
+  background: #2879b9;
+  border-color: #2879b9;
+  color: #fff;
+}
+/* 响应式沿模型页共同内容轨道切换，侧栏宽度不参与字段排版判断。 */
+@container model-settings (max-width: 620px) {
+  .ollama-card__model {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+  }
+  .ollama-card__model-name { grid-column: 1; grid-row: 1; }
+  .ollama-card__model-caps { grid-column: 1; grid-row: 2; }
+  .ollama-card__model-status { grid-column: 2; grid-row: 1; }
+  .ollama-card__model-meta { grid-column: 1; grid-row: 3; }
+  .ollama-card__model-actions { grid-column: 2; grid-row: 3; }
+  .ollama-card__model-heading { flex-wrap: wrap; }
+}
+@container model-settings (max-width: 500px) {
+  .ollama-runtime { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .ollama-runtime__options { width: 100%; margin-bottom: 8px; }
+  .ollama-runtime__custom { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .ollama-runtime__custom--default { grid-template-columns: minmax(0, 1fr); }
+  .provider-config-field label { grid-column: 1 / -1; }
+  .ollama-runtime__custom-note { grid-column: 1 / -1; }
+  .ollama-card__keepalive { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .ollama-card__keepalive-label { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ollama-runtime__option,
+  .ollama-card,
+  .ollama-card__model-actions,
+  .ollama-body-enter-active,
+  .ollama-body-leave-active { transition: none; }
+}
 </style>
 <style scoped src="./backend-service.css"></style>

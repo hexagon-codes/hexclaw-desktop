@@ -2276,6 +2276,8 @@ export default {
       modelStaleLabel: 'Removed', // TODO: verify ug
       newModelsFound: 'New models found in this sync', // TODO: verify ug
       title: 'LLM Provider',
+      modelServices: 'Model services',
+      serviceProvider: 'Provider',
       probeFailed: 'ئىقتىدار ئىزدەش مەغلۇپ بولدى، قايتا سىناڭ',
       deleteProviderFailed: 'ئۆچۈرۈش مەغلۇپ بولدى، ئەسلىگە كەلتۈرۈلدى',
       syncModelsFailed: 'مودېل تىزىملىكىنى ماسلاشتۇرۇش مەغلۇپ بولدى، ئۇلىنىشنى تەكشۈرۈڭ',

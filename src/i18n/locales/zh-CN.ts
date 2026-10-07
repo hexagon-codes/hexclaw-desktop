@@ -2176,6 +2176,8 @@ export default {
       modelStaleLabel: '已下架',
       newModelsFound: '本次同步发现新模型',
       title: 'LLM 服务商',
+      modelServices: '模型服务',
+      serviceProvider: '服务商',
       probeFailed: '能力探测失败，请重试',
       deleteProviderFailed: '删除失败，已恢复',
       syncModelsFailed: '同步模型列表失败，请检查连接',

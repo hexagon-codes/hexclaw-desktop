@@ -1,6 +1,22 @@
-import type { ModelCapability } from '@/types/settings'
+import type { ModelCapability, ModelOption } from '@/types/settings'
+import { normalizeModelReasoningControl, normalizeModelReasoningSupport } from './model-contract'
 
 export type DisplayModelCapability = ModelCapability | 'tools' | 'thinking'
+
+/** 推理标签只从精确且有效的声明派生，不进入模型 capabilities 持久化。 */
+export function displayModelCapabilities(
+  model: Pick<ModelOption, 'capabilities' | 'reasoningSupport' | 'reasoningControl'>,
+  fallback: readonly ModelCapability[] = ['text'],
+): DisplayModelCapability[] {
+  const result: DisplayModelCapability[] = [...(model.capabilities ?? fallback)]
+  if (
+    normalizeModelReasoningSupport(model.reasoningSupport) === 'supported' &&
+    normalizeModelReasoningControl(model.reasoningControl)
+  ) {
+    result.push('thinking')
+  }
+  return result
+}
 
 export const MODEL_CAPABILITY_DISPLAY: Record<
   DisplayModelCapability,
