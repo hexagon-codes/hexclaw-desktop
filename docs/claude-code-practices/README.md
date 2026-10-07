@@ -1,6 +1,6 @@
 # Claude Code 实战经验
 
-> 业余时间 × 一个人 × 6 核心仓库 × 68 万行代码，做出[河蟹 AI](https://github.com/hexagon-codes/hexclaw-desktop) 的副产品。整套"怎么用 Claude Code 做出一个能跑的产品"的工作流，沉淀在这里。
+> 这套经验来自[河蟹 AI](https://github.com/hexagon-codes/hexclaw-desktop)及其生态仓库的开发实践，记录如何用 Claude Code 完成设计、实现、验证与协作，并提供可复用的命令和模板。
 >
 > 适合分享给团队新人快速上手，也适合有经验的开发者查阅最佳实践。
 
@@ -35,7 +35,7 @@ claude-code-practices/
 │   ├── README.md                                    # 事件类型 + settings.json 配置示例
 │   ├── sensitive-file-block.sh                      # PreToolUse: 拦截 git commit 敏感文件
 │   ├── post-edit-quality.sh                         # PostToolUse: 改完文件跑 lint/typecheck
-│   └── pre-stop-verify.sh                           # Stop: 收尾前必须跑过测试
+│   └── pre-stop-verify.sh                           # Stop: 未提交变更触发测试的样本
 │
 ├── templates/                                       # 初始化项目时一次性复制的配置模板
 │   ├── USER-CLAUDE.md.template                      # ~/.claude/CLAUDE.md 全局偏好
@@ -81,16 +81,18 @@ cp docs/claude-code-practices/data/*.md    .claude/data/
 
 `data/` 下的 `api-test-cases.md` 是 `/test-dev` 运行时读的数据模板——按你项目实际接口补充用例。
 
-### Step 3：装 DevTestOps Skill（让测试流程自动触发）
+### Step 3：装 DevTestOps Skill（按任务选择验证）
 
 ```bash
 mkdir -p ~/.claude/skills
 cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
 ```
 
-装完之后，跑任何改动时 Claude 会自动按变更类型触发对应级别的测试检查，不用每次提醒。
+安装后可按实际任务和项目已有测试要求选用 Skill，结合受影响行为与证据缺口选择验证方法；纯文档、注释等不涉及逻辑变化的任务不属于该 Skill 的运行场景。复制 Skill 不代表每次改动都自动执行测试。
 
 ### Step 4：装 Hooks（挡住事故）
+
+Hook 示例依赖 Bash、`jq` 和对应项目的检查工具。复制脚本后还需在 `settings.json` 中绑定事件；按项目要求核对用途与执行范围，脚本复制本身不会启用 Hook。
 
 ```bash
 # 复制脚本
@@ -101,10 +103,12 @@ chmod +x ~/.claude/hooks/*.sh
 # 合并 settings.json — 见 hooks/README.md
 ```
 
-三个开箱即用的 hook：
+三个 Hook 样本：
 - **sensitive-file-block** — 拦截 `git commit` 敏感文件
 - **post-edit-quality** — 改完代码自动跑 lint/typecheck
-- **pre-stop-verify** — 收尾前必须跑过测试
+- **pre-stop-verify** — 有未提交变更时执行识别到的项目测试命令，失败阻止收尾
+
+`pre-stop-verify` 样本按工作区是否有改动触发，不会区分纯文档与业务变更，也不会自动选择受影响用例。仅在项目确实要求这种收尾门禁时绑定；按任务选择验证的项目不应直接启用该全量样本。Hooks 的启用不扩大任务或测试授权。
 
 ### Step 5：建立 CLAUDE.md
 
@@ -122,14 +126,14 @@ cp docs/claude-code-practices/templates/CLAUDE.md.template /path/to/your/project
 
 ## 核心理念（一分钟版本）
 
-- **设计驱动**：编码前先走完整设计阶段（Plan 模式 → 方案对比 → ADR），不做"一句话 + 秒出代码"
-- **测试闭环**：不接受 "should pass" / "probably OK"。测试跑过、grep 扫过残留才算完成
+- **设计驱动**：先明确问题、范围和验收；复杂功能比较方案并记录必要 ADR，局部修复采用有证据的最小改动
+- **验证闭环**：结论必须对应实际证据。业务改动按行为选择测试或真实链路；纯文档核对内容、链接与示例，不把搜索或构建成功当成功能验收
 - **多 Agent 协作**：Claude 写代码 / Codex 审代码 / 人类决策。交叉审查消除单模型盲区
-- **工作流 > 工具**：模型升级只抬每一步的上限，不让"要不要做设计 / 跑测试 / 交叉审查"这些问题失效
+- **工作流 > 工具**：按任务确定设计、验证与协作的必要程度，模型升级不代替结果核对
 
 > 术语定位：这套做法在业内被称为 **Agentic Engineering**——和 Karpathy 提的 Vibe coding（凭感觉让 AI 写、能跑就行）对照，强调人类编排 agent、设置质量门禁、验证输出，把 AI 生成代码纳入工程闭环。说到底：AI 可以写代码，不能替你承担工程责任。
 
-> 关于 Opus 4.7：主干 SOP 不用推倒重来，但提示词、评审门禁、测试 harness 需要随模型升级重新跑一遍回归。这些是工作流判断，跟模型能力无关；但旧的验证门槛在更强的模型上可能需要重新标定。
+> 模型升级时，按实际受影响任务评估提示词与验证方法；已有证据不足或出现行为变化时再补相关验证，不默认重跑所有项目检查。
 
 完整叙事参见公众号文章 [《河蟹 AI 背后的 Claude Code SOP：设计驱动 × 测试闭环 × 多 Agent 协作》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA)。
 
