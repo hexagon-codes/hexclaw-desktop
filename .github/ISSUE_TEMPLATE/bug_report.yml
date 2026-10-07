@@ -1,0 +1,45 @@
+name: Bug report / 问题反馈
+description: 说明版本、环境、复现步骤和实际结果。Share your version, environment, reproduction steps, and results.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提供已有信息即可；相关日志或截图请移除 API Key、访问令牌和个人数据。
+        Share the information available to you. Remove API Keys, access tokens, and personal data from any logs or screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本 / App version
+      description: 安装包版本；源码开发可注明提交或未提交改动。Release version, or the source revision and local changes.
+  - type: input
+    id: system
+    attributes:
+      label: 操作系统与架构 / Operating system and architecture
+      placeholder: macOS / Windows / Linux, version, Apple Silicon / Intel / x86_64
+  - type: dropdown
+    id: backend
+    attributes:
+      label: 使用的服务 / Active service
+      options:
+        - 本机 / Local
+        - 云端 / Cloud
+        - 不确定 / Unsure
+  - type: input
+    id: model
+    attributes:
+      label: Provider 与模型 / Provider and model
+      description: 仅模型相关问题填写，不包含凭据。For model-related issues; do not include credentials.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 说明从哪个页面或已绑定通道开始，以及发送的输入类型。Describe the page or connected channel and the input type.
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果 / Expected result
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果 / Actual result
+      description: 说明回答、图片或文件是否收到，以及出现的错误。State whether you received the response, image, or file, and any error shown.
