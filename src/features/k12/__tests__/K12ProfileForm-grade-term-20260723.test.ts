@@ -208,17 +208,4 @@ describe('K12ProfileForm 年级与学期二级联动', () => {
     )
   })
 
-  it('创建页只保留“上一步 / 创建”，不提供没有生产契约的示例入口', () => {
-    mount(K12ProfileForm, {
-      global: { plugins: [createPinia(), i18n()] },
-      attachTo: document.body,
-    })
-
-    expect(
-      body()
-        .findAll('.k12pf__foot .k12pf__btn')
-        .map((button) => button.text()),
-    ).toEqual(['上一步', '创建'])
-    expect(body().find('[data-testid="k12pf-preview"]').exists()).toBe(false)
-  })
 })

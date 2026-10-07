@@ -198,7 +198,7 @@ watch(
         class="hc-select__icon"
       />
       <span class="hc-select__label" :class="{ 'hc-select__label--placeholder': !selected }">
-        {{ displayLabel }}
+        <slot name="selected-label" :option="selected">{{ displayLabel }}</slot>
       </span>
       <ChevronDown
         :size="12"

@@ -662,6 +662,7 @@ export interface TextbookManifestPageRefDTO {
 
 export interface TextbookManifestCatalogDTO {
   subject: 'math'
+  grade_term?: string
   textbook_edition: string
   textbook_version: string
   title: string
@@ -708,6 +709,7 @@ export interface CurriculumProgressDTO {
   progress_id: string
   agent: string
   subject: 'math'
+  grade_term?: string
   revision: number
   textbook_binding_id: string
   textbook_manifest_id: string
@@ -726,9 +728,28 @@ export interface CurriculumProgressDTO {
   page_verification_status: CurriculumPageVerificationStatus
   segment_refs: string[]
   evidence_source: string
-  confirmed_at: string
-  created_at: string
-  updated_at: string
+  confirmed_at: number
+  created_at: number
+  updated_at: number
+  estimate_basis?: {
+    as_of_date: string
+    reference_term_start: string
+    reference_term_end: string
+    weight_method: string
+    evidence_receipt_hash?: string
+  }
+}
+
+export interface CurriculumProgressEstimateReq {
+  mode: 'estimate'
+  agent?: string
+  grade_term?: string
+  textbook_edition?: string
+  textbook_manifest_id?: string
+  unit_id?: string
+  lesson_id?: string
+  page_from?: number
+  page_to?: number
 }
 
 export interface CurriculumProgressResp {
@@ -772,7 +793,7 @@ export interface UpdateProfileBundleReq {
     grade_term: string
     subject_textbooks: SubjectTextbooksDTO
   }
-  curriculum_progress: {
+  curriculum_progress?: {
     subject: 'math'
     textbook_manifest_id: string
     volume: string
@@ -780,7 +801,7 @@ export interface UpdateProfileBundleReq {
     lesson_id?: string
     page_from?: number
     page_to?: number
-    evidence_source: 'parent_confirmed'
+    evidence_source: 'parent_confirmed' | 'ai_estimated'
   } | null
   weekly_practice_settings: {
     timezone: string
@@ -1031,16 +1052,17 @@ export function k12GetCurriculumCatalog(agent: string, textbookEdition: string, 
   })
 }
 
-export function k12GetCurriculumProgress(agent: string) {
+export function k12GetCurriculumProgress(agent: string | CurriculumProgressEstimateReq) {
   return apiGet<CurriculumProgressResp>(`${BASE}/curriculum-progress`, {
-    agent,
+    ...(typeof agent === 'string' ? { agent } : agent),
     subject: 'math',
   })
 }
 
-export function k12GetTextbookBindingOptions(agent: string) {
+export function k12GetTextbookBindingOptions(agent: string | { mode: 'create' }) {
   return apiGet<TextbookBindingOptionsResp>(`${BASE}/textbook-binding-options`, {
-    agent,
+    // 创建只读取当前后端所有者可用的教材候选，不要求先建立 Agent。
+    ...(typeof agent === 'string' ? { agent } : { mode: agent.mode }),
     subject: 'math',
   })
 }

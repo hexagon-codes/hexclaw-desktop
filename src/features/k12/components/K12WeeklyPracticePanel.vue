@@ -282,7 +282,8 @@ const progressLabel = computed(() => {
         ? `P${progress.verified_page_from}`
         : `P${progress.verified_page_from}–${progress.verified_page_to}`
   }
-  return pageLabel ? `${parts.join(' · ')}· ${pageLabel}` : parts.join(' · ')
+  const label = pageLabel ? `${parts.join(' · ')}· ${pageLabel}` : parts.join(' · ')
+  return progress.evidence_source === 'ai_estimated' ? `${label} · AI建议，可调整` : label
 })
 
 const compactProgressLabel = computed(() => {
@@ -304,6 +305,7 @@ const compactProgressLabel = computed(() => {
         : `P${progress.verified_page_from}–${progress.verified_page_to}`,
     )
   }
+  if (progress.evidence_source === 'ai_estimated') parts.push('AI建议，可调整')
   return parts.join(' · ')
 })
 

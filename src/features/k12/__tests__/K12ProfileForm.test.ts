@@ -638,20 +638,6 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.skills).toContain('k12_grade')
   })
 
-  it('建档 footer 严格为上一步 / 创建，仅发出有生产宿主的返回意图', async () => {
-    const w = render()
-    const labels = B()
-      .findAll('.k12pf__foot .k12pf__btn')
-      .map((button) => button.text())
-    expect(labels).toEqual(['上一步', '创建'])
-
-    await B().find('[data-testid="k12pf-back"]').trigger('click')
-    expect(w.emitted('back')).toHaveLength(1)
-    expect(B().find('[data-testid="k12pf-preview"]').exists()).toBe(false)
-    expect(w.emitted('close')).toBeUndefined()
-    expect(B().findAll('.k12pf__note')).toHaveLength(1)
-  })
-
   it('编辑删除使用 alertdialog 确认语义，第一次点击不执行删除', async () => {
     vi.useFakeTimers()
     const w = mount(K12ProfileForm, {

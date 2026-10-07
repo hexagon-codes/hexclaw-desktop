@@ -1,5 +1,6 @@
 import { apiGet, apiPost, apiPut, apiDelete } from './client'
 import type { AgentRole, AgentConfig, AgentRule } from '@/types'
+import type { UpdateProfileBundleReq } from './k12'
 
 export type { AgentRole, AgentConfig, AgentRule }
 
@@ -22,8 +23,13 @@ export function setDefaultAgent(name: string) {
   return apiPost<{ message: string; name: string }>('/api/v1/agents/default', { name })
 }
 
+/** 注册时可在同一事务初始化 K12 进度；查询与更新的 Agent 配置仍沿既有结构。 */
+export interface AgentRegistrationPayload extends AgentConfig {
+  curriculum_progress?: UpdateProfileBundleReq['curriculum_progress']
+}
+
 /** 注册 Agent */
-export function registerAgent(agent: AgentConfig) {
+export function registerAgent(agent: AgentRegistrationPayload) {
   return apiPost<{ message: string; name: string }>('/api/v1/agents', agent)
 }
 

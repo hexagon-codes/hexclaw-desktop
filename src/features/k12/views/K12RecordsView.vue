@@ -169,7 +169,7 @@ async function loadWeeklyPractice() {
   weeklyError.value = ''
   try {
     const [progressResp, settingsResp, planResp, historyResp] = await Promise.all([
-      k12GetCurriculumProgress(props.agentId),
+      k12GetCurriculumProgress({ mode: 'estimate', agent: props.agentId }),
       k12GetWeeklyPracticeSettings(props.agentId),
       k12EnsureWeeklyPracticePlan(props.agentId, weeklyPlanCommandKey()),
       k12GetWeeklyPracticeHistory(props.agentId, undefined, 20),
