@@ -46,7 +46,10 @@ function valueFor(model: AvailableChatModel): string {
 }
 const options = computed(() => {
   const result = [
-    { value: '', label: props.emptyLabel },
+    // 空状态提示只用于无候选；允许继承默认的入口仍保留合法空选项。
+    ...(!props.disableWhenEmpty || models.value.length === 0
+      ? [{ value: '', label: props.emptyLabel }]
+      : []),
     ...models.value.map((model) => ({
       value: valueFor(model),
       label:

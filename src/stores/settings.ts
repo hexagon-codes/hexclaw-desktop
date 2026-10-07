@@ -366,7 +366,8 @@ export const useSettingsStore = defineStore('settings', () => {
         const liveProviders = await restoreProviderApiKeys(
           backendToProviders(backendConfig, localProviders),
         )
-        const providers = backendContext.value?.kind === 'remote' ? liveProviders : appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
+        const remote = backendContext.value?.kind === 'remote'
+        const providers = remote ? liveProviders : appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
 
         logger.debug('Provider 配置已转换', {
           providerCount: providers.length,
@@ -374,7 +375,8 @@ export const useSettingsStore = defineStore('settings', () => {
             (provider) => provider.providerInstanceId || provider.backendKey || provider.id,
           ),
         })
-        providerSync.invalidateTransitions(config.value!.llm.providers, providers)
+        // 后端已按当前连接指纹匹配回执，不能按客户端旧配置再次撤销。
+        // 旧目录请求已在 loadConfig 开始时废止。
         runtimeProviders.value = cloneProviders(providers)
         config.value!.llm.providers = providers
         config.value!.llm.routing = {
@@ -393,8 +395,8 @@ export const useSettingsStore = defineStore('settings', () => {
         const restoredDefault = resolveLoadedDefaultSelection(
           providers,
           backendConfig,
-          config.value!.llm.defaultModel,
-          config.value!.llm.defaultProviderId ?? '',
+          remote ? '' : config.value!.llm.defaultModel,
+          remote ? '' : config.value!.llm.defaultProviderId ?? '',
         )
         config.value!.llm.defaultModel = restoredDefault.modelId
         config.value!.llm.defaultProviderId = restoredDefault.providerId
@@ -507,6 +509,15 @@ export const useSettingsStore = defineStore('settings', () => {
           liveAfterSave,
           plainConfig.llm.providers,
         )
+        // 条件合并后的默认绑定与供应商当前模型必须来自同一权威快照。
+        const restoredDefault = resolveLoadedDefaultSelection(
+          mergedAfterSave,
+          backendSnap,
+          remote ? '' : plainConfig.llm.defaultModel,
+          remote ? '' : plainConfig.llm.defaultProviderId ?? '',
+        )
+        plainConfig.llm.defaultModel = restoredDefault.modelId
+        plainConfig.llm.defaultProviderId = restoredDefault.providerId
         if (backendSnap.default_reasoning_policy !== undefined) {
           plainConfig.llm.defaultReasoningPolicy = normalizeDefaultReasoningPolicy(
             backendSnap.default_reasoning_policy,
@@ -526,6 +537,8 @@ export const useSettingsStore = defineStore('settings', () => {
           )
         }
         if (activeStillMatchesRequest) {
+          config.value!.llm.defaultModel = restoredDefault.modelId
+          config.value!.llm.defaultProviderId = restoredDefault.providerId
           runtimeProviders.value = cloneProviders(mergedAfterSave)
         }
       } catch (e) {

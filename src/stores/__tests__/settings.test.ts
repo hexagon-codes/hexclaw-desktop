@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useSettingsStore } from '../settings'
+import { getLLMConfig } from '@/api/config'
 
 // Mock API — 当前使用 @/api/config
 vi.mock('@/api/config', () => ({
   getLLMConfig: vi.fn().mockRejectedValue(new Error('no backend')),
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
   fetchProviderModels: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@/api/settings', () => ({
+  updateConfig: vi.fn().mockResolvedValue({}),
 }))
 
 describe('useSettingsStore', () => {
@@ -47,6 +52,21 @@ describe('useSettingsStore', () => {
     const provider = config.llm.providers[0]!
     config.llm.defaultProviderId = provider.id
     config.llm.defaultModel = 'gpt-4-turbo'
+    // 保存成功的用例需要服务端确认回读；加载失败仍由默认替身单独验证。
+    vi.mocked(getLLMConfig).mockResolvedValueOnce({
+      default: 'OpenAI',
+      providers: {
+        OpenAI: {
+          api_key: '********',
+          base_url: 'https://api.openai.com/v1',
+          model: 'gpt-4-turbo',
+          models: ['gpt-4-turbo'],
+          compatible: '',
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    })
     await store.saveConfig(config)
 
     expect(store.config!.llm.defaultProviderId).toBe(provider.id)
