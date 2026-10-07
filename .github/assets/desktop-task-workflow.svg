@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850" role="img" aria-labelledby="title desc" data-generator="fireworks-tech-graph" data-quality-profile="showcase">
+<title id="title">HexClaw Desktop · 从任务到交付</title><desc id="desc">桌面对话、已绑定 IM、定时任务和 Webhook 进入所选 HexClaw 服务。服务完成会话路由、检索知识和记忆、Agent 执行，按需调用配置模型、Skill、MCP 和场景包。结果持久化后通过桌面展示、IM 回传以及导出或打印交付。</desc>
+<defs><filter id="shadow" x="-10%" y="-20%" width="120%" height="140%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#9fb4c9" flood-opacity="0.22"/></filter>
+<marker id="arrow-0" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#3f8fd4"/></marker>
+<marker id="arrow-1" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#4caf7d"/></marker>
+<marker id="arrow-2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#8b6fcf"/></marker>
+<marker id="arrow-3" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#e8943a"/></marker>
+</defs>
+<rect width="1200" height="850" fill="#ffffff" data-graph-role="background"/>
+<!-- 横向泳道按职责分区，主流程使用实线，真实反馈使用虚线。 -->
+<text x="600" y="51" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="30" font-weight="700" fill="#12324c" text-anchor="middle">HexClaw Desktop · 从任务到交付</text>
+<text x="600" y="83" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="400" fill="#5f7b9c" text-anchor="middle">输入交给 HexClaw 执行，桌面与已绑定渠道呈现任务结果</text>
+<rect id="lane-0" x="40" y="120" width="1120" height="145" rx="18" fill="#f4fbff" stroke="#bcdcf3" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="164" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#3f8fd4" text-anchor="start">任务入口</text>
+<text x="64" y="193" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">交互或自动触发</text>
+<rect id="lane-1" x="40" y="290" width="1120" height="145" rx="18" fill="#f1faf4" stroke="#bfe6cf" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="334" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#4caf7d" text-anchor="start">HexClaw 执行</text>
+<text x="64" y="363" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">上下文与任务推进</text>
+<rect id="lane-2" x="40" y="460" width="1120" height="145" rx="18" fill="#f5f1fb" stroke="#d4c5ef" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="504" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#8b6fcf" text-anchor="start">模型与工具</text>
+<text x="64" y="533" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">按当前配置执行</text>
+<rect id="lane-3" x="40" y="630" width="1120" height="145" rx="18" fill="#fff7ee" stroke="#f3d7b0" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="674" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#e8943a" text-anchor="start">记录与交付</text>
+<text x="64" y="703" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">保存状态</text>
+<text x="64" y="726" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">呈现实际产物</text>
+<g id="entry" data-graph-role="node" data-node-id="entry" data-graph-bounds="250 145 830 95"><rect x="250" y="145" width="830" height="95" rx="12" fill="#ffffff" stroke="#bcdcf3" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="177" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">提交任务或触发自动化</text>
+<text x="665.0" y="202" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">桌面对话 · 已绑定 IM · 定时任务 / Webhook</text>
+</g>
+<g id="runtime" data-graph-role="node" data-node-id="runtime" data-graph-bounds="250 315 830 95"><rect x="250" y="315" width="830" height="95" rx="12" fill="#ffffff" stroke="#bfe6cf" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="347" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">所选 HexClaw 服务推进任务</text>
+<text x="665.0" y="372" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">会话与 Agent 路由 · 检索知识和记忆 · 执行任务</text>
+</g>
+<g id="capabilities" data-graph-role="node" data-node-id="capabilities" data-graph-bounds="250 485 830 95"><rect x="250" y="485" width="830" height="95" rx="12" fill="#ffffff" stroke="#d4c5ef" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="517" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">按需调用模型与能力</text>
+<text x="665.0" y="542" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">文本 / 视觉模型 · Skill · MCP · 场景包</text>
+</g>
+<g id="records" data-graph-role="node" data-node-id="records" data-graph-bounds="250 655 330 95"><rect x="250" y="655" width="330" height="95" rx="12" fill="#ffffff" stroke="#f3d7b0" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="415.0" y="687" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">保存结果与任务状态</text>
+<text x="415.0" y="712" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">会话 · 运行记录 · 产物</text>
+</g>
+<g id="output" data-graph-role="node" data-node-id="output" data-graph-bounds="720 655 360 95"><rect x="720" y="655" width="360" height="95" rx="12" fill="#ffffff" stroke="#f3d7b0" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="900.0" y="687" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">按任务交付结果</text>
+<text x="900.0" y="712" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">桌面展示 · IM 回传</text>
+<text x="900.0" y="734" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">导出 / 打印实际产物</text>
+</g>
+<path id="edge-entry-runtime-46" data-graph-role="edge" data-source="entry" data-target="runtime" d="M 665 240 L 665 315" fill="none" stroke="#3f8fd4" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-0)"/>
+<path id="edge-runtime-capabilities-47" data-graph-role="edge" data-source="runtime" data-target="capabilities" d="M 625 410 L 625 485" fill="none" stroke="#8b6fcf" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-2)"/>
+<path id="edge-capabilities-runtime-48" data-graph-role="edge" data-source="capabilities" data-target="runtime" d="M 705 485 L 705 410" fill="none" stroke="#8b6fcf" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-2)" stroke-dasharray="7 6"/>
+<path id="edge-runtime-records-49" data-graph-role="edge" data-source="runtime" data-target="records" d="M 250 362 L 225 362 L 225 702 L 250 702" fill="none" stroke="#e8943a" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-3)"/>
+<path id="edge-records-output-50" data-graph-role="edge" data-source="records" data-target="output" d="M 580 702 L 720 702" fill="none" stroke="#e8943a" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-3)"/>
+<text x="600" y="828" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="middle">实线：任务推进与交付    虚线：执行结果反馈    交付方式由任务和已绑定渠道决定</text>
+</svg>

@@ -1,600 +1,307 @@
 <div align="center">
 
-[English](README.en.md) | **中文**
+<img src=".github/assets/logo.png" alt="HexClaw" width="128">
 
-<img src=".github/assets/logo.png" alt="HexClaw Logo" width="160">
+# HexClaw Desktop
 
-# HexClaw Desktop (河蟹桌面客户端)
+**河蟹 AI 的原生桌面工作台：对话、智能体、知识、工具与自动化。**
 
-**企业级安全的个人 AI Agent 一体化桌面客户端**
+[![CI](https://github.com/hexagon-codes/hexclaw-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/hexagon-codes/hexclaw-desktop/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hexagon-codes/hexclaw-desktop?include_prereleases&sort=semver)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-[![CI](https://github.com/hexagon-codes/hexclaw-desktop/workflows/CI/badge.svg)](https://github.com/hexagon-codes/hexclaw-desktop/actions)
-[![Release](https://img.shields.io/github/v/release/hexagon-codes/hexclaw-desktop?include_prereleases)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-[![License](https://img.shields.io/github/license/hexagon-codes/hexclaw-desktop)](https://github.com/hexagon-codes/hexclaw-desktop/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/hexagon-codes/hexclaw-desktop/total)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-[![Stars](https://img.shields.io/github/stars/hexagon-codes/hexclaw-desktop?style=social)](https://github.com/hexagon-codes/hexclaw-desktop)
-
-**Built with**
-
-[![Tauri](https://img.shields.io/badge/Tauri-v2-FFC131?logo=tauri&logoColor=white)](https://v2.tauri.app)
-[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Rust](https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
-
-**Powered by**
-
-<a href="https://github.com/hexagon-codes/hexagon"><img src="https://img.shields.io/badge/🔷_Hexagon-Agent_Engine-4A90D9?style=for-the-badge" alt="Hexagon"></a>
-<a href="https://github.com/hexagon-codes/hexclaw"><img src="https://img.shields.io/badge/🦀_HexClaw-Backend-F74C00?style=for-the-badge" alt="HexClaw"></a>
-
-[**🌐 官网 hexclaw.net**](https://hexclaw.net) · [📖 在线文档](https://hexclaw.net/zh/docs/) · [⬇️ 下载](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-
-macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端依赖 · 数据完全私有
+[安装](#安装) · [首次使用](#首次使用) · [官网](https://hexclaw.net) · [使用指南](docs/guide.md) · [下载](https://github.com/hexagon-codes/hexclaw-desktop/releases) · [English](README.en.md)
 
 </div>
 
----
+HexClaw Desktop 用一个桌面应用连接 [HexClaw](https://github.com/hexagon-codes/hexclaw) Agent 服务。你可以直接使用应用管理的本机服务，也可以连接自己部署的云端服务；从桌面对话、已绑定的 IM 通道或自动化任务发起工作，由智能体调用模型、知识与工具，返回可查看、保存和交付的结果。
 
-<!-- TODO: 添加应用截图
-<p align="center">
-  <img src=".github/assets/screenshots/chat.png" alt="聊天界面" width="800" />
-</p>
--->
+应用采用 **Tauri 2 + Vue 3 + TypeScript**，本机 Agent 服务通过 Go Sidecar 运行。选择本地模型时可使用 Ollama；选择在线模型时需要对应 Provider 的网络连接和凭据。
 
-## 功能特性
+> 本 README 描述当前源码能力。已发布安装包包含对应发布版本的代码，最新源码与安装包可能存在差异。
 
-| 功能 | 说明 |
-|------|------|
-| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，GitHub 风格 Markdown（任务清单、删除线、表格）+ KaTeX 数学公式 / mhchem 化学式渲染，代码高亮，深度思考 |
-| **图片/视频生成** | 智谱 CogView-4 图片生成 + CogVideoX-2 视频生成，统一文本对话框入口（无独立 mode 按钮），生成结果落盘到 `{DataDir}/generated/` 后以 `/api/v1/files/generated/...` URL 引用（永不过期、不撑爆 SQLite），气泡内联预览 + 一直可见的下载按钮 |
-| **本地模型 (Ollama)** | 一键检测/关联本地 Ollama，自动发现已下载模型，状态机管理（检测→运行→关联），LM Studio/llama.cpp 走 OpenAI 兼容接入 |
-| **Agent 编排** | 自定义 Agent 角色/目标/背景，多 Agent 协作 (Handoff + Orchestrate + Spawn)，Agent 会议模式，角色模板库 |
-| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、确认后内联辅导要点、渐进提示、错题本/积累本/学情报告、验算徽章与入库徽章；讲解、批改和记录详情支持富文本 / 公式渲染，多孩按 Agent 实例隔离 |
-| **自主 Agent** | Budget 三维预算兜底 (token/时间/金额)，代码执行沙箱 (macOS Seatbelt/Linux Namespace/Windows 5 层隔离)，Checkpoint 长任务恢复 |
-| **工具审批** | 危险工具 WebSocket 实时审批 (ToolApprovalCard)，safe/sensitive/dangerous 三级风险分类，"始终允许"记忆 |
-| **Skill 系统** | 技能市场 + 自定义技能 + LLM 创建新 Skill (SkillWriter + 安全扫描)，Skill Chain 链式调用，依赖管理，Tool 注册与 Per-tool 权限 |
-| **MCP 协议** | Model Context Protocol 工具集成 (stdio/SSE/Streamable HTTP)，OAuth 2.0+PKCE 认证，命令白名单安全校验，一键安装+持久化，工具注解解析 |
-| **工作流画布** | 可视化拖拽编排 Agent 工作流，DAG 图执行引擎 |
-| **知识库 (RAG)** | 文档上传/解析/向量检索，支持 PDF / Markdown / TXT 等格式；Auto-RAG 自动检索知识库注入上下文 (score >= 0.35) |
-| **记忆系统** | 长期记忆 + 短期记忆 + 语义搜索，跨会话记忆持久化，VectorMemory 向量语义回忆 |
-| **工具智能** | 工具结果缓存 (LRU+TTL)，Per-tool 超时+指数退避重试，工具执行指标收集 (JSONL)，MCP 结构化日志+轮转 |
-| **安全网关** | Prompt 注入检测 / 工具输出清洗 (HTML/Unicode/LLM 分隔符) / PII 过滤 / 内容过滤 / RBAC 权限控制 / SSRF 防护 |
-| **文件操作** | Agent 可读/写/编辑 workspace 文件 (ReadSkill/WriteSkill/EditSkill)，路径校验+symlink 防护 |
-| **定时任务** | Cron 调度，周期性执行 Agent 任务 |
-| **IM 通道** | 飞书 / 钉钉 / 企微 / 微信 / Slack / Discord / Telegram，通过 IM 远程与 AI 对话 |
-| **深度研究** | 4 阶段自主调研（搜索→分析→综合→报告），基于 Hexagon Plan-and-Execute 引擎 |
-| **文档解析** | 聊天中直接上传 PDF / Word / Excel / CSV，自动提取文本作为上下文 |
-| **Webhook 通知** | 企微 / 飞书 / 钉钉机器人 Webhook 推送，任务完成自动通知 |
-| **ClawHub 技能市场** | 浏览、语义搜索 (TF-IDF)、安装社区 Skill/MCP，Hub 依赖自动解析 |
-| **首次引导** | 3 步 Welcome 向导（选 Provider → 选模型 → 测试连接），零配置门槛 |
-| **实时日志** | WebSocket 流式日志，Agent 执行链路全程追踪 |
-| **多语言** | 中文 / English / 维吾尔语 (ug-CN，含 RTL 从右到左排版)，vue-i18n 国际化 |
-| **系统托盘** | 最小化到托盘，托盘菜单快捷操作 |
-| **全局快捷键** | `⌘+Shift+H` 随时唤起 Quick Chat 窗口 |
-| **自动更新** | Tauri Updater，应用内一键升级 |
+![HexClaw Desktop 作业辅导工作台：在专属皮肤中查看带批注的作业原图](.github/assets/desktop-k12-workspace.png)
 
-## 生态链
+上图复用[官方 K12 教程](https://hexclaw.net/zh/docs/k12)的真实界面与专属皮肤。教程适用 Desktop `v0.5.0-beta.3` / HexClaw `v0.5.0-beta.1`，截图沿用 `v0.5.0-beta` 场景基线；作业素材为 **AI 生成示例 · 非真实学生作业**。
 
-```
-toolkit → ai-core → hexagon → hexclaw → hexclaw-desktop
-                                       → hexclaw-ui
-                                       → hexagon-ui
-```
+## 目录
 
-| 项目 | 定位 | 语言 |
-|------|------|------|
-| [toolkit](https://github.com/hexagon-codes/toolkit) | 通用工具箱 — 基础设施库 (日志/配置/HTTP/并发/错误链) | Go |
-| [ai-core](https://github.com/hexagon-codes/ai-core) | AI 能力底座 — LLM Provider/Embedding/向量/记忆 | Go |
-| [hexagon](https://github.com/hexagon-codes/hexagon) | 全能 AI Agent 框架 — ReAct/Plan-and-Execute/Tool 调度 | Go |
-| [hexclaw](https://github.com/hexagon-codes/hexclaw) | 河蟹后端 — Sidecar 服务 (RESTful API/RAG/Cron/安全网关) | Go |
-| [hexclaw-hub](https://github.com/hexagon-codes/hexclaw-hub) | 技能市场数据 — 在线技能目录 (`index.json` + Markdown 技能) | 数据仓库 |
-| **hexclaw-desktop** | **河蟹桌面客户端 (本仓库)** | **Rust + Vue 3** |
-| [hexclaw-ui](https://github.com/hexagon-codes/hexclaw-ui) | 河蟹 Web 端 — Web 客户端 (同时作为桌面端 UI 渲染层复用) | Vue 3 |
-| [hexagon-ui](https://github.com/hexagon-codes/hexagon-ui) | Agent 观测台 — 可观测性面板 (链路追踪/推理回放/性能分析) | Vue 3 |
-
-## 架构
-
-```
-HexClaw.app
-┌───────────────────────────────────────────────────────────────────┐
-│  Tauri Shell (Rust)                                               │
-│  窗口管理 · 系统托盘 · 原生菜单 · 全局快捷键 · 单实例 · 自动更新  │
-│  API 代理 (CORS bypass) · Sidecar 进程管理                        │
-├───────────────────────────────────────────────────────────────────┤
-│  Vue 3 前端 (WebView)                                             │
-│  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │  Chat  │ Agents │知识中心 │ 自动化 │ IM通道 │  集成   │  日志 │ │
-│  │ (默认) │        │文档|记忆│任务|Web │        │技能|MCP|P│       │ │
-│  │        │        │        │ hook    │        │         │ 设置  │ │
-│  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
-│      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
-├──────┴─────────────────┴──────────────────┴───────────────────────┤
-│  Tauri Commands (Rust → Go)                                       │
-│  check_engine_health · proxy_api_request · get_sidecar_status     │
-│  backend_chat · stream_chat · restart_sidecar · get_platform_info │
-├───────────────────────────────────────────────────────────────────┤
-│  HTTP / WebSocket  ←→  localhost:16060                            │
-├───────────────────────────────────────────────────────────────────┤
-│  hexclaw serve (Go Sidecar)                                       │
-│  Agent 引擎 · LLM 路由 · RAG · MCP · CORS · 安全网关 · Cron      │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │  Hexagon Framework  ←  ai-core (LLM/Tool/Memory)          │   │
-│  │                     ←  toolkit (Log/Config/HTTP/Concurrency)│   │
-│  └────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-设计模式与 **Docker Desktop 管理 Docker Engine** 一致 — Tauri 壳管理 Go Sidecar 进程。
-前后端通过 **Tauri IPC 代理**通信（解决 WebView CORS 限制），完全解耦。
-
-> Go Sidecar 默认监听 `localhost:16060`，可通过 hexclaw 配置文件修改端口。
-
-> 安装包内还内嵌了若干随包二进制：**Ollama**（本地模型推理）、**Pandoc + Typst**（文档渲染：Markdown → docx/pdf 等）。它们作为独立子进程被调用，对应 `src-tauri/binaries/` 下的 `ollama-bundle/`、`pandoc-*`、`typst-*`，许可证见 [THIRD_PARTY.md](THIRD_PARTY.md)。
-
-## Claude Code 开发实战 SOP
-
-这个仓库同时是"**用 Claude Code 做出一个能跑的产品**"的工作流实录。业余时间 × 一个人 × 6 核心仓库 × 68 万行代码背后的完整 SOP，已全部开源。
-
-- 📝 **公众号文章**：[《河蟹 AI 背后的 Claude Code SOP：设计驱动 × 测试闭环 × 多 Agent 协作》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) — 完整叙事 + 三条主线的具体做法
-- 📂 **开源 SOP 包**：[`docs/claude-code-practices/`](docs/claude-code-practices/) — 4 份实战手册 + 7 个可直接复制的 Claude Code 命令 + 3 个开箱即用 Hooks + DevTestOps Skill + CLAUDE.md 模板
-
-三条主线：
-
-| 主线 | 核心做法 |
-|------|---------|
-| ✏️ **设计驱动** | Plan 模式 → 多方案对比 → ADR 决策，不做"一句话 + 秒出代码" |
-| ✅ **测试闭环** | 不接受 "should pass" / "probably OK"——测试跑过、grep 扫过残留才算完成 |
-| 🤖 **多 Agent 协作** | Claude 写代码 / Codex 审代码 / 人类决策，交叉审查消除单模型盲区 |
-
-```bash
-# 一次性把整套 SOP 装进 Claude Code
-mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
-cp docs/claude-code-practices/command/*.md ~/.claude/commands/
-cp docs/claude-code-practices/data/*.md ~/.claude/data/
-cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
-cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/hooks/*.sh
-```
-
-## 技术栈
-
-| 层 | 技术 | 版本 |
-|----|------|------|
-| 桌面框架 | Tauri | v2 |
-| 前端框架 | Vue 3 (Composition API) | 3.5+ |
-| 语言 | TypeScript | 5.9+ |
-| 状态管理 | Pinia | 3.x |
-| UI 组件库 | Naive UI + 自定义设计系统 | - |
-| 样式 | Tailwind CSS | 4.x |
-| 路由 | Vue Router | 5.x |
-| 国际化 | vue-i18n (中文 / English / 维吾尔语 RTL) | 11.x |
-| 图标 | Lucide Vue | - |
-| Markdown | markdown-it + @mdit/plugin-katex + KaTeX/mhchem + Shiki (代码高亮) | - |
-| 文档解析 | pdfjs-dist + mammoth + xlsx | - |
-| 数据存储 | Tauri Store (plugin-store) + localStorage (Pinia 持久化插件)；会话/消息由后端 sidecar 持久化 | - |
-| HTTP 客户端 | ofetch (前端) / reqwest (Rust 代理) | - |
-| 构建工具 | Vite | 7.x |
-| 测试 | Vitest + @vue/test-utils | - |
-| Lint | ESLint + oxlint + Prettier | - |
-| 后端 Sidecar | hexclaw serve (Go) | Go 1.25+ |
-| Agent 框架 | Hexagon | - |
-| Rust 层 | Tauri Shell + 插件生态 | Rust 2021 edition |
+- [安装](#安装)
+- [首次使用](#首次使用)
+- [核心能力](#核心能力)
+- [运行架构](#运行架构)
+- [任务如何完成](#任务如何完成)
+- [源码开发](#源码开发)
+- [Claude Code 开发实战 SOP](#claude-code-开发实战-sop)
+- [文档与生态](#文档与生态)
+- [参与贡献](#参与贡献)
+- [联系我们](#联系我们)
+- [许可证](#许可证)
 
 ## 安装
 
-### 一键安装 (macOS)
+### 运行要求
+
+- **macOS**：当前随包的本地推理与文档渲染组件需要 macOS 14 及以上；支持 Apple Silicon 与 Intel。应用外壳配置的 macOS 11 下限不代表这些组件的兼容范围。
+- **Windows / Linux**：当前发布目标为 x86_64。Linux 发布构建使用 Ubuntu 22.04，运行环境需要满足 Tauri 的 WebKitGTK 4.1 等依赖。
+- **模型**：在线模型需要所选 Provider 的网络连接和凭据。macOS 安装包包含 Ollama；Windows 与 Linux 使用本地模型时，需要另行安装 [Ollama](https://ollama.com/download) 并下载模型。
+
+安装包以所选 [Release](https://github.com/hexagon-codes/hexclaw-desktop/releases) 的实际资产和版本要求为准，使用安装包无需 Node.js、Rust 或 Go。
+
+### macOS：一键安装（推荐）
+
+在终端运行以下命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/bb3c12ec91eec91798b67c292bc8c85c4481dc2b/install.sh | bash
 ```
 
-自动检测 CPU 架构（Apple Silicon / Intel），下载最新版并安装到 `/Applications`，无需手动处理 Gatekeeper 拦截。
+脚本自动识别 Apple Silicon / Intel，下载已公开的安装包（含预发布版），并安装到 `/Applications/HexClaw.app`。安装后从启动台打开，或运行 `open -a HexClaw`。
 
-### Homebrew (macOS)
+### macOS：Homebrew
 
 ```bash
 brew tap hexagon-codes/tap
 brew install --cask hexclaw
 ```
 
-后续升级：`brew upgrade --cask hexclaw`
-
-### GitHub Releases
-
-前往 [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) 下载对应平台安装包：
-
-| 平台 | 格式 |
-|------|------|
-| macOS (Apple Silicon) | `.dmg` |
-| macOS (Intel) | `.dmg` |
-| Windows | `.msi` / `.exe` (NSIS) |
-| Linux | `.deb` / `.AppImage` |
-
-> **macOS 用户注意**：浏览器直接下载的 `.dmg` 可能被 Gatekeeper 拦截。推荐使用上方的一键安装脚本或 Homebrew 安装，它们会自动处理 Gatekeeper 问题。
-> 如果手动下载安装，在终端执行 `xattr -cr /Applications/HexClaw.app` 即可解除拦截。
-
-### CI / 打包 / Release 流程
-
-- 本次 Desktop 版本为 `v0.5.0-beta.3`，后端源码继续固定为 `v0.5.0-beta.1`，更新内容见 [Changelog](CHANGELOG.md)。版本记录与实际 tag / Release 发布状态分别核对。
-- `main` 的 `push / PR -> CI`: 自动运行 lint、type-check、既有单测、打包门禁、web build 和 `cargo check`
-- `Actions -> Release -> Run workflow`: 在 `ref` 中指定固定提交 SHA，复用 CI 门禁并构建四平台测试安装包，产物保存在 workflow artifacts
-- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 复用同一门禁与安装包构建流程，保持 Release 为 Draft，全部平台构建成功后统一公开
-- 所有已公开版本（含 Beta）发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算两种 DMG 的 SHA256 → 推送 Cask 更新）；一键安装同样选择最新已公开版本
-
-单测使用私有 `hexclaw-docs` 中的权威原型和既有素材。仅单测 job 通过 `HEXCLAW_DOCS_READ_KEY` 只读 checkout，仓库变量 `HEXCLAW_DOCS_TEST_REF` 固定已验收的测试引用 commit；本地运行同组测试时，文档仓库与 desktop 仓库放在同一父目录。普通 CI 不调用模型、不发送 IM 消息，也不执行原生窗口操作；这些真实功能验收沿现有专用流程执行。
-
-正式发布前需要满足：
-
-- `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `src-tauri/Cargo.lock` 的根包版本和 Desktop tag 一致（当前为 `v0.5.0-beta.3`）
-- `Makefile` 的 `HEXCLAW_REF` 固定为合法后端 SemVer tag（当前为 `refs/tags/v0.5.0-beta.1`），独立于 Desktop 版号；内置 Sidecar 制品身份使用所属 Desktop 发行版号，不改变后端源码来源
-- `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
-- GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
-
-提交并推送后，可用当前提交的真实 SHA 触发测试安装包构建：
+升级已安装版本：
 
 ```bash
-DESKTOP_REF="$(git rev-parse HEAD)"
-gh workflow run release.yml -f ref="$DESKTOP_REF"
+brew upgrade --cask hexclaw
 ```
 
-> macOS 产物为 unsigned DMG，用户通过 `curl | bash` 一键安装脚本或 Homebrew 安装，自动处理 Gatekeeper。
+macOS 发行版未使用 Apple Developer ID 签名或公证。一键安装脚本与 Homebrew Cask 会处理应用安装；手动下载后遇到系统拦截时，参阅[使用指南中的 macOS 安全提示](docs/guide.md#macos-安全提示)。
 
-详细使用说明请参阅 [使用指南](docs/guide.md)（[English Guide](docs/guide.en.md)）。
+### macOS、Windows 与 Linux：安装包
 
-## 开发
+从 [GitHub Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) 选择版本和对应平台的资产：
 
-### 前置要求
+| 平台 | 架构 | 安装格式 |
+| --- | --- | --- |
+| macOS | Apple Silicon / Intel | `.dmg` |
+| Windows | x86_64 | `.exe`（NSIS） |
+| Linux | x86_64 | `.deb` / `.AppImage` |
 
-| 工具 | 版本要求 | 说明 |
-|------|---------|------|
-| Node.js | >= 20.19 或 >= 22.12 | JavaScript 运行时 |
-| pnpm | 10.x (仓库锁定 pnpm@10.30.3) | 包管理器 |
-| Rust | stable (2021 edition) | Tauri 编译 |
-| Go | >= 1.25 | Sidecar 编译 |
+发布构建覆盖上述四个目标；下载时以所选 Release 实际提供的资产为准。
 
-### 快速开始
+## 首次使用
+
+1. **选择服务。** 首次设置中选择本机服务，或填写云端 HexClaw 的服务地址和访问令牌。
+2. **确认模型。** 当前服务已有可用默认模型时可直接发起任务；未配置时再进入模型设置。在线模型填写所需凭据和地址并测试连接，本地模型确认 Ollama 与已下载模型可用，无需云端 API Key。
+3. **发起任务。** 回到“会话”页面发送消息或附件。需要专属角色时，在智能体页面创建实例；需要私有资料或外部工具时，再配置知识库、Skill、MCP 或连接。
+
+首次体验可发送：“用 Markdown 列出开源项目 README 的三项检查：快速开始、API 契约、版本一致性。”**收到完整回答，且输入区恢复可发送状态**，说明这次对话已完成。模型连接测试通过只说明连接可用，不能代替任务结果。
+
+本机服务由应用管理启动与停止。云端服务由服务器管理；服务器、模型与已绑定 IM 持续可用时，电脑关机不会停止云端任务。
+
+**两种服务分别保存自己的会话、学习记录、模型配置和连接。切换服务不会自动迁移或合并数据。** 在线模型会接收任务中发送给它的内容，数据处理方式取决于所选 Provider。
+
+### 使用作业辅导场景
+
+当前作业辅导场景面向小学。在智能体模板中创建作业辅导助手并填写孩子档案，然后进入该实例的辅导会话发送作业图片。图片任务自动推进到结果；可识别部分正常处理，无法可靠辨认的部分标注为“无法识别”。
+
+图片作业批改的完成标准是**收到可查看的带批注原图**。识题文本或处理中间态不代表批改完成；完整演示与更多截图见[官方 K12 教程](https://hexclaw.net/zh/docs/k12)。
+
+学习档案保存错题与积累，学情视图汇总学习情况，周练结合教材、课程进度和已有学习记录生成练习。当前源码支持课程进度估算，并保留手动调整的进度来源；具体教材与练习范围以服务可用资料为准。
+
+### 首次使用遇到问题
+
+| 现象 | 检查入口 |
+| --- | --- |
+| macOS 拦截手动下载的应用 | [macOS 安全提示](docs/guide.md#macos-安全提示) |
+| 服务显示未连接或引擎停止 | [服务连接排查](docs/guide.md#引擎状态红灯-engine-stopped)，分别检查本机进程或云端地址、访问令牌 |
+| 已连接但没有收到回答或产物 | [对话无响应](docs/guide.md#对话无响应)，检查当前服务的模型配置和任务日志 |
+
+## 核心能力
+
+| 能力 | 可以完成的工作 |
+| --- | --- |
+| 对话与结果展示 | 多轮对话、流式回答、附件输入、模型切换与推理参数；渲染 Markdown、代码、数学公式和化学式，查看生成文件与 Artifact。 |
+| 智能体与场景 | 管理角色、模板和默认 Agent，在“连接”中配置通道路由；通过场景包为 Agent 实例装配专属能力。 |
+| K12 作业辅导 | 为孩子建立独立档案；图片解题与批改、作文与美术点评、错题和学习积累、周练与学情报告，按任务提供批注图、练习与导出产物。 |
+| 知识与记忆 | 上传和管理文档，查看处理状态、重试失败任务，使用全文与向量检索为对话补充上下文；管理持久记忆。 |
+| 工具与集成 | 在“能力”中管理 Skill、技能市场、MCP 服务和 Prompt；让 Agent 调用已配置的外部工具与服务。 |
+| 自动化 | 创建定时任务、Webhook 与工作流，让任务按计划或事件触发。 |
+| 连接 | 管理 IM 通道、账号和数据连接器，将外部消息接入 Agent 执行链路。 |
+| 桌面体验与诊断 | 系统托盘、快捷聊天、通知、文件预览、导出与打印；查看运行日志和服务状态。 |
+
+模型可通过 OpenAI、Anthropic、Gemini、DeepSeek、Qwen 等 Provider 以及 OpenAI 兼容接口接入。Ollama 用于本地模型；具体可用模型、输入类型和工具能力取决于当前服务配置与 Provider 支持。
+
+## 运行架构
+
+![HexClaw Desktop 运行架构泳道图：桌面工作台经 Tauri 原生层连接本机 Sidecar 或云端 HexClaw，再调用模型、知识与工具](.github/assets/desktop-architecture.svg)
+
+| 层次 | 职责 |
+| --- | --- |
+| Vue 工作台 | 展示会话、智能体、知识库、自动化、连接、能力、日志和设置。 |
+| Tauri 原生宿主 | 管理窗口、托盘、通知、文件与系统操作，并承接 HTTP、SSE 和 WebSocket 传输。 |
+| 本机 HexClaw Sidecar | 在当前设备执行 Agent 与业务任务，默认使用 `localhost:16060`，由应用管理生命周期。 |
+| 云端 HexClaw 服务 | 在部署服务器执行任务和保存业务数据，桌面通过服务地址与访问令牌连接。 |
+| 模型、知识与工具 | 按任务使用配置的 Provider、检索、记忆、Skill、MCP 和场景能力。 |
+
+本机与云端使用同一套桌面任务入口。云端模式仍通过本机 Tauri 完成文件选择、预览和系统操作，但启动应用时不会启动本机 HexClaw Sidecar 或托管 Ollama；任务请求发往当前选中的云端服务。
+
+本机专属的进程管理与内部接口只适用于本机服务。模型、工具、数据连接器访问的是**执行服务所在环境**可用的资源，连接云端后不会自动获得本机文件系统或本机工具环境。
+
+本机 Provider 配置与 API Key 持久化在 `~/.hexclaw/hexclaw.yaml`，业务数据由本机服务保存。安装包同时提供 Pandoc 和 Typst，用于对应任务的文档渲染；随包组件说明见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+## 任务如何完成
+
+![HexClaw Desktop 任务泳道图：桌面、IM 或自动化入口进入会话与 Agent 执行链路，按需调用模型和工具，保存结果并交付](.github/assets/desktop-task-workflow.svg)
+
+桌面对话、已绑定 IM 和自动化提供任务入口；Agent 根据角色与任务使用知识、记忆和工具。执行状态与结果保存在当前服务，桌面呈现回答和产物，IM 任务通过对应通道回传；导出、打印等交付方式按任务能力提供。
+
+作业辅导会根据任务返回批注图、讲解、学习记录或练习文档，支持在桌面查看和通过已绑定通道接收结果。
+
+图示下载：[架构 PNG](.github/assets/desktop-architecture.png) · [任务流程 PNG](.github/assets/desktop-task-workflow.png)。
+
+## 源码开发
+
+### 环境要求
+
+| 工具 | 要求 |
+| --- | --- |
+| Node.js | `20.19.x` 及以上的 20 系列，或 `22.12.0` 及以上；CI 使用 Node.js 22。 |
+| pnpm | `10.30.3`，由 `package.json` 锁定。 |
+| Rust | `1.94.0`，由 `rust-toolchain.toml` 锁定。 |
+| Go | 1.25.13 及以上，用于编译当前主线 HexClaw Sidecar；指定其他后端版本时以其 `go.mod` 为准。 |
+| 系统工具 | Git、Make；渲染组件下载需要 Python 3 和 curl。 |
+| 平台依赖 | 按 [Tauri 2 前置要求](https://v2.tauri.app/start/prerequisites/) 安装对应系统依赖。 |
+
+### macOS 快速开始
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/hexagon-codes/hexclaw-desktop.git
 cd hexclaw-desktop
 
-# 2. 安装依赖
-make install
-# 等价于: pnpm install && cd src-tauri && cargo fetch
+pnpm install --frozen-lockfile
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.5.0-beta.1)
+# 编译 Makefile 指定版本的后端，并准备随包组件
 make sidecar
+make render-bundle
+make ollama
 
-# 本机全生态联调/装机测试：使用 ../hexclaw 和 ../go.work 中的本地最新代码
-make sidecar-local
-
-# 本机装机包：先校验本地 Go workspace，再重建 sidecar、生成 .app 和本地测试 DMG
-make package-local
-
-# 4. 启动开发模式
+# 启动 Vue 开发服务与 Tauri 桌面窗口
 make dev
 ```
 
-> **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0-beta.1` 到 `/tmp/hexclaw-gith-src` 并编译
-> - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
-> - 本机装机测试使用 `make sidecar-local`，等价于 `HEXCLAW_LOCAL_SRC=../hexclaw HEXCLAW_GOWORK=../go.work make sidecar`，会让 `ai-core`、`hexagon`、`toolkit` 走本地 Go workspace
-> - 本机完整打包使用 `make package-local`，由打包脚本校验本地 Go workspace，并从 desktop 仓库位置推导同级源码工作区；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
-> - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.2` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
-
-### Make 命令
-
-| 命令 | 说明 |
-|------|------|
-| `make dev` | 开发模式 (Vite HMR + Tauri 窗口) |
-| `make build` | 构建生产版本 |
-| `make package-local` | 校验本地 Go workspace、重建本地 sidecar、构建 `.app` 和本机测试 DMG |
-| `make build-web` | 仅构建前端 |
-| `make verify-local-deps` | 校验 `hexclaw/ai-core/hexagon/toolkit` 都解析到本地 workspace |
-| `make sidecar` | 编译 Go sidecar (当前平台) |
-| `make sidecar-local` | 使用本地 `../hexclaw` + `../go.work` 编译当前平台 sidecar |
-| `make sidecar-all` | 交叉编译所有平台 sidecar |
-| `make sidecar-all-local` | 使用本地全生态代码交叉编译所有平台 sidecar |
-| `make lint` | 代码检查 (oxlint + ESLint) |
-| `make lint-fix` | 代码检查并自动修复 |
-| `make format` | 代码格式化 (Prettier) |
-| `make type-check` | TypeScript 类型检查 |
-| `make test` | 运行单元测试 |
-| `make clean` | 清理构建产物 |
-| `make install` | 安装所有依赖 |
-
-### 项目结构
-
-```
-hexclaw-desktop/
-├── src/                          # Vue 3 前端源码
-│   ├── api/                      # API 客户端 (Tauri IPC + HTTP fallback)
-│   │   ├── client.ts             # HTTP/WS/IPC 基础客户端
-│   │   ├── chat.ts               # 聊天 API (WebSocket + HTTP 回退)
-│   │   ├── agents.ts             # Agent 管理 API
-│   │   ├── skills.ts             # Skill + ClawHub 市场 API
-│   │   ├── canvas.ts             # 工作流画布 API
-│   │   ├── mcp.ts                # MCP 协议 API
-│   │   ├── knowledge.ts          # 知识库 API
-│   │   ├── memory.ts             # 记忆系统 API
-│   │   ├── tasks.ts              # 定时任务 API
-│   │   ├── config.ts             # LLM 配置 API (Tauri 代理)
-│   │   ├── desktop.ts            # 桌面功能 API (通知/剪贴板)
-│   │   ├── im-channels.ts        # IM 通道 API (飞书/钉钉/企微等)
-│   │   ├── k12.ts                # K12 场景包 API 契约 (/api/k12/*)
-│   │   ├── team.ts               # 团队协作 API
-│   │   ├── voice.ts              # 语音 API (TTS/STT)
-│   │   ├── webhook.ts            # Webhook 通知 API
-│   │   ├── websocket.ts          # 聊天 WebSocket 客户端
-│   │   ├── logs.ts               # 日志 API + WebSocket 流
-│   │   ├── settings.ts           # 设置 API
-│   │   └── system.ts             # 系统信息 API
-│   ├── components/               # 组件
-│   │   ├── layout/               # 布局 (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
-│   │   ├── chat/                 # 聊天 (ChatInput/SessionList/MarkdownRenderer/ToolApprovalCard/BudgetPanel/AgentBadge/Interactive* 等)
-│   │   ├── settings/             # 设置 (OllamaCard/ModelManagerModal/SettingsNotification/SettingsSecurity)
-│   │   ├── artifacts/            # 产物 (ArtifactsPanel/ArtifactPreview/ArtifactCodeView/ArtifactDiffView)
-│   │   ├── inspector/            # 右侧详情 (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
-│   │   ├── canvas/               # 画布 (TemplateGallery)
-│   │   ├── channels/             # IM 通道 (AgentRoutingRules)
-│   │   ├── automation/           # 自动化 (WebhookPanel)
-│   │   ├── cron/                 # 定时任务 (CronJobConfirmCard)
-│   │   ├── logs/                 # 日志 (LogEntry/LogStats)
-│   │   └── common/               # 通用 (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary 等)
-│   ├── contracts/                # 场景扩展契约 (ViewDescriptor/RecordSchema/VerifyResult)
-│   ├── shell/                    # 领域无关 shell 扩展槽 (scenario registry/records/message badges)
-│   ├── features/                 # 场景包实现
-│   │   └── k12/                  # 作业辅导助手 (建档/辅导/错题本/辅导要点/学情)
-│   ├── views/                    # 页面视图
-│   │   ├── ChatView.vue          # AI 对话 (默认首页 · 会话/附件/Artifacts/模型切换)
-│   │   ├── AgentsView.vue        # Agent 管理 (模板/运行中/规则/会议)
-│   │   ├── KnowledgeCenterView.vue # 知识中心 (文档 + 记忆 Tab)
-│   │   ├── KnowledgeView.vue     # 知识库 (文档 CRUD/上传/搜索)
-│   │   ├── MemoryView.vue        # 记忆管理 (编辑/搜索/清空)
-│   │   ├── AutomationView.vue    # 自动化 (任务 + Webhook Tab)
-│   │   ├── TasksView.vue         # 定时任务 (Cron 管理)
-│   │   ├── CanvasView.vue        # 工作流画布 (DAG 编排)
-│   │   ├── IntegrationView.vue   # 集成 (Skills + MCP + Prompts Tab)
-│   │   ├── SkillsView.vue        # Skill 管理 + ClawHub 市场
-│   │   ├── McpView.vue           # MCP 管理 (服务器/工具/测试)
-│   │   ├── PromptsView.vue       # Prompt 库 (模板/搜索/复用)
-│   │   ├── IMChannelsView.vue    # IM 通道管理 (飞书/钉钉/企微等)
-│   │   ├── LogsView.vue          # 日志查看 (实时流/过滤/统计)
-│   │   ├── SettingsView.vue      # 设置 (LLM/安全/通知/Webhook/主题/语言)
-│   │   ├── AboutView.vue         # 关于 (独立窗口)
-│   │   ├── QuickChatView.vue     # 快捷聊天 (独立窗口)
-│   │   └── WelcomeView.vue       # 首次引导 (Provider → 模型 → 测试)
-│   ├── stores/                   # Pinia 状态管理 (thin store，业务逻辑委托 services/controllers)
-│   │   ├── app.ts                # 全局状态 (连接/侧边栏/详情面板)
-│   │   ├── chat.ts               # 聊天 (会话/消息/流式/Artifacts；消息由后端 sidecar 持久化)
-│   │   ├── agents.ts             # Agent 角色
-│   │   ├── canvas.ts             # 画布 (节点/边/工作流/运行)
-│   │   ├── logs.ts               # 日志 (WebSocket 流/过滤/统计)
-│   │   ├── settings.ts           # 设置 (LLM + 安全 + 通知, Tauri Store 持久化)
-│   │   └── plugins/persist.ts    # Pinia 持久化插件 (localStorage + 版本迁移)
-│   ├── composables/              # 组合式函数
-│   │   ├── useHexclaw.ts         # hexclaw 连接状态 + 健康检查轮询
-│   │   ├── useWebSocket.ts       # WebSocket 封装 (自动重连)
-│   │   ├── useSSE.ts             # SSE 流式请求
-│   │   ├── useShortcuts.ts       # 应用内快捷键 (⌘1~N 切页面)
-│   │   ├── useTheme.ts           # 主题 (深色/浅色/跟随系统)
-│   │   ├── useAutoUpdate.ts      # 自动更新 (Tauri updater)
-│   │   ├── useVoice.ts           # 语音 (TTS/STT/语音对话)
-│   │   ├── useValidation.ts      # 表单校验
-│   │   ├── useKeyboardNav.ts     # 键盘导航 + 焦点陷阱
-│   │   ├── usePlatform.ts        # 平台检测 (macOS/Windows/Linux)
-│   │   ├── useChatSend.ts        # 发送消息 + Auto-RAG 知识库检索
-│   │   ├── useChatActions.ts     # 聊天操作 (重发/编辑/删除等)
-│   │   ├── useCron*.ts           # Cron 解析/编译/常驻挂件
-│   │   └── useConversationAutomation.ts # 会话自动化 (自动标题等)
-│   ├── services/                 # 业务逻辑服务层
-│   │   ├── chatService.ts        # 聊天服务 (WebSocket/HTTP 发送)
-│   │   └── messageService.ts     # 消息服务 (消息构建/后端持久化)
-│   ├── i18n/                     # 国际化 (中文 zh-CN / 英文 en / 维吾尔语 ug-CN RTL)
-│   ├── router/                   # 路由 (基于 navigation.ts 动态生成，默认重定向 /chat)
-│   ├── types/                    # TypeScript 类型定义
-│   ├── utils/                    # 工具函数
-│   │   └── file-parser.ts        # 文档解析器 (PDF/Word/Excel/CSV)
-│   ├── config/                   # 前端配置
-│   │   ├── env.ts                # 环境配置
-│   │   ├── navigation.ts         # 导航注册表 (四组: home/build/connections/system)
-│   │   ├── llm-providers.ts      # LLM Provider 配置
-│   │   └── providers.ts          # Provider 元数据
-│   └── assets/                   # 静态资源 (Logo/图标/IM Logo)
-├── src-tauri/                    # Tauri (Rust) 层
-│   ├── src/
-│   │   ├── main.rs               # 入口
-│   │   ├── lib.rs                # 应用初始化 & 插件注册
-│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理/流式聊天/文件保存)
-│   │   ├── sidecar.rs            # Go Sidecar 进程管理
-│   │   ├── ollama.rs             # 内嵌 Ollama 进程管理
-│   │   ├── tray.rs               # 系统托盘
-│   │   ├── menu.rs               # macOS 原生菜单
-│   │   └── window.rs             # 窗口管理 & 全局快捷键 (⌘⇧H Quick Chat)
-│   ├── binaries/                 # 内嵌二进制 (hexclaw sidecar + pandoc + typst + ollama-bundle)
-│   ├── render-assets/            # 文档渲染资产 (reference.docx，随包打入)
-│   ├── icons/                    # 应用图标
-│   ├── capabilities/             # Tauri v2 权限配置
-│   ├── tauri.conf.json           # Tauri 配置
-│   ├── build.rs                  # Rust 构建脚本
-│   └── Cargo.toml                # Rust 依赖
-├── docs/                         # 文档
-│   ├── guide.md                  # 使用指南 (中文)
-│   ├── guide.en.md               # 使用指南 (英文)
-│   ├── updates.md                # 自动更新发布说明 (中文)
-│   ├── updates.en.md             # 自动更新发布说明 (英文)
-│   ├── overview.md               # 产品总览 (中文)
-│   ├── overview.en.md            # 产品总览 (英文)
-│   └── claude-code-practices/    # Claude Code 实战 SOP (4 手册 + 7 命令 + Hooks + DevTestOps Skill + 模板)
-├── homebrew/                     # Homebrew Cask 定义 + 更新脚本
-├── install.sh                    # macOS 一键安装脚本
-├── scripts/                      # CI/构建脚本
-├── .github/                      # GitHub CI/CD
-├── Makefile                      # 开发命令
-├── vite.config.ts                # Vite 配置
-├── vitest.config.ts              # Vitest 测试配置
-├── eslint.config.ts              # ESLint 配置
-├── tsconfig.json                 # TypeScript 配置
-├── package.json                  # Node 依赖
-├── LICENSE                       # Apache 2.0 许可证
-└── README.md
-```
-
-## 构建
-
-### 生产构建
+`make sidecar` 使用 `Makefile` 中的 `HEXCLAW_REF`，不会自动选择最新后端源码。需要使用后端最新主分支时，可显式运行：
 
 ```bash
-# 完整构建 (前端 + Tauri 打包)
-make build
-
-# 输出位置:
-#   macOS: src-tauri/target/release/bundle/macos/HexClaw.app
-#   DMG:   src-tauri/target/release/bundle/dmg/HexClaw_*.dmg
+make sidecar HEXCLAW_REF=origin/main
 ```
 
-### 指定目标平台构建
+需要指定其他后端版本时，将 `HEXCLAW_REF` 设置为对应 tag 或提交。Windows 和 Linux 的原生构建依赖及随包组件准备方式见 [Release 工作流](.github/workflows/release.yml)；上面的 `make render-bundle` 快速路径适用于 macOS。
+
+### 使用本地生态源码
+
+同时开发后端与桌面时，将 `hexclaw`、`ai-core`、`hexagon`、`toolkit` 放在桌面仓库的同级目录，并在父目录的 `go.work` 中引用这些模块，然后运行：
 
 ```bash
-# macOS Intel
-npx @tauri-apps/cli build --target x86_64-apple-darwin
-
-# macOS Apple Silicon
-npx @tauri-apps/cli build --target aarch64-apple-darwin
+make sidecar-local
+make render-bundle
+make ollama
+make dev
 ```
 
-### Sidecar 交叉编译
+`make sidecar-local` 从本地 Go workspace 构建后端，包含该工作区的已提交代码与未提交改动。修改 Go 代码后需要重新构建 Sidecar；Vue 前端在开发模式下使用 Vite 热更新。
+
+### 常用命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm dev` | 仅启动前端开发服务；需要可访问的 HexClaw 服务。 |
+| `make dev` | 启动 Tauri 桌面开发模式。 |
+| `make sidecar` | 编译指定后端版本的当前平台 Sidecar。 |
+| `make sidecar-local` | 编译同级 Go workspace 中的最新本地 Sidecar。 |
+| `pnpm type-check` | 检查 TypeScript 与 Vue 类型。 |
+| `pnpm lint` | 运行 oxlint 和 ESLint。 |
+| `pnpm build` | 类型检查并构建前端。 |
+| `make build` | 使用已准备的随包组件生成原生安装包。 |
+| `make package-local` | macOS 下基于完整本地生态 workspace 重建并生成本机安装产物。 |
+
+`make build` 默认也生成 updater 制品，需要匹配的 Tauri updater 签名密钥。仅构建本机手动安装包时，可按[本地打包说明](docs/updates.md#本地打包)在本次构建中关闭 updater 制品生成；这不修改项目默认配置或发布流程。
+
+### 代码导览
+
+| 路径 | 内容 |
+| --- | --- |
+| [`src/views/`](src/views/) | 工作台页面。 |
+| [`src/features/`](src/features/) | 场景功能与领域视图，包括 K12。 |
+| [`src/api/`](src/api/) | 服务 API 与原生传输适配。 |
+| [`src/components/`](src/components/) | 共享交互与展示组件。 |
+| [`src-tauri/src/`](src-tauri/src/) | 原生宿主、服务连接、进程管理与文件桥接。 |
+| [`release/`](release/) | 随包渲染组件与发布准备脚本。 |
+| [`.github/workflows/`](.github/workflows/) | CI 与多平台发布构建。 |
+
+## Claude Code 开发实战 SOP
+
+这个仓库同时记录了用 Claude Code 开发 HexClaw 的实际工作流。设计驱动、测试闭环与多 Agent 协作的方法，以及可复用的命令、Hooks、Skill 和模板，均已开源。
+
+- **公众号文章**：[《河蟹 AI 背后的 Claude Code SOP：设计驱动 × 测试闭环 × 多 Agent 协作》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA)，介绍开发过程与三条主线的具体做法。
+- **开源 SOP 包**：[`docs/claude-code-practices/`](docs/claude-code-practices/)，包含 4 份实战手册、7 个 Claude Code 命令、3 个 Hooks、DevTestOps Skill 和 CLAUDE.md 模板。
+
+| 主线 | 核心做法 |
+| --- | --- |
+| 设计驱动 | 先明确需求与方案，比较取舍，通过 ADR 记录设计决定。 |
+| 测试闭环 | 按实际改动选择验证方法，以运行结果和真实产物确认完成。 |
+| 多 Agent 协作 | Claude 编码、Codex 评审、人工决策，结合独立审查补充证据。 |
+
+在仓库目录中，可将 SOP 包复制到 Claude Code 的个人配置目录；文件用途和 Hooks 接入方式见 [SOP 使用说明](docs/claude-code-practices/README.md)。
 
 ```bash
-# 编译所有平台
-make sidecar-all
-
-# 或单独编译指定平台
-make sidecar-darwin-arm64    # macOS Apple Silicon
-make sidecar-darwin-amd64    # macOS Intel
-make sidecar-linux-amd64     # Linux x86_64
-make sidecar-windows-amd64   # Windows x86_64
-
-# 本机装机测试/全生态联调，优先使用本地最新 hexclaw + ai-core + hexagon + toolkit
-make sidecar-all-local
+mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
+cp docs/claude-code-practices/command/*.md ~/.claude/commands/
+cp docs/claude-code-practices/data/*.md ~/.claude/data/
+cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
+cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/
+chmod +x ~/.claude/hooks/*.sh
 ```
 
-Sidecar 二进制输出到 `src-tauri/binaries/` 目录，Tauri 打包时会自动内嵌。构建时会注入真实的 tag / commit / built 时间，方便在已安装应用里核对后端版本。
+## 文档与生态
 
-## 测试
+| 资源 | 内容 |
+| --- | --- |
+| [官网](https://hexclaw.net) | 产品介绍、安装说明与版本下载。 |
+| [在线中文文档](https://hexclaw.net/zh/docs/) / [English Docs](https://hexclaw.net/en/docs/) | 官方使用教程与功能说明。 |
+| [使用指南](docs/guide.md) | 安装、模块使用、快捷键与故障排查。 |
+| [产品总览](docs/overview.md) | 工作台模块与使用路径。 |
+| [自动更新说明](docs/updates.md) | 应用更新与发布制品要求。 |
+| [更新日志](CHANGELOG.md) | 各版本变更。 |
 
-```bash
-# 运行单元测试
-pnpm test:unit
+HexClaw 生态从通用基础库、模型接入和 Agent 框架，延伸到服务、桌面工作台与技能市场：
 
-# 或使用 Make
-make test
-```
+| 项目 | 定位与能力 | 技术 |
+| --- | --- | --- |
+| [toolkit](https://github.com/hexagon-codes/toolkit) | 通用 Go 基础库：泛型集合、并发、HTTP/SSE、缓存与配置、日志、数据库、对象存储和命令沙箱 | Go |
+| [ai-core](https://github.com/hexagon-codes/ai-core) | AI 能力底座：统一模型接入、工具调用、流式与结构化输出、模型路由、Embedding，以及图像、视频和语音 | Go |
+| [Hexagon](https://github.com/hexagon-codes/hexagon) | AI Agent 框架：工具调用、图编排、多 Agent、RAG、持久执行，以及 MCP、A2A 和 OpenTelemetry 集成 | Go |
+| [HexClaw](https://github.com/hexagon-codes/hexclaw) | 可自托管的 AI Agent 服务：多模型、工具、知识库、长期记忆与任务自动化，支持 API 和多平台 IM 接入 | Go |
+| [HexClaw Desktop](https://github.com/hexagon-codes/hexclaw-desktop)（本仓库） | AI Agent 桌面工作台：连接本机或云端 HexClaw 服务，集成对话、知识库、工具、任务自动化与 K12 作业辅导 | Tauri 2、Vue 3、TypeScript、Rust |
+| [HexClaw Hub](https://github.com/hexagon-codes/hexclaw-hub) | 技能与工具市场：Markdown 技能定义、MCP 服务目录、市场索引及生成与校验工具 | Markdown、Python |
 
-测试文件规范：
-- 测试文件与源码同目录，命名为 `*.test.ts` 或 `*.spec.ts`
-- Store 测试放在 `src/stores/__tests__/` 目录
-- 使用 Vitest + @vue/test-utils
+## 参与贡献
 
-涉及原型或图片 fixture 的测试需要同级的私有 `hexclaw-docs`；缺少参考资料属于环境缺失，不能当作功能验收通过。
+从[贡献指南](CONTRIBUTING.md)开始了解开发环境、验证范围和 Pull Request 要求。使用 [Bug 报告表单](https://github.com/hexagon-codes/hexclaw-desktop/issues/new?template=bug_report.yml)提供已有信息即可，也可以通过 [Issues](https://github.com/hexagon-codes/hexclaw-desktop/issues)讨论改进。
 
-## 常见问题
-
-### macOS 提示"无法打开"或"已损坏"
-
-推荐使用一键安装脚本或 Homebrew 安装（自动处理 Gatekeeper）：
-
-```bash
-# 方式 1：一键安装
-curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
-
-# 方式 2：Homebrew
-brew tap hexagon-codes/tap && brew install --cask hexclaw
-```
-
-如果已经手动下载了 DMG，在终端执行：
-
-```bash
-xattr -cr /Applications/HexClaw.app
-```
-
-### 侧边栏显示 "Engine stopped" 但后端已启动
-
-1. 确认 hexclaw 进程在运行: `ps aux | grep hexclaw`
-2. 确认端口监听正常: `curl http://localhost:16060/health`
-3. 如果 curl 成功但前端仍显示 stopped，检查是否是旧版本应用（重新 `make build` 并安装最新版本）
-
-### `make sidecar` 编译失败
-
-1. 确认 Go >= 1.25 已安装: `go version`
-2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta.1`
-3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
-
-### `make dev` 启动后白屏
-
-Sidecar 可能未编译或端口冲突。检查：
-1. 确认已执行 `make sidecar`
-2. 确认 `16060` 端口未被占用: `lsof -i :16060`
-
-### hexclaw 后端启动失败
-
-1. 查看错误日志: `~/.hexclaw/hexclaw.log`
-2. 直接运行 sidecar 查看输出: `./src-tauri/binaries/hexclaw-$(rustc -vV | grep host | awk '{print $2}') serve --desktop`
-3. 即使未配置 LLM API Key，hexclaw 也应该能正常启动（LLM 功能降级，基础 API 仍可用）
-
-## 贡献指南
-
-### 工作流程
-
-1. Fork 本仓库
-2. 创建功能分支: `git checkout -b feat/your-feature`
-3. 提交更改: `git commit -m "feat: 添加新功能"`
-4. 推送分支: `git push origin feat/your-feature`
-5. 创建 Pull Request
-
-### 代码规范
-
-- **格式化**: `make format` (Prettier)
-- **检查**: `make lint` (ESLint + oxlint，只检查不修改文件)
-- **类型检查**: `make type-check` (vue-tsc)
-
-### Commit Message 格式
-
-遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
-
-```
-feat: 添加新功能
-fix: 修复问题
-docs: 文档更新
-style: 代码格式调整
-refactor: 重构
-test: 测试相关
-chore: 构建/工具链
-```
-
-## 在线资源
-
-- 🌐 官网: [hexclaw.net](https://hexclaw.net)
-- 📖 中文文档: [hexclaw.net/zh/docs](https://hexclaw.net/zh/docs/)
-- 📖 English Docs: [hexclaw.net/en/docs](https://hexclaw.net/en/docs/)
-- 🐙 GitHub: [hexagon-codes/hexclaw-desktop](https://github.com/hexagon-codes/hexclaw-desktop)
-- 📝 Claude Code SOP: [《河蟹 AI 背后的 Claude Code SOP》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) · [开源 SOP 包](docs/claude-code-practices/)
+日志与截图请移除 API Key、访问令牌和个人数据。涉及图片、文件或 IM 时，请说明实际产物是否收到。
 
 ## 联系我们
 
-- 官网: [hexclaw.net](https://hexclaw.net)
-- GitHub Issues: [hexclaw-desktop/issues](https://github.com/hexagon-codes/hexclaw-desktop/issues)
-- 河蟹 AI: ai@hexclaw.net
-- 河蟹支持: support@hexclaw.net
+- 官网：[hexclaw.net](https://hexclaw.net)
+- 问题与建议：[GitHub Issues](https://github.com/hexagon-codes/hexclaw-desktop/issues)
+- 河蟹 AI：[ai@hexclaw.net](mailto:ai@hexclaw.net)
+- 河蟹支持：[support@hexclaw.net](mailto:support@hexclaw.net)
 
 ### 微信公众号
 
 关注 HexClaw 微信公众号，获取最新动态、使用教程和版本更新：
 
 <p align="center">
-  <img src=".github/assets/wechat-qrcode.jpg" alt="HexClaw 微信公众号" width="200" />
+  <img src=".github/assets/wechat-qrcode.jpg" alt="HexClaw 微信公众号二维码" width="200" />
 </p>
 
-## License
+## 许可证
 
-[Apache License 2.0](LICENSE)
+本项目采用 [Apache License 2.0](LICENSE)。随包第三方组件使用各自许可证，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。

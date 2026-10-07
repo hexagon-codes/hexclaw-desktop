@@ -1,573 +1,307 @@
 <div align="center">
 
-**English** | [中文](README.md)
-
-<img src=".github/assets/logo.png" alt="HexClaw Logo" width="160">
+<img src=".github/assets/logo.png" alt="HexClaw" width="128">
 
 # HexClaw Desktop
 
-**Enterprise-grade secure personal AI Agent all-in-one desktop client**
+**A native AI Agent workspace for conversations, agents, knowledge, tools, and automation.**
 
-[![CI](https://github.com/hexagon-codes/hexclaw-desktop/workflows/CI/badge.svg)](https://github.com/hexagon-codes/hexclaw-desktop/actions)
-[![Release](https://img.shields.io/github/v/release/hexagon-codes/hexclaw-desktop?include_prereleases)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-[![License](https://img.shields.io/github/license/hexagon-codes/hexclaw-desktop)](https://github.com/hexagon-codes/hexclaw-desktop/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/hexagon-codes/hexclaw-desktop/total)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-[![Stars](https://img.shields.io/github/stars/hexagon-codes/hexclaw-desktop?style=social)](https://github.com/hexagon-codes/hexclaw-desktop)
+[![CI](https://github.com/hexagon-codes/hexclaw-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/hexagon-codes/hexclaw-desktop/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hexagon-codes/hexclaw-desktop?include_prereleases&sort=semver)](https://github.com/hexagon-codes/hexclaw-desktop/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Built with**
-
-[![Tauri](https://img.shields.io/badge/Tauri-v2-FFC131?logo=tauri&logoColor=white)](https://v2.tauri.app)
-[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Rust](https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
-
-**Powered by**
-
-<a href="https://github.com/hexagon-codes/hexagon"><img src="https://img.shields.io/badge/🔷_Hexagon-Agent_Engine-4A90D9?style=for-the-badge" alt="Hexagon"></a>
-<a href="https://github.com/hexagon-codes/hexclaw"><img src="https://img.shields.io/badge/🦀_HexClaw-Backend-F74C00?style=for-the-badge" alt="HexClaw"></a>
-
-[**🌐 hexclaw.net**](https://hexclaw.net) · [📖 Docs](https://hexclaw.net/en/docs/) · [⬇️ Download](https://github.com/hexagon-codes/hexclaw-desktop/releases)
-
-Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud dependency · Full data privacy
+[Install](#installation) · [First use](#first-use) · [Website](https://hexclaw.net) · [User guide](docs/guide.en.md) · [Download](https://github.com/hexagon-codes/hexclaw-desktop/releases) · [中文](README.md)
 
 </div>
 
----
+HexClaw Desktop connects a desktop application to the [HexClaw](https://github.com/hexagon-codes/hexclaw) Agent service. Use the local service managed by the app, or connect to a cloud service you deploy yourself. Start tasks through desktop conversations, connected IM channels, or automation, and let agents use models, knowledge, and tools to produce results you can inspect, save, and deliver.
 
-<!-- TODO: Add screenshots
-<p align="center">
-  <img src=".github/assets/screenshots/chat.png" alt="Chat UI" width="800" />
-</p>
--->
+The app uses **Tauri 2 + Vue 3 + TypeScript**, with a Go Sidecar running the local Agent service. Ollama is available for local models; online models require network access and credentials for the selected Provider.
 
-## Features
+> This README describes the current source code. Published installers contain the code for their release, so the latest source and released packages may differ.
 
-| Feature | Description |
-|---------|-------------|
-| **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, GitHub-flavored Markdown (task lists, strikethrough, and tables) + KaTeX math / mhchem chemistry rendering, syntax highlighting, deep thinking |
-| **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, unified text-input entry (no separate mode buttons), results persisted to `{DataDir}/generated/` and referenced via `/api/v1/files/generated/...` URLs (never expire, won't bloat SQLite), inline preview + always-visible download button |
-| **Agent Orchestration** | Custom Agent roles/goals/backstory, multi-Agent collaboration, Agent conference mode, role template library |
-| **Scenario Packs / K12 Tutor** | Homework Tutor template mounted through the generic `scenarioRegistry`: child profile, default tutoring skills, photo problem recognition, progressive hints, Mistake Book / Notebook / insights, tutoring tips shown inline after recognition is confirmed, verification badges, and record chips; explanations, grading, and record details render rich text and formulas, while each child remains isolated by Agent instance |
-| **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
-| **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
-| **MCP Protocol** | Model Context Protocol tool integration, plug-and-play external tools |
-| **Knowledge Base (RAG)** | Document upload/parsing/vector retrieval, supports PDF / Markdown / TXT and more; Auto-RAG automatically retrieves knowledge base context before sending (score >= 0.35) |
-| **Memory System** | Long-term + short-term memory + semantic search, cross-session memory persistence |
-| **Scheduled Tasks** | Cron scheduling, periodic Agent task execution |
-| **Security Gateway** | Prompt injection detection / PII filtering / content filtering / RBAC access control |
-| **Team Collaboration** | *(Planned)* Multi-user workspaces, shared Agents and sessions |
-| **IM Channels** | Lark / DingTalk / WeCom / WeChat / Slack / Discord / Telegram — chat with AI remotely via IM |
-| **Deep Research** | 4-phase autonomous investigation (search → analyze → synthesize → report), powered by Hexagon Plan-and-Execute engine |
-| **Document Parsing** | Upload PDF / Word / Excel / CSV directly in chat, text auto-extracted as context; document detail view supports full content retrieval (API fetch + chunk reassembly fallback) |
-| **Webhook Notifications** | WeCom / Lark / DingTalk bot webhook push, auto-notify on task completion |
-| **ClawHub Skill Market** | Browse, search, and install OpenClaw community Skills, filter by category (coding/research/writing/data/automation) |
-| **Onboarding Wizard** | 3-step Welcome guide (choose Provider → choose model → test connection), zero-config barrier |
-| **Real-time Logs** | WebSocket streaming logs, full Agent execution chain tracing |
-| **Internationalization** | Chinese / English / Uyghur (ug-CN, with RTL right-to-left layout), vue-i18n |
-| **System Tray** | Minimize to tray, tray menu quick actions |
-| **Global Shortcut** | `⌘+Shift+H` to summon Quick Chat window anytime |
-| **Auto Update** | Tauri Updater, one-click in-app upgrade |
+![HexClaw Desktop homework workspace showing the original homework image with annotations in the K12 skin](.github/assets/desktop-k12-workspace.png)
 
-## Ecosystem
+The real interface and K12 skin are reused from the [official K12 tutorial (Chinese)](https://hexclaw.net/zh/docs/k12). The tutorial covers Desktop `v0.5.0-beta.3` / HexClaw `v0.5.0-beta.1`; its screenshots retain the `v0.5.0-beta` scenario baseline. Homework material is an **AI-generated example, not real student work**.
 
-```
-toolkit → ai-core → hexagon → hexclaw → hexclaw-desktop
-                                       → hexclaw-ui
-                                       → hexagon-ui
-```
+## Contents
 
-| Project | Role | Language |
-|---------|------|----------|
-| [toolkit](https://github.com/hexagon-codes/toolkit) | General toolbox — infrastructure library (logging/config/HTTP/concurrency/error chain) | Go |
-| [ai-core](https://github.com/hexagon-codes/ai-core) | AI capability foundation — LLM Provider/Embedding/Vector/Memory | Go |
-| [hexagon](https://github.com/hexagon-codes/hexagon) | Full-featured AI Agent framework — ReAct/Plan-and-Execute/Tool dispatch | Go |
-| [hexclaw](https://github.com/hexagon-codes/hexclaw) | HexClaw backend — Sidecar service (RESTful API/RAG/Cron/Security Gateway) | Go |
-| [hexclaw-hub](https://github.com/hexagon-codes/hexclaw-hub) | Skill marketplace data — online catalog (`index.json` + Markdown skills) | Data repo |
-| **hexclaw-desktop** | **HexClaw desktop client (this repo)** | **Rust + Vue 3** |
-| [hexclaw-ui](https://github.com/hexagon-codes/hexclaw-ui) | HexClaw Web client (also reused as desktop UI render layer) | Vue 3 |
-| [hexagon-ui](https://github.com/hexagon-codes/hexagon-ui) | Agent Observatory — observability dashboard (trace/reasoning replay/performance analysis) | Vue 3 |
-
-## Architecture
-
-```
-HexClaw.app
-┌───────────────────────────────────────────────────────────────────┐
-│  Tauri Shell (Rust)                                               │
-│  Window management · System tray · Native menu · Global shortcut  │
-│  Single instance · Auto update                                    │
-│  API proxy (CORS bypass) · Sidecar process management            │
-├───────────────────────────────────────────────────────────────────┤
-│  Vue 3 Frontend (WebView)                                         │
-│  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │  Chat  │ Agents │Knowledg│Automati│Channels│Integrat│  Logs │ │
-│  │(default)│       │Doc|Mem │Task|Web│ (IM)   │Skl|MCP|P│       │ │
-│  │        │        │        │ hook   │        │        │Setting│ │
-│  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
-│      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
-├──────┴─────────────────┴──────────────────┴───────────────────────┤
-│  Tauri Commands (Rust → Go)                                       │
-│  check_engine_health · proxy_api_request · get_sidecar_status     │
-│  backend_chat · stream_chat · restart_sidecar · get_platform_info │
-├───────────────────────────────────────────────────────────────────┤
-│  HTTP / WebSocket  ←→  localhost:16060                            │
-├───────────────────────────────────────────────────────────────────┤
-│  hexclaw serve (Go Sidecar)                                       │
-│  Agent Engine · LLM Router · RAG · MCP · CORS · Security · Cron  │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │  Hexagon Framework  ←  ai-core (LLM/Tool/Memory)          │   │
-│  │                     ←  toolkit (Log/Config/HTTP/Concurrency)│  │
-│  └────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-Same design pattern as **Docker Desktop managing Docker Engine** — the Tauri shell manages the Go Sidecar process.
-Frontend and backend communicate via **Tauri IPC proxy** (resolving WebView CORS limitations), fully decoupled.
-
-> The Go Sidecar listens on `localhost:16060` by default. Port can be changed in the hexclaw config file.
-
-> The installer also embeds a few bundled binaries: **Ollama** (local model inference) and **Pandoc + Typst** (document rendering: Markdown → docx/pdf, etc.). They run as standalone subprocesses, corresponding to `ollama-bundle/`, `pandoc-*`, and `typst-*` under `src-tauri/binaries/`. See [THIRD_PARTY.md](THIRD_PARTY.md) for licenses.
-
-## Claude Code Engineering SOP
-
-This repo is also a working log of "**how to build a shipping product with Claude Code**". The complete SOP behind *one developer × spare time × 6 core repos × 680K lines of code* is fully open-sourced.
-
-- 📝 **Article (Chinese)**: [河蟹 AI 背后的 Claude Code SOP](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) — full narrative + concrete practices for each of the three pillars
-- 📂 **Open-source SOP pack**: [`docs/claude-code-practices/`](docs/claude-code-practices/) — 4 playbooks + 7 copy-paste Claude Code commands + 3 ready-to-use Hooks + DevTestOps Skill + CLAUDE.md templates
-
-Three pillars:
-
-| Pillar | Core practice |
-|--------|---------------|
-| ✏️ **Design-driven** | Plan mode → multi-option comparison → ADR; no "one-liner prompt → instant code" |
-| ✅ **Test closed-loop** | No "should pass" / "probably OK" — only passing tests + grep-verified residuals count |
-| 🤖 **Multi-agent collaboration** | Claude writes / Codex reviews / human decides — cross-review eliminates single-model blind spots |
-
-```bash
-# Install the full SOP into Claude Code in one go
-mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
-cp docs/claude-code-practices/command/*.md ~/.claude/commands/
-cp docs/claude-code-practices/data/*.md ~/.claude/data/
-cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
-cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/hooks/*.sh
-```
-
-## Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Desktop framework | Tauri | v2 |
-| Frontend framework | Vue 3 (Composition API) | 3.5+ |
-| Language | TypeScript | 5.9+ |
-| State management | Pinia | 3.x |
-| UI component library | Naive UI + Custom design system | - |
-| Styling | Tailwind CSS | 4.x |
-| Routing | Vue Router | 5.x |
-| Internationalization | vue-i18n (Chinese / English / Uyghur RTL) | 11.x |
-| Icons | Lucide Vue | - |
-| Markdown | markdown-it + @mdit/plugin-katex + KaTeX/mhchem + Shiki (syntax highlighting) | - |
-| Document parsing | pdfjs-dist + mammoth + xlsx | - |
-| Data storage | Tauri Store (plugin-store) + localStorage (Pinia persist plugin); sessions/messages persisted by the backend sidecar | - |
-| HTTP client | ofetch (frontend) / reqwest (Rust proxy) | - |
-| Build tool | Vite | 7.x |
-| Testing | Vitest + @vue/test-utils | - |
-| Lint | ESLint + oxlint + Prettier | - |
-| Backend Sidecar | hexclaw serve (Go) | Go 1.25+ |
-| Agent framework | Hexagon | - |
-| Rust layer | Tauri Shell + plugin ecosystem | Rust 2021 edition |
+- [Installation](#installation)
+- [First use](#first-use)
+- [Core capabilities](#core-capabilities)
+- [Runtime architecture](#runtime-architecture)
+- [From task to delivery](#from-task-to-delivery)
+- [Source development](#source-development)
+- [Claude Code development SOP](#claude-code-development-sop)
+- [Documentation and ecosystem](#documentation-and-ecosystem)
+- [Contributing](#contributing)
+- [Contact](#contact)
+- [License](#license)
 
 ## Installation
 
-### One-line Install (macOS)
+### Runtime requirements
+
+- **macOS**: bundled local inference and document rendering components require macOS 14 or later; Apple Silicon and Intel are supported. The app shell's configured macOS 11 minimum does not describe compatibility for those components.
+- **Windows / Linux**: current release targets are x86_64. Linux builds use Ubuntu 22.04 and require Tauri dependencies such as WebKitGTK 4.1.
+- **Models**: online models require network access and credentials for the selected Provider. macOS installers include Ollama; Windows and Linux users need to install [Ollama](https://ollama.com/download) and download a model to use local models.
+
+Use the assets and version requirements of your selected [Release](https://github.com/hexagon-codes/hexclaw-desktop/releases). Installers do not require Node.js, Rust, or Go.
+
+### macOS: one-line install (recommended)
+
+Run the following command in your terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/bb3c12ec91eec91798b67c292bc8c85c4481dc2b/install.sh | bash
 ```
 
-Detects CPU architecture (Apple Silicon / Intel), downloads the latest release, installs to `/Applications`, and clears the Gatekeeper quarantine flag automatically.
+The script detects Apple Silicon or Intel, downloads a published installer, including prereleases, and installs it to `/Applications/HexClaw.app`. Open it from Launchpad or run `open -a HexClaw`.
 
-### Homebrew (macOS)
+### macOS: Homebrew
 
 ```bash
 brew tap hexagon-codes/tap
 brew install --cask hexclaw
 ```
 
-Upgrade later: `brew upgrade --cask hexclaw`
-
-### GitHub Releases
-
-Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to download the installer for your platform:
-
-| Platform | Format |
-|----------|--------|
-| macOS (Apple Silicon) | `.dmg` |
-| macOS (Intel) | `.dmg` |
-| Windows | `.msi` / `.exe` (NSIS) |
-| Linux | `.deb` / `.AppImage` |
-
-> **macOS users**: Browser-downloaded `.dmg` files may be blocked by Gatekeeper. Use the one-line install script or Homebrew above — they handle this automatically.
-> For manual DMG installs, run `xattr -cr /Applications/HexClaw.app` in Terminal.
-
-### CI / Packaging / Release Flow
-
-- This Desktop release uses `v0.5.0-beta.3` and keeps backend source pinned to `v0.5.0-beta.1`; see the [Changelog](CHANGELOG.md). Release notes do not establish that a tag or GitHub Release has been published.
-- `push / PR` on `main` runs lint, type-check, existing unit tests, package gates, the web build, and `cargo check` automatically
-- `Actions -> Release -> Run workflow`: set `ref` to a fixed commit SHA, reuse the CI gates, and build four-platform test installers as workflow artifacts
-- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: use the same gates and installer build flow, keep the Release as a draft, and publish it after every platform build succeeds
-- All published releases, including betas, automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes both DMG SHA256 values and pushes the Cask update); the one-line installer also selects the latest published release
-
-Unit tests use authoritative prototypes and existing fixtures from the private `hexclaw-docs` repository. Only the test job checks it out with the read-only `HEXCLAW_DOCS_READ_KEY`; the repository variable `HEXCLAW_DOCS_TEST_REF` pins the validated reference commit. For local runs, keep that repository beside the desktop repository. Routine CI does not invoke models, send IM messages, or operate native windows; those checks remain in the existing functional acceptance workflows.
-
-Before creating a release tag, make sure:
-
-- The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, along with the root package version in `src-tauri/Cargo.lock`, match the Desktop tag (currently `v0.5.0-beta.3`)
-- `HEXCLAW_REF` in `Makefile` is a fixed valid backend SemVer tag (currently `refs/tags/v0.5.0-beta.1`), independent of the Desktop version; the bundled Sidecar artifact identity uses its Desktop release version while its backend source remains pinned to that ref
-- the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
-- GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` (optional, for Tauri auto-update signing)
-
-After committing and pushing, use the current commit's actual SHA to build test installers:
+Upgrade an existing installation:
 
 ```bash
-DESKTOP_REF="$(git rev-parse HEAD)"
-gh workflow run release.yml -f ref="$DESKTOP_REF"
+brew upgrade --cask hexclaw
 ```
 
-> macOS builds are unsigned DMGs. Users install via `curl | bash` one-line script or Homebrew, which handle Gatekeeper automatically.
+macOS releases do not use Apple Developer ID signing or notarization. The installation script and Homebrew Cask handle app installation. If macOS blocks a manually downloaded app, see the [macOS guidance in the user guide](docs/guide.en.md#macos-security-warning).
 
-See the [User Guide](docs/guide.en.md) for detailed instructions.
+### macOS, Windows, and Linux: installers
 
-## Development
+Choose a release and the asset for your platform from [GitHub Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases):
 
-### Prerequisites
+| Platform | Architecture | Format |
+| --- | --- | --- |
+| macOS | Apple Silicon / Intel | `.dmg` |
+| Windows | x86_64 | `.exe` (NSIS) |
+| Linux | x86_64 | `.deb` / `.AppImage` |
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| Node.js | >= 20.19 or >= 22.12 | JavaScript runtime |
-| pnpm | 10.x (repo pins pnpm@10.30.3) | Package manager |
-| Rust | stable (2021 edition) | Required for Tauri compilation |
-| Go | >= 1.25 | Required for Sidecar compilation |
+Release builds cover these four targets; download the assets actually provided by the selected release.
 
-### Quick Start
+## First use
+
+1. **Choose a service.** Select the local service during setup, or enter the address and access token for your cloud HexClaw service.
+2. **Check the model.** Start a task directly if the active service already has a working default model; otherwise open model settings. For online models, enter the required credentials and address and test the connection. For local models, confirm that Ollama and a downloaded model are available; no cloud API Key is needed.
+3. **Start a task.** Send a message or attachment in Chat. Create an Agent instance when you need a specialized role, and configure knowledge, Skills, MCP, or connections when you need private information or external tools.
+
+Try: “List three open-source README checks in Markdown: quick start, API contracts, and version consistency.” **Receiving a complete response, with the input ready for another message**, means this conversation has completed. A successful model connection check alone does not prove task completion.
+
+The app manages startup and shutdown of the local service. The server manages the cloud service. When the server, models, and connected IM remain available, shutting down your computer does not stop cloud tasks.
+
+**Local and cloud services keep separate conversations, learning records, model settings, and connections. Switching services does not automatically migrate or merge data.** Online models receive the task content sent to them; data handling depends on the selected Provider.
+
+### Homework tutoring
+
+The current homework tutoring scenario targets primary school. Create a homework tutor from the Agent templates, complete the child profile, and send homework images in that instance's tutoring conversation. Image tasks progress automatically to their results. Recognizable content is processed normally, while content that cannot be read reliably is marked as unrecognizable.
+
+Homework-image grading is complete when you **receive and can view the original image with annotations**. Recognition text or an intermediate processing state does not indicate completed grading. See the [official K12 tutorial (Chinese)](https://hexclaw.net/zh/docs/k12) for a full walkthrough and more screenshots.
+
+Learning records retain mistakes and notes, learning insights summarize progress, and weekly practice combines textbooks, curriculum progress, and existing learning records. The current source supports curriculum progress estimates and preserves the source of manually adjusted progress. Available textbooks and exercise coverage depend on the materials available to the service.
+
+### First-use troubleshooting
+
+| Symptom | Where to check |
+| --- | --- |
+| macOS blocks a manually downloaded app | [macOS security warning](docs/guide.en.md#macos-security-warning) |
+| Service disconnected or engine stopped | [Service troubleshooting](docs/guide.en.md#engine-status-red-engine-stopped): check local processes, or the cloud address and access token |
+| Connected, but no response or output received | [Chat not responding](docs/guide.en.md#chat-not-responding): check the active service's model settings and task logs |
+
+## Core capabilities
+
+| Capability | What you can do |
+| --- | --- |
+| Conversations and results | Multi-turn conversations, streaming responses, attachments, model selection, and reasoning settings; render Markdown, code, math, and chemical formulas, and inspect generated files and Artifacts. |
+| Agents and scenarios | Manage roles, templates, and the default Agent, configure channel routing in Connections, and attach specialized capabilities to Agent instances through scenario packs. |
+| K12 homework tutoring | Create separate child profiles; solve and grade work from images, review writing and artwork, maintain mistakes and learning notes, generate weekly practice and learning reports, and receive annotated images, exercises, and exports. |
+| Knowledge and memory | Upload and manage documents, inspect processing status, retry failed tasks, retrieve context through full-text and vector search, and manage persistent memory. |
+| Tools and integrations | Manage Skills, the skill marketplace, MCP services, and Prompts in Capabilities; let agents use configured external tools and services. |
+| Automation | Create scheduled tasks, Webhooks, and workflows that run on schedules or events. |
+| Connections | Manage IM channels, accounts, and data connectors, and route external messages into Agent execution. |
+| Desktop experience and diagnostics | System tray, Quick Chat, notifications, file previews, exports, and printing; inspect runtime logs and service status. |
+
+Models can be connected through Providers such as OpenAI, Anthropic, Gemini, DeepSeek, and Qwen, as well as OpenAI-compatible APIs. Ollama supports local models. Available models, input types, and tool capabilities depend on the active service configuration and Provider support.
+
+## Runtime architecture
+
+![HexClaw Desktop architecture swimlane: the desktop workspace connects through Tauri to a local Sidecar or cloud HexClaw service, which uses models, knowledge, and tools](.github/assets/desktop-architecture.en.svg)
+
+| Layer | Responsibility |
+| --- | --- |
+| Vue workspace | Present Chat, Agents, Knowledge, Automation, Connections, Capabilities, Logs, and Settings. |
+| Tauri native host | Manage windows, the tray, notifications, files, and system operations; handle HTTP, SSE, and WebSocket transport. |
+| Local HexClaw Sidecar | Execute Agent and business tasks on the current device, using `localhost:16060` by default; the app manages its lifecycle. |
+| Cloud HexClaw service | Execute tasks and store business data on the deployed server; the desktop connects using the service address and access token. |
+| Models, knowledge, and tools | Use configured Providers, retrieval, memory, Skills, MCP, and scenario capabilities as required by the task. |
+
+Local and cloud modes share the same desktop task entry points. Cloud mode still uses the local Tauri host for file selection, previews, and system operations, but launching the app does not start a local HexClaw Sidecar or managed Ollama. Task requests go to the selected cloud service.
+
+Local process management and internal interfaces apply only to the local service. Models, tools, and data connectors access resources available in **the environment where the executing service runs**. Connecting to a cloud service does not automatically provide access to the computer's local filesystem or tool environment.
+
+Local Provider settings and API Keys are persisted in `~/.hexclaw/hexclaw.yaml`; the local service stores business data. Installers also provide Pandoc and Typst for document rendering in supported tasks. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled component details.
+
+## From task to delivery
+
+![HexClaw Desktop task swimlane: desktop conversations, IM, or automation enter Agent execution, use models and tools as needed, persist results, and deliver them](.github/assets/desktop-task-workflow.en.svg)
+
+Desktop conversations, connected IM, and automation provide task entry points. Agents use knowledge, memory, and tools according to their role and task. Execution status and results are stored by the active service. The desktop presents responses and files, IM tasks return results through their channel, and exports or printing are available where supported by the task.
+
+Homework tutoring returns annotated images, explanations, learning records, or exercise documents, depending on the task. Results can be viewed on the desktop or received through connected channels.
+
+Download the diagrams: [Architecture PNG](.github/assets/desktop-architecture.en.png) · [Task workflow PNG](.github/assets/desktop-task-workflow.en.png).
+
+## Source development
+
+### Requirements
+
+| Tool | Requirement |
+| --- | --- |
+| Node.js | Version 20 from `20.19.0` onward, or `22.12.0` and later; CI uses Node.js 22. |
+| pnpm | `10.30.3`, pinned in `package.json`. |
+| Rust | `1.94.0`, pinned in `rust-toolchain.toml`. |
+| Go | 1.25.13 or later to build the current mainline HexClaw Sidecar; use the selected backend version's `go.mod` for other versions. |
+| System tools | Git and Make; downloading rendering components also requires Python 3 and curl. |
+| Platform dependencies | Install the system dependencies listed in the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/). |
+
+### macOS quick start
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/hexagon-codes/hexclaw-desktop.git
 cd hexclaw-desktop
 
-# 2. Install dependencies
-make install
-# Equivalent to: pnpm install && cd src-tauri && cargo fetch
+pnpm install --frozen-lockfile
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.5.0-beta.1 by default)
 make sidecar
+make render-bundle
+make ollama
 
-# 4. Start development mode
 make dev
 ```
 
-> **Note**:
-> - `make sidecar` pulls `refs/tags/v0.5.0-beta.1` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
-> - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
-> - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
+The commands build the backend version selected by the Makefile, prepare bundled components, and launch the Vue development server and Tauri window.
 
-### Make Commands
-
-| Command | Description |
-|---------|-------------|
-| `make dev` | Development mode (Vite HMR + Tauri window) |
-| `make build` | Build production release |
-| `make build-web` | Build frontend only |
-| `make sidecar` | Compile Go sidecar (current platform) |
-| `make sidecar-all` | Cross-compile sidecar for all platforms |
-| `make lint` | Code linting (oxlint + ESLint) |
-| `make lint-fix` | Lint and auto-fix |
-| `make format` | Code formatting (Prettier) |
-| `make type-check` | TypeScript type checking |
-| `make test` | Run unit tests |
-| `make clean` | Clean build artifacts |
-| `make install` | Install all dependencies |
-
-### Project Structure
-
-```
-hexclaw-desktop/
-├── src/                          # Vue 3 frontend source
-│   ├── api/                      # API clients (Tauri IPC + HTTP fallback)
-│   │   ├── client.ts             # HTTP/WS/IPC base client
-│   │   ├── chat.ts               # Chat API (WebSocket + HTTP fallback)
-│   │   ├── agents.ts             # Agent management API
-│   │   ├── skills.ts             # Skill + ClawHub marketplace API
-│   │   ├── canvas.ts             # Workflow canvas API
-│   │   ├── mcp.ts                # MCP protocol API
-│   │   ├── knowledge.ts          # Knowledge base API
-│   │   ├── memory.ts             # Memory system API
-│   │   ├── tasks.ts              # Scheduled tasks API
-│   │   ├── config.ts             # LLM config API (Tauri proxy)
-│   │   ├── desktop.ts            # Desktop features API (notifications/clipboard)
-│   │   ├── im-channels.ts        # IM channel API (Lark/DingTalk/WeCom etc.)
-│   │   ├── k12.ts                # K12 scenario API contract (/api/k12/*)
-│   │   ├── team.ts               # Team collaboration API
-│   │   ├── voice.ts              # Voice API (TTS/STT)
-│   │   ├── webhook.ts            # Webhook notification API
-│   │   ├── websocket.ts          # Chat WebSocket client
-│   │   ├── logs.ts               # Logs API + WebSocket stream
-│   │   ├── settings.ts           # Settings API
-│   │   └── system.ts             # System info API
-│   ├── components/               # Components
-│   │   ├── layout/               # Layout (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
-│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/ToolApprovalCard/Interactive* etc.)
-│   │   ├── settings/             # Settings (OllamaCard/ModelManagerModal/SettingsNotification/SettingsSecurity)
-│   │   ├── artifacts/            # Artifacts (ArtifactsPanel/ArtifactPreview/CodeView/DiffView)
-│   │   ├── inspector/            # Inspector (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
-│   │   ├── canvas/               # Canvas (TemplateGallery)
-│   │   ├── channels/             # IM channels (AgentRoutingRules)
-│   │   ├── automation/           # Automation (WebhookPanel)
-│   │   ├── cron/                 # Scheduled tasks (CronJobConfirmCard)
-│   │   ├── logs/                 # Logs (LogEntry/LogStats)
-│   │   └── common/               # Shared (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary etc.)
-│   ├── contracts/                # Scenario extension contracts (ViewDescriptor/RecordSchema/VerifyResult)
-│   ├── shell/                    # Domain-neutral shell slots (scenario registry/records/message badges)
-│   ├── features/                 # Scenario-pack implementations
-│   │   └── k12/                  # Homework Tutor (profile/tutor/mistakes/tutoring-tips/insights)
-│   ├── views/                    # Page views
-│   │   ├── ChatView.vue          # AI chat (default landing · sessions/attachments/Artifacts/model switching)
-│   │   ├── AgentsView.vue        # Agent management (templates/running/rules/conference)
-│   │   ├── KnowledgeCenterView.vue # Knowledge center (Documents + Memory tabs)
-│   │   ├── KnowledgeView.vue     # Knowledge base (document CRUD/upload/search)
-│   │   ├── MemoryView.vue        # Memory management (edit/search/clear)
-│   │   ├── AutomationView.vue    # Automation (Tasks + Webhook tabs)
-│   │   ├── TasksView.vue         # Scheduled tasks (Cron management)
-│   │   ├── CanvasView.vue        # Workflow canvas (DAG orchestration)
-│   │   ├── IntegrationView.vue   # Integration (Skills + MCP + Prompts tabs)
-│   │   ├── SkillsView.vue        # Skill management + ClawHub marketplace
-│   │   ├── McpView.vue           # MCP management (servers/tools/testing)
-│   │   ├── PromptsView.vue       # Prompt library (templates/search/reuse)
-│   │   ├── IMChannelsView.vue    # IM channel management (Lark/DingTalk/WeCom etc.)
-│   │   ├── LogsView.vue          # Log viewer (real-time stream/filter/stats)
-│   │   ├── SettingsView.vue      # Settings (LLM/security/notification/webhook/theme/locale)
-│   │   ├── AboutView.vue         # About (separate window)
-│   │   ├── QuickChatView.vue     # Quick chat (separate window)
-│   │   └── WelcomeView.vue       # Onboarding wizard (Provider → model → test)
-│   ├── stores/                   # Pinia state management (thin store, business logic delegated to services/controllers)
-│   │   ├── app.ts                # Global state (connection/sidebar/detail panel)
-│   │   ├── chat.ts               # Chat (sessions/messages/streaming/Artifacts; messages persisted by backend sidecar)
-│   │   ├── agents.ts             # Agent roles
-│   │   ├── canvas.ts             # Canvas (nodes/edges/workflows/run)
-│   │   ├── logs.ts               # Logs (WebSocket stream/filter/stats)
-│   │   ├── settings.ts           # Settings (LLM + security + notification, Tauri Store persistence)
-│   │   └── plugins/persist.ts    # Pinia persist plugin (localStorage + version migration)
-│   ├── composables/              # Composable functions
-│   │   ├── useHexclaw.ts         # hexclaw connection status + health check polling
-│   │   ├── useWebSocket.ts       # WebSocket wrapper (auto-reconnect)
-│   │   ├── useSSE.ts             # SSE streaming requests
-│   │   ├── useShortcuts.ts       # In-app shortcuts (⌘1~N page switching)
-│   │   ├── useTheme.ts           # Theme (dark/light/follow system)
-│   │   ├── useAutoUpdate.ts      # Auto-update (Tauri updater)
-│   │   ├── useVoice.ts           # Voice (TTS/STT/voice chat)
-│   │   ├── useValidation.ts      # Form validation
-│   │   ├── useKeyboardNav.ts     # Keyboard navigation + focus trap
-│   │   ├── usePlatform.ts        # Platform detection (macOS/Windows/Linux)
-│   │   ├── useChatSend.ts        # Send message + Auto-RAG knowledge retrieval
-│   │   ├── useChatActions.ts     # Chat actions (resend/edit/delete etc.)
-│   │   ├── useCron*.ts           # Cron parsing/compilation/persistent widget
-│   │   └── useConversationAutomation.ts # Conversation automation (auto-title etc.)
-│   ├── services/                 # Business logic service layer
-│   │   ├── chatService.ts        # Chat service (WebSocket/HTTP send)
-│   │   └── messageService.ts     # Message service (build messages/backend persistence)
-│   ├── i18n/                     # Internationalization (Chinese zh-CN / English en / Uyghur ug-CN RTL)
-│   ├── router/                   # Router (dynamically built from navigation.ts, defaults to /chat)
-│   ├── types/                    # TypeScript type definitions
-│   ├── utils/                    # Utility functions
-│   │   └── file-parser.ts        # Document parser (PDF/Word/Excel/CSV)
-│   ├── config/                   # Frontend config
-│   │   ├── env.ts                # Environment config
-│   │   ├── navigation.ts         # Navigation registry (4 groups: home/build/connections/system)
-│   │   ├── llm-providers.ts      # LLM Provider config
-│   │   └── providers.ts          # Provider metadata
-│   └── assets/                   # Static assets (Logo/icons/IM logos)
-├── src-tauri/                    # Tauri (Rust) layer
-│   ├── src/
-│   │   ├── main.rs               # Entry point
-│   │   ├── lib.rs                # App initialization & plugin registration
-│   │   ├── commands.rs           # Tauri IPC commands (health check/API proxy/streaming chat/file save)
-│   │   ├── sidecar.rs            # Go Sidecar process management
-│   │   ├── ollama.rs             # Embedded Ollama process management
-│   │   ├── tray.rs               # System tray
-│   │   ├── menu.rs               # macOS native menu
-│   │   └── window.rs             # Window management & global shortcuts (⌘⇧H Quick Chat)
-│   ├── binaries/                 # Embedded binaries (hexclaw sidecar + pandoc + typst + ollama-bundle)
-│   ├── render-assets/            # Document render assets (reference.docx, bundled into the app)
-│   ├── icons/                    # App icons
-│   ├── capabilities/             # Tauri v2 permission config
-│   ├── tauri.conf.json           # Tauri config
-│   ├── build.rs                  # Rust build script
-│   └── Cargo.toml                # Rust dependencies
-├── docs/                         # Documentation
-│   ├── guide.md                  # User guide (Chinese)
-│   ├── guide.en.md               # User guide (English)
-│   ├── updates.md                # Auto-update release guide (Chinese)
-│   ├── updates.en.md             # Auto-update release guide (English)
-│   ├── overview.md               # Product overview (Chinese)
-│   ├── overview.en.md            # Product overview (English)
-│   └── claude-code-practices/    # Claude Code engineering SOP (4 playbooks + 7 commands + Hooks + DevTestOps Skill + templates)
-├── homebrew/                     # Homebrew Cask definition + update script
-├── install.sh                    # macOS one-line install script
-├── scripts/                      # CI/build scripts
-├── .github/                      # GitHub CI/CD
-├── Makefile                      # Dev commands
-├── vite.config.ts                # Vite config
-├── vitest.config.ts              # Vitest test config
-├── eslint.config.ts              # ESLint config
-├── tsconfig.json                 # TypeScript config
-├── package.json                  # Node dependencies
-├── LICENSE                       # Apache 2.0 license
-└── README.md
-```
-
-## Building
-
-### Production Build
+`make sidecar` uses `HEXCLAW_REF` from the `Makefile`; it does not automatically select the latest backend source. To use the latest backend main branch, run:
 
 ```bash
-# Full build (frontend + Tauri packaging)
-make build
-
-# Output locations:
-#   macOS: src-tauri/target/release/bundle/macos/HexClaw.app
-#   DMG:   src-tauri/target/release/bundle/dmg/HexClaw_*.dmg
+make sidecar HEXCLAW_REF=origin/main
 ```
 
-### Target Platform Build
+Set `HEXCLAW_REF` to a tag or commit when you need another backend version. See the [Release workflow](.github/workflows/release.yml) for Windows and Linux native build dependencies and bundled component preparation. The `make render-bundle` quick-start command above applies to macOS.
+
+### Use local ecosystem source
+
+When developing the backend and desktop together, place `hexclaw`, `ai-core`, `hexagon`, and `toolkit` beside the desktop repository, reference those modules in a `go.work` file in the parent directory, and run:
 
 ```bash
-# macOS Intel
-npx @tauri-apps/cli build --target x86_64-apple-darwin
-
-# macOS Apple Silicon
-npx @tauri-apps/cli build --target aarch64-apple-darwin
+make sidecar-local
+make render-bundle
+make ollama
+make dev
 ```
 
-### Sidecar Cross-compilation
+`make sidecar-local` builds the backend from the local Go workspace, including committed code and uncommitted changes. Rebuild the Sidecar after changing Go code. In development mode, the Vue frontend uses Vite hot updates.
+
+### Common commands
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Start only the frontend development server; an accessible HexClaw service is required. |
+| `make dev` | Start Tauri desktop development mode. |
+| `make sidecar` | Build the selected backend version's Sidecar for the current platform. |
+| `make sidecar-local` | Build the latest local Sidecar from the sibling Go workspace. |
+| `pnpm type-check` | Check TypeScript and Vue types. |
+| `pnpm lint` | Run oxlint and ESLint. |
+| `pnpm build` | Check types and build the frontend. |
+| `make build` | Generate native installers using prepared bundled components. |
+| `make package-local` | Rebuild from the complete local ecosystem workspace and generate local installation artifacts on macOS. |
+
+`make build` also generates updater artifacts by default and requires a matching Tauri updater signing key. For a local manually installable package, follow [Local Packaging](docs/updates.en.md#local-packaging) to disable updater artifact generation for that build without changing project defaults or the release flow.
+
+### Code guide
+
+| Path | Contents |
+| --- | --- |
+| [`src/views/`](src/views/) | Workspace pages. |
+| [`src/features/`](src/features/) | Scenario features and domain views, including K12. |
+| [`src/api/`](src/api/) | Service APIs and native transport adapters. |
+| [`src/components/`](src/components/) | Shared interaction and presentation components. |
+| [`src-tauri/src/`](src-tauri/src/) | Native host, service connections, process management, and file bridging. |
+| [`release/`](release/) | Bundled rendering components and release preparation scripts. |
+| [`.github/workflows/`](.github/workflows/) | CI and multiplatform release builds. |
+
+## Claude Code development SOP
+
+This repository also documents the actual workflow used to develop HexClaw with Claude Code. The design-driven development, verification, and multi-agent collaboration methods, along with reusable commands, Hooks, Skills, and templates, are open source.
+
+- **WeChat article (Chinese):** [The Claude Code SOP Behind HexClaw AI: Design-Driven Development × Verification × Multi-Agent Collaboration](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA), covering the development process and practical methods for these three areas.
+- **Open-source SOP package:** [`docs/claude-code-practices/`](docs/claude-code-practices/), containing 4 practical manuals, 7 Claude Code commands, 3 Hooks, a DevTestOps Skill, and CLAUDE.md templates.
+
+| Area | Practice |
+| --- | --- |
+| Design-driven development | Clarify requirements and options, compare tradeoffs, and record design decisions in ADRs. |
+| Verification | Choose checks based on the actual changes and confirm completion using execution results and real artifacts. |
+| Multi-agent collaboration | Claude writes code, Codex reviews it, and people make decisions; independent reviews provide additional evidence. |
+
+From the repository directory, copy the SOP package into your personal Claude Code configuration directories. See the [SOP instructions (Chinese)](docs/claude-code-practices/README.md) for file purposes and Hook configuration.
 
 ```bash
-# Compile all platforms
-make sidecar-all
-
-# Or compile specific platforms
-make sidecar-darwin-arm64    # macOS Apple Silicon
-make sidecar-darwin-amd64    # macOS Intel
-make sidecar-linux-amd64     # Linux x86_64
-make sidecar-windows-amd64   # Windows x86_64
+mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
+cp docs/claude-code-practices/command/*.md ~/.claude/commands/
+cp docs/claude-code-practices/data/*.md ~/.claude/data/
+cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
+cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/
+chmod +x ~/.claude/hooks/*.sh
 ```
 
-Sidecar binaries are output to `src-tauri/binaries/` and automatically bundled during Tauri packaging. Builds now inject the actual tag / commit / built timestamp so the installed app can report the backend version accurately.
+## Documentation and ecosystem
 
-## Testing
+| Resource | Contents |
+| --- | --- |
+| [Website](https://hexclaw.net) | Product information, installation instructions, and release downloads. |
+| [Chinese Docs](https://hexclaw.net/zh/docs/) / [English Docs](https://hexclaw.net/en/docs/) | Official tutorials and feature documentation. |
+| [User guide](docs/guide.en.md) | Installation, module usage, shortcuts, and troubleshooting. |
+| [Product overview](docs/overview.en.md) | Workspace modules and usage paths. |
+| [Update instructions](docs/updates.en.md) | App updates and release artifact requirements. |
+| [Changelog](CHANGELOG.md) | Changes by release. |
 
-```bash
-# Run unit tests
-pnpm test:unit
+The HexClaw ecosystem spans general libraries, model integration, and Agent orchestration, through to the service, desktop workspace, and skill marketplace:
 
-# Or using Make
-make test
-```
-
-Test file conventions:
-- Test files live alongside source files, named `*.test.ts` or `*.spec.ts`
-- Store tests go in `src/stores/__tests__/`
-- Uses Vitest + @vue/test-utils
-
-Tests that use prototypes or image fixtures need the private `hexclaw-docs` sibling repository. Missing references indicate an incomplete test environment, not a successful functional check.
-
-## Troubleshooting
-
-### macOS: "Cannot be opened" or "damaged"
-
-Use the one-line install script or Homebrew (they handle Gatekeeper automatically):
-
-```bash
-# Option 1: One-line install
-curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
-
-# Option 2: Homebrew
-brew tap hexagon-codes/tap && brew install --cask hexclaw
-```
-
-If you already downloaded the DMG manually, run in Terminal:
-
-```bash
-xattr -cr /Applications/HexClaw.app
-```
-
-### Sidebar shows "Engine stopped" but backend is running
-
-1. Verify hexclaw process is running: `ps aux | grep hexclaw`
-2. Verify port is listening: `curl http://localhost:16060/health`
-3. If curl succeeds but frontend still shows stopped, check if you're on an old build (run `make build` and reinstall)
-
-### `make sidecar` compilation fails
-
-1. Verify Go >= 1.25 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta.1`
-3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
-
-### `make dev` starts but shows white screen
-
-Sidecar may not be compiled or there's a port conflict. Check:
-1. Confirm `make sidecar` has been run
-2. Confirm port `16060` is not in use: `lsof -i :16060`
-
-### hexclaw backend fails to start
-
-1. Check error logs: `~/.hexclaw/hexclaw.log`
-2. Run sidecar directly to see output: `./src-tauri/binaries/hexclaw-$(rustc -vV | grep host | awk '{print $2}') serve --desktop`
-3. Even without an LLM API Key configured, hexclaw should start normally (LLM features degraded, base API still available)
+| Project | Role and capabilities | Technology |
+| --- | --- | --- |
+| [toolkit](https://github.com/hexagon-codes/toolkit) | General Go library: generic collections, concurrency, HTTP/SSE, caching and configuration, logging, databases, object storage, and command sandboxing | Go |
+| [ai-core](https://github.com/hexagon-codes/ai-core) | AI foundation: unified model integration, tool calling, streaming and structured output, model routing, Embedding, and image, video, and speech capabilities | Go |
+| [Hexagon](https://github.com/hexagon-codes/hexagon) | AI Agent framework: tool calling, graph orchestration, multiple Agents, RAG, durable execution, and MCP, A2A, and OpenTelemetry integration | Go |
+| [HexClaw](https://github.com/hexagon-codes/hexclaw) | Self-hostable AI Agent service: multiple models, tools, knowledge bases, long-term memory, and task automation, with API and multi-platform IM access | Go |
+| [HexClaw Desktop](https://github.com/hexagon-codes/hexclaw-desktop) (this repository) | AI Agent desktop workspace: connects to local or cloud HexClaw services and brings together chat, knowledge bases, tools, task automation, and K12 homework tutoring | Tauri 2, Vue 3, TypeScript, Rust |
+| [HexClaw Hub](https://github.com/hexagon-codes/hexclaw-hub) | Skill and tool marketplace: Markdown skill definitions, MCP server directory, marketplace index, and generation and validation tools | Markdown, Python |
 
 ## Contributing
 
-### Workflow
+Start with the [contribution guide](CONTRIBUTING.en.md) for development setup, verification scope, and Pull Request requirements. Share the information available to you through the [Bug report form](https://github.com/hexagon-codes/hexclaw-desktop/issues/new?template=bug_report.yml), or discuss improvements in [Issues](https://github.com/hexagon-codes/hexclaw-desktop/issues).
 
-1. Fork this repository
-2. Create a feature branch: `git checkout -b feat/your-feature`
-3. Commit your changes: `git commit -m "feat: add new feature"`
-4. Push the branch: `git push origin feat/your-feature`
-5. Create a Pull Request
-
-### Code Standards
-
-- **Formatting**: `make format` (Prettier)
-- **Linting**: `make lint` (ESLint + oxlint, check-only)
-- **Type checking**: `make type-check` (vue-tsc)
-
-### Commit Message Format
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat: add new feature
-fix: fix a bug
-docs: documentation update
-style: code style adjustment
-refactor: refactoring
-test: test-related changes
-chore: build/toolchain changes
-```
-
-## Resources
-
-- 🌐 Website: [hexclaw.net](https://hexclaw.net)
-- 📖 Chinese Docs: [hexclaw.net/zh/docs](https://hexclaw.net/zh/docs/)
-- 📖 English Docs: [hexclaw.net/en/docs](https://hexclaw.net/en/docs/)
-- 🐙 GitHub: [hexagon-codes/hexclaw-desktop](https://github.com/hexagon-codes/hexclaw-desktop)
-- 📝 Claude Code SOP: [Article (Chinese)](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) · [Open-source SOP pack](docs/claude-code-practices/)
+Remove API Keys, access tokens, and personal data from logs and screenshots. For image, file, or IM issues, state whether the actual output was received.
 
 ## Contact
 
-- GitHub Issues: [hexclaw-desktop/issues](https://github.com/hexagon-codes/hexclaw-desktop/issues)
-- HexClaw AI: ai@hexclaw.net
-- HexClaw Support: support@hexclaw.net
+- Website: [hexclaw.net](https://hexclaw.net)
+- Issues and suggestions: [GitHub Issues](https://github.com/hexagon-codes/hexclaw-desktop/issues)
+- HexClaw AI: [ai@hexclaw.net](mailto:ai@hexclaw.net)
+- HexClaw support: [support@hexclaw.net](mailto:support@hexclaw.net)
+
+### WeChat Official Account
+
+Follow the HexClaw WeChat Official Account for news, tutorials, and release updates:
+
+<p align="center">
+  <img src=".github/assets/wechat-qrcode.jpg" alt="HexClaw WeChat Official Account QR code" width="200" />
+</p>
 
 ## License
 
-[Apache License 2.0](LICENSE)
+This project uses the [Apache License 2.0](LICENSE). Bundled third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).

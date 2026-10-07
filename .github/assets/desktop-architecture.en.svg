@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850" role="img" aria-labelledby="title desc" data-generator="fireworks-tech-graph" data-quality-profile="showcase">
+<title id="title">HexClaw Desktop · Runtime architecture</title><desc id="desc">The Vue workspace accesses the selected HexClaw service through transport and file bridges in the Tauri Rust native host. Local mode starts a Sidecar on the device. Cloud mode connects to a remote service without starting a local Sidecar. Task execution and data belong to the selected service.</desc>
+<defs><filter id="shadow" x="-10%" y="-20%" width="120%" height="140%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#9fb4c9" flood-opacity="0.22"/></filter>
+<marker id="arrow-0" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#3f8fd4"/></marker>
+<marker id="arrow-1" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#4caf7d"/></marker>
+<marker id="arrow-2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#8b6fcf"/></marker>
+<marker id="arrow-3" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1 1 L 8 5 L 1 9 Z" fill="#e8943a"/></marker>
+</defs>
+<rect width="1200" height="850" fill="#ffffff" data-graph-role="background"/>
+<!-- 横向泳道按职责分区，主流程使用实线，真实反馈使用虚线。 -->
+<text x="600" y="51" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="30" font-weight="700" fill="#12324c" text-anchor="middle">HexClaw Desktop · Runtime architecture</text>
+<text x="600" y="83" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="400" fill="#5f7b9c" text-anchor="middle">A native workspace connected to a local Sidecar or a cloud HexClaw service</text>
+<rect id="lane-0" x="40" y="120" width="1120" height="145" rx="18" fill="#f4fbff" stroke="#bcdcf3" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="164" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#3f8fd4" text-anchor="start">Workspace</text>
+<text x="64" y="193" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">User actions &amp; state</text>
+<rect id="lane-1" x="40" y="290" width="1120" height="145" rx="18" fill="#f1faf4" stroke="#bfe6cf" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="334" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#4caf7d" text-anchor="start">Native host</text>
+<text x="64" y="363" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">Transport &amp; OS bridge</text>
+<rect id="lane-2" x="40" y="460" width="1120" height="145" rx="18" fill="#f5f1fb" stroke="#d4c5ef" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="504" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#8b6fcf" text-anchor="start">Connection</text>
+<text x="64" y="533" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">Select one server</text>
+<text x="64" y="556" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">No auto data migration</text>
+<rect id="lane-3" x="40" y="630" width="1120" height="145" rx="18" fill="#fff7ee" stroke="#f3d7b0" stroke-width="1.5" data-graph-role="container"/>
+<text x="64" y="674" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="20" font-weight="700" fill="#e8943a" text-anchor="start">Features &amp; data</text>
+<text x="64" y="703" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="start">From selected server</text>
+<g id="ui" data-graph-role="node" data-node-id="ui" data-graph-bounds="390 145 550 95"><rect x="390" y="145" width="550" height="95" rx="12" fill="#ffffff" stroke="#bcdcf3" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="177" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">Vue 3 desktop workspace</text>
+<text x="665.0" y="202" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Chat · Agents · Knowledge · Automation · Connections</text>
+</g>
+<g id="host" data-graph-role="node" data-node-id="host" data-graph-bounds="390 315 550 95"><rect x="390" y="315" width="550" height="95" rx="12" fill="#ffffff" stroke="#bfe6cf" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="347" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">Tauri 2 / Rust native host</text>
+<text x="665.0" y="372" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">HTTP · SSE · WebSocket · File &amp; OS bridges</text>
+</g>
+<g id="local" data-graph-role="node" data-node-id="local" data-graph-bounds="250 485 280 95"><rect x="250" y="485" width="280" height="95" rx="12" fill="#ffffff" stroke="#d4c5ef" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="390.0" y="517" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">Local HexClaw Sidecar</text>
+<text x="390.0" y="542" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Local startup &amp; lifecycle</text>
+<text x="390.0" y="564" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Default: 127.0.0.1:16060</text>
+</g>
+<g id="cloud" data-graph-role="node" data-node-id="cloud" data-graph-bounds="800 485 280 95"><rect x="800" y="485" width="280" height="95" rx="12" fill="#ffffff" stroke="#d4c5ef" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="940.0" y="517" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">Cloud HexClaw service</text>
+<text x="940.0" y="542" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Connect to a deployed server</text>
+<text x="940.0" y="564" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Server-managed lifecycle</text>
+</g>
+<g id="backend" data-graph-role="node" data-node-id="backend" data-graph-bounds="250 655 830 95"><rect x="250" y="655" width="830" height="95" rx="12" fill="#ffffff" stroke="#f3d7b0" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="665.0" y="687" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="650" fill="#12324c" text-anchor="middle">Features and data of the selected HexClaw service</text>
+<text x="665.0" y="712" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14.5" font-weight="400" fill="#5f7b9c" text-anchor="middle">Agents · Model routing · Knowledge &amp; memory · Skill / MCP · Scenario packs · Persistence</text>
+</g>
+<path id="edge-ui-host-47" data-graph-role="edge" data-source="ui" data-target="host" d="M 665 240 L 665 315" fill="none" stroke="#3f8fd4" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-0)"/>
+<path id="edge-host-local-48" data-graph-role="edge" data-source="host" data-target="local" d="M 505 410 L 505 450 L 390 450 L 390 485" fill="none" stroke="#4caf7d" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-1)"/>
+<path id="edge-host-cloud-49" data-graph-role="edge" data-source="host" data-target="cloud" d="M 825 410 L 825 450 L 940 450 L 940 485" fill="none" stroke="#4caf7d" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-1)"/>
+<path id="edge-host-local-50" data-graph-role="edge" data-source="host" data-target="local" d="M 390 362 L 225 362 L 225 532 L 250 532" fill="none" stroke="#8b6fcf" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-2)" stroke-dasharray="7 6"/>
+<path id="edge-local-backend-51" data-graph-role="edge" data-source="local" data-target="backend" d="M 390 580 L 390 655" fill="none" stroke="#e8943a" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-3)"/>
+<path id="edge-cloud-backend-52" data-graph-role="edge" data-source="cloud" data-target="backend" d="M 940 580 L 940 655" fill="none" stroke="#e8943a" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#arrow-3)"/>
+<text x="662" y="534" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" font-weight="600" fill="#5f7b9c" text-anchor="middle">Choose one</text>
+<text x="600" y="828" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="400" fill="#5f7b9c" text-anchor="middle">Solid: requests and feature access    Dashed: local Sidecar lifecycle    Cloud mode does not start a local Sidecar</text>
+</svg>
