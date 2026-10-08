@@ -66,6 +66,13 @@ export interface ModelOption {
   reasoningSupport?: ModelReasoningSupport
   /** 仅 supported 模型允许携带的精确上游控制映射。 */
   reasoningControl?: ModelReasoningControl
+  /** 原生推理三态独立于上游控制合同。 */
+  nativeReasoningSupport?: ModelReasoningSupport
+  /** 服务端签发的精确实例、模型和物理来源指纹，不包含凭据。 */
+  nativeReasoningSourceFingerprint?: string
+  /** 服务端整合声明与真实正证的只读投影，不能作为静态声明保存。 */
+  effectiveNativeReasoningSupport?: ModelReasoningSupport
+  effectiveNativeReasoningSourceFingerprint?: string
   /** Vector-space contract used by the semantic-index backend; never inferred generically from an id. */
   embedding?: EmbeddingModelContract
   /** A7 tool_call 动态探测结果（运行时由后端 /api/v1/llm/capabilities 注入） */
@@ -97,6 +104,8 @@ export interface CatalogModel {
   /** Provider 目录显式返回的推理能力。 */
   reasoningSupport?: ModelReasoningSupport
   reasoningControl?: ModelReasoningControl
+  nativeReasoningSupport?: ModelReasoningSupport
+  nativeReasoningSourceFingerprint?: string
 }
 
 /** 判断目录条目是否免费（prompt 和 completion 价格都为 0） */
@@ -140,6 +149,8 @@ export interface ProviderConfig {
   id: string
   /** 后端分配/确认的稳定 Provider 实例身份，不随展示名或 map key 变化。 */
   providerInstanceId?: string
+  /** 不含模型的物理来源作用域，供目录缓存校验。 */
+  nativeReasoningSourceFingerprint?: string
   /** 服务端按当前连接指纹投影的最近一次显式测试回执。 */
   probeReceipt?: ProviderProbeReceipt
   /** 后端运行时识别的 provider key（对应 hexclaw /api/v1/config/llm 的 map key） */
@@ -189,6 +200,8 @@ export interface BackendProviderModelSpec {
   capabilities?: ModelCapability[]
   reasoning_support?: ModelReasoningSupport
   reasoning_control?: ModelReasoningControl
+  native_reasoning_support?: ModelReasoningSupport
+  native_reasoning_source_fingerprint?: string
   embedding?: EmbeddingModelContract
 }
 
@@ -344,6 +357,7 @@ export interface AppConfig {
 /** 后端 LLM Provider 配置（匹配 hexclaw API） */
 export interface BackendLLMProvider {
   provider_instance_id?: string
+  native_reasoning_source_fingerprint?: string
   display_name?: string
   api_key?: string
   /** 已保存 Key 的真实长度（sidecar 脱敏元数据，仅长度不含 Key 内容） */
@@ -363,6 +377,8 @@ export interface BackendLLMProvider {
     id: string
     display_name?: string
     capabilities: ModelCapability[]
+    effective_native_reasoning_support?: ModelReasoningSupport
+    native_reasoning_source_fingerprint?: string
   }>
   model_specs_mode?: 'legacy' | 'explicit'
   compatible: string

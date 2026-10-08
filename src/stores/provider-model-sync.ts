@@ -26,7 +26,7 @@ export function syncProviderModelCatalogs(
   const catalogStore = useModelCatalogStore()
   for (const provider of providers) {
     if (provider.type !== 'ollama') {
-      catalogStore.ensureFallbackCatalog(provider.id, provider.models)
+      catalogStore.ensureFallbackCatalog(provider.id, provider.models, provider)
     }
     if (
       !provider.enabled ||
@@ -52,7 +52,7 @@ export function syncProviderModelCatalogs(
         return
       }
 
-      catalogStore.setCatalog(target.id, remoteModels)
+      catalogStore.setCatalog(target.id, remoteModels, target)
       const exclusionScope = target.providerInstanceId || target.id
       const result = reconcileProviderCatalog(
         target,

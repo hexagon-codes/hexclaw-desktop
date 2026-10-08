@@ -11,7 +11,6 @@ import {
   Eye,
   Plus,
   ChevronDown,
-  ChevronUp,
   Loader2,
   CheckCircle,
   RotateCcw,
@@ -30,6 +29,7 @@ import {
   canonicalizeModelOption,
   backendToProviders,
   isChatModelOption,
+  invalidateChangedProviderNativeReasoning,
   normalizeModelCapabilities,
   providerProbeConnectivityFingerprint,
   reconcileDefaultSelection,
@@ -63,6 +63,7 @@ import {
 import { getOllamaTarget } from '@/api/ollama'
 import { isCatalogModelFree } from '@/types'
 import type {
+  AppConfig,
   ProviderConfig,
   ProviderType,
   ModelOption,
@@ -73,6 +74,7 @@ import type {
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import HcModal from '@/components/common/HcModal.vue'
+import HcCollapsePanel from '@/components/common/HcCollapsePanel.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ModelSelector from '@/components/common/ModelSelector.vue'
@@ -292,6 +294,17 @@ function handleRoutingToggle() {
 
 const isDirty = ref(false)
 const persistedSettingsSignature = ref('')
+let persistedProviderInstances = new Map<string, string>()
+let ignoreModelReceiptsThrough = 0
+
+function recordSavedSettingsBaseline(signature: string) {
+  persistedSettingsSignature.value = signature
+  const baseline = JSON.parse(signature) as AppConfig | null
+  const ids = new Set(baseline?.llm.providers.map(provider => provider.id) ?? [])
+  persistedProviderInstances = new Map((settingsStore.config?.llm.providers ?? [])
+    .filter(provider => provider.providerInstanceId && ids.has(provider.id))
+    .map(provider => [provider.providerInstanceId!, provider.id]))
+}
 
 // 连接回执、能力探测与后端身份回填不是用户编辑，不参与保存按钮的差异判断。
 function editableSettingsSignature(owner = settingsStore.config) {
@@ -312,7 +325,7 @@ function editableSettingsSignature(owner = settingsStore.config) {
     },
   } : owner
   return JSON.stringify(comparableOwner, (key, value) =>
-    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength'].includes(key) ? undefined : value,
+    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength', 'nativeReasoningSourceFingerprint', 'effectiveNativeReasoningSupport', 'effectiveNativeReasoningSourceFingerprint'].includes(key) ? undefined : value,
   ) ?? ''
 }
 
@@ -491,6 +504,24 @@ function refreshAutoSaveDirtyState() {
 }
 
 watch(editableSettingsSignature, refreshAutoSaveDirtyState)
+watch(() => settingsStore.persistedModelReceipt, receipt => {
+  if (!receipt || receipt.scope !== backendScopeKey() || receipt.sequence <= ignoreModelReceiptsThrough || !persistedSettingsSignature.value) return
+  const baseline = JSON.parse(persistedSettingsSignature.value) as AppConfig | null
+  if (!baseline) return
+  let changed = false
+  for (const persisted of receipt.providers) {
+    const baselineId = persistedProviderInstances.get(persisted.providerInstanceId)
+    const provider = baselineId ? baseline.llm.providers.find(item => item.id === baselineId) : undefined
+    if (!provider) continue
+    // 仅更新实际已提交的模型字段；当前表单与其他字段不受后台回执影响。
+    provider.models = JSON.parse(JSON.stringify(persisted.models)) as ModelOption[]
+    provider.selectedModelId = persisted.selectedModelId
+    changed = true
+  }
+  if (!changed) return
+  persistedSettingsSignature.value = editableSettingsSignature(baseline)
+  refreshAutoSaveDirtyState()
+}, { flush: 'sync' })
 
 function resetPendingModelDraft() {
   newModelId.value = ''
@@ -533,7 +564,7 @@ async function persistSettings({
     if (!isCurrentOwner()) return
     originalProviders = savedProviders
     // 共享保存会规范化配置快照；只有没有后来编辑时才承认该规范化结果。
-    persistedSettingsSignature.value = submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature
+    recordSavedSettingsBaseline(submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature)
     if (refreshRuntimeInfo) {
       await loadRuntimeInfo()
     }
@@ -627,6 +658,11 @@ function toggleEditingProvider(providerId: string, explicitControl = false) {
   providerIgnoreNextClick = false
   providerTextGesture = false
   providerControlPointerGesture = false
+  const previous = editingProviderId.value
+  const panel = previous ? document.getElementById(`provider-details-${previous}`) : null
+  if (panel?.contains(document.activeElement)) {
+    panel.closest('.hc-provider__card')?.querySelector<HTMLElement>('.hc-provider__expand')?.focus({ preventScroll: true })
+  }
   editingProviderId.value = editingProviderId.value === providerId ? null : providerId
 }
 
@@ -727,7 +763,7 @@ onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
   originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
-  persistedSettingsSignature.value = editableSettingsSignature()
+  recordSavedSettingsBaseline(editableSettingsSignature())
   refreshAutoSaveDirtyState()
   // A7: 页面打开后异步拉一次能力缓存（不 block UI，失败降级为 unknown badge）
   void loadCapabilities()
@@ -1154,6 +1190,7 @@ watch(() => backendScopeKey(), () => {
   // 后端切换只使页面添加会话失效，已进入原持久化链的请求继续使用自己的后端快照。
   addProviderSession += 1
   settingsOwnerSession += 1
+  ignoreModelReceiptsThrough = settingsStore.modelPersistenceStarted
   showAddProvider.value = false
   addingProvider.value = false
   addProviderDraft.value = { name: '', baseUrl: '', apiKey: '' }
@@ -1193,7 +1230,7 @@ async function handleDeleteProvider(id: string) {
       const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
       if (!isCurrentOwner()) return
       originalProviders = savedProviders
-      persistedSettingsSignature.value = submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature
+      recordSavedSettingsBaseline(submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature)
       refreshAutoSaveDirtyState()
       if (securitySyncFailed) {
         logger.warn('[HexClaw] 删除 Provider 后安全/沙箱配置同步失败')
@@ -1413,13 +1450,12 @@ function providerNeedsDestinationConfirmation(provider: ProviderConfig): boolean
 
 function providerDestinationSelection(provider: ProviderConfig): 'local' | 'cloud' | '' {
   const decision = providerEndpointDecision(provider)
-  if (
-    decision.classification !== 'ambiguous' ||
-    provider.localitySource !== 'user' ||
-    provider.confirmedEndpointHost !== decision.host
-  )
-    return ''
-  return provider.locality === 'local' ? 'local' : 'cloud'
+  if (decision.classification !== 'ambiguous') return ''
+  if (provider.localitySource === 'user' && provider.confirmedEndpointHost === decision.host) {
+    return provider.locality === 'local' ? 'local' : 'cloud'
+  }
+  // 自动预选仅投影当前识别结果，不把展示状态写成用户确认或访问授权。
+  return effectiveProviderLocality(provider)
 }
 
 function handleProviderDestinationChange(provider: ProviderConfig, locality: 'local' | 'cloud') {
@@ -1601,6 +1637,10 @@ function restoreProviderApiKeyFocus(provider: ProviderConfig) {
 }
 
 function clearProviderProbeState(provider: ProviderConfig) {
+  const original = settingsStore.runtimeProviders?.find((candidate) =>
+    candidate.id === provider.id || Boolean(provider.providerInstanceId && candidate.providerInstanceId === provider.providerInstanceId),
+  )
+  invalidateChangedProviderNativeReasoning(original, provider)
   providerTestGenerations.set(provider.id, (providerTestGenerations.get(provider.id) ?? 0) + 1)
   provider.probeReceipt = undefined
   delete testProviderResult.value[provider.id]
@@ -1640,12 +1680,21 @@ function parseProviderProbeTime(value: string | number | undefined): number | un
 }
 
 async function providerWithStableIdentity(provider: ProviderConfig): Promise<ProviderConfig> {
+  const ownerSession = settingsOwnerSession
+  const scope = backendScopeKey()
   const providerInstanceId = provider.providerInstanceId
   const backendKey = provider.backendKey
   const providerId = provider.id
   markAutoSavePending()
   await flushAutoSave({ force: true })
+  const savedGeneration = autoSaveGeneration
   await settingsStore.loadConfig({ force: true })
+  // 同一编辑会话的成功保存后读回可补齐权威合同；后来编辑不能被旧读回承认。
+  if (ownerSession === settingsOwnerSession && scope === backendScopeKey() &&
+    savedGeneration === autoSaveGeneration && persistedAutoSaveGeneration >= savedGeneration) {
+    recordSavedSettingsBaseline(editableSettingsSignature())
+    refreshAutoSaveDirtyState()
+  }
 
   return (
     config.value?.llm.providers.find(
@@ -1958,7 +2007,7 @@ async function syncRemoteModels(
     const currentBaseUrl = currentProvider.baseUrl || currentPreset?.defaultBaseUrl || ''
     if (!syncLease.isCurrent(currentProvider, currentBaseUrl)) return false
     // 目录层：全量 + 元数据存本地缓存；Provider 卡片只呈现已配置子集。
-    catalogStore.setCatalog(currentProvider.id, remoteModels)
+    catalogStore.setCatalog(currentProvider.id, remoteModels, currentProvider)
     const result = reconcileProviderCatalog(
       currentProvider,
       remoteModels,
@@ -2104,12 +2153,13 @@ async function onToolbarReset() {
   if (!settingsStore.config) return
   // 显式重置开始新编辑会话，正常保存的快照替换不改变会话身份。
   settingsOwnerSession += 1
+  ignoreModelReceiptsThrough = settingsStore.modelPersistenceStarted
   toolbarSaveSession += 1
   saved.value = false
   saveFailed.value = false
   try {
     await settingsStore.loadConfig({ force: true })
-    persistedSettingsSignature.value = editableSettingsSignature()
+    recordSavedSettingsBaseline(editableSettingsSignature())
     refreshAutoSaveDirtyState()
     saved.value = false
   } catch (e) {
@@ -2235,6 +2285,7 @@ async function saveConfig() {
                   scope="global"
                   :support="selectedDefaultReasoningModel?.reasoningSupport ?? 'unknown'"
                   :control="selectedDefaultReasoningModel?.reasoningControl"
+                  :native-support="selectedDefaultReasoningModel?.effectiveNativeReasoningSupport ?? selectedDefaultReasoningModel?.nativeReasoningSupport"
                   :aria-label="t('chat.reasoning.defaultStrategy')"
                 />
               </div>
@@ -2462,12 +2513,13 @@ async function saveConfig() {
                     >
                       <span class="hc-provider__toggle-knob" aria-hidden="true" />
                     </button>
-                    <button type="button" class="hc-provider__expand" :aria-expanded="editingProviderId === provider.id" :aria-label="`${editingProviderId === provider.id ? '收起' : '展开'} ${provider.name}`" @click.stop="toggleEditingProvider(provider.id, true)"><component :is="editingProviderId === provider.id ? ChevronUp : ChevronDown" :size="16" /></button>
+                    <button type="button" class="hc-provider__expand" :aria-expanded="editingProviderId === provider.id" :aria-controls="`provider-details-${provider.id}`" :aria-label="`${editingProviderId === provider.id ? '收起' : '展开'} ${provider.name}`" @click.stop="toggleEditingProvider(provider.id, true)"><ChevronDown :size="16" :class="{ 'is-expanded': editingProviderId === provider.id }" /></button>
                   </div>
                 </div>
 
                 <!-- Provider 编辑面板 -->
-                <div v-if="editingProviderId === provider.id" class="hc-provider__edit">
+                <HcCollapsePanel :open="editingProviderId === provider.id" :gap="12" :body-id="`provider-details-${provider.id}`">
+                <div class="hc-provider__edit">
                   <div
                     class="hc-provider__config-grid"
                     :class="
@@ -2822,6 +2874,7 @@ async function saveConfig() {
                     <button type="button" class="hc-provider__delete-btn" @click="openDeleteProviderConfirm(provider.id)">{{ t('settings.llm.deleteAction', '删除') }}</button>
                   </div>
                 </div>
+                </HcCollapsePanel>
               </div>
             </div>
 
@@ -3298,6 +3351,9 @@ async function saveConfig() {
 .hc-provider__drag-handle:active,.hc-provider__card-head:active{cursor:grabbing}
 .hc-provider__expand{grid-column:7;display:grid;place-items:center;width:24px;height:32px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--hc-text-muted);cursor:pointer}
 .hc-provider__expand:hover{background:var(--hc-bg-hover);color:var(--hc-accent)}
+.hc-provider__expand svg{transition:transform 180ms var(--hc-ease-out,ease-out)}
+.hc-provider__expand svg.is-expanded{transform:rotate(180deg)}
+@media(prefers-reduced-motion:reduce){.hc-provider__expand svg{transition:none}}
 .hc-provider__card.hc-provider__card--dragging{opacity:.45}
 .hc-provider__drop-before::before,.hc-provider__drop-after::after{content:'';position:absolute;left:0;right:0;height:2px;background:var(--hc-accent);border-radius:2px;pointer-events:none}
 .hc-provider__drop-before::before{top:-5px}.hc-provider__drop-after::after{bottom:-5px}
@@ -5041,7 +5097,8 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
   color: var(--hc-text-secondary);
 }
 
-.hc-model-chip__cap--text {
+.hc-model-chip__cap--text,
+.hc-model-chip__cap--thinking {
   background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
   color: var(--hc-text-secondary);
 }

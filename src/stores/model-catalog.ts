@@ -4,9 +4,11 @@ import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
 import {
   canonicalizeModelOption,
+  applyCatalogNativeReasoningContract,
   mergeCatalogModelCapabilities,
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
+import { PROVIDER_PRESETS } from '@/config/providers'
 import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
 
 /**
@@ -37,6 +39,12 @@ export interface ProviderCatalog {
   newIds: string[]
   /** remote = Provider 目录；fallback = 远端不可用时由已持久化启用项形成的快照。 */
   source?: 'remote' | 'fallback'
+  /** 仅保存服务端安全来源标识，凭据及其客户端摘要不得持久化。 */
+  nativeReasoningSource?: {
+    providerInstanceId: string
+    baseUrl: string
+    sourceFingerprint: string
+  }
 }
 
 type CatalogMap = Record<string, ProviderCatalog>
@@ -106,6 +114,15 @@ function loadExclusionsFromStorage(): ExclusionMap {
 export const useModelCatalogStore = defineStore('modelCatalog', () => {
   const catalogs = ref<CatalogMap>(loadFromStorage())
   const exclusions = ref<ExclusionMap>(loadExclusionsFromStorage())
+  const nativeCredentialSources = new Map<string, string>()
+
+  function nativeSource(provider: ProviderConfig) {
+    return {
+      providerInstanceId: provider.providerInstanceId ?? '',
+      baseUrl: (provider.baseUrl || PROVIDER_PRESETS[provider.type]?.defaultBaseUrl || '').trim().replace(/\/+$/, ''),
+      sourceFingerprint: provider.nativeReasoningSourceFingerprint ?? '',
+    }
+  }
 
   function persist() {
     try {
@@ -151,7 +168,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
   }
 
   /** 同步一份新目录，自动 diff 出相对上次的新增模型 */
-  function setCatalog(providerId: string, models: CatalogModel[]) {
+  function setCatalog(providerId: string, models: CatalogModel[], provider?: ProviderConfig) {
     const prev = catalogs.value[providerId]
     // 首次同步不标"新增"（全是新的等于没有新的）
     const newIds = prev
@@ -162,7 +179,9 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
       syncedAt: new Date().toISOString(),
       newIds,
       source: 'remote',
+      ...(provider ? { nativeReasoningSource: nativeSource(provider) } : {}),
     }
+    if (provider) nativeCredentialSources.set(providerId, credentialSummary(provider.apiKey))
     persist()
   }
 
@@ -170,7 +189,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
    * 远端目录尚不可用时，以已持久化启用项建立稳定快照。
    * 仅大于自动启用阈值且没有可用目录时建立；后续 setCatalog 会整份替换为远端目录。
    */
-  function ensureFallbackCatalog(providerId: string, models: ModelOption[]) {
+  function ensureFallbackCatalog(providerId: string, models: ModelOption[], provider?: ProviderConfig) {
     if (models.length <= AUTO_ENABLE_CATALOG_LIMIT) return
     if ((catalogs.value[providerId]?.models.length ?? 0) > 0) return
     catalogs.value[providerId] = {
@@ -181,21 +200,50 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
           name: canonical.name || canonical.id,
           capabilities: canonical.capabilities,
           ...reasoningContractFrom(canonical),
+          ...(canonical.nativeReasoningSupport === undefined ? {} : { nativeReasoningSupport: canonical.nativeReasoningSupport }),
+          ...(canonical.nativeReasoningSourceFingerprint ? { nativeReasoningSourceFingerprint: canonical.nativeReasoningSourceFingerprint } : {}),
         }
       }),
       syncedAt: new Date().toISOString(),
       newIds: [],
       source: 'fallback',
+      ...(provider ? { nativeReasoningSource: nativeSource(provider) } : {}),
     }
+    if (provider) nativeCredentialSources.set(providerId, credentialSummary(provider.apiKey))
     persist()
   }
 
-  function getCatalog(providerId: string): ProviderCatalog | null {
-    return catalogs.value[providerId] ?? null
+  function getCatalog(providerId: string, provider?: ProviderConfig): ProviderCatalog | null {
+    const catalog = catalogs.value[providerId]
+    if (!catalog || !provider) return catalog ?? null
+    const currentSource = nativeSource(provider)
+    const credentialSource = credentialSummary(provider.apiKey)
+    const sameSource =
+      Boolean(currentSource.sourceFingerprint) &&
+      JSON.stringify(catalog.nativeReasoningSource) === JSON.stringify(currentSource) &&
+      (!nativeCredentialSources.has(providerId) || nativeCredentialSources.get(providerId) === credentialSource ||
+        (provider.apiKey.includes('*') && provider.apiKeyMutation === 'preserve'))
+    if (!sameSource && catalog.models.some((model) =>
+      model.nativeReasoningSourceFingerprint ||
+      (model.nativeReasoningSupport !== undefined && model.nativeReasoningSupport !== 'unknown'),
+    )) {
+      // 保留目录及其他能力，只废止旧来源的原生声明，避免再次应用缓存。
+      catalog.models = catalog.models.map((model) => {
+        const next = { ...model }
+        if (Object.prototype.hasOwnProperty.call(model, 'nativeReasoningSupport')) next.nativeReasoningSupport = 'unknown'
+        delete next.nativeReasoningSourceFingerprint
+        return next
+      })
+      catalog.nativeReasoningSource = currentSource
+      persist()
+    }
+    nativeCredentialSources.set(providerId, credentialSource)
+    return catalog
   }
 
   /** 清除某 Provider 的目录（Provider 被删除时调用） */
   function removeCatalog(providerId: string) {
+    nativeCredentialSources.delete(providerId)
     if (!(providerId in catalogs.value)) return
     delete catalogs.value[providerId]
     persist()
@@ -266,13 +314,14 @@ export function reconcileProviderCatalog(
       .filter((model) => !isExcluded(model.id))
       .map((model) => {
         const remote = remoteById.get(model.id)
-        if (!remote || model.isCustom) return model
-        return canonicalizeModelOption({
+        if (!remote) return model
+        if (model.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(model, remote))
+        return canonicalizeModelOption(applyCatalogNativeReasoningContract({
           ...withoutReasoningContract(model),
           name: remote.name || model.name || remote.id,
           capabilities: mergeCatalogModelCapabilities(remote, model),
           ...reasoningContractFrom(remote, model, presetById.get(model.id)),
-        })
+        }, remote))
       })
   } else {
     const existingById = new Map(target.models.map((model) => [model.id, model]))
@@ -282,16 +331,16 @@ export function reconcileProviderCatalog(
         const existing = existingById.get(remote.id)
         const preset = presetById.get(remote.id)
         if (existing) {
-          return canonicalizeModelOption({
+          return canonicalizeModelOption(applyCatalogNativeReasoningContract({
             ...withoutReasoningContract(existing),
             name: remote.name || existing.name || remote.id,
             ...(!existing.isCustom
               ? { capabilities: mergeCatalogModelCapabilities(remote, existing) }
               : {}),
             ...reasoningContractFrom(remote, existing, preset),
-          })
+          }, remote))
         }
-        return canonicalizeModelOption({
+        return canonicalizeModelOption(applyCatalogNativeReasoningContract({
           id: remote.id,
           name: remote.name || remote.id,
           // 带输入模态但没有能力合同的目录项保持显式空数组，不能由模型名或目录元数据推断。
@@ -307,7 +356,7 @@ export function reconcileProviderCatalog(
               : { capabilities: [] }),
           ...(remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
           ...reasoningContractFrom(remote, preset),
-        })
+        }, remote))
       })
     for (const existing of target.models) {
       if (!remoteById.has(existing.id) && !isExcluded(existing.id)) {

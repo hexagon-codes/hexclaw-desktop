@@ -249,6 +249,8 @@ interface BackendProviderModel {
   supports_tools?: boolean
   reasoning_support?: ModelReasoningSupport
   reasoning_control?: ModelReasoningControl
+  native_reasoning_support?: ModelReasoningSupport
+  native_reasoning_source_fingerprint?: string
 }
 
 /**
@@ -296,6 +298,12 @@ export async function fetchProviderModels(
       ? {}
       : { reasoningSupport: normalizeModelReasoningSupport(m.reasoning_support) }),
     ...(m.reasoning_control === undefined ? {} : { reasoningControl: m.reasoning_control }),
+    ...(Object.prototype.hasOwnProperty.call(m, 'native_reasoning_support')
+      ? { nativeReasoningSupport: normalizeModelReasoningSupport(m.native_reasoning_support) }
+      : {}),
+    ...(m.native_reasoning_source_fingerprint
+      ? { nativeReasoningSourceFingerprint: m.native_reasoning_source_fingerprint }
+      : {}),
   }))
   if (models.length === 0) {
     throw new Error('fetchProviderModels: empty model catalog')

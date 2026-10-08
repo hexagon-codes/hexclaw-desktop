@@ -15,7 +15,6 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { getAssistantDisplayContent, getAssistantReasoningFromMetadata, normalizeAssistantReasoning } from '@/utils/assistant-reply'
-import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { normalizeReasoningReceipt, type ReasoningReceipt } from '@/types/chat'
 import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
@@ -77,11 +76,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readReasoningReceipt(payload: unknown): ReasoningReceipt | null {
   if (!isRecord(payload)) return null
   if (Object.prototype.hasOwnProperty.call(payload, 'reasoning_receipt')) {
-    return normalizeReasoningReceipt(payload.reasoning_receipt, 'off')
+    return normalizeReasoningReceipt(payload.reasoning_receipt)
   }
   const metadata = isRecord(payload.metadata) ? payload.metadata : null
   return metadata && Object.prototype.hasOwnProperty.call(metadata, 'reasoning_receipt')
-    ? normalizeReasoningReceipt(metadata.reasoning_receipt, 'off')
+    ? normalizeReasoningReceipt(metadata.reasoning_receipt)
     : null
 }
 
@@ -127,12 +126,11 @@ function applyReasoningReceipt(payload: unknown) {
 }
 
 function buildQuickChatMetadata(): Record<string, string> {
-  return withModelReasoningDefaults(selectedModel.value, {
+  return {
     pinned_agent: 'default',
     producer_kind: 'quick_chat',
     locale: locale.value,
-    thinking: 'off',
-  }) ?? { thinking: 'off' }
+  }
 }
 
 function captureRenderManifest(message: Message, manifest: RenderManifest) {

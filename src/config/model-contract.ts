@@ -9,8 +9,9 @@ import type {
   ModelReasoningDialect,
   ModelReasoningSupport,
   ProviderConfig,
+  ReasoningPolicy,
 } from '@/types'
-import { isReasoningEffort } from '@/utils/reasoning-policy'
+import { cloneReasoningPolicy, isReasoningEffort, normalizeReasoningPolicy } from '@/utils/reasoning-policy'
 
 const CANONICAL_OPENROUTER_EMBEDDING_MODEL_IDS = new Set([
   'nvidia/nemotron-3-embed-1b:free',
@@ -145,6 +146,35 @@ function normalizeModelReasoningContract(
   return { support: 'unknown' }
 }
 
+export type ReasoningModelState = 'controllable' | 'native' | 'unsupported' | 'unknown'
+
+/** 原生推理证据与可操作的控制合同独立，所有入口读取同一只读状态。 */
+export function reasoningModelState(model?: Pick<ModelOption,
+  'reasoningSupport' | 'reasoningControl' | 'nativeReasoningSupport' | 'effectiveNativeReasoningSupport'
+>): ReasoningModelState {
+  if (model?.reasoningSupport === 'supported' && normalizeModelReasoningControl(model.reasoningControl)) {
+    return 'controllable'
+  }
+  const nativeSupport = model?.effectiveNativeReasoningSupport ?? model?.nativeReasoningSupport
+  if (nativeSupport === 'supported') return 'native'
+  if (model?.reasoningSupport === 'unsupported' || nativeSupport === 'unsupported') return 'unsupported'
+  return 'unknown'
+}
+
+/** 模型切换只投影当前可执行策略，不改写保存的强度偏好。 */
+export function projectReasoningPolicyForModel(
+  policyValue: unknown,
+  model?: Pick<ModelOption, 'reasoningSupport' | 'reasoningControl'>,
+): ReasoningPolicy {
+  const policy = normalizeReasoningPolicy(policyValue)
+  const control = normalizeModelReasoningControl(model?.reasoningControl)
+  if (policy.mode === 'effort' && model?.reasoningSupport === 'supported' && control &&
+    (control.dialect !== 'reasoning_effort' || !control.allowed_efforts?.includes(policy.effort))) {
+    return { mode: 'auto' }
+  }
+  return cloneReasoningPolicy(policy)
+}
+
 /** Ollama 仅以 /api/tags 的 capabilities 字段作为推理能力证据。 */
 export function reasoningSupportFromOllamaCapabilities(
   capabilities: readonly string[] | undefined,
@@ -174,8 +204,60 @@ export function canonicalizeModelOption(model: ModelOption): ModelOption {
     capabilities,
     ...(hasReasoningDeclaration ? { reasoningSupport: reasoning.support } : {}),
     ...(reasoning.control ? { reasoningControl: reasoning.control } : {}),
+    ...(hasOwn(model, 'nativeReasoningSupport')
+      ? { nativeReasoningSupport: normalizeModelReasoningSupport(model.nativeReasoningSupport) }
+      : {}),
+    ...(hasOwn(model, 'effectiveNativeReasoningSupport')
+      ? { effectiveNativeReasoningSupport: normalizeModelReasoningSupport(model.effectiveNativeReasoningSupport) }
+      : {}),
     ...(embedding ? { embedding } : {}),
   }
+}
+
+/** 目录声明缺省保留同来源值；显式未知与来源变化均不得被旧声明补回。 */
+export function applyCatalogNativeReasoningContract(
+  model: ModelOption,
+  catalogModel: Pick<CatalogModel, 'nativeReasoningSupport' | 'nativeReasoningSourceFingerprint'>,
+): ModelOption {
+  const next = { ...model }
+  const sourceChanged = Boolean(
+    catalogModel.nativeReasoningSourceFingerprint &&
+    model.nativeReasoningSourceFingerprint !== catalogModel.nativeReasoningSourceFingerprint,
+  )
+  const declarationChanged =
+    hasOwn(catalogModel, 'nativeReasoningSupport') &&
+    normalizeModelReasoningSupport(catalogModel.nativeReasoningSupport) !==
+      normalizeModelReasoningSupport(model.nativeReasoningSupport)
+  if (hasOwn(catalogModel, 'nativeReasoningSupport')) {
+    next.nativeReasoningSupport = normalizeModelReasoningSupport(catalogModel.nativeReasoningSupport)
+  } else if (sourceChanged && hasOwn(model, 'nativeReasoningSupport')) {
+    next.nativeReasoningSupport = 'unknown'
+  }
+  if (hasOwn(catalogModel, 'nativeReasoningSourceFingerprint')) {
+    next.nativeReasoningSourceFingerprint = catalogModel.nativeReasoningSourceFingerprint
+  }
+  if (
+    (sourceChanged &&
+      model.effectiveNativeReasoningSourceFingerprint !== catalogModel.nativeReasoningSourceFingerprint) ||
+    (declarationChanged &&
+      normalizeModelReasoningSupport(model.effectiveNativeReasoningSupport) ===
+        normalizeModelReasoningSupport(model.nativeReasoningSupport))
+  ) {
+    // 由旧静态声明形成的有效快照随声明更新失效，独立的同来源正证继续保留。
+    delete next.effectiveNativeReasoningSupport
+    delete next.effectiveNativeReasoningSourceFingerprint
+  }
+  return next
+}
+
+/** 只废止原生推理来源，不影响文本能力和已有控制合同。 */
+export function invalidateModelNativeReasoning(model: ModelOption): ModelOption {
+  const next = { ...model }
+  if (hasOwn(next, 'nativeReasoningSupport')) next.nativeReasoningSupport = 'unknown'
+  delete next.nativeReasoningSourceFingerprint
+  delete next.effectiveNativeReasoningSupport
+  delete next.effectiveNativeReasoningSourceFingerprint
+  return next
 }
 
 function reasoningContractFromModel(
@@ -225,6 +307,8 @@ export interface EffectiveProviderModelProjection {
   id: string
   display_name?: string
   capabilities: ModelCapability[]
+  effective_native_reasoning_support?: ModelReasoningSupport
+  native_reasoning_source_fingerprint?: string
 }
 
 export function mergeProviderModels(
@@ -259,6 +343,27 @@ export function mergeProviderModels(
         const spec = specsByID.get(id)
         const effectiveModel = effectiveModelsByID.get(id)
         const local = localByID.get(id)
+        const nativeModel = applyCatalogNativeReasoningContract(
+          local ?? { id, name: id },
+          {
+            ...(spec && hasOwn(spec, 'native_reasoning_support')
+              ? { nativeReasoningSupport: normalizeModelReasoningSupport(spec.native_reasoning_support) }
+              : {}),
+            ...(spec?.native_reasoning_source_fingerprint || effectiveModel?.native_reasoning_source_fingerprint
+              ? { nativeReasoningSourceFingerprint: spec?.native_reasoning_source_fingerprint || effectiveModel?.native_reasoning_source_fingerprint }
+              : {}),
+          },
+        )
+        const nativeFields = {
+          ...(nativeModel.nativeReasoningSupport === undefined ? {} : { nativeReasoningSupport: nativeModel.nativeReasoningSupport }),
+          ...(nativeModel.nativeReasoningSourceFingerprint ? { nativeReasoningSourceFingerprint: nativeModel.nativeReasoningSourceFingerprint } : {}),
+          ...(effectiveModel && hasOwn(effectiveModel, 'effective_native_reasoning_support')
+            ? {
+                effectiveNativeReasoningSupport: normalizeModelReasoningSupport(effectiveModel.effective_native_reasoning_support),
+                effectiveNativeReasoningSourceFingerprint: effectiveModel.native_reasoning_source_fingerprint,
+              }
+            : {}),
+        }
         if (!spec && !effectiveModel) {
           const localReasoningSupport =
             local?.reasoningSupport === undefined
@@ -274,6 +379,7 @@ export function mergeProviderModels(
               : { reasoningSupport: localReasoningSupport }),
             ...(local?.reasoningControl ? { reasoningControl: local.reasoningControl } : {}),
             ...(local?.embedding ? { embedding: local.embedding } : {}),
+            ...nativeFields,
           }
         }
         const hasBackendReasoningSupport = spec !== undefined && hasOwn(spec, 'reasoning_support')
@@ -319,6 +425,7 @@ export function mergeProviderModels(
               ? { reasoningControl: omittedReasoning.reasoningControl }
               : {}),
           ...(spec?.embedding === undefined ? {} : { embedding: spec.embedding }),
+          ...nativeFields,
         }
       }),
     )
@@ -375,6 +482,12 @@ export function mergeRemoteModelsIntoProvider(
           remoteModel.reasoningSupport ?? presetReasoningSupport.get(remoteModel.id),
         reasoningControl:
           remoteModel.reasoningControl ?? presetReasoningControl.get(remoteModel.id),
+        ...(Object.prototype.hasOwnProperty.call(remoteModel, 'nativeReasoningSupport')
+          ? { nativeReasoningSupport: remoteModel.nativeReasoningSupport }
+          : {}),
+        ...(remoteModel.nativeReasoningSourceFingerprint
+          ? { nativeReasoningSourceFingerprint: remoteModel.nativeReasoningSourceFingerprint }
+          : {}),
       }),
     )
   }
@@ -399,6 +512,10 @@ export interface AvailableChatModel {
   capabilities: ModelCapability[]
   reasoningSupport: ModelReasoningSupport
   reasoningControl?: ModelReasoningControl
+  nativeReasoningSupport?: ModelReasoningSupport
+  nativeReasoningSourceFingerprint?: string
+  effectiveNativeReasoningSupport?: ModelReasoningSupport
+  effectiveNativeReasoningSourceFingerprint?: string
 }
 
 export function collectAvailableChatModels(
@@ -420,6 +537,10 @@ export function collectAvailableChatModels(
         capabilities: normalizeModelCapabilities(canonical),
         reasoningSupport: normalizeModelReasoningSupport(canonical.reasoningSupport),
         ...(canonical.reasoningControl ? { reasoningControl: canonical.reasoningControl } : {}),
+        ...(canonical.nativeReasoningSupport === undefined ? {} : { nativeReasoningSupport: canonical.nativeReasoningSupport }),
+        ...(canonical.nativeReasoningSourceFingerprint ? { nativeReasoningSourceFingerprint: canonical.nativeReasoningSourceFingerprint } : {}),
+        ...(canonical.effectiveNativeReasoningSupport === undefined ? {} : { effectiveNativeReasoningSupport: canonical.effectiveNativeReasoningSupport }),
+        ...(canonical.effectiveNativeReasoningSourceFingerprint ? { effectiveNativeReasoningSourceFingerprint: canonical.effectiveNativeReasoningSourceFingerprint } : {}),
       })
     }
   }

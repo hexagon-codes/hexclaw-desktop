@@ -303,6 +303,8 @@ export default {
       selectStrategy: 'Choose the thinking strategy for this run',
       inherit: 'Follow global (default)',
       auto: 'Auto (recommended)',
+      modelAutomatic: 'Automatic model reasoning',
+      modelAutomaticHint: 'This model reasons automatically; configurable reasoning controls are not declared.',
       on: 'On',
       off: 'Off',
       unsupported: 'Thinking unsupported',

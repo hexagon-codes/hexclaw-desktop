@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import {
   allowedReasoningEfforts,
   normalizeDefaultReasoningPolicy,
@@ -22,6 +23,7 @@ const props = withDefaults(
     scope: 'global' | 'agent'
     support: ModelReasoningSupport
     control?: ModelReasoningControl
+    nativeSupport?: ModelReasoningSupport
     ariaLabel?: string
   }>(),
   { ariaLabel: '' },
@@ -60,14 +62,11 @@ const normalizedPolicy = computed<ReasoningPolicy>(() =>
 
 const allowedEfforts = computed(() => allowedReasoningEfforts(props.control))
 
-const effectiveSupport = computed<ModelReasoningSupport>(() => {
-  if (props.support === 'unsupported') return 'unsupported'
-  if (props.support !== 'supported' || !props.control) return 'unknown'
-  if (props.control.dialect === 'reasoning_effort' && allowedEfforts.value.length === 0) {
-    return 'unknown'
-  }
-  return 'supported'
-})
+const modelState = computed(() => reasoningModelState({
+  reasoningSupport: props.support,
+  reasoningControl: props.control,
+  effectiveNativeReasoningSupport: props.nativeSupport,
+}))
 
 const policyOptions = computed(() => {
   const options: Array<{ value: string; label: string }> = []
@@ -86,40 +85,35 @@ const policyOptions = computed(() => {
   return options
 })
 
-const fallbackPolicy = computed<ReasoningPolicy>(() =>
-  props.scope === 'agent' ? { mode: 'inherit' } : { mode: 'auto' },
-)
-
-const selectedKey = computed(() => policyKey(normalizedPolicy.value))
+const selectedKey = computed(() => policyKey(projectReasoningPolicyForModel(normalizedPolicy.value, {
+  reasoningSupport: props.support,
+  reasoningControl: props.control,
+})))
 
 const selectOptions = computed(() => {
-  if (effectiveSupport.value === 'supported') return policyOptions.value
+  if (modelState.value === 'controllable') return policyOptions.value
   return [
     {
       value: '__capability_status__',
       label:
-        effectiveSupport.value === 'unsupported'
-          ? t('chat.reasoning.unsupported')
-          : t('chat.reasoning.pending'),
+        modelState.value === 'native'
+          ? t('chat.reasoning.modelAutomatic')
+          : modelState.value === 'unsupported'
+            ? t('chat.reasoning.unsupported')
+            : t('chat.reasoning.pending'),
     },
   ]
 })
 
-const selectValue = computed(() =>
-  effectiveSupport.value === 'supported' ? selectedKey.value : '__capability_status__',
-)
-
-watch(
-  [selectedKey, policyOptions],
-  ([value, options]) => {
-    if (options.some((option) => option.value === value)) return
-    emit('update:modelValue', fallbackPolicy.value)
-  },
-  { immediate: true },
-)
+const selectValue = computed(() => {
+  if (modelState.value !== 'controllable') return '__capability_status__'
+  return policyOptions.value.some((option) => option.value === selectedKey.value)
+    ? selectedKey.value
+    : 'auto'
+})
 
 function updatePolicy(value: string) {
-  if (effectiveSupport.value !== 'supported') return
+  if (modelState.value !== 'controllable') return
   if (!policyOptions.value.some((option) => option.value === value)) return
   emit('update:modelValue', policyFromKey(value))
 }
@@ -129,7 +123,8 @@ function updatePolicy(value: string) {
   <HcSelect
     :model-value="selectValue"
     :options="selectOptions"
-    :disabled="effectiveSupport !== 'supported'"
+    :disabled="modelState !== 'controllable'"
+    :title="modelState === 'native' ? t('chat.reasoning.modelAutomaticHint') : undefined"
     :aria-label="ariaLabel || t('chat.reasoning.settingsAriaLabel')"
     @update:model-value="updatePolicy"
   />

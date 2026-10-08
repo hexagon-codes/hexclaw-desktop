@@ -13,6 +13,7 @@ import {
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import ModelSelector from '@/components/common/ModelSelector.vue'
+import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import { useAppStore } from '@/stores/app'
 import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
 import {
@@ -1821,9 +1822,8 @@ const selectedModelReasoningControl = computed<ModelReasoningControl | undefined
 const selectedReasoningEfforts = computed(() =>
   allowedReasoningEfforts(selectedModelReasoningControl.value),
 )
-const deepThinkingUnsupported = computed(
-  () => selectedModelReasoningSupport.value !== 'supported' || !selectedModelReasoningControl.value,
-)
+const selectedReasoningState = computed(() => reasoningModelState(selectedReasoningModel.value))
+const deepThinkingUnsupported = computed(() => selectedReasoningState.value !== 'controllable')
 
 // 当前模型是否支持视觉/视频上传
 const supportsVision = computed(() => selectedModelCapabilities.value.includes('vision'))
@@ -1834,19 +1834,19 @@ const activeSessionThinkingPolicy = computed<ReasoningPolicy>(() => {
   const sessionId = chatStore.currentSessionId
   return sessionId ? getSessionThinkingPolicy(sessionId) : draftThinkingPolicy.value
 })
-const effectiveReasoningPolicy = computed(() =>
-  resolveReasoningPolicy({
+const effectiveReasoningPolicy = computed(() => {
+  const resolved = resolveReasoningPolicy({
     sessionPolicy: activeSessionThinkingPolicy.value,
     agentPolicy: chatStore.agentRole
       ? agentsStore.findAgent(chatStore.agentRole)?.reasoning_policy
       : undefined,
     globalPolicy: settingsStore.config?.llm.defaultReasoningPolicy,
-    nativePolicy: nativeReasoningPolicyFromControl(
-      selectedModelReasoningSupport.value,
-      selectedModelReasoningControl.value,
-    ),
-  }),
-)
+  })
+  return {
+    ...resolved,
+    policy: projectReasoningPolicyForModel(resolved.policy, selectedReasoningModel.value),
+  }
+})
 const effectiveReasoningRequest = computed(() =>
   toReasoningRequest(
     effectiveReasoningPolicy.value.policy,
@@ -1857,6 +1857,7 @@ const effectiveReasoningRequest = computed(() =>
 const isDeepThinking = computed(() => effectiveReasoningRequest.value.thinkingEnabled)
 const selectedThinkingEffort = computed(() => effectiveReasoningRequest.value.thinkingEffort)
 const thinkingControlLabel = computed(() => {
+  if (selectedReasoningState.value === 'native') return t('chat.reasoning.modelAutomatic')
   if (selectedModelReasoningSupport.value !== 'supported' || !isDeepThinking.value) {
     return t('chat.reasoning.trigger')
   }
@@ -1866,6 +1867,7 @@ const thinkingControlLabel = computed(() => {
   return t('chat.reasoning.display', { value })
 })
 const thinkingControlTitle = computed(() => {
+  if (selectedReasoningState.value === 'native') return t('chat.reasoning.modelAutomaticHint')
   if (deepThinkingUnsupported.value) return t('chat.reasoning.unavailable')
   return selectedReasoningEfforts.value.length > 0
     ? t('chat.reasoning.configureEffort')
@@ -2503,12 +2505,11 @@ function resolveRouteReasoning(
   const routeModel = routeReasoningModel(model, provider)
   const reasoningSupport: ModelReasoningSupport = routeModel?.reasoningSupport ?? 'unknown'
   const reasoningControl = routeModel?.reasoningControl
-  const reasoningPolicy = resolveReasoningPolicy({
+  const reasoningPolicy = projectReasoningPolicyForModel(resolveReasoningPolicy({
     sessionPolicy: getSessionThinkingPolicy(sessionId),
     agentPolicy: agentRole ? agentsStore.findAgent(agentRole)?.reasoning_policy : undefined,
     globalPolicy: settingsStore.config?.llm.defaultReasoningPolicy,
-    nativePolicy: nativeReasoningPolicyFromControl(reasoningSupport, reasoningControl),
-  }).policy
+  }).policy, routeModel)
   const reasoningRequest = toReasoningRequest(reasoningPolicy, reasoningSupport, reasoningControl)
   return {
     thinkingEnabled: reasoningRequest.thinkingEnabled,

@@ -18,7 +18,8 @@ import type { ChatMessage, ChatAttachment, RuntimeWireFrame, RuntimeWireSnapshot
 import {
   createRuntimeWireSnapshot,
   mergeRuntimeWireFrame,
-  normalizeReasoningReceipt,
+  mergeReasoningReceipt,
+  parseReasoningReceipt,
   normalizeRuntimeSnapshotMetadata,
   type ReasoningRequest,
 } from '@/types/chat'
@@ -162,9 +163,36 @@ function runtimeMetadata(
 
 function reasoningRequestFromMetadata(
   metadata: Record<string, string> | undefined,
-): ReasoningRequest {
+): ReasoningRequest | null {
   const value = metadata?.thinking ?? metadata?.thinking_enabled
-  return value === 'on' || value === 'true' || value === '1' ? 'on' : 'off'
+  if (value === 'on' || value === 'true' || value === '1') return 'on'
+  if (value === 'off' || value === 'false' || value === '0') return 'off'
+  return null
+}
+
+/** 缺省控制请求仅由已接纳的完整回执确定，未知占位不能锁定期望。 */
+function parseReasoningReceiptWithFacts(value: unknown) {
+  const receipt = parseReasoningReceipt(value)
+  return receipt && (receipt.reasoning_support !== 'unknown' || receipt.reasoning_execution !== 'unknown')
+    ? receipt
+    : undefined
+}
+
+function mergeRuntimeFrameWithExpectation(
+  current: RuntimeWireSnapshot,
+  raw: unknown,
+  route: { provider?: string; model?: string } | undefined,
+  expectedReasoningRequest: ReasoningRequest | null,
+) {
+  const merged = mergeRuntimeWireFrame(current, raw, route, expectedReasoningRequest)
+  const receipt = merged.accepted && merged.frame && merged.frame.sequence > 0 &&
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? parseReasoningReceiptWithFacts((raw as Record<string, unknown>).reasoning_receipt)
+    : undefined
+  return {
+    ...merged,
+    expectedReasoningRequest: expectedReasoningRequest ?? receipt?.reasoning_request ?? null,
+  }
 }
 
 // U9 契约对齐：后端把 RAG/记忆命中作为 done chunk / reply 的**顶层**结构化数组回传
@@ -493,7 +521,8 @@ export function sendViaWebSocket(
     let settled = false
     let accumulatedContent = ''
     const resolvedMetadata = withModelReasoningDefaults(chatParams.model, metadata)
-    let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequestFromMetadata(resolvedMetadata))
+    let expectedReasoningRequest = reasoningRequestFromMetadata(resolvedMetadata)
+    let runtimeSnapshot = createRuntimeWireSnapshot(expectedReasoningRequest ?? undefined)
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fail(new ChatRequestError('Assistant reply timed out — no response received.', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
@@ -533,8 +562,9 @@ export function sendViaWebSocket(
     // 异源（其它请求）的迟到 chunk/reply；未回填时一律投递（零回归）。
     const streamScope = requestId ? { requestId } : undefined
     hexclawWS.onChunk((chunk) => {
-      const merged = mergeRuntimeWireFrame(runtimeSnapshot, chunk, chatParams)
+      const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, chunk, chatParams, expectedReasoningRequest)
       if (!merged.accepted || (chunk.sequence && !merged.frame)) return
+      expectedReasoningRequest = merged.expectedReasoningRequest
       if (merged.frame) runtimeSnapshot = merged.snapshot
       markActivity()
       if (chunk.content) accumulatedContent += chunk.content
@@ -557,8 +587,9 @@ export function sendViaWebSocket(
 
     hexclawWS.onReply((reply) => {
       if (settled) return
-      const merged = mergeRuntimeWireFrame(runtimeSnapshot, reply, chatParams)
+      const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, reply, chatParams, expectedReasoningRequest)
       if (!merged.accepted || (reply.sequence && !merged.frame)) return
+      expectedReasoningRequest = merged.expectedReasoningRequest
       if (merged.frame) runtimeSnapshot = merged.snapshot
       markActivity()
       settled = true
@@ -620,13 +651,14 @@ function openRequestSocket(
   callbacks: StreamCallbacks | undefined,
   buildPayload: () => Record<string, unknown>,
   route?: { provider?: string; model?: string },
-  reasoningRequest: ReasoningRequest = 'off',
+  reasoningRequest: ReasoningRequest | null = null,
 ): WebSocketStreamHandle {
   const ws = new NativeSidecarWebSocket('/ws')
 
   let settled = false
   let accumulatedContent = ''
-  let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequest)
+  let expectedReasoningRequest = reasoningRequest
+  let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequest ?? undefined)
   let firstReplyTimer: ReturnType<typeof setTimeout> | null = null
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
   let resolveDone!: (value: WebSocketStreamResult | null) => void
@@ -762,8 +794,9 @@ function openRequestSocket(
 
     switch (msg.type) {
       case 'chunk': {
-        const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+        const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, msg, route, expectedReasoningRequest)
         if (!merged.accepted || (msg.sequence && !merged.frame)) break
+        expectedReasoningRequest = merged.expectedReasoningRequest
         if (merged.frame) runtimeSnapshot = merged.snapshot
         markActivity()
         if (msg.content) accumulatedContent += msg.content
@@ -791,35 +824,47 @@ function openRequestSocket(
           Array.isArray(msg.metadata?.runtime_events)
         let runtimeFrame: RuntimeWireFrame | undefined
         if (hasAtomicRuntimeSnapshot) {
+          const snapshotSource = {
+            ...msg.metadata,
+            assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
+            message_id: msg.message_id ?? msg.metadata?.message_id,
+            reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
+            reasoning_receipt: msg.reasoning_receipt ?? msg.metadata?.reasoning_receipt,
+            runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
+            last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
+          }
           const snapshotMetadata = normalizeRuntimeSnapshotMetadata(
-            {
-              ...msg.metadata,
-              assistant_message_id: msg.assistant_message_id ?? msg.metadata?.assistant_message_id,
-              message_id: msg.message_id ?? msg.metadata?.message_id,
-              reasoning_disclosure: msg.reasoning_disclosure ?? msg.metadata?.reasoning_disclosure,
-              reasoning_receipt: msg.reasoning_receipt ?? msg.metadata?.reasoning_receipt,
-              runtime_events: msg.runtime_events ?? msg.metadata?.runtime_events,
-              last_sequence: msg.last_sequence ?? msg.metadata?.last_sequence,
-            },
+            snapshotSource,
             undefined,
             route,
-            runtimeSnapshot.reasoningReceipt.reasoning_request,
+            expectedReasoningRequest ?? undefined,
           )
+          const candidateReceipt = parseReasoningReceiptWithFacts(snapshotSource.reasoning_receipt)
+          const hasReceiptAuthority = snapshotMetadata.assistant_message_id &&
+            (!runtimeSnapshot.assistantMessageId || snapshotMetadata.assistant_message_id === runtimeSnapshot.assistantMessageId) &&
+            Number(snapshotMetadata.last_sequence) > 0 &&
+            Number(snapshotMetadata.last_sequence) >= runtimeSnapshot.lastSequence
+          const reasoningReceipt = candidateReceipt && (expectedReasoningRequest !== null || hasReceiptAuthority)
+            ? expectedReasoningRequest === null
+              ? candidateReceipt
+              : mergeReasoningReceipt(runtimeSnapshot.reasoningReceipt, candidateReceipt)
+            : runtimeSnapshot.reasoningReceipt
+          if (expectedReasoningRequest === null && hasReceiptAuthority && candidateReceipt) {
+            expectedReasoningRequest = candidateReceipt.reasoning_request
+          }
           runtimeSnapshot = {
             assistantMessageId: snapshotMetadata.assistant_message_id,
             aliases: snapshotMetadata.assistant_message_aliases ?? [],
             lastSequence: Number(snapshotMetadata.last_sequence) || 0,
             runtimeEvents: snapshotMetadata.runtime_events ?? [],
             reasoningDisclosure: snapshotMetadata.reasoning_disclosure,
-            reasoningReceipt: normalizeReasoningReceipt(
-              snapshotMetadata.reasoning_receipt,
-              runtimeSnapshot.reasoningReceipt.reasoning_request,
-            ),
+            reasoningReceipt,
             acceptedFrames: {},
           }
         } else {
-          const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+          const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, msg, route, expectedReasoningRequest)
           if (!merged.accepted || (msg.sequence && !merged.frame)) break
+          expectedReasoningRequest = merged.expectedReasoningRequest
           if (merged.frame) runtimeSnapshot = merged.snapshot
           runtimeFrame = merged.frame
         }
@@ -850,8 +895,9 @@ function openRequestSocket(
         break
       }
       case 'reply': {
-        const merged = mergeRuntimeWireFrame(runtimeSnapshot, msg, route)
+        const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, msg, route, expectedReasoningRequest)
         if (!merged.accepted || (msg.sequence && !merged.frame)) break
+        expectedReasoningRequest = merged.expectedReasoningRequest
         if (merged.frame) runtimeSnapshot = merged.snapshot
         markActivity()
         settleResolve({

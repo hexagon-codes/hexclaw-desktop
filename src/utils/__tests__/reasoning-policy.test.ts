@@ -35,7 +35,7 @@ describe('reasoning policy', () => {
     })
   })
 
-  it('uses the model native policy when a higher scope explicitly chooses auto', () => {
+  it('preserves auto when a higher scope delegates the choice to the model', () => {
     expect(resolveReasoningPolicy({
       sessionPolicy: { mode: 'inherit' },
       agentPolicy: { mode: 'inherit' },
@@ -43,7 +43,7 @@ describe('reasoning policy', () => {
       nativePolicy: { mode: 'effort', effort: 'high' },
     })).toEqual({
       source: 'global',
-      policy: { mode: 'effort', effort: 'high' },
+      policy: { mode: 'auto' },
     })
   })
 

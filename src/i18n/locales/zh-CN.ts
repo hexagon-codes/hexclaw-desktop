@@ -304,6 +304,8 @@ export default {
       selectStrategy: '选择执行时的思考策略',
       inherit: '跟随全局（默认）',
       auto: '自动（推荐）',
+      modelAutomatic: '模型自动推理',
+      modelAutomaticHint: 'This model reasons automatically; configurable reasoning controls are not declared.',
       on: '开启',
       off: '关闭',
       unsupported: '不支持思考',

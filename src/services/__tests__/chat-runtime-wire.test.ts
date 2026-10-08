@@ -94,6 +94,175 @@ describe('CHAT-INV-THINKING-007 Desktop runtime wire', () => {
     vi.stubGlobal('WebSocket', RuntimeWireWebSocket as unknown as typeof WebSocket)
   })
 
+  it.each([undefined, { thinking: 'auto' }])('adopts a trusted inherited control receipt for %j metadata', async (metadata) => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '', undefined, undefined, metadata)
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit(fullFrame({
+      content: 'answer', done: true,
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    await expect(handle.done).resolves.toMatchObject({
+      metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+  })
+
+  it.each([
+    ['off', 'on'],
+    ['on', 'off'],
+  ])('keeps explicit %s strict when the receipt requests %s', async (request, receiptRequest) => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '', undefined, undefined, { thinking: request })
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit(fullFrame({
+      content: 'answer', done: true,
+      reasoning_receipt: { version: 1, reasoning_request: receiptRequest, reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    await expect(handle.done).resolves.toMatchObject({
+      metadata: { reasoning_receipt: { reasoning_request: request, reasoning_support: 'unknown', reasoning_execution: 'unknown' } },
+    })
+  })
+
+  it('keeps missing receipts unbound and raw replay idempotent after the first authority', async () => {
+    const onChunk = vi.fn()
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '', undefined, { onChunk })
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    const first = fullFrame({ content: 'A' })
+    socket.emit(first)
+    socket.emit(fullFrame({
+      sequence: 2, content: 'B',
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    socket.emit(first)
+    socket.emit({ ...first, content: 'conflicting replay' })
+    socket.emit(fullFrame({
+      sequence: 3, content: 'C',
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'unknown' },
+    }))
+    socket.emit(fullFrame({ sequence: 4, content: 'D', done: true }))
+    await expect(handle.done).resolves.toMatchObject({
+      content: 'ABCD', metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+    expect(onChunk).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not bind a malformed first receipt before the later complete authority', async () => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '')
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit(fullFrame({
+      content: 'A',
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'unknown' },
+    }))
+    socket.emit(fullFrame({
+      sequence: 2, content: 'B', done: true,
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    await expect(handle.done).resolves.toMatchObject({
+      content: 'AB', metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+  })
+
+  it('binds the first accepted authority and ignores a later opposite control receipt', async () => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '')
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit(fullFrame({
+      content: 'A',
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    socket.emit(fullFrame({
+      sequence: 2, content: 'B', done: true,
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    await expect(handle.done).resolves.toMatchObject({
+      content: 'AB', metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_execution: 'applied' } },
+    })
+  })
+
+  it('does not bind a receipt from a rejected alias or sequence gap', async () => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '')
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    const badReceipt = { version: 1, reasoning_request: 'off', reasoning_support: 'supported', reasoning_execution: 'applied' }
+    socket.emit(fullFrame({ message_id: 'different-alias', reasoning_receipt: badReceipt }))
+    socket.emit(fullFrame({ sequence: 2, reasoning_receipt: badReceipt }))
+    socket.emit(fullFrame({
+      content: 'answer', done: true,
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    await expect(handle.done).resolves.toMatchObject({
+      metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+  })
+
+  it('adopts the inherited receipt only from an atomic snapshot with a valid identity and sequence', async () => {
+    const onSnapshot = vi.fn()
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '', undefined, { onSnapshot })
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit({
+      type: 'stream_snapshot', content: '', last_sequence: 0, runtime_events: [],
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    })
+    expect(onSnapshot.mock.calls[0]?.[0].metadata.reasoning_receipt).toMatchObject({
+      reasoning_request: 'off', reasoning_support: 'unknown', reasoning_execution: 'unknown',
+    })
+    socket.emit({
+      type: 'stream_snapshot', content: 'answer', done: true,
+      assistant_message_id: 'assistant-backend-1', message_id: 'assistant-backend-1',
+      last_sequence: 3, runtime_events: [],
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    })
+    await expect(handle.done).resolves.toMatchObject({
+      metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+  })
+
+  it('leaves a complete bootstrap placeholder unbound before the actual receipt and preserves its replay', async () => {
+    const onChunk = vi.fn()
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '', undefined, { onChunk })
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    const bootstrap = fullFrame({
+      content: 'A',
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'unknown', reasoning_execution: 'unknown' },
+    })
+    socket.emit(bootstrap)
+    socket.emit(fullFrame({
+      sequence: 2, content: 'B',
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    }))
+    socket.emit(bootstrap)
+    socket.emit(fullFrame({ sequence: 3, content: 'C', done: true }))
+    await expect(handle.done).resolves.toMatchObject({
+      content: 'ABC', metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+    expect(onChunk).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not bind an atomic bootstrap placeholder even with a canonical identity and positive sequence', async () => {
+    const handle = openWebSocketStream('hello', 's1', { provider: 'openai', model: 'gpt-5.6-sol' }, '')
+    const socket = RuntimeWireWebSocket.instances[0]!
+    socket.open()
+    socket.emit({
+      type: 'stream_snapshot', content: 'A',
+      assistant_message_id: 'assistant-backend-1', message_id: 'assistant-backend-1',
+      last_sequence: 1, runtime_events: [],
+      reasoning_receipt: { version: 1, reasoning_request: 'off', reasoning_support: 'unknown', reasoning_execution: 'unknown' },
+    })
+    socket.emit({
+      type: 'stream_snapshot', content: 'answer', done: true,
+      assistant_message_id: 'assistant-backend-1', message_id: 'assistant-backend-1',
+      last_sequence: 2, runtime_events: [],
+      reasoning_receipt: { version: 1, reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' },
+    })
+    await expect(handle.done).resolves.toMatchObject({
+      metadata: { reasoning_receipt: { reasoning_request: 'on', reasoning_support: 'supported', reasoning_execution: 'applied' } },
+    })
+  })
+
   it('keeps legacy content frames compatible but fails raw reasoning closed', async () => {
     const onChunk = vi.fn()
     const handle = openWebSocketStream(

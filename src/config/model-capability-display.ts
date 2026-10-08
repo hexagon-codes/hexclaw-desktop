@@ -5,13 +5,14 @@ export type DisplayModelCapability = ModelCapability | 'tools' | 'thinking'
 
 /** 推理标签只从精确且有效的声明派生，不进入模型 capabilities 持久化。 */
 export function displayModelCapabilities(
-  model: Pick<ModelOption, 'capabilities' | 'reasoningSupport' | 'reasoningControl'>,
+  model: Pick<ModelOption, 'capabilities' | 'reasoningSupport' | 'reasoningControl' | 'nativeReasoningSupport' | 'effectiveNativeReasoningSupport'>,
   fallback: readonly ModelCapability[] = ['text'],
 ): DisplayModelCapability[] {
   const result: DisplayModelCapability[] = [...(model.capabilities ?? fallback)]
   if (
-    normalizeModelReasoningSupport(model.reasoningSupport) === 'supported' &&
-    normalizeModelReasoningControl(model.reasoningControl)
+    normalizeModelReasoningSupport(model.effectiveNativeReasoningSupport ?? model.nativeReasoningSupport) === 'supported' ||
+    (normalizeModelReasoningSupport(model.reasoningSupport) === 'supported' &&
+      normalizeModelReasoningControl(model.reasoningControl))
   ) {
     result.push('thinking')
   }

@@ -3,12 +3,9 @@ export function isQwenThinkingModel(model?: string): boolean {
 }
 
 export function withModelReasoningDefaults(
-  model?: string,
+  _model?: string,
   metadata?: Record<string, string>,
 ): Record<string, string> | undefined {
   const nextMetadata = { ...metadata }
-  if (isQwenThinkingModel(model) && nextMetadata.thinking === undefined) {
-    nextMetadata.thinking = 'off'
-  }
   return Object.keys(nextMetadata).length > 0 ? nextMetadata : undefined
 }

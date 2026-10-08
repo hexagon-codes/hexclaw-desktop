@@ -36,12 +36,12 @@ import {
   userVisibleAgents,
 } from '@/utils/imChannelBinding'
 import {
-  nativeReasoningPolicyFromControl,
   normalizeDefaultReasoningPolicy,
   normalizeReasoningPolicy,
   resolveReasoningPolicy,
 } from '@/utils/reasoning-policy'
 import { useSettingsStore } from '@/stores/settings'
+import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import SearchInput from '@/components/common/SearchInput.vue'
 
 const props = defineProps<{ instance: IMInstance }>()
@@ -140,24 +140,23 @@ function modelDisplayName(): string {
   return exactEffectiveModel.value?.modelName || effective.modelId
 }
 
-/** 通道只读投影：仅精确 supported 模型展示最终生效策略，不提供通道级选择或写入。 */
+/** 通道只读投影共用精确模型能力，不提供通道级选择或写入。 */
 const channelReasoningValue = computed(() => {
   const model = exactEffectiveModel.value
-  if (model?.reasoningSupport !== 'supported' || !model.reasoningControl) return ''
-  const resolved = resolveReasoningPolicy({
+  const state = reasoningModelState(model)
+  if (state === 'native') return t('chat.reasoning.modelAutomatic')
+  if (state !== 'controllable') return ''
+  const resolved = projectReasoningPolicyForModel(resolveReasoningPolicy({
     sessionPolicy: { mode: 'inherit' },
     agentPolicy: normalizeReasoningPolicy(getBoundAgent()?.reasoning_policy),
     globalPolicy: normalizeDefaultReasoningPolicy(
       settingsStore?.config?.llm?.defaultReasoningPolicy,
     ),
-    nativePolicy: nativeReasoningPolicyFromControl(
-      model.reasoningSupport,
-      model.reasoningControl,
-    ),
-  }).policy
-  return resolved.mode === 'effort'
+  }).policy, model)
+  const value = resolved.mode === 'effort'
     ? t(`chat.reasoning.effortOption.${resolved.effort}`)
     : t(`chat.reasoning.${resolved.mode}`)
+  return t('chat.reasoning.display', { value })
 })
 
 function effectiveModelSourceLabel(): string {
@@ -391,8 +390,12 @@ onBeforeUnmount(() => {
           ? modelDisplayName()
           : t('imChannels.noDefaultModel', '未配置默认模型') }}</bdi>
       </span>
-      <span v-if="channelReasoningValue" class="hc-cab__effmodel-reasoning">
-        {{ t('chat.reasoning.display', { value: channelReasoningValue }) }}
+      <span
+        v-if="channelReasoningValue"
+        class="hc-cab__effmodel-reasoning"
+        :title="reasoningModelState(exactEffectiveModel) === 'native' ? t('chat.reasoning.modelAutomaticHint') : undefined"
+      >
+        {{ channelReasoningValue }}
       </span>
       <span class="hc-cab__effmodel-source">{{ effectiveModelSourceLabel() }}</span>
     </div>

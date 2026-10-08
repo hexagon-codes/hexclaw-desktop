@@ -17,7 +17,7 @@ describe('buildChatRequestMetadata', () => {
     ).toBe('on')
   })
 
-  it('sends thinking_effort only for an enabled exact reasoning_effort model', () => {
+  it('keeps explicit effort intent independent from presentation and model control mapping', () => {
     const effortMetadata = buildChatRequestMetadata({
       thinkingEnabled: true,
       memoryEnabled: true,
@@ -48,8 +48,8 @@ describe('buildChatRequestMetadata', () => {
     } as never)
 
     expect(effortMetadata).toEqual({ thinking: 'on', thinking_effort: 'high' })
-    expect(booleanDialectMetadata).toEqual({ thinking: 'on' })
-    expect(disabledMetadata).toEqual({ thinking: 'off' })
+    expect(booleanDialectMetadata).toEqual({ thinking: 'on', thinking_effort: 'high' })
+    expect(disabledMetadata).toEqual({ thinking: 'on', thinking_effort: 'high' })
   })
 
   it('sends agent_mode for explicit non-auto modes', () => {

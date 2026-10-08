@@ -1,12 +1,9 @@
 import type { ModelReasoningControl, ReasoningPolicy } from '@/types'
-import {
-  allowedReasoningEfforts,
-  normalizeReasoningPolicy,
-} from '@/utils/reasoning-policy'
+import { normalizeReasoningPolicy } from '@/utils/reasoning-policy'
 
 export function buildChatRequestMetadata(params: {
   thinkingEnabled: boolean
-  /** 发送瞬间冻结的策略；只用于判断是否需要透传 thinking_effort。 */
+  /** 发送瞬间冻结的请求策略，模型控制参数由后端精确合同映射。 */
   reasoningPolicy?: ReasoningPolicy
   /** 发送瞬间冻结的精确模型控制合同。 */
   reasoningControl?: ModelReasoningControl
@@ -33,15 +30,11 @@ export function buildChatRequestMetadata(params: {
     metadata.pinned_agent = params.pinnedAgent.trim() || 'default'
     metadata.producer_kind = 'chat'
   }
-  metadata.thinking = params.thinkingEnabled ? 'on' : 'off'
   const reasoningPolicy = normalizeReasoningPolicy(params.reasoningPolicy)
-  const allowedEfforts = allowedReasoningEfforts(params.reasoningControl)
-  if (
-    params.thinkingEnabled &&
-    params.reasoningControl?.dialect === 'reasoning_effort' &&
-    reasoningPolicy.mode === 'effort' &&
-    allowedEfforts.includes(reasoningPolicy.effort)
-  ) {
+  metadata.thinking = reasoningPolicy.mode === 'inherit'
+    ? params.thinkingEnabled ? 'on' : 'off'
+    : reasoningPolicy.mode === 'effort' ? 'on' : reasoningPolicy.mode
+  if (reasoningPolicy.mode === 'effort') {
     metadata.thinking_effort = reasoningPolicy.effort
   }
   if (!params.memoryEnabled) metadata.memory = 'off'

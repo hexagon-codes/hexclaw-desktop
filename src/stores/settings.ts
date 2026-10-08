@@ -1,5 +1,5 @@
 import { backendContext, backendStorageKey, backendLocalStorage, backendScopeKey } from '@/services/backend-context'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, readonly } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
@@ -138,6 +138,12 @@ export const useSettingsStore = defineStore('settings', () => {
   let llmConfigBaseline: BackendLLMConfig | null = null
   let llmConfigScope = backendScopeKey()
   let configBackendStorageKey = backendStorageKey(CONFIG_STORE_KEY)
+  const modelPersistenceStarted = ref(0)
+  const persistedModelReceipt = ref<{
+    scope: string
+    sequence: number
+    providers: Array<{ providerInstanceId: string; models: ModelOption[]; selectedModelId: string }>
+  } | null>(null)
 
   function recordLLMConfigConditions(
     snapshot?: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> & Partial<BackendLLMConfig>,
@@ -158,6 +164,31 @@ export const useSettingsStore = defineStore('settings', () => {
     getLLMConfigConditions: () => llmConfigScope === backendScopeKey() ? llmConfigConditions : null,
     getLLMConfigBaseline: () => llmConfigScope === backendScopeKey() ? llmConfigBaseline : null,
     recordLLMConfigConditions,
+    beginModelPersistence: () => ++modelPersistenceStarted.value,
+    recordPersistedModels: ({ scope, sequence, providers, submitted, persisted }) => {
+      if (scope !== backendScopeKey()) return
+      const restored = backendToProviders(persisted, providers)
+      const modelContract = (provider: BackendLLMConfig['providers'][string] | undefined) =>
+        JSON.stringify({ models: provider?.models, modelSpecs: provider?.model_specs, model: provider?.model })
+      persistedModelReceipt.value = {
+        scope,
+        sequence,
+        providers: restored.flatMap(provider => {
+          const instanceId = provider.providerInstanceId
+          const actual = Object.values(persisted.providers).find(item => item.provider_instance_id === instanceId)
+          if (!instanceId || !actual) return []
+          const expected = Object.values(submitted.providers).find(item => item.provider_instance_id === instanceId)
+          const source = providers.find(item => item.providerInstanceId === instanceId)
+          // 未被条件合并改变的模型合同沿原提交快照取值，保留模型对象的既有属性顺序。
+          const models = source && modelContract(actual) === modelContract(expected) ? source.models : provider.models
+          return [{
+            providerInstanceId: instanceId,
+            models: JSON.parse(JSON.stringify(models)) as ModelOption[],
+            selectedModelId: actual.model || '',
+          }]
+        }),
+      }
+    },
   })
 
   const ollamaAddressTransitions: Array<{ id: string; before: string; after: string }> = []
@@ -706,6 +737,8 @@ export const useSettingsStore = defineStore('settings', () => {
     loading,
     error,
     runtimeProviders,
+    modelPersistenceStarted: readonly(modelPersistenceStarted),
+    persistedModelReceipt: readonly(persistedModelReceipt),
     backendConfigLoaded,
     enabledProviders,
     availableModels,

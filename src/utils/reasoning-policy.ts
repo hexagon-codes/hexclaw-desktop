@@ -104,33 +104,23 @@ export function nativeReasoningPolicyFromControl(
     : { mode: 'off' }
 }
 
-function normalizeNativePolicy(value: unknown): ReasoningPolicy {
-  const policy = normalizeReasoningPolicy(value)
-  return policy.mode === 'on' || policy.mode === 'off' || policy.mode === 'effort'
-    ? policy
-    : { mode: 'off' }
-}
-
-/** 统一实现 session > Agent > global > native 的优先级，auto 显式委托给模型原生值。 */
+/** 统一实现 session > Agent > global 的优先级，auto 保留为模型自行决定的请求意图。 */
 export function resolveReasoningPolicy(input: {
   sessionPolicy?: unknown
   agentPolicy?: unknown
   globalPolicy?: unknown
   nativePolicy?: unknown
 }): ResolvedReasoningPolicy {
-  const nativePolicy = normalizeNativePolicy(input.nativePolicy)
   const candidates: Array<{ source: Exclude<ReasoningPolicySource, 'native'>; policy: ReasoningPolicy }> = [
     { source: 'session', policy: normalizeReasoningPolicy(input.sessionPolicy) },
     { source: 'agent', policy: normalizeReasoningPolicy(input.agentPolicy) },
     { source: 'global', policy: normalizeDefaultReasoningPolicy(input.globalPolicy) },
   ]
   const selected = candidates.find((candidate) => candidate.policy.mode !== 'inherit')
-  if (!selected) return { source: 'native', policy: cloneReasoningPolicy(nativePolicy) }
+  if (!selected) return { source: 'native', policy: { mode: 'auto' } }
   return {
     source: selected.source,
-    policy: selected.policy.mode === 'auto'
-      ? cloneReasoningPolicy(nativePolicy)
-      : cloneReasoningPolicy(selected.policy),
+    policy: cloneReasoningPolicy(selected.policy),
   }
 }
 

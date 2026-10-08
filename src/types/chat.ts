@@ -148,7 +148,7 @@ export function parseReasoningReceipt(value: unknown): ReasoningReceipt | undefi
   }
 }
 
-function mergeReasoningReceipt(
+export function mergeReasoningReceipt(
   current: ReasoningReceipt,
   next: ReasoningReceipt,
 ): ReasoningReceipt {
@@ -269,6 +269,7 @@ export function mergeRuntimeWireFrame(
   current: RuntimeWireSnapshot,
   raw: unknown,
   route?: { provider?: string; model?: string },
+  expectedReasoningRequest: ReasoningRequest | null = current.reasoningReceipt.reasoning_request,
 ): { snapshot: RuntimeWireSnapshot; frame?: RuntimeWireFrame; accepted: boolean } {
   if (!isRecord(raw)) return { snapshot: current, accepted: false }
   const canonical = nonEmptyString(raw.assistant_message_id) ? raw.assistant_message_id : undefined
@@ -284,11 +285,12 @@ export function mergeRuntimeWireFrame(
   const candidateReasoningReceipt =
     raw.reasoning_receipt === undefined
       ? current.reasoningReceipt
-      : normalizeReasoningReceipt(raw.reasoning_receipt, current.reasoningReceipt.reasoning_request)
-  const reasoningReceipt = mergeReasoningReceipt(
-    current.reasoningReceipt,
-    candidateReasoningReceipt,
-  )
+      : expectedReasoningRequest === null
+        ? sequence > 0 ? parseReasoningReceipt(raw.reasoning_receipt) ?? current.reasoningReceipt : current.reasoningReceipt
+        : normalizeReasoningReceipt(raw.reasoning_receipt, expectedReasoningRequest)
+  const reasoningReceipt = expectedReasoningRequest === null
+    ? candidateReasoningReceipt
+    : mergeReasoningReceipt(current.reasoningReceipt, candidateReasoningReceipt)
   if (sequence === 0) {
     if (candidateId || raw.reasoning_disclosure != null || raw.runtime_event != null) {
       return { snapshot: current, accepted: false }

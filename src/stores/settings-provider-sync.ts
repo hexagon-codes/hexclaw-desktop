@@ -22,6 +22,14 @@ interface SettingsProviderSyncContext {
   recordLLMConfigConditions: (
     receipt: Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> & Partial<BackendLLMConfig>,
   ) => void
+  beginModelPersistence?: () => number
+  recordPersistedModels?: (commit: {
+    scope: string
+    sequence: number
+    providers: ProviderConfig[]
+    submitted: BackendLLMConfig
+    persisted: BackendLLMConfig
+  }) => void
 }
 
 /**
@@ -52,6 +60,7 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
     draft: BackendLLMConfig,
     replacements: ProviderCredentialReplacement[],
     origin = captureOrigin(),
+    onPersisted?: (payload: BackendLLMConfig) => void,
   ) {
     const assertScope = () => {
       if (backendScopeKey() !== origin.scope) throw new Error('Backend connection changed during configuration save')
@@ -71,6 +80,7 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
       )
       assertScope()
       context.recordLLMConfigConditions({ ...value, ...receipt })
+      onPersisted?.(value)
       return receipt
     }
     try {
@@ -120,6 +130,7 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
       if (!current) return
       const snapshot: AppConfig = JSON.parse(JSON.stringify(current))
       const origin = captureOrigin()
+      const sequence = context.beginModelPersistence?.() ?? 0
       snapshot.llm.providers = await materializeProviderApiKeys(snapshot.llm.providers)
       const backendConfig = providersToBackend(
           snapshot.llm.providers,
@@ -132,6 +143,14 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
         backendConfig,
         providerCredentialReplacements(snapshot.llm.providers),
         origin,
+        // 只在真实提交成功后传递本次实际 payload，不以完成时的可变配置代替。
+        (persisted) => context.recordPersistedModels?.({
+          scope: origin.scope,
+          sequence,
+          providers: snapshot.llm.providers,
+          submitted: backendConfig,
+          persisted,
+        }),
       )
     })
     void queued.catch((error) => {

@@ -6,6 +6,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-catalog'
 import {
   canonicalizeModelOption,
+  applyCatalogNativeReasoningContract,
   isChatModelOption,
   mergeCatalogModelCapabilities,
   resolveProviderSelectedModelId,
@@ -55,7 +56,7 @@ const draftSelectedModelId = ref('')
 const baselineModels = ref<ModelOption[]>([])
 const baselineSelectedModelId = ref('')
 
-const catalog = computed(() => catalogStore.getCatalog(props.provider.id))
+const catalog = computed(() => catalogStore.getCatalog(props.provider.id, props.provider))
 const lastSuccessfulSyncAt = computed(() =>
   catalog.value?.source === 'remote' ? catalog.value.syncedAt : '',
 )
@@ -94,6 +95,8 @@ function comparableModel(model: ModelOption) {
     capabilities: canonical.capabilities ?? [],
     embedding: canonical.embedding ?? null,
     toolReliability: canonical.toolReliability ?? null,
+    nativeReasoningSupport: canonical.nativeReasoningSupport ?? null,
+    nativeReasoningSourceFingerprint: canonical.nativeReasoningSourceFingerprint ?? null,
   }
 }
 
@@ -288,18 +291,18 @@ function applyCatalogReasoningContract(
 ): ModelOption {
   const hasReasoningSupport = Object.prototype.hasOwnProperty.call(catalogModel, 'reasoningSupport')
   const hasReasoningControl = Object.prototype.hasOwnProperty.call(catalogModel, 'reasoningControl')
-  if (!hasReasoningSupport && !hasReasoningControl) return model
+  if (!hasReasoningSupport && !hasReasoningControl) return applyCatalogNativeReasoningContract(model, catalogModel)
 
   const next = { ...model }
   delete next.reasoningSupport
   delete next.reasoningControl
   if (hasReasoningSupport) next.reasoningSupport = catalogModel.reasoningSupport
   if (hasReasoningControl) next.reasoningControl = catalogModel.reasoningControl
-  return next
+  return applyCatalogNativeReasoningContract(next, catalogModel)
 }
 
 function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelOption {
-  if (existing?.isCustom) return cloneModelOption(existing)
+  if (existing?.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(cloneModelOption(existing), m))
   if (existing) {
     return canonicalizeModelOption(
       applyCatalogReasoningContract(
@@ -326,7 +329,6 @@ function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelO
 }
 
 function normalizeAgainstCatalog(model: ModelOption): ModelOption {
-  if (model.isCustom) return cloneModelOption(model)
   const catalogModel = catalogModels.value.find((candidate) => candidate.id === model.id)
   return catalogModel ? modelOptionFromCatalog(catalogModel, model) : cloneModelOption(model)
 }

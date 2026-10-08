@@ -38,6 +38,7 @@ import type {
   ReasoningPolicy,
 } from '@/types'
 import { normalizeReasoningPolicy } from '@/utils/reasoning-policy'
+import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import { isAgentDisplayNameValid } from '@/utils/agent-display-name'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { logger } from '@/utils/logger'
@@ -324,6 +325,7 @@ const resolvedGlobalDefaultModel = computed(() => {
 interface AgentReasoningCapability {
   support: ModelReasoningSupport
   control?: ModelReasoningControl
+  nativeSupport?: ModelReasoningSupport
 }
 
 /** Agent 显式模型优先，否则按全局默认的 Provider 实例与模型精确解析能力。 */
@@ -343,7 +345,11 @@ function reasoningCapabilityForAgent(agent: AgentConfig): AgentReasoningCapabili
     )
   }
   return match
-    ? { support: match.reasoningSupport, control: match.reasoningControl }
+    ? {
+        support: match.reasoningSupport,
+        control: match.reasoningControl,
+        nativeSupport: match.effectiveNativeReasoningSupport ?? match.nativeReasoningSupport,
+      }
     : { support: 'unknown' }
 }
 
@@ -406,11 +412,20 @@ async function toggleAddSkills() {
 }
 
 function reasoningPolicySummary(agent: AgentConfig, capability: AgentReasoningCapability): string {
-  if (capability.support === 'unsupported') return t('chat.reasoning.unsupported')
-  if (capability.support !== 'supported' || !capability.control) {
+  const state = reasoningModelState({
+    reasoningSupport: capability.support,
+    reasoningControl: capability.control,
+    effectiveNativeReasoningSupport: capability.nativeSupport,
+  })
+  if (state === 'native') return t('chat.reasoning.modelAutomatic')
+  if (state === 'unsupported') return t('chat.reasoning.unsupported')
+  if (state !== 'controllable') {
     return t('chat.reasoning.pending')
   }
-  const policy = normalizeReasoningPolicy(agent.reasoning_policy)
+  const policy = projectReasoningPolicyForModel(agent.reasoning_policy, {
+    reasoningSupport: capability.support,
+    reasoningControl: capability.control,
+  })
   const value =
     policy.mode === 'effort'
       ? t(`chat.reasoning.effortOption.${policy.effort}`)
@@ -1705,6 +1720,7 @@ async function handleUnregisterAgent() {
                         scope="agent"
                         :support="newAgentReasoningCapability.support"
                         :control="newAgentReasoningCapability.control"
+                        :native-support="newAgentReasoningCapability.nativeSupport"
                         :aria-label="t('chat.reasoning.selectStrategy')"
                       />
                       <span
@@ -2115,6 +2131,7 @@ async function handleUnregisterAgent() {
                       scope="agent"
                       :support="editAgentReasoningCapability.support"
                       :control="editAgentReasoningCapability.control"
+                      :native-support="editAgentReasoningCapability.nativeSupport"
                       :aria-label="t('chat.reasoning.selectStrategy')"
                     />
                     <span

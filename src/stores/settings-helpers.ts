@@ -7,6 +7,7 @@ import {
   cloneModels,
   embeddingContractForModel,
   isChatModelOption,
+  invalidateModelNativeReasoning,
   mergeProviderModels,
   mergeRemoteModelsIntoProvider,
   normalizeModelCapabilities,
@@ -23,6 +24,7 @@ import type {
   BackendLLMProvider,
 } from '@/types'
 import { cloneProviders } from './settings-provider-copy'
+import { isMaskedApiKey } from './settings-provider-secrets'
 
 export {
   canonicalizeModelOption,
@@ -141,6 +143,7 @@ export function invalidateChangedProviderProbeReceipt(
   previous: ProviderConfig | undefined,
   next: ProviderConfig | undefined,
 ): void {
+  invalidateChangedProviderNativeReasoning(previous, next)
   if (
     !previous ||
     !next ||
@@ -149,6 +152,31 @@ export function invalidateChangedProviderProbeReceipt(
   )
     return
   next.probeReceipt = undefined
+}
+
+/** 原生来源只跟随物理实例、地址和有效 Key，展示名及默认模型不参与。 */
+export function invalidateChangedProviderNativeReasoning(
+  previous: ProviderConfig | undefined,
+  next: ProviderConfig | undefined,
+): void {
+  if (!previous || !next) return
+  const preservesCredential =
+    isMaskedApiKey(next.apiKey) &&
+    next.apiKeyMutation !== 'delete' &&
+    next.credentialRef === previous.credentialRef
+  const credentialChanged =
+    (next.apiKeyMutation === 'delete' && Boolean(previous.apiKey.trim() || previous.credentialPresent)) ||
+    (!preservesCredential && previous.apiKey.trim() !== next.apiKey.trim())
+  const sourceChanged =
+    previous.providerInstanceId !== next.providerInstanceId ||
+    previous.type !== next.type ||
+    previous.baseUrl.trim().replace(/\/+$/, '') !== next.baseUrl.trim().replace(/\/+$/, '') ||
+    credentialChanged ||
+    (Boolean(previous.nativeReasoningSourceFingerprint && next.nativeReasoningSourceFingerprint) &&
+      previous.nativeReasoningSourceFingerprint !== next.nativeReasoningSourceFingerprint)
+  if (!sourceChanged) return
+  next.models = next.models.map(invalidateModelNativeReasoning)
+  delete next.nativeReasoningSourceFingerprint
 }
 
 /** 后端加载后，在有效的本地选择与后端默认之间确定可恢复的默认模型。 */
@@ -420,6 +448,7 @@ export function backendToProviders(
     const nextProvider: ProviderConfig = {
       id: localProvider?.id ?? name,
       providerInstanceId: p.provider_instance_id ?? localProvider?.providerInstanceId,
+      nativeReasoningSourceFingerprint: p.native_reasoning_source_fingerprint,
       probeReceipt,
       backendKey: name,
       name: p.display_name?.trim() || localProvider?.name || name,
@@ -438,7 +467,10 @@ export function backendToProviders(
       // effective_models 是 GET 的只读投影；其 capability 与静态声明的路由授权
       // 保持分层，普通保存仍只序列化 ProviderConfig 的声明字段。
       models: mergeProviderModels(
-        localProvider,
+        localProvider && p.native_reasoning_source_fingerprint &&
+          localProvider.nativeReasoningSourceFingerprint !== p.native_reasoning_source_fingerprint
+          ? { ...localProvider, models: localProvider.models.map(invalidateModelNativeReasoning) }
+          : localProvider,
         p.model,
         p.models,
         p.model_specs,
@@ -516,6 +548,12 @@ export function providersToBackend(
             ? {}
             : { reasoning_support: normalizeModelReasoningSupport(canonical.reasoningSupport) }),
           ...(canonical.reasoningControl ? { reasoning_control: canonical.reasoningControl } : {}),
+          ...(canonical.nativeReasoningSupport === undefined
+            ? {}
+            : { native_reasoning_support: normalizeModelReasoningSupport(canonical.nativeReasoningSupport) }),
+          ...(canonical.nativeReasoningSourceFingerprint
+            ? { native_reasoning_source_fingerprint: canonical.nativeReasoningSourceFingerprint }
+            : {}),
           ...(embedding ? { embedding } : {}),
         }
       }),
