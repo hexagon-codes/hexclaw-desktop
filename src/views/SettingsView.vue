@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import BackendServiceCard from '@/components/settings/BackendServiceCard.vue'
-import { backendContext, backendScopeKey, backendLocalStorage, backendStorageKey, readModelSettingsReturn, clearModelSettingsReturn } from '@/services/backend-context'
+import WechatFollowContent from '@/components/settings/WechatFollowContent.vue'
+import { backendContext, backendScopeKey, backendLocalStorage, backendStorageKey, readModelSettingsReturn, clearModelSettingsReturn, registerBackendDraftFlush } from '@/services/backend-context'
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
@@ -193,10 +194,17 @@ const pendingDeleteProviderId = ref<string | null>(null)
 const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(
   null,
 )
+const modelExclusionDraftUndos: Array<{ scope: string; modelId: string }> = []
+function revertModelExclusionDraft() {
+  for (const item of modelExclusionDraftUndos.splice(0)) catalogStore.clearModelExclusion(item.scope, item.modelId)
+}
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
 const appVersion = ref('—')
 const openAbout = useAboutWindow()
+const showWechatFollow = ref(false)
+const ollamaCardRef = ref<{ saveTarget: (draft?: import('@/api/ollama').OllamaTarget) => Promise<void>; resetTarget: () => void; targetDraft: () => import('@/api/ollama').OllamaTarget | undefined }>()
+const ollamaTargetDirty = ref(false)
 
 // Load desktop app version from Tauri
 onMounted(() => {
@@ -218,6 +226,7 @@ let autoSaveGeneration = 0
 let persistedAutoSaveGeneration = 0
 let unlistenCloseRequested: (() => void) | null = null
 let closingAfterFlush = false
+const unregisterBackendDraftFlush = registerBackendDraftFlush(() => flushAutoSave())
 
 // tab 序：AI 能力域配置（LLM/自动化权限）相邻靠前，平台工具类（系统设置）居尾。
 const sections = computed(() => [
@@ -239,7 +248,6 @@ function handleLocaleChange(locale: string) {
 
 function handleThemeSelect(mode: ThemeMode) {
   setTheme(mode)
-  autoSave()
 }
 
 const themeOptions = computed(() => [
@@ -261,13 +269,15 @@ function handleThemeKeydown(event: KeyboardEvent, index: number) {
 // U5: 开机自启开关——之前只落 Store（假开关），现桥接到 Rust set_autostart command，
 // 让 plugin-autostart 真正 enable()/disable() 系统 LaunchAgent。
 async function handleAutoStartChange() {
-  autoSave() // 保留原有 Store 持久化
   if (!isDesktopRuntime() || !config.value) return
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('set_autostart', { enable: !!config.value.general.auto_start })
+    await settingsStore.saveImmediateSetting('general')
   } catch (e) {
     logger.error('[HexClaw] 设置开机自启失败:', e)
+    await syncAutoStartState()
+    toast.error(messageFromUnknownError(e))
   }
 }
 
@@ -294,11 +304,13 @@ function handleRoutingToggle() {
 
 const isDirty = ref(false)
 const persistedSettingsSignature = ref('')
+const modelBaseline = ref<AppConfig['llm'] | null>(null)
 let persistedProviderInstances = new Map<string, string>()
 let ignoreModelReceiptsThrough = 0
 
-function recordSavedSettingsBaseline(signature: string) {
+function recordSavedSettingsBaseline(signature: string, llm = settingsStore.config?.llm) {
   persistedSettingsSignature.value = signature
+  if (llm) modelBaseline.value = JSON.parse(JSON.stringify(llm)) as AppConfig['llm']
   const baseline = JSON.parse(signature) as AppConfig | null
   const ids = new Set(baseline?.llm.providers.map(provider => provider.id) ?? [])
   persistedProviderInstances = new Map((settingsStore.config?.llm.providers ?? [])
@@ -310,7 +322,6 @@ function recordSavedSettingsBaseline(signature: string) {
 function editableSettingsSignature(owner = settingsStore.config) {
   // 后端补齐的合同默认值与系统推导位置是同一配置语义；显式用户位置和模式保持原值。
   const comparableOwner = owner ? {
-    ...owner,
     llm: {
       ...owner.llm,
       providers: owner.llm.providers.map(provider => ({
@@ -486,11 +497,11 @@ function isDesktopRuntime() {
 }
 
 function hasUnsavedChanges() {
-  return isDirty.value || !!newModelId.value.trim()
+  return isDirty.value || ollamaTargetDirty.value || !!newModelId.value.trim()
 }
 
 function hasUnfinishedSettingsPersistence() {
-  return hasUnsavedChanges() || autoSavePromise !== null
+  return autoSavePromise !== null
 }
 
 function markAutoSavePending() {
@@ -516,6 +527,11 @@ watch(() => settingsStore.persistedModelReceipt, receipt => {
     // 仅更新实际已提交的模型字段；当前表单与其他字段不受后台回执影响。
     provider.models = JSON.parse(JSON.stringify(persisted.models)) as ModelOption[]
     provider.selectedModelId = persisted.selectedModelId
+    const actualBaselineProvider = modelBaseline.value?.providers.find(item => item.id === baselineId)
+    if (actualBaselineProvider) {
+      actualBaselineProvider.models = JSON.parse(JSON.stringify(persisted.models)) as ModelOption[]
+      actualBaselineProvider.selectedModelId = persisted.selectedModelId
+    }
     changed = true
   }
   if (!changed) return
@@ -546,29 +562,34 @@ async function persistSettings({
 } = {}) {
   if (!settingsStore.config) return
 
-  const owner = settingsStore.config
+  const owner: AppConfig = JSON.parse(JSON.stringify(settingsStore.config))
   const ownerSession = settingsOwnerSession
   const scope = backendScopeKey()
   const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
   const limitError = owner.llm.providers.map(providerInputError).find(Boolean)
   if (limitError) { toast.error(limitError); throw new Error(limitError) }
   const savedProviders = owner.llm.providers.map(provider => ({ ...provider }))
-  const submittedSignature = editableSettingsSignature(owner)
-  const submittedGeneration = autoSaveGeneration
   const operation = ++settingsPersistOperation
   const feedbackSession = toolbarSaveSession
+  const targetDraft = ollamaCardRef.value?.targetDraft()
 
   settingsPersisting.value = true
   try {
-    const result = await settingsStore.saveConfig(owner)
+    if (targetDraft) await ollamaCardRef.value?.saveTarget(targetDraft)
+    if (!isCurrentOwner()) return
+    const result = await settingsStore.saveConfig(owner, { modelOnly: true })
     if (!isCurrentOwner()) return
     originalProviders = savedProviders
     // 共享保存会规范化配置快照；只有没有后来编辑时才承认该规范化结果。
-    recordSavedSettingsBaseline(submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature)
+    recordSavedSettingsBaseline(editableSettingsSignature(result.savedConfig ?? owner), (result.savedConfig ?? owner).llm)
+    for (let index = modelExclusionDraftUndos.length - 1; index >= 0; index--) {
+      const undo = modelExclusionDraftUndos[index]!
+      if (!owner.llm.providers.some(provider => providerModelExclusionScope(provider) === undo.scope && provider.models.some(model => model.id === undo.modelId))) modelExclusionDraftUndos.splice(index, 1)
+    }
     if (refreshRuntimeInfo) {
       await loadRuntimeInfo()
     }
-    if (showSavedFeedback && !result.securitySyncFailed && isCurrentOwner() && feedbackSession === toolbarSaveSession) {
+    if (showSavedFeedback && !result.securitySyncFailed && isCurrentOwner() && feedbackSession === toolbarSaveSession && editableSettingsSignature() === persistedSettingsSignature.value && !ollamaTargetDirty.value) {
       saved.value = true
       setTimeout(() => {
         if (isCurrentOwner() && feedbackSession === toolbarSaveSession) saved.value = false
@@ -581,13 +602,20 @@ async function persistSettings({
 
 async function flushAutoSave({
   force = false,
+  explicitSubmit = false,
   showSavedFeedback = false,
   refreshRuntimeInfo = false,
 }: {
   force?: boolean
+  explicitSubmit?: boolean
   showSavedFeedback?: boolean
   refreshRuntimeInfo?: boolean
 } = {}) {
+  // 生命周期只等待已经点击保存的请求；force 不能把未保存模型草稿隐式提交。
+  if (!explicitSubmit) {
+    if (autoSavePromise) await autoSavePromise
+    return
+  }
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer)
     autoSaveTimer = null
@@ -610,7 +638,8 @@ async function flushAutoSave({
   if ((force || hasPendingModelDraft) && persistedAutoSaveGeneration >= autoSaveGeneration) {
     markAutoSavePending()
   }
-  while (persistedAutoSaveGeneration < autoSaveGeneration) {
+  const requestedGeneration = autoSaveGeneration
+  while (persistedAutoSaveGeneration < requestedGeneration) {
     if (!isCurrentOwner()) return
     if (autoSavePromise) {
       const sameOwner = autoSavePromiseOwnerSession === ownerSession && autoSavePromiseScope === scope
@@ -666,12 +695,6 @@ function toggleEditingProvider(providerId: string, explicitControl = false) {
   editingProviderId.value = editingProviderId.value === providerId ? null : providerId
 }
 
-function handleLanguageChange() {
-  if (!config.value) return
-  handleLocaleChange(config.value.general.language)
-  autoSave()
-}
-
 // 语言下拉（替代原生 <select class="hc-input">，原 @change=handleLanguageChange 改由 setter 触发）
 const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
@@ -679,13 +702,18 @@ const languageOptions = [
   { value: 'ug-CN', label: '维吾尔语' },
 ]
 const languageModel = computed<string>({
-  get: () => config.value?.general.language ?? 'zh-CN',
+  get: () => locale.value,
   set: (v) => {
-    if (!config.value || config.value.general.language === v) return
-    config.value.general.language = v
-    handleLanguageChange()
+    if (locale.value === v) return
+    handleLocaleChange(v)
+    if (config.value) config.value.general.language = v
   },
 })
+
+async function saveImmediateSetting(section: 'memory' | 'sandbox') {
+  try { await settingsStore.saveImmediateSetting(section) }
+  catch (error) { toast.error(messageFromUnknownError(error)); await loadRuntimeInfo() }
+}
 
 // ─── A7 模型 tool_call 能力探测 ──────────────────────────
 
@@ -762,6 +790,10 @@ function probingModel(providerId: string, modelId: string): boolean {
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
+  if (!localStorage.getItem('hc-locale') && ['zh-CN', 'en', 'ug-CN'].includes(settingsStore.config?.general.language ?? '')) {
+    handleLocaleChange(settingsStore.config!.general.language)
+  }
+  settingsStore.setModelDraftEditing(true)
   originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
   recordSavedSettingsBaseline(editableSettingsSignature())
   refreshAutoSaveDirtyState()
@@ -809,6 +841,19 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  unregisterBackendDraftFlush()
+  const scope = backendScopeKey()
+  const releaseDraft = () => {
+    if (scope !== backendScopeKey()) return
+    if (settingsStore.config && modelBaseline.value && editableSettingsSignature() !== persistedSettingsSignature.value) {
+      settingsStore.config.llm = JSON.parse(JSON.stringify(modelBaseline.value)) as AppConfig['llm']
+      revertModelExclusionDraft()
+    }
+    settingsStore.setModelDraftEditing(false)
+  }
+  // 离开期间只收口已发起的保存，随后释放未提交编辑，避免后台目录同步带出草稿。
+  if (autoSavePromise) void autoSavePromise.catch(() => undefined).finally(releaseDraft)
+  else releaseDraft()
   if (hasUnfinishedSettingsPersistence()) {
     void flushAutoSave({ force: true })
   }
@@ -897,7 +942,7 @@ const sandboxNetworkEnabled = computed({
   get: () => config.value?.sandbox?.network_enabled ?? true,
   set: (network_enabled: boolean) => {
     if (!config.value) return
-    config.value.sandbox = { network_enabled }
+    config.value.sandbox = { ...config.value.sandbox, network_enabled }
   },
 })
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1037,15 +1082,21 @@ const runtimeModeShort = computed(() => {
 let runtimeInfoGen = 0
 async function loadRuntimeInfo() {
   const gen = ++runtimeInfoGen
+  const scope = backendScopeKey()
+  const preferenceSnapshot = JSON.stringify({ memory: config.value?.memory, sandbox: config.value?.sandbox })
   runtimeInfoLoading.value = true
   try {
     const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
       getRuntimeConfig(),
       getLLMConfig(),
     ])
-    if (gen !== runtimeInfoGen) return // stale response from earlier call, discard
+    if (gen !== runtimeInfoGen || scope !== backendScopeKey()) return
     runtimeConfig.value = nextRuntimeConfig
     runtimeLLMConfig.value = nextLLMConfig
+    if (config.value && preferenceSnapshot === JSON.stringify({ memory: config.value.memory, sandbox: config.value.sandbox })) {
+      if (nextRuntimeConfig.memory) config.value.memory = { ...nextRuntimeConfig.memory }
+      config.value.sandbox = { ...config.value.sandbox, ...nextRuntimeConfig.sandbox }
+    }
   } catch (e) {
     if (gen !== runtimeInfoGen) return
     runtimeConfig.value = null
@@ -1201,51 +1252,12 @@ watch(() => backendScopeKey(), () => {
   saveFailed.value = false
 })
 
-/** 真正执行 Provider 删除 */
+/** 删除只修改模型草稿，确认后的实际配置提交仍由保存配置负责。 */
 async function handleDeleteProvider(id: string) {
-  const owner = settingsStore.config
-  const ownerSession = settingsOwnerSession
-  const scope = backendScopeKey()
-  const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
-  const limitError = settingsStore.config?.llm.providers.filter(provider => provider.id !== id).map(providerInputError).find(Boolean)
-  if (limitError) { toast.error(limitError); return }
-  // 保存删除前快照，以便失败时恢复
-  const snapshot = settingsStore.config
-    ? (JSON.parse(
-        JSON.stringify(settingsStore.config.llm.providers),
-      ) as typeof settingsStore.config.llm.providers)
-    : null
-  const prevEditingId = editingProviderId.value
-
   settingsStore.removeProvider(id)
   catalogStore.removeCatalog(id)
-  if (editingProviderId.value === id) {
-    editingProviderId.value = null
-  }
-  if (settingsStore.config) {
-    try {
-      const savedProviders = settingsStore.config.llm.providers.map(provider => ({ ...provider }))
-      const submittedSignature = editableSettingsSignature(owner)
-      const submittedGeneration = autoSaveGeneration
-      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
-      if (!isCurrentOwner()) return
-      originalProviders = savedProviders
-      recordSavedSettingsBaseline(submittedGeneration === autoSaveGeneration ? editableSettingsSignature() : submittedSignature)
-      refreshAutoSaveDirtyState()
-      if (securitySyncFailed) {
-        logger.warn('[HexClaw] 删除 Provider 后安全/沙箱配置同步失败')
-      }
-    } catch (e) {
-      logger.error('[HexClaw] 删除 Provider 后保存失败，已恢复:', e)
-      // 恢复 UI 到删除前状态
-      if (snapshot && owner) {
-        const rollbackOwner = isCurrentOwner() ? settingsStore.config : owner
-        if (rollbackOwner) rollbackOwner.llm.providers = snapshot
-        if (isCurrentOwner()) editingProviderId.value = prevEditingId
-      }
-      if (isCurrentOwner()) toast.error(t('settings.llm.deleteProviderFailed', '删除失败，已恢复'))
-    }
-  }
+  if (editingProviderId.value === id) editingProviderId.value = null
+  autoSave()
 }
 
 function openDeleteProviderConfirm(id: string) {
@@ -1536,6 +1548,7 @@ async function confirmDeleteModel() {
       toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
       return
     }
+    if (!previouslyExcluded) modelExclusionDraftUndos.push({ scope: exclusionScope, modelId: target.modelId })
     removeModel(provider, target.modelId)
     const removedSelectedModelId = settingsStore.config?.llm.providers.find((p) => p.id === provider.id)?.selectedModelId
     const removedDefaultProviderId = settingsStore.config?.llm.defaultProviderId
@@ -1648,7 +1661,7 @@ function clearProviderProbeState(provider: ProviderConfig) {
 
 function providerConnectionResult(provider: ProviderConfig) {
   const transient = testProviderResult.value[provider.id]
-  if (transient && transient.receiptBacked !== false) return transient
+  if (transient) return transient
   const receipt = provider.probeReceipt
   if (receipt) {
     return {
@@ -1680,32 +1693,8 @@ function parseProviderProbeTime(value: string | number | undefined): number | un
 }
 
 async function providerWithStableIdentity(provider: ProviderConfig): Promise<ProviderConfig> {
-  const ownerSession = settingsOwnerSession
-  const scope = backendScopeKey()
-  const providerInstanceId = provider.providerInstanceId
-  const backendKey = provider.backendKey
-  const providerId = provider.id
-  markAutoSavePending()
-  await flushAutoSave({ force: true })
-  const savedGeneration = autoSaveGeneration
-  await settingsStore.loadConfig({ force: true })
-  // 同一编辑会话的成功保存后读回可补齐权威合同；后来编辑不能被旧读回承认。
-  if (ownerSession === settingsOwnerSession && scope === backendScopeKey() &&
-    savedGeneration === autoSaveGeneration && persistedAutoSaveGeneration >= savedGeneration) {
-    recordSavedSettingsBaseline(editableSettingsSignature())
-    refreshAutoSaveDirtyState()
-  }
-
-  return (
-    config.value?.llm.providers.find(
-      (candidate) =>
-        !!candidate.providerInstanceId &&
-        ((!!providerInstanceId && candidate.providerInstanceId === providerInstanceId) ||
-          candidate.id === providerId ||
-          (!!backendKey && candidate.backendKey === backendKey) ||
-          (candidate.name === provider.name && candidate.type === provider.type)),
-    ) ?? provider
-  )
+  // 测试是独立运行操作，不保存或重载模型草稿。
+  return provider
 }
 
 /** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
@@ -1847,16 +1836,6 @@ async function testProvider(provider: ProviderConfig) {
     return
   }
 
-  if (!activeProvider.providerInstanceId) {
-    const failure = { ok: false, msg: t('settings.llm.connectionFailed') }
-    testProviderResult.value[provider.id] = failure
-    if (activeProvider.id !== provider.id) {
-      testProviderResult.value[activeProvider.id] = failure
-    }
-    testingProviderIds.value.delete(provider.id)
-    return
-  }
-
   let currentTestProvider: (() => ProviderConfig | undefined) | undefined
   let refreshTestReceipt: (() => Promise<ProviderConfig | undefined>) | undefined
   try {
@@ -1873,7 +1852,7 @@ async function testProvider(provider: ProviderConfig) {
     const testedGeneration = providerTestGenerations.get(activeProvider.id) ?? 0
     currentTestProvider = () => {
       const currentProvider = config.value?.llm.providers.find(
-        (candidate) => candidate.providerInstanceId === testedInstanceId,
+        (candidate) => testedInstanceId ? candidate.providerInstanceId === testedInstanceId : candidate.id === activeProvider.id,
       )
       return currentProvider &&
         backendScopeKey() === testedScope &&
@@ -1883,6 +1862,7 @@ async function testProvider(provider: ProviderConfig) {
         : undefined
     }
     refreshTestReceipt = async () => {
+      if (!testedInstanceId) return currentTestProvider?.()
       const snapshot = await getLLMConfig()
       const currentProvider = currentTestProvider?.()
       if (!currentProvider) return undefined
@@ -1916,7 +1896,7 @@ async function testProvider(provider: ProviderConfig) {
     const testedAt = parseProviderProbeTime(result.tested_at)
 
     // 成功与失败都以持久回执为准，页面卸载不能丢失最近一次连接结论。
-    if (result.persisted && testedAt !== undefined) {
+    if (result.persisted && testedAt !== undefined && testedInstanceId) {
       currentProvider.probeReceipt = {
         providerInstanceId: testedInstanceId,
         outcome: result.ok ? 'passed' : 'failed',
@@ -1934,15 +1914,13 @@ async function testProvider(provider: ProviderConfig) {
       delete testProviderResult.value[currentProvider.id]
       delete testProviderResult.value[provider.id]
     } else {
-      // 未持久化结果不能冒充连接事实，回读后没有当前回执即维持未测试。
+      // 未保存 Provider 的独立测试仅保留本次回执，不伪造服务端持久化事实。
       delete testProviderResult.value[provider.id]
-      if (!result.ok) {
         testProviderResult.value[currentProvider.id] = {
-          ok: false,
-          msg: result.error_message || result.message || t('settings.llm.connectionFailed'),
+          ok: result.ok,
+          msg: result.error_message || result.message || (result.ok ? 'Connection test passed.' : t('settings.llm.connectionFailed')),
           receiptBacked: false,
         }
-      }
     }
     // 同次连接请求已由服务端保存模型能力回执；这里只读恢复，不再次调用模型。
     // 回读仅更新匹配连接的回执，不能用整份快照覆盖请求期间的新编辑。
@@ -2128,20 +2106,10 @@ function isStaleModel(provider: ProviderConfig, model: ModelOption): boolean {
 
 /** 自动保存（防抖） */
 function autoSave() {
+  // 控件只更新模型草稿与差异；保存行为由工具栏唯一入口触发。
   markAutoSavePending()
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
-  if (!isDirty.value) {
-    autoSaveTimer = null
-    if (!autoSavePromise) persistedAutoSaveGeneration = autoSaveGeneration
-    return
-  }
-  autoSaveTimer = setTimeout(async () => {
-    try {
-      await flushAutoSave()
-    } catch (e) {
-      logger.error('[HexClaw] 自动保存失败:', e)
-    }
-  }, 500)
+  autoSaveTimer = null
 }
 
 function selectProviderModel(provider: ProviderConfig, modelId: string) {
@@ -2150,7 +2118,7 @@ function selectProviderModel(provider: ProviderConfig, modelId: string) {
 }
 
 async function onToolbarReset() {
-  if (!settingsStore.config) return
+  if (!settingsStore.config || !modelBaseline.value || settingsPersisting.value) return
   // 显式重置开始新编辑会话，正常保存的快照替换不改变会话身份。
   settingsOwnerSession += 1
   ignoreModelReceiptsThrough = settingsStore.modelPersistenceStarted
@@ -2158,8 +2126,14 @@ async function onToolbarReset() {
   saved.value = false
   saveFailed.value = false
   try {
-    await settingsStore.loadConfig({ force: true })
-    recordSavedSettingsBaseline(editableSettingsSignature())
+    settingsStore.config.llm = JSON.parse(JSON.stringify(modelBaseline.value)) as AppConfig['llm']
+    revertModelExclusionDraft()
+    ollamaCardRef.value?.resetTarget()
+    shownApiKeys.value = {}
+    revealedApiKeys.value = {}
+    testProviderResult.value = {}
+    newModelId.value = ''
+    resetPendingModelDraft()
     refreshAutoSaveDirtyState()
     saved.value = false
   } catch (e) {
@@ -2177,6 +2151,7 @@ async function saveConfig() {
   try {
     await flushAutoSave({
       force: true,
+      explicitSubmit: true,
       showSavedFeedback: true,
       refreshRuntimeInfo: activeSection.value === 'system',
     })
@@ -2197,7 +2172,7 @@ async function saveConfig() {
 <template>
   <div
     class="hc-settings"
-    :inert="showAddProvider || customModelDialogProviderId || modelManagerProviderId ? true : undefined"
+    :inert="showAddProvider || customModelDialogProviderId || modelManagerProviderId || showWechatFollow ? true : undefined"
   >
     <PageToolbar>
       <template #tabs>
@@ -2207,11 +2182,12 @@ async function saveConfig() {
         />
       </template>
       <template #actions>
-        <button class="hc-btn hc-btn-ghost" @click="onToolbarReset">
+        <button v-if="activeSection === 'llm' || hasUnsavedChanges()" class="hc-btn hc-btn-ghost" :disabled="!hasUnsavedChanges() || settingsPersisting" @click="onToolbarReset">
           <RotateCcw :size="14" />
-          {{ t('settings.toolbar.reset', 'Reset') }}
+          {{ activeSection === 'llm' ? '撤销未保存修改' : '撤销模型修改' }}
         </button>
         <button
+          v-if="activeSection === 'llm' || hasUnsavedChanges()"
           class="hc-btn hc-btn-primary"
           :class="{ 'hc-settings__btn--saved': saved, 'hc-settings__btn--failed': saveFailed }"
           :disabled="settingsPersisting || !hasUnsavedChanges()"
@@ -2224,7 +2200,7 @@ async function saveConfig() {
               ? t('common.saved')
               : saveFailed
                 ? t('settings.toolbar.saveFailed', '保存失败，请重试')
-                : t('settings.toolbar.saveSettings', '保存')
+                : activeSection === 'llm' ? '保存配置' : '保存模型配置'
           }}
           <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }"
             >· 未保存</span
@@ -2239,160 +2215,16 @@ async function saveConfig() {
 
         <template v-if="config">
           <!-- LLM Providers -->
-          <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--llm">
+          <div v-show="activeSection === 'llm'" class="hc-settings__section hc-settings__section--llm">
             <div v-if="taskReturn" class="hc-settings__task-return" data-task-return>
               <div>
                 <span>{{ returnModelReady ? '默认模型已选好，可以继续原任务。' : '配置模型后继续原任务，已填写的内容会保留。' }}</span>
                 <button class="hc-btn" :class="{ 'hc-btn-primary': returnModelReady }" :disabled="returningToTask" @click="resumeConfiguredTask">{{ returnModelReady ? '继续原任务' : '返回原任务' }}</button>
               </div>
             </div>
-            <!-- ── 默认行为 ── -->
-            <div class="hc-settings__sep">
-              <span class="hc-settings__sep-label">默认行为</span>
-              <span class="hc-settings__sep-line"></span>
-            </div>
-
-            <div class="hc-settings__row">
-              <span class="hc-settings__row-label">
-                {{ t('settings.llm.defaultModel') }}
-                <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')"
-                  >?</span
-                >
-              </span>
-              <div class="hc-settings__row-right">
-                <ModelSelector
-                  v-model="selectedDefaultModelValue"
-                  data-testid="llm-default-model-select"
-                  class="hc-settings__select"
-                  :empty-label="t('settings.llm.noEnabledModels')"
-                  disable-when-empty
-                />
-              </div>
-            </div>
-
-            <div class="hc-settings__row">
-              <span class="hc-settings__row-label">
-                {{ t('chat.reasoning.defaultStrategy') }}
-                <span class="hc-settings__info" :data-info="t('chat.reasoning.defaultStrategyHint')"
-                  >?</span
-                >
-              </span>
-              <div class="hc-settings__row-right">
-                <ReasoningPolicySelect
-                  v-model="defaultReasoningPolicyValue"
-                  data-testid="llm-default-reasoning-policy"
-                  class="hc-settings__select"
-                  scope="global"
-                  :support="selectedDefaultReasoningModel?.reasoningSupport ?? 'unknown'"
-                  :control="selectedDefaultReasoningModel?.reasoningControl"
-                  :native-support="selectedDefaultReasoningModel?.effectiveNativeReasoningSupport ?? selectedDefaultReasoningModel?.nativeReasoningSupport"
-                  :aria-label="t('chat.reasoning.defaultStrategy')"
-                />
-              </div>
-            </div>
-
-            <!-- Routing: toggle + select (策略仅在开启时显示) -->
-            <div class="hc-settings__row">
-              <span class="hc-settings__row-label">
-                {{ t('settings.llm.routingEnabled') }}
-                <span
-                  class="hc-settings__info"
-                  data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。"
-                  >?</span
-                >
-              </span>
-              <div class="hc-settings__row-right">
-                <HcSelect
-                  v-if="config.llm.routing?.enabled"
-                  v-model="routingStrategyValue"
-                  data-testid="llm-routing-strategy-select"
-                  class="hc-settings__select"
-                  :options="routingStrategyOptions"
-                />
-                <input
-                  v-model="config.llm.routing!.enabled"
-                  data-testid="llm-routing-toggle"
-                  type="checkbox"
-                  class="hc-toggle"
-                  @change="handleRoutingToggle"
-                />
-              </div>
-            </div>
-
-            <!-- B1 Agent 策略模式：默认 auto 按问题启发式路由（7 模式 + auto）-->
-            <div class="hc-settings__row">
-              <span class="hc-settings__row-label">
-                Agent 模式
-                <span
-                  class="hc-settings__info"
-                  data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。"
-                  >?</span
-                >
-              </span>
-              <div class="hc-settings__row-right">
-                <HcSelect
-                  v-model="agentModeValue"
-                  data-testid="llm-agent-mode-select"
-                  class="hc-settings__select"
-                  :options="agentModeOptions"
-                />
-              </div>
-            </div>
-
-            <!-- ── 工具能力 ── -->
-            <div class="hc-settings__sep">
-              <span class="hc-settings__sep-label">工具能力</span>
-              <span class="hc-settings__sep-line"></span>
-            </div>
-
-            <div class="hc-settings__row">
-              <span class="hc-settings__row-label">
-                {{ t('settings.llm.toolsToggle') }}
-                <span
-                  class="hc-settings__info"
-                  data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。"
-                  >?</span
-                >
-              </span>
-              <div class="hc-settings__row-right">
-                <input
-                  type="checkbox"
-                  class="hc-toggle"
-                  :checked="(config.llm.tools?.enabled ?? 'auto') !== 'off'"
-                  @change="
-                    (e: Event) => {
-                      const on = (e.target as HTMLInputElement).checked
-                      config!.llm.tools = {
-                        enabled: on ? 'auto' : 'off',
-                        maxTools: config!.llm.tools?.maxTools ?? 0,
-                      }
-                      autoSave()
-                    }
-                  "
-                />
-              </div>
-            </div>
-
-            <div v-if="(config.llm.tools?.enabled ?? 'auto') !== 'off'" class="hc-settings__sub">
-              <div class="hc-settings__row">
-                <span class="hc-settings__row-label">
-                  {{ t('settings.llm.maxToolsLabel') }}
-                  <span
-                    class="hc-settings__info"
-                    data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。"
-                    >?</span
-                  >
-                </span>
-                <div class="hc-settings__row-right">
-                  <div class="hc-settings__stepper">
-                    <button class="hc-settings__step-button" @click="stepMaxTools(-1)">−</button>
-                    <input :value="maxToolsDisplay" readonly />
-                    <button class="hc-settings__step-button" @click="stepMaxTools(1)">+</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
+            <!-- 主区先于辅助区；切 Tab 保留同一模型草稿与运行回执。 -->
+            <div class="hc-settings__task-layout">
+              <main class="hc-settings__task-main">
             <!-- ── 服务商 ── -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">服务商</span>
@@ -2408,6 +2240,8 @@ async function saveConfig() {
 
             <!-- 本地 LLM (Ollama) 卡片 -->
             <OllamaCard
+              ref="ollamaCardRef"
+              @target-dirty="ollamaTargetDirty = $event; autoSave()"
               @associate="handleAssociateOllama"
               @toggle-provider="handleToggleOllamaProvider"
             />
@@ -2889,26 +2723,183 @@ async function saveConfig() {
                 >{{ t('settings.llm.providerServiceDocs') }}</a
               >
             </p>
+              </main>
+              <aside class="hc-settings__task-aside">
+            <!-- ── 默认行为 ── -->
+            <div class="hc-settings__sep">
+              <span class="hc-settings__sep-label">默认行为</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
+
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.defaultModel') }}
+                <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <ModelSelector
+                  v-model="selectedDefaultModelValue"
+                  data-testid="llm-default-model-select"
+                  class="hc-settings__select"
+                  :empty-label="t('settings.llm.noEnabledModels')"
+                  disable-when-empty
+                />
+              </div>
+            </div>
+
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('chat.reasoning.defaultStrategy') }}
+                <span class="hc-settings__info" :data-info="t('chat.reasoning.defaultStrategyHint')"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <ReasoningPolicySelect
+                  v-model="defaultReasoningPolicyValue"
+                  data-testid="llm-default-reasoning-policy"
+                  class="hc-settings__select"
+                  scope="global"
+                  :support="selectedDefaultReasoningModel?.reasoningSupport ?? 'unknown'"
+                  :control="selectedDefaultReasoningModel?.reasoningControl"
+                  :native-support="selectedDefaultReasoningModel?.effectiveNativeReasoningSupport ?? selectedDefaultReasoningModel?.nativeReasoningSupport"
+                  :aria-label="t('chat.reasoning.defaultStrategy')"
+                />
+              </div>
+            </div>
+
+            <!-- Routing: toggle + select (策略仅在开启时显示) -->
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.routingEnabled') }}
+                <span
+                  class="hc-settings__info"
+                  data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <HcSelect
+                  v-if="config.llm.routing?.enabled"
+                  v-model="routingStrategyValue"
+                  data-testid="llm-routing-strategy-select"
+                  class="hc-settings__select"
+                  :options="routingStrategyOptions"
+                />
+                <input
+                  v-model="config.llm.routing!.enabled"
+                  data-testid="llm-routing-toggle"
+                  type="checkbox"
+                  class="hc-toggle"
+                  @change="handleRoutingToggle"
+                />
+              </div>
+            </div>
+
+            <!-- B1 Agent 策略模式：默认 auto 按问题启发式路由（7 模式 + auto）-->
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                Agent 模式
+                <span
+                  class="hc-settings__info"
+                  data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <HcSelect
+                  v-model="agentModeValue"
+                  data-testid="llm-agent-mode-select"
+                  class="hc-settings__select"
+                  :options="agentModeOptions"
+                />
+              </div>
+            </div>
+
+            <!-- ── 工具能力 ── -->
+            <div class="hc-settings__sep">
+              <span class="hc-settings__sep-label">工具能力</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
+
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.toolsToggle') }}
+                <span
+                  class="hc-settings__info"
+                  data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。"
+                  >?</span
+                >
+              </span>
+              <div class="hc-settings__row-right">
+                <input
+                  type="checkbox"
+                  class="hc-toggle"
+                  :checked="(config.llm.tools?.enabled ?? 'auto') !== 'off'"
+                  @change="
+                    (e: Event) => {
+                      const on = (e.target as HTMLInputElement).checked
+                      config!.llm.tools = {
+                        enabled: on ? 'auto' : 'off',
+                        maxTools: config!.llm.tools?.maxTools ?? 0,
+                      }
+                      autoSave()
+                    }
+                  "
+                />
+              </div>
+            </div>
+
+            <div v-if="(config.llm.tools?.enabled ?? 'auto') !== 'off'" class="hc-settings__sub">
+              <div class="hc-settings__row">
+                <span class="hc-settings__row-label">
+                  {{ t('settings.llm.maxToolsLabel') }}
+                  <span
+                    class="hc-settings__info"
+                    data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。"
+                    >?</span
+                  >
+                </span>
+                <div class="hc-settings__row-right">
+                  <div class="hc-settings__stepper">
+                    <button class="hc-settings__step-button" @click="stepMaxTools(-1)">−</button>
+                    <input :value="maxToolsDisplay" readonly />
+                    <button class="hc-settings__step-button" @click="stepMaxTools(1)">+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+              </aside>
+            </div>
           </div>
 
           <!-- Automation permissions（治理入口：级别/待处理/审计/矩阵） -->
           <div
-            v-else-if="activeSection === 'automation'"
+            v-show="activeSection === 'automation'"
             class="hc-settings__section hc-settings__section--automation"
           >
             <AutomationPermissionsPanel />
           </div>
 
           <!-- System (merged: appearance + storage) -->
-          <div v-else-if="activeSection === 'system'" class="hc-settings__section">
+          <div v-show="activeSection === 'system'" class="hc-settings__section">
+            <p class="hc-settings__immediate-note">Changes apply immediately. No additional save is required.</p>
+            <!-- 系统偏好即时生效；服务、信息与品牌入口属于辅助列。 -->
+            <div class="hc-settings__task-layout">
+              <main class="hc-settings__task-main">
             <div class="hc-settings__form hc-settings__form--system">
-              <BackendServiceCard />
               <div class="hc-settings__sep">
                 <span class="hc-settings__sep-label">{{ t('settings.appearance.title') }}</span>
                 <span class="hc-settings__sep-line"></span>
               </div>
               <div
-                class="hc-settings__theme-segmented"
+                class="hc-settings__theme-row"
+              >
+                <span class="hc-settings__row-label">明暗模式</span>
+                <div class="hc-settings__theme-segmented"
                 role="radiogroup"
                 :aria-label="t('settings.appearance.title')"
               >
@@ -2926,6 +2917,7 @@ async function saveConfig() {
                 >
                   {{ opt.label }}
                 </button>
+              </div>
               </div>
 
               <component
@@ -2975,7 +2967,7 @@ async function saveConfig() {
                   v-model="memoryEnabled"
                   type="checkbox"
                   class="hc-toggle"
-                  @change="autoSave()"
+                  @change="saveImmediateSetting('memory')"
                 />
               </label>
 
@@ -2988,11 +2980,14 @@ async function saveConfig() {
                   v-model="sandboxNetworkEnabled"
                   type="checkbox"
                   class="hc-toggle"
-                  @change="autoSave()"
+                  @change="saveImmediateSetting('sandbox')"
                 />
               </label>
             </div>
 
+              </main>
+              <aside class="hc-settings__task-aside">
+                <BackendServiceCard />
             <!-- 系统信息 -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">{{ t('settings.system.info') }}</span>
@@ -3067,16 +3062,14 @@ async function saveConfig() {
               <span class="hc-settings__sep-line"></span>
             </div>
             <div class="hc-settings__about">
-              <p class="hc-settings__about-intro">
-                <span class="hc-settings__about-emoji" aria-hidden="true">🦀</span>
-                {{
-                  t('about.subtitle', '一只横行本地的 AI 螃蟹 —— 钳得住活，守得住数据，长得出本事')
-                }}
-              </p>
-              <button type="button" class="hc-settings__about-link" @click="openAbout">
-                {{ t('about.learnMore', '了解更多') }}
-                <span aria-hidden="true">→</span>
-              </button>
+              <p class="hc-settings__about-intro">钳得住活，守得住数据，长得出本事。<br />一只 AI 螃蟹，可在本机运行，也可部署到云端。</p>
+              <!-- 官网标准锚点交给全局外链控制器，鼠标和键盘均只有一次分发。 -->
+              <nav class="hc-settings__about-links" aria-label="关于河蟹">
+                <button type="button" class="hc-settings__about-link" @click="openAbout">关于</button>
+                <a class="hc-settings__about-link" href="https://hexclaw.net/" target="_blank" rel="noopener noreferrer">访问官网 ↗</a>
+                <button type="button" class="hc-settings__about-link" @click="showWechatFollow = true">关注公众号</button>
+              </nav>
+            </div>              </aside>
             </div>
           </div>
         </template>
@@ -3084,6 +3077,7 @@ async function saveConfig() {
     </div>
   </div>
 
+  <HcModal :open="showWechatFollow" title="关注公众号" :width="320" @close="showWechatFollow = false"><WechatFollowContent /></HcModal>
   <HcModal :open="showAddProvider" :title="t('settings.llm.addProvider')" :busy="addingProvider" initial-focus=".hc-provider-select__trigger" @close="closeAddProvider">
     <form class="hc-provider__add-form" :inert="addingProvider ? true : undefined" @submit.prevent="handleAddProvider">
       <div class="hc-provider__add-field"><label>{{ t('settings.llm.serviceProvider', 'Provider') }}</label><ProviderSelect v-model="addProviderType" :include-custom="true" /></div>
@@ -3321,7 +3315,7 @@ async function saveConfig() {
 
 <style scoped>
 /* 模型服务的长控件共用右侧 360px 轨道；短开关与计数器沿同一右边界。 */
-.hc-settings__section.hc-settings__section--llm{container-name:model-settings}
+.hc-settings__section.hc-settings__section--llm{container-name:model-settings settings-content}
 .hc-settings__section--llm .hc-settings__row{min-height:48px}
 .hc-settings__section--llm .hc-settings__row-label{font-size:14px;min-width:0;flex-shrink:1}
 .hc-settings__section--llm .hc-settings__row-right{width:360px;min-width:0;gap:12px;justify-content:flex-end}
@@ -3434,7 +3428,7 @@ async function saveConfig() {
 }
 
 .hc-settings__section {
-  max-width: 760px;
+  max-width: none;
   width: 100%;
   min-height: 100%;
   display: flex;
@@ -3452,8 +3446,29 @@ async function saveConfig() {
 
 /* 三个设置分区沿同一内容宽度，不因标签切换改变共同边界。 */
 .hc-settings__section--automation {
-  max-width: 760px;
+  max-width: none;
 }
+
+/* 主辅列以设置正文可用宽度判断；单列顺序保持任务主区在前。 */
+.hc-settings__task-layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;width:100%;align-items:start}
+.hc-settings__task-main,.hc-settings__task-aside{min-width:0}
+.hc-settings__task-aside{padding-left:24px;border-left:1px solid var(--hc-border);box-sizing:border-box}
+.hc-settings__task-aside .hc-settings__row{flex-direction:column;align-items:stretch;gap:8px}
+.hc-settings__task-aside .hc-settings__row-right{width:100%;max-width:100%}
+.hc-settings__task-aside .hc-settings__select{width:100%;max-width:100%}
+.hc-settings__task-aside .hc-settings__info-grid{grid-template-columns:1fr}
+.hc-settings__task-aside .hc-settings__sep:first-child{margin-top:0}
+.hc-settings__theme-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--hc-border)}
+.hc-settings__theme-row .hc-settings__theme-segmented{width:360px;max-width:100%;height:36px;min-height:36px;margin:0;flex-shrink:1}
+.hc-settings__section--llm .hc-settings__task-aside .hc-settings__row-right:has(.hc-toggle) .hc-settings__select{flex:1;width:0;min-width:0}
+.hc-settings__task-aside .hc-settings__row-label{font-size:12.5px}
+.hc-settings__task-main .hc-provider__card{padding:12px;border-radius:10px}
+.hc-settings__task-main .hc-settings__sep:first-child{margin-top:0}
+.hc-settings__about{padding:14px;border:1px solid var(--hc-border);border-radius:var(--hc-radius-md);background:var(--hc-bg-card)}
+.hc-settings__about-links{display:flex;align-items:center;flex-wrap:wrap;gap:14px}
+.hc-settings__about-links .hc-settings__about-link{padding:0;text-decoration:none;font-size:12.5px}
+@container settings-content (max-width:1039px){.hc-settings__task-layout{grid-template-columns:minmax(0,1fr)}.hc-settings__task-aside{padding-left:0;border-left:0}.hc-settings__task-aside .hc-settings__row{flex-direction:row;align-items:center}.hc-settings__task-aside .hc-settings__row-right{width:360px;max-width:60%}}
+@container settings-content (max-width:560px){.hc-settings__theme-row{flex-direction:column;align-items:flex-start;gap:8px}.hc-settings__task-aside .hc-settings__row{flex-direction:column;align-items:stretch}.hc-settings__task-aside .hc-settings__row-right{width:100%;max-width:100%}}
 
 .hc-settings__section-title {
   font-size: 15px;
@@ -3474,7 +3489,13 @@ async function saveConfig() {
 .hc-settings__form--system {
   gap: 0;
   margin-bottom: 0;
+  max-width: 780px;
+  container-type: inline-size;
+  container-name: system-settings-form;
 }
+.hc-settings__immediate-note{margin:0 0 16px;max-width:72ch;font-size:12px;line-height:1.5;color:var(--hc-text-secondary)}
+.hc-settings__form--system > .hc-settings__toggle-row{padding:12px 0;border-bottom:1px solid var(--hc-divider,var(--hc-border))}
+.hc-settings__form--system > .hc-settings__toggle-row:last-child{border-bottom:0}
 
 .hc-settings__field {
   display: flex;
@@ -5265,5 +5286,12 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
   .hc-settings__info-grid--runtime {
     grid-template-columns: 1fr;
   }
+}
+/* 系统长控件遵从局部表单宽度；末尾响应规则不被通用行和240px下拉基础样式覆盖。 */
+.hc-settings__form--system > .hc-settings__row .hc-settings__row-right{width:360px;max-width:100%;min-width:0}
+.hc-settings__form--system > .hc-settings__row .hc-settings__select{width:100%;max-width:100%}
+@container system-settings-form (max-width:560px){
+  .hc-settings__form--system > .hc-settings__row:has(.hc-settings__select){flex-direction:column;align-items:flex-start;gap:8px;padding:6px 0;min-height:60px;box-sizing:border-box}
+  .hc-settings__form--system .hc-settings__theme-row{flex-direction:column;align-items:flex-start;gap:8px;padding:8px 0}
 }
 </style>

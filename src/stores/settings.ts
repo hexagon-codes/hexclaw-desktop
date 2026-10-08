@@ -88,6 +88,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const error = ref<ApiError | null>(null)
   const runtimeProviders = ref<ProviderConfig[] | null>(null)
   const backendConfigLoaded = ref(false)
+  const modelDraftEditing = ref(false)
   const syncedSecurity = ref<SecurityConfig>({ ...defaultConfig().security })
   const syncedSandbox = ref<SandboxConfig>(fallbackSandbox())
 
@@ -159,6 +160,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   const providerSync = createSettingsProviderSync({
+    canPersistSyncedModels: () => !modelDraftEditing.value,
     getConfig: () => config.value,
     getRuntimeProviders: () => runtimeProviders.value,
     getLLMConfigConditions: () => llmConfigScope === backendScopeKey() ? llmConfigConditions : null,
@@ -469,7 +471,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /** 保存配置 — LLM 配置保存到后端 API，其余保存到 Tauri Store */
-  async function saveConfig(newConfig: AppConfig): Promise<{ securitySyncFailed: boolean }> {
+  async function saveConfig(newConfig: AppConfig, options: { modelOnly?: boolean } = {}): Promise<{ securitySyncFailed: boolean; savedConfig?: AppConfig }> {
     const origin = providerSync.captureOrigin()
     // 深拷贝去掉 Vue 响应式代理，确保序列化正确
     const requestedConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
@@ -477,6 +479,7 @@ export const useSettingsStore = defineStore('settings', () => {
     const previousSandbox = cloneSandbox(syncedSandbox.value)
     const saveRevision = ++latestSaveRevision
     let securitySyncFailed = false
+    let savedConfig = requestedConfig
 
     assertUniqueProviderNames(requestedConfig.llm.providers)
     requestedConfig.llm.defaultProviderId = resolveDefaultModelProviderId(
@@ -498,7 +501,7 @@ export const useSettingsStore = defineStore('settings', () => {
       config.value?.llm.providers ?? [],
       requestedConfig.llm.providers,
     )
-    config.value = JSON.parse(JSON.stringify(requestedConfig))
+    if (!options.modelOnly) config.value = JSON.parse(JSON.stringify(requestedConfig))
     const requestedConfigSignature = JSON.stringify(requestedConfig)
 
     const persistJob = async () => {
@@ -581,6 +584,15 @@ export const useSettingsStore = defineStore('settings', () => {
 
       // 安全配置 + 沙箱配置同步到后端
       try {
+        if (options.modelOnly) {
+          // 模型保存不回写系统即时项，避免旧模型快照覆盖并行开关修改。
+          if (config.value) {
+            plainConfig.general = { ...config.value.general }
+            plainConfig.memory = config.value.memory ? { ...config.value.memory } : undefined
+            plainConfig.sandbox = config.value.sandbox ? { ...config.value.sandbox } : undefined
+            plainConfig.security = { ...config.value.security }
+          }
+        } else {
         await updateConfig({
           security: plainConfig.security,
           sandbox: plainConfig.sandbox,
@@ -588,6 +600,7 @@ export const useSettingsStore = defineStore('settings', () => {
         logger.debug('安全/沙箱配置已同步到后端', plainConfig.security, plainConfig.sandbox)
         syncedSecurity.value = cloneSecurity(plainConfig.security)
         syncedSandbox.value = cloneSandbox(plainConfig.sandbox ?? fallbackSandbox())
+        }
       } catch (e) {
         securitySyncFailed = true
         logger.warn('安全/沙箱配置同步到后端失败，已回滚本地状态', e)
@@ -642,12 +655,45 @@ export const useSettingsStore = defineStore('settings', () => {
       }
 
       // 保存后异步拉取远程模型列表（不阻塞保存，失败静默）
+      savedConfig = JSON.parse(JSON.stringify(plainConfig)) as AppConfig
       providerSync.sync(plainConfig.llm.providers)
     }
 
     const queuedJob = providerSync.enqueue(persistJob)
     await queuedJob
-    return { securitySyncFailed }
+    return { securitySyncFailed, savedConfig }
+  }
+
+  /** 即时偏好只提交所属字段；客户端副本保留最后成功模型，绝不把表单草稿带入持久化。 */
+  async function saveImmediateSetting(section: 'general' | 'memory' | 'sandbox') {
+    const scope = backendScopeKey()
+    const owner = config.value
+    if (!owner) return
+    const value = JSON.parse(JSON.stringify(owner[section]))
+    await providerSync.enqueue(async () => {
+      if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+      if (section === 'memory') await updateConfig({ memory: value })
+      if (section === 'sandbox') {
+        await updateConfig({ sandbox: value })
+        if (scope === backendScopeKey()) syncedSandbox.value = cloneSandbox(value)
+      }
+      if (scope !== backendScopeKey()) return
+      // 读取原持久副本，只合并当前即时字段，避免写入未提交 Provider 及凭据。
+      const fallback = defaultConfig()
+      let persisted: AppConfig = fallback
+      if (isTauri()) {
+        const { LazyStore } = await import('@tauri-apps/plugin-store')
+        const store = new LazyStore(CONFIG_STORE_FILE)
+        persisted = (await store.get<AppConfig>(backendStorageKey(CONFIG_STORE_KEY))) ?? fallback
+        const next = { ...persisted, [section]: value }
+        await store.set(backendStorageKey(CONFIG_STORE_KEY), next)
+        await store.save()
+      } else {
+        const raw = backendLocalStorage.getItem(CONFIG_STORE_KEY)
+        if (raw) persisted = JSON.parse(raw) as AppConfig
+        backendLocalStorage.setItem(CONFIG_STORE_KEY, JSON.stringify({ ...persisted, [section]: value }))
+      }
+    })
   }
 
   /** 添加 Provider */
@@ -744,6 +790,8 @@ export const useSettingsStore = defineStore('settings', () => {
     availableModels,
     loadConfig,
     saveConfig,
+    setModelDraftEditing: (active: boolean) => { modelDraftEditing.value = active },
+    saveImmediateSetting,
     saveOllamaConnection,
     addProvider,
     updateProvider,

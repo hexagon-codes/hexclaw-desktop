@@ -23,15 +23,15 @@
   .modal-f{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:.5px solid var(--hc-border)}
   .settings-wrap{max-width:600px;width:100%;min-height:100%;display:flex;flex-direction:column;margin:0}
   .settings-wrap.settings-wrap--system{max-width:520px}
-  .runtime-service-card{margin:0 0 22px;padding:14px 16px;border:1px solid var(--hc-border);border-radius:var(--hc-radius-lg);background:linear-gradient(135deg,var(--hc-bg-card),color-mix(in srgb,var(--hc-accent-subtle) 40%,var(--hc-bg-card)));box-shadow:var(--hc-shadow-sm)}
+  .runtime-service-card{margin:0 0 26px;padding:14px;border:1px solid var(--hc-border);border-radius:var(--hc-radius-md);background:var(--hc-bg-card);box-shadow:none}
   .runtime-service-card__top{display:flex;align-items:flex-start;gap:12px}
   .runtime-service-card__identity{display:flex;align-items:flex-start;gap:9px;min-width:0;flex:1}
   .runtime-service-card__identity strong{display:block;color:var(--hc-text-primary);font-size:14px;line-height:1.3}
   .runtime-service-card__meta{display:block;margin-top:4px;overflow:hidden;color:var(--hc-text-secondary);font-size:11.5px;line-height:1.45;text-overflow:ellipsis;white-space:nowrap}
-  .backend-version{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.95em;font-weight:600;color:var(--hc-text-primary);letter-spacing:-.01em}
+  .backend-version{font:inherit;color:inherit}
   .backend-version--pending{font-family:inherit;font-weight:500;color:var(--hc-text-muted)}
-  .runtime-service-card__foot{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hc-border-subtle,var(--hc-border))}
-  .runtime-service-card__hint{min-width:0;flex:1;color:var(--hc-text-muted);font-size:11px;line-height:1.45}
+  .runtime-service-card__foot{display:flex;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hc-border-subtle,var(--hc-border))}
+  .runtime-service-card__hint{min-width:0;flex-basis:100%;color:var(--hc-text-secondary);font-size:12px;line-height:1.5}
   .runtime-service-card__manage{flex-shrink:0}
   /* 服务配置正文独立滚动，连接动作始终保留在弹窗底部。 */
   /* 正文可滚动，页脚在短窗口中仍留有可见空间。 */

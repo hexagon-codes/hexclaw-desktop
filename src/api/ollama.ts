@@ -70,6 +70,10 @@ export async function getOllamaTarget(): Promise<OllamaTarget> {
   acceptOllamaTarget(result.ollama)
   return result.ollama
 }
+/** 测试候选地址，不提交目标配置或改变当前运行实例。 */
+export function probeOllamaTarget(candidate: Pick<OllamaTarget, 'mode' | 'custom_base_url'>) {
+  return apiPost<{ reachable: boolean; error?: string; version?: string }>('/api/v1/ollama/probe', candidate)
+}
 export async function saveOllamaTarget(target: OllamaTarget, ids: string[]): Promise<OllamaTarget> {
   const scope = backendScopeKey()
   const llm = await apiGet<{ config_revision: number; config_digest: string }>('/api/v1/config/llm')

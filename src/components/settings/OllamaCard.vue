@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { backendContext, backendScopeKey, assertBackendActive } from '@/services/backend-context'
-import { activeOllamaTarget } from '@/api/ollama'
+import { activeOllamaTarget, probeOllamaTarget } from '@/api/ollama'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
@@ -292,6 +292,7 @@ const target = ref<OllamaTarget | null>(null)
 const targetMode = ref<'default' | 'custom'>('default')
 const targetAddress = ref('')
 const targetSaving = ref(false)
+const targetProbing = ref(false)
 const targetDirty = computed(() => !!target.value && (targetMode.value !== target.value.mode || (targetMode.value === 'custom' && targetAddress.value.trim() !== target.value.custom_base_url)))
 const remoteBackend = computed(() => backendContext.value?.kind === 'remote')
 const managedLocal = computed(() => !remoteBackend.value && targetMode.value === 'default' && !!status.value?.can_restart)
@@ -313,29 +314,43 @@ async function readTarget() {
   targetMode.value = target.value.mode
   targetAddress.value = target.value.custom_base_url
 }
-async function saveTarget() {
-  if (!target.value || targetSaving.value) return
-  const limitError = targetMode.value === 'custom'
-    ? inputLimitError(targetAddress.value, 'Ollama service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: target.value.custom_base_url })
-    : ''
+function targetDraft(): OllamaTarget | undefined {
+  if (!target.value || !targetDirty.value) return undefined
+  return { ...target.value, mode: targetMode.value, custom_base_url: targetAddress.value.trim(), associated_provider_instance_ids: [...target.value.associated_provider_instance_ids] }
+}
+function resetTarget() {
+  if (!target.value) return
+  targetMode.value = target.value.mode
+  targetAddress.value = target.value.custom_base_url
+}
+async function saveTarget(draft = targetDraft()) {
+  if (!draft || targetSaving.value) return
+  const limitError = draft.mode === 'custom'
+    ? inputLimitError(draft.custom_base_url, 'Ollama service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: target.value?.custom_base_url }) : ''
   if (limitError) throw new Error(limitError)
-  if (!targetDirty.value) return
-  if (targetMode.value === 'custom' && !/^https?:\/\/[^\s]+$/.test(targetAddress.value.trim())) throw new Error('A complete Ollama service URL is required')
+  if (draft.mode === 'custom' && !/^https?:\/\/[^\s]+$/.test(draft.custom_base_url)) throw new Error('A complete Ollama service URL is required')
   targetSaving.value = true
   const scope = backendScopeKey()
   try {
-    const ids = target.value.associated_provider_instance_ids.length ? target.value.associated_provider_instance_ids : (ollamaProviderRef.value?.providerInstanceId ? [ollamaProviderRef.value.providerInstanceId] : [])
-    target.value = await settingsStore.saveOllamaConnection({ ...target.value, mode: targetMode.value, custom_base_url: targetAddress.value.trim() }, ids)
+    const ids = draft.associated_provider_instance_ids.length ? draft.associated_provider_instance_ids : (ollamaProviderRef.value?.providerInstanceId ? [ollamaProviderRef.value.providerInstanceId] : [])
+    const saved = await settingsStore.saveOllamaConnection(draft, ids)
     assertBackendActive(scope)
-    targetAddress.value = target.value.custom_base_url
+    const stillSubmitted = targetMode.value === draft.mode && targetAddress.value.trim() === draft.custom_base_url
+    target.value = saved
+    if (stillSubmitted) resetTarget()
   } finally { targetSaving.value = false }
 }
-async function selectTargetMode(mode: 'default' | 'custom') {
-  targetMode.value = mode
-  if (mode === 'default') { try { await saveTarget(); await detect() } catch (error) { toast.error(String(error)) } }
-}
+function selectTargetMode(mode: 'default' | 'custom') { targetMode.value = mode }
 async function testTarget() {
-  try { await saveTarget(); await detect() } catch (error) { toast.error(String(error)) }
+  // 候选目标测试只验证地址，不改变已保存目标或 Provider 映射。
+  if (targetProbing.value) return
+  targetProbing.value = true
+  try {
+    const result = await probeOllamaTarget({ mode: targetMode.value, custom_base_url: targetAddress.value.trim() })
+    if (!result.reachable) throw new Error(result.error || 'Ollama daemon unreachable')
+    toast.success('Ollama connection test passed.')
+  } catch (error) { toast.error(String(error)) }
+  finally { targetProbing.value = false }
 }
 
 async function detect() {
@@ -908,13 +923,15 @@ const keepAliveOptions = computed(() =>
 const emit = defineEmits<{
   associate: []
   toggleProvider: []
+  targetDirty: [dirty: boolean]
 }>()
 
 function toggleOllamaProvider() {
   emit('toggleProvider')
 }
 
-defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveTarget, readTarget })
+watch(targetDirty, dirty => emit('targetDirty', dirty))
+defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveTarget, readTarget, resetTarget, targetDraft })
 </script>
 
 <template>
@@ -998,14 +1015,14 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
               <input id="ollamaCustomUrl" v-model="targetInputAddress" class="minput"
                 spellcheck="false" placeholder="http://192.168.1.20:11434"
                 :readonly="targetMode === 'default'" :disabled="targetMode === 'custom' && targetSaving"
-                @change="targetMode === 'custom' && testTarget()">
+                >
               <button v-if="targetMode === 'custom' && targetAddress" type="button"
                 class="provider-clear-button" aria-label="清除 Ollama 服务地址"
                 :disabled="targetSaving" @click="targetAddress = ''">×</button>
             </span>
           </div>
           <button v-if="targetMode === 'custom'" class="btn btn-test"
-            :disabled="targetSaving || detecting" @click="testTarget">{{ detecting ? '测试中…' : '测试连接' }}</button>
+            :disabled="targetSaving || detecting || targetProbing" @click="testTarget">{{ detecting || targetProbing ? '测试中…' : '测试连接' }}</button>
           <p class="ollama-runtime__custom-note">{{ targetNote }}</p>
         </div>
       </div>
@@ -1346,11 +1363,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 <style scoped>
 .ollama-card {
   border: 1px solid var(--hc-border);
-  border-radius: 16px;
+  border-radius: 10px;
   background: var(--hc-bg-card);
   backdrop-filter: saturate(160%) blur(16px);
   -webkit-backdrop-filter: saturate(160%) blur(16px);
-  padding: 14px 20px;
+  padding: 12px;
   transition: border-color 0.2s;
   margin-bottom: 0;
 }
@@ -1391,7 +1408,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   align-items: center;
   gap: 7px;
   font-weight: 600;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.4;
   color: var(--hc-text-primary);
   text-decoration: none;

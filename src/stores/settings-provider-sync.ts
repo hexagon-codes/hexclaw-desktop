@@ -15,6 +15,7 @@ import {
 } from './settings-helpers'
 
 interface SettingsProviderSyncContext {
+  canPersistSyncedModels?: () => boolean
   getConfig: () => AppConfig | null
   getRuntimeProviders: () => ProviderConfig[] | null
   getLLMConfigConditions: () => Pick<BackendLLMConfig, 'config_revision' | 'config_digest'> | null
@@ -126,6 +127,7 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
 
   function persistSyncedModels() {
     const queued = enqueue(async () => {
+      if (context.canPersistSyncedModels?.() === false) return
       const current = context.getConfig()
       if (!current) return
       const snapshot: AppConfig = JSON.parse(JSON.stringify(current))

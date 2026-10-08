@@ -426,6 +426,7 @@ export interface LLMConfigMutationReceipt {
 }
 
 export interface BackendRuntimeConfig {
+  memory?: MemoryConfig
   server: {
     host: string
     port: number
@@ -459,6 +460,7 @@ export interface BackendRuntimeConfig {
 }
 
 export interface RuntimeConfigUpdateRequest {
+  memory?: MemoryConfig
   security?: SecurityConfig
   sandbox?: SandboxConfigUpdate
 }
