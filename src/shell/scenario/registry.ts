@@ -11,6 +11,24 @@ import type { Component } from 'vue'
 import type { InstanceViewDescriptor, RecordSchema } from '@/contracts'
 import type { AgentConfig, ChatAttachment, CronJob } from '@/types'
 import { EMPTY_VIEW_DESCRIPTOR } from '@/contracts'
+import type { ChatWorkspaceMode } from '@/components/chat/workspace-mode'
+
+/** Shell 拥有布局和通用会话动作；场景头只消费状态与动作，不创建第二布局源。 */
+export interface ScenarioChatActions {
+  workspaceMode: ChatWorkspaceMode
+  sessionsCollapsedByUser: boolean
+  rightPanelOverlay: boolean
+  toggleSessions(): void
+  toggleArtifacts(): void
+  openContext(): void
+  exportConversation(format: 'markdown' | 'json'): Promise<void>
+  revealContent(identity: string): Promise<void>
+}
+export interface ScenarioArtifactAction {
+  id: string
+  action: string
+  sequence: number
+}
 
 /** 解析描述符时传入的实例上下文（来自 agent 实例） */
 export interface ScenarioContext {
@@ -162,6 +180,7 @@ interface RegistryState {
   actionHandlers: Map<string, ActionHandler>
   /** 会话增强组件（场景包提供；chat shell 只用 <component :is> 渲染，不 import 场景包） */
   chatEnhancement: Component | null
+  artifactRenderers: Map<string, Component>
   /** 智能体卡扩展组件（场景实例卡上的计数/快捷入口；AgentsView 只渲染，不认识场景） */
   agentCardExtension: Component | null
   /** 智能体卡标题徽章 i18n key；由场景包声明，shell 只负责标题行投影。 */
@@ -188,6 +207,7 @@ function createState(): RegistryState {
     cronJobPresentationResolvers: [],
     actionHandlers: new Map(),
     chatEnhancement: null,
+    artifactRenderers: new Map(),
     agentCardExtension: null,
     agentCardBadgeKey: null,
     scenarioTemplates: [],
@@ -274,6 +294,12 @@ export const scenarioRegistry = {
   /** 取会话增强组件（chat shell 用 <component :is> 渲染；无场景为 null） */
   get chatEnhancement(): Component | null {
     return state.chatEnhancement
+  },
+  registerArtifactRenderer(type: string, component: Component): void {
+    state.artifactRenderers.set(type, component)
+  },
+  resolveArtifactRenderer(type: string): Component | undefined {
+    return state.artifactRenderers.get(type)
   },
 
   /** 注册智能体卡扩展组件（场景实例卡上的计数 + 快捷入口） */

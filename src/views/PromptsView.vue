@@ -9,7 +9,7 @@
 import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Trash2, Pencil, X, FileText } from 'lucide-vue-next'
+import { X, FileText } from 'lucide-vue-next'
 import {
   getAllPrompts,
   upsertPrompt,
@@ -39,7 +39,7 @@ const props = withDefaults(
   },
 )
 
-type PromptEditor = Partial<Prompt> & { command?: string }
+type PromptEditor = Partial<Prompt>
 
 // ── 顶栏统一搜索（IntegrationView 注入）──
 const query = computed(() => (props.filter ?? '').toLowerCase().trim())
@@ -89,7 +89,7 @@ defineExpose({ newPrompt })
 function editPrompt(p: Prompt) {
   editing.value = {
     ...p,
-    command: p.type === 'command' ? (p as PromptEditor).command ?? '/translate' : '',
+    command: p.type === 'command' ? p.command ?? '' : '',
   }
 }
 /** 增删改失败提示（PromptsView 原无错误反馈，失败会静默吞掉）。 */
@@ -101,7 +101,7 @@ async function savePrompt() {
   actionError.value = ''
   const original = prompts.value.find((prompt) => prompt.id === e.id)
   const originalCommand = original
-    ? original.type === 'command' ? (original as PromptEditor).command ?? '/translate' : ''
+    ? original.type === 'command' ? original.command ?? '' : ''
     : undefined
   let limitError =
     inputLimitError(e.title, 'Prompt title', INPUT_LIMITS.title, { original: original?.title }) ||
@@ -126,6 +126,11 @@ async function savePrompt() {
       id: e.id,
       type: (e.type as PromptType) ?? 'command',
       title: e.title,
+      command: e.type === 'command' ? e.command ?? '' : '',
+      description: e.description ?? '',
+      scenario: e.scenario,
+      subject: e.subject,
+      task_kind: e.task_kind,
       body_md: e.body_md ?? '',
       category: e.category ?? '',
       model: e.model ?? '',
@@ -154,8 +159,13 @@ async function confirmRemovePrompt() {
   }
 }
 async function toggleEnabled(p: Prompt) {
-  await upsertPrompt({ ...p, enabled: !p.enabled })
-  await loadPrompts()
+  actionError.value = ''
+  try {
+    await upsertPrompt({ ...p, enabled: !p.enabled })
+    await loadPrompts()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : 'Could not update prompt'
+  }
 }
 
 const isCommand = computed(() => editing.value?.type === 'command')
@@ -253,21 +263,18 @@ onMounted(() => {
           <div class="hc-prompts__item-main">
             <span class="hc-tag" :class="p.type === 'command' ? 'hc-tag--cmd' : 'hc-tag--prompt'">{{
               p.type === 'command'
-                ? t('prompts.typeCommand', '命令')
+                ? t('prompts.typeCommand', '命令') + ' /'
                 : t('prompts.typePrompt', 'Prompt 片段')
             }}</span>
             <span class="hc-prompts__title">{{ p.title }}</span>
-            <span v-if="p.category" class="hc-prompts__cat">{{ p.category }}</span>
+            <span v-if="p.command || p.category" class="hc-prompts__cat">{{ p.command || p.category }}</span>
           </div>
           <div class="hc-prompts__item-actions">
             <label class="hc-switch" :title="t('prompts.enabled', '启用')">
-              <input type="checkbox" :checked="p.enabled" @change="toggleEnabled(p)" />
-              <span>{{ p.enabled ? t('prompts.on', '已启用') : t('prompts.off', '已禁用') }}</span>
+              <input type="checkbox" role="switch" :aria-label="t('prompts.enabled', '启用') + ' ' + p.title" :checked="p.enabled" @change="toggleEnabled(p)" />
             </label>
-            <button class="hc-icon-btn" @click="editPrompt(p)"><Pencil :size="15" /></button>
-            <button class="hc-icon-btn hc-icon-btn--danger" @click="pendingDeletePrompt = p">
-              <Trash2 :size="15" />
-            </button>
+            <button class="hc-prompt-action" @click="editPrompt(p)">{{ t('common.edit', '编辑') }}</button>
+            <button class="hc-prompt-action" @click="pendingDeletePrompt = p">{{ t('common.delete', '删除') }}</button>
           </div>
         </li>
       </ul>
@@ -326,9 +333,7 @@ onMounted(() => {
                 <div>
                   <label>{{ t('prompts.fCommand', '命令（输入 / 召唤）') }}</label>
                   <input v-model="editing.command" type="text" placeholder="/translate" />
-                  <small class="hc-prompts__hint">{{
-                    t('prompts.fCommandHint', '短名直呼是效率用户的肌肉记忆。')
-                  }}</small>
+                  <small class="hc-prompts__hint">{{ t('prompts.commandRecallHint', '从 / 菜单选择后预填正文，编辑完成再发送。') }}</small>
                 </div>
               </div>
               <div class="hc-field hc-field--row">
@@ -635,6 +640,46 @@ onMounted(() => {
   gap: 6px;
   font-size: 12px;
   cursor: pointer;
+}
+.hc-switch input {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--hc-bg-active);
+  position: relative;
+  cursor: pointer;
+}
+.hc-switch input::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+  transition: transform .2s;
+}
+.hc-switch input:checked { background: var(--hc-accent); }
+.hc-switch input:checked::before { transform: translateX(14px); }
+.hc-switch input:focus-visible, .hc-prompt-action:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
+.hc-prompt-action {
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  padding: 7px 12px;
+  color: var(--hc-text-primary);
+  background: var(--hc-bg-elevated);
+  font-size: 12px;
+  cursor: pointer;
+}
+.hc-prompt-action:hover { background: var(--hc-bg-hover); }
+@media (max-width: 600px) {
+  .hc-prompts__item { flex-wrap: wrap; }
+  .hc-prompts__item-main { flex-wrap: wrap; }
+  .hc-prompts__item-actions { margin-left: auto; }
 }
 /* 弹窗正文区：表单字段纵向排列（取代旧内联编辑器布局） */
 .hc-prompt-modal {

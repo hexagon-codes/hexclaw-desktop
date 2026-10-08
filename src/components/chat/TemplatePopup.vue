@@ -11,7 +11,8 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText, Pin, Plus, Wand2, Upload, Store } from 'lucide-vue-next'
-import { getPrompts } from '@/api/prompts'
+import { getPrompts, type PromptInvocation } from '@/api/prompts'
+import { backendScopeKey } from '@/services/backend-context'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import type { Skill } from '@/types'
 
@@ -25,6 +26,9 @@ interface PromptTemplate {
   pinned: boolean
   createdAt: string
   updatedAt: string
+  description?: string
+  command?: string
+  invocation?: PromptInvocation
 }
 
 /** 统一命令项：skill 或 prompt。 */
@@ -35,6 +39,8 @@ interface PaletteItem {
   desc?: string
   /** prompt 正文（插入用）。 */
   content?: string
+  command?: string
+  invocation?: PromptInvocation
   /** skill 名（@name 插入用）。 */
   name?: string
   pinned?: boolean
@@ -83,8 +89,13 @@ async function fetchServerTemplates(query: string): Promise<PromptTemplate[]> {
       .map((p) => ({
         id: p.id, title: p.title, content: p.body_md, category: p.category || p.type,
         useCount: 0, pinned: false, createdAt: p.updated_at, updatedAt: p.updated_at,
+        description: p.description, command: p.command,
+        invocation: { prompt_id: p.id, builtin_key: p.builtin_key, scenario: p.scenario,
+          subject: p.subject, task_kind: p.task_kind, model: p.model, tool_scope: p.tool_scope },
       }))
-      .filter((t) => !q || t.title.toLowerCase().includes(q) || t.content.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
+      .filter((t) => props.promptScenario === 'k12'
+        ? !q || t.title.toLowerCase().includes(q) || (t.description ?? '').toLowerCase().includes(q)
+        : !q || t.title.toLowerCase().includes(q) || t.content.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
   } catch {
     return [] // 离线 / 后端未启用 → 只用本地模板
   }
@@ -116,6 +127,7 @@ const props = withDefaults(defineProps<{
   skills?: Skill[]
   /** 面板范围：all=斜杠召回(Skill+Prompt) / skills=🔧按钮 / prompts=✨按钮 */
   scope?: 'all' | 'skills' | 'prompts'
+  promptScenario?: string
 }>(), { skills: () => [], scope: 'all' })
 
 const emit = defineEmits<{
@@ -156,8 +168,11 @@ const promptItems = computed<PaletteItem[]>(() => {
   if (props.scope === 'skills') return []
   const q = props.query.toLowerCase()
   return templates.value
-    .filter((tpl) => !q || tpl.title.toLowerCase().includes(q) || tpl.category.toLowerCase().includes(q))
-    .map((tpl) => ({ kind: 'prompt' as const, id: tpl.id, title: tpl.title, desc: tpl.content, content: tpl.content, pinned: tpl.pinned }))
+    .filter((tpl) => !q || tpl.title.toLowerCase().includes(q)
+      || (props.promptScenario === 'k12' ? (tpl.description ?? '').toLowerCase().includes(q) : tpl.category.toLowerCase().includes(q)))
+    .map((tpl) => ({ kind: 'prompt' as const, id: tpl.id, title: tpl.title,
+      desc: props.promptScenario === 'k12' ? tpl.description : tpl.content,
+      content: tpl.content, pinned: tpl.pinned, command: tpl.command, invocation: tpl.invocation }))
 })
 
 // 统一列表：Skill 在前、Prompt 在后。
@@ -172,25 +187,33 @@ const headerTitle = computed(() => {
   return t('chat.palette.all', '命令 · Skill / Prompt')
 })
 
+let loadGeneration = 0
 async function reload(query: string) {
+  const generation = ++loadGeneration
+  const scope = backendScopeKey()
   selectedIndex.value = 0
+  templates.value = []
   if (props.scope === 'skills') { templates.value = []; return } // 纯 skill 范围不必拉 prompt
   try {
-    templates.value = await loadMerged(query)
+    const result = await loadMerged(query)
+    if (generation === loadGeneration && scope === backendScopeKey() && props.visible) templates.value = result
   } catch {
-    templates.value = []
+    if (generation === loadGeneration) templates.value = []
   }
 }
 
 watch(() => props.visible, (v) => { if (v) reload(props.query) })
 watch(() => props.query, (q) => { if (props.visible) reload(q) })
+watch(() => [props.scope, props.promptScenario], () => { if (props.visible) void reload(props.query) })
+watch(filtered, () => { selectedIndex.value = 0 })
 
 function handleSelect(item: PaletteItem) {
-  if (item.kind === 'prompt' && !item.id.startsWith('pr-')) dbTemplateIncrementUse(item.id) // 服务端条目无本地 useCount
+  if (item.kind === 'prompt' && !item.invocation) dbTemplateIncrementUse(item.id)
   emit('select', item)
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
   const list = filtered.value
   const createIdx = showCreate.value ? list.length : -1
   const maxIdx = showCreate.value ? list.length : Math.max(0, list.length - 1)
@@ -202,6 +225,7 @@ function handleKeydown(e: KeyboardEvent) {
     selectedIndex.value = Math.max(selectedIndex.value - 1, 0)
   } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault()
+    if (props.promptScenario === 'k12' && !list.length) return
     if (selectedIndex.value < list.length) {
       handleSelect(list[selectedIndex.value]!)
     } else if (selectedIndex.value === createIdx) {
@@ -233,6 +257,7 @@ defineExpose({ handleKeydown })
       v-if="visible"
       ref="rootEl"
       class="tpl-popup"
+      :class="{ 'tpl-popup--k12': promptScenario === 'k12' }"
       :style="{ bottom: position.bottom + 'px', left: position.left + 'px' }"
     >
       <div class="tpl-popup__header">
@@ -265,7 +290,7 @@ defineExpose({ handleKeydown })
                 <Pin v-if="item.pinned" :size="10" style="color: var(--hc-accent); margin-right: 2px" />
                 {{ item.title }}
               </span>
-              <span class="tpl-popup__badge">{{ item.kind === 'skill' ? 'Skill' : 'Prompt' }}</span>
+              <span class="tpl-popup__badge">{{ item.kind === 'skill' ? 'Skill' : item.command || 'Prompt' }}</span>
             </div>
             <span v-if="item.desc" class="tpl-popup__preview">{{ item.desc.slice(0, 40) }}{{ item.desc.length > 40 ? '…' : '' }}</span>
           </button>
@@ -406,6 +431,10 @@ defineExpose({ handleKeydown })
   max-width: 110px;
   flex-shrink: 0;
 }
+/* K12菜单保留短说明，完整专业正文只进入编辑区。普通菜单沿原单行呈现。 */
+.tpl-popup--k12 { width: min(420px, calc(100vw - 16px)); }
+.tpl-popup--k12 .tpl-popup__item { flex-wrap: wrap; }
+.tpl-popup--k12 .tpl-popup__preview { width: 100%; max-width: none; margin-left: 22px; line-height: 1.5; }
 
 .tpl-popup__item--create {
   border-top: 1px solid var(--hc-divider);

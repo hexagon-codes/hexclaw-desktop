@@ -17,6 +17,12 @@ export interface Prompt {
   id: string
   type: PromptType
   title: string
+  command?: string
+  description?: string
+  builtin_key?: string
+  scenario?: string
+  subject?: 'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art'
+  task_kind?: string
   body_md: string
   args_json: string
   tool_scope: string
@@ -28,6 +34,17 @@ export interface Prompt {
 
 /** 创建/更新 Prompt 的入参（id 空 → 新建）。 */
 export type PromptInput = Partial<Prompt> & { title: string }
+
+/** 模板候选意图及建议执行选项。最终用户正文优先，身份不用于授权或教材事实。 */
+export interface PromptInvocation {
+  prompt_id: string
+  builtin_key?: string
+  scenario?: string
+  subject?: Prompt['subject']
+  task_kind?: string
+  model: string
+  tool_scope: string
+}
 
 /** 列出启用的 Prompt（前端 ✨ / `/` 召唤拉取）。 */
 export function getPrompts() {

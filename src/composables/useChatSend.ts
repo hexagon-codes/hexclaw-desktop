@@ -210,6 +210,8 @@ export function useChatSend(deps: ChatSendDeps) {
     options?: {
       contextRefs?: import('@/types').ChatContextRef[]
       skillNames?: string[]
+      requestMetadata?: Record<string, string>
+      promptInvocation?: import('@/api/prompts').PromptInvocation
       onPayloadRejected?: (error: ChatPayloadLimitError) => void
       // 预置附件（编辑/重试重发时带回原消息的图片等，BUG-20260625），与 files/preview 合并
       attachments?: ChatAttachment[]
@@ -445,8 +447,13 @@ export function useChatSend(deps: ChatSendDeps) {
     // backendText 始终以 thunk 传入（Auto-RAG 始终尝试）；sendMessage 在乐观 push 后再 await 解析，
     // 解析为空则后端用可见文本（thunk 内 contextParts 为空时返回 undefined）。
     const sendOptions = {
-      backendText: resolveBackendText,
+      // 单元任务由领域读取冻结材料；其最终用户正文不能再混入通用RAG包装文本。
+      backendText: options?.promptInvocation?.task_kind === 'unit_summary'
+        || options?.requestMetadata?.k12_active_material
+        ? finalText : resolveBackendText,
       skillNames,
+      requestMetadata: options?.requestMetadata,
+      promptInvocation: options?.promptInvocation,
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,
       routeSnapshot: options?.routeSnapshot ?? captureRouteSnapshot?.(),

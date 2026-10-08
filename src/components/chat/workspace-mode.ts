@@ -3,6 +3,14 @@ export const CHAT_WORKSPACE_MODES = ['sessions', 'artifacts', 'context', 'focus'
 export type ChatWorkspaceMode = (typeof CHAT_WORKSPACE_MODES)[number]
 export type ChatWorkspaceEntry = Exclude<ChatWorkspaceMode, 'focus'>
 
+/** 覆盖阈值按扣除主导航后的工作区测量，右面板宽度不参与以避免振荡。 */
+export function rightWorkspacePresentation(
+  workspaceWidth: number,
+  scenarioOwnsHeader: boolean,
+): 'split' | 'overlay' {
+  return workspaceWidth < (scenarioOwnsHeader ? 1040 : 780) ? 'overlay' : 'split'
+}
+
 export function toggleChatWorkspaceEntry(
   current: ChatWorkspaceMode,
   entry: ChatWorkspaceEntry,
@@ -30,10 +38,7 @@ export function resolveChatWorkspaceTransition(
   requested: ChatWorkspaceMode,
   sessionsCollapsedByUser: boolean,
 ): ChatWorkspaceTransition {
-  if (
-    (current === 'artifacts' || current === 'context') &&
-    requested === 'focus'
-  ) {
+  if ((current === 'artifacts' || current === 'context') && requested === 'focus') {
     return {
       mode: workspaceAfterRightPanelClose(sessionsCollapsedByUser),
       sessionsCollapsedByUser,

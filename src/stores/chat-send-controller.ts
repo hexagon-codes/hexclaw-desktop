@@ -2,12 +2,14 @@ import type { Ref } from 'vue'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
+import type { PromptInvocation } from '@/api/prompts'
 import type { ChatPayloadLimitError } from '@/services/chatService'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
 import {
   resolveChatRouteSnapshot,
+  freezeChatRouteSnapshot,
   type ChatRouteSnapshot,
 } from './chat-route-snapshot'
 import { buildSessionStreamState, type ChatSendErrorHandler } from './chat-stream-helpers'
@@ -22,6 +24,8 @@ export interface ChatSendOptions {
   backendText?: string | (() => Promise<string | undefined>)
   skillNames?: string[]
   documents?: ChatDocumentRef[]
+  requestMetadata?: Record<string, string>
+  promptInvocation?: PromptInvocation
   onPayloadRejected?: (error: ChatPayloadLimitError) => void
   /**
    * 内部定向提交目标。用于“编辑即新版本”事务：分支被接受前仍展示源会话，
@@ -174,14 +178,35 @@ export function createChatSendController(params: {
     refreshSendingState(sending, draftSending)
     try {
       const requestId = createId()
-      const samplingSnapshot = resolveChatRouteSnapshot(options?.routeSnapshot, {
+      let samplingSnapshot = resolveChatRouteSnapshot(options?.routeSnapshot, {
         agentRole: agentRole.value,
         chatParams: { ...chatParams.value },
         thinkingEnabled: thinkingEnabled.value,
         reasoningSupport: 'unknown',
       })
       const skillNames = options?.skillNames ?? []
+      const requestMetadata = { ...options?.requestMetadata }
+      const promptInvocation = options?.promptInvocation ? { ...options.promptInvocation } : undefined
+      const suggestedModel = promptInvocation?.model.trim()
+      if (suggestedModel) {
+        const settings = getSettingsStore()
+        const candidates = settings.availableModels.filter((entry) => entry.modelId === suggestedModel)
+        const model = candidates.find((entry) => entry.providerId === samplingSnapshot.chatParams.provider)
+          ?? candidates.find((entry) => entry.providerId === settings.config?.llm.defaultProviderId)
+          ?? (candidates.length === 1 ? candidates[0] : undefined)
+        if (!model) throw new Error('The prompt suggested model is unavailable or ambiguous.')
+        samplingSnapshot = freezeChatRouteSnapshot({
+          ...samplingSnapshot,
+          chatParams: { ...samplingSnapshot.chatParams, provider: model.providerId, model: model.modelId },
+          reasoningSupport: 'unknown',
+          reasoningControl: undefined,
+        })
+      }
       const userMeta: Record<string, unknown> = {}
+      if (promptInvocation) userMeta.prompt_invocation = promptInvocation
+      for (const key of ['k12_active_material', 'k12_task_intent']) {
+        if (requestMetadata[key]) userMeta[key] = requestMetadata[key]
+      }
       if (attachments?.length) userMeta.attachments = attachments
       if (skillNames.length) userMeta.skills = skillNames
       // 文档卡片仅展示，不入 attachments、不发后端（正文已在 backendText）。
@@ -248,6 +273,8 @@ export function createChatSendController(params: {
         draftSending,
         skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
         documents: options?.documents, // BUG-20260626：透传文档卡片给后端持久化（否则重载丢失退化纯文本）
+        requestMetadata,
+        promptInvocation,
         onPayloadRejected: options?.onPayloadRejected,
         samplingSnapshot, // U4：点击瞬间快照，防 Auto-RAG 期间切会话带错 agent/model/thinking
       })

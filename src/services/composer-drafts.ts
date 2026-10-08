@@ -1,9 +1,10 @@
 import { backendScopeKey } from './backend-context'
 import { invoke } from '@tauri-apps/api/core'
 import { fileFromNativeGrant, nativeGrantFromFile, type NativeFileGrant } from '@/api/native-files'
+import type { PromptComposerDraft } from '@/utils/prompt-compose'
 
 export interface DraftAttachment { file?: File; nativeId?: string; name: string; mime: string }
-export interface ComposerDraft { text: string; skills: unknown[]; contexts: unknown[]; files: DraftAttachment[] }
+export interface ComposerDraft { text: string; skills: unknown[]; contexts: unknown[]; files: DraftAttachment[]; promptDraft?: PromptComposerDraft }
 let database: Promise<IDBDatabase> | undefined
 function db(): Promise<IDBDatabase> {
   return database ??= new Promise((resolve, reject) => {

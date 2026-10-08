@@ -47,8 +47,10 @@ import {
   type VideoTaskStatus,
 } from '@/api/videogen'
 import { logger } from '@/utils/logger'
-import { shouldSendOnEnter } from '@/utils/chat-compose'
+import { shouldSendOnEnter, COMPOSE_GUARD_MS } from '@/utils/chat-compose'
 import { normalizeMathMarkdown } from '@/utils/math-content'
+import type { PromptInvocation } from '@/api/prompts'
+import { promptExtra, replacePromptExtra, reconcilePromptEdit, promptIntent, type PromptComposerDraft } from '@/utils/prompt-compose'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import type {
   ScenarioComposerChip,
@@ -125,12 +127,15 @@ const props = defineProps<{
   /** 场景描述符声明的输入提示与辅助说明；公共输入框只负责投影，不解析领域语义。 */
   scenarioPlaceholder?: string
   scenarioHint?: { emphasis: string; detail: string }
+  /** 仅K12启用单元模板摘要投影；普通会话保留原召回展示。 */
+  promptScenario?: string
   sendHandler?: (
     text: string,
     files: File[],
     options?: {
       contextRefs?: ChatContextRef[]
       skillNames?: string[]
+      promptInvocation?: PromptInvocation
       onPayloadRejected?: (error: ChatPayloadLimitError) => void
     },
   ) => boolean | Promise<boolean>
@@ -281,6 +286,12 @@ function removeContextRef(type: string, id: string) {
 }
 
 const inputText = ref('')
+const promptDraft = ref<PromptComposerDraft>()
+const promptExtraRef = ref<HTMLTextAreaElement>()
+const unitPromptActive = computed(() => props.promptScenario === 'k12' && promptDraft.value?.unit_summary === true)
+const unitPromptExtra = computed(() => promptDraft.value ? promptExtra(inputText.value, promptDraft.value) : '')
+const unitPromptIntent = computed(() => promptIntent(inputText.value, promptDraft.value?.description ?? ''))
+const unitPromptTitle = computed(() => (promptDraft.value?.title ?? '').replace(/^梳理/, '').replace(/单元知识$/, '') + ' · 单元资料')
 const voiceSessionActive = ref(false)
 const voiceFinalizing = ref(false)
 const voiceElapsedSeconds = ref(0)
@@ -498,11 +509,12 @@ function persistDraft(): Promise<void> {
   if (draftLoading.value || !activeDraftKey) return draftWrite
   const key = activeDraftKey
   const text = inputText.value
+  const prompt = promptDraft.value ? JSON.parse(JSON.stringify(promptDraft.value)) as PromptComposerDraft : undefined
   const skills = JSON.parse(JSON.stringify(mountedSkills.value))
   const contexts = JSON.parse(JSON.stringify(contextChips.value))
   const files = attachedFiles.value.map((item) => preserveComposerFile(item.file))
   draftWrite = draftWrite.catch(() => undefined).then(async () => {
-    await writeComposerDraft(key, { text, skills, contexts, files: await Promise.all(files) })
+    await writeComposerDraft(key, { text, skills, contexts, files: await Promise.all(files), promptDraft: prompt })
   })
   return draftWrite
 }
@@ -523,6 +535,7 @@ async function loadDraft(key: string) {
   activeDraftKey = ''
   clearAttachedFiles()
   inputText.value = ''
+  promptDraft.value = undefined
   mountedSkills.value = []
   contextChips.value = []
   const draft = await readComposerDraft(key)
@@ -548,6 +561,7 @@ async function loadDraft(key: string) {
     if (revision === draftRevision && !chatInputUnmounted) {
       // 全部附件恢复后才发布正文与上下文，失败不呈现可发送的残缺草稿。
       inputText.value = draft?.text ?? ''
+      promptDraft.value = draft?.text ? draft.promptDraft : undefined
       mountedSkills.value = (draft?.skills ?? []) as Skill[]
       contextChips.value = (draft?.contexts ?? []) as ContextChip[]
       for (const chip of [...contextChips.value]) {
@@ -603,7 +617,7 @@ watch(() => [props.draftScopeKey, props.draftAgentKey], (_, previous) => {
 watch([inputText, attachedFiles, mountedSkills, contextChips], () => {
   if (!draftLoading.value) draftContentRevision++
 }, { deep: true, flush: 'sync' })
-watch([inputText, attachedFiles, mountedSkills, contextChips], () => {
+watch([inputText, attachedFiles, mountedSkills, contextChips, promptDraft], () => {
   if (!draftLoading.value) void persistDraft().catch((error) => logger.warn('[ChatInput] Draft persistence failed', error))
 }, { deep: true, flush: 'post' })
 onBeforeUnmount(() => { void persistDraft().catch((error) => logger.warn('[ChatInput] Draft persistence failed', error)); unregisterDraftFlush() })
@@ -694,6 +708,7 @@ const fileAccept = computed(() => {
 
 function clearDraft() {
   inputText.value = ''
+  promptDraft.value = undefined
   clearAttachedFiles()
   mountedSkills.value = []
   contextChips.value = []
@@ -816,6 +831,7 @@ async function handleSend() {
       content: c.content,
     }))
     const skillNames = mountedSkills.value.map((s) => s.name)
+    const promptInvocation = promptDraft.value ? { ...promptDraft.value.invocation } : undefined
     const sourceBackend = backendScopeKey()
     const sourceAgent = props.draftAgentKey
     const sourceScope = props.draftScopeKey
@@ -824,6 +840,7 @@ async function handleSend() {
     const sourceContentRevision = draftContentRevision
     const snapshot = {
       text: inputText.value,
+      promptDraft: promptDraft.value ? JSON.parse(JSON.stringify(promptDraft.value)) as PromptComposerDraft : undefined,
       skills: JSON.parse(JSON.stringify(mountedSkills.value)) as Skill[],
       contexts: JSON.parse(JSON.stringify(contextChips.value)) as ContextChip[],
       files: await Promise.all(attachedFiles.value.map((item) => preserveComposerFile(item.file))),
@@ -890,6 +907,7 @@ async function handleSend() {
         if (!recoveryIsActive()) return
         // 只恢复本机明确未发送的完整草稿；新编辑或作用域切换均优先保留。
         inputText.value = snapshot.text
+        promptDraft.value = snapshot.promptDraft
         mountedSkills.value = snapshot.skills
         contextChips.value = snapshot.contexts
         attachedFiles.value = restoredFiles
@@ -913,7 +931,7 @@ async function handleSend() {
     const accepted = await props.sendHandler(
       text,
       files,
-      { contextRefs, skillNames, onPayloadRejected },
+      { contextRefs, skillNames, promptInvocation, onPayloadRejected },
     )
     if (accepted && !payloadRejected && sourceIsActive()
       && sourceContentRevision === draftContentRevision
@@ -934,6 +952,9 @@ async function handleSend() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // 输入法确认先于菜单/发送处理，避免合成Enter误选模板或误发完整正文。
+  if (composing.value || e.isComposing || e.keyCode === 229
+    || (e.key === 'Enter' && Date.now() - lastCompositionEnd < COMPOSE_GUARD_MS)) return
   if (showTemplate.value && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
     templateRef.value?.handleKeydown(e)
     return
@@ -976,8 +997,29 @@ function editorSelection(): { start: number; end: number } {
 }
 
 function handleContentUpdate(content: string) {
+  if (promptDraft.value) reconcilePromptEdit(inputText.value, content, promptDraft.value)
   inputText.value = content
+  if (!content.trim()) promptDraft.value = undefined
   handleInput()
+}
+
+function updateUnitPromptExtra(event: Event) {
+  const field = event.target as HTMLTextAreaElement
+  if (!promptDraft.value) return
+  inputText.value = replacePromptExtra(inputText.value, promptDraft.value, field.value)
+  const match = field.value.slice(0, field.selectionStart).match(/(?:^|\n)\/([^\n/]{0,20})$/)
+  if (!match) { showTemplate.value = false; return }
+  const rect = field.getBoundingClientRect()
+  templateQuery.value = match[1] ?? ''
+  paletteScope.value = 'all'
+  showTemplate.value = true
+  templatePosition.value = { bottom: window.innerHeight - rect.top + 8, left: Math.max(8, Math.min(rect.left, window.innerWidth - 436)) }
+}
+
+function toggleUnitPromptEditor() {
+  if (!promptDraft.value) return
+  promptDraft.value.editor_expanded = !promptDraft.value.editor_expanded
+  nextTick(() => promptDraft.value?.editor_expanded ? mathEditorRef.value?.focusEditor() : promptExtraRef.value?.focus())
 }
 
 function handleInput() {
@@ -1043,10 +1085,14 @@ function slashStripRange(): { start: number; end: number } | null {
 
 // 统一命令面板选中：skill → 插 @name；prompt → 插正文（含 $ARGUMENTS snippet 填参）。
 // 斜杠召回会剥掉 /query；按钮召回在光标处插入。
-function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string; name?: string }) {
-  const cursorPos = editorSelection().start
+function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; id?: string; title?: string; desc?: string; content?: string; name?: string; invocation?: PromptInvocation }) {
+  const extraField = unitPromptActive.value && !promptDraft.value?.editor_expanded ? promptExtraRef.value : undefined
+  const extraStart = promptDraft.value?.extra_range?.start
+  const cursorPos = extraField && extraStart !== undefined
+    ? extraStart + (unitPromptExtra.value ? 2 : 0) + extraField.selectionStart : editorSelection().start
   const text = inputText.value
-  const strip = slashStripRange()
+  const extraSlash = extraField ? unitPromptExtra.value.slice(0, extraField.selectionStart).match(/(?:^|\n)(\/[^\n/]{0,20})$/) : undefined
+  const strip = extraSlash ? { start: cursorPos - extraSlash[1]!.length, end: cursorPos } : extraField ? null : slashStripRange()
   const start = strip ? strip.start : cursorPos
   const end = strip ? strip.end : cursorPos
   const before = text.slice(0, start)
@@ -1075,7 +1121,31 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
 
   // prompt
   const content = item.content ?? ''
-  inputText.value = before + content + text.slice(end)
+  const isUnit = props.promptScenario === 'k12' && item.invocation?.scenario === 'k12' && item.invocation.task_kind === 'unit_summary'
+  if (isUnit && unitPromptActive.value && promptDraft.value) {
+    // 同模板重选保留全文编辑；跨模板只替换模板正文并保留当前可见补充。
+    if (strip) {
+      const next = text.slice(0, strip.start) + text.slice(strip.end)
+      reconcilePromptEdit(text, next, promptDraft.value)
+      inputText.value = next
+    }
+    const extra = promptExtra(inputText.value, promptDraft.value)
+    if (promptDraft.value.invocation.prompt_id !== item.invocation!.prompt_id) {
+      inputText.value = content + (extra ? '\n\n' + extra : '')
+      promptDraft.value = { invocation: item.invocation!, title: item.title ?? '', description: item.desc ?? '',
+        template_snapshot: content, unit_summary: true, editor_expanded: false,
+        extra_range: { start: content.length, end: inputText.value.length } }
+    } else promptDraft.value.editor_expanded = false
+    nextTick(() => promptExtraRef.value?.focus())
+    return
+  }
+  const tail = text.slice(end)
+  const templateEnd = before.length + content.length
+  inputText.value = before + content + (isUnit && tail ? '\n\n' + tail.replace(/^\n\n/, '') : tail)
+  promptDraft.value = item.invocation ? { invocation: item.invocation, title: item.title ?? '', description: item.desc ?? '',
+    template_snapshot: content, unit_summary: isUnit, editor_expanded: false,
+    extra_range: isUnit ? { start: templateEnd, end: inputText.value.length } : undefined } : undefined
+  if (isUnit) { nextTick(() => promptExtraRef.value?.focus()); return }
   const ARG = '$ARGUMENTS'
   const argIdx = content.indexOf(ARG)
   nextTick(() => {
@@ -1387,7 +1457,7 @@ function formatFileSize(bytes: number): string {
 
 // 统一命令面板入口：与输入「/」等效，更可发现。scope 决定列 Skill / Prompt / 全部。
 function openPalette(scope: 'all' | 'skills' | 'prompts') {
-  const el = editorElement()
+  const el = unitPromptActive.value && !promptDraft.value?.editor_expanded ? promptExtraRef.value : editorElement()
   if (!el) return
   const rect = el.getBoundingClientRect()
   templateQuery.value = ''
@@ -1396,9 +1466,10 @@ function openPalette(scope: 'all' | 'skills' | 'prompts') {
   showTemplate.value = true
   templatePosition.value = {
     bottom: window.innerHeight - rect.top + 8,
-    left: Math.min(rect.left + 14, window.innerWidth - 356),
+    left: Math.max(8, Math.min(rect.left + 14, window.innerWidth - (props.promptScenario === 'k12' ? 436 : 356))),
   }
-  mathEditorRef.value?.focusEditor()
+  if (unitPromptActive.value && !promptDraft.value?.editor_expanded) promptExtraRef.value?.focus()
+  else mathEditorRef.value?.focusEditor()
 }
 function openPromptPicker() {
   openPalette('prompts')
@@ -1408,9 +1479,11 @@ function openSkillPicker() {
 } // 🔧 按钮
 
 function focus() {
+  if (unitPromptActive.value && !promptDraft.value?.editor_expanded) { promptExtraRef.value?.focus(); return }
   mathEditorRef.value?.focusToEnd()
 }
 function setInput(text: string, shouldFocus = true) {
+  promptDraft.value = undefined
   inputText.value = text
   nextTick(() => {
     handleInput()
@@ -1432,6 +1505,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         'hc-composer__box--primary': !isScenarioComposer,
         'hc-composer__box--dragging': isDragging,
         'hc-composer__box--voice': voiceSessionActive,
+        'hc-composer__box--prompt-expanded': unitPromptActive && promptDraft?.editor_expanded,
       }"
       @dragenter.prevent="handleDragEnter"
       @dragover.prevent
@@ -1588,7 +1662,23 @@ defineExpose({ focus, setInput, triggerFileUpload })
         </div>
       </div>
 
-      <HcClearableField>
+      <div v-if="unitPromptActive && promptDraft" class="hc-composer__prompt-draft">
+        <div class="hc-composer__prompt-title">{{ unitPromptTitle }}</div>
+        <p class="hc-composer__prompt-intent">{{ unitPromptIntent }}</p>
+        <div v-if="!promptDraft.editor_expanded" class="hc-composer__prompt-extra">
+          <label for="unit-prompt-extra">{{ t('chat.unitPrompt.extra', '本次补充（选填）') }}</label>
+          <textarea id="unit-prompt-extra" ref="promptExtraRef" :value="unitPromptExtra" rows="2"
+            :placeholder="t('chat.unitPrompt.extraPlaceholder', '可补充本次指定单元或材料')"
+            :disabled="disabled || submitting" @input="updateUnitPromptExtra" @keydown="handleKeydown"
+            @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" />
+        </div>
+        <button type="button" class="hc-composer__prompt-toggle" :aria-expanded="promptDraft.editor_expanded"
+          aria-controls="canonical-prompt-editor" @click="toggleUnitPromptEditor">
+          {{ promptDraft.editor_expanded ? t('chat.unitPrompt.collapse', '收起完整 Prompt') : t('chat.unitPrompt.expand', '查看 / 编辑完整 Prompt') }}
+        </button>
+      </div>
+      <HcClearableField v-show="!unitPromptActive || promptDraft?.editor_expanded" id="canonical-prompt-editor"
+        :class="{ 'hc-composer__prompt-editor': unitPromptActive }">
         <MessageText
           ref="mathEditorRef"
           :content="inputText"
@@ -1719,6 +1809,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
       :position="templatePosition"
       :skills="skills || []"
       :scope="paletteScope"
+      :prompt-scenario="promptScenario"
       @select="handleTemplateSelect"
       @close="showTemplate = false"
       @create="emit('createTemplate')"
@@ -1733,6 +1824,25 @@ defineExpose({ focus, setInput, triggerFileUpload })
 </template>
 
 <style scoped>
+.hc-composer__prompt-draft { padding: 6px 4px 2px; min-width: 0; }
+.hc-composer__prompt-title { font-size: 14px; font-weight: 600; color: var(--hc-text-primary); }
+.hc-composer__prompt-intent { margin: 3px 0 5px; font-size: 12px; line-height: 1.5; color: var(--hc-text-secondary); }
+.hc-composer__prompt-extra label { font-size: 12px; color: var(--hc-text-secondary); }
+.hc-composer__prompt-extra textarea {
+  display: block; box-sizing: border-box; width: 100%; min-height: 44px; padding: 5px 0;
+  border: 0; background: transparent; color: var(--hc-text-primary); resize: none;
+  font: inherit; font-size: 14px; line-height: 1.6;
+}
+.hc-composer__prompt-extra textarea:focus-visible, .hc-composer__prompt-toggle:focus-visible {
+  outline: 2px solid var(--hc-accent); outline-offset: 2px; border-radius: 4px;
+}
+.hc-composer__prompt-toggle { border: 0; padding: 5px 0; background: transparent; color: var(--hc-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+/* 完整正文的滚动留在编辑区域，发送和模型栏始终可达。 */
+.hc-composer .hc-composer__prompt-editor :deep(.hc-composer__field) { min-height: 90px; height: 220px; max-height: 28vh; overflow-y: auto; padding: 8px; border: 1px solid var(--hc-border); border-radius: 8px; font-size: 13px; line-height: 1.65; }
+.hc-composer__box--prompt-expanded .hc-composer__prompt-draft { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.hc-composer__box--prompt-expanded .hc-composer__prompt-intent,
+.hc-composer__box--prompt-expanded .hc-composer__scenario-hint,
+.hc-composer__box--prompt-expanded .hc-composer__skills { display: none; }
 /* ─── Apple HIG 规范变量 ───── */
 .hc-composer__box {
   position: relative;

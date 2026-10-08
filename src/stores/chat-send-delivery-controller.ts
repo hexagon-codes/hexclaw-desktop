@@ -140,6 +140,8 @@ export function createChatSendDeliveryController(params: {
     draftSending: Ref<boolean>
     skillNames?: string[]
     documents?: ChatDocumentRef[]
+    requestMetadata?: Record<string, string>
+    promptInvocation?: import('@/api/prompts').PromptInvocation
     onPayloadRejected?: (error: ChatPayloadLimitError) => void
     samplingSnapshot?: {
       agentRole: string
@@ -177,7 +179,18 @@ export function createChatSendDeliveryController(params: {
     // 此前 skillNames 只进本地消息 metadata、从未发给后端 → 技能当轮不生效。
     // BUG-20260626：文档卡片 ref 经 metadata.documents（JSON）透传给后端持久化，
     // 否则切会话重载后文档退化成纯文本（卡片只在前端本地、不落库）。
-    let requestMetadata = buildRequestMetadata(args.samplingSnapshot)
+    let requestMetadata = buildRequestMetadata(args.samplingSnapshot) ?? {}
+    // 场景引用在点击发送时冻结；它只提供候选对象，不替代服务端身份和来源核验。
+    for (const key of ['k12_active_material', 'k12_task_intent']) {
+      const value = args.requestMetadata?.[key]
+      if (value) requestMetadata[key] = value
+    }
+    if (args.promptInvocation) {
+      requestMetadata.prompt_invocation = JSON.stringify(args.promptInvocation)
+      if (args.promptInvocation.scenario === 'k12' && args.promptInvocation.task_kind === 'unit_summary') {
+        requestMetadata.k12_task_intent = JSON.stringify({ version: 1, kind: 'unit_summary', ...args.promptInvocation })
+      }
+    }
     if (skillNames && skillNames.length) {
       requestMetadata = { ...requestMetadata, skills: skillNames.join(',') }
     }

@@ -713,7 +713,7 @@ export interface ChatRequest {
 /** 产物类型 */
 export interface Artifact {
   id: string
-  type: 'code' | 'html' | 'file' | 'markdown'
+  type: 'code' | 'html' | 'file' | 'markdown' | 'learning-material'
   title: string
   language?: string
   content: string
@@ -721,6 +721,9 @@ export interface Artifact {
   messageId: string
   blockIndex?: number
   createdAt: string
+  /** 领域产物只携带持久引用与展示元数据，不能把 PDF 二进制塞入 content。 */
+  reference?: { documentId: string; revisionId: string; artifactId: string; contentDigest: string; byteDigest: string; filename: string; version: number; subject: string; generatedDate: string; gradeTerm?: string; edition?: string; unitNumber?: string; unitTitle?: string }
+  busy?: boolean
 }
 
 /** 聊天模式 */

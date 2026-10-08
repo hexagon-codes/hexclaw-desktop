@@ -2,8 +2,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { FileText, FileJson, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { saveBlobInApp } from '@/utils/download'
-import { isTauri } from '@/utils/platform'
+import { exportConversationSnapshot } from './conversation-export'
 
 const { t } = useI18n()
 
@@ -30,48 +29,16 @@ function onClickOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener('mousedown', onClickOutside, true))
 onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside, true))
 
-function exportMarkdown() {
-  const title = props.sessionTitle || t('chat.title')
-  let md = `# ${title}\n\n`
-  md += `> ${t('chat.exportedAt')}: ${new Date().toLocaleString()}\n\n---\n\n`
-  for (const msg of props.messages) {
-    const who = msg.role === 'user' ? `**${t('chat.exportUser')}**` : `**${msg.agent_name || t('chat.modeAgent')}**`
-    const time = new Date(msg.timestamp).toLocaleString()
-    md += `### ${who} · ${time}\n\n${msg.content}\n\n---\n\n`
-  }
-  download(md, `${title}.md`, 'text/markdown')
+async function exportFormat(format: 'markdown' | 'json') {
+  await exportConversationSnapshot({
+    format,
+    title: props.sessionTitle || t('chat.title'),
+    messages: props.messages,
+    exportedAtLabel: t('chat.exportedAt'),
+    userLabel: t('chat.exportUser'),
+    assistantLabel: t('chat.modeAgent'),
+  })
   emit('close')
-}
-
-function exportJSON() {
-  const title = props.sessionTitle || t('chat.title')
-  const data = {
-    title,
-    exported_at: new Date().toISOString(),
-    message_count: props.messages.length,
-    messages: props.messages.map(m => ({
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp,
-      agent_name: m.agent_name,
-    })),
-  }
-  download(JSON.stringify(data, null, 2), `${title}.json`, 'application/json')
-  emit('close')
-}
-
-function download(content: string, filename: string, type: string) {
-  const blob = new Blob([content], { type })
-  if (isTauri()) {
-    void saveBlobInApp(blob, filename)
-    return
-  }
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }
 </script>
 
@@ -83,14 +50,14 @@ function download(content: string, filename: string, type: string) {
         <X :size="14" />
       </button>
     </div>
-    <button class="hc-export-menu__item" @click="exportMarkdown">
+    <button class="hc-export-menu__item" @click="exportFormat('markdown')">
       <FileText :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">Markdown</span>
         <span class="hc-export-menu__desc">{{ t('chat.exportMarkdownDesc') }}</span>
       </div>
     </button>
-    <button class="hc-export-menu__item" @click="exportJSON">
+    <button class="hc-export-menu__item" @click="exportFormat('json')">
       <FileJson :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">JSON</span>

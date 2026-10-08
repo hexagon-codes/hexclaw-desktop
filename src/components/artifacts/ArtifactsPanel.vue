@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X, FileCode, Eye, GitCompareArrows, Code2 } from 'lucide-vue-next'
 import type { Artifact } from '@/types'
 import ArtifactCodeView from './ArtifactCodeView.vue'
 import ArtifactPreview from './ArtifactPreview.vue'
 import ArtifactDiffView from './ArtifactDiffView.vue'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 
 const { t } = useI18n()
 
@@ -17,20 +18,25 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   select: [id: string]
+  action: [payload: { id: string; action: string }]
 }>()
 
 type TabKey = 'list' | 'code' | 'preview' | 'diff'
 const activeTab = ref<TabKey>('list')
 
-const selectedArtifact = computed(() =>
-  props.artifacts.find((a) => a.id === props.selectedId) ?? null,
+const selectedArtifact = computed(
+  () => props.artifacts.find((a) => a.id === props.selectedId) ?? null,
 )
 
 const tabs = computed(() => {
-  const base = [
-    { key: 'list' as TabKey, icon: FileCode, label: t('chat.artifacts') },
-    { key: 'code' as TabKey, icon: Code2, label: 'Code' },
-  ]
+  const base = [{ key: 'list' as TabKey, icon: FileCode, label: t('chat.artifacts') }]
+  if (
+    selectedArtifact.value
+      ? !scenarioRegistry.resolveArtifactRenderer(selectedArtifact.value.type)
+      : props.artifacts.length === 0 ||
+        props.artifacts.some((item) => !scenarioRegistry.resolveArtifactRenderer(item.type))
+  )
+    base.push({ key: 'code' as TabKey, icon: Code2, label: 'Code' })
   if (selectedArtifact.value?.type === 'html') {
     base.push({ key: 'preview' as TabKey, icon: Eye, label: 'Preview' })
   }
@@ -42,8 +48,22 @@ const tabs = computed(() => {
 
 function handleSelect(id: string) {
   emit('select', id)
-  activeTab.value = 'code'
+  activeTab.value = scenarioRegistry.resolveArtifactRenderer(
+    props.artifacts.find((item) => item.id === id)?.type || '',
+  )
+    ? 'list'
+    : 'code'
 }
+watch(
+  () => props.artifacts,
+  (items) => {
+    if (
+      items.length > 0 &&
+      items.every((item) => scenarioRegistry.resolveArtifactRenderer(item.type))
+    )
+      activeTab.value = 'list'
+  },
+)
 
 function typeLabel(type: string) {
   const map: Record<string, string> = { code: 'Code', html: 'HTML', file: 'File', markdown: 'MD' }
@@ -81,19 +101,26 @@ function typeLabel(type: string) {
           <p>{{ t('chat.artifactsEmpty') }}</p>
           <p class="hc-artifacts__empty-hint">{{ t('chat.artifactsHint') }}</p>
         </div>
-        <button
-          v-for="art in artifacts"
-          :key="art.id"
-          class="hc-artifacts__item"
-          :class="{ 'hc-artifacts__item--active': selectedId === art.id }"
-          @click="handleSelect(art.id)"
-        >
-          <div class="hc-artifacts__item-info">
-            <span class="hc-artifacts__item-title">{{ art.title }}</span>
-            <span class="hc-artifacts__item-meta">{{ art.language || typeLabel(art.type) }}</span>
-          </div>
-          <span class="hc-artifacts__item-badge">{{ typeLabel(art.type) }}</span>
-        </button>
+        <template v-for="art in artifacts" :key="art.id">
+          <component
+            :is="scenarioRegistry.resolveArtifactRenderer(art.type)"
+            v-if="scenarioRegistry.resolveArtifactRenderer(art.type)"
+            :artifact="art"
+            @action="emit('action', $event)"
+          />
+          <button
+            v-else
+            class="hc-artifacts__item"
+            :class="{ 'hc-artifacts__item--active': selectedId === art.id }"
+            @click="handleSelect(art.id)"
+          >
+            <div class="hc-artifacts__item-info">
+              <span class="hc-artifacts__item-title">{{ art.title }}</span>
+              <span class="hc-artifacts__item-meta">{{ art.language || typeLabel(art.type) }}</span>
+            </div>
+            <span class="hc-artifacts__item-badge">{{ typeLabel(art.type) }}</span>
+          </button>
+        </template>
       </div>
 
       <!-- Code tab -->
@@ -105,7 +132,10 @@ function typeLabel(type: string) {
       </div>
 
       <!-- Preview tab -->
-      <div v-else-if="activeTab === 'preview'" class="hc-artifacts__detail hc-artifacts__detail--full">
+      <div
+        v-else-if="activeTab === 'preview'"
+        class="hc-artifacts__detail hc-artifacts__detail--full"
+      >
         <ArtifactPreview v-if="selectedArtifact" :artifact="selectedArtifact" />
       </div>
 
@@ -153,7 +183,9 @@ function typeLabel(type: string) {
   color: var(--hc-text-muted);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .hc-artifacts__tab:hover {
@@ -205,7 +237,9 @@ function typeLabel(type: string) {
   background: var(--hc-bg-card);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
   width: 100%;
 }
 
