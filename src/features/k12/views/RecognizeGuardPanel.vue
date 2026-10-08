@@ -558,6 +558,7 @@ const finalArtifactDigest = computed(() => {
 const finalArtifactTitle = computed(() => {
   const title = finalArtifact.value?.title
   if (typeof title === 'string' && title.trim()) return title.trim()
+  if (currentTaskIntent.value === 'blank_worksheet') return '空白卷 · 家长讲题指南'
   if (isWithSkips.value) {
     return `整页批改完成 · 有 ${taskCoverage.value?.skipped ?? 0} 题跳过`
   }
