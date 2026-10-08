@@ -35,7 +35,9 @@ const setup = () => {
   let healthTimer: ReturnType<typeof setInterval> | null = null
   let startupHealthRetryTimer: ReturnType<typeof setTimeout> | null = null
   let healthCheckGeneration = 0
+  let healthObservationRevision = 0
   let healthCheckActive = false
+  const healthObservations = new Map<string, Promise<void>>()
   let serviceRestart: ServiceRestart | null = null
 
   function isCurrentScope(scope: string) {
@@ -50,33 +52,46 @@ const setup = () => {
   /** Sidecar 健康观察已确认就绪时同步运行状态。 */
   function markSidecarReady() {
     if (backendContext.value?.kind === 'remote' || isRestarting.value) return
+    healthObservationRevision++
     sidecarReady.value = true
     sidecarStatus.value = 'running'
   }
 
   /** 检查 hexclaw 后端连接状态 */
-  async function checkConnection() {
-    if (isRestarting.value) return
+  function checkConnection(): Promise<void> {
+    if (isRestarting.value) return Promise.resolve()
     const scope = backendScopeKey()
+    const pending = healthObservations.get(scope)
+    if (pending) return pending
     const generation = healthCheckGeneration
-    const ok = await checkHealth()
-    if (generation !== healthCheckGeneration || !isCurrentScope(scope) || isRestarting.value) return
-    if (ok) {
-      sidecarReady.value = true
-      sidecarStatus.value = 'running'
-      if (!backendVersion.value) {
-        try {
-          const version = (await getVersion()).version
-          if (generation === healthCheckGeneration && isCurrentScope(scope) && !isRestarting.value) {
-            backendVersion.value = version
-          }
-        } catch { /* 版本单独重查 */ }
+    const revision = healthObservationRevision
+    // 截止时间可以长于轮询间隔；同作用域只观察一个在途请求。
+    const observation = (async () => {
+      const ok = await checkHealth()
+      if (generation !== healthCheckGeneration || revision !== healthObservationRevision ||
+        !isCurrentScope(scope) || isRestarting.value || ok === null) return
+      if (ok) {
+        sidecarReady.value = true
+        sidecarStatus.value = 'running'
+        if (!backendVersion.value) {
+          try {
+            const version = (await getVersion()).version
+            if (generation === healthCheckGeneration && revision === healthObservationRevision &&
+              isCurrentScope(scope) && !isRestarting.value) {
+              backendVersion.value = version
+            }
+          } catch { /* 版本单独重查 */ }
+        }
+      } else {
+        sidecarReady.value = false
+        backendVersion.value = ''
+        sidecarStatus.value = 'stopped'
       }
-    } else {
-      sidecarReady.value = false
-      backendVersion.value = ''
-      sidecarStatus.value = 'stopped'
-    }
+    })().finally(() => {
+      if (healthObservations.get(scope) === observation) healthObservations.delete(scope)
+    })
+    healthObservations.set(scope, observation)
+    return observation
   }
 
   /** 启动期快速恢复健康检查，确认就绪后转为稳定轮询。 */
@@ -124,10 +139,14 @@ const setup = () => {
   }
 
   /** 同一后端的生命周期动作共用在途状态，旧作用域不得写回新连接。 */
-  function runServiceRestart(operation: (restart: ServiceRestart) => Promise<boolean>): Promise<boolean> {
+  function runServiceRestart(operation: (restart: ServiceRestart) => Promise<boolean | null>): Promise<boolean> {
     const scope = backendScopeKey()
     if (serviceRestart?.scope === scope) return serviceRestart.promise
     if (!isCurrentScope(scope)) return Promise.resolve(false)
+    const confirmed = {
+      status: sidecarStatus.value, ready: sidecarReady.value,
+      version: backendVersion.value, revision: healthObservationRevision,
+    }
     const restart: ServiceRestart = { scope, controller: new AbortController(), promise: Promise.resolve(false) }
     serviceRestart = restart
     clearHealthCheckTimers()
@@ -137,6 +156,15 @@ const setup = () => {
       try {
         const ok = await operation(restart)
         assertRestartActive(restart)
+        if (ok === null) {
+          // 未取得新代际事实不能报告重启成功，也不能覆盖现有可信状态。
+          if (confirmed.revision === healthObservationRevision) {
+            sidecarStatus.value = confirmed.status
+            sidecarReady.value = confirmed.ready
+            backendVersion.value = confirmed.version
+          }
+          return false
+        }
         sidecarStatus.value = ok ? 'running' : 'stopped'
         sidecarReady.value = ok
         backendVersion.value = ''
@@ -174,14 +202,16 @@ const setup = () => {
       assertRestartActive(restart)
 
       // 原生已等待健康，这里保留短暂波动时的现有确认。
+      let lastKnownReady = true
       for (let i = 0; i < 3; i++) {
         const ok = await checkHealth()
         assertRestartActive(restart)
-        if (ok) return true
+        if (ok !== null) lastKnownReady = ok
+        if (ok === true) return true
         await new Promise(resolve => setTimeout(resolve, 1000))
         assertRestartActive(restart)
       }
-      return false
+      return lastKnownReady
     })
   }
 

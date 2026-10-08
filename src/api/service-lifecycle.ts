@@ -75,8 +75,14 @@ function waitForObservation(signal: AbortSignal, delay: number): Promise<void> {
 }
 
 /** 云端重启只提交一次；结果不确定时继续观察代际，不重新发送。 */
-export async function restartRemoteService(scope: string, signal: AbortSignal): Promise<boolean> {
-  const before = await serviceRequest('/health', scope, signal, HEALTH_REQUEST_TIMEOUT_MS)
+export async function restartRemoteService(scope: string, signal: AbortSignal): Promise<boolean | null> {
+  let before: Awaited<ReturnType<typeof serviceRequest>>
+  try {
+    before = await serviceRequest('/health', scope, signal, HEALTH_REQUEST_TIMEOUT_MS)
+  } catch {
+    assertOperationActive(scope, signal)
+    return null
+  }
   assertOperationActive(scope, signal)
   const initialHealth = parseHealth(before._data)
   if (![200, 503].includes(before.status) || !initialHealth?.restart_supported) {
@@ -112,5 +118,5 @@ export async function restartRemoteService(scope: string, signal: AbortSignal): 
     const remaining = deadline - Date.now()
     if (remaining > 0) await waitForObservation(signal, Math.min(HEALTH_OBSERVATION_INTERVAL_MS, remaining))
   }
-  return false
+  return null
 }

@@ -178,12 +178,12 @@ describe('Low Fixes', () => {
   })
 
   describe('checkHealth 返回值类型校验', () => {
-    it('checkHealth 对 invoke 返回值使用 Boolean() 转换', async () => {
+    it('checkHealth 只返回可信正负观察或未知', async () => {
       const { checkHealth } = await import('@/api/client')
       expect(typeof checkHealth).toBe('function')
 
       const result = await checkHealth()
-      expect(typeof result).toBe('boolean')
+      expect([true, false, null]).toContain(result)
     })
   })
 

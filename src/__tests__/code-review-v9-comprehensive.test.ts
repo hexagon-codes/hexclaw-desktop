@@ -1039,8 +1039,8 @@ describe('timeout configuration across the stack', () => {
     expect(clientTs).toContain('timeout: env.timeout')
   })
 
-  it('health check uses 3s timeout (fast fail)', () => {
-    expect(commandsRs).toContain('from_secs(3)')
+  it('health check uses the cloud connection deadline', () => {
+    expect(commandsRs).toContain('from_secs(12)')
   })
 })
 

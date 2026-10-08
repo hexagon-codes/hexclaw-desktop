@@ -400,19 +400,24 @@ export function apiWebSocket(path: string): NativeSidecarWebSocket {
 
 // ─── 健康检查 ────────────────────────────────────────
 
-/** 健康检查（通过 Tauri command 绕过 CORS，回退到 HTTP） */
-export async function checkHealth(): Promise<boolean> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const result = await invoke<boolean>('check_engine_health')
-    return Boolean(result)
-  } catch {
+/** 健康检查的 null 表示运输结果未知，不能替代可信的运行或停止事实。 */
+export async function checkHealth(): Promise<boolean | null> {
+  if (isTauri()) {
     try {
-      await api('/health', { timeout: 3000 })
-      return true
+      const { invoke } = await import('@tauri-apps/api/core')
+      const result = await invoke<boolean>('check_engine_health')
+      return typeof result === 'boolean' ? result : null
     } catch {
-      return false
+      // 原生鉴权身份检查未完成时，公共健康端点不能替换它的结果。
+      return null
     }
+  }
+  try {
+    await api('/health', { timeout: 12000, retry: 0 })
+    return true
+  } catch (error) {
+    const status = (error as { response?: { status?: number } } | null)?.response?.status
+    return typeof status === 'number' && status >= 400 ? false : null
   }
 }
 

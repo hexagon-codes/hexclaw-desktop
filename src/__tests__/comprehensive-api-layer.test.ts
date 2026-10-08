@@ -318,7 +318,7 @@ describe('client.ts', () => {
   })
 
   describe('checkHealth()', () => {
-    it('returns true when Tauri invoke fails but HTTP succeeds', async () => {
+    it('returns true when browser health succeeds without a native transport', async () => {
       mockedInvoke.mockRejectedValueOnce(new Error('Tauri unavailable'))
       // The real checkHealth does api('/health', ...) which uses the ofetch mock
       // We need to make the ofetch-based `api` call succeed
@@ -330,14 +330,14 @@ describe('client.ts', () => {
       expect(result).toBe(true)
     })
 
-    it('returns false when both Tauri and HTTP fail', async () => {
+    it('returns unknown when browser transport receives no response', async () => {
       mockedInvoke.mockRejectedValueOnce(new Error('Tauri unavailable'))
       const { ofetch } = await import('ofetch')
       const mockedOfetch = vi.mocked(ofetch) as unknown as ReturnType<typeof vi.fn>
       mockedOfetch.mockRejectedValueOnce(new Error('Connection refused'))
 
       const result = await checkHealth()
-      expect(result).toBe(false)
+      expect(result).toBeNull()
     })
   })
 })

@@ -67,6 +67,24 @@ describe('useAppStore', () => {
     expect(store.isRestarting).toBe(false)
   })
 
+  it.each([null, false])('preserves native restart readiness unless a later trusted negative arrives: %s', async (observation) => {
+    vi.useFakeTimers()
+    checkHealth.mockResolvedValue(observation)
+    const store = useAppStore()
+    try {
+      const result = store.restartSidecar()
+      await vi.waitFor(() => expect(checkHealth).toHaveBeenCalledTimes(1))
+      await vi.advanceTimersByTimeAsync(3000)
+      await expect(result).resolves.toBe(observation === null)
+      expect(invoke).toHaveBeenCalledTimes(1)
+      expect(checkHealth).toHaveBeenCalledTimes(3)
+      expect(store.sidecarStatus).toBe(observation === null ? 'running' : 'stopped')
+    } finally {
+      store.stopHealthCheck()
+      vi.useRealTimers()
+    }
+  })
+
   it('[BUG-20260725-008] marks the sidecar ready within one second when the native ready event is lost', async () => {
     vi.useFakeTimers()
     const store = useAppStore()

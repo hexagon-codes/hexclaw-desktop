@@ -364,17 +364,129 @@ pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<String, String> {
 
 /// 健康检查（Rust 端发请求，绕过 WebView CORS 限制）
 #[tauri::command]
-pub async fn check_engine_health(app: tauri::AppHandle) -> bool {
-    let Ok(client) = SidecarClient::new(Duration::from_secs(3)) else {
-        return false;
+pub async fn check_engine_health(app: tauri::AppHandle) -> Result<bool, String> {
+    let client = SidecarClient::new(ENGINE_HEALTH_TIMEOUT)
+        .map_err(|_| ENGINE_HEALTH_UNKNOWN.to_string())?;
+    let response = match client.request(reqwest::Method::GET, "/api/v1/config")
+        .map_err(|_| ENGINE_HEALTH_UNKNOWN.to_string())?.send().await {
+        Ok(response) => response,
+        Err(error) => return engine_health_transport_result(error, client.connection().is_local()),
     };
-    match client.get("/api/v1/config").await {
-        Ok(resp) => {
-            let Ok(body) = SidecarClient::read_json::<serde_json::Value>(resp).await else { return false; };
-            let Some(identity) = body.get("backend_id").and_then(|value| value.as_str()) else { return false; };
-            crate::backend_connection::accept_active_identity(app, client.connection(), identity).is_ok()
-        },
-        Err(_) => false,
+    match read_engine_health_identity(response).await? {
+        Some(identity) => Ok(crate::backend_connection::accept_active_identity(
+            app, client.connection(), &identity,
+        ).is_ok()),
+        None => Ok(false),
+    }
+}
+
+const ENGINE_HEALTH_TIMEOUT: Duration = Duration::from_secs(12);
+const ENGINE_HEALTH_UNKNOWN: &str = "Backend health transport outcome unknown";
+
+// 只有明确的本机拒绝连接属于可达性负证；云端断连、超时和未完整读回保持未知。
+fn engine_health_transport_result(error: reqwest::Error, is_local: bool) -> Result<bool, String> {
+    if is_local && !error.is_timeout() {
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        while let Some(current) = cause {
+            if current.downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused) {
+                return Ok(false);
+            }
+            cause = current.source();
+        }
+    }
+    Err(ENGINE_HEALTH_UNKNOWN.to_string())
+}
+
+async fn read_engine_health_identity(response: reqwest::Response) -> Result<Option<String>, String> {
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let bytes = read_bounded(response, crate::sidecar_client::MAX_JSON_RESPONSE_BYTES).await
+        .map_err(|_| ENGINE_HEALTH_UNKNOWN.to_string())?;
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(None);
+    };
+    Ok(body.get("backend_id").and_then(|value| value.as_str())
+        .filter(|identity| !identity.is_empty()).map(str::to_owned))
+}
+
+#[cfg(test)]
+mod engine_health_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn response_server(status: &str, body: &str, delay: Duration, interrupted: bool)
+        -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v1/config", listener.local_addr().unwrap());
+        let status = status.to_owned();
+        let body = body.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                if stream.read(&mut byte).unwrap() == 0 { break; }
+                request.extend_from_slice(&byte);
+            }
+            let request = String::from_utf8(request).unwrap().to_lowercase();
+            assert!(request.starts_with("get /api/v1/config http/1.1"));
+            assert!(request.contains("authorization: bearer health-fixture-token\r\n"));
+            std::thread::sleep(delay);
+            let length = body.len() + usize::from(interrupted) * 100;
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}").unwrap();
+        });
+        (endpoint, server)
+    }
+
+    async fn response(endpoint: &str) -> reqwest::Response {
+        reqwest::Client::builder().timeout(ENGINE_HEALTH_TIMEOUT).build().unwrap()
+            .get(endpoint).bearer_auth("health-fixture-token").send().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn engine_health_delayed_response_keeps_authenticated_identity() {
+        let (endpoint, server) = response_server("200 OK", r#"{"backend_id":"fixture-data-identity"}"#,
+            Duration::from_millis(3200), false);
+        let result = read_engine_health_identity(response(&endpoint).await).await;
+        server.join().unwrap();
+        assert_eq!(result, Ok(Some("fixture-data-identity".to_string())));
+    }
+
+    #[tokio::test]
+    async fn engine_health_received_negative_and_complete_invalid_identity_remain_negative() {
+        for (status, body) in [("401 Unauthorized", "denied"), ("503 Service Unavailable", "unavailable"),
+            ("200 OK", r#"{"backend_id":""}"#), ("200 OK", r#"{"status":"healthy"}"#),
+            ("200 OK", "invalid-json")] {
+            let (endpoint, server) = response_server(status, body, Duration::ZERO, false);
+            let result = read_engine_health_identity(response(&endpoint).await).await;
+            server.join().unwrap();
+            assert_eq!(result, Ok(None));
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_health_interrupted_response_does_not_fabricate_negative_identity() {
+        let (endpoint, server) = response_server("200 OK", r#"{"backend_id":"fixture-data-identity"}"#,
+            Duration::ZERO, true);
+        let result = read_engine_health_identity(response(&endpoint).await).await;
+        server.join().unwrap();
+        assert_eq!(result, Err(ENGINE_HEALTH_UNKNOWN.to_string()));
+    }
+
+    #[tokio::test]
+    async fn engine_health_only_known_local_refusal_is_a_negative_transport_result() {
+        for local in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/api/v1/config", listener.local_addr().unwrap());
+            drop(listener);
+            let error = reqwest::Client::builder().timeout(ENGINE_HEALTH_TIMEOUT).build().unwrap()
+                .get(endpoint).bearer_auth("health-fixture-token").send().await.unwrap_err();
+            let result = engine_health_transport_result(error, local);
+            assert_eq!(result, if local { Ok(false) } else { Err(ENGINE_HEALTH_UNKNOWN.to_string()) });
+        }
     }
 }
 
