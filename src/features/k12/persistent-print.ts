@@ -12,6 +12,8 @@ import { isTauri } from '@/utils/platform'
 import type { NativePrintReceipt } from './export'
 
 export interface PersistentPrintRequest {
+  /** 点击时冻结的连接身份；准备与原生执行不得随后切换到另一服务。 */
+  scope?: string
   agent: string
   idempotencyKey?: string
   sourceKind: GenericPrintSourceKind
@@ -31,7 +33,7 @@ const operationKeys = new Map<string, string>()
 const inFlightPreparations = new Map<string, Promise<PersistentPrintPreparation>>()
 
 function operationIdentity(req: PersistentPrintRequest): string {
-  return `${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.artifactId ?? req.canonicalMarkdown ?? ''}`
+  return `${req.scope ?? backendScopeKey()}\u0000${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.artifactId ?? req.canonicalMarkdown ?? ''}`
 }
 
 function operationKey(req: PersistentPrintRequest): string {
@@ -54,6 +56,7 @@ async function executeCoordinatedPrint(
   printJobId: string,
 ): Promise<boolean> {
   const printed = await executeNativePrintJob({
+    scope: req.scope,
     agent: req.agent,
     printJobId,
   })
@@ -62,10 +65,11 @@ async function executeCoordinatedPrint(
 }
 
 export async function executeNativePrintJob(input: {
+  scope?: string
   agent: string
   printJobId: string
 }): Promise<boolean> {
-  const scope = backendScopeKey()
+  const scope = input.scope ?? backendScopeKey()
   const { invoke } = await import('@tauri-apps/api/core')
   const result = await invoke<{ receipt: NativePrintReceipt }>('execute_print_job', {
     scope,
@@ -84,6 +88,11 @@ export async function executeNativePrintJob(input: {
 }
 
 async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
+  const assertScope = () => {
+    if (req.scope !== undefined && req.scope !== backendScopeKey())
+      throw new DOMException('Backend connection changed', 'AbortError')
+  }
+  assertScope()
   const artifactId = req.artifactId?.trim()
   const canonicalMarkdown = req.canonicalMarkdown?.trim()
   if (Boolean(artifactId) === Boolean(canonicalMarkdown)) {
@@ -105,6 +114,7 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
         title: req.title,
         canonical_markdown: canonicalMarkdown!,
       })
+  assertScope()
   let job = prepared.print_job
   if (job.status === 'printed') {
     clearOperationKey(req)
@@ -117,11 +127,14 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
     // convergence and never opens another native dialog.
     await k12GetGenericPrintJob(req.agent, job.print_job_id)
   }
+  assertScope()
 
   const genericArtifact = artifactId
     ? null
     : await k12GetGenericPrintArtifact(req.agent, job.print_job_id)
+  assertScope()
   const pdf = await k12GetPrintArtifactContent(req.agent, artifactId ?? job.artifact_id)
+  assertScope()
   let confirmation: Promise<boolean> | null = null
   const confirm = () => {
     confirmation ??= executeCoordinatedPrint(req, job.print_job_id).catch((error) => {
@@ -136,6 +149,7 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
 export function preparePersistentPrint(
   req: PersistentPrintRequest,
 ): Promise<PersistentPrintPreparation> {
+  req = { ...req, scope: req.scope ?? backendScopeKey() }
   const identity = operationIdentity(req)
   const running = inFlightPreparations.get(identity)
   if (running) return running

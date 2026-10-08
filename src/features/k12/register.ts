@@ -17,6 +17,7 @@ import K12ProfileForm from './views/K12ProfileForm.vue'
 import K12WebhookPanel from './views/K12WebhookPanel.vue'
 import K12GlobalPresentation from './appearance/K12GlobalPresentation.vue'
 import K12AppearanceSettings from './appearance/K12AppearanceSettings.vue'
+import UnitSummaryArtifactItem from './unit-summary/UnitSummaryArtifactItem.vue'
 import k12ZhCN from './i18n/zh-CN'
 import k12En from './i18n/en'
 import k12UgCN from './i18n/ug-CN'
@@ -56,6 +57,7 @@ export function registerK12Scenario(): void {
 
   // 4) 会话增强组件（头部 tab + 记录视图 + 辅导要点侧栏）→ chat shell 用 <component :is> 渲染
   scenarioRegistry.registerChatEnhancement(K12ChatEnhancement)
+  scenarioRegistry.registerArtifactRenderer('learning-material', UnitSummaryArtifactItem)
   // 4b) 智能体卡扩展（错题/待复习计数 + 快捷入口）→ AgentsView 对场景实例渲染
   scenarioRegistry.registerAgentCardExtension(K12AgentCard)
   scenarioRegistry.registerAgentCardBadge('k12.agentCard.tag')

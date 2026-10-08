@@ -35,6 +35,14 @@ import type {
 import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 import { listImageTaskBindings, refreshRecoverableImageTaskBindings } from '../image-task-binding'
 import { useK12Appearance } from '../appearance/useK12Appearance'
+import { PanelLeft, PanelRight, MoreHorizontal } from 'lucide-vue-next'
+import { backendScopeKey } from '@/services/backend-context'
+import type { Artifact, ChatMessageMetadata } from '@/types/chat'
+import type { UnitSummaryResponse } from '@/api/k12'
+import type { ScenarioChatActions, ScenarioArtifactAction } from '@/shell/scenario/registry'
+import UnitSummaryContent from '../unit-summary/UnitSummaryContent.vue'
+import { createUnitSummaryController } from '../unit-summary/controller'
+import { materialArtifact } from '../unit-summary/types'
 
 const props = defineProps<{
   agentId: string
@@ -57,6 +65,9 @@ const props = defineProps<{
   /** 当前消息图片的只读展示地址；不参与任务创建与刷新恢复。 */
   messageImageSources?: Record<string, string>
   messageFeedback?: Record<string, 'like' | 'dislike' | null>
+  messages?: Array<{ id: string; metadata?: ChatMessageMetadata }>
+  chatActions?: ScenarioChatActions
+  artifactAction?: ScenarioArtifactAction
 }>()
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
@@ -82,7 +93,12 @@ const headerName = computed(() => {
 })
 
 const emit = defineEmits<{
-  (e: 'messageAction', payload: { sourceMessageId: string; action: 'retry' | 'fork' | 'like' | 'dislike' }): void
+  (e: 'update:artifacts', artifacts: Artifact[]): void
+  (e: 'update:requestMetadata', metadata: Record<string, string>): void
+  (
+    e: 'messageAction',
+    payload: { sourceMessageId: string; action: 'retry' | 'fork' | 'like' | 'dislike' },
+  ): void
   (e: 'update:recordsActive', v: boolean): void
   /** composer 预设 chips 上交 shell（数据流，替代旧 Teleport-锚点方案·BUG-20260709）：
    *  shell 透传给 ChatInput 在对话框盒内渲染，杜绝 defer/锚点顺序时序类反复回归。 */
@@ -91,10 +107,7 @@ const emit = defineEmits<{
   (e: 'update:composerImage', v: string): void
   /** 会话内联槽是否有活动内容：shell 据此收起空会话占位并把新内容滚入可视区。 */
   (e: 'update:inlineActive', v: boolean): void
-  (
-    e: 'contentUpdated',
-    payload: { sourceMessageId?: string; reveal?: 'start' },
-  ): void
+  (e: 'contentUpdated', payload: { sourceMessageId?: string; reveal?: 'start' }): void
   /** 请求 shell 操作通用输入框；K12 文案不进入 ChatInput/ChatView。 */
   (e: 'composerCommand', command: ScenarioComposerCommand): void
   /** 失败任务显式重提：只上交原始图片事实；shell 负责新消息身份与当前路由冻结。 */
@@ -130,6 +143,131 @@ const {
   setPreference: setK12AppearancePreference,
 } = useK12Appearance()
 const finalArtifactPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
+const unitPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
+const unitMaterials = createUnitSummaryController({
+  openPrint: async (request) => {
+    if (!unitPrintController.value) throw new Error('The print controller is not ready')
+    await unitPrintController.value.open(request)
+  },
+  onError: (error) => toast.error(error.message),
+})
+const {
+  bound: unitMessageMaterials,
+  selected: selectedUnitMaterial,
+  jobs: unitJobs,
+  busy: unitBusy,
+  loadError: unitLoadError,
+} = unitMaterials
+const openedUnitMaterial = computed(() =>
+  selectedUnitMaterial.value &&
+  !unitMessageMaterials.value.some(
+    (item) => item.view.material?.revision_id === selectedUnitMaterial.value?.material?.revision_id,
+  )
+    ? selectedUnitMaterial.value
+    : null,
+)
+function unitIdentity(view: UnitSummaryResponse) {
+  return `unit-summary-${view.material?.revision_id || ''}`
+}
+function activateUnitMaterial(view: UnitSummaryResponse) {
+  const documentId = view.document?.document_id || view.document?.id || view.material?.document_id
+  if (!view.material || !documentId) return
+  emit('update:requestMetadata', {
+    k12_active_material: JSON.stringify({
+      version: 1,
+      document_id: documentId,
+      revision_id: view.material.revision_id,
+    }),
+  })
+}
+function unitMaterialBusy(view: UnitSummaryResponse) {
+  return !!unitBusy.value[materialArtifact(view)?.id || '']
+}
+function handleUnitContentAction(
+  view: UnitSummaryResponse,
+  action: 'artifacts' | 'download' | 'print',
+) {
+  activateUnitMaterial(view)
+  if (action === 'artifacts') {
+    if (props.chatActions?.workspaceMode !== 'artifacts') props.chatActions?.toggleArtifacts()
+    return
+  }
+  void unitMaterials.run(view, action)
+}
+watch(
+  [() => props.agentId, () => props.sessionId, () => backendScopeKey()],
+  ([agent, session]) => {
+    unitMaterials.setContext(agent || '', session || '')
+    emit('update:requestMetadata', {})
+    unitMaterials.setMessages(props.messages || [])
+  },
+  { immediate: true },
+)
+watch(
+  () => props.messages,
+  (messages) => unitMaterials.setMessages(messages || []),
+  { deep: true },
+)
+watch(unitMaterials.artifacts, (items) => emit('update:artifacts', items), { immediate: true })
+watch(
+  () =>
+    unitMessageMaterials.value
+      .map((item) => `${item.messageId}:${item.view.material?.revision_id}`)
+      .join('|'),
+  (current, previous) => {
+    if (current === previous) return
+    const latest = unitMessageMaterials.value[unitMessageMaterials.value.length - 1]
+    if (latest) emit('contentUpdated', { sourceMessageId: latest.messageId })
+  },
+)
+watch(
+  () => props.artifactAction,
+  async (action) => {
+    if (!action) return
+    await unitMaterials.runArtifact(action.id, action.action)
+    if (action.action === 'open' && selectedUnitMaterial.value) {
+      activateUnitMaterial(selectedUnitMaterial.value)
+      await props.chatActions?.revealContent(unitIdentity(selectedUnitMaterial.value))
+    }
+  },
+)
+onBeforeUnmount(() => {
+  unitMaterials.dispose()
+  emit('update:artifacts', [])
+  emit('update:requestMetadata', {})
+})
+const moreOpen = ref(false)
+const exportOpen = ref(false)
+const moreRoot = ref<HTMLElement>()
+function closeMore() {
+  moreOpen.value = false
+  exportOpen.value = false
+}
+function toggleMore() {
+  moreOpen.value = !moreOpen.value
+  exportOpen.value = false
+}
+function openConversationContext() {
+  props.chatActions?.openContext()
+  closeMore()
+}
+function dismissMore(event: MouseEvent) {
+  if (!moreRoot.value?.contains(event.target as Node)) {
+    moreOpen.value = false
+    exportOpen.value = false
+  }
+}
+onMounted(() => document.addEventListener('mousedown', dismissMore))
+onBeforeUnmount(() => document.removeEventListener('mousedown', dismissMore))
+async function exportUnitConversation(format: 'markdown' | 'json') {
+  moreOpen.value = false
+  exportOpen.value = false
+  try {
+    await props.chatActions?.exportConversation(format)
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  }
+}
 const finalArtifactActionHandler = createFinalArtifactActionHandler({
   agent: () => props.agentId,
   openPrint: async (request) => {
@@ -353,9 +491,13 @@ onBeforeUnmount(() => deactivateExperience())
 watch(tab, (v) => emit('update:recordsActive', v !== 'chat'), { immediate: true })
 watch(tab, (v) => setExperienceSceneLevel(v === 'chat' ? 'immersive' : 'calm'))
 watch(
-  [visibleTaskShells, tab],
-  ([tasks, currentTab]) => {
-    emit('update:inlineActive', tasks.length > 0 && currentTab === 'chat')
+  [visibleTaskShells, tab, unitMessageMaterials, openedUnitMaterial, unitJobs],
+  ([tasks, currentTab, materials, opened, jobs]) => {
+    emit(
+      'update:inlineActive',
+      (tasks.length > 0 || materials.length > 0 || !!opened || jobs.length > 0) &&
+        currentTab === 'chat',
+    )
   },
   { immediate: true },
 )
@@ -474,10 +616,18 @@ watch(
 </script>
 
 <template>
-  <!-- ① 头部槽：身份（单行截断防长名竖排断行·D2）+ 子视图 tab。
-       当前 descriptor.actions 为空，头部没有场景动作；识题只走 composer 拍照入口，辅导要点只在
-       RecognizeGuardPanel 持久确认后内联展示，不存在 shell 侧栏或锚点。 -->
+  <!-- 一条场景头复用 Shell 会话开关与产物/上下文状态；会话动作仅在辅导页出现。 -->
   <div class="k12enh-tabs">
+    <button
+      v-if="chatActions"
+      class="k12enh-action k12enh-action--rail"
+      type="button"
+      :aria-label="t('chat.toggleSessions')"
+      :aria-pressed="chatActions.workspaceMode === 'sessions'"
+      @click="chatActions.toggleSessions()"
+    >
+      <PanelLeft :size="17" />
+    </button>
     <div class="k12enh-id">
       <span class="k12enh-av">🎓</span>
       <span class="k12enh-name" :title="headerName">{{ headerName }}</span>
@@ -497,6 +647,44 @@ watch(
       >
         {{ t(ht.labelKey) }}
       </button>
+    </div>
+    <div v-if="tab === 'chat' && chatActions" class="k12enh-actions">
+      <button
+        type="button"
+        class="k12enh-action"
+        :class="{ 'is-on': chatActions.workspaceMode === 'artifacts' }"
+        :aria-pressed="chatActions.workspaceMode === 'artifacts'"
+        @click="chatActions.toggleArtifacts()"
+      >
+        <PanelRight :size="16" />产物
+      </button>
+      <div ref="moreRoot" class="k12enh-more" @keydown.esc.stop="closeMore">
+        <button
+          type="button"
+          class="k12enh-action"
+          aria-label="更多"
+          :aria-expanded="moreOpen"
+          aria-haspopup="menu"
+          @click="toggleMore"
+        >
+          <MoreHorizontal :size="18" />
+        </button>
+        <div v-if="moreOpen" class="k12enh-menu" role="menu">
+          <template v-if="!exportOpen"
+            ><button type="button" role="menuitem" @click="exportOpen = true">导出会话</button
+            ><button type="button" role="menuitem" @click="openConversationContext">
+              会话上下文
+            </button></template
+          >
+          <template v-else
+            ><button type="button" role="menuitem" @click="exportUnitConversation('markdown')">
+              Markdown</button
+            ><button type="button" role="menuitem" @click="exportUnitConversation('json')">
+              JSON
+            </button></template
+          >
+        </div>
+      </div>
     </div>
   </div>
 
@@ -552,8 +740,12 @@ watch(
               :model-route="task.payload?.route"
               :message-intent="task.payload?.contextText?.trim() || ''"
               @close="closeRecognize(task)"
-              @retry="emit('messageAction', { sourceMessageId: task.sourceMessageId, action: 'retry' })"
-              @message-action="emit('messageAction', { sourceMessageId: task.sourceMessageId, ...$event })"
+              @retry="
+                emit('messageAction', { sourceMessageId: task.sourceMessageId, action: 'retry' })
+              "
+              @message-action="
+                emit('messageAction', { sourceMessageId: task.sourceMessageId, ...$event })
+              "
               @final-artifact-action="runFinalArtifactAction"
               @content-updated="emit('contentUpdated', $event)"
               @update:execution-state="emit('update:sessionExecution', $event)"
@@ -565,6 +757,77 @@ watch(
     </Teleport>
 
     <!-- 辅导要点只在 RecognizeGuardPanel 识题持久确认后内联展示。 -->
+    <!-- 消息引用锁定历史 revision；侧栏 current 更新不能替换这份正文。 -->
+    <Teleport
+      v-for="item in unitMessageMaterials"
+      :key="`${item.messageId}:${item.view.material?.revision_id}`"
+      defer
+      :to="`#${scenarioMessageAnchorId(item.messageId)}`"
+    >
+      <div
+        v-show="tab === 'chat'"
+        :id="unitIdentity(item.view)"
+        class="k12enh-unit"
+        @focusin="activateUnitMaterial(item.view)"
+        @pointerdown="activateUnitMaterial(item.view)"
+      >
+        <UnitSummaryContent
+          :view="item.view"
+          :busy="unitMaterialBusy(item.view)"
+          @action="handleUnitContentAction(item.view, $event)"
+        />
+      </div>
+    </Teleport>
+    <Teleport v-if="openedUnitMaterial" defer to="#hc-chat-scenario-inline"
+      ><div
+        v-show="tab === 'chat'"
+        :id="unitIdentity(openedUnitMaterial)"
+        class="k12enh-unit"
+        @focusin="activateUnitMaterial(openedUnitMaterial)"
+        @pointerdown="activateUnitMaterial(openedUnitMaterial)"
+      >
+        <UnitSummaryContent
+          :view="openedUnitMaterial"
+          :busy="unitMaterialBusy(openedUnitMaterial)"
+          @action="handleUnitContentAction(openedUnitMaterial, $event)"
+        /></div
+    ></Teleport>
+    <Teleport
+      v-for="job in unitJobs.filter(
+        (item) =>
+          item.source_message_id &&
+          messageIds?.includes(item.source_message_id) &&
+          !['succeeded', 'reused', 'superseded'].includes(item.state),
+      )"
+      :key="job.id"
+      defer
+      :to="`#${scenarioMessageAnchorId(job.source_message_id!)}`"
+      ><div v-show="tab === 'chat'" class="k12enh-unit-status" role="status">
+        <UnitSummaryContent v-if="job.content" :view="{ job }" />
+        <p>
+          {{
+            job.clarification ||
+            job.failure_detail ||
+            job.error ||
+            (job.state === 'needs_input'
+              ? 'More information is needed to prepare this material.'
+              : job.state === 'outcome_unknown'
+                ? 'The generation result is pending confirmation.'
+                : job.state === 'failed'
+                  ? 'The material could not be completed.'
+                  : 'Preparing learning material…')
+          }}
+        </p>
+        <button v-if="job.state === 'failed'" type="button" @click="unitMaterials.resume(job)">
+          Retry
+        </button>
+      </div></Teleport
+    >
+    <Teleport v-if="unitLoadError" defer to="#hc-chat-scenario-inline"
+      ><div v-show="tab === 'chat'" class="k12enh-unit-status" role="status">
+        {{ unitLoadError }} <button type="button" @click="unitMaterials.refresh()">Refresh</button>
+      </div></Teleport
+    >
   </div>
 
   <!-- composer 预设 chips（后端 descriptor 下发，对齐原型 .composer-chips）：
@@ -725,6 +988,11 @@ watch(
   </Teleport>
 
   <K12PersistentPrintController
+    ref="unitPrintController"
+    mode="native-dialog"
+    @error="toast.error($event.message)"
+  />
+  <K12PersistentPrintController
     ref="finalArtifactPrintController"
     @error="toast.error($event.message)"
   />
@@ -741,6 +1009,102 @@ watch(
   padding: 11px 16px;
   border-bottom: 0.5px solid var(--hc-border);
   flex-shrink: 0;
+}
+.k12enh-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.k12enh-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.k12enh-action:hover,
+.k12enh-action.is-on {
+  background: var(--hc-bg-active);
+  color: var(--hc-accent);
+}
+.k12enh-more {
+  position: relative;
+}
+.k12enh-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 5px);
+  z-index: 40;
+  width: 164px;
+  padding: 5px;
+  border: 1px solid var(--hc-border);
+  border-radius: 8px;
+  background: var(--hc-bg-elevated);
+  box-shadow: var(--hc-shadow-float);
+}
+.k12enh-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  text-align: left;
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.k12enh-menu button:hover {
+  background: var(--hc-bg-hover);
+}
+.k12enh-unit {
+  max-width: 780px;
+  margin: 16px auto;
+  min-width: 0;
+}
+.k12enh-unit-status {
+  padding: 12px 16px;
+  margin: 12px auto;
+  max-width: 780px;
+  color: var(--hc-text-secondary);
+  font-size: 13px;
+}
+.k12enh-unit-status button {
+  border: 1px solid var(--hc-border);
+  border-radius: 6px;
+  background: var(--hc-bg-elevated);
+  color: var(--hc-text-primary);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+/* 顶栏换行按整窗 CSS viewport；工作区覆盖阈值独立由 Shell 测量。 */
+@media (max-width: 959px) {
+  .k12enh-tabs {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .k12enh-id {
+    flex: 1;
+  }
+  .k12enh-seg {
+    order: 4;
+    width: 100%;
+    justify-content: center;
+  }
+  .k12enh-actions {
+    margin-left: auto;
+  }
 }
 /* 身份块：单行截断防长名竖排断行（D2·BUG-20260708）。flex:1 min-width:0 让名字 ellipsis、把 tab/动作挤到右侧 */
 .k12enh-id {
@@ -772,16 +1136,8 @@ watch(
   border-radius: 7px;
   flex-shrink: 0;
   white-space: nowrap;
-  background: rgba(50, 213, 131, 0.14);
-  color: var(--hc-success);
-}
-.k12enh-grade::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  flex: 0 0 6px;
-  border-radius: 50%;
-  background: currentColor;
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-secondary);
 }
 .k12enh-seg {
   display: inline-flex;
