@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime, formatElapsedSeconds, formatDurationMs } from '@/utils/time'
 import { outputPreview, hasOutput } from '@/utils/output-preview'
@@ -800,7 +800,20 @@ function statusText(status: string): string {
   }
 }
 
-defineExpose({ openCreateForm, loadJobs, canCreate })
+/** 从治理页进入时按服务端精确 task_ref 定位，不猜前缀或选择第一项。 */
+async function locatePermissionTarget(taskRef: string, decisionId?: string) {
+  await loadJobs()
+  await loadPermissionStatuses()
+  const match = [...permissionStatuses.value.entries()].find(([, status]) => status.task_ref === taskRef)
+  const job = match ? jobs.value.find(item => item.id === match[0]) : undefined
+  if (!job || !match) return false
+  if (decisionId && match[1].last_block?.id !== decisionId) return false
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-autonomy-task-ref="${CSS.escape(taskRef)}"]`)?.scrollIntoView({ block: 'center' })
+  if (!match[1].all_clear) openBlockedModal(job)
+  return true
+}
+defineExpose({ openCreateForm, loadJobs, canCreate, locatePermissionTarget })
 </script>
 
 <template>
@@ -828,7 +841,7 @@ defineExpose({ openCreateForm, loadJobs, canCreate })
       />
 
       <div v-else class="tasks-grid">
-        <div v-for="job in filteredJobs" :key="job.id" class="task-card">
+        <div v-for="job in filteredJobs" :key="job.id" class="task-card" :data-autonomy-task-ref="permissionStatuses.get(job.id)?.task_ref">
           <!-- Card header -->
           <div class="task-card__header">
             <div class="task-card__title-row">

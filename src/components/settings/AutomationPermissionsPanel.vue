@@ -7,9 +7,11 @@ import {
   getAutonomyProfile, updateAutonomyProfile, getAutonomySummary, listAutonomyDecisions,
   listAutonomyGrants, revokeAutonomyGrant,
   type AutonomyProfile, type MatrixView, type AutonomySummary, type AutonomyDecision, type AutonomyGrant,
+  type AutonomyTaskStatus,
 } from '@/api/autonomy'
 import { useToast } from '@/composables/useToast'
 import { translateOpenIdentifier } from '@/utils/open-i18n-label'
+import { backendScopeKey } from '@/services/backend-context'
 
 /**
  * 设置页「自动化权限」分区 —— 治理入口，非一线审批。
@@ -49,27 +51,27 @@ const profileCards = computed(() => [
     key: 'function_first' as AutonomyProfile,
     title: t('autonomy.profile.functionFirst', '功能优先'),
     badge: t('autonomy.profile.recommended', '推荐'),
-    lead: t('autonomy.profile.functionFirstLead', '日常能力自动跑，高后果转审批'),
+    lead: '常规自动执行，高后果操作先审批。',
     desc: t('autonomy.profile.functionFirstDesc', '读取、浏览、沙箱执行、修改工作区、发送消息自动跑；宿主执行、连接器写入、发布内容、能力修改转审批。'),
-    guard: t('autonomy.profile.functionFirstGuard', '高后果操作仍会先问你'),
+    guard: '常规自动执行，高后果操作先审批。',
     warn: false,
   },
   {
     key: 'strict' as AutonomyProfile,
     title: t('autonomy.profile.strict', '严格审批'),
     badge: '',
-    lead: t('autonomy.profile.strictLead', '凡自动任务都先问你'),
+    lead: '常规无人值守任务先审批。',
     desc: t('autonomy.profile.strictDesc', '自动任务全部转人工确认。适合刚接入外部触发（Webhook）时先观察一段时间。'),
-    guard: t('autonomy.profile.strictGuard', '所有自动任务都会先问你'),
+    guard: '常规无人值守任务先审批。',
     warn: false,
   },
   {
     key: 'full_access' as AutonomyProfile,
     title: t('autonomy.profile.fullAccess', '全功能'),
     badge: t('autonomy.profile.advanced', '高级'),
-    lead: t('autonomy.profile.fullAccessLead', '全部放行，仅限可信本机'),
+    lead: '可信本机自动执行，仍遵守拒绝规则。',
     desc: t('autonomy.profile.fullAccessDesc', '全部自动放行，仅限本机可信环境、压测或临时排障。启用需高后果确认，强制记录审计。'),
-    guard: t('autonomy.profile.fullAccessGuard', '全部自动放行，无额外确认'),
+    guard: '可信本机自动执行，仍遵守拒绝规则。',
     warn: true,
   },
 ])
@@ -107,17 +109,17 @@ const metrics = computed(() => {
       warn: (c?.pending ?? 0) > 0,
     },
     {
-      key: 'ready',
-      value: c ? `${c.ready}/${c.tasks}` : '—',
-      label: t('autonomy.settings.metricReady', '可无人值守运行（预估）'),
-      warn: false,
-    },
-    {
       key: 'grants',
       value: c ? String(c.grants) : '—',
-      label: t('autonomy.settings.metricGrants', '任务级授权生效中'),
+      label: '生效授权',
+      warn: false,
+    },    {
+      key: 'ready',
+      value: !summary.value ? '—' : summary.value.evaluation?.state === 'evaluated' && summary.value.ready != null ? String(summary.value.ready) : '待评估',
+      label: '可自动运行',
       warn: false,
     },
+
   ]
 })
 
@@ -155,6 +157,11 @@ function sourceLabel(key: string): string {
   return translateOpenIdentifier(t, te, 'autonomy.source', key)
 }
 
+/** 内部验算沿运行时授权，不把只读矩阵单元格计数投影为任务放行状态。 */
+function isRuntimeGrantBoundSource(source: string) {
+  return source === 'solve' || source === 'internal_verification'
+}
+
 function cellTitle(source: string, category: string, state: string): string {
   const s = state === 'auto'
     ? t('autonomy.settings.cellAuto', '自动')
@@ -163,6 +170,7 @@ function cellTitle(source: string, category: string, state: string): string {
 }
 
 async function loadAll() {
+  const scope = backendScopeKey()
   loading.value = true
   try {
     const [profileRes, summaryRes, decisionsRes, grantsRes] = await Promise.all([
@@ -171,6 +179,7 @@ async function loadAll() {
       listAutonomyDecisions({ limit: 8 }).catch(() => null),
       listAutonomyGrants().catch(() => null),
     ])
+    if (scope !== backendScopeKey()) return
     profile.value = profileRes.profile
     matrix.value = profileRes.matrix
     summary.value = summaryRes
@@ -236,8 +245,11 @@ async function applyProfile(next: AutonomyProfile) {
   }
 }
 
-function goAutomation() {
-  void router.push('/automation')
+function goAutomation(task: AutonomyTaskStatus) {
+  const source = task.source || task.kind
+  // 目标所属的任务类型决定页面，触发来源保留给真实权限记录，二者不能互相替代。
+  const path = task.kind === 'webhook' ? '/automation/webhooks' : task.kind === 'workflow' ? '/automation/workflows' : '/automation'
+  void router.push({ path, query: { task_ref: task.task_ref, source, ...(task.decision_id ? { decision_id: task.decision_id } : {}) } })
 }
 
 function formatTime(iso: string): string {
@@ -251,9 +263,6 @@ function formatTime(iso: string): string {
 
 <template>
   <div class="auto-perm">
-    <p class="auto-perm__lede">
-      {{ t('autonomy.settings.lede', '决定自动化任务在无人值守时能自动做什么。一线审批发生在创建流和任务卡；这里只做全局级别、待处理兜底、审计回看和生效策略。自愈权限只允许生成恢复候选，必须经过下一次真实执行验证；鉴权、数据源或外部服务故障不会因权限放行而自动消失。') }}
-    </p>
 
     <div v-if="unavailable" class="auto-perm__unavailable">
       <ShieldAlert :size="20" />
@@ -261,19 +270,11 @@ function formatTime(iso: string): string {
     </div>
 
     <template v-else>
-      <!-- 当前态锚点：一句话让「我现在处于什么保护态」始终可见 -->
-      <div class="auto-perm__anchor" data-testid="current-state">
-        <ShieldCheck :size="14" class="auto-perm__anchor-icon" />
-        <span>
-          {{ t('autonomy.settings.currentLabel', '当前') }}：<b>{{ currentTitle }}</b>
-          <span class="auto-perm__anchor-sep">·</span>
-          {{ currentGuard }}
-        </span>
-      </div>
-
+      <!-- 正文不足1040时主区先于辅助区；策略比例不是任务评估事实。 -->
+      <div class="auto-perm__layout"><main class="auto-perm__main">
       <!-- 自动化级别三档 -->
       <section class="auto-perm__group">
-        <h3 class="auto-perm__section-title">{{ t('autonomy.settings.profileTitle', '自动化级别') }}</h3>
+        <div class="auto-perm__level-title"><h3 class="auto-perm__section-title">自动化级别</h3><span>修改即时生效，无需保存。</span><span class="auto-perm__current" :title="currentGuard">当前：<b>{{ currentTitle }}</b></span></div>
         <div class="auto-perm__profiles" role="radiogroup" :aria-label="t('autonomy.settings.profileTitle', '自动化级别')">
           <button
             v-for="card in profileCards"
@@ -320,21 +321,11 @@ function formatTime(iso: string): string {
         </p>
       </section>
 
-      <!-- 当前影响 -->
-      <section class="auto-perm__group">
-        <h3 class="auto-perm__section-title">{{ t('autonomy.settings.impactTitle', '当前影响') }}</h3>
-        <div class="auto-perm__metrics">
-          <div v-for="m in metrics" :key="m.key" class="auto-perm__metric">
-            <b :class="{ 'auto-perm__metric-num--warn': m.warn }">{{ m.value }}</b>
-            <span>{{ m.label }}</span>
-          </div>
-        </div>
-      </section>
-
       <!-- 待处理动作 -->
       <section class="auto-perm__group">
         <h3 class="auto-perm__section-title">{{ t('autonomy.settings.pendingTitle', '待处理动作') }}</h3>
-        <div v-if="(summary?.pending?.length ?? 0) === 0" class="auto-perm__allclear" data-testid="all-clear">
+        <p v-if="!summary" class="auto-perm__muted">Permission task status is unavailable. Refresh and try again.</p>
+        <div v-else-if="summary.pending.length === 0" class="auto-perm__allclear" data-testid="all-clear">
           <ShieldCheck :size="15" />
           {{ t('autonomy.settings.allClear', '没有需要处理的权限动作；高后果能力仍按任务级授权或运行时审批执行。') }}
         </div>
@@ -350,7 +341,7 @@ function formatTime(iso: string): string {
                 </template>
               </span>
             </div>
-            <button class="hc-btn hc-btn-primary auto-perm__pending-action" @click="goAutomation">
+            <button class="hc-btn auto-perm__pending-action" @click="goAutomation(task)">
               {{ t('autonomy.settings.pendingAction', '去处理') }}
               <ArrowRight :size="12" />
             </button>
@@ -380,7 +371,8 @@ function formatTime(iso: string): string {
           <div v-for="d in visibleDecisions" :key="d.id" class="auto-perm__log-row" data-testid="decision-row">
             <span class="auto-perm__log-time">{{ formatTime(d.at) }}</span>
             <span class="auto-perm__log-text">
-              {{ sourceLabel(d.source) }} / {{ d.tool }}<template v-if="d.capability"> · {{ categoryLabel(d.capability) }}</template>
+              <span>{{ sourceLabel(d.source) }}<template v-if="d.capability"> · {{ categoryLabel(d.capability) }}</template></span>
+              <code>{{ d.tool }}</code>
             </span>
             <span
               class="auto-perm__pill"
@@ -426,6 +418,19 @@ function formatTime(iso: string): string {
         </div>
       </section>
 
+
+      </main><aside class="auto-perm__aside">
+      <!-- 当前影响 -->
+      <section class="auto-perm__group">
+        <h3 class="auto-perm__section-title">{{ t('autonomy.settings.impactTitle', '当前影响') }}</h3>
+        <div class="auto-perm__metrics">
+          <div v-for="m in metrics" :key="m.key" class="auto-perm__metric">
+            <b :class="{ 'auto-perm__metric-num--warn': m.warn }">{{ m.value }}</b>
+            <span>{{ m.label }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- 生效策略矩阵（只读诊断）：默认收起，收起态给每来源自动放行占比摘要 -->
       <section class="auto-perm__group">
         <h3 class="auto-perm__section-title">
@@ -462,7 +467,7 @@ function formatTime(iso: string): string {
             }"
           >
             {{ sourceLabel(s.source) }}
-            <b>{{ s.auto }}/{{ s.total }}</b>
+            <b>{{ isRuntimeGrantBoundSource(s.source) ? '按运行时授权' : s.auto + '/' + s.total }}</b>
           </span>
         </div>
 
@@ -483,17 +488,20 @@ function formatTime(iso: string): string {
                 <td v-for="cell in row.cells" :key="cell.source">
                   <span
                     class="auto-perm__dot"
+                    v-if="!isRuntimeGrantBoundSource(cell.source)"
                     :class="cell.state === 'auto' ? 'auto-perm__dot--auto' : 'auto-perm__dot--approval'"
                     :title="cellTitle(cell.source, row.category, cell.state)"
                     role="img"
                     :aria-label="cellTitle(cell.source, row.category, cell.state)"
                   />
+                  <span v-else>{{ row.category === 'exec_sandboxed' ? '按运行时授权' : '—' }}</span>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
+      </aside></div>
     </template>
 
     <!-- 全功能高后果确认弹层：确认前级别不切换 -->
@@ -553,7 +561,14 @@ function formatTime(iso: string): string {
 </template>
 
 <style scoped>
-.auto-perm { display: flex; flex-direction: column; gap: 22px; }
+.auto-perm { display: flex; flex-direction: column; gap: 22px; container-type:inline-size; container-name:autonomy-content }
+.auto-perm__layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;align-items:start}
+.auto-perm__main,.auto-perm__aside{min-width:0;display:flex;flex-direction:column;gap:24px}
+.auto-perm__main{container-type:inline-size;container-name:autonomy-main}
+.auto-perm__aside{padding-left:24px;border-left:1px solid var(--hc-border);box-sizing:border-box}
+.auto-perm__level-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--hc-text-secondary)}
+.auto-perm__current{margin-left:auto;white-space:nowrap}
+@container autonomy-content (max-width:1039px){.auto-perm__layout{grid-template-columns:minmax(0,1fr)}.auto-perm__aside{padding-left:0;border-left:0}}
 .auto-perm__lede { margin: 0; font-size: 13px; line-height: 1.6; color: var(--hc-text-secondary); }
 
 /* ─── 当前态锚点 ───────────────────────────────── */
@@ -577,8 +592,8 @@ function formatTime(iso: string): string {
 .auto-perm__group { display: flex; flex-direction: column; gap: 9px; }
 .auto-perm__section-title {
   display: flex; align-items: center; gap: 8px;
-  margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
-  text-transform: uppercase; color: var(--hc-text-muted);
+  margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--hc-text-primary);
 }
 .auto-perm__refresh {
   display: inline-flex; align-items: center; justify-content: center;
@@ -595,7 +610,7 @@ function formatTime(iso: string): string {
 .auto-perm__profile {
   position: relative; display: flex; flex-direction: column; gap: 6px;
   text-align: start; cursor: pointer;
-  min-height: 84px; padding: 13px 15px; border-radius: 12px;
+  min-height: 72px; padding: 10px 12px; border-radius: 10px;
   border: 0.5px solid var(--hc-border); background: var(--hc-bg-card);
   transition:
     border-color 0.15s var(--hc-ease-smooth),
@@ -649,17 +664,17 @@ function formatTime(iso: string): string {
 
 /* ─── 当前影响：单卡三列 stat strip（待处理置顶、就绪用分数） ── */
 .auto-perm__metrics {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex; flex-direction:column;
   border: 0.5px solid var(--hc-border); border-radius: 12px;
   background: var(--hc-bg-card); overflow: hidden;
 }
 .auto-perm__metric {
-  display: flex; flex-direction: column; gap: 3px;
-  padding: 13px 14px; border-inline-start: 0.5px solid var(--hc-divider, rgba(255, 255, 255, 0.06));
+  display: flex; flex-direction: row-reverse; justify-content:space-between; gap: 12px; align-items:center;
+  padding: 12px; border-bottom:1px solid var(--hc-border);
 }
 .auto-perm__metric:first-child { border-inline-start: 0; }
 .auto-perm__metric b {
-  font-size: 20px; font-weight: 700; line-height: 1.1;
+  font-size: 13px; font-weight: 600; line-height: 1.4;
   color: var(--hc-text-primary); font-variant-numeric: tabular-nums;
 }
 .auto-perm__metric b.auto-perm__metric-num--warn { color: var(--hc-warning, #e69500); }
@@ -670,11 +685,11 @@ function formatTime(iso: string): string {
   display: flex; align-items: center; gap: 7px;
   font-size: 12.5px; color: var(--hc-success, #28a745);
 }
-.auto-perm__pending-list { display: flex; flex-direction: column; gap: 8px; }
+.auto-perm__pending-list { display: flex; flex-direction: column; gap: 0; border:1px solid var(--hc-border);border-radius:10px;overflow:hidden;background:var(--hc-bg-card) }
 .auto-perm__pending {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: var(--hc-radius-md);
-  border: 0.5px solid rgba(240, 180, 41, 0.3); background: rgba(240, 180, 41, 0.07);
+  min-height:60px;box-sizing:border-box;padding: 8px 12px;
+  border-bottom:1px solid var(--hc-border);background:transparent;
 }
 .auto-perm__pending-icon { flex-shrink: 0; color: var(--hc-warning, #e69500); }
 .auto-perm__pending-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -682,7 +697,7 @@ function formatTime(iso: string): string {
 .auto-perm__pending-main span { font-size: 12px; color: var(--hc-text-secondary); }
 /* 动作用高对比蓝按钮：琥珀=「这里要注意」，蓝=「点这里解决」，两个角色不同色 */
 .auto-perm__pending-action {
-  flex-shrink: 0; gap: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+  flex-shrink: 0; min-height:32px; gap: 4px; padding: 4px 10px; font-size: 12px; font-weight: 500;box-shadow:none;
 }
 
 /* ─── 决策日志 ─────────────────────────────────── */
@@ -701,8 +716,10 @@ function formatTime(iso: string): string {
 .auto-perm__log-time { flex-shrink: 0; font-size: 11px; color: var(--hc-text-muted); font-variant-numeric: tabular-nums; }
 .auto-perm__log-text {
   flex: 1; min-width: 0; font-size: 12px; color: var(--hc-text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow-wrap:anywhere;display:flex;flex-direction:column;gap:3px;
 }
+.auto-perm__log-text code{font-size:11px;color:var(--hc-text-muted);line-height:1.4}
+.auto-perm__metric:last-child,.auto-perm__pending:last-child{border-bottom:0}
 .auto-perm__pill { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 7px; }
 .auto-perm__pill--ok { background: rgba(40, 167, 69, 0.12); color: var(--hc-success, #28a745); }
 .auto-perm__pill--warn { background: rgba(240, 180, 41, 0.14); color: var(--hc-warning, #e69500); }
@@ -793,8 +810,13 @@ function formatTime(iso: string): string {
   to { opacity: 1; transform: none; }
 }
 
-@media (max-width: 900px) {
-  .auto-perm__profiles { grid-template-columns: 1fr; }
-  /* 三格指标够窄仍可并排，保持 stat strip 完整；仅级别卡降为单列 */
-}
+/* 策略摘要按来源与比例对齐；内部授权不参与静态放行比例。 */
+.auto-perm__matrix-chips{display:flex;flex-direction:column;gap:0;border:1px solid var(--hc-border);border-radius:10px;background:var(--hc-bg-card);padding:0 12px}
+.auto-perm__chip{display:flex;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--hc-border);border-radius:0;padding:9px 0;background:none;font-size:12px}
+.auto-perm__chip b{font-size:13px;font-weight:600;color:var(--hc-text-primary);white-space:nowrap}
+.auto-perm__chip:last-child{border-bottom:0}
+.auto-perm__chip--full,.auto-perm__chip--none{background:none}
+/* 档位按主区实际可用宽度降为单列，位于基础规则之后避免层叠覆盖。 */
+@container autonomy-main (max-width:620px){.auto-perm__profiles{grid-template-columns:1fr}}
+@container autonomy-content (max-width:560px){.auto-perm__current{margin-left:0}}
 </style>

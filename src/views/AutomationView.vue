@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Plus, RefreshCw } from 'lucide-vue-next'
@@ -9,12 +9,14 @@ import WorkflowPanel from '@/components/automation/WorkflowPanel.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import { getNavigationChildren } from '@/config/navigation'
+import { useToast } from '@/composables/useToast'
 
 type AutomationTab = 'tasks' | 'webhooks' | 'workflows'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const toast = useToast()
 
 function resolveTab(path: string): AutomationTab {
   if (path.startsWith('/automation/webhooks')) return 'webhooks'
@@ -52,9 +54,24 @@ const activeTab = computed<AutomationTab>({
   },
 })
 
-const tasksViewRef = ref<{ openCreateForm?: () => void; loadJobs?: () => void; canCreate?: boolean }>()
-const webhookPanelRef = ref<{ loadWebhooks?: () => void; openCreateForm?: () => void; canCreate?: boolean }>()
-const workflowPanelRef = ref<{ loadWorkflows?: () => void; createWorkflow?: () => void }>()
+type PermissionTargetPanel = { locatePermissionTarget?: (taskRef: string, decisionId?: string) => Promise<boolean> }
+const tasksViewRef = ref<PermissionTargetPanel & { openCreateForm?: () => void; loadJobs?: () => void; canCreate?: boolean }>()
+const webhookPanelRef = ref<PermissionTargetPanel & { loadWebhooks?: () => void; openCreateForm?: () => void; canCreate?: boolean }>()
+const workflowPanelRef = ref<PermissionTargetPanel & { loadWorkflows?: () => void; createWorkflow?: () => void }>()
+let targetRevision = 0
+watch(() => [route.query.task_ref, route.query.source, route.query.decision_id, activeTab.value], async () => {
+  const taskRef = typeof route.query.task_ref === 'string' ? route.query.task_ref : ''
+  if (!taskRef) return
+  const revision = ++targetRevision
+  automationSearch.value = ''
+  await nextTick()
+  const panel = activeTab.value === 'tasks' ? tasksViewRef.value : activeTab.value === 'webhooks' ? webhookPanelRef.value : workflowPanelRef.value
+  try {
+    const decisionId = typeof route.query.decision_id === 'string' ? route.query.decision_id : undefined
+    const found = await panel?.locatePermissionTarget?.(taskRef, decisionId)
+    if (revision === targetRevision && !found) toast.error('The requested automation task could not be found. Refresh and try again.')
+  } catch (error) { if (revision === targetRevision) toast.error(String(error)) }
+}, { immediate: true, flush: 'post' })
 
 const primaryActionDisabled = computed(() => {
   if (activeTab.value === 'tasks') return tasksViewRef.value?.canCreate !== true

@@ -157,6 +157,8 @@ export function revokeAutonomyGrant(id: string) {
 
 /** 总览里单个自动化任务的权限状态（预估口径 + 决策日志事实口径叠加）。 */
 export interface AutonomyTaskStatus {
+  source?: string
+  decision_id?: string
   task_ref: string
   kind: 'cron' | 'webhook' | 'workflow'
   name: string
@@ -171,6 +173,9 @@ export interface AutonomyTaskStatus {
 export interface AutonomySummary {
   profile: AutonomyProfile
   counts: { tasks: number; ready: number; pending: number; grants: number }
+  /** 当前快照没有有效评估事实时为 null；旧 counts.ready 仅保留兼容。 */
+  ready?: number | null
+  evaluation?: { state: 'not_evaluated' | 'evaluated'; profile_revision?: number; task_revision?: number; evaluated_at?: string }
   pending: AutonomyTaskStatus[]
   tasks: AutonomyTaskStatus[]
 }

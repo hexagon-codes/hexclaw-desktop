@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useAutomationList } from '@/composables/useAutomationList'
 import { useI18n } from 'vue-i18n'
 
@@ -365,7 +365,19 @@ onMounted(() => {
   loadCronJobs()
 })
 
-defineExpose({ loadWebhooks, openCreateForm, form, canCreate })
+async function locatePermissionTarget(taskRef: string, decisionId?: string) {
+  await loadWebhooks()
+  await loadPermissionStatuses()
+  const match = [...permissionStatuses.value.entries()].find(([, status]) => status.task_ref === taskRef)
+  const webhook = match ? webhooks.value.find(item => item.id === match[0]) : undefined
+  if (!webhook || !match) return false
+  if (decisionId && match[1].last_block?.id !== decisionId) return false
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-autonomy-task-ref="${CSS.escape(taskRef)}"]`)?.scrollIntoView({ block: 'center' })
+  if (!match[1].all_clear) openBlockedModal(webhook)
+  return true
+}
+defineExpose({ loadWebhooks, openCreateForm, form, canCreate, locatePermissionTarget })
 </script>
 
 <template>
@@ -614,6 +626,7 @@ defineExpose({ loadWebhooks, openCreateForm, form, canCreate })
           v-for="wh in filteredWebhooks"
           :key="wh.id"
           class="webhook-panel__item hc-webhook-card"
+          :data-autonomy-task-ref="permissionStatuses.get(wh.id)?.task_ref"
           :class="`webhook-panel__item--${wh.type}`"
         >
           <div class="webhook-panel__item-info">

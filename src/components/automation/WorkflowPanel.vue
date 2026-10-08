@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Layers, Send, Zap, Pencil, Trash2, ArrowUp, ArrowDown, Play, RotateCcw, Save, X, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-vue-next'
 import { useCanvasStore } from '@/stores/canvas'
 import { useToast } from '@/composables'
 import type { CanvasNode } from '@/types'
-import { preflightAutonomy, createAutonomyGrant, type PreflightResult } from '@/api/autonomy'
+import { preflightAutonomy, createAutonomyGrant, getAutonomySummary, type PreflightResult } from '@/api/autonomy'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
@@ -342,7 +342,19 @@ const runHeadLabel = computed(() =>
   : t('workflow.runResultOk', '运行完成'),
 )
 
-defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
+async function locatePermissionTarget(taskRef: string, decisionId?: string) {
+  await store.loadWorkflows()
+  const summary = await getAutonomySummary()
+  const task = summary.tasks.find(item => item.kind === 'workflow' && item.task_ref === taskRef)
+  const workflow = task ? store.savedWorkflows.find(item => `workflow:${item.id}` === task.task_ref) : undefined
+  if (!workflow) return false
+  if (decisionId && task?.last_block?.id !== decisionId) return false
+  selectWorkflow(workflow.id)
+  await nextTick()
+  await runSavePreflight()
+  return true
+}
+defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow, locatePermissionTarget })
 </script>
 
 <template>
