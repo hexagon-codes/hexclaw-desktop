@@ -2376,6 +2376,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
   border-color: #687787;
   box-shadow: 0 0 0 2px rgba(104, 119, 135, .22);
 }
+/* 指针聚焦使用轻量细环，键盘聚焦仍保留清晰可辨的中性提示。 */
+:global([data-theme="light"][data-hc-focus-origin="pointer"] .ollama-card #ollamaCustomUrl[readonly]:focus) {
+  border-color: #acb7c4;
+  box-shadow: 0 0 0 1px rgba(172, 183, 196, .12);
+}
 :global([data-theme="dark"] .ollama-card #ollamaCustomUrl[readonly]) {
   background: #1b2532;
   border-color: #475464;
