@@ -60,6 +60,7 @@ import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
 import {
   displayModelCapabilities as displayCapabilities,
   MODEL_CAPABILITY_DISPLAY,
+  localizedModelCapabilityDisplay,
 } from '@/config/model-capability-display'
 import { getOllamaTarget } from '@/api/ollama'
 import { isCatalogModelFree } from '@/types'
@@ -90,6 +91,9 @@ import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t, locale } = useI18n()
+// 日期跟随应用语言；宿主不支持对应语言时明确回退英文，不借用系统中文。
+const dateLocale = computed(() => Intl.DateTimeFormat.supportedLocalesOf([locale.value])[0] || 'en')
+const capabilityDisplay = (cap: import('@/config/model-capability-display').DisplayModelCapability) => localizedModelCapabilityDisplay(cap, t)
 const toast = useToast()
 const settingsStore = useSettingsStore()
 let originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
@@ -98,7 +102,7 @@ function providerInputError(provider: ProviderConfig): string {
   const original = originalProviders.find(item => item.id === provider.id ||
     (!!provider.providerInstanceId && item.providerInstanceId === provider.providerInstanceId) ||
     (!!provider.backendKey && item.backendKey === provider.backendKey))
-  return inputLimitError(provider.name, 'Provider name', INPUT_LIMITS.displayName, { original: original?.name }) ||
+  return inputLimitError(provider.name, t('settings.experience.providerNamePlaceholder'), INPUT_LIMITS.displayName, { original: original?.name }) ||
     inputLimitError(provider.baseUrl ?? '', 'Base URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: original?.baseUrl ?? (original ? '' : undefined) }) ||
     inputLimitError(provider.apiKey ?? '', 'API Key', INPUT_LIMITS.secretBytes, { unit: 'bytes', original: original?.apiKey ?? (original ? '' : undefined) })
 }
@@ -417,11 +421,11 @@ function commitProviderOrder(ids: string[], movedId: string) {
     // 仅持久化稳定身份的显示偏好，不写配置、凭据或连接测试状态。
     backendLocalStorage.setItem(PROVIDER_ORDER_KEY, JSON.stringify(ids))
     const index = ids.indexOf(movedId)
-    providerOrderFeedback.value = `Provider moved to position ${index + 1} of ${ids.length}`
+    providerOrderFeedback.value = t('settings.experience.providerMoved', { position: index + 1, total: ids.length })
   } catch {
     providerOrderIds.value = previous
-    providerOrderFeedback.value = 'Provider order could not be saved'
-    toast.error('Provider order could not be saved')
+    providerOrderFeedback.value = t('settings.experience.providerOrderSaveFailed')
+    toast.error(providerOrderFeedback.value)
   }
 }
 
@@ -808,15 +812,15 @@ function reliabilityIcon(level: string): string {
 
 function reliabilityTooltip(r: { level: string; lastProbe?: string; probeError?: string }): string {
   const label =
-    { good: '工具调用可靠', partial: '工具调用部分可靠', bad: '工具调用不可靠', unknown: '未检测' }[
+    { good: t('settings.experience.reliabilityGood'), partial: t('settings.experience.reliabilityPartial'), bad: t('settings.experience.reliabilityBad'), unknown: t('settings.experience.reliabilityUnknown') }[
       r.level
     ] ?? r.level
   const parts = [label]
   if (r.lastProbe) {
     const d = new Date(r.lastProbe)
-    parts.push(`上次检测：${d.toLocaleDateString()}`)
+    parts.push(t('settings.experience.lastProbe', { date: d.toLocaleDateString(dateLocale.value) }))
   }
-  if (r.probeError) parts.push(`错误：${r.probeError}`)
+  if (r.probeError) parts.push(t('settings.experience.probeError', { error: r.probeError }))
   return parts.join(' · ')
 }
 
@@ -1044,16 +1048,16 @@ const agentModeValue = computed({
     autoSave()
   },
 })
-const agentModeOptions = [
-  { value: 'auto', label: '自动（推荐）' },
-  { value: 'react', label: 'ReAct — 通用工具循环' },
-  { value: 'plan-execute', label: 'Plan-Execute — 先规划再执行' },
-  { value: 'reflection', label: 'Reflection — 答后自查' },
-  { value: 'tot', label: 'ToT — 多解择优' },
-  { value: 'self-reflect', label: 'Self-Reflect — 每步反思' },
-  { value: 'mem-augmented', label: 'Memory-Augmented — 个性化档案' },
-  { value: 'debate', label: 'Debate — 双视角辩论' },
-]
+const agentModeOptions = computed(() => [
+  { value: 'auto', label: t('settings.experience.agentAuto') },
+  { value: 'react', label: t('settings.experience.agentReact') },
+  { value: 'plan-execute', label: t('settings.experience.agentPlanExecute') },
+  { value: 'reflection', label: t('settings.experience.agentReflection') },
+  { value: 'tot', label: t('settings.experience.agentTot') },
+  { value: 'self-reflect', label: t('settings.experience.agentSelfReflect') },
+  { value: 'mem-augmented', label: t('settings.experience.agentMemory') },
+  { value: 'debate', label: t('settings.experience.agentDebate') },
+])
 // HcSelect 投影：路由策略下拉。原 <select @change="handleRoutingStrategyChange">，
 // HcSelect 仅 emit update:modelValue，故把写值 + 副作用收进 setter。
 const routingStrategyValue = computed({
@@ -1100,7 +1104,7 @@ const runtimeApiEndpoint = computed(
   () =>
     backendContext.value?.apiBase ?? `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
-const runtimeLocalStoreFile = computed(() => backendContext.value?.kind === 'remote' ? '云端服务 · 独立数据' : '本机服务 · data.db')
+const runtimeRemote = computed(() => backendContext.value?.kind === 'remote')
 const runtimeModeShort = computed(() => {
   const rawMode = runtimeConfig.value?.server.mode?.trim()?.toLowerCase()
   if (!rawMode) return ''
@@ -1136,9 +1140,19 @@ async function loadRuntimeInfo(preferenceSection?: 'memory' | 'sandbox') {
     if (gen !== runtimeInfoGen || scope !== backendScopeKey()) return
     runtimeConfig.value = nextRuntimeConfig
     runtimeLLMConfig.value = nextLLMConfig
-    if (config.value && preferenceSnapshot === JSON.stringify({ memory: config.value.memory, sandbox: config.value.sandbox })) {
-      if (nextRuntimeConfig.memory) config.value.memory = { ...nextRuntimeConfig.memory }
-      config.value.sandbox = { ...config.value.sandbox, ...nextRuntimeConfig.sandbox }
+    if (config.value && preferenceSnapshot === JSON.stringify(currentPreferences())) {
+      if (preferenceSection === 'sandbox') {
+        if (config.value.sandbox && typeof nextRuntimeConfig.sandbox?.network_enabled === 'boolean') {
+          config.value.sandbox.network_enabled = nextRuntimeConfig.sandbox.network_enabled
+        }
+      } else if (preferenceSection === 'memory') {
+        if (config.value.memory && typeof nextRuntimeConfig.memory?.enabled === 'boolean') {
+          config.value.memory.enabled = nextRuntimeConfig.memory.enabled
+        }
+      } else {
+        if (nextRuntimeConfig.memory) config.value.memory = { ...nextRuntimeConfig.memory }
+        config.value.sandbox = { ...config.value.sandbox, ...nextRuntimeConfig.sandbox }
+      }
     }
   } catch (e) {
     if (gen !== runtimeInfoGen) return
@@ -1225,7 +1239,7 @@ async function handleAddProvider() {
   }
 
   const draft = addProviderDraft.value
-  const limitError = inputLimitError(draft.name, 'Provider name', INPUT_LIMITS.displayName) ||
+  const limitError = inputLimitError(draft.name, t('settings.experience.providerNamePlaceholder'), INPUT_LIMITS.displayName) ||
     inputLimitError(draft.baseUrl, 'Base URL', INPUT_LIMITS.urlBytes, { unit: 'bytes' }) ||
     inputLimitError(draft.apiKey, 'API Key', INPUT_LIMITS.secretBytes, { unit: 'bytes' })
   if (limitError) { toast.error(limitError); return }
@@ -1442,7 +1456,7 @@ function handleCustomModelDialogKeydown(event: KeyboardEvent) {
 
 /** 添加自定义模型到 Provider；空 ID 与重复 ID保持 fail-closed。 */
 function addCustomModel(provider: ProviderConfig): boolean {
-  const limitError = inputLimitError(newModelId.value, 'Model ID', INPUT_LIMITS.identifier)
+  const limitError = inputLimitError(newModelId.value, t('settings.llm.modelId'), INPUT_LIMITS.identifier)
   if (limitError) { toast.error(limitError); return false }
   const modelId = normalizedNewModelId.value
   if (!modelId || provider.models.some((model) => model.id === modelId)) return false
@@ -1473,8 +1487,8 @@ function submitCustomModel() {
   closeCustomModelDialog()
   toast.success(
     embeddingOnly
-      ? `已添加 ${addedModelId} · 可用于知识库语义索引`
-      : `已添加自定义模型 ${addedModelId}`,
+      ? t('settings.experience.embeddingAdded', { name: addedModelId })
+      : t('settings.experience.modelAdded', { name: addedModelId }),
   )
 }
 
@@ -1641,8 +1655,8 @@ function saveEditModel() {
   const provider = settingsStore.config?.llm.providers.find((p) => p.id === providerId)
   if (!provider) return
   const original = provider.models[idx]
-  const limitError = inputLimitError(editModelForm.value.id, 'Model ID', INPUT_LIMITS.identifier, { original: original?.id }) ||
-    inputLimitError(editModelForm.value.name, 'Model name', INPUT_LIMITS.title, { original: original?.name })
+  const limitError = inputLimitError(editModelForm.value.id, t('settings.llm.modelId'), INPUT_LIMITS.identifier, { original: original?.id }) ||
+    inputLimitError(editModelForm.value.name, t('settings.llm.modelName'), INPUT_LIMITS.title, { original: original?.name })
   if (limitError) { toast.error(limitError); return }
   const previousModelId = provider.models[idx]!.id
 
@@ -1962,7 +1976,7 @@ async function testProvider(provider: ProviderConfig) {
       delete testProviderResult.value[provider.id]
         testProviderResult.value[currentProvider.id] = {
           ok: result.ok,
-          msg: result.error_message || result.message || (result.ok ? 'Connection test passed.' : t('settings.llm.connectionFailed')),
+          msg: result.error_message || result.message || (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
           receiptBacked: false,
         }
     }
@@ -2228,7 +2242,7 @@ async function saveConfig() {
       <template #actions>
         <button v-if="activeSection === 'llm' || hasUnsavedChanges()" class="hc-btn hc-btn-ghost" :disabled="!hasUnsavedChanges() || settingsPersisting" @click="onToolbarReset">
           <RotateCcw :size="14" />
-          {{ activeSection === 'llm' ? '撤销未保存修改' : '撤销模型修改' }}
+          {{ activeSection === 'llm' ? t('settings.experience.undoUnsaved') : t('settings.experience.undoModels') }}
         </button>
         <button
           v-if="activeSection === 'llm' || hasUnsavedChanges()"
@@ -2244,10 +2258,10 @@ async function saveConfig() {
               ? t('common.saved')
               : saveFailed
                 ? t('settings.toolbar.saveFailed', '保存失败，请重试')
-                : activeSection === 'llm' ? '保存配置' : '保存模型配置'
+                : activeSection === 'llm' ? t('settings.toolbar.saveSettings') : t('settings.experience.saveModels')
           }}
           <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }"
-            >· 未保存</span
+            >· {{ t('settings.experience.unsaved') }}</span
           >
         </button>
       </template>
@@ -2262,8 +2276,8 @@ async function saveConfig() {
           <div v-show="activeSection === 'llm'" class="hc-settings__section hc-settings__section--llm">
             <div v-if="taskReturn" class="hc-settings__task-return" data-task-return>
               <div>
-                <span>{{ returnModelReady ? '默认模型已选好，可以继续原任务。' : '配置模型后继续原任务，已填写的内容会保留。' }}</span>
-                <button class="hc-btn" :class="{ 'hc-btn-primary': returnModelReady }" :disabled="returningToTask" @click="resumeConfiguredTask">{{ returnModelReady ? '继续原任务' : '返回原任务' }}</button>
+                <span>{{ returnModelReady ? t('settings.experience.taskReady') : t('settings.experience.taskConfigure') }}</span>
+                <button class="hc-btn" :class="{ 'hc-btn-primary': returnModelReady }" :disabled="returningToTask" @click="resumeConfiguredTask">{{ returnModelReady ? t('settings.experience.taskContinue') : t('settings.experience.taskReturn') }}</button>
               </div>
             </div>
             <!-- 主区先于辅助区；切 Tab 保留同一模型草稿与运行回执。 -->
@@ -2271,7 +2285,7 @@ async function saveConfig() {
               <main class="hc-settings__task-main">
             <!-- ── 服务商 ── -->
             <div class="hc-settings__sep">
-              <span class="hc-settings__sep-label">服务商</span>
+              <span class="hc-settings__sep-label">{{ t('settings.llm.serviceProvider') }}</span>
               <span class="hc-settings__sep-line"></span>
               <button
                 class="hc-btn hc-btn-sm hc-settings__sep-action"
@@ -2292,7 +2306,7 @@ async function saveConfig() {
 
             <!-- Provider 列表（本地 Ollama 常驻，故不再额外渲染「尚未添加服务商」空态；对齐原型） -->
             <div ref="providerListRef" class="hc-provider__list">
-              <span id="provider-order-hint" class="hc-provider__sr-only">拖动卡头非交互区域排序；也可在排序柄上按 Alt + ↑ / ↓。排序仅调整显示，不影响模型路由。</span>
+              <span id="provider-order-hint" class="hc-provider__sr-only">{{ t('settings.experience.sortHint') }}</span>
               <span class="hc-provider__sr-only" aria-live="polite">{{ providerOrderFeedback }}</span>
               <div
                 v-for="provider in nonOllamaProviders"
@@ -2309,7 +2323,7 @@ async function saveConfig() {
               >
                 <!-- Provider 头部 -->
                 <div class="hc-provider__card-head" @pointerdown="startProviderPointer($event, provider)" @click="toggleEditingProvider(provider.id)">
-                  <button type="button" class="hc-provider__drag-handle" :aria-label="`排序 ${provider.name}`" aria-describedby="provider-order-hint" title="拖动卡头排序；Alt + ↑ / ↓ 调整顺序。仅影响显示，不改变模型路由。" @click.stop @keydown="handleProviderSortKeydown($event, provider)"><GripVertical :size="18" /></button>
+                  <button type="button" class="hc-provider__drag-handle" :aria-label="t('settings.experience.sortProvider', { name: provider.name })" aria-describedby="provider-order-hint" :title="t('settings.experience.sortTooltip')" @click.stop @keydown="handleProviderSortKeydown($event, provider)"><GripVertical :size="18" /></button>
                   <div class="hc-provider__card-info">
                     <div class="hc-provider__logo">
                       <img
@@ -2342,7 +2356,7 @@ async function saveConfig() {
                           !providerConnectionResult(provider)!.ok,
                       }"
                       aria-live="polite"
-                      title="上次连接测试结果，非实时健康状态"
+                      :title="t('settings.experience.lastTestHint')"
                       :aria-label="
                         providerConnectionResult(provider)?.ok
                           ? t('settings.llm.testSuccess', '成功')
@@ -2391,7 +2405,7 @@ async function saveConfig() {
                     >
                       <span class="hc-provider__toggle-knob" aria-hidden="true" />
                     </button>
-                    <button type="button" class="hc-provider__expand" :aria-expanded="editingProviderId === provider.id" :aria-controls="`provider-details-${provider.id}`" :aria-label="`${editingProviderId === provider.id ? '收起' : '展开'} ${provider.name}`" @click.stop="toggleEditingProvider(provider.id, true)"><ChevronDown :size="16" :class="{ 'is-expanded': editingProviderId === provider.id }" /></button>
+                    <button type="button" class="hc-provider__expand" :aria-expanded="editingProviderId === provider.id" :aria-controls="`provider-details-${provider.id}`" :aria-label="t(editingProviderId === provider.id ? 'settings.experience.collapseProvider' : 'settings.experience.expandProvider', { name: provider.name })" @click.stop="toggleEditingProvider(provider.id, true)"><ChevronDown :size="16" :class="{ 'is-expanded': editingProviderId === provider.id }" /></button>
                   </div>
                 </div>
 
@@ -2467,8 +2481,8 @@ async function saveConfig() {
                         <button
                           type="button"
                           class="hc-settings__eye-btn"
-                          :aria-label="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
-                          :title="shownApiKeys[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                          :aria-label="shownApiKeys[provider.id] ? t('settings.experience.hideApiKey') : t('settings.experience.showApiKey')"
+                          :title="shownApiKeys[provider.id] ? t('settings.experience.hideApiKey') : t('settings.experience.showApiKey')"
                           @click="toggleApiKeyVisibility(provider)"
                         >
                           <Eye :size="15" />
@@ -2583,7 +2597,7 @@ async function saveConfig() {
                           }"
                           :title="
                             isEmbeddingOnlyModel(model)
-                              ? `${model.name || model.id} · Embedding · 仅用于知识库语义索引`
+                              ? `${model.name || model.id} · Embedding · ${t('settings.experience.embeddingPurpose')}`
                               : model.name || model.id
                           "
                         >
@@ -2595,16 +2609,16 @@ async function saveConfig() {
                             :key="cap"
                             class="hc-model-chip__cap"
                             :class="`hc-model-chip__cap--${cap}`"
-                            :title="MODEL_CAPABILITY_DISPLAY[cap].title"
+                            :title="capabilityDisplay(cap).title"
                             >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                            {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                            {{ capabilityDisplay(cap).label }}</span
                           >
                           <button
                             v-if="isProviderModelRemovable(provider, model)"
                             type="button"
                             class="hc-model-chip__remove"
-                            :aria-label="`删除 ${model.name || model.id}`"
-                            title="删除模型"
+                            :aria-label="t('settings.experience.deleteModel', { name: model.name || model.id })"
+                            :title="t('settings.llm.deleteModel')"
                             @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
@@ -2625,7 +2639,7 @@ async function saveConfig() {
                           <button
                             type="button"
                             class="hc-model-chip__select"
-                            :aria-label="`选择模型 ${model.name || model.id}`"
+                            :aria-label="t('settings.experience.selectModel', { name: model.name || model.id })"
                             @click="selectProviderModel(provider, model.id)"
                           >
                             <span class="hc-model-chip__name" :title="model.name || model.id">
@@ -2648,9 +2662,9 @@ async function saveConfig() {
                               :key="cap"
                               class="hc-model-chip__cap"
                               :class="`hc-model-chip__cap--${cap}`"
-                              :title="MODEL_CAPABILITY_DISPLAY[cap].title"
+                              :title="capabilityDisplay(cap).title"
                               >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                              {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                              {{ capabilityDisplay(cap).label }}</span
                             >
                             <span
                               v-if="
@@ -2665,11 +2679,11 @@ async function saveConfig() {
                           <button
                             type="button"
                             class="hc-model-chip__probe"
-                            :aria-label="`重新检测 ${model.name || model.id} 工具调用可靠度`"
+                            :aria-label="t('settings.experience.reprobeModel', { name: model.name || model.id })"
                             :title="
                               probingModel(provider.id, model.id)
-                                ? '探测中…'
-                                : '重新检测工具调用可靠度'
+                                ? t('settings.experience.probing')
+                                : t('settings.experience.reprobe')
                             "
                             @click.stop="refreshCapability(provider, model)"
                           >
@@ -2683,8 +2697,8 @@ async function saveConfig() {
                           <button
                             type="button"
                             class="hc-model-chip__remove"
-                            :aria-label="`删除 ${model.name || model.id}`"
-                            title="删除模型"
+                            :aria-label="t('settings.experience.deleteModel', { name: model.name || model.id })"
+                            :title="t('settings.llm.deleteModel')"
                             @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
@@ -2731,9 +2745,9 @@ async function saveConfig() {
                             :key="cap"
                             class="hc-model-chip__cap"
                             :class="`hc-model-chip__cap--${cap}`"
-                            :title="MODEL_CAPABILITY_DISPLAY[cap].title"
+                            :title="capabilityDisplay(cap).title"
                             >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                            {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                            {{ capabilityDisplay(cap).label }}</span
                           >
                         </button>
                       </template>
@@ -2741,7 +2755,7 @@ async function saveConfig() {
                       <button
                         type="button"
                         class="hc-model-chip hc-model-chip--add"
-                        title="添加自定义模型"
+                        :title="t('settings.llm.addModel')"
                         @click="openCustomModelDialog(provider, $event)"
                       >
                         <Plus :size="11" /> {{ t('settings.llm.customModel', '自定义') }}
@@ -2769,9 +2783,10 @@ async function saveConfig() {
             </p>
               </main>
               <aside class="hc-settings__task-aside">
+              <section class="hc-settings__aside-group">
             <!-- ── 默认行为 ── -->
             <div class="hc-settings__sep">
-              <span class="hc-settings__sep-label">默认行为</span>
+              <span class="hc-settings__sep-label">{{ t('settings.experience.defaults') }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
 
@@ -2820,7 +2835,7 @@ async function saveConfig() {
                 {{ t('settings.llm.routingEnabled') }}
                 <span
                   class="hc-settings__info"
-                  data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。"
+                  :data-info="t('settings.llm.routingHint')"
                   >?</span
                 >
               </span>
@@ -2845,10 +2860,10 @@ async function saveConfig() {
             <!-- B1 Agent 策略模式：默认 auto 按问题启发式路由（7 模式 + auto）-->
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
-                Agent 模式
+                {{ t('settings.experience.agentMode') }}
                 <span
                   class="hc-settings__info"
-                  data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。"
+                  :data-info="t('settings.experience.agentModeHint')"
                   >?</span
                 >
               </span>
@@ -2862,9 +2877,11 @@ async function saveConfig() {
               </div>
             </div>
 
+              </section>
+              <section class="hc-settings__aside-group">
             <!-- ── 工具能力 ── -->
             <div class="hc-settings__sep">
-              <span class="hc-settings__sep-label">工具能力</span>
+              <span class="hc-settings__sep-label">{{ t('settings.experience.tools') }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
 
@@ -2873,7 +2890,7 @@ async function saveConfig() {
                 {{ t('settings.llm.toolsToggle') }}
                 <span
                   class="hc-settings__info"
-                  data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。"
+                  :data-info="t('settings.llm.toolsDesc')"
                   >?</span
                 >
               </span>
@@ -2902,7 +2919,7 @@ async function saveConfig() {
                   {{ t('settings.llm.maxToolsLabel') }}
                   <span
                     class="hc-settings__info"
-                    data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。"
+                    :data-info="t('settings.llm.maxToolsDesc')"
                     >?</span
                   >
                 </span>
@@ -2916,6 +2933,7 @@ async function saveConfig() {
               </div>
             </div>
 
+              </section>
               </aside>
             </div>
           </div>
@@ -2930,7 +2948,7 @@ async function saveConfig() {
 
           <!-- System (merged: appearance + storage) -->
           <div v-show="activeSection === 'system'" class="hc-settings__section">
-            <p class="hc-settings__immediate-note">Changes apply immediately. No additional save is required.</p>
+            <p class="hc-settings__immediate-note">{{ t('settings.experience.immediateApply') }}</p>
             <!-- 系统偏好即时生效；服务、信息与品牌入口属于辅助列。 -->
             <div class="hc-settings__task-layout">
               <main class="hc-settings__task-main">
@@ -2942,7 +2960,7 @@ async function saveConfig() {
               <div
                 class="hc-settings__theme-row"
               >
-                <span class="hc-settings__row-label">明暗模式</span>
+                <span class="hc-settings__row-label">{{ t('settings.experience.themeMode') }}</span>
                 <div class="hc-settings__theme-segmented"
                 role="radiogroup"
                 :aria-label="t('settings.appearance.title')"
@@ -3032,13 +3050,14 @@ async function saveConfig() {
               </main>
               <aside class="hc-settings__task-aside">
                 <BackendServiceCard />
+              <section class="hc-settings__aside-group">
             <!-- 系统信息 -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">{{ t('settings.system.info') }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
 
-            <div class="hc-settings__info-card" style="margin-top: 10px">
+            <div class="hc-settings__info-card">
               <div class="hc-settings__info-grid">
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.version') }}</span>
@@ -3050,7 +3069,8 @@ async function saveConfig() {
                     t('settings.system.localStorage')
                   }}</span>
                   <div class="hc-settings__info-value">
-                    <bdi class="hc-settings__info-mono">{{ runtimeLocalStoreFile }}</bdi> ·
+                    <template v-if="runtimeRemote">{{ t('settings.service.cloudStore') }}</template>
+                    <template v-else>{{ t('settings.service.localStore') }} · <bdi class="hc-settings__info-mono">data.db</bdi></template> ·
                     <span
                       :style="{
                         color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)',
@@ -3067,12 +3087,13 @@ async function saveConfig() {
                   <div
                     class="hc-settings__info-value"
                     :style="{
-                      color: runtimeConfig?.knowledge.enabled
+                      color: runtimeRemote ? 'var(--hc-text-primary)' : runtimeConfig?.knowledge.enabled
                         ? 'var(--hc-success)'
                         : 'var(--hc-text-muted)',
                     }"
                   >
-                    <template v-if="runtimeConfig?.knowledge.enabled"
+                    <template v-if="runtimeRemote">{{ t('settings.service.cloudKnowledge') }}</template>
+                    <template v-else-if="runtimeConfig?.knowledge.enabled"
                       ><bdi class="hc-settings__info-mono">FTS5</bdi> ·
                       {{ t('settings.storage.enabled') }}</template
                     >
@@ -3097,23 +3118,26 @@ async function saveConfig() {
                 {{ t('common.loading', 'Loading...') }}
               </p>
             </div>
-
+              </section>
+              <section class="hc-settings__aside-group">
             <!-- 关于河蟹（身份入口，与「系统信息」分区风格一致） -->
-            <div class="hc-settings__sep" style="margin-top: 18px">
+            <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">{{
                 t('settings.system.aboutLabel', '关于河蟹')
               }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
             <div class="hc-settings__about">
-              <p class="hc-settings__about-intro">钳得住活，守得住数据，长得出本事。<br />一只 AI 螃蟹，可在本机运行，也可部署到云端。</p>
+              <p class="hc-settings__about-intro">{{ t('settings.experience.aboutTagline') }}<br />{{ t('settings.experience.aboutDescription') }}</p>
               <!-- 官网标准锚点交给全局外链控制器，鼠标和键盘均只有一次分发。 -->
-              <nav class="hc-settings__about-links" aria-label="关于河蟹">
-                <button type="button" class="hc-settings__about-link" @click="openAbout">关于</button>
-                <a class="hc-settings__about-link" href="https://hexclaw.net/" target="_blank" rel="noopener noreferrer">访问官网 ↗</a>
-                <button type="button" class="hc-settings__about-link" @click="showWechatFollow = true">关注公众号</button>
+              <nav class="hc-settings__about-links" :aria-label="t('settings.system.aboutLabel')">
+                <button type="button" class="hc-settings__about-link" @click="openAbout">{{ t('settings.experience.about') }}</button>
+                <a class="hc-settings__about-link" href="https://hexclaw.net/" target="_blank" rel="noopener noreferrer">{{ t('settings.experience.visitWebsite') }} ↗</a>
+                <button type="button" class="hc-settings__about-link" @click="showWechatFollow = true">{{ t('settings.experience.wechat') }}</button>
               </nav>
-            </div>              </aside>
+            </div>
+              </section>
+              </aside>
             </div>
           </div>
         </template>
@@ -3121,13 +3145,13 @@ async function saveConfig() {
     </div>
   </div>
 
-  <HcModal :open="showWechatFollow" title="关注公众号" :width="320" @close="showWechatFollow = false"><WechatFollowContent /></HcModal>
+  <HcModal :open="showWechatFollow" :title="t('settings.experience.wechat')" :width="320" @close="showWechatFollow = false"><WechatFollowContent /></HcModal>
   <HcModal :open="showAddProvider" :title="t('settings.llm.addProvider')" :busy="addingProvider" initial-focus=".hc-provider-select__trigger" @close="closeAddProvider">
     <form class="hc-provider__add-form" :inert="addingProvider ? true : undefined" @submit.prevent="handleAddProvider">
       <div class="hc-provider__add-field"><label>{{ t('settings.llm.serviceProvider', 'Provider') }}</label><ProviderSelect v-model="addProviderType" :include-custom="true" /></div>
-      <div v-if="addProviderType === 'custom'" class="hc-provider__add-field"><label for="add-provider-name">名称</label><HcClearableField><input id="add-provider-name" v-model="addProviderDraft.name" class="hc-input" autocomplete="off" placeholder="服务商名称" /></HcClearableField></div>
+      <div v-if="addProviderType === 'custom'" class="hc-provider__add-field"><label for="add-provider-name">{{ t('settings.experience.providerName') }}</label><HcClearableField><input id="add-provider-name" v-model="addProviderDraft.name" class="hc-input" autocomplete="off" :placeholder="t('settings.experience.providerNamePlaceholder')" /></HcClearableField></div>
       <div class="hc-provider__add-field"><label for="add-provider-url">Base URL</label><HcClearableField><input id="add-provider-url" v-model="addProviderDraft.baseUrl" class="hc-input" autocomplete="off" spellcheck="false" /></HcClearableField></div>
-      <div class="hc-provider__add-field"><label for="add-provider-key">API Key</label><div class="hc-settings__input-group"><HcClearableField :trailing="38"><input id="add-provider-key" v-model="addProviderDraft.apiKey" class="hc-input" :type="showAddProviderKey ? 'text' : 'password'" :placeholder="PROVIDER_PRESETS[addProviderType].placeholder || 'API Key'" autocomplete="off" spellcheck="false" /></HcClearableField><button type="button" class="hc-settings__eye-btn" :aria-label="showAddProviderKey ? '隐藏 API Key' : '显示 API Key'" @click="showAddProviderKey = !showAddProviderKey"><Eye :size="15" /></button></div></div>
+      <div class="hc-provider__add-field"><label for="add-provider-key">API Key</label><div class="hc-settings__input-group"><HcClearableField :trailing="38"><input id="add-provider-key" v-model="addProviderDraft.apiKey" class="hc-input" :type="showAddProviderKey ? 'text' : 'password'" :placeholder="PROVIDER_PRESETS[addProviderType].placeholder || 'API Key'" autocomplete="off" spellcheck="false" /></HcClearableField><button type="button" class="hc-settings__eye-btn" :aria-label="showAddProviderKey ? t('settings.experience.hideApiKey') : t('settings.experience.showApiKey')" @click="showAddProviderKey = !showAddProviderKey"><Eye :size="15" /></button></div></div>
     </form>
     <template #footer><button type="button" class="hc-btn" :disabled="addingProvider" @click="closeAddProvider">{{ t('common.cancel') }}</button><button type="button" class="hc-btn hc-btn-primary" :disabled="addingProvider" @click="handleAddProvider"><Loader2 v-if="addingProvider" :size="14" class="animate-spin" />{{ t('common.add', '添加') }}</button></template>
   </HcModal>
@@ -3152,13 +3176,13 @@ async function saveConfig() {
         >
           <div class="hc-edit-model-dialog__header">
             <h3 id="hc-custom-model-dialog-title" class="hc-edit-model-dialog__title">
-              添加自定义模型
+              {{ t('settings.llm.addModel') }}
             </h3>
           </div>
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
               <label for="hc-custom-model-id"
-                >模型 ID <span class="hc-settings__required">*</span></label
+                >{{ t('settings.llm.modelId') }} <span class="hc-settings__required">*</span></label
               >
               <HcClearableField>
                 <input
@@ -3168,7 +3192,7 @@ async function saveConfig() {
                   data-testid="custom-model-id"
                   type="text"
                   class="hc-input"
-                  placeholder="如 anthropic/claude-3.7-sonnet-long-context-preview"
+                  :placeholder="t('settings.experience.modelIdPlaceholder')"
                   autocomplete="off"
                   :aria-invalid="customModelIdIsDuplicate || undefined"
                   :aria-describedby="
@@ -3184,11 +3208,11 @@ async function saveConfig() {
                 class="hc-settings__hint hc-settings__hint--error"
                 role="alert"
               >
-                该模型已在列表中
+                {{ t('settings.experience.duplicateModel') }}
               </p>
             </div>
             <fieldset class="hc-edit-model__field hc-custom-model-dialog__capability">
-              <legend>核心能力（可多选，仅系统自动识别）</legend>
+              <legend>{{ t('settings.experience.coreCapabilities') }}</legend>
               <div class="hc-edit-model__caps">
                 <label
                   v-for="cap in [
@@ -3210,7 +3234,7 @@ async function saveConfig() {
                   <span class="hc-edit-model__cap-icon">{{
                     MODEL_CAPABILITY_DISPLAY[cap].icon
                   }}</span>
-                  <span>{{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                  <span>{{ capabilityDisplay(cap).label }}</span>
                 </label>
               </div>
             </fieldset>
@@ -3247,33 +3271,33 @@ async function saveConfig() {
       >
         <div class="hc-edit-model-dialog">
           <div class="hc-edit-model-dialog__header">
-            <h3 class="hc-edit-model-dialog__title">编辑模型</h3>
+            <h3 class="hc-edit-model-dialog__title">{{ t('settings.editModel') }}</h3>
           </div>
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
-              <label>模型 ID <span class="hc-settings__required">*</span></label>
+              <label>{{ t('settings.llm.modelId') }} <span class="hc-settings__required">*</span></label>
               <HcClearableField>
                 <input
                   v-model="editModelForm.id"
                   type="text"
                   class="hc-input"
-                  placeholder="如 gpt-4o, claude-sonnet-4-6"
+                  :placeholder="t('settings.experience.editModelIdPlaceholder')"
                 />
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
-              <label>显示名称</label>
+              <label>{{ t('settings.llm.modelName') }}</label>
               <HcClearableField>
                 <input
                   v-model="editModelForm.name"
                   type="text"
                   class="hc-input"
-                  placeholder="留空则使用模型 ID"
+                  :placeholder="t('settings.experience.modelNamePlaceholder')"
                 />
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
-              <label>模型能力</label>
+              <label>{{ t('settings.experience.modelCapabilities') }}</label>
               <div class="hc-edit-model__caps">
                 <label
                   v-for="cap in [
@@ -3297,19 +3321,19 @@ async function saveConfig() {
                   <span class="hc-edit-model__cap-icon">{{
                     MODEL_CAPABILITY_DISPLAY[cap].icon
                   }}</span>
-                  <span>{{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                  <span>{{ capabilityDisplay(cap).label }}</span>
                 </label>
               </div>
             </div>
           </div>
           <div class="hc-edit-model-dialog__actions">
-            <button class="hc-btn hc-btn-secondary" @click="editingModel = null">取消</button>
+            <button class="hc-btn hc-btn-secondary" @click="editingModel = null">{{ t('common.cancel') }}</button>
             <button
               class="hc-btn hc-btn-primary"
               :disabled="!editModelForm.id.trim()"
               @click="saveEditModel"
             >
-              保存
+              {{ t('common.save') }}
             </button>
           </div>
         </div>
@@ -3367,10 +3391,10 @@ async function saveConfig() {
 .hc-settings__section--llm [data-testid="llm-routing-strategy-select"] :deep(.hc-select__trigger),.hc-settings__section--llm [data-testid="llm-agent-mode-select"] :deep(.hc-select__trigger){height:34px;min-height:34px;font-size:13px;line-height:normal}
 .hc-settings__section--llm .hc-settings__row-right:has(.hc-toggle) .hc-settings__select{width:314px}
 .hc-settings__section--llm .hc-settings__row-right>.hc-toggle{margin:0;flex:0 0 34px}
-.hc-settings__section--llm .hc-settings__sub{position:relative;padding-left:0;border-left:0;margin-left:0;margin-top:0}
-.hc-settings__section--llm .hc-settings__sub::before{content:'';position:absolute;left:4px;top:4px;bottom:4px;width:1px;background:var(--hc-border-hl)}
+.hc-settings__section--llm .hc-settings__sub{position:relative;padding-inline-start:0;border-inline-start:0;margin-inline-start:0;margin-top:0}
+.hc-settings__section--llm .hc-settings__sub::before{content:'';position:absolute;inset-inline-start:4px;top:4px;bottom:4px;width:1px;background:var(--hc-border-hl)}
 .hc-settings__section--llm .hc-settings__sub .hc-settings__row{min-height:48px}
-.hc-settings__section--llm .hc-settings__sub .hc-settings__row-label{padding-left:16px;font-size:12px}
+.hc-settings__section--llm .hc-settings__sub .hc-settings__row-label{padding-inline-start:16px;font-size:12px}
 .hc-settings__section--llm .hc-settings__sep{margin-top:28px}
 .hc-settings__section--llm>.hc-settings__sep:first-child{margin-top:0}
 .hc-settings__section--llm .hc-settings__sep-label{font-size:14px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--hc-text-secondary)}
@@ -3493,14 +3517,19 @@ async function saveConfig() {
   max-width: none;
 }
 
-/* 主辅列以设置正文可用宽度判断；单列顺序保持任务主区在前。 */
+/* CSS Grid分配主区剩余宽度；以正文容器决定列数，不按整窗或Retina物理像素维护JS布局状态。 */
 .hc-settings__task-layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;width:100%;align-items:start}
 .hc-settings__task-main,.hc-settings__task-aside{min-width:0}
-.hc-settings__task-aside{padding-left:24px;border-left:1px solid var(--hc-border);box-sizing:border-box}
+.hc-settings__task-aside{display:flex;flex-direction:column;gap:26px;padding-inline-start:24px;border-inline-start:1px solid var(--hc-border);box-sizing:border-box}
+.hc-settings__aside-group{min-width:0}
+.hc-settings__aside-group>.hc-settings__sep{margin:0 0 10px}
+.hc-settings__aside-group>.hc-settings__about{margin-top:0}
 .hc-settings__task-aside .hc-settings__row{flex-direction:column;align-items:stretch;gap:8px}
 .hc-settings__task-aside .hc-settings__row-right{width:100%;max-width:100%}
 .hc-settings__task-aside .hc-settings__select{width:100%;max-width:100%}
-.hc-settings__task-aside .hc-settings__info-grid{grid-template-columns:1fr}
+.hc-settings__task-aside .hc-settings__info-grid{grid-template-columns:1fr;gap:15px}
+.hc-settings__task-aside .hc-settings__info-card{padding:14px}
+.hc-settings__task-aside .hc-settings__info-value{font-weight:400;overflow-wrap:anywhere;min-width:0}
 .hc-settings__task-aside .hc-settings__sep:first-child{margin-top:0}
 .hc-settings__theme-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--hc-border)}
 .hc-settings__theme-row .hc-settings__theme-segmented{width:360px;max-width:100%;height:36px;min-height:36px;margin:0;flex-shrink:1}
@@ -3511,7 +3540,7 @@ async function saveConfig() {
 .hc-settings__about{padding:14px;border:1px solid var(--hc-border);border-radius:var(--hc-radius-md);background:var(--hc-bg-card)}
 .hc-settings__about-links{display:flex;align-items:center;flex-wrap:wrap;gap:14px}
 .hc-settings__about-links .hc-settings__about-link{padding:0;text-decoration:none;font-size:12.5px}
-@container settings-content (max-width:1039px){.hc-settings__task-layout{grid-template-columns:minmax(0,1fr)}.hc-settings__task-aside{padding-left:0;border-left:0}.hc-settings__task-aside .hc-settings__row{flex-direction:row;align-items:center}.hc-settings__task-aside .hc-settings__row-right{width:360px;max-width:60%}}
+@container settings-content (width < 960px){.hc-settings__task-layout{grid-template-columns:minmax(0,1fr)}.hc-settings__task-aside{padding-inline-start:0;border-inline-start:0}.hc-settings__task-aside .hc-settings__row{flex-direction:row;align-items:center}.hc-settings__task-aside .hc-settings__row-right{width:360px;max-width:60%}}
 @container settings-content (max-width:560px){.hc-settings__theme-row{flex-direction:column;align-items:flex-start;gap:8px}.hc-settings__task-aside .hc-settings__row{flex-direction:column;align-items:stretch}.hc-settings__task-aside .hc-settings__row-right{width:100%;max-width:100%}}
 
 .hc-settings__section-title {
@@ -5334,8 +5363,25 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
 /* 系统长控件遵从局部表单宽度；末尾响应规则不被通用行和240px下拉基础样式覆盖。 */
 .hc-settings__form--system > .hc-settings__row .hc-settings__row-right{width:360px;max-width:100%;min-width:0}
 .hc-settings__form--system > .hc-settings__row .hc-settings__select{width:100%;max-width:100%}
+
+/* 辅助表单按自身宽度排列长控件；短开关和计数器保留同行，不继承全体纵排。 */
+.hc-settings__section--llm .hc-settings__aside-group{container-type:inline-size;container-name:settings-form;max-width:780px}
+.hc-settings__section--llm .hc-settings__task-aside .hc-settings__row{flex-direction:row;align-items:center;min-height:52px;padding:12px 0;gap:12px}
+.hc-settings__section--llm .hc-settings__task-aside .hc-settings__row-label{font-size:14px;min-width:0}
+.hc-settings__section--llm .hc-settings__task-aside .hc-settings__row-right{width:360px;max-width:100%}
+.hc-settings__section--llm .hc-settings__task-aside .hc-settings__select :deep(.hc-select__trigger){height:36px;min-height:36px;font-size:13px;border-radius:8px}
+.hc-settings__task-layout .hc-settings__sep-label{font-size:14px;font-weight:600;color:var(--hc-text-primary)}
+@container settings-form (max-width:560px){
+  .hc-settings__section--llm .hc-settings__task-aside .hc-settings__row{min-height:48px;padding:6px 0;gap:8px}
+  .hc-settings__section--llm .hc-settings__task-aside .hc-settings__row-right{width:auto}
+  .hc-settings__section--llm .hc-settings__task-aside .hc-settings__row:has(.hc-settings__select){display:grid;grid-template-columns:minmax(0,1fr);min-height:60px;padding:9px 0 13px;gap:7px 10px}
+  .hc-settings__section--llm .hc-settings__task-aside .hc-settings__row:has(.hc-settings__select)>.hc-settings__row-label{grid-column:1/-1}
+  .hc-settings__section--llm .hc-settings__task-aside .hc-settings__row:has(.hc-settings__select)>.hc-settings__row-right{width:100%;grid-column:1/-1}
+}
 @container system-settings-form (max-width:560px){
   .hc-settings__form--system > .hc-settings__row:has(.hc-settings__select){flex-direction:column;align-items:flex-start;gap:8px;padding:6px 0;min-height:60px;box-sizing:border-box}
+  .hc-settings__form--system > .hc-settings__row .hc-settings__row-right{width:100%;max-width:100%}
   .hc-settings__form--system .hc-settings__theme-row{flex-direction:column;align-items:flex-start;gap:8px;padding:8px 0}
+  .hc-settings__form--system .hc-settings__theme-segmented{width:100%;max-width:100%}
 }
 </style>

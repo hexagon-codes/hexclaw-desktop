@@ -1,14 +1,18 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useK12Appearance, type K12AppearancePreference } from './useK12Appearance'
+const { t } = useI18n()
 const { preference, setPreference } = useK12Appearance()
-const options: Array<{ key: K12AppearancePreference; label: string }> = [
-  { key: 'k12', label: 'K12 专属皮肤' }, { key: 'default', label: '通用外观' },
-]
+const options = computed<Array<{ key: K12AppearancePreference; label: string }>>(() => [
+  { key: 'k12', label: t('settings.experience.k12Skin') },
+  { key: 'default', label: t('settings.experience.generalAppearance') },
+])
 function onKeydown(event: KeyboardEvent, index: number) {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
   event.preventDefault()
-  const next = (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + options.length) % options.length
-  setPreference(options[next]!.key)
+  const next = (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + options.value.length) % options.value.length
+  setPreference(options.value[next]!.key)
   ;(event.currentTarget as HTMLElement).closest('[role="radiogroup"]')?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus()
 }
 </script>
@@ -16,11 +20,11 @@ function onKeydown(event: KeyboardEvent, index: number) {
   <!-- 风格与明暗模式为独立全局偏好；后端切换和模型撤销不改变此选择。 -->
   <section class="k12-appearance-settings" aria-labelledby="k12-appearance-title">
     <div class="k12-appearance-settings__copy">
-      <b id="k12-appearance-title">界面风格</b>
-      <p>应用于全部页面，并随明暗模式切换。</p>
+      <b id="k12-appearance-title">{{ t('settings.experience.interfaceStyle') }}</b>
+      <p>{{ t('settings.experience.interfaceStyleDesc') }}</p>
     </div>
     <div class="k12-appearance-settings__control">
-      <div class="k12-appearance-settings__segmented" role="radiogroup" aria-label="界面风格">
+      <div class="k12-appearance-settings__segmented" role="radiogroup" :aria-label="t('settings.experience.interfaceStyle')">
         <button v-for="(option, index) in options" :key="option.key" type="button" role="radio"
           :class="{ 'is-selected': preference === option.key }" :aria-checked="preference === option.key"
           :tabindex="preference === option.key ? 0 : -1" @click="setPreference(option.key)" @keydown="onKeydown($event, index)">{{ option.label }}</button>

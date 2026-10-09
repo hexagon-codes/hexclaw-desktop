@@ -20,7 +20,7 @@ import { backendScopeKey } from '@/services/backend-context'
  * 一线审批发生在创建流和任务卡；任务粒度状态归「自动化」页，本页不重复陈列。
  * 单用户桌面定位：三档（功能优先/严格审批/全功能），无团队形态。
  */
-const { t, te } = useI18n()
+const { t, te, locale } = useI18n()
 const toast = useToast()
 const router = useRouter()
 
@@ -29,7 +29,7 @@ const matrix = ref<MatrixView | null>(null)
 const summary = ref<AutonomySummary | null>(null)
 const decisions = ref<AutonomyDecision[]>([])
 const grants = ref<AutonomyGrant[]>([])
-/** 审计区收敛（2026-07-04）：默认最近 3 条，展开看全部。 */
+/** 默认展示最近三条决策，展开仅查看当前后端已加载的近期记录。 */
 const DECISIONS_COLLAPSED_COUNT = 3
 const decisionsExpanded = ref(false)
 const visibleDecisions = computed(() =>
@@ -51,27 +51,27 @@ const profileCards = computed(() => [
     key: 'function_first' as AutonomyProfile,
     title: t('autonomy.profile.functionFirst', '功能优先'),
     badge: t('autonomy.profile.recommended', '推荐'),
-    lead: '常规自动执行，高后果操作先审批。',
+    lead: t('autonomy.profile.functionFirstLead'),
     desc: t('autonomy.profile.functionFirstDesc', '读取、浏览、沙箱执行、修改工作区、发送消息自动跑；宿主执行、连接器写入、发布内容、能力修改转审批。'),
-    guard: '常规自动执行，高后果操作先审批。',
+    guard: t('autonomy.profile.functionFirstLead'),
     warn: false,
   },
   {
     key: 'strict' as AutonomyProfile,
     title: t('autonomy.profile.strict', '严格审批'),
     badge: '',
-    lead: '常规无人值守任务先审批。',
+    lead: t('autonomy.profile.strictLead'),
     desc: t('autonomy.profile.strictDesc', '自动任务全部转人工确认。适合刚接入外部触发（Webhook）时先观察一段时间。'),
-    guard: '常规无人值守任务先审批。',
+    guard: t('autonomy.profile.strictLead'),
     warn: false,
   },
   {
     key: 'full_access' as AutonomyProfile,
     title: t('autonomy.profile.fullAccess', '全功能'),
     badge: t('autonomy.profile.advanced', '高级'),
-    lead: '可信本机自动执行，仍遵守拒绝规则。',
+    lead: t('autonomy.profile.fullAccessLead'),
     desc: t('autonomy.profile.fullAccessDesc', '全部自动放行，仅限本机可信环境、压测或临时排障。启用需高后果确认，强制记录审计。'),
-    guard: '可信本机自动执行，仍遵守拒绝规则。',
+    guard: t('autonomy.profile.fullAccessLead'),
     warn: true,
   },
 ])
@@ -111,12 +111,12 @@ const metrics = computed(() => {
     {
       key: 'grants',
       value: c ? String(c.grants) : '—',
-      label: '生效授权',
+      label: t('autonomy.settings.activeGrants'),
       warn: false,
     },    {
       key: 'ready',
-      value: !summary.value ? '—' : summary.value.evaluation?.state === 'evaluated' && summary.value.ready != null ? String(summary.value.ready) : '待评估',
-      label: '可自动运行',
+      value: !summary.value ? '—' : summary.value.evaluation?.state === 'evaluated' && summary.value.ready != null ? String(summary.value.ready) : t('autonomy.settings.pendingEvaluation'),
+      label: t('autonomy.settings.automaticReady'),
       warn: false,
     },
 
@@ -254,7 +254,8 @@ function goAutomation(task: AutonomyTaskStatus) {
 
 function formatTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleString()
+    // 日期按应用语言显示；环境缺少对应格式时回退英文，原时间值不变。
+    return new Date(iso).toLocaleString(Intl.DateTimeFormat.supportedLocalesOf([locale.value])[0] || 'en')
   } catch {
     return iso
   }
@@ -270,11 +271,11 @@ function formatTime(iso: string): string {
     </div>
 
     <template v-else>
-      <!-- 正文不足1040时主区先于辅助区；策略比例不是任务评估事实。 -->
+      <!-- 正文不足960时主区先于辅助区，CSS自动分配剩余宽度；策略比例不是任务评估事实。 -->
       <div class="auto-perm__layout"><main class="auto-perm__main">
       <!-- 自动化级别三档 -->
       <section class="auto-perm__group">
-        <div class="auto-perm__level-title"><h3 class="auto-perm__section-title">自动化级别</h3><span>修改即时生效，无需保存。</span><span class="auto-perm__current" :title="currentGuard">当前：<b>{{ currentTitle }}</b></span></div>
+        <div class="auto-perm__level-title"><h3 class="auto-perm__section-title">{{ t('autonomy.settings.profileTitle') }}</h3><span>{{ t('settings.experience.immediateApply') }}</span><span class="auto-perm__current" :title="currentGuard">{{ t('autonomy.settings.currentLabel') }}：<b>{{ currentTitle }}</b></span></div>
         <div class="auto-perm__profiles" role="radiogroup" :aria-label="t('autonomy.settings.profileTitle', '自动化级别')">
           <button
             v-for="card in profileCards"
@@ -324,7 +325,7 @@ function formatTime(iso: string): string {
       <!-- 待处理动作 -->
       <section class="auto-perm__group">
         <h3 class="auto-perm__section-title">{{ t('autonomy.settings.pendingTitle', '待处理动作') }}</h3>
-        <p v-if="!summary" class="auto-perm__muted">Permission task status is unavailable. Refresh and try again.</p>
+        <p v-if="!summary" class="auto-perm__muted">{{ t('autonomy.settings.taskStatusUnavailable') }}</p>
         <div v-else-if="summary.pending.length === 0" class="auto-perm__allclear" data-testid="all-clear">
           <ShieldCheck :size="15" />
           {{ t('autonomy.settings.allClear', '没有需要处理的权限动作；高后果能力仍按任务级授权或运行时审批执行。') }}
@@ -349,54 +350,7 @@ function formatTime(iso: string): string {
         </div>
       </section>
 
-      <!-- 最近权限决策 -->
-      <section class="auto-perm__group">
-        <h3 class="auto-perm__section-title">
-          {{ t('autonomy.settings.logTitle', '最近权限决策（本地持久化审计）') }}
-          <button
-            class="auto-perm__refresh"
-            :disabled="loading"
-            :aria-label="t('common.refresh', '刷新')"
-            @click="loadAll"
-          >
-            <RefreshCw :size="12" :class="{ 'auto-perm__spin': loading }" />
-          </button>
-        </h3>
-        <div v-if="decisions.length === 0" class="auto-perm__muted">
-          {{ t('autonomy.settings.noLog', '还没有权限决策记录——自动化任务运行后这里会持续留档。') }}
-        </div>
-        <!-- 收敛（2026-07-04 PM 评审）：家长用户默认只看最近 3 条（macOS「近期使用」同型），
-             治理闭环内容不减；>3 条时给「显示全部 (N)」展开。 -->
-        <div v-else class="auto-perm__log">
-          <div v-for="d in visibleDecisions" :key="d.id" class="auto-perm__log-row" data-testid="decision-row">
-            <span class="auto-perm__log-time">{{ formatTime(d.at) }}</span>
-            <span class="auto-perm__log-text">
-              <span>{{ sourceLabel(d.source) }}<template v-if="d.capability"> · {{ categoryLabel(d.capability) }}</template></span>
-              <code>{{ d.tool }}</code>
-            </span>
-            <span
-              class="auto-perm__pill"
-              :class="{
-                'auto-perm__pill--ok': d.decision === 'allow',
-                'auto-perm__pill--warn': d.decision === 'pending',
-                'auto-perm__pill--danger': d.decision === 'deny',
-              }"
-            >{{ t(`autonomy.decision.${d.decision}`, d.decision) }}</span>
-          </div>
-          <button
-            v-if="decisions.length > DECISIONS_COLLAPSED_COUNT"
-            class="auto-perm__showall"
-            data-testid="decisions-show-all"
-            @click="decisionsExpanded = !decisionsExpanded"
-          >
-            {{ decisionsExpanded
-              ? t('autonomy.settings.collapseLog', '收起')
-              : t('autonomy.settings.showAllLog', { n: decisions.length }) }}
-          </button>
-        </div>
-      </section>
-
-      <!-- FS-3：任务级授权列表 + 撤销。此前只有 grants 计数，无处查看/撤销具体授权。 -->
+      <!-- 任务级授权保留原列表和撤销入口。 -->
       <section v-if="grants.length" class="auto-perm__group">
         <h3 class="auto-perm__section-title">
           {{ t('autonomy.grants.title', '任务级授权（生效中）') }}
@@ -417,20 +371,6 @@ function formatTime(iso: string): string {
           </div>
         </div>
       </section>
-
-
-      </main><aside class="auto-perm__aside">
-      <!-- 当前影响 -->
-      <section class="auto-perm__group">
-        <h3 class="auto-perm__section-title">{{ t('autonomy.settings.impactTitle', '当前影响') }}</h3>
-        <div class="auto-perm__metrics">
-          <div v-for="m in metrics" :key="m.key" class="auto-perm__metric">
-            <b :class="{ 'auto-perm__metric-num--warn': m.warn }">{{ m.value }}</b>
-            <span>{{ m.label }}</span>
-          </div>
-        </div>
-      </section>
-
       <!-- 生效策略矩阵（只读诊断）：默认收起，收起态给每来源自动放行占比摘要 -->
       <section class="auto-perm__group">
         <h3 class="auto-perm__section-title">
@@ -441,7 +381,7 @@ function formatTime(iso: string): string {
             @click="matrixOpen = !matrixOpen"
           >
             <ChevronDown :size="13" class="auto-perm__chevron" :class="{ 'auto-perm__chevron--open': matrixOpen }" />
-            {{ t('autonomy.settings.matrixTitle', '生效策略矩阵（只读诊断）') }}
+            {{ t('autonomy.settings.matrixTitle') }}
           </button>
           <span v-show="matrixOpen" class="auto-perm__legend">
             <span class="auto-perm__legend-item">
@@ -455,7 +395,8 @@ function formatTime(iso: string): string {
           </span>
         </h3>
 
-        <!-- 收起态：每来源「自动放行 N/总数」一眼看清谁被卡得最多 -->
+        <!-- 收起态：能力比例仅说明策略矩阵，不代表具体任务已获授权。 -->
+        <p v-show="!matrixOpen" class="auto-perm__muted">{{ t('autonomy.settings.matrixSummary') }}</p>
         <div v-show="!matrixOpen" class="auto-perm__matrix-chips" data-testid="matrix-summary">
           <span
             v-for="s in matrixSummary"
@@ -467,7 +408,7 @@ function formatTime(iso: string): string {
             }"
           >
             {{ sourceLabel(s.source) }}
-            <b>{{ isRuntimeGrantBoundSource(s.source) ? '按运行时授权' : s.auto + '/' + s.total }}</b>
+            <b>{{ isRuntimeGrantBoundSource(s.source) ? t('autonomy.settings.runtimeGrant') : s.auto + '/' + s.total }}</b>
           </span>
         </div>
 
@@ -494,11 +435,71 @@ function formatTime(iso: string): string {
                     role="img"
                     :aria-label="cellTitle(cell.source, row.category, cell.state)"
                   />
-                  <span v-else>{{ row.category === 'exec_sandboxed' ? '按运行时授权' : '—' }}</span>
+                  <span v-else>{{ row.category === 'exec_sandboxed' ? t('autonomy.settings.runtimeGrant') : '—' }}</span>
                 </td>
               </tr>
             </tbody>
           </table>
+        </div>
+      </section>
+      </main><aside class="auto-perm__aside">
+      <!-- 当前影响 -->
+      <section class="auto-perm__group">
+        <h3 class="auto-perm__section-title">{{ t('autonomy.settings.impactTitle', '当前影响') }}</h3>
+        <div class="auto-perm__metrics">
+          <div v-for="m in metrics" :key="m.key" class="auto-perm__metric">
+            <b :class="{ 'auto-perm__metric-num--warn': m.warn }">{{ m.value }}</b>
+            <span>{{ m.label }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 最近权限决策 -->
+      <section class="auto-perm__group">
+        <h3 class="auto-perm__section-title">
+          {{ t('autonomy.settings.logTitle', '最近权限决策') }}
+          <button
+            class="auto-perm__refresh"
+            :disabled="loading"
+            :aria-label="t('common.refresh', '刷新')"
+            @click="loadAll"
+          >
+            <RefreshCw :size="12" :class="{ 'auto-perm__spin': loading }" />
+          </button>
+        </h3>
+        <div v-if="decisions.length === 0" class="auto-perm__muted">
+          {{ t('autonomy.settings.noLog', '还没有权限决策记录——自动化任务运行后这里会持续留档。') }}
+        </div>
+        <!-- 默认最近三条，展开仅显示已加载的近期记录；摘要与状态在首行，时间和工具在次行。 -->
+        <div v-else class="auto-perm__log">
+          <div v-for="d in visibleDecisions" :key="d.id" class="auto-perm__log-row" data-testid="decision-row">
+            <span class="auto-perm__log-text">
+              <span>{{ sourceLabel(d.source) }}<template v-if="d.capability"> · {{ categoryLabel(d.capability) }}</template></span>
+            </span>
+            <span
+              class="auto-perm__pill"
+              :class="{
+                'auto-perm__pill--ok': d.decision === 'allow',
+                'auto-perm__pill--warn': d.decision === 'pending',
+                'auto-perm__pill--danger': d.decision === 'deny',
+              }"
+            >{{ t(`autonomy.decision.${d.decision}`, d.decision) }}</span>
+            <span class="auto-perm__log-meta">
+              <span class="auto-perm__log-time">{{ formatTime(d.at) }}</span>
+              <code dir="ltr">{{ d.tool }}</code>
+            </span>
+          </div>
+          <button
+            v-if="decisions.length > DECISIONS_COLLAPSED_COUNT"
+            class="auto-perm__showall"
+            data-testid="decisions-show-all"
+            :aria-expanded="decisionsExpanded"
+            @click="decisionsExpanded = !decisionsExpanded"
+          >
+            {{ decisionsExpanded
+              ? t('autonomy.settings.collapseLog', '收起')
+              : t('autonomy.settings.showAllLog', { n: decisions.length }) }}
+          </button>
         </div>
       </section>
       </aside></div>
@@ -565,10 +566,11 @@ function formatTime(iso: string): string {
 .auto-perm__layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;align-items:start}
 .auto-perm__main,.auto-perm__aside{min-width:0;display:flex;flex-direction:column;gap:24px}
 .auto-perm__main{container-type:inline-size;container-name:autonomy-main}
-.auto-perm__aside{padding-left:24px;border-left:1px solid var(--hc-border);box-sizing:border-box}
-.auto-perm__level-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--hc-text-secondary)}
-.auto-perm__current{margin-left:auto;white-space:nowrap}
-@container autonomy-content (max-width:1039px){.auto-perm__layout{grid-template-columns:minmax(0,1fr)}.auto-perm__aside{padding-left:0;border-left:0}}
+.auto-perm__aside{padding-inline-start:24px;border-inline-start:1px solid var(--hc-border);box-sizing:border-box;gap:26px}
+.auto-perm__level-title{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:baseline;gap:8px;font-size:12px;color:var(--hc-text-secondary)}
+.auto-perm__current{margin-inline-start:auto;white-space:nowrap}
+.auto-perm__current b{font-weight:500}
+@container autonomy-content (width < 960px){.auto-perm__layout{grid-template-columns:minmax(0,1fr)}.auto-perm__aside{padding-inline-start:0;border-inline-start:0}}
 .auto-perm__lede { margin: 0; font-size: 13px; line-height: 1.6; color: var(--hc-text-secondary); }
 
 /* ─── 当前态锚点 ───────────────────────────────── */
@@ -589,7 +591,7 @@ function formatTime(iso: string): string {
   border: 0.5px dashed var(--hc-border); border-radius: var(--hc-radius-lg);
 }
 
-.auto-perm__group { display: flex; flex-direction: column; gap: 9px; }
+.auto-perm__group { display: flex; flex-direction: column; gap: 10px; }
 .auto-perm__section-title {
   display: flex; align-items: center; gap: 8px;
   margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0;
@@ -611,26 +613,23 @@ function formatTime(iso: string): string {
   position: relative; display: flex; flex-direction: column; gap: 6px;
   text-align: start; cursor: pointer;
   min-height: 72px; padding: 10px 12px; border-radius: 10px;
-  border: 0.5px solid var(--hc-border); background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border); background: var(--hc-bg-card);
   transition:
     border-color 0.15s var(--hc-ease-smooth),
-    background 0.15s var(--hc-ease-smooth),
-    transform 0.15s var(--hc-ease-smooth),
-    box-shadow 0.15s var(--hc-ease-smooth);
+    background 0.15s var(--hc-ease-smooth);
 }
-.auto-perm__profile:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--hc-shadow-sm); }
+.auto-perm__profile:hover:not(:disabled) { transform: none; box-shadow: none; border-color: var(--hc-border-hl); }
 .auto-perm__profile:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
 .auto-perm__profile:disabled { opacity: 0.7; cursor: default; }
-.auto-perm__profile--on {
-  border-color: var(--hc-border-hl, rgba(95, 179, 234, 0.32));
+.auto-perm__profile--on,
+.auto-perm__profile--on:hover:not(:disabled) {
+  border-color: var(--hc-accent);
   background: var(--hc-accent-subtle, rgba(95, 179, 234, 0.14));
 }
-.auto-perm__profile--warn { border-color: rgba(240, 180, 41, 0.32); }
-.auto-perm__profile--warn.auto-perm__profile--on { background: rgba(240, 180, 41, 0.13); }
 .auto-perm__profile-head {
   display: flex; align-items: center; gap: 6px; padding-inline-end: 20px; min-width: 0;
 }
-.auto-perm__profile-head b { font-size: 13px; color: var(--hc-text-primary); }
+.auto-perm__profile-head b { font-size: 14px; color: var(--hc-text-primary); }
 .auto-perm__profile-lead { font-size: 12px; line-height: 1.5; color: var(--hc-text-secondary); }
 .auto-perm__profile-lock {
   position: absolute; top: 12px; inset-inline-end: 12px;
@@ -653,7 +652,6 @@ function formatTime(iso: string): string {
   width: 16px; height: 16px; border-radius: 50%;
   background: var(--hc-accent); color: var(--hc-text-inverse, #fff);
 }
-.auto-perm__profile--warn .auto-perm__check { background: var(--hc-warning, #e69500); }
 .check-enter-active { animation: auto-perm-pop 0.25s var(--hc-spring); }
 .check-leave-active { transition: opacity 0.1s ease-out; }
 .check-leave-to { opacity: 0; }
@@ -662,23 +660,23 @@ function formatTime(iso: string): string {
   to { opacity: 1; transform: scale(1); }
 }
 
-/* ─── 当前影响：单卡三列 stat strip（待处理置顶、就绪用分数） ── */
+/* 当前影响用三行键值摘要，分隔线与文字共用内缩边界。 */
 .auto-perm__metrics {
   display: flex; flex-direction:column;
-  border: 0.5px solid var(--hc-border); border-radius: 12px;
+  padding: 0 12px; border: 0.5px solid var(--hc-border); border-radius: 10px;
   background: var(--hc-bg-card); overflow: hidden;
 }
 .auto-perm__metric {
   display: flex; flex-direction: row-reverse; justify-content:space-between; gap: 12px; align-items:center;
-  padding: 12px; border-bottom:1px solid var(--hc-border);
+  padding: 12px 0; border-block-start:1px solid var(--hc-divider, var(--hc-border));
 }
-.auto-perm__metric:first-child { border-inline-start: 0; }
+.auto-perm__metric:first-child { border-block-start: 0; }
 .auto-perm__metric b {
-  font-size: 13px; font-weight: 600; line-height: 1.4;
+  font-size: 14px; font-weight: 600; line-height: 1.1; white-space: nowrap;
   color: var(--hc-text-primary); font-variant-numeric: tabular-nums;
 }
 .auto-perm__metric b.auto-perm__metric-num--warn { color: var(--hc-warning, #e69500); }
-.auto-perm__metric span { font-size: 11.5px; line-height: 1.4; color: var(--hc-text-secondary); }
+.auto-perm__metric span { max-inline-size:170px; font-size: 12px; line-height: 1.4; color: var(--hc-text-secondary); }
 
 /* ─── 待处理动作 ───────────────────────────────── */
 .auto-perm__allclear {
@@ -719,7 +717,14 @@ function formatTime(iso: string): string {
   overflow-wrap:anywhere;display:flex;flex-direction:column;gap:3px;
 }
 .auto-perm__log-text code{font-size:11px;color:var(--hc-text-muted);line-height:1.4}
-.auto-perm__metric:last-child,.auto-perm__pending:last-child{border-bottom:0}
+/* 决策摘要与状态同行，完整时间和工具标识在跨列次行自然换行；授权行保留原布局。 */
+.auto-perm__log-row[data-testid="decision-row"]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:4px 10px}
+.auto-perm__log-row[data-testid="decision-row"] .auto-perm__log-text{gap:4px;white-space:normal;overflow:visible}
+.auto-perm__log-row[data-testid="decision-row"] .auto-perm__log-text>span{font-size:13px;line-height:1.5;color:var(--hc-text-primary)}
+.auto-perm__log-row[data-testid="decision-row"] .auto-perm__log-meta{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-inline-size:0}
+.auto-perm__log-row[data-testid="decision-row"] .auto-perm__log-time{font-size:11px;line-height:1.45;color:var(--hc-text-muted);max-inline-size:100%;overflow-wrap:anywhere}
+.auto-perm__log-row[data-testid="decision-row"] .auto-perm__log-meta code{min-inline-size:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;color:var(--hc-text-muted);overflow-wrap:anywhere}
+.auto-perm__pending:last-child{border-bottom:0}
 .auto-perm__pill { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 7px; }
 .auto-perm__pill--ok { background: rgba(40, 167, 69, 0.12); color: var(--hc-success, #28a745); }
 .auto-perm__pill--warn { background: rgba(240, 180, 41, 0.14); color: var(--hc-warning, #e69500); }
@@ -730,10 +735,10 @@ function formatTime(iso: string): string {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 0; border: none; background: transparent; cursor: pointer;
   font: inherit; letter-spacing: inherit; text-transform: inherit;
-  color: var(--hc-text-muted);
+  color: var(--hc-text-primary);
   transition: color 0.15s var(--hc-ease-smooth);
 }
-.auto-perm__disclosure:hover { color: var(--hc-text-secondary); }
+.auto-perm__disclosure:hover { color: var(--hc-text-primary); }
 .auto-perm__disclosure:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 3px; border-radius: 3px; }
 .auto-perm__chevron { transition: transform 0.2s var(--hc-ease-smooth); }
 .auto-perm__chevron--open { transform: rotate(180deg); }
@@ -816,7 +821,7 @@ function formatTime(iso: string): string {
 .auto-perm__chip b{font-size:13px;font-weight:600;color:var(--hc-text-primary);white-space:nowrap}
 .auto-perm__chip:last-child{border-bottom:0}
 .auto-perm__chip--full,.auto-perm__chip--none{background:none}
-/* 档位按主区实际可用宽度降为单列，位于基础规则之后避免层叠覆盖。 */
-@container autonomy-main (max-width:620px){.auto-perm__profiles{grid-template-columns:1fr}}
-@container autonomy-content (max-width:560px){.auto-perm__current{margin-left:0}}
+/* 局部阈值与960px外壳的最小572px主区一致；仅不足572px时纵排，卡片保留自然高度。 */
+@container autonomy-main (width < 572px){.auto-perm__profiles{grid-template-columns:1fr}}
+@container autonomy-content (max-width:560px){.auto-perm__current{margin-inline-start:0}}
 </style>

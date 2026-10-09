@@ -1,13 +1,15 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import qrUrl from '@/assets/hexclaw-wechat-qr.png'
+const { t } = useI18n()
 </script>
 
 <template>
   <!-- 原始码点与静区共用一份资源；主题变化只改变周围文本，不反色或裁切二维码。 -->
   <div class="wechat-follow">
-    <img :src="qrUrl" alt="hexclaw 微信公众号二维码" width="240" height="240" />
+    <img :src="qrUrl" :alt="t('settings.experience.qrAlt')" width="240" height="240" />
     <strong>hexclaw</strong>
-    <p>使用微信扫一扫</p>
+    <p>{{ t('settings.experience.qrInstruction') }}</p>
   </div>
 </template>
 

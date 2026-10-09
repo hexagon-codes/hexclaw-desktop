@@ -6,24 +6,26 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
-import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
+import { getGroupedNavItems, isNavActive, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
 import logoUrl from '@/assets/logo.png'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
 
-const productVersionLabel = computed(() => backendContext.value?.kind === 'remote' ? `云端 · ${new URL(backendContext.value.apiBase).host}` : `本机服务 · ${appStore.sidecarReady ? '已连接' : '未连接'}`)
+const productVersionLabel = computed(() => backendContext.value?.kind === 'remote'
+  ? `${t('settings.service.cloud')} · ${new URL(backendContext.value.apiBase).host}`
+  : `${t('settings.service.localStore')} · ${t(appStore.sidecarReady ? 'settings.system.connected' : 'settings.service.disconnected')}`)
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
 const groupOrder: NavGroup[] = ['home', 'build', 'connections', 'system']
 
-// Localized group header; empty for the home group (Chat stands alone).
+// 分组名称使用应用词典；首页不显示分组标题。
 function groupLabel(group: NavGroup): string {
-  const label = NAV_GROUP_LABELS[group]
-  return locale.value === 'zh-CN' ? label.zh : label.en
+  const key = { home: '', build: 'nav.groupBuild', connections: 'nav.groupConnections', system: 'nav.groupSystem' }[group]
+  return key ? t(key) : ''
 }
 
 const dotClass = computed(() => {
@@ -91,7 +93,7 @@ function getGroupItems(group: NavGroup) {
           <span
             class="hc-sidebar__engine-label"
             role="button"
-            title="管理后端服务"
+            :title="t('settings.service.settings')"
             tabindex="0" @keydown.enter="backendPanelOpen = true" @click="backendPanelOpen = true"
           >
             {{ productVersionLabel }}

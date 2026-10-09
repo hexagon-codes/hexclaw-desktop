@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Link } from 'lucide-vue-next'
 import { backendContext, backendPanelOpen } from '@/services/backend-context'
 import { useAppStore } from '@/stores/app'
 const app = useAppStore()
+const { t } = useI18n()
 const remote = computed(() => backendContext.value?.kind === 'remote')
 const serviceHost = computed(() => {
   try { return new URL(backendContext.value?.apiBase ?? '').host } catch { return '—' }
@@ -15,16 +17,16 @@ const serviceHost = computed(() => {
     <div class="runtime-service-card__top">
       <div class="runtime-service-card__identity">
         <span class="backend-live-dot" :class="{ 'backend-live-dot--disconnected': !app.sidecarReady }" />
-        <div><strong>{{ remote ? 'HexClaw 服务 · 云端' : 'HexClaw 服务 · 本机' }}</strong>
-          <span class="runtime-service-card__meta"><span class="backend-version" :class="{ 'backend-version--pending': !app.backendVersion }" data-backend-version>{{ app.backendVersion ? (app.backendVersion.startsWith('v') ? app.backendVersion : 'v' + app.backendVersion) : '版本待检查' }}</span> · {{ remote ? serviceHost : '随应用启停' }}</span>
+        <div><strong>{{ t(remote ? 'settings.service.cloudTitle' : 'settings.service.localTitle') }}</strong>
+          <span class="runtime-service-card__meta"><span class="backend-version" :class="{ 'backend-version--pending': !app.backendVersion }" data-backend-version><bdi v-if="app.backendVersion" dir="ltr">{{ app.backendVersion.startsWith('v') ? app.backendVersion : 'v' + app.backendVersion }}</bdi><template v-else>{{ t('settings.service.versionPending') }}</template></span> · <bdi v-if="remote" dir="ltr">{{ serviceHost }}</bdi><template v-else>{{ t('settings.service.lifecycle') }}</template></span>
         </div>
       </div>
-      <span class="backend-status-pill" :class="{ 'backend-status-pill--warning': !app.sidecarReady }">{{ app.sidecarReady ? '已连接' : '未连接' }}</span>
+      <span class="backend-status-pill" :class="{ 'backend-status-pill--warning': !app.sidecarReady }">{{ t(app.sidecarReady ? 'settings.system.connected' : 'settings.service.disconnected') }}</span>
     </div>
     <div class="runtime-service-card__foot">
-      <span class="runtime-service-card__hint">{{ remote ? '会话、知识库与模型配置存储在云端服务器。' : '会话、知识库与模型配置存储在这台设备上。' }}<br v-if="remote" /><span v-if="remote">数据由你的服务器托管</span></span>
-      <button v-if="!remote && !app.sidecarReady" class="btn btn-secondary runtime-service-card__manage" :disabled="app.isRestarting" @click="app.restartSidecar()">{{ app.isRestarting ? '重启中…' : '重启服务' }}</button>
-      <button class="btn btn-secondary runtime-service-card__manage" @click="backendPanelOpen = true"><Link :size="14" />服务设置</button>
+      <span class="runtime-service-card__hint">{{ t(remote ? 'settings.service.cloudStorage' : 'settings.service.localStorage') }}<br v-if="remote" /><span v-if="remote">{{ t('settings.service.hostedHint') }}</span></span>
+      <button v-if="!remote && !app.sidecarReady" class="btn btn-secondary runtime-service-card__manage" :disabled="app.isRestarting" @click="app.restartSidecar()">{{ t(app.isRestarting ? 'settings.service.restarting' : 'settings.service.restart') }}</button>
+      <button class="btn btn-secondary runtime-service-card__manage" @click="backendPanelOpen = true"><Link :size="14" />{{ t('settings.service.settings') }}</button>
     </div>
   </section>
 </template>

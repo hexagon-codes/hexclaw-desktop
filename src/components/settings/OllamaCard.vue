@@ -164,6 +164,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import {
   MODEL_CAPABILITY_DISPLAY,
+  localizedModelCapabilityDisplay,
   type DisplayModelCapability,
 } from '@/config/model-capability-display'
 
@@ -224,6 +225,7 @@ const POST_PULL_REFRESH_INTERVAL = 1000
 const POST_PULL_REFRESH_RETRIES = 4
 
 const { t } = useI18n()
+const capabilityDisplay = (cap: DisplayModelCapability) => localizedModelCapabilityDisplay(cap, t)
 
 const status = ref<OllamaStatus | null>(null)
 const detecting = ref(false)
@@ -300,15 +302,15 @@ const targetInputAddress = computed({
   get: () => targetMode.value === 'custom' ? targetAddress.value : target.value?.resolved_base_url || 'http://127.0.0.1:11434',
   set: (address: string) => { if (targetMode.value === 'custom') targetAddress.value = address },
 })
-const targetAccessSummary = computed(() => `${remoteBackend.value ? '云端后端访问' : '本机后端访问'} · ${targetInputAddress.value || '待填写目标地址'}`)
-const targetStorageSummary = computed(() => `模型运行与下载：${targetMode.value === 'custom' ? '目标 Ollama 所在设备' : remoteBackend.value ? '后端服务器' : '此设备'}。`)
+const targetAccessSummary = computed(() => `${t(remoteBackend.value ? 'settings.ollama.remoteAccess' : 'settings.ollama.localAccess')} · ${targetInputAddress.value || t('settings.ollama.missingTarget')}`)
+const targetStorageSummary = computed(() => t('settings.ollama.storageSummary', { location: t(targetMode.value === 'custom' ? 'settings.ollama.targetDevice' : remoteBackend.value ? 'settings.ollama.backendServer' : 'settings.ollama.thisDevice') }))
 const targetNote = computed(() => targetMode.value === 'custom'
   ? remoteBackend.value
-    ? '填写云端后端可访问的地址。127.0.0.1 指后端服务器；访问此设备需使用其可达网络地址。'
-    : '填写本机后端可访问的 Ollama 地址，可使用其他端口或设备。'
+    ? t('settings.ollama.customRemoteHint')
+    : t('settings.ollama.customLocalHint')
   : remoteBackend.value
-    ? '默认地址指向当前后端服务器。'
-    : '默认地址指向此设备。由 HexClaw 自动检测或启动 Ollama。')
+    ? t('settings.ollama.defaultRemoteHint')
+    : t('settings.ollama.defaultLocalHint'))
 async function readTarget() {
   target.value = await getOllamaTarget()
   targetMode.value = target.value.mode
@@ -326,9 +328,9 @@ function resetTarget() {
 async function saveTarget(draft = targetDraft()) {
   if (!draft || targetSaving.value) return
   const limitError = draft.mode === 'custom'
-    ? inputLimitError(draft.custom_base_url, 'Ollama service URL', INPUT_LIMITS.urlBytes, { unit: 'bytes', original: target.value?.custom_base_url }) : ''
+    ? inputLimitError(draft.custom_base_url, t('settings.ollama.accessTarget'), INPUT_LIMITS.urlBytes, { unit: 'bytes', original: target.value?.custom_base_url }) : ''
   if (limitError) throw new Error(limitError)
-  if (draft.mode === 'custom' && !/^https?:\/\/[^\s]+$/.test(draft.custom_base_url)) throw new Error('A complete Ollama service URL is required')
+  if (draft.mode === 'custom' && !/^https?:\/\/[^\s]+$/.test(draft.custom_base_url)) throw new Error(t('settings.ollama.completeUrlRequired'))
   targetSaving.value = true
   const scope = backendScopeKey()
   try {
@@ -347,8 +349,8 @@ async function testTarget() {
   targetProbing.value = true
   try {
     const result = await probeOllamaTarget({ mode: targetMode.value, custom_base_url: targetAddress.value.trim() })
-    if (!result.reachable) throw new Error(result.error || 'Ollama daemon unreachable')
-    toast.success('Ollama connection test passed.')
+    if (!result.reachable) throw new Error(result.error || t('settings.ollama.unreachable'))
+    toast.success(t('settings.ollama.testPassed'))
   } catch (error) { toast.error(String(error)) }
   finally { targetProbing.value = false }
 }
@@ -423,7 +425,7 @@ async function detect() {
     if (e instanceof DOMException && e.name === 'AbortError') return
     // During install polling, don't show errors — just keep waiting
     if (!waitingInstall.value) {
-      error.value = e instanceof Error ? e.message : 'Unknown error'
+      error.value = e instanceof Error ? e.message : t('settings.ollama.unknownError')
       status.value = null
     }
   } finally {
@@ -772,7 +774,7 @@ function resetStallTimer() {
 async function startPull() {
   const model = pullModelName.value.trim()
   if (pulling.value) return
-  const limitError = inputLimitError(pullModelName.value, 'Model ID', INPUT_LIMITS.identifier)
+  const limitError = inputLimitError(pullModelName.value, t('settings.llm.modelId'), INPUT_LIMITS.identifier)
   if (limitError) { pullError.value = limitError; pullInputError.value = true; return }
   if (!model) {
     pullInputError.value = true
@@ -946,7 +948,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
             target="_blank"
             rel="noopener noreferrer"
             class="ollama-card__title-link"
-            aria-label="打开 Ollama 官网"
+            :aria-label="t('settings.ollama.openWebsite')"
             title="ollama.com"
             @click.stop
           ><ExternalLink :size="14" /></a>
@@ -986,7 +988,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
         <button
           type="button"
           class="ollama-card__expand"
-          :aria-label="expanded ? '收起 Ollama 设置' : '展开 Ollama 设置'"
+          :aria-label="t(expanded ? 'settings.ollama.collapseSettings' : 'settings.ollama.expandSettings')"
           :aria-expanded="expanded"
           aria-controls="ollamaProviderDetails"
           @click.stop="toggleExpanded"
@@ -1000,34 +1002,34 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
 
     <div v-show="expanded" id="ollamaProviderDetails" class="ollama-card__details">
       <div class="ollama-runtime" data-ollama-runtime :data-ollama-runtime-mode="targetMode">
-        <div class="ollama-runtime__head"><b>连接方式</b></div>
-        <div class="ollama-runtime__options" role="radiogroup" aria-label="Ollama 连接方式">
+        <div class="ollama-runtime__head"><b>{{ t('settings.ollama.connectionMode') }}</b></div>
+        <div class="ollama-runtime__options" role="radiogroup" :aria-label="t('settings.ollama.connectionMode')">
           <button v-for="mode in (['default', 'custom'] as const)" :key="mode" type="button"
             class="ollama-runtime__option" :class="{ 'is-active': targetMode === mode }"
             role="radio" :aria-checked="targetMode === mode" :disabled="targetSaving"
-            @click="selectTargetMode(mode)">{{ mode === 'default' ? '默认地址' : '自定义地址' }}</button>
+            @click="selectTargetMode(mode)">{{ t(mode === 'default' ? 'settings.ollama.defaultAddress' : 'settings.ollama.customAddress') }}</button>
         </div>
         <div class="ollama-runtime__custom" :class="{ 'ollama-runtime__custom--default': targetMode === 'default' }">
           <div class="provider-config-field">
-            <label for="ollamaCustomUrl">访问目标</label>
+            <label for="ollamaCustomUrl">{{ t('settings.ollama.accessTarget') }}</label>
             <span class="provider-clearable">
               <!-- 默认地址只读而非禁用，保持键盘聚焦、文本选择与复制。 -->
-              <input id="ollamaCustomUrl" v-model="targetInputAddress" class="minput"
+              <input id="ollamaCustomUrl" v-model="targetInputAddress" class="minput" dir="ltr"
                 spellcheck="false" placeholder="http://192.168.1.20:11434"
                 :readonly="targetMode === 'default'" :disabled="targetMode === 'custom' && targetSaving"
                 >
               <button v-if="targetMode === 'custom' && targetAddress" type="button"
-                class="provider-clear-button" aria-label="清除 Ollama 服务地址"
+                class="provider-clear-button" :aria-label="t('settings.ollama.clearAddress')"
                 :disabled="targetSaving" @click="targetAddress = ''">×</button>
             </span>
           </div>
           <button v-if="targetMode === 'custom'" class="btn btn-test"
-            :disabled="targetSaving || detecting || targetProbing" @click="testTarget">{{ detecting || targetProbing ? '测试中…' : '测试连接' }}</button>
+            :disabled="targetSaving || detecting || targetProbing" @click="testTarget">{{ t(detecting || targetProbing ? 'settings.llm.testing' : 'settings.llm.testConnection') }}</button>
           <p class="ollama-runtime__custom-note">{{ targetNote }}</p>
         </div>
       </div>
       <div v-if="status?.version || state === 'associated'" class="ollama-card__model-heading">
-        <span v-if="status?.version" class="ollama-card__meta">自托管 · {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} · {{ status.model_count }} {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}</span>
+        <span v-if="status?.version" class="ollama-card__meta">{{ t('settings.ollama.selfHosted') }} · {{ t('settings.ollama.brand', 'Ollama') }} <bdi dir="ltr">{{ status.version }}</bdi> · {{ status.model_count }} {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}</span>
         <button
           v-if="state === 'associated'"
           class="ollama-card__refresh ollama-card__provider-toggle"
@@ -1117,9 +1119,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect, saveT
                 :key="cap"
                 class="ollama-card__cap"
                 :class="`ollama-card__cap--${cap}`"
-                :title="MODEL_CAPABILITY_DISPLAY[cap].title"
+                :title="capabilityDisplay(cap).title"
                 >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                {{ capabilityDisplay(cap).label }}</span
               >
               </div>
             </div>
