@@ -561,6 +561,16 @@ export const useSettingsStore = defineStore('settings', () => {
           plainConfig.llm.providers,
           mergedAfterSave,
         )
+        // 凭据可用性来自提交后服务端读回，不能把 materialize 的临时 replace 投影当事实。
+        plainConfig.llm.providers = plainConfig.llm.providers.map(provider => {
+          const persisted = mergedAfterSave.find(candidate => candidate.id === provider.id || Boolean(provider.providerInstanceId && candidate.providerInstanceId === provider.providerInstanceId))
+          return persisted ? {
+            ...provider,
+            credentialRef: persisted.credentialRef,
+            credentialPresent: persisted.credentialPresent,
+            apiKeyMutation: persisted.apiKeyMutation,
+          } : provider
+        })
         const activeStillMatchesRequest =
           saveRevision === latestSaveRevision &&
           JSON.stringify(config.value) === requestedConfigSignature
@@ -672,10 +682,14 @@ export const useSettingsStore = defineStore('settings', () => {
     const value = JSON.parse(JSON.stringify(owner[section]))
     await providerSync.enqueue(async () => {
       if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+      let persistedValue = value
       if (section === 'memory') await updateConfig({ memory: value })
       if (section === 'sandbox') {
-        await updateConfig({ sandbox: value })
-        if (scope === backendScopeKey()) syncedSandbox.value = cloneSandbox(value)
+        await updateConfig({ sandbox: { network_enabled: value.network_enabled } })
+        if (scope !== backendScopeKey()) return
+        // 网络即时项沿已保存目录基线合并，不提交或缓存表单中的目录草稿。
+        syncedSandbox.value = { ...cloneSandbox(syncedSandbox.value), network_enabled: value.network_enabled }
+        persistedValue = cloneSandbox(syncedSandbox.value)
       }
       if (scope !== backendScopeKey()) return
       // 读取原持久副本，只合并当前即时字段，避免写入未提交 Provider 及凭据。
@@ -685,13 +699,13 @@ export const useSettingsStore = defineStore('settings', () => {
         const { LazyStore } = await import('@tauri-apps/plugin-store')
         const store = new LazyStore(CONFIG_STORE_FILE)
         persisted = (await store.get<AppConfig>(backendStorageKey(CONFIG_STORE_KEY))) ?? fallback
-        const next = { ...persisted, [section]: value }
+        const next = { ...persisted, [section]: persistedValue }
         await store.set(backendStorageKey(CONFIG_STORE_KEY), next)
         await store.save()
       } else {
         const raw = backendLocalStorage.getItem(CONFIG_STORE_KEY)
         if (raw) persisted = JSON.parse(raw) as AppConfig
-        backendLocalStorage.setItem(CONFIG_STORE_KEY, JSON.stringify({ ...persisted, [section]: value }))
+        backendLocalStorage.setItem(CONFIG_STORE_KEY, JSON.stringify({ ...persisted, [section]: persistedValue }))
       }
     })
   }

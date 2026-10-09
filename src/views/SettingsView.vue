@@ -332,12 +332,49 @@ function editableSettingsSignature(owner = settingsStore.config) {
         numCtx: provider.numCtx ?? 0,
         toolsEnabled: provider.toolsEnabled ?? null,
         maxTools: provider.maxTools ?? 0,
+        // 写入器补齐的 replace/delete 不等于新编辑；实际 Key 字符串仍参与差异。
+        // 显式删除非空已保存 Key 保留意图，空 Key 的例行 delete 与未声明同义。
+        apiKeyMutation: provider.apiKeyMutation === 'delete' && (provider.apiKey.trim() || provider.credentialPresent === true)
+          ? 'delete'
+          : provider.apiKey.trim() && !isMaskedApiKey(provider.apiKey) ? 'replace' : undefined,
       })),
     },
   } : owner
   return JSON.stringify(comparableOwner, (key, value) =>
-    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength', 'nativeReasoningSourceFingerprint', 'effectiveNativeReasoningSupport', 'effectiveNativeReasoningSourceFingerprint'].includes(key) ? undefined : value,
+    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength', 'credentialRef', 'credentialPresent', 'nativeReasoningSourceFingerprint', 'effectiveNativeReasoningSupport', 'effectiveNativeReasoningSourceFingerprint'].includes(key) ? undefined : value,
   ) ?? ''
+}
+
+/** 仅将仍等于本次冻结输入的字段规范化，保存期间的新编辑逐字段保留。 */
+function reconcileSavedModelFields(submitted: AppConfig['llm'], persisted: AppConfig['llm']) {
+  const current = settingsStore.config?.llm
+  if (!current) return
+  const sameField = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
+  const cloneField = (value: unknown) => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+  const submittedIds = submitted.providers.map(provider => provider.id)
+  const currentIds = current.providers.map(provider => provider.id)
+  const structuralUnchanged = sameField(currentIds, submittedIds)
+  for (const key of new Set([...Object.keys(submitted), ...Object.keys(persisted)])) {
+    if (key === 'providers') continue
+    const target = current as unknown as Record<string, unknown>
+    const frozen = submitted as unknown as Record<string, unknown>
+    const saved = persisted as unknown as Record<string, unknown>
+    if (sameField(target[key], frozen[key])) target[key] = cloneField(saved[key])
+  }
+  for (const frozen of submitted.providers) {
+    const target = current.providers.find(provider => provider.id === frozen.id)
+    const saved = persisted.providers.find(provider => provider.id === frozen.id || Boolean(frozen.providerInstanceId && provider.providerInstanceId === frozen.providerInstanceId))
+    if (!target || !saved) continue
+    for (const key of new Set([...Object.keys(frozen), ...Object.keys(saved)])) {
+      const liveFields = target as unknown as Record<string, unknown>
+      const frozenFields = frozen as unknown as Record<string, unknown>
+      const savedFields = saved as unknown as Record<string, unknown>
+      if (sameField(liveFields[key], frozenFields[key])) liveFields[key] = cloneField(savedFields[key])
+    }
+  }
+  if (structuralUnchanged) {
+    current.providers = persisted.providers.map(saved => current.providers.find(provider => provider.id === saved.id) ?? JSON.parse(JSON.stringify(saved)) as ProviderConfig)
+  }
 }
 
 const maxToolsDisplay = computed(() => {
@@ -580,6 +617,7 @@ async function persistSettings({
     const result = await settingsStore.saveConfig(owner, { modelOnly: true })
     if (!isCurrentOwner()) return
     originalProviders = savedProviders
+    reconcileSavedModelFields(owner.llm, (result.savedConfig ?? owner).llm)
     // 共享保存会规范化配置快照；只有没有后来编辑时才承认该规范化结果。
     recordSavedSettingsBaseline(editableSettingsSignature(result.savedConfig ?? owner), (result.savedConfig ?? owner).llm)
     for (let index = modelExclusionDraftUndos.length - 1; index >= 0; index--) {
@@ -699,20 +737,19 @@ function toggleEditingProvider(providerId: string, explicitControl = false) {
 const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
   { value: 'en', label: 'English' },
-  { value: 'ug-CN', label: '维吾尔语' },
+  { value: 'ug-CN', label: 'ئۇيغۇرچە' },
 ]
 const languageModel = computed<string>({
   get: () => locale.value,
   set: (v) => {
     if (locale.value === v) return
     handleLocaleChange(v)
-    if (config.value) config.value.general.language = v
   },
 })
 
 async function saveImmediateSetting(section: 'memory' | 'sandbox') {
   try { await settingsStore.saveImmediateSetting(section) }
-  catch (error) { toast.error(messageFromUnknownError(error)); await loadRuntimeInfo() }
+  catch (error) { toast.error(messageFromUnknownError(error)); await loadRuntimeInfo(section) }
 }
 
 // ─── A7 模型 tool_call 能力探测 ──────────────────────────
@@ -1080,10 +1117,16 @@ const runtimeModeShort = computed(() => {
 })
 
 let runtimeInfoGen = 0
-async function loadRuntimeInfo() {
+async function loadRuntimeInfo(preferenceSection?: 'memory' | 'sandbox') {
   const gen = ++runtimeInfoGen
   const scope = backendScopeKey()
-  const preferenceSnapshot = JSON.stringify({ memory: config.value?.memory, sandbox: config.value?.sandbox })
+  // 即时保存的失败回读只恢复本次字段，避免覆盖其他尚未保存的草稿。
+  const currentPreferences = () => preferenceSection === 'sandbox'
+    ? config.value?.sandbox?.network_enabled
+    : preferenceSection === 'memory'
+      ? config.value?.memory?.enabled
+      : { memory: config.value?.memory, sandbox: config.value?.sandbox }
+  const preferenceSnapshot = JSON.stringify(currentPreferences())
   runtimeInfoLoading.value = true
   try {
     const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
@@ -1773,6 +1816,7 @@ function apiKeyInputPlaceholder(provider: ProviderConfig): string {
 function onProviderApiKeyTyped(provider: ProviderConfig, event: Event) {
   delete revealedApiKeys.value[provider.id]
   provider.apiKey = (event.target as HTMLInputElement).value
+  provider.apiKeyMutation = provider.apiKey.trim() ? 'replace' : 'delete'
   clearProviderProbeState(provider)
   autoSave()
   scheduleAutoTest(provider)

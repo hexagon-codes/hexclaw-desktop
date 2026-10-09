@@ -36,6 +36,7 @@ async function proxyApiRequestText(
   method: string,
   path: string,
   body: string | null,
+  requestHeaders: Record<string, string> = {},
 ): Promise<string> {
   const scope = backendScopeKey()
   try {
@@ -44,6 +45,7 @@ async function proxyApiRequestText(
         method,
         headers: {
           'Content-Type': 'application/json',
+          ...requestHeaders,
         },
         body: body ?? undefined,
       })
@@ -157,7 +159,11 @@ export async function updateLLMConfig(
       config_digest: result?.configDigest,
     }
   }
-  const text = await proxyApiRequestText('PUT', '/api/v1/config/llm', JSON.stringify(config))
+  // Web 更新复用原生协调器的请求标识形态；同次请求不自动重发或更换标识。
+  const requestId = `llm-config:${crypto.randomUUID()}`
+  const text = await proxyApiRequestText('PUT', '/api/v1/config/llm', JSON.stringify(config), {
+    'Idempotency-Key': requestId,
+  })
   const result = safeJsonParse<LLMConfigMutationReceipt>(text, 'updateLLMConfig')
   logger.debug('LLM config updated:', result)
   return result
