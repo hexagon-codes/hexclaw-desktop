@@ -111,7 +111,7 @@ import {
   useChatActions,
   useCronCompileLabel,
 } from '@/composables'
-import type { EditedMessageSubmission } from '@/composables/useChatActions'
+import type { EditedMessageSubmission, RecoverFailedReply } from '@/composables/useChatActions'
 import { freezeChatRouteSnapshot, type ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
@@ -1095,6 +1095,7 @@ const agentRoleDisplay = computed(() => {
 // 场景包会话增强（架构 §8.4）：由后端/registry 决定当前实例是否有增强视图，
 // chat shell 只解析描述符 + 渲染 registry 提供的组件，**不认识任何场景领域概念**（回归锁）。
 const chatEnhancement = scenarioRegistry.chatEnhancement
+const scenarioReplyRecovery = ref<{ recoverFailedReply?: RecoverFailedReply } | null>(null)
 const scenarioRecordsActive = ref(false)
 // 场景增强上交的 composer 预设 chips（BUG-20260709：数据流替代 Teleport 锚点）。
 // shell 只投影结构化 label/actionId，不解释 action 领域含义。
@@ -1908,13 +1909,16 @@ const selectedModelCapabilities = computed(() => {
 const selectedReasoningModel = computed(() => {
   if (usesBoundAgentModel.value) {
     const agent = agentsStore.findAgent(chatStore.agentRole)
-    return settingsStore.availableModels.find(
-      (model) =>
-        model.modelId === agent?.model &&
-        (!agent?.provider ||
-          model.providerId === agent.provider ||
-          model.providerKey === agent.provider),
-    )
+    if (!agent) return undefined
+    if (agent.model) {
+      return settingsStore.availableModels.find(
+        (model) =>
+          model.modelId === agent.model &&
+          (!agent.provider ||
+            model.providerId === agent.provider ||
+            model.providerKey === agent.provider),
+      )
+    }
   }
   return settingsStore.availableModels.find(
     (model) =>
@@ -2777,7 +2781,21 @@ const {
   handleEdit,
   confirmEdit,
   cancelEdit,
-} = useChatActions(chatStore, toast, handleSend, submitEditedMessage, captureEditedMessageRoute)
+} = useChatActions(
+  chatStore,
+  toast,
+  handleSend,
+  submitEditedMessage,
+  captureEditedMessageRoute,
+  async (request) => {
+    if (chatStore.currentSessionId !== request.sessionId) return true
+    if (scenarioCtx.value && !scenarioReplyRecovery.value) {
+      toast.error(t('chat.retryFailed'))
+      return true
+    }
+    return await scenarioReplyRecovery.value?.recoverFailedReply?.(request) ?? false
+  },
+)
 
 const scenarioMessageFeedback = computed(() =>
   Object.fromEntries(
@@ -3454,6 +3472,7 @@ function startSidebarResize(event: MouseEvent) {
       <component
         :is="chatEnhancement"
         v-if="scenarioCtx && chatEnhancement"
+        ref="scenarioReplyRecovery"
         v-bind="scenarioCtx"
         v-model:records-active="scenarioRecordsActive"
         :composer-action="scenarioComposerAction"

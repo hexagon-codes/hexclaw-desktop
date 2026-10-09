@@ -38,6 +38,16 @@ export interface EditedMessageSubmission {
 export type SubmitEditedMessage = (submission: EditedMessageSubmission) => Promise<boolean>
 export type CaptureEditRouteSnapshot = (sourceSessionId: string) => ChatRouteSnapshot
 
+/** 失败回复只读恢复的稳定身份；场景包核对自身持久回执，不重发原请求。 */
+export interface FailedReplyRecoveryRequest {
+  sessionId: string
+  requestId: string
+  sourceMessageId: string
+  assistantMessageId: string
+  sourceMetadata?: ChatMessage['metadata']
+}
+export type RecoverFailedReply = (request: FailedReplyRecoveryRequest) => Promise<boolean>
+
 /**
  * 从原用户消息提取「重发需保留」的载荷：图片/附件（metadata.attachments）+ 挂载技能（metadata.skills）。
  * BUG-20260625 根因：编辑/重试只重发 text，丢掉这些 → 图片消失。无可带载荷时返回 undefined，
@@ -63,6 +73,7 @@ export function useChatActions(
   handleSend: (text: string, files?: File[], options?: ResendCarry | DirectedResend) => Promise<boolean>,
   submitEditedMessage?: SubmitEditedMessage,
   captureEditRouteSnapshot?: CaptureEditRouteSnapshot,
+  recoverFailedReply?: RecoverFailedReply,
 ) {
   // ─── 原位编辑（DeepSeek 风格） ──────────────────────
   const editingMsgId = ref<string | null>(null)
@@ -151,15 +162,6 @@ export function useChatActions(
     const targetMsg = chatStore.messages[msgIndex]
     if (!targetMsg || targetMsg.role !== 'assistant') return
 
-    // 先检查模型是否可用，避免在删除消息前才发现没法重发
-    // model=undefined means "let backend decide" (Agent mode) — valid
-    const model = chatStore.chatParams.model
-    if (model !== undefined && model.trim() === '') {
-      // 不再静默 no-op（"点了没反应"），明确提示选模型
-      toast.error(i18n.global.t('chat.selectModelFirst'))
-      return
-    }
-
     // 找到触发重试的 AI 消息之前的用户消息
     const msgs = chatStore.messages
     let userMsgIdx = -1
@@ -179,6 +181,37 @@ export function useChatActions(
     }
 
     const userMsg = msgs[userMsgIdx]!
+    const sessionId = chatStore.currentSessionId
+    const requestId = typeof targetMsg.metadata?.request_id === 'string'
+      ? targetMsg.metadata.request_id.trim()
+      : ''
+    // 持久失败回执先交原场景对账；领域成功与外层模型失败分开，不能删历史再生成。
+    if (targetMsg.metadata?.is_error === true && sessionId && requestId && recoverFailedReply) {
+      const sourceMessageId = backendDeletableMessageId(userMsg)
+      if (sourceMessageId === requestId) {
+        try {
+          if (await recoverFailedReply({
+            sessionId,
+            requestId,
+            sourceMessageId,
+            assistantMessageId: backendDeletableMessageId(targetMsg),
+            sourceMetadata: { ...userMsg.metadata },
+          })) return
+        } catch (cause) {
+          logger.warn('Failed reply reconciliation failed', cause)
+          toast.error(i18n.global.t('chat.retryFailed'))
+          return
+        }
+        if (chatStore.currentSessionId !== sessionId || !chatStore.messages.includes(targetMsg)) return
+      }
+    }
+
+    // 只读恢复不依赖模型；普通明确重新生成仍在删除前核对原模型设置。
+    const model = chatStore.chatParams.model
+    if (model !== undefined && model.trim() === '') {
+      toast.error(i18n.global.t('chat.selectModelFirst'))
+      return
+    }
     const userText = userMsg.content
     // BUG-20260625：重试必须带回原用户消息的图片附件 + 挂载技能，否则重发丢图。
     const carry = resendCarryFrom(userMsg)

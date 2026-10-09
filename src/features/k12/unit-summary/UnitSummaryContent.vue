@@ -5,6 +5,11 @@ import type { UnitSummaryResponse } from './types'
 import { UNIT_SUBJECT_LABELS } from './types'
 const props = defineProps<{ view: UnitSummaryResponse; busy?: boolean }>()
 const content = computed(() => props.view.material?.content || props.view.job?.content)
+// 当前头来自后端；历史标识不改变正在阅读的冻结版本或下载引用。
+const historical = computed(() => Boolean(
+  props.view.material && props.view.document?.current_revision_id &&
+  props.view.material.revision_id !== props.view.document.current_revision_id,
+))
 const emit = defineEmits<{ action: [action: 'artifacts' | 'download' | 'print'] }>()
 </script>
 <template>
@@ -32,7 +37,7 @@ const emit = defineEmits<{ action: [action: 'artifacts' | 'download' | 'print'] 
           >生成日期 {{ view.material.generated_date }} · v{{
             String(view.material.version).padStart(2, '0')
           }}</span
-        ><span v-if="view.delivery?.complete" role="status">已保存到产物 · PDF 已准备</span>
+        ><span v-if="view.delivery?.complete" role="status">已保存到产物 · <template v-if="historical">历史版本 · </template>PDF 已准备</span>
       </div>
       <p v-else class="unit-summary__delivery" role="status">
         Content prepared · PDF delivery is incomplete.

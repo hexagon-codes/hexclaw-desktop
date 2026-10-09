@@ -204,7 +204,7 @@ export function createChatSendController(params: {
       }
       const userMeta: Record<string, unknown> = {}
       if (promptInvocation) userMeta.prompt_invocation = promptInvocation
-      for (const key of ['k12_active_material', 'k12_task_intent']) {
+      for (const key of ['k12_active_material', 'k12_task_intent', 'k12_provided_materials']) {
         if (requestMetadata[key]) userMeta[key] = requestMetadata[key]
       }
       if (attachments?.length) userMeta.attachments = attachments

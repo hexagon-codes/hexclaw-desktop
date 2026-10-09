@@ -343,6 +343,8 @@ export function useChatSend(deps: ChatSendDeps) {
     // 从新的多文件参数：图片/视频作为 attachment，文档解析为文本（进隐藏上下文）+ 文件卡片
     const docTexts: string[] = []
     const documentRefs: ChatDocumentRef[] = []
+    // 真实附件正文与家长最终指令分别冻结；预览句柄只属于当前 WebView，不能充当服务端来源 ID。
+    const providedMaterials: Array<{ name: string; mime: string; pages?: number; text: string }> = []
     if (files?.length) {
       for (const file of files) {
         const isImage = file.type.startsWith('image/')
@@ -363,6 +365,12 @@ export function useChatSend(deps: ChatSendDeps) {
             if (parsed.text.trim()) {
               const pageInfo = parsed.pageCount ? ` (${parsed.pageCount}页)` : ''
               docTexts.push(`[文件: ${parsed.fileName}${pageInfo}]\n\n${parsed.text}`)
+              providedMaterials.push({
+                name: file.name,
+                mime: file.type,
+                ...(parsed.pageCount ? { pages: parsed.pageCount } : {}),
+                text: parsed.text,
+              })
               const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               registerDocPreview(docId, file)
               documentRefs.push({ name: file.name, mime: file.type, size: file.size, id: docId })
@@ -387,6 +395,12 @@ export function useChatSend(deps: ChatSendDeps) {
       const doc = legacyParsedDocument
       const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
       docTexts.unshift(`[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}`)
+      providedMaterials.unshift({
+        name: legacyAttachment?.file.name || doc.fileName,
+        mime: legacyAttachment?.file.type || '',
+        ...(doc.pageCount ? { pages: doc.pageCount } : {}),
+        text: doc.text,
+      })
       if (legacyAttachment) {
         const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         registerDocPreview(docId, legacyAttachment.file)
@@ -444,6 +458,10 @@ export function useChatSend(deps: ChatSendDeps) {
 
     const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
     const skillNames = options?.skillNames ?? []
+    const requestMetadata = { ...options?.requestMetadata }
+    if (providedMaterials.length) {
+      requestMetadata.k12_provided_materials = JSON.stringify(providedMaterials)
+    }
     // backendText 始终以 thunk 传入（Auto-RAG 始终尝试）；sendMessage 在乐观 push 后再 await 解析，
     // 解析为空则后端用可见文本（thunk 内 contextParts 为空时返回 undefined）。
     const sendOptions = {
@@ -452,7 +470,7 @@ export function useChatSend(deps: ChatSendDeps) {
         || options?.requestMetadata?.k12_active_material
         ? finalText : resolveBackendText,
       skillNames,
-      requestMetadata: options?.requestMetadata,
+      requestMetadata,
       promptInvocation: options?.promptInvocation,
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,

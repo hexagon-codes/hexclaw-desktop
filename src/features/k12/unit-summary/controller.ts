@@ -14,6 +14,7 @@ import { savePdfArtifact } from '../export'
 import type { PersistentPrintRequest } from '../persistent-print'
 import { materialArtifact } from './types'
 import type { Artifact, ChatMessageMetadata } from '@/types/chat'
+import type { FailedReplyRecoveryRequest } from '@/composables/useChatActions'
 
 interface MessageReference {
   messageId: string
@@ -25,6 +26,7 @@ const TERMINAL = new Set([
   'superseded',
   'failed',
   'needs_input',
+  'ignored',
 ])
 function parseJSON(value: unknown): unknown {
   if (typeof value !== 'string') return value
@@ -162,6 +164,11 @@ export function createUnitSummaryController(options: {
         if (!active(token, identity)) return
         current.value = views
         bound.value = projected
+        // 刷新只同步可变当前头，已选正文和文件仍保持原不可变版本。
+        const latestDocument = views.find(
+          (view) => view.document?.document_id === selected.value?.document?.document_id,
+        )?.document
+        if (selected.value && latestDocument) selected.value = { ...selected.value, document: latestDocument }
         jobs.value = [...observedJobs.values()]
         loadError.value = ''
         schedule()
@@ -223,6 +230,62 @@ export function createUnitSummaryController(options: {
       artifact.reference.revisionId,
     )
     if (active(token, identity)) selected.value = response
+  }
+  async function recoverFailedReply(request: FailedReplyRecoveryRequest): Promise<boolean> {
+    if (request.sessionId !== context.session || request.sourceMessageId !== request.requestId) return false
+    const persistedSource = unitSummaryMessageReferences([
+      { id: request.sourceMessageId, metadata: request.sourceMetadata },
+    ])
+    // 来源事实来自整条持久会话，不以当前视觉窗口是否包含原消息决定恢复。
+    const item = [...persistedSource, ...messageRefs].find(
+      (row) => row.messageId === request.sourceMessageId && row.ref.attempt_id?.trim(),
+    )
+    const token = generation,
+      identity = currentIdentity(),
+      agent = context.agent
+    let jobId = item?.ref.attempt_id
+    // 已有领域回执接管本次失败恢复；未完成或查询失败也不能退回新请求生成。
+    try {
+      if (!jobId) {
+        let matching = [...jobs.value, ...current.value.flatMap((view) => view.job ? [view.job] : [])].filter(
+          (job) => job.source_message_id === request.sourceMessageId && job.session_id === request.sessionId,
+        )
+        if (!matching.length) {
+          const response = await k12ListUnitSummaryDocuments(agent, { session_id: request.sessionId })
+          if (!active(token, identity)) return true
+          matching = [...(response.jobs || []), ...(response.documents || []).flatMap((view) => view.job ? [view.job] : [])].filter(
+            (job) => job.source_message_id === request.sourceMessageId && job.session_id === request.sessionId,
+          )
+        }
+        matching = [...new Map(matching.map((job) => [job.id, job])).values()]
+        if (!matching.length) return false
+        if (matching.length !== 1) throw new Error('Unit summary recovery task is ambiguous')
+        jobId = matching[0]!.id
+      }
+      const response = await k12GetUnitSummaryJob(agent, jobId)
+      if (!active(token, identity)) return true
+      if (
+        response.job?.id !== jobId ||
+        response.job.source_message_id !== request.sourceMessageId ||
+        response.job.session_id !== request.sessionId
+      ) throw new Error('Unit summary recovery identity mismatch')
+      jobs.value = [...jobs.value.filter((job) => job.id !== jobId), response.job]
+      schedule()
+      if (!response.delivery?.complete || !response.material) {
+        // 已知失败沿原同任务恢复；未知调用仍由原 resume 分支只读刷新，不重发模型。
+        if (response.job.state === 'failed') await resume(response.job)
+        return true
+      }
+      if (
+        (item?.ref.revision_id && item.ref.revision_id !== response.material.revision_id) ||
+        (item?.ref.document_id && item.ref.document_id !== response.document?.document_id) ||
+        (item?.ref.artifact_id && item.ref.artifact_id !== response.material.artifact.artifact_id)
+      ) throw new Error('Unit summary recovery material mismatch')
+      selected.value = response
+    } catch (cause) {
+      if (active(token, identity)) report(cause)
+    }
+    return true
   }
   async function run(view: UnitSummaryResponse, action: 'download' | 'print') {
     const artifact = materialArtifact(view)
@@ -305,6 +368,7 @@ export function createUnitSummaryController(options: {
     setContext,
     setMessages,
     refresh,
+    recoverFailedReply,
     run,
     runArtifact,
     resume,

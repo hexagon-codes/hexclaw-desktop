@@ -132,9 +132,14 @@ export interface ScenarioComposerImagePayload {
   route?: ScenarioImageModelRoute
 }
 
-/** 通用消息之后的场景投影锚点；消息 ID 由 shell 生成，只含 nanoid 安全字符。 */
+/** 通用消息之后的场景投影锚点；完整消息 ID 保留派生助手消息后缀。 */
 export function scenarioMessageAnchorId(messageId: string): string {
   return `hc-chat-scenario-inline-${messageId}`
+}
+
+/** Teleport 使用 CSS 选择器定位；转义消息后缀等字符，不改写原 DOM ID。 */
+export function scenarioMessageAnchorSelector(messageId: string): string {
+  return `#${CSS.escape(scenarioMessageAnchorId(messageId))}`
 }
 
 /**

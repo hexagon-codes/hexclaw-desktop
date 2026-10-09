@@ -88,6 +88,7 @@ export interface UnitSummaryMaterialDTO {
 export interface UnitSummaryJobDTO {
   attempt_id?: string
   id: string
+  // ignored仅保留非单元语义解析审计，不显示资料/澄清状态，也不继续轮询。
   state: string
   stage?: string
   revision: number

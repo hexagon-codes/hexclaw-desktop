@@ -289,6 +289,8 @@ const inputText = ref('')
 const promptDraft = ref<PromptComposerDraft>()
 const promptExtraRef = ref<HTMLTextAreaElement>()
 const unitPromptActive = computed(() => props.promptScenario === 'k12' && promptDraft.value?.unit_summary === true)
+// 单元候选的图片随最终正文一次发送；加入附件不启动作业/作品任务，实际意图仍由最终正文解析。
+const shouldInterceptScenarioImage = computed(() => !!props.scenarioImageIntercept && !unitPromptActive.value)
 const unitPromptExtra = computed(() => promptDraft.value ? promptExtra(inputText.value, promptDraft.value) : '')
 const unitPromptIntent = computed(() => promptIntent(inputText.value, promptDraft.value?.description ?? ''))
 const unitPromptTitle = computed(() => (promptDraft.value?.title ?? '').replace(/^梳理/, '').replace(/单元知识$/, '') + ' · 单元资料')
@@ -1175,8 +1177,8 @@ async function handleMentionSelect(item: MentionSelectItem) {
     try {
       await nextTick()
       await draftScopeUpdate
-      if (props.scenarioImageIntercept) {
-        // 图片先附加、后选择场景 Agent 时，转交同一图片，不再进入普通聊天附件管道。
+      if (shouldInterceptScenarioImage.value) {
+        // 普通作业可自动转交同一图片；单元候选保留附件，等待最终正文与 invocation 一次发送。
         const images = attachedFiles.value.filter((attachment) => attachment.file.type.startsWith('image/'))
         const sourceDraftRevision = draftRevision
         const sourceBackend = backendScopeKey()
@@ -1424,10 +1426,10 @@ function createScenarioImagePayload(
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
-    // 场景图片改道（BUG-20260709）：场景会话下图片不进附件（否则走 chat vision 被普通聊天吞掉）。
+    // 普通场景图片沿原自动处理路径转交；单元候选留在附件区，不提前进入作业或作品任务。
     // 新选图片只保留原始 File（含可能的 native grant）和会话内受控预览；不读 dataURL/Base64。
     // K12 资产层直接消费该 File/grant，得到 receipt 后才持久化同一消息投影。非图片文件不受影响。
-    if (isImage && props.scenarioImageIntercept) {
+    if (isImage && shouldInterceptScenarioImage.value) {
       emit('scenario-image', createScenarioImagePayload(file))
       continue
     }

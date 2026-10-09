@@ -32,7 +32,7 @@ import type {
   ScenarioComposerImagePayload,
   ScenarioTextModelRoute,
 } from '@/shell/scenario/registry'
-import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
+import { scenarioMessageAnchorSelector } from '@/shell/scenario/registry'
 import { listImageTaskBindings, refreshRecoverableImageTaskBindings } from '../image-task-binding'
 import { useK12Appearance } from '../appearance/useK12Appearance'
 import { PanelLeft, PanelRight, MoreHorizontal } from 'lucide-vue-next'
@@ -43,6 +43,7 @@ import type { ScenarioChatActions, ScenarioArtifactAction } from '@/shell/scenar
 import UnitSummaryContent from '../unit-summary/UnitSummaryContent.vue'
 import { createUnitSummaryController } from '../unit-summary/controller'
 import { materialArtifact } from '../unit-summary/types'
+import type { FailedReplyRecoveryRequest } from '@/composables/useChatActions'
 
 const props = defineProps<{
   agentId: string
@@ -180,6 +181,16 @@ function activateUnitMaterial(view: UnitSummaryResponse) {
     }),
   })
 }
+async function recoverFailedReply(request: FailedReplyRecoveryRequest) {
+  const previous = selectedUnitMaterial.value
+  const handled = await unitMaterials.recoverFailedReply(request)
+  if (handled && selectedUnitMaterial.value && selectedUnitMaterial.value !== previous) {
+    activateUnitMaterial(selectedUnitMaterial.value)
+    await props.chatActions?.revealContent(unitIdentity(selectedUnitMaterial.value))
+  }
+  return handled
+}
+defineExpose({ recoverFailedReply })
 function unitMaterialBusy(view: UnitSummaryResponse) {
   return !!unitBusy.value[materialArtifact(view)?.id || '']
 }
@@ -704,7 +715,7 @@ watch(
       v-for="task in visibleTaskShells"
       :key="`${task.sourceMessageId}:${task.restoreDispatchId || 'new'}`"
       defer
-      :to="`#${scenarioMessageAnchorId(task.sourceMessageId)}`"
+      :to="scenarioMessageAnchorSelector(task.sourceMessageId)"
     >
       <div
         v-show="tab === 'chat'"
@@ -762,7 +773,7 @@ watch(
       v-for="item in unitMessageMaterials"
       :key="`${item.messageId}:${item.view.material?.revision_id}`"
       defer
-      :to="`#${scenarioMessageAnchorId(item.messageId)}`"
+      :to="scenarioMessageAnchorSelector(item.messageId)"
     >
       <div
         v-show="tab === 'chat'"
@@ -797,11 +808,11 @@ watch(
         (item) =>
           item.source_message_id &&
           messageIds?.includes(item.source_message_id) &&
-          !['succeeded', 'reused', 'superseded'].includes(item.state),
+          !['succeeded', 'reused', 'superseded', 'ignored'].includes(item.state),
       )"
       :key="job.id"
       defer
-      :to="`#${scenarioMessageAnchorId(job.source_message_id!)}`"
+      :to="scenarioMessageAnchorSelector(job.source_message_id!)"
       ><div v-show="tab === 'chat'" class="k12enh-unit-status" role="status">
         <UnitSummaryContent v-if="job.content" :view="{ job }" />
         <p>
@@ -1069,6 +1080,8 @@ watch(
   background: var(--hc-bg-hover);
 }
 .k12enh-unit {
+  width: 100%;
+  box-sizing: border-box;
   max-width: 780px;
   margin: 16px auto;
   min-width: 0;

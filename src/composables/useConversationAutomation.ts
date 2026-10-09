@@ -77,9 +77,26 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
     return merged
   }
 
+  function hasUnitMaterialTaskReceipt(message: ChatMessage): boolean {
+    let references: unknown = message.metadata?.artifacts
+    if (typeof references === 'string') {
+      try { references = JSON.parse(references) } catch { return false }
+    }
+    return Array.isArray(references) && references.some((value: unknown) => {
+      if (!value || typeof value !== 'object') return false
+      const reference = value as Record<string, unknown>
+      return reference.kind === 'unit_summary' && typeof reference.attempt_id === 'string' && reference.attempt_id.trim().length > 0
+    })
+  }
+
+  function isKnowledgeWriteSuggestion(action: ConversationAutomationAction): boolean {
+    return action.kind === 'add_text_to_knowledge' || action.kind === 'add_attachment_to_knowledge'
+  }
+
   function getVisibleConversationActions(message: ChatMessage): ConversationAutomationAction[] {
+    const unitTaskReceipt = hasUnitMaterialTaskReceipt(message)
     return getConversationAutomationActions(message).filter(
-      (action) => action.status !== 'dismissed',
+      (action) => action.status !== 'dismissed' && !(unitTaskReceipt && action.status === 'pending' && isKnowledgeWriteSuggestion(action)),
     )
   }
 
@@ -102,6 +119,12 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
       sourceMessageId: sourceMessage.id,
       attachment: params.attachment,
     })
+
+    // 已执行的资料任务由真实回执识别；默认正文的否定说明不能再生成派生资料写库建议。
+    // Prompt 元数据只是候选，普通会话的明确写入意图仍由既有路径处理。
+    if (hasUnitMaterialTaskReceipt(params.assistantMessage)) {
+      actions = actions.filter((action) => !isKnowledgeWriteSuggestion(action))
+    }
 
     // Dedup: if the backend Agent already saved memory via metadata.memory_saved,
     // drop the frontend-generated save_memory action to avoid double-saving.
