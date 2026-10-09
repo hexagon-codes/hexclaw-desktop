@@ -34,3 +34,15 @@ export const MODEL_CAPABILITY_DISPLAY: Record<
   tools: { icon: '🔧', label: '工具', title: '工具调用' },
   thinking: { icon: '🧠', label: '推理', title: '推理能力' },
 }
+
+/** 设置页按当前语言投影固定能力名称，技术能力标识与图标保持不变。 */
+export function localizedModelCapabilityDisplay(
+  capability: DisplayModelCapability,
+  translate: (key: string) => string,
+): { icon: string; label: string; title: string } {
+  return {
+    icon: MODEL_CAPABILITY_DISPLAY[capability].icon,
+    label: translate(`settings.capabilities.${capability}.label`),
+    title: translate(`settings.capabilities.${capability}.title`),
+  }
+}
