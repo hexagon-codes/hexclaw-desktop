@@ -9,6 +9,7 @@ import { useToast } from '@/composables/useToast'
 import { getVersion } from '@/api/system'
 import { getOllamaStatus } from '@/api/ollama'
 import WechatFollowContent from '@/components/settings/WechatFollowContent.vue'
+import { dismissSplash } from '@/utils/splash'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -137,6 +138,9 @@ async function handleInstallUpdate() {
 }
 
 onMounted(() => {
+  // 独立关于页不挂载主布局，内容就绪后直接结束共用启动遮罩。
+  dismissSplash()
+
   import('@tauri-apps/api/app').then(({ getVersion }) =>
     getVersion().then((v) => (appVersion.value = 'v' + v)),
   ).catch(() => {})
