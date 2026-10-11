@@ -26,6 +26,7 @@ import { scenarioRegistry } from '@/shell/scenario/registry'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import { getSkills } from '@/api/skills'
+import type { Skill } from '@/types/skill'
 import { getAssistantSoul, updateAssistantSoul } from '@/api/assistant'
 import AgentSkillPicker from '@/components/agents/AgentSkillPicker.vue'
 import SoulStructuredEditor from '@/components/agents/SoulStructuredEditor.vue'
@@ -392,10 +393,7 @@ async function ensureSkillsLoaded() {
   if (skillsLoaded.value) return
   try {
     const res = await getSkills()
-    availableSkills.value = (res.skills ?? []).map((s) => ({
-      name: s.name,
-      description: s.description,
-    }))
+    availableSkills.value = res.skills ?? []
     skillsLoaded.value = true
   } catch {
     availableSkills.value = [] // skill 列表拉不到只影响该选择器，不阻断其它高级项
@@ -492,6 +490,7 @@ const addSoulEl = ref<HTMLTextAreaElement | null>(null)
 const editSoulEl = ref<HTMLTextAreaElement | null>(null)
 
 function openSoulFocus(target: 'add' | 'edit') {
+  void ensureSkillsLoaded()
   soulEditorTarget.value = target
   const el = target === 'add' ? addSoulEl.value : editSoulEl.value
   soulEditorRect.value = el ? el.getBoundingClientRect() : null
@@ -567,7 +566,7 @@ function advInputRaw(v: string | number): string {
   return String(v ?? '').trim()
 }
 const editSkills = ref<string[]>([])
-const availableSkills = ref<{ name: string; description?: string }[]>([])
+const availableSkills = ref<Skill[]>([])
 const skillsLoaded = ref(false)
 
 function toggleEditAdvanced() {
@@ -2287,6 +2286,7 @@ async function handleUnregisterAgent() {
         :agent-name="soulEditorAgentName"
         :source-rect="soulEditorRect"
         :skills="soulEditorSkills"
+        :available-skills="availableSkills"
         @apply="onSoulApply"
         @close="soulEditorOpen = false"
       />

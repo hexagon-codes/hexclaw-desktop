@@ -1,8 +1,26 @@
-/** 后端返回的 Skill（Markdown 技能） */
-export interface Skill {
-  id?: string
+/** 作者声明的可见名称；name 始终用于请求、挂载和持久身份。 */
+export interface SkillDisplayMetadata {
   name: string
   display_name?: string
+  display_names?: Record<string, string>
+}
+
+export interface SkillTeachingMethod extends SkillDisplayMetadata {
+  structure: Record<string, string>
+}
+
+/** 本轮实际成功加载并注入的 Skill 快照，独立于当前技能目录。 */
+export interface SkillContextReceipt extends SkillDisplayMetadata {
+  version: string
+  status: 'loaded'
+  content_digest: string
+  methods?: SkillTeachingMethod[]
+}
+
+/** 后端返回的 Skill（Markdown 技能） */
+export interface Skill extends SkillDisplayMetadata {
+  id?: string
+  teaching_methods?: SkillTeachingMethod[]
   description: string
   author: string
   version: string
@@ -22,9 +40,8 @@ export interface Skill {
 }
 
 /** ClawHub 技能市场的 Skill（与后端 hub.SkillMeta 对齐） */
-export interface ClawHubSkill {
-  name: string
-  display_name?: string
+export interface ClawHubSkill extends SkillDisplayMetadata {
+  teaching_methods?: SkillTeachingMethod[]
   description: string
   author: string
   version: string

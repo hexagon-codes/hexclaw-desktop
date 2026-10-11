@@ -7,15 +7,16 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SearchInput from '@/components/common/SearchInput.vue'
+import { skillDisplayName } from '@/utils/skill-display'
+import type { SkillDisplayMetadata } from '@/types/skill'
 
 /** 选择器只需要的最小 skill 结构（与 AgentsView 懒加载的列表形状一致，不绑定完整 Skill 类型） */
-interface PickerSkill {
-  name: string
+interface PickerSkill extends SkillDisplayMetadata {
   description?: string
   icon?: string
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const props = defineProps<{
   available: PickerSkill[]
@@ -37,7 +38,7 @@ const filteredSkills = computed(() => {
   const q = filter.value.trim().toLowerCase()
   if (!q) return props.available
   return props.available.filter(
-    (s) => s.name.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q),
+    (s) => skillDisplayName(s, locale.value).toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q),
   )
 })
 
@@ -85,7 +86,7 @@ function chipIcon(s: PickerSkill): string {
         }"
         @click="toggle(s.name)"
       >
-        <span v-if="chipIcon(s)">{{ chipIcon(s) }}</span>{{ s.name }}<span class="font-bold">✕</span>
+        <span v-if="chipIcon(s)">{{ chipIcon(s) }}</span>{{ skillDisplayName(s, locale) }}<span class="font-bold">✕</span>
       </button>
     </div>
 
@@ -121,7 +122,7 @@ function chipIcon(s: PickerSkill): string {
       >
         <span v-if="selectedSet.has(s.name)" class="font-bold">✓</span>
         <span v-else-if="chipIcon(s)">{{ chipIcon(s) }}</span>
-        {{ s.name }}
+        {{ skillDisplayName(s, locale) }}
       </button>
     </div>
   </div>

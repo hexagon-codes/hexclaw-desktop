@@ -368,6 +368,7 @@ export default {
     },
     operationProcess: {
       title: 'Processing steps',
+      teachingBasis: 'Teaching basis (Skill guidance)',
       completed: 'Completed',
       unknown: 'Outcome unknown',
     },
@@ -378,6 +379,7 @@ export default {
     toolRunning: 'Running',
     toolFailed: 'Failed',
     toolName: {
+      solve: 'Solve',
       code_exec: 'Code Sandbox',
       code: 'Run Code',
       shell: 'Terminal',

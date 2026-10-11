@@ -40,8 +40,9 @@ import SkillPreviewModal from '@/components/skills/SkillPreviewModal.vue'
 import { useAppStore } from '@/stores/app'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
+import { skillDisplayName } from '@/utils/skill-display'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 
 const props = withDefaults(defineProps<{
@@ -171,6 +172,10 @@ function getSkillScope(skill: Skill): 'runtime' | 'local' {
 
 const pendingUninstall = ref<string | null>(null)
 
+function installedSkillName(name: string): string {
+  return skillDisplayName(skills.value.find(skill => skill.name === name) ?? { name }, locale.value)
+}
+
 async function handleUninstall(name: string) {
   pendingUninstall.value = name
 }
@@ -178,18 +183,19 @@ async function handleUninstall(name: string) {
 async function confirmUninstall() {
   const name = pendingUninstall.value
   if (!name) return
+  const label = installedSkillName(name)
   pendingUninstall.value = null
   await nextTick()
   try {
     await uninstallSkill(name)
     await restartEngineAfterSkillChange(
-      `技能「${name}」已卸载，正在重启引擎...`,
-      `技能「${name}」已卸载并重新载入`,
+      `技能「${label}」已卸载，正在重启引擎...`,
+      `技能「${label}」已卸载并重新载入`,
     )
   } catch (e) {
     pendingUninstall.value = name
     console.error('卸载 Skill 失败:', e)
-    statusNotice.value = { tone: 'warn', message: `卸载技能「${name}」失败：${e instanceof Error ? e.message : '请重试'}` }
+    statusNotice.value = { tone: 'warn', message: `卸载技能「${label}」失败：${e instanceof Error ? e.message : '请重试'}` }
   }
 }
 
@@ -279,7 +285,7 @@ async function toggleSkillEnabled(name: string) {
       if (result.requires_restart) {
         await restartEngineAfterSkillChange(
           result.message || t('skills.restartRequired'),
-          `技能「${name}」已更新并重新载入`,
+          `技能「${skillDisplayName(skill, locale.value)}」已更新并重新载入`,
         )
       } else {
         statusNotice.value = result.message
@@ -329,7 +335,7 @@ const filteredSkills = computed(() => {
   if (!q) return skills.value
   return skills.value.filter(
     (s) =>
-      s.name.toLowerCase().includes(q) ||
+      skillDisplayName(s, locale.value).toLowerCase().includes(q) || s.name.toLowerCase().includes(q) ||
       s.description.toLowerCase().includes(q) ||
       s.tags?.some((tag) => tag.toLowerCase().includes(q)),
   )
@@ -378,7 +384,7 @@ const filteredHubSkills = computed(() => {
     if (cats && !cats.includes((s.category || '').toLowerCase())) return false
     if (!q) return true
     return (
-      (s.display_name || s.name).toLowerCase().includes(q) ||
+      skillDisplayName(s, locale.value).toLowerCase().includes(q) ||
       s.name.toLowerCase().includes(q) ||
       (s.description || '').toLowerCase().includes(q) ||
       (s.author || '').toLowerCase().includes(q) ||
@@ -428,12 +434,12 @@ async function handleHubInstall(skill: ClawHubSkill) {
   try {
     await installFromHub(skill.name)
     await restartEngineAfterSkillChange(
-      `技能「${skill.name}」已安装，正在重启引擎...`,
-      `技能「${skill.name}」已安装并重新载入`,
+      `技能「${skillDisplayName(skill, locale.value)}」已安装，正在重启引擎...`,
+      `技能「${skillDisplayName(skill, locale.value)}」已安装并重新载入`,
     )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    hubInstallError.value = `${skill.name}: ${msg}`
+    hubInstallError.value = `${skillDisplayName(skill, locale.value)}: ${msg}`
   } finally {
     const s = new Set(hubInstallingSet.value)
     s.delete(skill.name)
@@ -669,7 +675,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
                     :style="{ color: 'var(--hc-text-primary)' }"
                     @click="openInstalledPreview(skill)"
                   >
-                    {{ skill.name }}
+                    {{ skillDisplayName(skill, locale) }}
                   </button>
                 </div>
                 <p class="hc-capability-installed-meta">
@@ -807,7 +813,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
               </div>
               <div class="min-w-0">
                 <h4 class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
-                  {{ skill.display_name || skill.name }}
+                  {{ skillDisplayName(skill, locale) }}
                 </h4>
                 <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
                   {{ skill.author }} &middot; v{{ skill.version }}
@@ -1054,7 +1060,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
       :open="pendingUninstall !== null"
       :confirmation-key="pendingUninstall"
       :title="t('skills.uninstallTitle')"
-      :message="pendingUninstall ? t('skills.uninstallMessage', { name: pendingUninstall }) : ''"
+      :message="pendingUninstall ? t('skills.uninstallMessage', { name: installedSkillName(pendingUninstall) }) : ''"
       :confirm-text="t('skills.uninstallConfirm')"
       :cancel-text="t('common.cancel')"
       danger

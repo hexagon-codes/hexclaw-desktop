@@ -5,6 +5,7 @@ import {
   assertK12ImageTaskResultResponse,
 } from '@/contracts/generated/k12-image-task.v1'
 import type { K12ImageTaskProblemSourceActionResponse } from '@/contracts/generated/k12-image-task.v1'
+import type { SkillContextReceipt } from '@/types/skill'
 import {
   assertImageTaskProblemSourceActionSemantics,
   assertImageTaskResultSemantics,
@@ -2336,6 +2337,8 @@ interface ImageTaskResultRespBase {
   /** 明确失败态的结构化英文诊断类别；内部结果未知恢复态必须省略。 */
   failure_kind?: string
   result: ImageTaskResultProjection | null
+  /** 新结果冻结的教学依据；旧结果缺失时不向当前目录追补。 */
+  skill_context_receipts?: SkillContextReceipt[]
 }
 
 interface ImageTaskResultAuditEnvelope {

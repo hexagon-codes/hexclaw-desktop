@@ -4,6 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { SkillContextReceipt } from '@/types/skill'
 import {
   k12ListMistakes,
   k12ReviewQueue,
@@ -88,6 +89,7 @@ export type ImageTaskCompletionOutcome =
       taskIntent: 'completed_homework' | 'blank_worksheet'
       result: PhotoJobResult
       operationReceipts?: ImageTaskOperationReceipt[]
+      skillContextReceipts?: SkillContextReceipt[]
     }
   | {
       stage: 'promoted' | 'unreadable'
@@ -779,6 +781,7 @@ export const useK12Store = defineStore('k12', () => {
         taskIntent: projection.task_intent,
         result: projection.result.payload,
         operationReceipts: 'operation_receipts' in projection ? projection.operation_receipts : undefined,
+        skillContextReceipts: projection.skill_context_receipts,
       }
     }
     if (

@@ -3,8 +3,10 @@ import { computed, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ChatMessage, ToolCall } from '@/types/chat'
 import type { RenderManifest } from '@/contracts/message-content'
+import type { SkillContextReceipt } from '@/types/skill'
 import { splitProcessBlocks } from '@/utils/assistant-process'
 import { toolCallStatus, resolveProcessToolName } from '@/utils/tool-call'
+import { skillContextReceipts, skillDisplayName, skillMethodStructure } from '@/utils/skill-display'
 import AssistantRunStatus from './AssistantRunStatus.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import ToolCallCard from './ToolCallCard.vue'
@@ -17,6 +19,8 @@ const props = defineProps<{
   live?: boolean
   elapsedSeconds: number
   toolCalls?: ToolCall[]
+  /** 图片结果同层的持久 Skill 快照；不构造聊天消息或工具执行。 */
+  skillReceipts?: readonly SkillContextReceipt[]
   /** 已有任务回执的只读投影，不生成工具调用或执行来源。 */
   operations?: readonly {
     id: string
@@ -26,7 +30,7 @@ const props = defineProps<{
   }[]
 }>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const expanded = ref(false)
 const bodyID = useId()
 const events = computed(() => props.message?.metadata?.runtime_events ?? [])
@@ -109,7 +113,9 @@ const fallbackReasoning = computed(() =>
     : '',
 )
 const operations = computed(() => props.operations ?? [])
-const hasDetails = computed(() => !!(steps.value.length || fallbackReasoning.value || operations.value.length))
+// 教学依据是成功加载的持久快照，不生成工具调用，也不从本轮挂载名称推断应用。
+const teachingReceipts = computed(() => skillContextReceipts(props.skillReceipts ?? props.message?.metadata?.skill_context_receipts).filter(receipt => receipt.methods.length))
+const hasDetails = computed(() => !!(steps.value.length || fallbackReasoning.value || operations.value.length || teachingReceipts.value.length))
 const failed = computed(
   () =>
     terminal.value === 'failed' ||
@@ -251,6 +257,17 @@ function callFor(id: string, name: string, input: string): ToolCall {
             <span v-if="operation.status === 'success'" class="hc-process-tool__meta">{{ operation.summary || t('chat.operationProcess.completed') }}</span>
             <span v-if="operation.status === 'unknown'" class="hc-process-tool__meta">{{ t('chat.operationProcess.unknown') }}</span>
             <span v-else-if="operation.status === 'error'" class="hc-process-tool__meta">{{ t('chat.toolFailed', '失败') }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="teachingReceipts.length" data-skill-teaching-basis :dir="locale === 'ug-CN' ? 'rtl' : 'ltr'">
+        <div class="hc-process__step"><b>{{ t('chat.operationProcess.teachingBasis') }}</b></div>
+        <div v-for="skill in teachingReceipts" :key="`${skill.name}:${skill.content_digest}`" class="hc-process__step">
+          <div class="hc-process-tool">
+            <div class="hc-process-tool__operation"><span class="hc-process-tool__name">{{ skillDisplayName(skill, locale) }}</span></div>
+            <div class="hc-process-tool__detail">
+              <p v-for="(method, index) in skill.methods" :key="`${method.name}:${index}`"><b>{{ skillDisplayName(method, locale) }}</b> · {{ skillMethodStructure(method.structure, locale) }}</p>
+            </div>
           </div>
         </div>
       </div>

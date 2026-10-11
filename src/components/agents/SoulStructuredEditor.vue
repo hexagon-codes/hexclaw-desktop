@@ -12,6 +12,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X } from 'lucide-vue-next'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import { skillDisplayName } from '@/utils/skill-display'
+import type { SkillDisplayMetadata } from '@/types/skill'
 import {
   SOUL_SEGMENTS,
   SOUL_PRESETS,
@@ -22,7 +24,7 @@ import {
   type SoulState,
 } from '@/utils/soul-editor'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const props = defineProps<{
   /** 现有人设文本（作为 identity 种子） */
@@ -32,6 +34,8 @@ const props = defineProps<{
   sourceRect?: DOMRect | null
   /** 该智能体已挂载的 Skill（自动注入段真数据展示） */
   skills?: string[]
+  /** 仅供只读名称投影；人设组装仍使用原技能标识。 */
+  availableSkills?: SkillDisplayMetadata[]
 }>()
 
 const emit = defineEmits<{ apply: [text: string]; close: [] }>()
@@ -248,7 +252,7 @@ function close(apply: boolean) {
                 :key="c"
                 class="px-1.5 py-0.5 rounded text-[11px] border"
                 :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
-              >{{ c }}</span>
+              >{{ sec.key === 'skills' ? skillDisplayName(availableSkills?.find(skill => skill.name === c) ?? { name: c }, locale) : c }}</span>
             </div>
           </div>
         </div>

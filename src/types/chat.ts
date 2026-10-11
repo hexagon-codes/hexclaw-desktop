@@ -55,6 +55,8 @@ export interface RuntimeWireSnapshot {
 }
 
 export interface ChatMessageMetadata extends Record<string, unknown> {
+  /** 服务端成功加载的 Skill 快照 JSON；原值随消息持久化，不从目录追补。 */
+  skill_context_receipts?: string
   thinking_state?: ThinkingState
   thinking_duration?: number | string
   reasoning_visibility?: ReasoningVisibility

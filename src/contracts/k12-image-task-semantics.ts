@@ -1693,6 +1693,7 @@ export function assertImageTaskResultSemantics(value: unknown): void {
       'operation_receipts',
       'grounding_evidence_receipts',
       'problem_grounding_receipts',
+      'skill_context_receipts',
     ],
     '$',
   )

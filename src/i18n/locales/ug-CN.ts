@@ -383,6 +383,7 @@ export default {
     },
     operationProcess: {
       title: 'بىر تەرەپ قىلىش جەريانى',
+      teachingBasis: 'ئۆگىتىش ئاساسى (Skill يېتەكچى قائىدىسى)',
       completed: 'تاماملاندى',
       unknown: 'نەتىجە نامەلۇم',
     },
@@ -393,6 +394,7 @@ export default {
     toolRunning: 'ئىجرا بولۇۋاتىدۇ',
     toolFailed: 'مەغلۇپ بولدى',
     toolName: {
+      solve: 'مەسىلە ھەل قىلىش',
       code_exec: 'كود قۇم ساندۇقى',
       code: 'كود ئىجرا قىلىش',
       shell: 'تېرمىنال',

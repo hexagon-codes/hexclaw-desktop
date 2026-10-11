@@ -14,6 +14,7 @@ import { FileText, Pin, Plus, Wand2, Upload, Store } from 'lucide-vue-next'
 import { getPrompts, type PromptInvocation } from '@/api/prompts'
 import { backendScopeKey } from '@/services/backend-context'
 import SkillIcon from '@/components/common/SkillIcon.vue'
+import { skillDisplayName } from '@/utils/skill-display'
 import type { Skill } from '@/types'
 
 // Template storage migrated from SQLite to localStorage
@@ -118,7 +119,7 @@ function dbTemplateIncrementUse(id: string): void {
   }
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -150,13 +151,13 @@ const skillItems = computed<PaletteItem[]>(() => {
   const q = props.query.toLowerCase()
   return (props.skills ?? [])
     .filter((s) => {
-      const dn = (s.display_name || s.name).toLowerCase()
+      const dn = skillDisplayName(s, locale.value).toLowerCase()
       return !q || dn.includes(q) || s.name.toLowerCase().includes(q)
     })
     .map((s) => ({
       kind: 'skill' as const,
       id: `skill:${s.name}`,
-      title: s.display_name || s.name,
+      title: skillDisplayName(s, locale.value),
       desc: s.description,
       name: s.name,
       skillMeta: { icon: s.icon, tags: s.tags, name: s.name },

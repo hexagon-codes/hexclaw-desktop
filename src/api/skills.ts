@@ -143,6 +143,9 @@ function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
   return {
     name: String(m.name ?? ''),
     display_name: typeof m.display_name === 'string' ? m.display_name : undefined,
+    display_names: m.display_names && typeof m.display_names === 'object' && !Array.isArray(m.display_names)
+      ? Object.fromEntries(Object.entries(m.display_names).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+      : undefined,
     description: String(m.description ?? ''),
     author: String(m.author ?? ''),
     version: String(m.version ?? ''),

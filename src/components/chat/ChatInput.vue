@@ -33,6 +33,7 @@ import MentionPopup from './MentionPopup.vue'
 import MessageText from './MessageText.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
+import { skillDisplayName } from '@/utils/skill-display'
 import { useVoice } from '@/composables/useVoice'
 import { useToast } from '@/composables/useToast'
 import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef } from '@/types'
@@ -89,7 +90,7 @@ const DEFAULT_VIDEO_SIZE = '1280x720'
 const DEFAULT_VIDEO_DURATION = 5
 const DEFAULT_VIDEO_WITH_AUDIO = true
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const voiceToast = useToast()
 // STT 错误继续交给公共 toast 承载，录音面板不再新建错误通道。
 const {
@@ -1621,7 +1622,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         </span>
         <span v-for="s in mountedSkills" :key="'skill:' + s.name" class="hc-composer__skill-chip">
           <SkillIcon :skill="s" :size="14" />
-          <span class="hc-composer__skill-name">{{ s.display_name || s.name }}</span>
+          <span class="hc-composer__skill-name">{{ skillDisplayName(s, locale) }}</span>
           <button
             class="hc-composer__skill-remove"
             :title="t('chat.removeSkill', '移除技能')"

@@ -15,6 +15,8 @@ import { useChatStore } from '@/stores/chat'
 import ModelSelector from '@/components/common/ModelSelector.vue'
 import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import { useAppStore } from '@/stores/app'
+import { skillDisplayName } from '@/utils/skill-display'
+import type { SkillDisplayMetadata } from '@/types/skill'
 import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
 import {
   bindSessionAgent,
@@ -147,7 +149,7 @@ import { downloadInApp, openOrDownloadDocument, saveBlobInApp } from '@/utils/do
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import crabLogo from '@/assets/logo-crab.png'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const chatStore = useChatStore()
@@ -907,11 +909,9 @@ function getMessageSkills(message: ChatMessage): string[] {
   return Array.isArray(s) ? (s as string[]).filter((x) => typeof x === 'string') : []
 }
 /** 用 availableSkills 还原 skill 元信息供 SkillIcon 渲染；缺失则按名兜底。 */
-function skillForChip(name: string): {
-  name: string
+function skillForChip(name: string): SkillDisplayMetadata & {
   icon?: string
   tags?: string[]
-  display_name?: string
 } {
   const found = availableSkills.value.find((s) => s.name === name)
   return found ?? { name }
@@ -3956,7 +3956,7 @@ function startSidebarResize(event: MouseEvent) {
                           "
                         >
                           <SkillIcon :skill="skillForChip(sn)" :size="13" />
-                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                          <span>{{ skillDisplayName(skillForChip(sn), locale) }}</span>
                         </span>
                       </div>
                       <MessageText :content="msg.content" />
@@ -3985,7 +3985,7 @@ function startSidebarResize(event: MouseEvent) {
                           class="hc-msg__edit-skill-chip"
                         >
                           <SkillIcon :skill="skillForChip(sn)" :size="13" />
-                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                          <span>{{ skillDisplayName(skillForChip(sn), locale) }}</span>
                         </span>
                       </div>
                       <HcClearableField>

@@ -737,6 +737,12 @@ export const K12_IMAGE_TASK_SCHEMA = {
             }
           ]
         },
+        "skill_context_receipts": {
+          "items": {
+            "$ref": "#/$defs/skillContextReceipt"
+          },
+          "type": "array"
+        },
         "source_attachments": {
           "items": {
             "type": "object"
@@ -771,6 +777,67 @@ export const K12_IMAGE_TASK_SCHEMA = {
         "task_intent",
         "status",
         "result"
+      ],
+      "type": "object"
+    },
+    "skillContextReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "content_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "display_names": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "methods": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "display_names": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "name": {
+                "type": "string"
+              },
+              "structure": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "const": "loaded"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "status",
+        "content_digest"
       ],
       "type": "object"
     },

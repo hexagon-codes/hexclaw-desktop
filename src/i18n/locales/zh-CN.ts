@@ -368,6 +368,7 @@ export default {
     },
     operationProcess: {
       title: '处理过程',
+      teachingBasis: '教学依据（Skill指导原则）',
       completed: '已完成',
       unknown: '结果未知',
     },
@@ -378,6 +379,7 @@ export default {
     toolRunning: '运行中',
     toolFailed: '失败',
     toolName: {
+      solve: '解题',
       code_exec: '代码沙箱',
       code: '代码运行',
       shell: '终端',

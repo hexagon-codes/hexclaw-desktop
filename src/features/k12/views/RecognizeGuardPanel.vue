@@ -20,6 +20,7 @@ import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ActivityTimeline from '@/components/chat/ActivityTimeline.vue'
 import AssistantProcess from '@/components/chat/AssistantProcess.vue'
+import type { SkillContextReceipt } from '@/types/skill'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
@@ -222,6 +223,7 @@ interface BlankWorksheetGuideItem {
 }
 const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
 const mathOperationReceipts = ref<ImageTaskOperationReceipt[]>([])
+const mathSkillContextReceipts = ref<SkillContextReceipt[]>([])
 // 逻辑与物理回执按实际操作聚合，不推断 Skill 调用或调用次数。
 const mathProcessOperations = computed(() => {
   const names: Record<string, string> = {
@@ -1654,6 +1656,7 @@ watch(
     annotatedImage.value = ''
     blankWorksheetGuide.value = []
     mathOperationReceipts.value = []
+    mathSkillContextReceipts.value = []
     rows.value = []
     problemProgressSlots.value = []
     taskCoverage.value = null
@@ -1786,6 +1789,7 @@ async function run() {
   annotatedImage.value = ''
   blankWorksheetGuide.value = []
   mathOperationReceipts.value = []
+  mathSkillContextReceipts.value = []
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
@@ -2245,13 +2249,14 @@ async function completeImageTaskFlow() {
     outcomeUnknown.value = false
     if (outcome.stage === 'completed') {
       creativeResult.value = null
-      applyPhotoJobResult(outcome.result, outcome.operationReceipts)
+      applyPhotoJobResult(outcome.result, outcome.operationReceipts, outcome.skillContextReceipts)
     } else {
       // Creative result is a different discriminated projection. Never feed
       // intake/work metadata to the homework result mapper; feedback is only
       // rendered when the public result contract actually carries it.
       blankWorksheetGuide.value = []
       mathOperationReceipts.value = []
+      mathSkillContextReceipts.value = []
       rows.value = []
       annotatedImage.value = ''
       creativeResult.value = {
@@ -2276,8 +2281,9 @@ async function completeImageTaskFlow() {
 }
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
-function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTaskOperationReceipt[]) {
+function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTaskOperationReceipt[], skillReceipts?: SkillContextReceipt[]) {
   mathOperationReceipts.value = operationReceipts ?? []
+  mathSkillContextReceipts.value = skillReceipts ?? []
   const parentGuides = parentTeachingGuideItems(result)
   if (parentGuides.length) {
     // Preserve backend item order (the frozen original-question order), and
@@ -2518,7 +2524,7 @@ async function coldStart() {
       :items="homeworkTimelineItems"
       :initially-expanded="homeworkTaskProgressState === 'running'"
     >
-      <template #details><AssistantProcess :operations="mathProcessOperations" :elapsed-seconds="0" /></template>
+      <template #details><AssistantProcess :operations="mathProcessOperations" :skill-receipts="mathSkillContextReceipts" :elapsed-seconds="0" /></template>
     </TaskProgressCard>
 
     <div
@@ -2816,7 +2822,7 @@ async function coldStart() {
       }}
     </div>
 
-    <AssistantProcess v-if="hasBlankWorksheetGuide" :operations="mathProcessOperations" :elapsed-seconds="0" />
+    <AssistantProcess v-if="hasBlankWorksheetGuide" :operations="mathProcessOperations" :skill-receipts="mathSkillContextReceipts" :elapsed-seconds="0" />
 
     <!-- 空白卷使用独立的家长讲题结果面。 -->
     <section

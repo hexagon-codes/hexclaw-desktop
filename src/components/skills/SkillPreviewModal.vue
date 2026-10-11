@@ -13,11 +13,13 @@ import { useI18n } from 'vue-i18n'
 import { X, Download, CheckCircle2, Trash2 } from 'lucide-vue-next'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SkillMarkdownPreview from '@/components/skills/SkillMarkdownPreview.vue'
+import { skillDisplayName } from '@/utils/skill-display'
 
 /** 两端共有的最小形状（Skill / ClawHubSkill 都满足）。SkillIcon 需要 icon/name/tags，故整对象透传。 */
 interface PreviewSkill {
   name: string
   display_name?: string
+  display_names?: Record<string, string>
   description?: string
   author?: string
   version?: string
@@ -53,7 +55,7 @@ const emit = defineEmits<{
   delete: []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
@@ -95,7 +97,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               </div>
               <div class="min-w-0">
                 <h3 class="text-base font-semibold truncate" :style="{ color: 'var(--hc-text-primary)' }">
-                  {{ skill.display_name || skill.name }}
+                  {{ skillDisplayName(skill, locale) }}
                 </h3>
                 <p class="text-xs mt-0.5 truncate" :style="{ color: 'var(--hc-text-muted)' }">
                   <template v-if="skill.author">{{ skill.author }}</template>
