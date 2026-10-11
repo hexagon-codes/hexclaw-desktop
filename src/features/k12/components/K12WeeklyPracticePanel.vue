@@ -1421,7 +1421,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 9px 13px;
   border: 0.5px solid var(--hc-border);
   border-radius: 12px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   box-shadow: none;
 }
 
@@ -1466,7 +1466,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 18px 18px 13px;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: linear-gradient(160deg, var(--hc-accent-subtle), rgba(255, 254, 249, 0.9) 55%);
+  background: linear-gradient(160deg, var(--hc-accent-subtle), var(--hc-bg-card) 55%);
   box-shadow: var(--hc-shadow-sm);
 }
 
@@ -1594,7 +1594,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   padding: 10px 12px;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   box-shadow: none;
   color: var(--hc-text-secondary);
   font-size: 12px;

@@ -1718,7 +1718,7 @@ defineExpose({ load, openAdd })
   gap: 6px;
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   padding: 7px 12px;
   font-size: 11px;
   color: var(--hc-text-muted);
@@ -1739,7 +1739,7 @@ defineExpose({ load, openAdd })
   padding: 12px 14px;
   border: 0.5px solid var(--hc-border);
   border-radius: 14px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
 }
 
 .k12cw__filter-row {
@@ -1793,7 +1793,7 @@ defineExpose({ load, openAdd })
   padding: 11px 13px 11px 17px;
   border: 0.5px solid var(--hc-border);
   border-radius: 12px;
-  background: rgba(255, 254, 249, 0.96);
+  background: var(--k12-card, var(--hc-bg-card));
   color: var(--hc-text-secondary);
   font-size: 12.5px;
   line-height: 1.55;
@@ -1860,7 +1860,7 @@ defineExpose({ load, openAdd })
   align-items: stretch;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   box-shadow: var(--hc-shadow-sm);
   transition:
     box-shadow 0.2s var(--hc-ease-out),
@@ -2088,7 +2088,7 @@ defineExpose({ load, openAdd })
   min-height: 32px;
   margin-top: 0;
   padding: 6px 12px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   /* 共享按钮继承全局字体并固定行高，避免 WebKit 原生字体回退造成卡片纵向漂移。 */
   font-family: inherit;
   font-size: 12px;

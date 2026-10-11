@@ -1486,7 +1486,7 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__basket {
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   box-shadow: var(--hc-shadow-sm);
   overflow: hidden;
 }
@@ -1497,13 +1497,7 @@ async function cancelSet(s: PracticeSetDTO) {
   flex-wrap: nowrap;
   padding: 15px 18px;
   border-bottom: 1px solid var(--hc-divider);
-  background: linear-gradient(135deg, var(--hc-accent-subtle), rgba(255, 254, 249, 0.9));
-}
-:global([data-theme='dark']) .k12ps__basket {
-  background: rgba(15, 40, 67, 0.88);
-}
-:global([data-theme='dark']) .k12ps__bhead {
-  background: linear-gradient(135deg, var(--hc-accent-subtle), rgba(15, 40, 67, 0.88));
+  background: linear-gradient(135deg, var(--hc-accent-subtle), var(--hc-bg-card));
 }
 .k12ps__bhead-copy {
   min-width: 240px;

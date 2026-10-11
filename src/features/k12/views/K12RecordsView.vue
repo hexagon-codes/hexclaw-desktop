@@ -2535,7 +2535,7 @@ async function doExportMd() {
   margin: 0 0 12px;
   border: 0.5px solid var(--hc-border);
   border-radius: 14px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
 }
 .k12rec__filter-row {
   display: flex;
@@ -3032,7 +3032,7 @@ async function doExportMd() {
   overflow: hidden;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(255, 254, 249, 0.9);
+  background: var(--hc-bg-card);
   color: var(--hc-text-secondary);
   font-family: inherit;
   font-size: 12px;
@@ -3156,7 +3156,7 @@ async function doExportMd() {
 .k12mistakes :deep(.rl-actions > button[data-testid^='mistake-practice-']) {
   height: 36px;
   padding: 8px 14px;
-  color: rgb(23, 61, 80);
+  color: var(--hc-text-primary);
   background: color-mix(in srgb, var(--hc-accent) 7.5%, transparent);
 }
 .k12mistakes :deep(.rl-actions > button[data-testid^='mistake-view-practice-']) {
