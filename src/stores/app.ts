@@ -73,15 +73,14 @@ const setup = () => {
       if (ok) {
         sidecarReady.value = true
         sidecarStatus.value = 'running'
-        if (!backendVersion.value) {
-          try {
-            const version = (await getVersion()).version
-            if (generation === healthCheckGeneration && revision === healthObservationRevision &&
-              isCurrentScope(scope) && !isRestarting.value) {
-              backendVersion.value = version
-            }
-          } catch { /* 版本单独重查 */ }
-        }
+        // 稳定后端身份换代不改变连接作用域，健康成功后仍读回实际版本。
+        try {
+          const version = (await getVersion()).version
+          if (generation === healthCheckGeneration && revision === healthObservationRevision &&
+            isCurrentScope(scope) && !isRestarting.value) {
+            backendVersion.value = version
+          }
+        } catch { /* 保留最近可信版本，下次既有健康观察继续读回。 */ }
       } else {
         sidecarReady.value = false
         backendVersion.value = ''
