@@ -553,13 +553,13 @@ export default {
   // Keys physics/chemistry are legacy skill IDs (manifest.ts owned by another session);
   // labels follow the v0.5.0 subject terms (Science / Information Technology).
   manifest: {
-    pedagogy: 'Pedagogy (step hints · no direct answers)',
-    homework: 'Photo recognition · per-problem grading',
+    pedagogy: 'Step-by-step tutoring',
+    homework: 'Homework checking',
     math: 'Math tutoring',
-    chinese: 'Chinese (essays: co-write, not ghost-write)',
+    chinese: 'Chinese tutoring',
     english: 'English tutoring',
     concept: 'Concept explanation',
-    exercise: 'Exercises · variants · review papers',
+    exercise: 'Exercise generation',
     physics: 'Science tutoring',
     chemistry: 'Information technology tutoring',
   },
