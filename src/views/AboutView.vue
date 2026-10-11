@@ -8,7 +8,6 @@ import { useAutoUpdate } from '@/composables/useAutoUpdate'
 import { useToast } from '@/composables/useToast'
 import { getVersion } from '@/api/system'
 import { getOllamaStatus } from '@/api/ollama'
-import WechatFollowContent from '@/components/settings/WechatFollowContent.vue'
 import { dismissSplash } from '@/utils/splash'
 
 const { t } = useI18n()
@@ -254,10 +253,6 @@ onMounted(() => {
         <a href="mailto:ai@hexclaw.net">{{ t('about.brandAi', '河蟹 AI') }} · ai@hexclaw.net</a>
       </nav>
 
-      <section class="hc-about-page__wechat" aria-label="关注公众号">
-        <WechatFollowContent />
-      </section>
-
       <footer class="hc-about-page__footer">
         Copyright &copy; 2025–2026 hexagon-codes · Open-source under the Apache License 2.0.
       </footer>
@@ -446,15 +441,14 @@ onMounted(() => {
 .hc-about-page__body {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  /* 生态区填充现有关于窗的剩余高度，完整正文不通过滚动或二维码区域扩展窗口。 */
+  overflow: hidden;
   padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   -webkit-app-region: no-drag;
 }
-.hc-about-page__wechat{padding:16px 0;flex-shrink:0}
-.hc-about-page__eco{flex-shrink:0}
 
 /* ── Engine (Powered By) — mirrors hexclaw.net .engine-bar ── */
 .hc-about-page__engine {
@@ -662,7 +656,6 @@ onMounted(() => {
   line-height: 1.35;
   color: #94a8bc;
 }
-.hc-about-page__body > .hc-about-page__eco{flex:none}
 
 @media (max-width: 460px) {
   .hc-about-page__engine {
