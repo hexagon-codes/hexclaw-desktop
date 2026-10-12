@@ -34,6 +34,8 @@ watchEffect(() => {
 })
 
 const appVersion = ref('—')
+// 自动检查的成功结果保持安静，手动检查的反馈仅属于当前关于窗口。
+const showUpToDateResult = ref(false)
 // Hexagon 引擎版本（= 后端 engine_version = hexagon.Version）。在下方「POWERED BY」区块展示，
 // About 保留引擎版本详情；Sidebar 同步展示运行中引擎的精简状态。
 const engineVersion = ref('')
@@ -81,7 +83,7 @@ function formatUpdaterErrorMessage(message: string, install = false) {
 const updateStatusTone = computed(() => {
   if (updateAvailable.value) return 'available'
   if (checkError.value) return 'error'
-  if (lastCheckedAt.value) return 'success'
+  if (lastCheckedAt.value && showUpToDateResult.value) return 'success'
   return 'idle'
 })
 
@@ -100,7 +102,7 @@ const updateStatusText = computed(() => {
   if (checkError.value) {
     return formatUpdaterErrorMessage(checkError.value)
   }
-  if (lastCheckedAt.value) {
+  if (lastCheckedAt.value && showUpToDateResult.value) {
     return t('about.updateUpToDate', '当前已是最新版本')
   }
   return ''
@@ -109,6 +111,7 @@ const updateStatusText = computed(() => {
 const showUpdateStatus = computed(() => updateStatusText.value.length > 0)
 
 async function handleCheckUpdate() {
+  showUpToDateResult.value = false
   const result = await checkForUpdate()
 
   if (result.status === 'available' && result.version) {
@@ -117,7 +120,7 @@ async function handleCheckUpdate() {
   }
 
   if (result.status === 'up-to-date') {
-    toast.success(t('about.updateUpToDate', '当前已是最新版本'))
+    showUpToDateResult.value = true
     return
   }
 
@@ -473,8 +476,7 @@ onMounted(() => {
 .hc-about-page__engine-info {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .hc-about-page__engine-kicker {
@@ -504,10 +506,11 @@ onMounted(() => {
 }
 
 .hc-about-page__engine-caps {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   color: #7a9ab8;
-  white-space: nowrap;
+  white-space: normal;
   text-align: right;
 }
 
