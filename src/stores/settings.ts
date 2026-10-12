@@ -3,10 +3,13 @@ import { ref, computed, watch, readonly } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
+import { fromNativeError } from '@/utils/errors'
 import { getLLMConfig } from '@/api/config'
 import { getOllamaStatus, saveOllamaTarget, type OllamaTarget } from '@/api/ollama'
-import { updateConfig } from '@/api/settings'
+import { getRuntimeConfig, updateConfig } from '@/api/settings'
+import { i18n } from '@/i18n'
 import { isTauri } from '@/utils/platform'
+import type { DisplayLocale } from '@/types/settings'
 import type {
   AppConfig,
   ProviderConfig,
@@ -193,6 +196,80 @@ export const useSettingsStore = defineStore('settings', () => {
     },
   })
 
+  const confirmedDisplayLocales = new Map<string, DisplayLocale>()
+  const unsettledDisplayLocales = new Set<string>()
+  const rejectedDisplayLocales = new Set<string>()
+
+  function currentDisplayLocale(): DisplayLocale {
+    const locale = i18n.global.locale.value
+    return locale === 'en' || locale === 'ug-CN' ? locale : 'zh-CN'
+  }
+
+  /** 语言与模型保存共用队列；未确证的写入只读回一次，切页不得重放。 */
+  async function syncDisplayLocale(scope: string, locale: DisplayLocale) {
+    const assertScope = () => {
+      if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+    }
+    assertScope()
+    if (confirmedDisplayLocales.get(scope) === locale) return
+    const attemptKey = JSON.stringify([scope, locale])
+    if (unsettledDisplayLocales.has(attemptKey) || rejectedDisplayLocales.has(attemptKey)) return
+
+    const before = await getRuntimeConfig()
+    assertScope()
+    if ((before.display_locale ?? 'zh-CN') === locale) {
+      confirmedDisplayLocales.set(scope, locale)
+      return
+    }
+
+    unsettledDisplayLocales.add(attemptKey)
+    confirmedDisplayLocales.delete(scope)
+    try {
+      await updateConfig({ display_locale: locale })
+      assertScope()
+    } catch (error) {
+      const status = fromNativeError(error).status
+      if (status && status >= 400 && status < 500 && status !== 408) {
+        unsettledDisplayLocales.delete(attemptKey)
+        rejectedDisplayLocales.add(attemptKey)
+        throw error
+      }
+      // 断连时服务端可能已经提交；只核对实际配置，不重复 PUT。
+      try {
+        assertScope()
+        const current = await getRuntimeConfig()
+        assertScope()
+        if (current.display_locale === locale) {
+          confirmedDisplayLocales.set(scope, locale)
+          unsettledDisplayLocales.delete(attemptKey)
+          return
+        }
+      } catch { /* 保留当前作用域和值的未知写入记录。 */ }
+      throw error
+    }
+    const current = await getRuntimeConfig()
+    assertScope()
+    if (current.display_locale !== locale) throw new Error('Display locale save was not confirmed')
+    confirmedDisplayLocales.set(scope, locale)
+    unsettledDisplayLocales.delete(attemptKey)
+  }
+
+  function syncCurrentDisplayLocale(explicit = false) {
+    if (!config.value || !backendConfigLoaded.value || configBackendStorageKey !== backendStorageKey(CONFIG_STORE_KEY)) return
+    const locale = currentDisplayLocale()
+    const scope = backendScopeKey()
+    const attemptKey = JSON.stringify([scope, locale])
+    if (explicit) rejectedDisplayLocales.delete(attemptKey)
+    if (config.value.general.language === locale && (
+      confirmedDisplayLocales.get(scope) === locale || unsettledDisplayLocales.has(attemptKey) || rejectedDisplayLocales.has(attemptKey)
+    )) return
+    config.value.general.language = locale
+    void saveImmediateSetting('general').catch((error) => logger.warn('展示语言同步失败', error))
+  }
+
+  watch(() => i18n.global.locale.value, () => syncCurrentDisplayLocale(true))
+  watch(() => backendScopeKey(), () => syncCurrentDisplayLocale())
+
   const ollamaAddressTransitions: Array<{ id: string; before: string; after: string }> = []
   function reconcileOllamaAddresses(providers: ProviderConfig[]) {
     for (const change of ollamaAddressTransitions) {
@@ -225,6 +302,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function loadConfig({ force = false } = {}) {
     // 已有 providers 且非强制重载，说明完整配置已就绪，无需重新加载
     if (!force && config.value?.llm.providers.length) {
+      syncCurrentDisplayLocale()
       return
     }
     // 如果已在加载中，复用已有 Promise
@@ -380,6 +458,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
 
     loading.value = false
+    syncCurrentDisplayLocale()
     // 目录是可再生缓存：配置可先使用，远程刷新在后台完成。小目录变更走独立保存队列，
     // 不调用 saveConfig，因此不会形成 save → sync → save 递归。
     providerSync.sync(cloneProviders(config.value?.llm.providers ?? []))
@@ -680,9 +759,12 @@ export const useSettingsStore = defineStore('settings', () => {
     const owner = config.value
     if (!owner) return
     const value = JSON.parse(JSON.stringify(owner[section]))
+    if (section === 'general') value.language = currentDisplayLocale()
     await providerSync.enqueue(async () => {
       if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+      if (section === 'general' && value.language !== currentDisplayLocale()) return
       let persistedValue = value
+      if (section === 'general') await syncDisplayLocale(scope, value.language)
       if (section === 'memory') await updateConfig({ memory: value })
       if (section === 'sandbox') {
         await updateConfig({ sandbox: { network_enabled: value.network_enabled } })

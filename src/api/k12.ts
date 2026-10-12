@@ -20,6 +20,7 @@ import {
  */
 import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
+import { i18n } from '@/i18n'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import type { K12SourceRegion } from '@/contracts/k12-source-region'
@@ -2186,6 +2187,7 @@ export interface CreateImageTaskReq {
   message_intent?: string
   attempt_generation: number
   route_request: {
+    message_locale?: 'zh-CN' | 'en' | 'ug-CN'
     provider?: string
     model?: string
     selection_source?: 'explicit' | 'auto'
@@ -2366,7 +2368,15 @@ export type ImageTaskResultResp =
       })
 
 export async function k12CreateImageTask(req: CreateImageTaskReq, signal?: AbortSignal) {
-  const response = await apiPost<unknown>(`${BASE}/image-tasks`, req, {
+  // 同一次接纳冻结显示语言，后续查询和恢复不重新读取桌面偏好。
+  const request = {
+    ...req,
+    route_request: {
+      ...req.route_request,
+      message_locale: req.route_request.message_locale ?? i18n.global.locale.value,
+    },
+  }
+  const response = await apiPost<unknown>(`${BASE}/image-tasks`, request, {
     // 首次视觉探测最多等待120秒，再为请求接纳与回读预留10秒。
     timeout: 130_000,
     signal,

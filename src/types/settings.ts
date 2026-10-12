@@ -426,6 +426,8 @@ export interface LLMConfigMutationReceipt {
 }
 
 export interface BackendRuntimeConfig {
+  /** 桌面语言同步后的 IM 展示语言；旧服务缺省为中文。 */
+  display_locale?: DisplayLocale
   memory?: MemoryConfig
   server: {
     host: string
@@ -460,10 +462,13 @@ export interface BackendRuntimeConfig {
 }
 
 export interface RuntimeConfigUpdateRequest {
+  display_locale?: DisplayLocale
   memory?: MemoryConfig
   security?: SecurityConfig
   sandbox?: SandboxConfigUpdate
 }
+
+export type DisplayLocale = 'zh-CN' | 'en' | 'ug-CN'
 
 export interface ConfigUpdateResponse {
   message: string
