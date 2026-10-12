@@ -1401,7 +1401,7 @@ async function handleUnregisterAgent() {
         >
           <div
             ref="addAgentDialog"
-            class="w-full rounded-2xl border flex flex-col overflow-hidden max-h-[88vh] max-w-md"
+            class="hc-agent-dialog rounded-2xl border flex flex-col overflow-hidden max-h-[88vh]"
             role="dialog"
             aria-modal="true"
             tabindex="-1"
@@ -1897,7 +1897,7 @@ async function handleUnregisterAgent() {
           <!-- 原型对齐：max-h + 头尾固定 + 中段独立滚动（修「保存按钮不可达」P0）；
                基本信息展开，服务商/模型并入「模型与参数 · Skill」折叠区（与创建同构） -->
           <div
-            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden max-h-[85vh]"
+            class="hc-agent-dialog rounded-2xl border flex flex-col overflow-hidden max-h-[85vh]"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div
@@ -2701,7 +2701,13 @@ button.hc-cxcard {
 }
 
 /* ── 新建弹窗第一步「选择起点」卡片网格 ── */
+.hc-agent-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
 .hc-agent-fold {
+  /* 展开内容保留自然高度，由表单中段滚动，避免 Flex 压缩后被圆角容器裁切。 */
+  flex-shrink: 0;
   width: 100%;
   margin-top: 12px;
   overflow: hidden;
