@@ -113,8 +113,8 @@ const fallbackReasoning = computed(() =>
     : '',
 )
 const operations = computed(() => props.operations ?? [])
-// 教学依据是成功加载的持久快照，不生成工具调用，也不从本轮挂载名称推断应用。
-const teachingReceipts = computed(() => skillContextReceipts(props.skillReceipts ?? props.message?.metadata?.skill_context_receipts).filter(receipt => receipt.methods.length))
+// 图片沿冻结指南回执，普通消息只展示本任务选定的指导；加载审计不代表本题采用。
+const teachingReceipts = computed(() => skillContextReceipts(props.skillReceipts ?? props.message?.metadata?.teaching_context_receipts).filter(receipt => receipt.methods.length))
 const hasDetails = computed(() => !!(steps.value.length || fallbackReasoning.value || operations.value.length || teachingReceipts.value.length))
 const failed = computed(
   () =>
