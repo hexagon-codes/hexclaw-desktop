@@ -131,6 +131,35 @@ function createMarkdownRenderer(copyLabel: string) {
     typographer: true,
   })
 
+  // 仅补中文标点相邻的强强调边界，正文仍由原生解析器处理嵌套、代码、链接和公式。
+  const cjkInlineStates = new WeakSet<object>()
+  instance.inline.ruler.before('emphasis', 'cjk-strong-delimiters', (state) => {
+    if (state.src.charCodeAt(state.pos) !== 0x2a || cjkInlineStates.has(state)) return false
+    const scanDelims = state.scanDelims.bind(state)
+    state.scanDelims = (start, canSplitWord) => {
+      const scanned = scanDelims(start, canSplitWord)
+      if (state.src.charCodeAt(start) !== 0x2a || scanned.length < 2) return scanned
+      const last = state.src.charCodeAt(start - 1)
+      const beforeStart = last >= 0xdc00 && last <= 0xdfff ? start - 2 : start - 1
+      const before = String.fromCodePoint(state.src.codePointAt(beforeStart) ?? 0x20)
+      const after = String.fromCodePoint(state.src.codePointAt(start + scanned.length) ?? 0x20)
+      const han = /\p{Script=Han}/u
+      const punctuation = /\p{P}/u
+      const cjkPunctuation = /[\u3000-\u303f\uff00-\uffef\u2018-\u201f]/u
+      if (
+        !scanned.can_close &&
+        punctuation.test(before) &&
+        (han.test(after) || (cjkPunctuation.test(before) && /[\p{L}\p{N}]/u.test(after)))
+      ) {
+        scanned.can_close = true
+      }
+      if (!scanned.can_open && punctuation.test(after) && han.test(before)) scanned.can_open = true
+      return scanned
+    }
+    cjkInlineStates.add(state)
+    return false
+  })
+
   // 正文图片进入全应用预览，公式和交互产物仍沿各自渲染器。
   const renderImage = instance.renderer.rules.image!
   instance.renderer.rules.image = (tokens, index, options, env, self) => {
@@ -338,7 +367,9 @@ const rendered = computed(() => {
   const markdown = projection?.markdown ?? displayMarkdown.value
   // 渲染管线原生支持 `\[...\]`（tex 插件 delimiters:'all'）：保留方括号形态，
   // 避开 normalize 转独占行 `$$` 后在缩进列表内的跨块误配对（乱码根因）。
-  const html = mdInstance.value.render(normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true }))
+  const html = mdInstance.value.render(
+    normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true }),
+  )
   return DOMPurify.sanitize(
     projection ? decoratePromptPreviewHtml(html, projection) : html,
     KATEX_DOMPURIFY_CONFIG,
