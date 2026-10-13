@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { ShieldCheck, ShieldAlert, RefreshCw, X, Check, ArrowRight, ChevronDown, Lock } from 'lucide-vue-next'
+import { ShieldCheck, ShieldAlert, RefreshCw, X, Check, ArrowRight, Lock } from 'lucide-vue-next'
 import {
   getAutonomyProfile, updateAutonomyProfile, getAutonomySummary, listAutonomyDecisions,
   listAutonomyGrants, revokeAutonomyGrant,
@@ -39,7 +39,6 @@ const loading = ref(false)
 const switching = ref(false)
 const unavailable = ref(false)
 const fullAccessConfirmOpen = ref(false)
-const matrixOpen = ref(false)
 
 /**
  * 单用户桌面三档；balanced 引擎虽支持但不在 UI 暴露（避免档位过载）。
@@ -121,16 +120,6 @@ const metrics = computed(() => {
     },
 
   ]
-})
-
-/** 矩阵收起态摘要：每个来源自动放行的能力占比，一眼看清哪个来源被卡得最多。 */
-const matrixSummary = computed(() => {
-  const m = matrix.value
-  if (!m) return []
-  return m.rows.map((r) => {
-    const auto = r.cells.filter((cell) => cell.state === 'auto').length
-    return { source: r.source, auto, total: r.cells.length }
-  })
 })
 
 /** 矩阵转置：行=能力、列=来源。来源恒 6 列，能力可扩到 11+ 行——窄容器里竖排比横排稳。 */
@@ -371,19 +360,11 @@ function formatTime(iso: string): string {
           </div>
         </div>
       </section>
-      <!-- 生效策略矩阵（只读诊断）：默认收起，收起态给每来源自动放行占比摘要 -->
+      <!-- 生效策略固定展开，直接呈现真实矩阵，不改变实际权限。 -->
       <section class="auto-perm__group">
         <h3 class="auto-perm__section-title">
-          <button
-            class="auto-perm__disclosure"
-            :aria-expanded="matrixOpen"
-            data-testid="matrix-toggle"
-            @click="matrixOpen = !matrixOpen"
-          >
-            <ChevronDown :size="13" class="auto-perm__chevron" :class="{ 'auto-perm__chevron--open': matrixOpen }" />
-            {{ t('autonomy.settings.matrixTitle') }}
-          </button>
-          <span v-show="matrixOpen" class="auto-perm__legend">
+          {{ t('autonomy.settings.matrixTitle') }}
+          <span class="auto-perm__legend">
             <span class="auto-perm__legend-item">
               <span class="auto-perm__dot auto-perm__dot--auto" />
               {{ t('autonomy.settings.legendAuto', '自动放行') }}
@@ -395,27 +376,10 @@ function formatTime(iso: string): string {
           </span>
         </h3>
 
-        <!-- 收起态：能力比例仅说明策略矩阵，不代表具体任务已获授权。 -->
-        <p v-show="!matrixOpen" class="auto-perm__muted">{{ t('autonomy.settings.matrixSummary') }}</p>
-        <div v-show="!matrixOpen" class="auto-perm__matrix-chips" data-testid="matrix-summary">
-          <span
-            v-for="s in matrixSummary"
-            :key="s.source"
-            class="auto-perm__chip"
-            :class="{
-              'auto-perm__chip--full': s.auto === s.total,
-              'auto-perm__chip--none': s.auto === 0,
-            }"
-          >
-            {{ sourceLabel(s.source) }}
-            <b>{{ isRuntimeGrantBoundSource(s.source) ? t('autonomy.settings.runtimeGrant') : s.auto + '/' + s.total }}</b>
-          </span>
-        </div>
-
-        <p v-show="matrixOpen" class="auto-perm__muted">
+        <p class="auto-perm__muted">
           {{ t('autonomy.settings.matrixNote', '回答「为什么被拦 / 为什么放行」：沙箱执行与宿主执行是两级信任——外部来源只自动放行沙箱执行。连接器（MCP）工具无内置类别，无人值守下需任务级授权。自愈权限不等于可以修复鉴权、数据源或外部服务故障。') }}
         </p>
-        <div v-if="matrixOpen && matrixT" class="auto-perm__matrix-box">
+        <div v-if="matrixT" class="auto-perm__matrix-box">
           <table class="auto-perm__matrix" data-testid="policy-matrix">
             <thead>
               <tr>
@@ -730,7 +694,7 @@ function formatTime(iso: string): string {
 .auto-perm__pill--warn { background: rgba(240, 180, 41, 0.14); color: var(--hc-warning, #e69500); }
 .auto-perm__pill--danger { background: rgba(255, 59, 48, 0.1); color: var(--hc-error, #ff3b30); }
 
-/* ─── 策略矩阵：默认收起 disclosure + 收起态来源摘要 chips ── */
+/* ─── 策略矩阵的共享图例与表格样式 ───────────────── */
 .auto-perm__disclosure {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 0; border: none; background: transparent; cursor: pointer;
