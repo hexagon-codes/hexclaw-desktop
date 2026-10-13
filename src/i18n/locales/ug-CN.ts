@@ -322,6 +322,8 @@ export default {
       selectStrategy: 'بۇ قېتىملىق ئىجرا ئۈچۈن ئويلاش ئىستراتېگىيەسىنى تاللاڭ',
       inherit: 'ئومۇمىي سۈكۈتتىكىگە ئەگىشىش',
       auto: 'ئاپتوماتىك (تەۋسىيە)',
+      modelAutomatic: 'مودېل ئاپتوماتىك ئويلايدۇ',
+      modelAutomaticHint: 'This model reasons automatically; configurable reasoning controls are not declared.',
       on: 'ئېچىش',
       off: 'تاقاش',
       unsupported: 'ئويلاشنى قوللىمايدۇ',
