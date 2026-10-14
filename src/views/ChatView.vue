@@ -1534,6 +1534,7 @@ const scenarioCtx = computed(() => {
 const scenarioOwnsHeader = computed(() => scenarioCtx.value?.descriptor.headerOwner === 'scenario')
 watch([() => scenarioCtx.value?.agentId, () => scenarioCtx.value?.sessionId], ([, sessionId]) => {
   // 切孩子、切同一孩子的会话或离开场景时，上一会话的离散图片 attempt 均不得泄漏。
+  if (!scenarioCtx.value) scenarioRecordsActive.value = false
   scenarioInlineActive.value = false
   scenarioComposerImage.value = ''
   scenarioComposerAction.value = undefined
@@ -4402,7 +4403,7 @@ function startSidebarResize(event: MouseEvent) {
     <!-- Artifacts Panel (right side) -->
     <Transition name="hc-chat-panel">
       <ArtifactsPanel
-        v-if="chatWorkspaceMode === 'artifacts' && !scenarioRecordsActive"
+        v-if="chatWorkspaceMode === 'artifacts' && !(scenarioCtx && scenarioRecordsActive)"
         :artifacts="workspaceArtifacts"
         :selected-id="chatStore.selectedArtifactId"
         @close="restoreWorkspaceAfterRightPanelClose"
