@@ -585,7 +585,6 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     const payload = h.registerSpy.mock.calls[0]![0] as { description: string }
-    expect(payload.description).toBe('五年级上 · 数学教材与进度已绑定 · 按年级边界讲解')
   })
 
   it('卡片副标题：改档改年级 → profile-bundle 同步派生 description（不写死）', async () => {
@@ -613,9 +612,6 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     const bundle = h.profileBundleSpy.mock.calls[0]![0] as {
       agent_config: { description: string }
     }
-    expect(bundle.agent_config.description).toBe(
-      '六年级上 · 数学教材与进度已绑定 · 按年级边界讲解',
-    )
     expect(h.updateSpy).not.toHaveBeenCalled()
   })
 

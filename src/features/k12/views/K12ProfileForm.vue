@@ -11,6 +11,7 @@ import type { ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
 import { registerAgent, unregisterAgent } from '@/api/agents'
+import { getSkills } from '@/api/skills'
 import {
   k12GetProfile,
   k12GetCurriculumProgress,
@@ -31,6 +32,8 @@ import { useToast } from '@/composables/useToast'
 import { isAgentDisplayNameValid } from '@/utils/agent-display-name'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { backendScopeKey } from '@/services/backend-context'
+import { skillDisplayName } from '@/utils/skill-display'
+import type { SkillDisplayMetadata } from '@/types/skill'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import {
@@ -69,7 +72,7 @@ const emit = defineEmits<{
   (e: 'back'): void
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 const agentsStore = useAgentsStore()
 const k12Store = useK12Store()
@@ -164,6 +167,31 @@ const mountedSkillCount = computed(() => {
   if (props.agent?.skills?.length && !hasTemplateSkill) return defaultBoundSkills().length
   return K12_TEMPLATE_SKILLS.filter((skill) => mountedSkills.value.has(skill.name)).length
 })
+const runtimeSkillMetadata = ref<SkillDisplayMetadata[]>([])
+const runtimeSkillScope = ref('')
+
+// 目录结果只属于当前表单的同一连接，旧连接与卸载后的回包不参与名称投影。
+async function loadRuntimeSkillMetadata() {
+  const connection = backendScopeKey()
+  try {
+    const response = await getSkills()
+    if (formDisposed || connection !== backendScopeKey()) return
+    runtimeSkillScope.value = connection
+    runtimeSkillMetadata.value = response.skills ?? []
+  } catch {
+    if (formDisposed || connection !== backendScopeKey()) return
+    runtimeSkillScope.value = connection
+    runtimeSkillMetadata.value = []
+  }
+}
+
+function mountedSkillLabel(name: string): string {
+  const metadata = runtimeSkillScope.value === backendScopeKey()
+    ? runtimeSkillMetadata.value.find((skill) => skill.name === name)
+    : undefined
+  return skillDisplayName(metadata ?? { name }, locale.value)
+}
+
 function toggleMountedSkill(name: string) {
   const skill = K12_TEMPLATE_SKILLS.find((candidate) => candidate.name === name)
   if (!skill || skill.tier === 'P0') return
@@ -628,6 +656,7 @@ watch(
   },
 )
 onMounted(() => {
+  void loadRuntimeSkillMetadata()
   if (!isEdit.value) {
     void loadCreateCurriculumOptions()
     return
@@ -706,8 +735,21 @@ const displayName = computed(() => {
   return displayNameIsAutomatic ? autoDisplayName.value : storedDisplayName
 })
 
-// 卡片副标题严格采用原型口径，说明分科绑定事实；改年级时与 display_name 同步派生。
+// 卡片副标题说明数学教材与当前进度入口，不声明实际绑定状态；自动模板随年级派生。
 const cardDescription = computed(() => t('k12.profile.cardDesc', { grade: grade.value }))
+const storedDescription = props.agent?.description
+const storedDescriptionGrade = props.agent?.metadata?.['k12.grade_term']
+// 只按原年级精确识别三种语言的历史和当前自动模板，自定义简介原样保留。
+const automaticDescriptions = storedDescriptionGrade === undefined ? [] : [
+  `${storedDescriptionGrade} · 数学教材与进度已绑定 · 按年级边界讲解`,
+  `${storedDescriptionGrade} · Math textbook and progress linked · Teaching bounded by grade level`,
+  `${storedDescriptionGrade} · ماتېماتىكا دەرسلىكى ۋە ئىلگىرىلەش باغلانغان · سىنىپ چېكى بويىچە چۈشەندۈرۈش`,
+  ...['zh-CN', 'en', 'ug-CN'].map((descriptionLocale) =>
+    t('k12.profile.cardDesc', { grade: storedDescriptionGrade }, { locale: descriptionLocale }),
+  ),
+]
+const storedDescriptionIsAutomatic =
+  storedDescription === undefined || automaticDescriptions.includes(storedDescription)
 
 // HcSelect 选项（替代原生 <select>；WKWebView 下原生 select 显 macOS Aqua 样式 · BUG-20260708 B2）
 const gradeOptions = computed(() =>
@@ -863,7 +905,9 @@ async function submit() {
         expected_settings_revision: weeklySettings.value.revision,
         agent_config: {
           display_name: displayName.value,
-          description: props.agent.description ?? cardDescription.value,
+          description: storedDescriptionIsAutomatic
+            ? cardDescription.value
+            : props.agent.description ?? cardDescription.value,
           system_prompt: soulText.value,
           provider: provider.value,
           model: model.value,
@@ -913,7 +957,7 @@ async function submit() {
     const payload: Parameters<typeof registerAgent>[0] = {
       name,
       display_name: displayName.value,
-      description: cardDescription.value, // 原型卡片副标题：年级 · 分科教材独立绑定 · 年级边界
+      description: cardDescription.value, // 卡片副标题：年级 · 数学教材与当前进度 · 年级边界
       system_prompt: soulText.value, // 辅导助手人设（家长可编辑「辅导语气」，未改则派生）：身份+讲题边界（F2/D3）
       model: model.value, // ''=跟随全局默认强推理模型；高级折叠可指定（BUG-20260711-H）
       provider: provider.value,
@@ -1170,7 +1214,7 @@ async function submit() {
                     :disabled="skill.tier === 'P0'"
                     @change="toggleMountedSkill(skill.name)"
                   />
-                  <span>{{ skill.icon }} {{ t(skill.labelKey) }}</span>
+                  <span>{{ skill.icon }} {{ mountedSkillLabel(skill.name) }}</span>
                   <small v-if="skill.tier === 'P0'">必需</small>
                 </label>
               </div>

@@ -508,7 +508,7 @@ export default {
       '多个孩子请分别创建辅导助手，并绑定各自的私聊；档案、学习记录和记忆分别保存。',
     autoName: '{child}的辅导助手 · {grade}',
     assistantName: '{child}的辅导助手',
-    cardDesc: '{grade} · 数学教材与进度已绑定 · 按年级边界讲解',
+    cardDesc: '{grade} · 数学教材与当前进度 · 按年级边界讲解',
     back: '上一步',
     create: '创建',
     cancel: '取消',

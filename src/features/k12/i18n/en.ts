@@ -523,7 +523,7 @@ export default {
       'Create a tutor for each child and link their private chat; profiles, learning records and memories are stored separately.',
     autoName: "{child}'s Study Assistant · {grade}",
     assistantName: "{child}'s Study Assistant",
-    cardDesc: '{grade} · Math textbook and progress linked · Teaching bounded by grade level',
+    cardDesc: '{grade} · Math textbook and current progress · Teaching bounded by grade level',
     back: 'Back',
     create: 'Create',
     cancel: 'Cancel',
