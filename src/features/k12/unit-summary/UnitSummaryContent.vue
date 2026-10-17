@@ -144,15 +144,22 @@ const emit = defineEmits<{ action: [action: 'artifacts' | 'download' | 'print'] 
   font-size: 12px;
   color: var(--hc-text-secondary);
 }
-.unit-summary h3 {
-  margin: 5px 0 10px;
-  font-size: 24px;
-  line-height: 1.4;
+.unit-summary__head > h3 {
+  margin: 6px 0;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
 }
 .unit-summary__delivery {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 18px;
+  gap: 4px 12px;
+  margin: 6px 0 10px;
+  line-height: 1.7;
+}
+.unit-summary__delivery > span[role='status'] {
+  color: var(--hc-text-primary);
 }
 .unit-summary__plan {
   margin-top: 14px;
