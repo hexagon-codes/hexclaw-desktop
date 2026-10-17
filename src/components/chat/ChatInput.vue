@@ -293,6 +293,29 @@ const unitPromptActive = computed(() => props.promptScenario === 'k12' && prompt
 // 单元候选的图片随最终正文一次发送；加入附件不启动作业/作品任务，实际意图仍由最终正文解析。
 const shouldInterceptScenarioImage = computed(() => !!props.scenarioImageIntercept && !unitPromptActive.value)
 const unitPromptExtra = computed(() => promptDraft.value ? promptExtra(inputText.value, promptDraft.value) : '')
+let promptExtraResizeObserver: ResizeObserver | undefined
+
+function syncUnitPromptExtraHeight() {
+  const field = promptExtraRef.value
+  if (!field) return
+  field.style.height = '44px'
+  field.style.height = `${Math.min(132, Math.max(44, field.scrollHeight + 2))}px`
+}
+
+watch(promptExtraRef, (field) => {
+  promptExtraResizeObserver?.disconnect()
+  if (!field) return
+  syncUnitPromptExtraHeight()
+  let width = field.clientWidth
+  // 只响应宽度重排，避免高度同步再次触发自身测量。
+  promptExtraResizeObserver = new ResizeObserver(() => {
+    if (field.clientWidth === width) return
+    width = field.clientWidth
+    syncUnitPromptExtraHeight()
+  })
+  promptExtraResizeObserver.observe(field)
+}, { flush: 'post' })
+watch(unitPromptExtra, () => { void nextTick(syncUnitPromptExtraHeight) }, { flush: 'post' })
 const unitPromptIntent = computed(() => promptIntent(inputText.value, promptDraft.value?.description ?? ''))
 const unitPromptTitle = computed(() => (promptDraft.value?.title ?? '').replace(/^梳理/, '').replace(/单元知识$/, '') + ' · 单元资料')
 const voiceSessionActive = ref(false)
@@ -1397,6 +1420,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   chatInputUnmounted = true
+  promptExtraResizeObserver?.disconnect()
   draftLoading.value = true
   nativePreviewScopeGeneration++
   stopVoiceTimer()
@@ -1670,7 +1694,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         <p class="hc-composer__prompt-intent">{{ unitPromptIntent }}</p>
         <div v-if="!promptDraft.editor_expanded" class="hc-composer__prompt-extra">
           <label for="unit-prompt-extra">{{ t('chat.unitPrompt.extra', '本次补充（选填）') }}</label>
-          <textarea id="unit-prompt-extra" ref="promptExtraRef" :value="unitPromptExtra" rows="2"
+          <textarea id="unit-prompt-extra" ref="promptExtraRef" :value="unitPromptExtra" rows="1"
             :placeholder="t('chat.unitPrompt.extraPlaceholder', '可补充本次指定单元或材料')"
             :disabled="disabled || submitting" @input="updateUnitPromptExtra" @keydown="handleKeydown"
             @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" />
@@ -1830,13 +1854,16 @@ defineExpose({ focus, setInput, triggerFileUpload })
 .hc-composer__prompt-draft { padding: 6px 4px 2px; min-width: 0; }
 .hc-composer__prompt-title { font-size: 14px; font-weight: 600; color: var(--hc-text-primary); }
 .hc-composer__prompt-intent { margin: 3px 0 5px; font-size: 12px; line-height: 1.5; color: var(--hc-text-secondary); }
-.hc-composer__prompt-extra label { font-size: 12px; color: var(--hc-text-secondary); }
+.hc-composer__prompt-extra label { display: block; margin-bottom: 6px; font-size: 12px; color: var(--hc-text-secondary); }
 .hc-composer__prompt-extra textarea {
-  display: block; box-sizing: border-box; width: 100%; min-height: 44px; padding: 5px 0;
-  border: 0; background: transparent; color: var(--hc-text-primary); resize: none;
+  display: block; box-sizing: border-box; width: 100%; height: 44px; min-height: 44px; max-height: 132px; padding: 9px 12px;
+  border: 1px solid var(--hc-border); border-radius: 8px; background: var(--hc-bg-input); color: var(--hc-text-primary); resize: none; overflow-y: auto;
   font: inherit; font-size: 14px; line-height: 1.6;
 }
-.hc-composer__prompt-extra textarea:focus-visible, .hc-composer__prompt-toggle:focus-visible {
+.hc-composer__prompt-extra textarea:focus {
+  outline: none; border-color: var(--hc-accent); box-shadow: var(--hc-focus-shadow, 0 0 0 3px var(--hc-accent-subtle));
+}
+.hc-composer__prompt-toggle:focus-visible {
   outline: 2px solid var(--hc-accent); outline-offset: 2px; border-radius: 4px;
 }
 .hc-composer__prompt-toggle { border: 0; padding: 5px 0; background: transparent; color: var(--hc-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
