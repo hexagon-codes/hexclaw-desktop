@@ -105,6 +105,14 @@ export const api = ofetch.create(
       'Content-Type': 'application/json',
     },
     onRequest({ request, options }) {
+      if (isTauri() && managedSidecarPath(request)) {
+        // 重试沿用首次连接归属；旧回执被取消后不能带着原参数改发到新后端。
+        const headers = new Headers(options.headers)
+        const scope = headers.get('x-hexclaw-connection-scope') ?? backendScopeKey()
+        assertBackendActive(scope)
+        headers.set('x-hexclaw-connection-scope', scope)
+        options.headers = headers
+      }
       logger.debug(`→ ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`)
     },
     onResponse({ request, response, options }) {
