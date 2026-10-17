@@ -291,7 +291,9 @@ export function createUnitSummaryController(options: {
     const artifact = materialArtifact(view)
     if (!artifact?.reference || busy.value[artifact.id]) return
     const agent = context.agent,
-      scope = context.scope
+      scope = context.scope,
+      token = generation,
+      identity = currentIdentity()
     busy.value = { ...busy.value, [artifact.id]: true }
     try {
       if (scope !== backendScopeKey()) throw new Error('Backend connection changed')
@@ -319,9 +321,9 @@ export function createUnitSummaryController(options: {
         await savePdfArtifact(pdf, artifact.reference.filename.replace(/\.pdf$/i, ''))
       }
     } catch (cause) {
-      report(cause)
+      if (active(token, identity)) report(cause)
     } finally {
-      if (scope === context.scope) {
+      if (active(token, identity)) {
         const next = { ...busy.value }
         delete next[artifact.id]
         busy.value = next
@@ -329,12 +331,14 @@ export function createUnitSummaryController(options: {
     }
   }
   async function runArtifact(id: string, action: string) {
+    const token = generation,
+      identity = currentIdentity()
     try {
       if (action === 'open') return await openArtifact(id)
       const view = current.value.find((item) => materialArtifact(item)?.id === id)
       if (view && (action === 'download' || action === 'print')) await run(view, action)
     } catch (cause) {
-      report(cause)
+      if (active(token, identity)) report(cause)
     }
   }
   async function resume(job: UnitSummaryJobDTO) {
@@ -342,15 +346,17 @@ export function createUnitSummaryController(options: {
       await refresh()
       return
     }
+    const token = generation,
+      identity = currentIdentity()
     try {
       await k12ResumeUnitSummaryJob(job.id, {
         agent: context.agent,
         expected_revision: job.revision,
         idempotency_key: crypto.randomUUID(),
       })
-      await refresh()
+      if (active(token, identity)) await refresh()
     } catch (cause) {
-      report(cause)
+      if (active(token, identity)) report(cause)
     }
   }
   function dispose() {
