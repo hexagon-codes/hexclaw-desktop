@@ -8,7 +8,7 @@
  * 选中 prompt → 抛 {kind:'prompt', content}（ChatInput 插正文，含 $ARGUMENTS 填参）。
  * Prompt 数据 = 服务端 Prompt 库（运营增删不发版）+ 本地模板；Skill 数据由父组件传入。
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText, Pin, Plus, Wand2, Upload, Store } from 'lucide-vue-next'
 import { getPrompts, type PromptInvocation } from '@/api/prompts'
@@ -218,12 +218,26 @@ function handleKeydown(e: KeyboardEvent) {
   const list = filtered.value
   const createIdx = showCreate.value ? list.length : -1
   const maxIdx = showCreate.value ? list.length : Math.max(0, list.length - 1)
-  if (e.key === 'ArrowDown') {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
-    selectedIndex.value = Math.min(selectedIndex.value + 1, maxIdx)
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    selectedIndex.value = Math.max(selectedIndex.value - 1, 0)
+    selectedIndex.value = e.key === 'ArrowDown'
+      ? Math.min(selectedIndex.value + 1, maxIdx)
+      : Math.max(selectedIndex.value - 1, 0)
+    if (props.promptScenario === 'k12') {
+      void nextTick(() => {
+        if (!props.visible || props.promptScenario !== 'k12') return
+        const container = rootEl.value?.querySelector<HTMLElement>('.tpl-popup__list')
+        const selected = container?.querySelector<HTMLElement>('.tpl-popup__item--active')
+        if (!container || !selected) return
+        // 只滚动当前列表纵轴，保持输入焦点、横向位置及外部阅读位置。
+        const bounds = container.getBoundingClientRect()
+        const item = selected.getBoundingClientRect()
+        const top = bounds.top + container.clientTop
+        const bottom = top + container.clientHeight
+        if (item.top < top) container.scrollTop = Math.floor(container.scrollTop + item.top - top)
+        else if (item.bottom > bottom) container.scrollTop = Math.ceil(container.scrollTop + item.bottom - bottom)
+      })
+    }
   } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault()
     if (props.promptScenario === 'k12' && !list.length) return
@@ -258,6 +272,7 @@ defineExpose({ handleKeydown })
       v-if="visible"
       ref="rootEl"
       class="tpl-popup"
+      data-scroll-reveal="off"
       :class="{ 'tpl-popup--k12': promptScenario === 'k12' }"
       :style="{ bottom: position.bottom + 'px', left: position.left + 'px' }"
     >
@@ -433,9 +448,11 @@ defineExpose({ handleKeydown })
   flex-shrink: 0;
 }
 /* K12菜单保留短说明，完整专业正文只进入编辑区。普通菜单沿原单行呈现。 */
-.tpl-popup--k12 { width: min(420px, calc(100vw - 16px)); }
+.tpl-popup--k12 { width: min(360px, calc(100vw - 16px)); }
+.tpl-popup--k12 .tpl-popup__list { overflow-x: hidden; }
 .tpl-popup--k12 .tpl-popup__item { flex-wrap: wrap; }
-.tpl-popup--k12 .tpl-popup__preview { width: 100%; max-width: none; margin-left: 22px; line-height: 1.5; }
+.tpl-popup--k12 .tpl-popup__name { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.tpl-popup--k12 .tpl-popup__preview { width: calc(100% - 22px); max-width: none; margin-left: 22px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 
 .tpl-popup__item--create {
   border-top: 1px solid var(--hc-divider);

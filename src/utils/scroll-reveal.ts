@@ -94,6 +94,11 @@ export function installScrollReveal(
   const resizeObserver =
     typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => paint())
 
+  // 浮层可局部隐藏镜像滚动条，原容器滚动与键盘行为保持。
+  function excludesScrollbar(element: unknown): boolean {
+    return element instanceof Element && Boolean(element.closest('[data-scroll-reveal="off"]'))
+  }
+
   function asScrollable(element: unknown): HTMLElement | null {
     if (!(element instanceof HTMLElement)) return null
     const style = view?.getComputedStyle(element)
@@ -107,6 +112,7 @@ export function installScrollReveal(
   }
 
   function findScrollable(node: EventTarget | null): HTMLElement | null {
+    if (excludesScrollbar(node)) return null
     let element = node instanceof HTMLElement ? node : null
     while (element) {
       const scrollable = asScrollable(element)
@@ -165,7 +171,7 @@ export function installScrollReveal(
   }
 
   function paint() {
-    if (!active?.isConnected) {
+    if (!active?.isConnected || excludesScrollbar(active)) {
       hide()
       return
     }
@@ -197,6 +203,10 @@ export function installScrollReveal(
   }
 
   function show(element: HTMLElement) {
+    if (excludesScrollbar(element)) {
+      hide()
+      return
+    }
     if (active !== element) {
       resizeObserver?.disconnect()
       active = element
@@ -231,6 +241,10 @@ export function installScrollReveal(
   }
 
   const onScroll = (event: Event) => {
+    if (excludesScrollbar(event.target)) {
+      hide()
+      return
+    }
     if (event.target instanceof Element) markScrolling(event.target)
     const element = asScrollable(event.target) ?? findScrollable(event.target)
     if (!element) return
@@ -238,6 +252,10 @@ export function installScrollReveal(
     scheduleHide()
   }
   const onPointerOver = (event: PointerEvent) => {
+    if (excludesScrollbar(event.target)) {
+      hide()
+      return
+    }
     const element = findScrollable(event.target)
     if (element) show(element)
   }
