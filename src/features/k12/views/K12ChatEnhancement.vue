@@ -208,6 +208,9 @@ function handleUnitContentAction(
 watch(
   [() => props.agentId, () => props.sessionId, () => backendScopeKey()],
   ([agent, session]) => {
+    // 会话切换会复用组件，旧原生打印回执不能进入新的会话。
+    unitPrintController.value?.close(true)
+    finalArtifactPrintController.value?.close(true)
     unitMaterials.setContext(agent || '', session || '')
     emit('update:requestMetadata', {})
     unitMaterials.setMessages(props.messages || [])
