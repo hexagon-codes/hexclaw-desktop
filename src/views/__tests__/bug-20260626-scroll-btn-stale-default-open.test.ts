@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+
+enableAutoUnmount(afterEach)
 
 /**
  * BUG-20260626（截图2）：打开既有会话、视口已自动停在最底（下面无内容）时，
@@ -111,13 +113,6 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
   for (const key of Object.keys(original)) mocked[key] = stub
   return mocked
 })
-vi.mock('markdown-it', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    render: (s: string) => `<p>${s}</p>`,
-    renderer: { rules: { fence: null } },
-    utils: { escapeHtml: (s: string) => s },
-  })),
-}))
 vi.mock('vue-router', () => ({
   useRoute: vi.fn(() => mockRoute),
   useRouter: vi.fn(() => ({ push: mockRouterPush, replace: mockRouterReplace })),

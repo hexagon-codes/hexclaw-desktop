@@ -1073,7 +1073,7 @@ describe('QuickChatView', () => {
       },
     )
 
-    it('fails closed when a receipt tries to rewrite Quick Chat request=off to on', async () => {
+    it('retains a trusted inherited on receipt instead of forcing the default Quick Chat projection off', async () => {
       const wrapper = await mountReasoningStatusQuickChat()
       await sendReasoningStatusFixture(wrapper)
 
@@ -1090,12 +1090,11 @@ describe('QuickChatView', () => {
       })
       await flushPromises()
 
-      const status = wrapper.get('[data-component="AssistantRunStatus"][role="status"]')
-      expect(status.attributes('data-reasoning-request')).toBe('off')
-      expect(status.attributes('data-reasoning-support')).toBe('unknown')
-      expect(status.attributes('data-reasoning-execution')).toBe('unknown')
-      expect(status.text()).toContain('正在回复…')
-      expect(wrapper.findAll('[data-component="ThinkingProgress"]')).toHaveLength(0)
+      const status = wrapper.get('[data-component="ThinkingProgress"]')
+      expect(status.attributes('data-reasoning-request')).toBe('on')
+      expect(status.attributes('data-reasoning-support')).toBe('supported')
+      expect(status.attributes('data-reasoning-execution')).toBe('applied')
+      expect(wrapper.findAll('[data-component="AssistantRunStatus"]')).toHaveLength(0)
     })
 
     it('does not add a deep-thinking entry to Quick Chat', async () => {

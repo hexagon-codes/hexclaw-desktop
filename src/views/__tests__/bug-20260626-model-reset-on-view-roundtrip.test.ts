@@ -130,13 +130,6 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
   return mocked
 })
 
-vi.mock('markdown-it', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    render: (s: string) => `<p>${s}</p>`,
-    renderer: { rules: { fence: null } },
-    utils: { escapeHtml: (s: string) => s },
-  })),
-}))
 
 vi.mock('vue-router', () => ({
   useRoute: vi.fn(() => mockRoute),

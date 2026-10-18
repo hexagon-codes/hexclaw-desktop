@@ -156,7 +156,7 @@ describe('chatService', () => {
     await pending
   })
 
-  it('requests thinking off for qwen thinking models via backend', async () => {
+  it('preserves automatic reasoning without inferring controls from a model name via backend', async () => {
     const pending = sendViaBackend(
       'hi',
       's1',
@@ -168,10 +168,10 @@ describe('chatService', () => {
     socket.readyState = MockRequestWebSocket.OPEN
     socket.onopen?.()
     expect(JSON.parse(socket.send.mock.calls[0]![0])).toMatchObject({
-      metadata: { thinking: 'off' },
       model: 'qwen3.5:9b',
       provider: 'Ollama (本地)',
     })
+    expect(JSON.parse(socket.send.mock.calls[0]![0])).not.toHaveProperty('metadata.thinking')
     socket.onmessage?.({ data: JSON.stringify({ type: 'reply', content: 'ok' }) })
     await pending
   })
@@ -240,7 +240,7 @@ describe('chatService', () => {
     )
   })
 
-  it('requests thinking off for qwen thinking models via WebSocket by default', async () => {
+  it('preserves automatic reasoning without inferring controls from a model name via WebSocket', async () => {
     wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
       cb({ content: 'done', type: 'reply' })
       return () => {}
@@ -259,7 +259,7 @@ describe('chatService', () => {
       undefined,
       undefined,
       undefined,
-      { thinking: 'off' },
+      undefined,
       undefined,
       expect.any(Function),
     )

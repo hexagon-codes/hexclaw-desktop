@@ -296,15 +296,6 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
   return mocked
 })
 
-// Mock markdown-it（MarkdownRenderer 依赖）
-vi.mock('markdown-it', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    render: (s: string) => `<p>${s}</p>`,
-    renderer: { rules: { fence: null } },
-    utils: { escapeHtml: (s: string) => s },
-  })),
-}))
-
 /**
  * 创建测试用 i18n 实例
  */
