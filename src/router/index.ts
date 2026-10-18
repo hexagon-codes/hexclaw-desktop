@@ -57,6 +57,8 @@ const router = createRouter({
       meta: { layout: 'blank' },
     },
     ...buildNavigationRoutes(),
+    { path: '/automation/workflows/editor', name: 'workflow-editor', component: navRouteComponents.automation },
+    { path: '/automation/workflows/history', name: 'workflow-history', component: navRouteComponents.automation },
     // 旧路由重定向（兼容书签/收藏）
     { path: '/dashboard', redirect: '/chat' },
     { path: '/memory', redirect: '/knowledge/memory' },

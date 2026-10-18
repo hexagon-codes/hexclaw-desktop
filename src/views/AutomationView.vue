@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Plus, RefreshCw } from 'lucide-vue-next'
+import { Plus, RefreshCw, Upload } from 'lucide-vue-next'
 import TasksView from '@/views/TasksView.vue'
 import WebhookPanel from '@/components/automation/WebhookPanel.vue'
 import WorkflowPanel from '@/components/automation/WorkflowPanel.vue'
@@ -57,7 +57,7 @@ const activeTab = computed<AutomationTab>({
 type PermissionTargetPanel = { locatePermissionTarget?: (taskRef: string, decisionId?: string) => Promise<boolean> }
 const tasksViewRef = ref<PermissionTargetPanel & { openCreateForm?: () => void; loadJobs?: () => void; canCreate?: boolean }>()
 const webhookPanelRef = ref<PermissionTargetPanel & { loadWebhooks?: () => void; openCreateForm?: () => void; canCreate?: boolean }>()
-const workflowPanelRef = ref<PermissionTargetPanel & { loadWorkflows?: () => void; createWorkflow?: () => void }>()
+const workflowPanelRef = ref<PermissionTargetPanel & { loadWorkflows?: () => void; createWorkflow?: () => void; openImport?: () => void }>()
 let targetRevision = 0
 watch(() => [route.query.task_ref, route.query.source, route.query.decision_id, activeTab.value], async () => {
   const taskRef = typeof route.query.task_ref === 'string' ? route.query.task_ref : ''
@@ -124,6 +124,7 @@ function onPrimaryAction() {
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
       <template #actions>
+        <button v-if="activeTab === 'workflows'" type="button" class="hc-btn" @click="workflowPanelRef?.openImport?.()"><Upload :size="14" /> {{ t('workflow.transfer.importTitle') }}</button>
         <!-- 刷新图标按钮（真功能，按 activeTab 分别刷新任务/Webhook/工作流；原型 au-0 仅示意 icbtn） -->
         <button
           class="hc-btn hc-btn-ghost"

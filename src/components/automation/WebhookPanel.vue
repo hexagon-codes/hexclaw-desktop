@@ -156,6 +156,7 @@ function webhookCardTitle(webhook: Webhook): string {
 }
 
 function webhookBindingLabel(webhook: Webhook): string {
+  if (webhook.workflow_id) return `Workflow: ${webhook.workflow_id}`
   if (!webhook.job_id) return '绑定：Prompt'
   const job = cronJobs.value.find((item) => item.id === webhook.job_id)
   return `绑定：${job ? cronJobDisplayName(job) : 'Cron Job'}`
