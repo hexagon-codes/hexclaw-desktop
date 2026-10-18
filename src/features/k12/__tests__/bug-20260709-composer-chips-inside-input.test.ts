@@ -15,8 +15,8 @@
  *
  * 断言的是**正确行为**——未修复代码上本文件必须 FAIL（RED 证据）。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -26,6 +26,8 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 import chatViewSource from '@/views/ChatView.vue?raw'
 
+enableAutoUnmount(afterEach)
+
 const CHIPS = ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验']
 const PROJECTED_CHIPS = [
   { id: 'k12-composer-chip-0', label: CHIPS[0], actionId: 'subject-capabilities' },
@@ -34,6 +36,7 @@ const PROJECTED_CHIPS = [
 ]
 
 vi.mock('@/api/k12', () => ({
+  k12ListUnitSummaryDocuments: vi.fn().mockResolvedValue({ documents: [], jobs: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
     header_tabs: ['辅导', '错题本'],
     message_badges: [],

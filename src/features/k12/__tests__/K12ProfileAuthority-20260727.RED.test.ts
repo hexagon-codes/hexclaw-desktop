@@ -15,10 +15,9 @@ describe('[K12-PROFILE-AUTHORITY] 孩子档案完整编辑面定版契约', () =
   })
 
   it('[K12-PROFILE-050] 当前版本只渲染数学教材进度', () => {
-    expect(profileSource).toContain(
-      'const VISIBLE_TEXTBOOK_SUBJECTS = [COMPAT_TEXTBOOK_SUBJECTS[0]]',
-    )
-    expect(profileSource).toContain('v-for="subject in VISIBLE_TEXTBOOK_SUBJECTS"')
+    const rows = [...profileSource.matchAll(/data-testid="k12-textbook-row"\s+data-subject="([^"]+)"/g)]
+    expect(rows.map((match) => match[1])).toEqual(['math'])
+    expect(profileSource).toContain('v-model="textbookEditions.math"')
     expect(profileSource).not.toContain('v-for="subject in COMPAT_TEXTBOOK_SUBJECTS"')
   })
 

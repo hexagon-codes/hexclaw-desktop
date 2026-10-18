@@ -561,6 +561,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
         provider: 'hexclaw-gpt',
         model: 'gpt-5.6-sol',
         selection_source: 'explicit' as const,
+        message_locale: 'zh-CN' as const,
       },
     }
 

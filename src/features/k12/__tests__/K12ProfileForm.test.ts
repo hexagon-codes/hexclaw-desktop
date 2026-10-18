@@ -31,6 +31,16 @@ vi.mock('@/api/agents', () => ({
   getAgents: () => h.getAgentsSpy(),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
+vi.mock('@/api/skills', () => ({
+  getSkills: vi.fn().mockResolvedValue({
+    skills: [
+      { name: 'k12-pedagogy', display_names: { 'zh-CN': '渐进式辅导' } },
+      { name: 'homework-checker', display_names: { 'zh-CN': '作业批改' } },
+    ],
+    total: 2,
+    dir: '',
+  }),
+}))
 vi.mock('@/api/k12', () => ({
   k12UpdateProfile: (r: unknown) => h.profileSpy(r),
   k12GetProfile: (agent: string) => h.getProfileSpy(agent),
@@ -131,6 +141,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         subject: 'math',
         revision: 1,
         textbook_binding_id: 'binding-人教版-五年级上册',
+        textbook_manifest_id: 'manifest-math-1',
         textbook_edition: '人教版',
         textbook_version: '2022',
         title: '数学',
@@ -362,7 +373,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
             art: '湘美版',
           },
         },
-        curriculum_progress: expect.objectContaining({ volume: '上册' }),
+        curriculum_progress: undefined,
       }),
     )
   })
@@ -538,9 +549,8 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
     expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
-    await B().find('input[placeholder="起始页"]').setValue('1')
-    expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeDefined()
-    await B().find('input[placeholder="起始页"]').setValue('')
+    expect(B().find('input[placeholder="起始页"]').attributes('disabled')).toBeDefined()
+    expect(B().find('input[placeholder="结束页"]').attributes('disabled')).toBeDefined()
     expect(B().find('.k12pf__btn--primary').attributes('disabled')).toBeUndefined()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -566,7 +576,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(bundle.profile.grade_term).toBe('六年级上')
     expect(bundle.profile.child_name).toBe('小明')
     expect(bundle.profile.subject_textbooks.math).toBe('人教版')
-    expect(bundle.curriculum_progress).toBeNull()
+    expect(bundle.curriculum_progress).toBeUndefined()
     expect(bundle.expected_profile_revision).toBe(2)
     expect(bundle.expected_progress_revision).toBe(2)
     expect(bundle.expected_settings_revision).toBe(settings.revision)
@@ -577,14 +587,6 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       arithmetic_minutes: settings.arithmetic_minutes,
     }))
     expect(w.emitted('created')).toBeTruthy()
-  })
-
-  it('卡片副标题：建档严格写定版原型的数学教材进度边界', async () => {
-    render()
-    await B().find('input.k12pf__input').setValue('小明')
-    await B().find('.k12pf__btn--primary').trigger('click')
-    await flushPromises()
-    const payload = h.registerSpy.mock.calls[0]![0] as { description: string }
   })
 
   it('卡片副标题：改档改年级 → profile-bundle 同步派生 description（不写死）', async () => {
@@ -609,9 +611,6 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const bundle = h.profileBundleSpy.mock.calls[0]![0] as {
-      agent_config: { description: string }
-    }
     expect(h.updateSpy).not.toHaveBeenCalled()
   })
 
@@ -831,16 +830,14 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     )
     expect(root.find('[data-testid="k12-textbook-binding-status"]').exists()).toBe(true)
     expect(root.find('[data-testid="k12-textbook-binding-status"]').text()).toBe('已识别，可关联')
-    expect(root.find('[data-testid="k12-textbook-manifest"] .hc-select__label').text()).toContain(
-      ' · 可确认',
-    )
+    expect(root.find('[data-testid="k12-textbook-manifest"] .hc-select__label').text()).toBe(items[0].document_title)
     const manifestSelect = wrapper.findAllComponents(HcSelect).find(
       (select) => select.attributes('data-testid') === 'k12-textbook-manifest',
     )!
     expect(manifestSelect.props('options').slice(1)).toEqual([
       {
         value: 'failed-manifest-0',
-        label: `${items[0].document_title} · 教材目录待补齐`,
+        label: `${items[0].document_title} · ${failureMessages[0]!.trim()}`,
         disabled: true,
       },
       {

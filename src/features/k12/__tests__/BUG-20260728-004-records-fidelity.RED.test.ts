@@ -202,13 +202,13 @@ describe('BUG-20260728-004 learning-record prototype fidelity', () => {
 
   it('keeps the creative-work shell on the prototype card surfaces', () => {
     expect(creativeWorksSource).toMatch(
-      /\.k12cw__filter\s*\{[^}]*display:\s*grid;[^}]*gap:\s*9px;[^}]*background:\s*rgba\(255,\s*254,\s*249,\s*0\.9\)/s,
+      /\.k12cw__filter\s*\{[^}]*display:\s*grid;[^}]*gap:\s*9px;[^}]*background:\s*var\(--hc-bg-card\)/s,
     )
     expect(creativeWorksSource).toMatch(
-      /\.k12cw__rules\s*\{[^}]*background:\s*rgba\(255,\s*254,\s*249,\s*0\.96\)/s,
+      /\.k12cw__rules\s*\{[^}]*background:\s*var\(--k12-card,\s*var\(--hc-bg-card\)\)/s,
     )
     expect(creativeWorksSource).toMatch(
-      /\.k12cw__card\s*\{[^}]*background:\s*rgba\(255,\s*254,\s*249,\s*0\.9\)/s,
+      /\.k12cw__card\s*\{[^}]*background:\s*var\(--hc-bg-card\)/s,
     )
     expect(creativeWorksSource).toMatch(/\.k12cw__rules b\s*\{[^}]*margin-bottom:\s*0/s)
     expect(recordsSource).toMatch(

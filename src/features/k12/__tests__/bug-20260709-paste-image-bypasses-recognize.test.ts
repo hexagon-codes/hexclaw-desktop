@@ -72,6 +72,7 @@ const { k12UploadAsset, k12CreateImageTask } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/k12', () => ({
+  k12ListUnitSummaryDocuments: vi.fn().mockResolvedValue({ documents: [], jobs: [] }),
   k12UploadAsset,
   k12CreateImageTask,
   k12GetImageTask: vi.fn(),

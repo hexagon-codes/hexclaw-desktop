@@ -32,7 +32,7 @@ describe('BUG-20260728-006 child-profile prototype authority', () => {
     ).toBe(true)
     expect(
       templateSource.includes(
-        '关联数学教材和当前进度；只有已确认的教材依据会参与推荐。',
+        '教材可用后，系统自动推荐进度，你可随时调整。',
       ),
     ).toBe(true)
     expect(templateSource.includes('同步巩固与口算热身默认关闭')).toBe(false)
@@ -52,7 +52,7 @@ describe('BUG-20260728-006 child-profile prototype authority', () => {
     expect(positions.every((position) => position >= 0)).toBe(true)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)
     expect(
-      /<div\s+v-if="!isEdit"[^>]*class="k12pf__field"[\s\S]*?t\('k12\.profile\.textbookBySubject'\)/.test(
+      /class="k12pf__textbook-row k12pf__textbook-row--math"[\s\S]*?data-subject="math"/.test(
         templateSource,
       ),
     ).toBe(true)

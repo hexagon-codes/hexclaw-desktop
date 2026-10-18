@@ -14,6 +14,7 @@ import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 // Vue 要求 Teleport target 在 Teleport 挂载时已存在——真实顺序下 target 尚未渲染 → 定位失败、内容丢失。
 
 vi.mock('@/api/k12', () => ({
+  k12ListUnitSummaryDocuments: vi.fn().mockResolvedValue({ documents: [], jobs: [] }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),

@@ -10,6 +10,7 @@ import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 const recovery = vi.hoisted(() => ({ list: vi.fn() }))
 
 vi.mock('@/api/k12', () => ({
+  k12ListUnitSummaryDocuments: vi.fn().mockResolvedValue({ documents: [], jobs: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({ composer_chips: [] }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),

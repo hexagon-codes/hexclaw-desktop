@@ -7,8 +7,8 @@
  *
  * 同时锁死：识题/渐进提示**不在头部**（识题走 composer 拍照入口、渐进提示是辅导默认行为 + composer chip）。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mount, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -16,7 +16,10 @@ import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
+enableAutoUnmount(afterEach)
+
 vi.mock('@/api/k12', () => ({
+  k12ListUnitSummaryDocuments: vi.fn().mockResolvedValue({ documents: [], jobs: [] }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(), k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
