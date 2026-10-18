@@ -43,13 +43,18 @@ describe('K12 Canvas/Workflow API contract', () => {
     localStorage.clear()
   })
 
-  it('keeps the nine route clients as the exact runtime surface', () => {
+  it('keeps the K12 route clients and the generic execution extensions explicit', () => {
     expect(Object.keys(canvasApi).filter((name) => typeof canvasApi[name as keyof typeof canvasApi] === 'function').sort()).toEqual([
+      'bindWorkflowTrigger',
+      'cancelWorkflowRun',
       'deleteWorkflow',
       'getPanel',
       'getWorkflowRun',
+      'getWorkflowRuns',
+      'getWorkflowTriggers',
       'getWorkflows',
       'listPanels',
+      'removeWorkflowTrigger',
       'resumeWorkflowRun',
       'runWorkflow',
       'saveWorkflow',

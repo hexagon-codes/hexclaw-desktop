@@ -68,7 +68,7 @@ export function fromNativeError(err: unknown): ApiError {
     const fetchErr = err as Error & { status?: number; statusCode?: number; data?: { error?: string } }
     const status = fetchErr.status ?? fetchErr.statusCode
     if (status) {
-      return fromHttpStatus(status, fetchErr.data?.error ?? err.message)
+      return { ...fromHttpStatus(status, fetchErr.data?.error ?? err.message), cause: err }
     }
     return createApiError('UNKNOWN', err.message, undefined, err)
   }

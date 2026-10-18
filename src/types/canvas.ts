@@ -5,6 +5,57 @@
  */
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
+export type WorkflowResourceKey = 'skills' | 'prompts' | 'knowledge' | 'tools'
+export interface WorkflowDeliverySettings {
+  session: { mode: 'none' | 'source' | 'workflow' }
+  dingtalk: { enabled: boolean; instance_id: string; chat_id: string }
+  email: { enabled: boolean; instance_id: string; to: string; subject: string }
+  directory: { enabled: boolean; location: 'desktop' | 'service'; path: string; directory_ref: string; client_id: string; label?: string }
+}
+export interface WorkflowGeneratedFile {
+  id: string; node_id: string; format: string; name: string
+  status: 'pending' | 'rendering' | 'ready' | 'failed'
+  download_url?: string; digest?: string; size?: number; mime?: string
+  error?: string; error_code?: string; created_at: string; updated_at: string
+}
+export interface WorkflowDelivery {
+  id: string
+  node_id: string
+  kind: 'session' | 'dingtalk' | 'email' | 'directory'
+  status: 'pending' | 'preparing' | 'sending' | 'accepted' | 'delivered' | 'failed' | 'outcome_unknown'
+  session_id?: string
+  instance_id?: string
+  chat_id?: string
+  error?: string
+  error_code?: string
+  external_message_id?: string
+  directory?: WorkflowDeliverySettings['directory']
+  files?: Array<{ artifact_id: string; name: string; digest: string; path?: string }>
+  parts?: Array<{ ordinal: number; status: string; attempts: number; external_message_id?: string; error?: string }>
+  updated_at?: string
+}
+export interface WorkflowStepSettings {
+  resources: Record<WorkflowResourceKey, { mode: 'inherit' | 'override' | 'none'; value: string[] }>
+  memory: { retrieval: { mode: 'inherit' | 'related' | 'none'; query: string }; writeback: { mode: 'inherit' | 'suggest' | 'none' } }
+  output: { kind: 'inherit' | 'text' | 'structured' | 'artifact'; fields: string; instructions: string; artifactKinds: string[] }
+  input_selection: { kind: 'text' | 'structured' | 'artifact'; field: string }
+  output_template: string
+  output_field: string
+  outputs: { formats: Array<'pdf' | 'md' | 'html'> }
+  delivery: WorkflowDeliverySettings
+}
+
+/** 请求配置与实际命中分开；空数组不表示发生过执行。 */
+export interface WorkflowStepReceipt {
+  effective_resources?: Record<string, unknown>
+  knowledge_hits?: unknown[]
+  memory_hits?: unknown[]
+  tool_calls?: unknown[]
+  artifacts?: MessageContent['attachments']
+  skill_receipts?: unknown[]
+  output_error?: string
+  retry_requires_review?: boolean
+}
 
 /** 画布节点 */
 export interface CanvasNode {
@@ -74,10 +125,11 @@ export interface Workflow {
   data?: Record<string, unknown>
   created_at: string
   updated_at: string
+  revision?: string
 }
 
 /** 工作流执行状态 */
-export type WorkflowRunStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type WorkflowRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'outcome_unknown'
 
 /** 工作流节点执行结果 */
 export interface WorkflowNodeRun {
@@ -87,14 +139,22 @@ export interface WorkflowNodeRun {
   status: string
   output?: string
   error?: string
+  provider_display_name?: string | null
+  model_id?: string | null
+  outcome_unknown?: boolean
   agent_role?: string
+  branches?: Array<{ agent: string; task?: string; status: string; output?: string; error?: string; provider_display_name?: string; model_id?: string; outcome_unknown?: boolean }>
   handoff_agent?: string
   started_at?: string
   finished_at?: string
+  resource_receipts?: Record<string, WorkflowStepReceipt>
 }
 
 /** 工作流执行结果 */
 export interface WorkflowRun {
+  generated_files?: WorkflowGeneratedFile[]
+  deliveries?: WorkflowDelivery[]
+  history_deleted?: boolean
   id: string
   workflow_id: string
   status: WorkflowRunStatus
@@ -112,6 +172,8 @@ export interface WorkflowRun {
   trigger_key?: string
   prior_run_id?: string
   retry_safe?: boolean
+  definition?: Workflow
+  resource_snapshots?: Record<string, Record<string, unknown>>
   started_at: string
   finished_at?: string
 }

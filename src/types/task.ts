@@ -5,7 +5,7 @@ export interface JobSpec {
    * 'agent': AI reasoning per run — script is empty and compiled.at is the
    * zero time ("0001-01-01T00:00:00Z"), so the UI must not render script info.
    */
-  runtime: 'python3' | 'agent'
+  runtime: 'python3' | 'agent' | 'workflow'
   script: string
   deps: string[]
   inputs?: Record<string, unknown>

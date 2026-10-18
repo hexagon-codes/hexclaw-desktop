@@ -64,6 +64,11 @@ export type {
   WorkflowRunStatus,
   WorkflowNodeRun,
   WorkflowRun,
+  WorkflowStepSettings,
+  WorkflowDeliverySettings,
+  WorkflowDelivery,
+  WorkflowResourceKey,
+  WorkflowStepReceipt,
 } from './canvas'
 export type {
   AppConfig,

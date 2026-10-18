@@ -17,6 +17,7 @@ export interface Webhook {
   has_secret: boolean
   prompt: string
   job_id?: string
+  workflow_id?: string
   user_id: string
   enabled: boolean
   last_event_at?: string

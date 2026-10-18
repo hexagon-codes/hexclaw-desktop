@@ -3,7 +3,7 @@
  *
  * 覆盖 listPanels / getPanel / sendCanvasEvent
  *        saveWorkflow / getWorkflows / deleteWorkflow / runWorkflow / getWorkflowRun
- *        localStorage fallback 逻辑
+ *        后端错误传播与本地数据保持
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -15,7 +15,6 @@ vi.mock('ofetch', () => ({
 }))
 
 import { listPanels, getPanel, sendCanvasEvent, saveWorkflow, getWorkflows, deleteWorkflow, runWorkflow, getWorkflowRun } from '../canvas'
-import type { Workflow } from '@/types/canvas'
 
 describe('Canvas API', () => {
   beforeEach(() => {
@@ -71,7 +70,7 @@ describe('Canvas API', () => {
     })
   })
 
-  // ─── Workflow CRUD with localStorage fallback ────
+  // ─── Workflow CRUD 错误合同 ────
 
   describe('saveWorkflow', () => {
     it('saves via API when available', async () => {
@@ -85,33 +84,18 @@ describe('Canvas API', () => {
       expect(result.id).toBe('wf1')
     })
 
-    it('falls back to localStorage when API fails', async () => {
+    it('propagates save failure without creating a local success', async () => {
       mockFetch.mockRejectedValue(new Error('503'))
-      const result = await saveWorkflow({ id: 'wf-local', name: 'Fallback', nodes: [], edges: [] })
-      expect(result.id).toBe('wf-local')
-      expect(result.name).toBe('Fallback')
-      expect(result.created_at).toBeTruthy()
-      expect(result.updated_at).toBeTruthy()
-
-      // Verify localStorage was written
-      const stored = JSON.parse(localStorage.getItem('hexclaw_workflows') || '[]')
-      expect(stored).toHaveLength(1)
-      expect(stored[0].id).toBe('wf-local')
+      await expect(saveWorkflow({ id: 'wf-local', name: 'Test', nodes: [], edges: [] })).rejects.toThrow('503')
+      expect(localStorage.getItem('hexclaw_workflows')).toBeNull()
     })
 
-    it('updates existing workflow in localStorage', async () => {
-      // First save
+    it('preserves an existing local draft when backend save fails', async () => {
+      const original = JSON.stringify([{ id: 'wf1', name: 'V1' }])
+      localStorage.setItem('hexclaw_workflows', original)
       mockFetch.mockRejectedValue(new Error('offline'))
-      await saveWorkflow({ id: 'wf1', name: 'V1', nodes: [], edges: [] })
-
-      // Second save (update)
-      const result = await saveWorkflow({ id: 'wf1', name: 'V2', nodes: [{ id: 's1' }] as unknown as Workflow['nodes'], edges: [] })
-      expect(result.name).toBe('V2')
-
-      // Should still only have 1 workflow
-      const stored = JSON.parse(localStorage.getItem('hexclaw_workflows') || '[]')
-      expect(stored).toHaveLength(1)
-      expect(stored[0].name).toBe('V2')
+      await expect(saveWorkflow({ id: 'wf1', name: 'V2', nodes: [], edges: [] })).rejects.toThrow('offline')
+      expect(localStorage.getItem('hexclaw_workflows')).toBe(original)
     })
   })
 
@@ -122,18 +106,15 @@ describe('Canvas API', () => {
       expect(result).toHaveLength(1)
     })
 
-    it('falls back to localStorage when API fails', async () => {
+    it('does not present local drafts as saved backend workflows', async () => {
       localStorage.setItem('hexclaw_workflows', JSON.stringify([{ id: 'local-wf' }]))
       mockFetch.mockRejectedValue(new Error('offline'))
-      const result = await getWorkflows()
-      expect(result).toHaveLength(1)
-      expect(result[0]!.id).toBe('local-wf')
+      await expect(getWorkflows()).rejects.toThrow('offline')
     })
 
-    it('returns empty array when both fail', async () => {
+    it('propagates unavailable backend instead of reporting an empty list', async () => {
       mockFetch.mockRejectedValue(new Error('offline'))
-      const result = await getWorkflows()
-      expect(result).toEqual([])
+      await expect(getWorkflows()).rejects.toThrow('offline')
     })
 
     it('handles null workflows from API', async () => {
@@ -153,14 +134,12 @@ describe('Canvas API', () => {
       )
     })
 
-    it('deletes from localStorage when API fails', async () => {
-      localStorage.setItem('hexclaw_workflows', JSON.stringify([{ id: 'wf1' }, { id: 'wf2' }]))
+    it('propagates deletion failure and preserves local drafts', async () => {
+      const original = JSON.stringify([{ id: 'wf1' }, { id: 'wf2' }])
+      localStorage.setItem('hexclaw_workflows', original)
       mockFetch.mockRejectedValue(new Error('offline'))
-      await deleteWorkflow('wf1')
-
-      const stored = JSON.parse(localStorage.getItem('hexclaw_workflows') || '[]')
-      expect(stored).toHaveLength(1)
-      expect(stored[0].id).toBe('wf2')
+      await expect(deleteWorkflow('wf1')).rejects.toThrow('offline')
+      expect(localStorage.getItem('hexclaw_workflows')).toBe(original)
     })
   })
 
