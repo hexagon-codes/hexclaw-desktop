@@ -47,6 +47,7 @@ const emit = defineEmits<{
 .hc-utabs {
   display: flex;
   gap: 24px;
+  min-height: 39px;
   border-bottom: 0.5px solid var(--hc-border);
 }
 
@@ -65,6 +66,7 @@ const emit = defineEmits<{
   font-size: 13px;
   font-weight: 400;
   font-family: inherit;
+  line-height: normal;
   white-space: nowrap;
   transition: color 0.15s var(--hc-ease-out), border-color 0.15s var(--hc-ease-out);
 }

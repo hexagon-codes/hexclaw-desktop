@@ -128,8 +128,11 @@ function onKeydown(e: KeyboardEvent) {
       else openDropdown()
       break
     case 'Escape':
-      e.preventDefault()
-      closeDropdown()
+      if (open.value) {
+        e.preventDefault()
+        e.stopPropagation()
+        closeDropdown()
+      }
       break
     case 'Tab':
       closeDropdown(false)

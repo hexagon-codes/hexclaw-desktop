@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatLogTime } from '@/utils/time'
-import { ScrollText, Eraser, Download, RefreshCw, Search, Copy, X, ArrowDown } from 'lucide-vue-next'
+import { ScrollText, Eraser, Download, RefreshCw, Search, Copy, ArrowDown } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import type { LogGroup } from '@/stores/logs'
 import { useToast } from '@/composables/useToast'
@@ -10,6 +10,7 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import DetailDrawer from '@/components/common/DetailDrawer.vue'
 import { saveBlobInApp } from '@/utils/download'
 import { isTauri } from '@/utils/platform'
 import type { LogEntry, LogQuery } from '@/types'
@@ -154,7 +155,7 @@ function scrollIndexIntoView(i: number) {
 // ─────────────────────────── 复制 ───────────────────────────
 async function copy(text: string) {
   try {
-    await navigator.clipboard?.writeText(text)
+    await navigator.clipboard.writeText(text)
     toast.success(t('logs.copied', '已复制'))
   } catch {
     toast.error(t('logs.copyFailed', '复制失败'))
@@ -439,16 +440,14 @@ onUnmounted(() => {
     </button>
 
     <!-- 详情抽屉：结构化 fields + trace_id（点击可按 trace 检索）+ 复制 -->
-    <div v-if="selected" class="hc-logs__drawer">
-      <div class="hc-logs__drawer-head">
+    <DetailDrawer v-if="selected" class="hc-logs__drawer" :ariaLabel="t('logs.title')" :copy-label="t('logs.copyJson', '复制 JSON')" @copy="copy(JSON.stringify(selected, null, 2))" @close="closeDetail">
+      <template #header>
         <span class="hc-logs__row-level" :class="`hc-logs__row-level--${selected.level}`">{{ selected.level }}</span>
         <span class="hc-logs__drawer-time">{{ formatLogTime(selected.timestamp) }}</span>
         <span class="hc-logs__drawer-src">{{ selected.source || '-' }}<template v-if="selected.domain"> · {{ selected.domain }}</template></span>
         <span class="hc-logs__drawer-spacer" />
-        <button class="hc-logs__action-btn" :title="t('logs.copyJson', '复制 JSON')" @click="copy(JSON.stringify(selected, null, 2))"><Copy :size="13" /></button>
-        <button class="hc-logs__action-btn" :title="t('common.close', '关闭')" :aria-label="t('common.close', '关闭')" @click="closeDetail"><X :size="14" /></button>
-      </div>
-      <div class="hc-logs__drawer-body">
+      </template>
+      <div class="hc-logs__drawer-content">
         <pre class="hc-logs__drawer-msg">{{ selected.message }}</pre>
 
         <div v-if="selected.trace_id" class="hc-logs__trace">
@@ -478,7 +477,7 @@ onUnmounted(() => {
           <pre>{{ JSON.stringify(selectedGroup.records, null, 2) }}</pre>
         </details>
       </div>
-    </div>
+    </DetailDrawer>
 
     <!-- 底部状态栏：连接态 + 条数 + 错误/警告计数（左）｜跟随（右）-->
     <div class="hc-logs__statusbar">
@@ -758,34 +757,13 @@ onUnmounted(() => {
 }
 
 /* ─── 详情抽屉 ─── */
-.hc-logs__drawer {
-  flex-shrink: 0;
-  max-height: 40%;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--hc-border);
-  background: var(--hc-bg-elevated);
-}
-.hc-logs__drawer-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 16px;
-  border-bottom: 0.5px solid var(--hc-divider);
-  font-size: 11px;
-  flex-shrink: 0;
-}
 .hc-logs__drawer-time {
   font-variant-numeric: tabular-nums;
   color: var(--hc-text-secondary);
 }
 .hc-logs__drawer-src { color: var(--hc-text-muted); }
 .hc-logs__drawer-spacer { flex: 1; }
-.hc-logs__drawer-body {
-  overflow-y: auto;
-  padding: 10px 16px 14px;
-  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
-}
+.hc-logs__drawer-content { font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace; }
 .hc-logs__drawer-msg {
   margin: 0 0 10px;
   font-size: 12px;

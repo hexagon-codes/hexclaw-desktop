@@ -118,9 +118,9 @@ const revalidating = ref(false)
 // CACHE_TTL_MS removed — DB cache layer eliminated
 const activeTab = ref<'documents' | 'search'>('documents')
 
-// 二级 tab（统一 UnderlineTabs）：全部 (N) / 检索测试
+// 二级页签的数量后缀与样式由 UnderlineTabs 统一处理。
 const knowledgeTabs = computed(() => [
-  { key: 'documents', label: `${t('knowledge.allTab', '全部')} (${docs.value.length})` },
+  { key: 'documents', label: t('knowledge.allTab', '全部'), count: docs.value.length },
   { key: 'search', label: t('knowledge.searchTest', '检索测试') },
 ])
 
@@ -1849,7 +1849,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 v-for="(uf, idx) in uploadingFiles"
                 :key="uf.operationId || uf.intentKey || idx"
                 data-testid="knowledge-upload-job"
-                class="knowledge-page__resource-row knowledge-page__temporary-row"
+                class="hc-resource-row knowledge-page__resource-row knowledge-page__temporary-row"
               >
                 <span class="knowledge-page__resource-file">
                   <span
@@ -1899,7 +1899,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <template v-if="canDismissUpload(uf)">
                   <button
                     type="button"
-                    class="knowledge-page__resource-action"
+                    class="hc-resource-action knowledge-page__resource-action"
                     :disabled="uf.dismissing || !knowledgeEnabled"
                     @click="openFilePicker"
                   >
@@ -1907,7 +1907,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   </button>
                   <button
                     type="button"
-                    class="knowledge-page__resource-action"
+                    class="hc-resource-action knowledge-page__resource-action"
                     :disabled="uf.dismissing"
                     @click="dismissUpload(uf)"
                   >
@@ -1917,7 +1917,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <button
                   v-if="canCancelUpload(uf)"
                   type="button"
-                  class="knowledge-page__resource-action"
+                  class="hc-resource-action knowledge-page__resource-action"
                   :disabled="uf.cancelling"
                   data-testid="knowledge-upload-cancel"
                   @click="cancelUploadJob(uf)"
@@ -2036,7 +2036,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         'knowledge-page__document-card--structured-failure':
                           getStructuredDocumentFacts(doc).length > 0,
                       }"
-                      class="knowledge-page__resource-row knowledge-page__document-card flex items-center"
+                      class="hc-resource-row knowledge-page__resource-row knowledge-page__document-card flex items-center"
                     >
                       <span class="knowledge-page__resource-file">
                         <span
@@ -2079,7 +2079,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         <button
                           v-if="getStructuredDocumentFacts(doc).length === 0 && getDocStatus(doc) !== 'processing'"
                           type="button"
-                          class="knowledge-page__resource-action"
+                          class="hc-resource-action knowledge-page__resource-action"
                           @click="openDocDetail(doc)"
                         >
                           详情
@@ -2090,7 +2090,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                             hasRetryableVectorFailure(doc) ? 'knowledge-vector-retry' : undefined
                           "
                           type="button"
-                          class="knowledge-page__resource-action"
+                          class="hc-resource-action knowledge-page__resource-action"
                           :disabled="
                             !knowledgeEnabled ||
                             reindexingDocIds.has(doc.id) ||
@@ -2110,7 +2110,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           v-if="shouldShowKnowledgeSettingsAction(doc)"
                           type="button"
                           data-testid="knowledge-settings-action"
-                          class="knowledge-page__resource-action"
+                          class="hc-resource-action knowledge-page__resource-action"
                           @click="openKnowledgeSettings"
                         >
                           {{ t('knowledge.settingsAction') }}
@@ -2118,7 +2118,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         <button
                           v-if="getDocumentUpload(doc)"
                           type="button"
-                          class="knowledge-page__resource-action"
+                          class="hc-resource-action knowledge-page__resource-action"
                           :disabled="getDocumentUpload(doc)?.cancelling || !knowledgeEnabled"
                           @click="cancelDocumentUpload(doc)"
                         >
@@ -2128,7 +2128,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                           v-else-if="canCancelVectorJob(doc)"
                           type="button"
                           data-testid="knowledge-vector-cancel"
-                          class="knowledge-page__resource-action knowledge-page__resource-action--warning"
+                          class="hc-resource-action knowledge-page__resource-action hc-resource-action--warning knowledge-page__resource-action--warning"
                           :title="t('knowledge.vectorCancel', '取消语义增强')"
                           :disabled="
                             !knowledgeEnabled || cancellingVectorJobIds.has(doc.vector_job_id || '')
@@ -2140,7 +2140,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                         <button
                           v-if="getStructuredDocumentFacts(doc).length === 0 && getDocStatus(doc) !== 'processing'"
                           type="button"
-                          class="knowledge-page__resource-action knowledge-page__resource-action--danger"
+                          class="hc-resource-action knowledge-page__resource-action hc-resource-action--danger knowledge-page__resource-action--danger"
                           :disabled="!knowledgeEnabled"
                           @click="confirmDelete(doc)"
                         >
@@ -2769,7 +2769,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 :pdf="selectedIsPDF"
                 @source="originalPage = $event"
               />
-              <button v-if="selectedIsPDF" type="button" class="knowledge-page__resource-action" @click="originalPage = 1">View original</button>
+              <button v-if="selectedIsPDF" type="button" class="hc-resource-action knowledge-page__resource-action" @click="originalPage = 1">View original</button>
               <div
                 v-if="selectedDoc.error_message"
                 class="rounded-lg px-3 py-2 text-sm"
@@ -2996,15 +2996,6 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
   gap: 16px;
 }
 
-/* 知识库页签遵循原型行高，避免继承正文行高造成后续内容整体下移。 */
-.knowledge-page__tab-stack > :deep(.hc-utabs) {
-  min-height: 39px;
-}
-
-.knowledge-page__tab-stack > :deep(.hc-utabs .hc-utab) {
-  line-height: normal;
-}
-
 .knowledge-page__scroll {
   padding: 16px 26px 48px;
 }
@@ -3021,21 +3012,6 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
 .knowledge-page__document-list.space-y-2 > :not([hidden]) {
   margin-bottom: 0;
-}
-
-.knowledge-page__resource-row {
-  display: flex;
-  min-width: 0;
-  min-height: 52px;
-  align-items: center;
-  gap: 8px;
-  box-sizing: border-box;
-  padding: 9px 10px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 10px;
-  background: var(--hc-bg-card);
-  color: var(--hc-text-secondary);
-  font-size: 12px;
 }
 
 .knowledge-page__upload-date {
@@ -3151,44 +3127,6 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 .knowledge-page__document-actions {
   gap: 8px;
   flex-wrap: nowrap;
-}
-
-.knowledge-page__resource-action {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  min-height: 32px;
-  padding: 6px 8px;
-  border: 0.5px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--hc-text-secondary);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.knowledge-page__resource-action:hover:not(:disabled) {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-
-.knowledge-page__resource-action:disabled {
-  cursor: not-allowed;
-  background: color-mix(in srgb, var(--hc-accent) 1.6%, transparent);
-  color: var(--hc-text-primary);
-  opacity: 0.45;
-}
-
-.knowledge-page__resource-action--warning {
-  color: #b45309;
-}
-
-.knowledge-page__resource-action--danger {
-  color: var(--hc-error);
 }
 
 .knowledge-page__structured-failure-mark {

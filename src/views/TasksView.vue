@@ -53,6 +53,8 @@ import { useToast } from '@/composables'
 import { useAutomationList } from '@/composables/useAutomationList'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import CronScheduleField from '@/components/cron/CronScheduleField.vue'
+import { CRON_SCHEDULE_PRESETS } from '@/utils/cron-schedule'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -90,19 +92,6 @@ const form = ref<CronJobInput>({
   chat_id: '',
   continuous: false,
 })
-
-const schedulePresets = computed(() => [
-  { label: t('tasks.presetDaily9'), value: '0 9 * * *' },
-  { label: t('tasks.presetHourly'), value: '@every 1h' },
-  { label: t('tasks.preset30min'), value: '@every 30m' },
-  { label: t('tasks.preset5min'), value: '@every 5m' },
-  { label: t('tasks.presetMon9'), value: '0 9 * * 1' },
-  { label: t('tasks.presetNoon'), value: '0 12 * * *' },
-  { label: t('tasks.presetEvening'), value: '0 18 * * *' },
-  { label: t('tasks.presetDaily'), value: '@daily' },
-])
-
-const showPresets = ref(false)
 
 // ── 投递目标（§5 一处存处处引）─────────────────────────────────
 // 通用渠道类型（始终可选）+ 已配置连接实例（从连接库下拉，按稳定 id 引用）。
@@ -203,7 +192,7 @@ const formValid = computed(() => {
 
 /** Agent-runtime jobs reason per run: no compiled script to display. */
 function isAgentJob(job: CronJob): boolean {
-  return job.spec?.runtime === 'agent'
+  return job.spec?.runtime === 'agent' || job.spec?.runtime === 'workflow'
 }
 
 /**
@@ -302,12 +291,6 @@ function openCreateForm() {
   }
   loadConnections() // 打开即拉取连接库（已缓存则瞬时返回；失败优雅降级）
   showForm.value = true
-  showPresets.value = false
-}
-
-function selectPreset(value: string) {
-  form.value.schedule = value
-  showPresets.value = false
 }
 
 // 创建任务进度状态（v2 SSE 流式编译）
@@ -757,8 +740,8 @@ function runStatusText(status: string): string {
 // formatTime imported from @/utils/time
 
 function scheduleLabel(schedule: string): string {
-  const preset = schedulePresets.value.find((p) => p.value === schedule)
-  return preset ? preset.label : schedule
+  const preset = CRON_SCHEDULE_PRESETS.find((p) => p.value === schedule)
+  return preset ? t(preset.labelKey) : schedule
 }
 
 function statusColor(status: string): string {
@@ -985,7 +968,7 @@ defineExpose({ openCreateForm, loadJobs, canCreate, locatePermissionTarget })
           <div v-if="isAgentJob(job)" class="task-card__agent-badge">
             <Sparkles :size="12" />
             <span
-              >{{ t('tasks.agentRuntime', 'Agent · 每次执行由 AI 推理完成')
+              >{{ job.spec?.runtime === 'workflow' ? 'Workflow' : t('tasks.agentRuntime', 'Agent · 每次执行由 AI 推理完成')
               }}<template v-if="job.spec?.timeout_s"> · {{ job.spec.timeout_s }}s</template></span
             >
           </div>
@@ -1140,40 +1123,7 @@ defineExpose({ openCreateForm, loadJobs, canCreate, locatePermissionTarget })
               <!-- Schedule -->
               <div class="hc-field">
                 <label class="hc-field__label">{{ t('tasks.schedule') }}</label>
-                <div class="schedule-input-wrap">
-                  <HcClearableField>
-                    <input
-                      v-model="form.schedule"
-                      type="text"
-                      class="hc-input"
-                      style="font-family: monospace"
-                      :placeholder="t('tasks.cronExprPlaceholder')"
-                    />
-                  </HcClearableField>
-                  <button
-                    class="schedule-preset-btn"
-                    data-governed-button="tasks-schedule"
-                    type="button"
-                    @click="showPresets = !showPresets"
-                  >
-                    <ChevronDown :size="14" />
-                  </button>
-                </div>
-                <Transition name="fade">
-                  <div v-if="showPresets" class="schedule-presets">
-                    <button
-                      v-for="preset in schedulePresets"
-                      :key="preset.value"
-                      class="schedule-preset-item"
-                      data-governed-button="tasks-schedule"
-                      :class="{ 'schedule-preset-item--active': form.schedule === preset.value }"
-                      @click="selectPreset(preset.value)"
-                    >
-                      <span class="schedule-preset-item__label">{{ preset.label }}</span>
-                      <code class="schedule-preset-item__value">{{ preset.value }}</code>
-                    </button>
-                  </div>
-                </Transition>
+                <CronScheduleField v-model="form.schedule" />
               </div>
 
               <!-- Prompt -->
@@ -1906,82 +1856,6 @@ defineExpose({ openCreateForm, loadJobs, canCreate, locatePermissionTarget })
   font-size: 13px;
   font-weight: 500;
   color: var(--hc-text-secondary);
-}
-
-/* ── Schedule input ── */
-.schedule-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.schedule-input-wrap .hc-input {
-  padding-right: 32px;
-}
-
-.schedule-preset-btn {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 4px;
-  border: none;
-  background: transparent;
-  color: var(--hc-text-muted);
-  border-radius: var(--hc-radius-sm);
-  cursor: pointer;
-  display: flex;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.schedule-preset-btn:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-secondary);
-}
-
-.schedule-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 0 0;
-}
-
-.schedule-preset-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: var(--hc-radius-md);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
-  font-size: 12px;
-}
-
-.schedule-preset-item:hover {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-}
-
-.schedule-preset-item--active {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-}
-
-.schedule-preset-item__label {
-  color: var(--hc-text-primary);
-  font-weight: 500;
-}
-
-.schedule-preset-item__value {
-  color: var(--hc-text-muted);
-  font-family: monospace;
-  font-size: 11px;
 }
 
 /* ── Type toggle ── */
