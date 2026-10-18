@@ -2,6 +2,8 @@
 
 > 已安装的 MCP 服务器、常用 Skills、自定义 Commands 清单，以及 Command / Skill 的制作方法。
 
+清单记录作者整理时的环境，不能证明读者当前安装了这些工具。调用前核对当前可用能力，并遵守项目 `AGENTS.md` 与用户授权；工具、Hook、Command 和 Skill 的存在不授权新增测试、UI 改动、Git 写入或外发。整体测试先评估必要性，已通过且条件未变的证据继续复用。
+
 ## 目录
 
 - [一、已安装 MCP 服务器](#一已安装-mcp-服务器)
@@ -15,7 +17,7 @@
 
 ## 一、已安装 MCP 服务器
 
-MCP（Model Context Protocol）为 Claude Code 提供外部工具能力。当前已安装 4 个：
+MCP（Model Context Protocol）为 Claude Code 提供外部工具能力。整理时使用的 4 个配置示例如下，当前安装状态需另行核对：
 
 | MCP 服务器 | 包名 | 功能 | 常用场景 |
 |------------|------|------|----------|
@@ -77,7 +79,7 @@ claude mcp remove <name>           # 删除 MCP
 
 ## 二、常用 Skills 分类清单
 
-Skills 是预装的专业知识包，Claude 会根据上下文自动选用。当前共安装 200+ 个，按用途分类列出常用的：
+Skills 提供特定任务的方法与工具说明。以下是整理时常用的名称示例，是否安装、当前描述及调用方式以本次环境为准，不根据这份历史清单假定可用：
 
 ### 代码审查与质量
 
@@ -86,7 +88,7 @@ Skills 是预装的专业知识包，Claude 会根据上下文自动选用。当
 | `requesting-code-review` | 完成任务后请求代码审查 |
 | `receiving-code-review` | 收到审查反馈后的处理流程 |
 | `systematic-debugging` | 系统化调试（科学方法排查） |
-| `verification-before-completion` | 完成前必须跑验证命令 |
+| `verification-before-completion` | 完成前核对结论与有效证据；缺口存在时按授权补验证 |
 | `click-path-audit` | UI 交互路径全链路审计 |
 | `security-review` | 安全审查清单 |
 | `security-scan` | 扫描 `.claude/` 配置安全性 |
@@ -178,7 +180,7 @@ Skills 是预装的专业知识包，Claude 会根据上下文自动选用。当
 | `/review-go` | `review-go.md` | Go 后端深度代码审查 | 入口，引用 `资深Go架构师代码审查.md` |
 | `/review-fullstack` | `review-fullstack.md` | 全栈（前端+后端）深度代码审查 | 入口，引用 `全栈架构师代码审查.md` |
 | `/apple-design` | `apple-design.md` | Apple HIG 设计规范驱动的 UI 开发/审查 | |
-| `/test-dev` | `test-dev.md` | 测试环境全量回归测试 | |
+| `/test-dev` | `test-dev.md` | 按影响和证据缺口选择测试环境 API 回归 | |
 | `/test-prod` | `test-prod.md` | 生产环境全量回归测试 | |
 | `/资深Go架构师代码审查` | `资深Go架构师代码审查.md` | Go 架构师视角的审查 Pipeline | 规则本体，被 `/review-go` 引用 |
 | `/全栈架构师代码审查` | `全栈架构师代码审查.md` | 全栈架构师视角的审查 Pipeline（含生态链扫描） | 规则本体，被 `/review-fullstack` 引用 |
