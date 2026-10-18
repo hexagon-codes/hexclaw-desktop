@@ -46,7 +46,7 @@ vi.mock('@/api/autonomy', () => ({
   getAutonomySummary: () => api.getAutonomySummary(),
 }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ path: '/automation' }),
+  useRoute: () => ({ path: '/automation', query: {} }),
   useRouter: () => ({ replace: vi.fn() }),
 }))
 vi.mock('lucide-vue-next', async (importOriginal) => {

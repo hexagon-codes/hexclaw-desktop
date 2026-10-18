@@ -85,7 +85,7 @@ describe('BUG: PromptsView destructive actions lack guards', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.find('.hc-icon-btn--danger').trigger('click')
+    await wrapper.find('.hc-prompts__item-actions .hc-prompt-action:last-of-type').trigger('click')
     await flushPromises()
 
     const dialog = wrapper.findComponent(ConfirmDialog)

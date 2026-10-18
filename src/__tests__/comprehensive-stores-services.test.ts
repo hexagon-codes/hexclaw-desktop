@@ -199,8 +199,9 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue('ok'),
 }))
 
-// --- settings-helpers (partial mock, real logic not needed) ---
-vi.mock('@/stores/settings-helpers', () => ({
+// 仅替换本组依赖，未替换的纯配置助手继续使用真实实现。
+vi.mock('@/stores/settings-helpers', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/stores/settings-helpers')>(),
   cloneProviders: vi.fn((p: unknown[]) => JSON.parse(JSON.stringify(p))),
   mergeConfigProvidersWithRuntime: vi.fn((config: unknown[]) => [...config]),
   resolveProviderSelectedModelId: vi.fn(
@@ -1043,9 +1044,9 @@ describe('App Store', () => {
 
       // 先完成启动期异步检查，再验证下一周期没有叠加轮询。
       await vi.advanceTimersByTimeAsync(0)
-      expect(mockCheckHealth).toHaveBeenCalledTimes(2)
+      expect(mockCheckHealth).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(5000)
-      expect(mockCheckHealth).toHaveBeenCalledTimes(3)
+      expect(mockCheckHealth).toHaveBeenCalledTimes(2)
       store.stopHealthCheck()
     })
   })

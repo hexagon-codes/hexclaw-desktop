@@ -973,8 +973,8 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    // Knowledge Tab 的计数属于标签文本，格式与权威原型保持一致：全部 (N)。
-    const docsTab = wrapper.findAll('button').find((btn) => /全部\s*\(1\)/.test(btn.text()))
+    // 计数属于共享标签内的徽标，不再重复创建页级统计卡。
+    const docsTab = wrapper.findAll('button').find((btn) => /全部\s*1/.test(btn.text()))
     expect(docsTab?.exists()).toBe(true)
     expect(wrapper.find('[data-testid="knowledge-doc-stats"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain(

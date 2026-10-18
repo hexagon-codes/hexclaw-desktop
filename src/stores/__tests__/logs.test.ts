@@ -122,6 +122,8 @@ describe('useLogsStore', () => {
 
     store.exitHistory()
     expect(store.mode).toBe('live')
-    expect(store.historyEntries).toHaveLength(0)
+    expect(store.displayedEntries).toEqual(store.filteredEntries)
+    expect(store.displayedEntries).toHaveLength(0)
+    expect(store.historyEntries[0]?.id).toBe('h1')
   })
 })

@@ -79,7 +79,7 @@ async function openPreview(body: string) {
   const wrapper = mountView()
   await flushPromises()
   await wrapper
-    .get('.hc-prompts__item-actions .hc-icon-btn:not(.hc-icon-btn--danger)')
+    .get('.hc-prompts__item-actions .hc-prompt-action:first-of-type')
     .trigger('click')
   await wrapper.findAll('.hc-body-tabs button')[1]!.trigger('click')
   await flushPromises()

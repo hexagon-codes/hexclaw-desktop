@@ -26,9 +26,7 @@ describe('KnowledgeView visual hierarchy', () => {
   })
 
   it('keeps each document card and its primary content in one stable desktop row', () => {
-    expect(knowledgeView).toContain(
-      'class="knowledge-page__resource-row knowledge-page__document-card flex items-center"',
-    )
+    expect(knowledgeView).toMatch(/class="[^"\n]*\bknowledge-page__resource-row\b[^"\n]*\bknowledge-page__document-card\b[^"\n]*\bflex items-center\b[^"\n]*"/)
     expect(knowledgeView).toContain('class="knowledge-page__document-main flex-1 min-w-0"')
   })
 

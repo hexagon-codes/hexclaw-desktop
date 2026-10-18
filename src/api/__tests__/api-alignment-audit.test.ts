@@ -68,7 +68,7 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
 
   it('listSessions sends GET /api/v1/sessions with user_id query', () => {
     expect(chatSource).toContain(
-      "apiGet<{ sessions: ChatSession[]; total: number }>('/api/v1/sessions'",
+      "apiGet<{ sessions: Array<ChatSession & { meta?: string }>; total: number }>('/api/v1/sessions'",
     )
   })
 
