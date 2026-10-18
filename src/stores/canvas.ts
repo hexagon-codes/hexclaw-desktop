@@ -16,6 +16,11 @@ import {
   runWorkflow as apiRunWorkflow,
   getWorkflowRun as apiGetWorkflowRun,
   resumeWorkflowRun as apiResumeWorkflowRun,
+  getWorkflowRuns as apiGetWorkflowRuns,
+  cancelWorkflowRun as apiCancelWorkflowRun,
+  deleteWorkflowRun as apiDeleteWorkflowRun,
+  retryWorkflowDelivery as apiRetryWorkflowDelivery,
+  retryWorkflowOutputFile as apiRetryWorkflowOutputFile,
   type PanelSummary,
 } from '@/api/canvas'
 import { trySafe } from '@/utils/errors'
@@ -32,31 +37,49 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // ─── 工作流状态 ─────────────────────────────────────
   const savedWorkflows = ref<Workflow[]>([])
+  const workflowsLoaded = ref(false)
+  const workflowsLoading = ref(false)
+  const workflowLoadError = ref<ApiError | null>(null)
+  const workflowCount = computed(() => workflowsLoaded.value ? savedWorkflows.value.length : undefined)
+  const runHistoryCount = ref<number | undefined>()
   // 'unavailable' 为前端专属态：后端未提供/未启用工作流引擎（404），区别于真正的执行失败。
   const runStatus = ref<WorkflowRunStatus | 'idle' | 'unavailable'>('idle')
   const runOutput = ref<string>('')
   const currentWorkflowId = ref<string | null>(null)
-  const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
-  const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string; nodeResults?: WorkflowNodeRun[] } | null>(null)
+  const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed' | 'skipped'>>({})
+  const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string; nodeResults?: WorkflowNodeRun[]; messageContent?: WorkflowRun['message_content']; deliveries?: WorkflowRun['deliveries']; generatedFiles?: WorkflowRun['generated_files'] } | null>(null)
   // 最近一次运行的 id（Ph5 续接用：失败后据此 resume，复用已完成节点）。
   const lastRunId = ref<string | null>(null)
+  const runHistory = ref<WorkflowRun[]>([])
+  const runHistoryLoading = ref(false)
+  const runHistoryLoadError = ref<ApiError | null>(null)
+  const workflowData = ref<Record<string, unknown> | undefined>()
+  let observation = 0
+  const deletedRunIds = new Set<string>()
 
   // 试运行前置校验：返回拦截原因（null = 可运行）。未配置的步骤——模型步骤无指令(prompt 空，
   // UI 显示"未配置指令")、工具步骤未选工具——不允许试运行。否则会把空指令提交后端执行、产出
   // 无意义结果（BUG-20260623：空工作流点试运行仍输出通用问候）。供 runWorkflow 闸门 + UI 禁用按钮复用。
-  const runBlockReason = computed<string | null>(() => {
-    if (nodes.value.length === 0) return '请先添加步骤再试运行'
+  const runBlocker = computed<{ kind: 'Empty' | 'Agent' | 'Parallel' | 'Tool' | 'Import'; nodeId?: string; message: string } | null>(() => {
+    if (nodes.value.length === 0) return { kind: 'Empty', message: '请先添加步骤再试运行' }
     for (const n of nodes.value) {
       const cfg = (n.config ?? {}) as Record<string, unknown>
+      if (cfg.import_requires_review === true) return { kind: 'Import', nodeId: n.id, message: 'Review the imported source settings and select local execution resources before running' }
       if (n.type === 'agent' && !String(cfg.prompt ?? '').trim()) {
-        return `「${n.label || '模型'}」步骤未配置指令，请先填写指令再试运行`
+        return { kind: 'Agent', nodeId: n.id, message: `「${n.label || '模型'}」步骤未配置指令，请先填写指令再试运行` }
+      }
+      if (n.type === 'parallel') {
+        const branches = cfg.branches
+        if (Array.isArray(branches) && (!branches.length || branches.some((branch) => !String(branch.agent ?? '').trim()))) return { kind: 'Parallel', nodeId: n.id, message: 'Select an Agent for each parallel branch' }
+        if (!branches && !(Array.isArray(cfg.roles) ? cfg.roles.length : String(cfg.roles ?? '').trim())) return { kind: 'Parallel', nodeId: n.id, message: 'Configure the parallel Agent branches' }
       }
       if (n.type === 'tool' && !String(cfg.tool ?? '').trim()) {
-        return `「${n.label || '工具'}」步骤未选择工具，请先配置再试运行`
+        return { kind: 'Tool', nodeId: n.id, message: `「${n.label || '工具'}」步骤未选择工具，请先配置再试运行` }
       }
     }
     return null
   })
+  const runBlockReason = computed(() => runBlocker.value?.message ?? null)
 
   // ─── Actions ─────────────────────────────────────────
 
@@ -117,6 +140,12 @@ export const useCanvasStore = defineStore('canvas', () => {
   }
 
   function clearCanvas() {
+    stopObserving(true)
+    historyRequest += 1
+    runHistory.value = []
+    runHistoryLoading.value = false
+    runHistoryLoadError.value = null
+    workflowData.value = undefined
     nodes.value = []
     edges.value = []
     currentPanel.value = null
@@ -128,19 +157,22 @@ export const useCanvasStore = defineStore('canvas', () => {
   async function saveWorkflow(name: string, description?: string) {
     loading.value = true
     error.value = null
+    const originalNodes = nodes.value
+    const originalId = currentWorkflowId.value
     const id = currentWorkflowId.value || `wf-${crypto.randomUUID().slice(0, 8)}`
     const [res, err] = await trySafe(
       () => apiSaveWorkflow({
         id,
         name,
         description,
+        data: workflowData.value ? JSON.parse(JSON.stringify(workflowData.value)) : undefined,
         nodes: JSON.parse(JSON.stringify(nodes.value)),
         edges: JSON.parse(JSON.stringify(edges.value)),
       }),
       '保存工作流',
     )
     if (res) {
-      currentWorkflowId.value = res.id
+      if (nodes.value === originalNodes && currentWorkflowId.value === originalId) currentWorkflowId.value = res.id
       // 刷新工作流列表
       await loadWorkflows()
     }
@@ -149,8 +181,16 @@ export const useCanvasStore = defineStore('canvas', () => {
     return res
   }
 
+  let workflowRequest = 0
   async function loadWorkflows() {
+    const ticket = ++workflowRequest
+    workflowsLoading.value = true
+    workflowLoadError.value = null
     const [res, err] = await trySafe(() => apiGetWorkflows(), '加载工作流列表')
+    if (ticket !== workflowRequest) return
+    workflowsLoading.value = false
+    workflowLoadError.value = err
+    workflowsLoaded.value = !!res
     if (res) savedWorkflows.value = res
     error.value = err
   }
@@ -158,9 +198,11 @@ export const useCanvasStore = defineStore('canvas', () => {
   async function deleteWorkflow(id: string) {
     const [, err] = await trySafe(() => apiDeleteWorkflow(id), '删除工作流')
     if (!err) {
+      workflowRequest += 1
+      workflowsLoading.value = false
       savedWorkflows.value = savedWorkflows.value.filter((w) => w.id !== id)
       if (currentWorkflowId.value === id) {
-        currentWorkflowId.value = null
+        clearCanvas()
       }
     }
     error.value = err
@@ -169,6 +211,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   function loadWorkflowToCanvas(workflow: Workflow) {
     clearCanvas()
     currentWorkflowId.value = workflow.id
+    workflowData.value = workflow.data
     for (const n of workflow.nodes) {
       addNode(n)
     }
@@ -270,183 +313,158 @@ export const useCanvasStore = defineStore('canvas', () => {
     return order
   }
 
-  async function runWorkflow() {
-    if (runStatus.value === 'running') return
-    // 未配置/空工作流不提交后端执行（BUG-20260623）。保持 idle，原因由 UI 经 runBlockReason 提示。
-    if (runBlockReason.value) return
-    runStatus.value = 'running'
-    runOutput.value = ''
-    runResult.value = null
-    error.value = null
-
-    // Reset node run statuses
-    const statusMap: Record<string, 'idle' | 'running' | 'completed' | 'failed'> = {}
-    for (const n of nodes.value) statusMap[n.id] = 'idle'
-    nodeRunStatus.value = statusMap
-
-    // 1. 确保工作流已保存
-    const id = currentWorkflowId.value || `wf-${crypto.randomUUID().slice(0, 8)}`
-    if (!currentWorkflowId.value) {
-      currentWorkflowId.value = id
+  function projectRun(run: WorkflowRun) {
+    if (deletedRunIds.has(run.id) || run.history_deleted) return
+    lastRunId.value = run.id
+    runStatus.value = run.status
+    runOutput.value = run.output || run.error || ''
+    runResult.value = { output: run.output, error: run.error, startedAt: run.started_at,
+      finishedAt: run.finished_at, nodeResults: run.node_results, messageContent: run.message_content, deliveries: run.deliveries, generatedFiles: run.generated_files }
+    const statuses: Record<string, 'idle' | 'running' | 'completed' | 'failed' | 'skipped'> = {}
+    for (const result of run.node_results ?? []) {
+      statuses[result.node_id] = result.status === 'completed' ? 'completed'
+        : result.status === 'skipped' ? 'skipped' : result.status === 'failed' ? 'failed'
+        : result.status === 'running' ? 'running' : 'idle'
     }
+    nodeRunStatus.value = statuses
+    const index = runHistory.value.findIndex((item) => item.id === run.id)
+    if (index < 0) runHistory.value.unshift(run)
+    else runHistory.value[index] = run
+  }
 
-    const existingName = savedWorkflows.value.find(w => w.id === id)?.name
-    const [savedWf] = await trySafe(
-      () => apiSaveWorkflow({
-        id,
-        name: existingName || `Workflow ${id}`,
-        nodes: JSON.parse(JSON.stringify(nodes.value)),
-        edges: JSON.parse(JSON.stringify(edges.value)),
-      }),
-      '自动保存工作流',
-    )
-    if (savedWf) currentWorkflowId.value = savedWf.id
-
-    const order = topologicalOrder()
-
-    // 2. 提交后端执行（异步：后端立即返回 run id + status=running，真正执行在 goroutine 里跑）
-    const [res, err] = await trySafe(
-      () => apiRunWorkflow(savedWf?.id || id),
-      '运行工作流',
-    )
-
-    if (res) {
-      // 3. 后端已受理执行 — 先标记所有节点为 running（驱动节点动画），
-      //    随后用真实 node_results / 轮询结果回填逐节点最终态。
-      for (const nid of order) {
-        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'running' }
+  /** 观察与执行分离；离页只结束旧观察，不把远端运行判成失败。 */
+  async function observeRun(initial: WorkflowRun) {
+    const ticket = ++observation
+    const workflowId = currentWorkflowId.value
+    const deliveryObservationStarted = Date.now()
+    let snapshot = initial
+    while (ticket === observation && workflowId === currentWorkflowId.value && !deletedRunIds.has(snapshot.id)) {
+      projectRun(snapshot)
+      if (snapshot.status !== 'running' && snapshot.status !== 'pending') {
+        const waiting = snapshot.deliveries?.some((delivery) => ['pending', 'preparing', 'sending'].includes(delivery.status) || delivery.status === 'accepted' && delivery.kind !== 'email')
+          || snapshot.generated_files?.some((file) => file.status === 'pending' || file.status === 'rendering')
+        if (!waiting || Date.now() - deliveryObservationStarted > 20_000) return
       }
-      applyNodeResults(res)
-      lastRunId.value = res.id ?? null
-      let final: WorkflowRun = res
-      if ((res.status === 'running' || res.status === 'pending') && res.id) {
-        final = await pollWorkflowRun(res.id)
-      }
-      if (final.id) lastRunId.value = final.id
-
-      // 4. 用真实 node_results 回填逐节点状态与产物
-      applyNodeResults(final)
-      // 后端未返回逐节点结果时，按整体执行结果兜底逐节点状态：
-      // 整体成功 → 全部 completed；整体失败 → 全部 failed。
-      const fallbackNodeStatus = final.status === 'failed' ? 'failed' : 'completed'
-      if (!final.node_results || final.node_results.length === 0) {
-        for (const nid of order) {
-          nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: fallbackNodeStatus }
-        }
-      }
-      runStatus.value = final.status
-      runOutput.value = final.output || final.error || ''
-      runResult.value = {
-        output: final.output,
-        error: final.error,
-        startedAt: final.started_at,
-        finishedAt: final.finished_at,
-        nodeResults: final.node_results,
-      }
-      error.value = null
-    } else if (err?.status === 404 || err?.code === 'NOT_FOUND') {
-      // 后端未提供/未启用工作流引擎（404）—— 不是「执行失败」。
-      // 节点从未运行，保持 idle（标 failed 会误导用户以为自己的工作流挂了）。
-      runStatus.value = 'unavailable'
-      const msg = '⚠ 工作流引擎未启用（当前后端未提供该功能）'
-      runOutput.value = msg
-      runResult.value = {
-        output: msg,
-        error: err?.message ?? 'Workflow engine not enabled',
-        startedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-      }
-      error.value = err
-    } else {
-      // 后端不可用 / 执行失败 — 标记所有节点为 failed，明确告知非模拟
-      for (const nid of order) {
-        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'failed' }
-      }
-      runStatus.value = 'failed'
-      const msg = '⚠ 工作流未能提交后端执行（引擎不可用）'
-      runOutput.value = msg
-      runResult.value = {
-        output: msg,
-        error: err?.message ?? 'Backend unavailable',
-        startedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-      }
-      error.value = err
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      if (ticket !== observation) return
+      const [next, err] = await trySafe(() => apiGetWorkflowRun(initial.id), 'Query workflow run')
+      if (ticket !== observation) return
+      if (next) { snapshot = next; error.value = null }
+      else { error.value = err; return }
     }
   }
 
-  /** 续接最近一次失败/中断的运行（Ph5）：后端复用已完成节点输出，只重算失败/未达节点。 */
+  async function runWorkflow(input = '', savedDefinition?: Workflow) {
+    if (runStatus.value === 'running' || runStatus.value === 'pending' || runBlockReason.value) return
+    if (savedDefinition && savedDefinition.id !== currentWorkflowId.value) return
+    const originalNodes = nodes.value
+    runStatus.value = 'pending'
+    const id = currentWorkflowId.value || `wf-${crypto.randomUUID().slice(0, 8)}`
+    const existing = savedWorkflows.value.find((item) => item.id === id)
+    const saved = savedDefinition ?? await saveWorkflow(existing?.name || `Workflow ${id}`)
+    if (nodes.value !== originalNodes) return
+    if (!saved) { runStatus.value = 'idle'; return }
+    nodeRunStatus.value = {}
+    runResult.value = null
+    lastRunId.value = null
+    const [run, err] = await trySafe(() => apiRunWorkflow(saved.id, {
+      input, platform: 'desktop', idempotency_key: crypto.randomUUID(),
+    }), 'Run workflow')
+    if (nodes.value !== originalNodes) return
+    if (run) {
+      error.value = null
+      void loadRunHistory(null, false)
+      await observeRun(run)
+    } else {
+      runStatus.value = err?.status === 404 ? 'unavailable' : 'failed'
+      error.value = err
+      runOutput.value = err?.message || 'Workflow could not be submitted'
+      runResult.value = { error: runOutput.value }
+    }
+  }
+
   async function resumeRun() {
     if (runStatus.value === 'running' || !lastRunId.value) return
-    runStatus.value = 'running'
-    error.value = null
-    const order = topologicalOrder()
-    const [res, err] = await trySafe(() => apiResumeWorkflowRun(lastRunId.value!), '续接工作流')
-    if (res) {
-      applyNodeResults(res)
-      let final: WorkflowRun = res
-      if ((res.status === 'running' || res.status === 'pending') && res.id) {
-        final = await pollWorkflowRun(res.id)
-      }
-      if (final.id) lastRunId.value = final.id
-      applyNodeResults(final)
-      const fallbackNodeStatus = final.status === 'failed' ? 'failed' : 'completed'
-      if (!final.node_results || final.node_results.length === 0) {
-        for (const nid of order) nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: fallbackNodeStatus }
-      }
-      runStatus.value = final.status
-      runOutput.value = final.output || final.error || ''
-      runResult.value = {
-        output: final.output,
-        error: final.error,
-        startedAt: final.started_at,
-        finishedAt: final.finished_at,
-        nodeResults: final.node_results,
-      }
-      error.value = null
-    } else {
-      runStatus.value = 'failed'
-      runOutput.value = err?.message ?? '续接失败'
-      error.value = err
+    const [run, err] = await trySafe(() => apiResumeWorkflowRun(lastRunId.value!), 'Resume workflow')
+    error.value = err
+    if (run) {
+      void loadRunHistory(null, false)
+      await observeRun(run)
     }
   }
 
-  /** 把后端 node_results 的状态回填到 nodeRunStatus（实时驱动节点动画）。 */
-  function applyNodeResults(run: WorkflowRun) {
-    if (!run.node_results || run.node_results.length === 0) return
-    const map = { ...nodeRunStatus.value }
-    for (const nr of run.node_results) {
-      map[nr.node_id] =
-        nr.status === 'completed' || nr.status === 'skipped' ? 'completed'
-        : nr.status === 'failed' ? 'failed'
-        : nr.status === 'running' ? 'running'
-        : 'idle'
+  let historyRequest = 0
+  let runCountRequest = 0
+  // 仅同步总量时不覆盖已选运行或其错误；编辑器清空也不使全局总量失效。
+  async function loadRunHistory(id: string | null = currentWorkflowId.value, updateHistory = true) {
+    const ticket = updateHistory ? ++historyRequest : historyRequest
+    const countTicket = !id ? ++runCountRequest : runCountRequest
+    if (updateHistory) {
+      runHistoryLoading.value = true
+      runHistoryLoadError.value = null
     }
-    nodeRunStatus.value = map
+    const [result, err] = await trySafe(() => apiGetWorkflowRuns(id || undefined), 'Load workflow runs')
+    if (!id && countTicket === runCountRequest) runHistoryCount.value = result ? (result.runs ?? []).length : undefined
+    if (!updateHistory || ticket !== historyRequest) return
+    runHistoryLoading.value = false
+    runHistoryLoadError.value = err
+    error.value = err
+    if (result) runHistory.value = result.runs ?? []
   }
 
-  /** 轮询后端运行记录直到完成/失败（前端 2min 兜底；后端单 run 上限 10min）。 */
-  async function pollWorkflowRun(runId: string): Promise<WorkflowRun> {
-    const deadline = Date.now() + 120_000
-    let last: WorkflowRun | null = null
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 600))
-      const [snap] = await trySafe(() => apiGetWorkflowRun(runId), '查询运行状态')
-      if (snap) {
-        last = snap
-        applyNodeResults(snap)
-        if (snap.status !== 'running' && snap.status !== 'pending') return snap
-      }
+  function stopObserving(clearResult = false) {
+    observation += 1
+    if (clearResult) {
+      runStatus.value = 'idle'
+      lastRunId.value = null
+      runResult.value = null
+      runOutput.value = ''
+      nodeRunStatus.value = {}
     }
-    return (
-      last ?? {
-        id: runId,
-        workflow_id: currentWorkflowId.value ?? '',
-        status: 'failed',
-        error: '运行超时（前端轮询 2 分钟未完成）',
-        started_at: new Date().toISOString(),
-      }
-    )
+  }
+
+  async function cancelRun() {
+    if (!lastRunId.value) return
+    const [, err] = await trySafe(() => apiCancelWorkflowRun(lastRunId.value!), 'Cancel workflow')
+    error.value = err
+  }
+
+  async function retryDelivery(runId: string, deliveryId: string) {
+    const [run, err] = await trySafe(() => apiRetryWorkflowDelivery(runId, deliveryId), 'Retry workflow delivery')
+    error.value = err
+    if (run && !deletedRunIds.has(runId)) await observeRun(run)
+    return !err
+  }
+
+  async function retryOutputFile(runId: string, fileId: string) {
+    const [run, err] = await trySafe(() => apiRetryWorkflowOutputFile(runId, fileId), 'Retry workflow output file')
+    error.value = err
+    if (run && !deletedRunIds.has(runId)) await observeRun(run)
+    return !err
+  }
+
+  async function inspectRun(id: string) {
+    const ticket = ++observation
+    const [run, err] = await trySafe(() => apiGetWorkflowRun(id), 'Query workflow run')
+    if (ticket !== observation || deletedRunIds.has(id)) return
+    error.value = err
+    if (run) await observeRun(run)
+  }
+
+  async function deleteRun(id: string): Promise<boolean> {
+    const [, err] = await trySafe(() => apiDeleteWorkflowRun(id), 'Delete workflow run')
+    error.value = err
+    if (err) return false
+    deletedRunIds.add(id)
+    // 旧列表与计数回执不可把已删除项重新发布。
+    historyRequest += 1
+    runCountRequest += 1
+    runHistoryLoading.value = false
+    runHistoryLoadError.value = null
+    runHistory.value = runHistory.value.filter((run) => run.id !== id)
+    if (runHistoryCount.value !== undefined) runHistoryCount.value = Math.max(0, runHistoryCount.value - 1)
+    if (lastRunId.value === id) stopObserving(true)
+    return true
   }
 
   return {
@@ -458,12 +476,20 @@ export const useCanvasStore = defineStore('canvas', () => {
     loading,
     error,
     savedWorkflows,
+    workflowCount,
+    runHistoryCount,
+    workflowsLoading,
+    workflowLoadError,
+    runHistoryLoading,
+    runHistoryLoadError,
     runStatus,
     runOutput,
     currentWorkflowId,
+    workflowData,
     nodeRunStatus,
     runResult,
     lastRunId,
+    runHistory,
     // actions
     loadPanels,
     loadPanel,
@@ -482,6 +508,14 @@ export const useCanvasStore = defineStore('canvas', () => {
     topologicalOrder,
     runWorkflow,
     resumeRun,
+    loadRunHistory,
+    cancelRun,
+    inspectRun,
+    retryDelivery,
+    retryOutputFile,
+    deleteRun,
+    stopObserving,
     runBlockReason,
+    runBlocker,
   }
 })
