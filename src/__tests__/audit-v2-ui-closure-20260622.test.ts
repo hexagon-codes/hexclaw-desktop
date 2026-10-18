@@ -66,7 +66,7 @@ describe('UI-4 CanvasView 不可达死代码已移除', () => {
 describe('UI-7 SettingsView 保存失败已 surface（不再仅 logger.error）', () => {
   it('saveConfig 的 catch 置 saveFailed.value（按钮反馈失败）', () => {
     const src = read('views/SettingsView.vue')
-    const fn = src.slice(src.indexOf('async function saveConfig'), src.indexOf('async function saveConfig') + 500)
+    const fn = src.match(/async function saveConfig\([^)]*\)[\s\S]*?\n\}/)?.[0] ?? ''
     const catchBlock = fn.slice(fn.indexOf('} catch'))
     expect(catchBlock).toContain('saveFailed.value = true')
     expect(src).toContain("t('settings.toolbar.saveFailed'")

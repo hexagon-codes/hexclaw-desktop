@@ -43,11 +43,13 @@ describe('SF SettingsView — 用户主动操作失败已 surface 到 toast', ()
   it('SF-2 refreshCapability 失败 → toast.error', () => {
     expect(catchOf(fnBody(src, 'async function refreshCapability'))).toContain('toast.error')
   })
-  it('SF-3 handleDeleteProvider 失败 → toast.error（保留快照恢复）', () => {
+  it('SF-3 删除只改草稿，显式保存失败保留错误和可重试草稿', () => {
     const fn = fnBody(src, 'async function handleDeleteProvider')
-    const c = catchOf(fn)
-    expect(c).toContain('toast.error')
-    expect(c, '不能丢掉原有快照恢复').toContain('snapshot')
+    expect(fn).toContain('settingsStore.removeProvider(id)')
+    expect(fn).not.toContain('settingsStore.saveConfig')
+    const save = fnBody(src, 'async function saveConfig')
+    expect(catchOf(save)).toContain('saveFailed.value = true')
+    expect(fnBody(src, 'async function onToolbarReset')).toContain('modelBaseline.value')
   })
   it('SF-4 模型管理器手动重同步失败 → toast.error', () => {
     expect(src).toContain('ModelManagerModal')

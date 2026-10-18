@@ -102,7 +102,7 @@ describe('AutomationPermissionsPanel', () => {
     autonomyApis.revokeAutonomyGrant.mockResolvedValue({ message: 'ok' })
   })
 
-  it('渲染三档 Profile、当前档高亮、矩阵默认收起为来源摘要、展开后含沙箱/宿主执行拆分列', async () => {
+  it('渲染三档 Profile、当前档高亮，生效策略固定展开并含沙箱/宿主执行拆分列', async () => {
     const wrapper = mountPanel()
     await flushPromises()
 
@@ -110,13 +110,7 @@ describe('AutomationPermissionsPanel', () => {
     expect(wrapper.find('[data-testid="profile-strict"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="profile-full_access"]').exists()).toBe(true)
 
-    // 矩阵默认收起：只见来源摘要 chips，不渲染完整表格
-    expect(wrapper.find('[data-testid="matrix-summary"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="policy-matrix"]').exists()).toBe(false)
-
-    // 展开后才出完整表格 + 沙箱/宿主执行拆分列
-    await wrapper.find('[data-testid="matrix-toggle"]').trigger('click')
-    await flushPromises()
+    expect(wrapper.find('[data-testid="matrix-toggle"]').exists()).toBe(false)
     const matrix = wrapper.find('[data-testid="policy-matrix"]')
     expect(matrix.exists()).toBe(true)
     expect(matrix.text()).toContain('沙箱执行')
@@ -127,20 +121,21 @@ describe('AutomationPermissionsPanel', () => {
     expect(wrapper.find('[data-testid="decision-row"]').text()).toContain('github.issues.write_label')
   })
 
-  it('当前态锚点显示当前档位 + 安全含义；指标条待处理置顶且就绪用分数', async () => {
+  it('当前态锚点显示档位与保护含义，影响区保留待处理、授权和真实就绪评估', async () => {
     const wrapper = mountPanel()
     await flushPromises()
 
-    const anchor = wrapper.find('[data-testid="current-state"]')
+    const anchor = wrapper.find('.auto-perm__current')
     expect(anchor.exists()).toBe(true)
     expect(anchor.text()).toContain('功能优先')
-    expect(anchor.text()).toContain('高后果操作仍会先问你')
+    expect(anchor.attributes('title')).toContain('高后果操作先审批')
 
-    // 指标条：3 格，第一格是待处理，就绪表达为 ready/tasks 分数
+    // 待处理和生效授权有持久统计；缺少真实任务评估时不能由静态比例推算就绪。
     const metrics = wrapper.findAll('.auto-perm__metric')
     expect(metrics).toHaveLength(3)
     expect(metrics.map((m) => m.text()).join('|')).toContain('待处理')
-    expect(metrics[1]?.text()).toContain('2/3') // ready=2, tasks=3
+    expect(metrics[1]?.text()).toContain('2')
+    expect(metrics[2]?.text()).toContain('待评估')
     expect(metrics[0]?.text()).toContain('待处理') // 待处理置顶
   })
 
@@ -149,7 +144,7 @@ describe('AutomationPermissionsPanel', () => {
     await flushPromises()
 
     await wrapper.find('[data-testid="pending-task"] button').trigger('click')
-    expect(routerPush).toHaveBeenCalledWith('/automation')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/automation/webhooks', query: { task_ref: 'webhook:wh-1', source: 'webhook' } })
   })
 
   it('切换到 strict 直接生效并热更新', async () => {

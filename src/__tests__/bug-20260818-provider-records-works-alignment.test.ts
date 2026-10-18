@@ -15,12 +15,13 @@ async function source(relativePath: string): Promise<string> {
 }
 
 describe('BUG-20260818-001: Provider 卡头恒一行 + 状态三态 + 眼睛一次性明文回读', () => {
-  it('卡头必须移除容器断点换行（对齐 2026-08-17 卡头一行布局决定）', async () => {
+  it('卡头保留共享网格轨道，并仅在已批准的窄容器断点重排', async () => {
     const view = await source('src/views/SettingsView.vue')
     expect(view).not.toMatch(/@container\s*\(max-width:\s*959px\)/)
-    const headRule = view.match(/\.hc-provider__card-head\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(headRule).toContain('display: flex')
-    expect(headRule).not.toContain('grid-template-columns')
+    const headRule = view.match(/^\.hc-provider__card-head\s*\{[^}]*\}/m)?.[0] ?? ''
+    expect(headRule).toContain('display: grid')
+    expect(headRule).toContain('grid-template-columns: 28px 34px minmax(0, 1fr) 128px 64px 34px 24px')
+    expect(view).toContain('@container model-settings (max-width:620px)')
   })
 
   it('卡头连接状态只投影 未测试/成功/失败 三态（测试中… 仅瞬态），不渲染上次测试时间', async () => {

@@ -5,6 +5,9 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 import { PROVIDER_PRESETS } from '@/config/providers'
+import type { BackendLLMConfig } from '@/types'
+
+const backendFixture = vi.hoisted(() => ({ config: null as BackendLLMConfig | null }))
 
 const { mockRouter } = vi.hoisted(() => ({
   mockRouter: {
@@ -58,7 +61,27 @@ vi.mock('@/api/config', () => ({
     routing: { enabled: false, strategy: 'cost-aware' },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
   }),
-  testLLMConnection: mockTestLLMConnection,
+  testLLMConnection: async (...args: unknown[]) => {
+    const result = await mockTestLLMConnection(...args)
+    const options = args[1] as { providerInstanceId?: string; locality?: string } | undefined
+    const provider = Object.values(backendFixture.config?.providers ?? {}).find(
+      (item) => item.provider_instance_id === options?.providerInstanceId,
+    )
+    if (provider && result.persisted) {
+      Object.assign(provider, {
+        probe_receipt: {
+          provider_instance_id: options?.providerInstanceId,
+          outcome: result.ok ? 'passed' : 'failed',
+          tested_at: result.tested_at,
+          latency_ms: result.latency_ms,
+          locality: options?.locality ?? 'cloud',
+          error_code: result.error_code,
+          error_message: result.error_message,
+        },
+      })
+    }
+    return result
+  },
   probeLLMModelCapability: mockProbeLLMModelCapability,
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
   fetchProviderModels: mockFetchProviderModels,
@@ -280,7 +303,7 @@ describe('SettingsView — E2E 关键路径', () => {
     closeRequestState.handler = null
     const { getLLMConfig, updateLLMConfig } = await import('@/api/config')
     vi.mocked(getLLMConfig).mockReset()
-    vi.mocked(getLLMConfig).mockResolvedValue({
+    backendFixture.config = {
       default: 'openai',
       providers: {
         openai: {
@@ -293,9 +316,20 @@ describe('SettingsView — E2E 关键路径', () => {
       },
       routing: { enabled: false, strategy: 'cost-aware' },
       cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
-    })
+    }
+    vi.mocked(getLLMConfig).mockImplementation(async () => backendFixture.config!)
     vi.mocked(updateLLMConfig).mockReset()
-    vi.mocked(updateLLMConfig).mockImplementation(() => Promise.resolve({}))
+    vi.mocked(updateLLMConfig).mockImplementation(async (config) => {
+      const previous = backendFixture.config!
+      backendFixture.config = {
+        ...config,
+        providers: Object.fromEntries(Object.entries(config.providers).map(([key, provider], index) => [
+          key,
+          { ...provider, provider_instance_id: provider.provider_instance_id || previous.providers[key]?.provider_instance_id || `pvd_v1_${String(index + 1).padStart(32, '0')}` },
+        ])),
+      }
+      return {}
+    })
     ollamaApi.getOllamaStatus.mockResolvedValue({
       running: false,
       associated: false,
@@ -349,7 +383,7 @@ describe('SettingsView — E2E 关键路径', () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
-    const expectedSections = ['LLM 服务商', '系统设置']
+    const expectedSections = ['模型服务', '自动化权限', '系统设置']
 
     for (const section of expectedSections) {
       expect(wrapper.text()).toContain(section)
@@ -385,7 +419,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     // LLM 服务商配置表单应可见
-    expect(wrapper.text()).toContain('LLM 服务商')
+    expect(wrapper.text()).toContain('模型服务')
   })
 
   it('shows the third-party AI service notice once below the provider list', async () => {
@@ -433,8 +467,7 @@ describe('SettingsView — E2E 关键路径', () => {
     // 内层 section 不再是滚动宿主（旧实现的 --scroll 标记已移除）
     expect(section.classes()).not.toContain('hc-settings__section--scroll')
 
-    // section 仍以 max-width 维持易读窄列（左对齐），滚动条则归全宽面板
-    expect(section.attributes('style') || '').toMatch(/max-width/)
+    expect(section.attributes('style') || '').not.toMatch(/max-width/)
   })
 
   it('renders model chips for provider models', async () => {
@@ -535,10 +568,8 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     expect(wrapper.get('.hc-provider__connection-status').text()).toContain('成功')
-    expect(mockProbeLLMModelCapability).toHaveBeenCalledWith(
-      'pvd_v1_11112222333344445555666677778888',
-      'gpt-4o',
-    )
+    expect(mockTestLLMConnection).toHaveBeenCalledTimes(1)
+    expect(mockProbeLLMModelCapability).not.toHaveBeenCalled()
   })
 
   it('does not pass masked provider api keys in connection probes when the provider has stable identity', async () => {
@@ -959,7 +990,11 @@ describe('SettingsView — E2E 关键路径', () => {
     const vm = wrapper.vm as unknown as { testProvider: (provider: unknown) => Promise<void> }
     await vm.testProvider(provider)
 
-    expect(mockTestLLMConnection).not.toHaveBeenCalled()
+    expect(mockTestLLMConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: expect.objectContaining({ model: 'embed' }) }),
+      expect.anything(),
+    )
+    expect(provider.selectedModelId).toBe('')
   })
 
   it('keeps exact OpenRouter embeddings out of chat selection when syncing a small directory', async () => {
@@ -1265,7 +1300,7 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
   })
 
-  it('waits for manual resync persistence and surfaces a save failure', async () => {
+  it('keeps a manual catalog resync in the draft until explicit save, then surfaces persistence failure', async () => {
     const error = vi.fn()
     ;(window as unknown as Record<string, unknown>).__hcToast = { value: { error } }
     const wrapper = await mountSettingsView()
@@ -1289,11 +1324,15 @@ describe('SettingsView — E2E 关键路径', () => {
     await body.get('button[title="重新同步"]').trigger('click')
     await flushPromises()
 
-    expect(saveConfig).toHaveBeenCalled()
-    expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
+    expect(saveConfig).not.toHaveBeenCalled()
+    await body.get('[data-testid="model-manager-cancel"]').trigger('click')
+    await wrapper.get('.hc-toolbar .hc-btn-primary').trigger('click')
+    await flushPromises()
+    expect(saveConfig).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('保存失败')
   })
 
-  it('queues manual resync persistence behind an in-flight autosave', async () => {
+  it('keeps resync edits after an explicitly submitted save and persists them only on the next explicit save', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
     const store = await getSettingsStore()
@@ -1340,6 +1379,10 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(saveConfig).toHaveBeenCalledTimes(1)
 
     releaseFirstSave()
+    await flushPromises()
+    expect(saveConfig).toHaveBeenCalledTimes(1)
+    await body.get('[data-testid="model-manager-cancel"]').trigger('click')
+    await wrapper.get('.hc-toolbar .hc-btn-primary').trigger('click')
     await vi.waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(2))
 
     expect(savedSnapshots[0]).not.toEqual(Array.from({ length: 10 }, (_, index) => `new-${index}`))
@@ -1432,7 +1475,7 @@ describe('SettingsView — E2E 关键路径', () => {
     const providerCards = wrapper.findAll('.hc-provider__card')
     const providerCard = providerCards[providerCards.length - 1]!
     const deleteBtn = providerCard
-      .findAll('.hc-provider__card-actions button')
+      .findAll('button.hc-provider__delete-btn')
       .find((button: DOMWrapper<Element>) => button.text().trim() === '删除')
     expect(deleteBtn).toBeDefined()
     await deleteBtn!.trigger('click')
@@ -1451,7 +1494,7 @@ describe('SettingsView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
-  it('keeps provider-level test and delete as the only header actions', async () => {
+  it('keeps one provider-level test in the header and one delete in its expanded configuration', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
@@ -1471,8 +1514,9 @@ describe('SettingsView — E2E 关键路径', () => {
     for (const card of cards) {
       const actionText = card.get('.hc-provider__card-actions').text()
       expect(actionText).toContain('测试')
-      expect(actionText).toContain('删除')
       expect(card.findAll('.hc-provider__test-btn')).toHaveLength(1)
+      await card.get('.hc-provider__card-head').trigger('click')
+      await flushPromises()
       expect(card.findAll('.hc-provider__delete-btn')).toHaveLength(1)
       expect(card.find('.hc-provider__test-row').exists()).toBe(false)
       expect(card.find('.hc-provider__edit-footer').exists()).toBe(false)
@@ -1498,11 +1542,20 @@ describe('SettingsView — E2E 关键路径', () => {
       name: 'My Provider',
       type: 'custom',
       enabled: true,
-      apiKey: 'sk-custom',
+      apiKey: '****test',
       baseUrl: 'https://api.example.com/v1',
       models: [{ id: 'custom-chat-model', name: 'Custom Chat Model', capabilities: ['text'] }],
     })!
     customProvider.providerInstanceId = 'pvd_v1_99990000111122223333444455556666'
+    backendFixture.config!.providers.custom = {
+      provider_instance_id: customProvider.providerInstanceId,
+      display_name: customProvider.name,
+      api_key: '****test',
+      base_url: customProvider.baseUrl,
+      model: 'custom-chat-model',
+      models: ['custom-chat-model'],
+      compatible: 'openai',
+    }
     await flushPromises()
 
     for (const type of ['openai', 'deepseek']) {
@@ -1756,25 +1809,15 @@ describe('SettingsView — E2E 关键路径', () => {
     )
   })
 
-  it('flushes a newly added provider when the window closes before explicit save', async () => {
+  it('does not implicitly submit a newly added provider when the window closes', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     const { updateLLMConfig } = await import('@/api/config')
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
 
     const wrapper = await mountSettingsView()
-    for (let i = 0; i < 10; i++) {
-      await flushPromises()
-      if (wrapper.find('.hc-settings__sep-action').exists()) break
-    }
-
-    const addProviderBtn = wrapper.find('.hc-settings__sep-action')
-    expect(addProviderBtn.exists()).toBe(true)
-    await addProviderBtn.trigger('click')
     await flushPromises()
-
-    const confirmBtn = wrapper.find('.hc-provider__add-actions .hc-btn-primary')
-    expect(confirmBtn.exists()).toBe(true)
-    await confirmBtn.trigger('click')
+    const store = await getSettingsStore()
+    store.addProvider({ name: 'Unsaved provider', type: 'custom', enabled: true, apiKey: '', baseUrl: 'https://draft.example.test/v1', models: [] })
     await flushPromises()
 
     const closeEvent = { preventDefault: vi.fn() }
@@ -1782,20 +1825,14 @@ describe('SettingsView — E2E 关键路径', () => {
     await closeRequestState.handler!(closeEvent)
     await flushPromises()
 
-    expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
-    expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls[
-      mockedUpdateLLMConfig.mock.calls.length - 1
-    ]?.[0] as {
-      providers: Record<string, unknown>
-    }
-    expect(Object.keys(backendPayload.providers)).toHaveLength(2)
-    expect(closeRequestState.close).toHaveBeenCalledTimes(1)
+    expect(closeEvent.preventDefault).not.toHaveBeenCalled()
+    expect(mockedUpdateLLMConfig).not.toHaveBeenCalled()
+    expect(Object.keys(backendFixture.config!.providers)).toHaveLength(1)
 
     wrapper.unmount()
   })
 
-  it('flushes in-progress provider edits on close request even before blur', async () => {
+  it('does not implicitly submit in-progress credential edits on close request', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     const { updateLLMConfig } = await import('@/api/config')
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
@@ -1817,24 +1854,14 @@ describe('SettingsView — E2E 关键路径', () => {
     await closeRequestState.handler!(closeEvent)
     await flushPromises()
 
-    expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
-    expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls[
-      mockedUpdateLLMConfig.mock.calls.length - 1
-    ]?.[0]
-    expect(backendPayload?.providers.openai).not.toHaveProperty('api_key', 'sk-fresh-key')
-    const credentialReplacements = mockedUpdateLLMConfig.mock.calls[
-      mockedUpdateLLMConfig.mock.calls.length - 1
-    ]?.[1]
-    expect(credentialReplacements).toContainEqual({
-      providerKey: 'openai',
-      secret: 'sk-fresh-key',
-    })
+    expect(closeEvent.preventDefault).not.toHaveBeenCalled()
+    expect(mockedUpdateLLMConfig).not.toHaveBeenCalled()
+    expect(backendFixture.config!.providers.openai!.api_key).not.toBe('sk-fresh-key')
 
     wrapper.unmount()
   })
 
-  it('waits for an in-flight save and drains edits made before close completes', async () => {
+  it('waits for an explicitly submitted save without draining later unsubmitted edits during close', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     const { updateLLMConfig } = await import('@/api/config')
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
@@ -1856,7 +1883,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     const routingToggle = wrapper.get<HTMLInputElement>('[data-testid="llm-routing-toggle"]')
     await routingToggle.setValue(true)
-    const saveButton = wrapper.findAll('button').find((button) => button.text().includes('保存'))
+    const saveButton = wrapper.find('.hc-toolbar .hc-btn-primary')
     expect(saveButton).toBeDefined()
     await saveButton!.trigger('click')
     await vi.waitFor(() => expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(1))
@@ -1874,11 +1901,11 @@ describe('SettingsView — E2E 关键路径', () => {
     await closePromise
     await flushPromises()
 
-    expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(2)
-    const finalPayload = mockedUpdateLLMConfig.mock.calls[1]![0] as {
+    expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(1)
+    const finalPayload = mockedUpdateLLMConfig.mock.calls[0]![0] as {
       routing: { enabled: boolean }
     }
-    expect(finalPayload.routing.enabled).toBe(false)
+    expect(finalPayload.routing.enabled).toBe(true)
     expect(closeRequestState.close).toHaveBeenCalledTimes(1)
 
     wrapper.unmount()
@@ -2088,7 +2115,7 @@ describe('SettingsView — E2E 关键路径', () => {
     wrapper.unmount()
   })
 
-  it('persists and refreshes a provider without a stable identity before its explicit probe', async () => {
+  it('probes an unsaved provider independently without persisting or assigning a false stable identity', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
@@ -2136,17 +2163,17 @@ describe('SettingsView — E2E 关键路径', () => {
     }
     await vm.testProvider(provider)
 
-    expect(updateLLMConfig).toHaveBeenCalled()
-    expect(getLLMConfig).toHaveBeenCalled()
+    expect(updateLLMConfig).not.toHaveBeenCalled()
     expect(mockTestLLMConnection).toHaveBeenCalledWith(
-      expect.anything(),
+      expect.objectContaining({ provider: expect.objectContaining({ api_key: 'sk-test', base_url: provider.baseUrl }) }),
       expect.objectContaining({
-        providerInstanceId: 'pvd_v1_00112233445566778899aabbccddeeff',
+        providerInstanceId: undefined,
       }),
     )
+    expect(provider.providerInstanceId).toBeUndefined()
   })
 
-  it('serializes an existing provider save and server reload before probing unsaved edits', async () => {
+  it('probes current unsaved edits without saving them and reads back only the matching receipt afterwards', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
@@ -2173,12 +2200,9 @@ describe('SettingsView — E2E 关键路径', () => {
     }
     await vm.testProvider(provider)
 
-    expect(updateLLMConfigMock).toHaveBeenCalled()
+    expect(updateLLMConfigMock).not.toHaveBeenCalled()
     expect(getLLMConfigMock).toHaveBeenCalled()
-    expect(updateLLMConfigMock.mock.invocationCallOrder[0]).toBeLessThan(
-      mockTestLLMConnection.mock.invocationCallOrder[0]!,
-    )
-    expect(getLLMConfigMock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(getLLMConfigMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       mockTestLLMConnection.mock.invocationCallOrder[0]!,
     )
   })
@@ -2418,13 +2442,14 @@ describe('SettingsView — E2E 关键路径', () => {
       await flushPromises()
     }
 
-    const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存'))
+    const saveBtn = wrapper.find('.hc-toolbar .hc-btn-primary')
     expect(saveBtn).toBeDefined()
 
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已保存')
+    const { updateLLMConfig } = await import('@/api/config')
+    expect(updateLLMConfig).toHaveBeenCalled()
   })
 
   it('does not trigger duplicate toolbar saves while a previous save is still in flight', async () => {
@@ -2452,7 +2477,7 @@ describe('SettingsView — E2E 关键路径', () => {
       await flushPromises()
     }
 
-    const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存'))
+    const saveBtn = wrapper.find('.hc-toolbar .hc-btn-primary')
     expect(saveBtn).toBeDefined()
 
     await saveBtn!.trigger('click')
@@ -2466,7 +2491,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
   })
 
-  it('does not trigger duplicate resets while a previous reset is still in flight', async () => {
+  it('reverts model drafts to the saved baseline locally without redundant backend reloads', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     const { getLLMConfig } = await import('@/api/config')
     const mockedGetConfig = vi.mocked(getLLMConfig)
@@ -2476,15 +2501,11 @@ describe('SettingsView — E2E 关键路径', () => {
 
     const baselineCalls = mockedGetConfig.mock.calls.length
 
-    let resolveReset!: (value: Record<string, unknown>) => void
-    mockedGetConfig.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveReset = resolve as unknown as typeof resolveReset
-        }),
-    )
-
-    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置'))
+    const store = await getSettingsStore()
+    const before = store.config!.llm.providers[0]!.baseUrl
+    store.config!.llm.providers[0]!.baseUrl = 'https://unsaved.example.test/v1'
+    await flushPromises()
+    const resetBtn = wrapper.find('.hc-toolbar .hc-btn-ghost')
     expect(resetBtn).toBeDefined()
 
     await resetBtn!.trigger('click')
@@ -2492,22 +2513,8 @@ describe('SettingsView — E2E 关键路径', () => {
     await resetBtn!.trigger('click')
     await flushPromises()
 
-    expect(mockedGetConfig.mock.calls.length - baselineCalls).toBe(1)
-
-    resolveReset({
-      default: 'openai',
-      providers: {
-        openai: {
-          api_key: '****test',
-          base_url: 'https://api.openai.com/v1',
-          model: 'gpt-4o',
-          compatible: '',
-        },
-      },
-      routing: { enabled: false, strategy: 'cost-aware' },
-      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
-    })
-    await flushPromises()
+    expect(mockedGetConfig.mock.calls.length - baselineCalls).toBe(0)
+    expect(store.config!.llm.providers[0]!.baseUrl).toBe(before)
   })
 
   it('cleans up the saved-indicator timer on unmount after saving', async () => {
@@ -2525,7 +2532,7 @@ describe('SettingsView — E2E 关键路径', () => {
         await flushPromises()
       }
 
-      const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存'))
+      const saveBtn = wrapper.find('.hc-toolbar .hc-btn-primary')
       expect(saveBtn).toBeDefined()
 
       await saveBtn!.trigger('click')
@@ -2613,12 +2620,13 @@ describe('SettingsView — E2E 关键路径', () => {
     await systemBtn!.trigger('click')
     await flushPromises()
 
-    const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存'))
+    const saveBtn = wrapper.find('.hc-toolbar .hc-btn-primary')
     expect(saveBtn).toBeDefined()
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已保存')
+    const { updateLLMConfig } = await import('@/api/config')
+    expect(updateLLMConfig).toHaveBeenCalled()
     expect(localStorage.getItem('app_config')).toBeTruthy()
   })
 
@@ -2651,7 +2659,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('系统信息')
-    expect(wrapper.text()).toContain('本地存储')
+    expect(wrapper.text()).toContain(zhCN.settings.system.localStorage)
     expect(wrapper.text()).toContain('知识索引')
     expect(wrapper.text()).toContain('API 端点')
   })
@@ -2706,7 +2714,7 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(store.config?.llm.providers).toBeDefined()
   })
 
-  it('restores provider list when delete-then-save fails (Bug 2 regression)', async () => {
+  it('keeps failed deletion as an unsaved draft and allows reverting it to the persisted baseline', async () => {
     // Bug 2 回归: 修复前 handleDeleteProvider 先删 provider，保存失败只记日志不恢复 UI
     // 结果: provider 从界面消失但未持久化
     const wrapper = await mountSettingsView()
@@ -2731,11 +2739,19 @@ describe('SettingsView — E2E 关键路径', () => {
     // 通过 SettingsView 暴露的方法执行删除
     const vm = wrapper.vm as unknown as {
       handleDeleteProvider: (id: string) => Promise<void>
+      saveConfig: () => Promise<void>
+      onToolbarReset: () => Promise<void>
     }
     await vm.handleDeleteProvider(firstProviderId)
     await flushPromises()
 
-    // 修复后: 保存失败时 provider 被恢复
+    expect(store.saveConfig).not.toHaveBeenCalled()
+    await vm.saveConfig()
+    await flushPromises()
+    expect(wrapper.text()).toContain('保存失败')
+    expect(store.config?.llm.providers.length).toBe(providersBefore - 1)
+    expect(Object.keys(backendFixture.config!.providers)).toHaveLength(providersBefore)
+    await vm.onToolbarReset()
     expect(store.config?.llm.providers.length).toBe(providersBefore)
 
     // 清理

@@ -302,7 +302,7 @@ describe('BUG 16: SettingsView flushAutoSave re-saves after in-flight promise', 
     // A failed generation remains newer than persistedAutoSaveGeneration, so the shared
     // generation helper must restore the pending flag without duplicating state writes.
     expect(src).toMatch(
-      /function\s+refreshAutoSaveDirtyState\s*\(\)\s*\{[\s\S]*?hasPendingAutoSave\s*=\s*persistedAutoSaveGeneration\s*<\s*autoSaveGeneration/,
+      /function\s+refreshAutoSaveDirtyState\s*\(\)\s*\{[\s\S]*?hasPendingAutoSave\s*=\s*isDirty\.value\s*&&\s*persistedAutoSaveGeneration\s*<\s*autoSaveGeneration/,
     )
     expect(fnBody).toMatch(/catch\s*\([^)]*\)\s*\{[\s\S]*?refreshAutoSaveDirtyState\(\)[\s\S]*?throw\s+\w+/)
   })

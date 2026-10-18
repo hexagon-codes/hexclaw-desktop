@@ -33,12 +33,12 @@ describe('provider display name config round-trip', () => {
     expect(restored?.name).toBe('HexClaw-GPT')
   })
 
-  it('keeps the persisted local name ahead of a stale backend display name', () => {
+  it('adopts the server-owned display name while preserving the provider identity', () => {
     const backend = {
       default: 'hexclaw-gpt',
       providers: {
         'hexclaw-gpt': {
-          display_name: 'Stale Backend Name',
+          display_name: 'Server Provider Name',
           api_key: '',
           base_url: 'https://example.test/v1',
           model: 'gpt-5.6-sol',
@@ -50,7 +50,9 @@ describe('provider display name config round-trip', () => {
     } as BackendLLMConfig
 
     const [restored] = backendToProviders(backend, [provider])
-    expect(restored?.name).toBe('HexClaw-GPT')
+    expect(restored?.name).toBe('Server Provider Name')
+    expect(restored?.id).toBe(provider.id)
+    expect(restored?.providerInstanceId).toBe(provider.providerInstanceId)
     expect(restored?.backendKey).toBe('hexclaw-gpt')
   })
 

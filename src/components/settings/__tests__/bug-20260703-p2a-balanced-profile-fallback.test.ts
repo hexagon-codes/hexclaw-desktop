@@ -88,12 +88,12 @@ describe('BUG-20260703 P2a — balanced 档兜底显示', () => {
   it('当前态锚点显示本地化「平衡」+ 安全含义，不裸显 balanced 串', async () => {
     const wrapper = mountPanel()
     await flushPromises()
-    const anchor = wrapper.find('[data-testid="current-state"]')
+    const anchor = wrapper.find('.auto-perm__current')
     expect(anchor.exists()).toBe(true)
     expect(anchor.text()).toContain('平衡')
     expect(anchor.text()).not.toContain('balanced')
     // guard 不能为空：锚点必须回答「我现在处于什么保护态」
-    expect(anchor.text().replace(/\s/g, '')).not.toMatch(/当前：平衡$/)
+    expect(anchor.attributes('title')).toBeTruthy()
   })
 
   it('卡区出兜底说明（不加第 4 卡）：三卡均未选中 + 一句话解释当前 balanced 态', async () => {
