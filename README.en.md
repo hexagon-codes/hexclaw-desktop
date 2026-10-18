@@ -18,7 +18,7 @@ HexClaw Desktop connects a desktop application to the [HexClaw](https://github.c
 
 The app uses **Tauri 2 + Vue 3 + TypeScript**, with a Go Sidecar running the local Agent service. Ollama is available for local models; online models require network access and credentials for the selected Provider.
 
-> This README describes the current source code. Published installers contain the code for their release, so the latest source and released packages may differ.
+> This README describes the `v0.5.0` source, with backend source pinned to `refs/tags/v0.5.0`. Updating version metadata and documentation does not publish a release; released installers contain their Release's code and may differ from the current source.
 
 ![HexClaw Desktop homework workspace showing the original homework image with annotations in the K12 skin](.github/assets/desktop-k12-workspace.png)
 
@@ -186,7 +186,7 @@ make dev
 
 The commands build the backend version selected by the Makefile, prepare bundled components, and launch the Vue development server and Tauri window.
 
-`make sidecar` uses `HEXCLAW_REF` from the `Makefile`; it does not automatically select the latest backend source. To use the latest backend main branch, run:
+`make sidecar` uses the fixed `HEXCLAW_REF=refs/tags/v0.5.0` from the `Makefile`; it does not automatically select the latest backend source. Before release packaging, publish backend tag `v0.5.0` with the final fixes. A version bump alone neither includes uncommitted changes in that tag nor updates an installed Sidecar. To verify uncommitted backend changes during development, use the existing `make sidecar-local` or `make build-local` target. To use the latest backend main branch, run:
 
 ```bash
 make sidecar HEXCLAW_REF=origin/main

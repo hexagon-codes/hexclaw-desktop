@@ -2,6 +2,12 @@
 
 # 自动更新发布说明
 
+## v0.5.0（2026-10-19）
+
+Desktop 版本元数据统一为 `0.5.0`，后端源码固定为 `refs/tags/v0.5.0`，变更见 [Changelog](../CHANGELOG.md)。本次只更新本地版本与文档，未提交、推送、创建 Tag、安装、部署或发布；已安装 App 和云端服务的版本不因此改变。
+
+正式构建前须先在包含最终修复的后端提交上完成现有 CI 并发布后端 `v0.5.0` Tag，再构建 Desktop。该 Tag 尚不可用时固定来源构建不能完成，不回退旧后端或改跟随 main。开发时使用当前未提交后端代码仍走 `make sidecar-local` / `make build-local`。本版不更改工作流、平台矩阵、部署分支或分发渠道。
+
 ## v0.5.0-beta.3（2026-10-04）
 
 本次 Desktop 版本为 `v0.5.0-beta.3`，后端源码继续固定为 `v0.5.0-beta.1`，变更见 [Changelog](../CHANGELOG.md)。工作流保留 `CI` 与 `Release` 两个入口，共用同一组现有门禁；`Release` 手动触发时只生成测试安装包，Desktop 版本 tag 触发时构建 Draft Release，全部平台构建成功后才公开。各阶段的结果分别记录，不将本地检查通过写成 GitHub Release 已发布。
@@ -85,7 +91,7 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/Cargo.lock` 中 `hexclaw-desktop` 的根包版本
-2. 核对 `Makefile` 中的 `HEXCLAW_REF` 为固定、已存在的后端 SemVer tag，当前为 `refs/tags/v0.5.0-beta.1`。后端来源版号独立于 Desktop 版号；内置 Sidecar 制品身份随 Desktop 发行版号注入。
+2. 先发布包含本次最终修复的后端版本，再核对 `Makefile` 中的 `HEXCLAW_REF` 为固定、已存在的后端 SemVer tag，当前配置为 `refs/tags/v0.5.0`。元数据可先准备，远端正式构建须等该 Tag 可用；后端来源版号独立于 Desktop 版号。内置 Sidecar 制品身份随 Desktop 发行版号注入，不能仅凭该身份断言后端源码已更新，还须核对实际来源提交。
 3. 提交代码并推送，确认普通 CI 通过。使用已推送的固定提交 SHA 手动触发 `Release`，确认四平台测试安装包构建通过；手动运行只上传 workflow artifacts，不发布 GitHub Release：
 
 ```bash

@@ -2,7 +2,7 @@
 
 # HexClaw Desktop User Guide
 
-Applies to Desktop `v0.5.0-beta.3`, with bundled backend source from `v0.5.0-beta.1`. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for installation and update-release requirements.
+Applies to the Desktop `v0.5.0` source, with release backend source pinned to `refs/tags/v0.5.0`. Version preparation does not publish installers or update a running service. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for publishing the backend tag before building Desktop and for automatic-update requirements.
 
 ## Table of Contents
 
@@ -198,7 +198,7 @@ Supported LLM Providers:
 | Custom OpenAI-compatible service | The service's compatible endpoint, credentials, and model ID |
 | Ollama local models | Ollama must be reachable from the executing service, with the selected model downloaded |
 
-If the active service already has an available default model, start a task directly. Otherwise select a Provider and model in **Settings → LLM Configuration**. Online models need the required API Key and address; local Ollama models do not need a cloud API Key.
+If the active service already has an available default model, start a task directly. Otherwise select a Provider and model in **Settings → Model services**. Online models need the required API Key and address; local Ollama models do not need a cloud API Key.
 
 ### Quick Chat
 
@@ -448,9 +448,9 @@ Real-time log viewing and filtering:
 
 ## Settings & Configuration
 
-Settings has three areas: **LLM Configuration, Automation Permissions, and System Settings**. Manage Webhooks in **Automation → Webhooks** and persistent memory in **Knowledge → Long-term Memory**.
+Settings has three areas: **Model services, Automation Permissions, and System Settings**. Manage Webhooks in **Automation → Webhooks** and persistent memory in **Knowledge → Long-term Memory**.
 
-### LLM Configuration
+### Model services
 
 | Option | Description |
 |--------|-------------|
@@ -461,9 +461,15 @@ Settings has three areas: **LLM Configuration, Automation Permissions, and Syste
 | Base URL | Custom API endpoint (optional) |
 | Connection test | Check the Provider interface connection; task completion still requires an actual answer or output |
 
+Default settings, conversations, and agents share the same model capability information. Native reasoning support does not establish that the Provider declares parameters to control reasoning. Switches or effort levels appear only when the selected model has a trusted control contract. Native support with unknown controls is shown as “Automatic model reasoning”; Provider and model names are not used to infer controls.
+
+The `auto` reasoning strategy lets the model decide; it does not mean off. Execution uses an explicit request first, then the agent setting, then the global setting, and finally `auto` when none is specified. Navigating between pages or refreshing capabilities does not itself change a saved strategy.
+
 ### Automation Permissions
 
 In **Settings → Automation Permissions**, choose Function First, Strict Approval, or Full Access, then inspect pending tasks, task-specific grants, audit records, and the effective policy matrix. Full Access requires an additional confirmation. Individual task approvals take place in the creation flow or task cards.
+
+The effective policy stays expanded. Recent permission decisions initially show three entries; expanding them shows the records already loaded.
 
 Permission approval does not establish that a model, connector, or external service is available, or that a task has succeeded. Inspect automation execution states and results in **Automation**.
 

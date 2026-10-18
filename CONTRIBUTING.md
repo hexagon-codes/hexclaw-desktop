@@ -45,7 +45,7 @@ make ollama
 make dev
 ```
 
-`make sidecar` 从公开 HexClaw 仓库构建 `Makefile` 中 `HEXCLAW_REF` 指定的后端版本；它不会自动选择最新主分支。需要最新后端时，改用 `make sidecar HEXCLAW_REF=origin/main`，并确认前后端契约对应。
+当前 Desktop 源码版本为 `0.5.0`。`make sidecar` 从公开 HexClaw 仓库构建 `Makefile` 中 `HEXCLAW_REF=refs/tags/v0.5.0` 指定的后端版本；正式包必须先有包含最终修复的后端 Tag，再构建 Desktop。两仓版本元数据更新不表示已创建该 Tag 或发布安装包。默认来源不随 main 浮动；开发时包含后端未提交修改的验证使用 `make sidecar-local` / `make build-local`。需要最新主分支时，可显式使用 `make sidecar HEXCLAW_REF=origin/main`，并确认前后端契约对应。
 
 `make render-bundle` 的当前快捷目标适用于 macOS。Windows 和 Linux 的原生依赖与组件准备步骤见 [Release 工作流](.github/workflows/release.yml)。
 
@@ -91,6 +91,15 @@ pnpm exec vitest run src/api/__tests__/knowledge-retry-intent.test.ts
 ```
 
 完整命令清单在 [package.json](package.json)。测试缺少参考资料或环境时，说明缺少什么，并与维护者协调对应检查；不要通过删掉断言或跳过失败来宣称已通过。仓库既有 CI 门禁保持不变，fork 缺少维护者资源时，不保证全部 CI 检查可直接运行或通过。
+
+### 维护测试环境与当前合同
+
+- jsdom 不等于浏览器。规范 API 的缺失在共享 [Vitest 环境](src/test/vitest-setup.ts) 中适配；例如 `CSS.escape` 使用规范 polyfill，不能修改生产选择器或返回未转义值来迁就夹具。`ResizeObserver` 的环境适配只提供生命周期，不证明布局或尺寸正确。
+- 编写和维护测试必须遵守[当前 CI 工作流](.github/workflows/ci.yml)及本节测试规范，核对工具链、锁文件及共享初始化，不以本机可运行替代 CI 合同。
+- 优先使用真实的纯函数、Markdown 解析器和净化器。必要的模块替身保留无关真实导出，只替换 HTTP、原生桥接等受控边界；新增导出不应因整模块假实现而在无关用例中缺失。
+- 组件依赖路由、服务作用域或持久任务时，夹具应建立对应上下文。请求、归属、状态、幂等和回执断言继续保留；不要把真实合同失败当成可忽略的 mock 问题。
+- 文案、class 和源码写法可能随已批准设计变化。核对权威设计与业务合同后维护过时断言，不为测试恢复旧 UI，也不把源码字符串当成唯一行为证明。UI 显示测试的新增和改写遵守项目限制；实际 UI 验收不能由单测替代。
+- 启动整体测试前说明局部验证为何不足；相关条件未变的有效证据继续复用。固定 CI 门禁照常保留，真实模型、IM 和原生操作按各自授权执行。本地通过只代表已记录环境中的结果，不能写成尚未运行的 GitHub Actions 已通过。
 
 ## 提交 Pull Request
 

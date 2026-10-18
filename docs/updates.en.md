@@ -2,6 +2,12 @@
 
 # Auto-Update Release Guide
 
+## v0.5.0 (2026-10-19)
+
+Desktop version metadata is aligned to `0.5.0`, with backend source pinned to `refs/tags/v0.5.0`; see the [Changelog](../CHANGELOG.md). This change only prepares local metadata and documentation. It does not commit, push, create tags, install, deploy, or publish, and it does not change the installed app or cloud service version.
+
+Before release packaging, complete the existing CI on the backend commit containing the final fixes and publish backend tag `v0.5.0`, then build Desktop. If that tag is unavailable, the fixed-source build cannot complete; do not fall back to an older backend or follow main. Development builds using uncommitted backend changes still use `make sidecar-local` / `make build-local`. Workflows, platform matrices, deployment branches, and distribution channels remain unchanged.
+
 ## v0.5.0-beta.3 (2026-10-04)
 
 This Desktop version is `v0.5.0-beta.3`, with backend source kept at `v0.5.0-beta.1`; see the [Changelog](../CHANGELOG.md). The two workflow entry points, `CI` and `Release`, share the existing gates. A manual `Release` run only builds test installers; a Desktop version tag builds a draft Release and publishes it after every platform build succeeds. Results for these stages are recorded separately; local checks do not establish that a GitHub Release has been published.
@@ -85,7 +91,7 @@ If your private key has no password, the second secret can stay empty or be omit
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - the `hexclaw-desktop` root package version in `src-tauri/Cargo.lock`
-2. Verify that `HEXCLAW_REF` in `Makefile` pins an existing backend SemVer tag, currently `refs/tags/v0.5.0-beta.1`. The backend source version is independent of the Desktop version; the bundled Sidecar artifact identity is injected from its Desktop release version.
+2. Publish the backend version containing the final fixes first, then verify that `HEXCLAW_REF` in `Makefile` pins that existing backend SemVer tag, currently configured as `refs/tags/v0.5.0`. Metadata may be prepared earlier, but remote release builds must wait until the tag is available. Backend and Desktop source versions remain independent. The bundled Sidecar artifact identity is injected from its Desktop release version; verify the actual backend source commit as well, since that identity alone does not prove the source was updated.
 3. Commit and push your changes, and confirm that routine CI passes. Trigger `Release` manually with the fixed SHA of the pushed commit and confirm that all four platform installer builds pass. A manual run uploads workflow artifacts without publishing a GitHub Release:
 
 ```bash

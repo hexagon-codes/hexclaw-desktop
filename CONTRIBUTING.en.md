@@ -45,7 +45,7 @@ make ollama
 make dev
 ```
 
-`make sidecar` builds the backend version selected by `HEXCLAW_REF` in the `Makefile` from the public HexClaw repository. It does not automatically choose the latest main branch. To use the latest backend, use `make sidecar HEXCLAW_REF=origin/main` and check that frontend and backend contracts match.
+The current Desktop source version is `0.5.0`. `make sidecar` builds the backend selected by `HEXCLAW_REF=refs/tags/v0.5.0` in the `Makefile` from the public HexClaw repository. Release packaging requires publishing that backend tag with the final fixes before building Desktop. Updating version metadata in both repositories does not create the tag or publish installers. The default source does not follow main; use `make sidecar-local` / `make build-local` to verify uncommitted backend changes during development. To use the latest main branch explicitly, use `make sidecar HEXCLAW_REF=origin/main` and check that frontend and backend contracts match.
 
 The current `make render-bundle` shortcut applies to macOS. See the [Release workflow](.github/workflows/release.yml) for Windows and Linux native dependencies and component preparation.
 
@@ -91,6 +91,15 @@ pnpm exec vitest run src/api/__tests__/knowledge-retry-intent.test.ts
 ```
 
 See [package.json](package.json) for the complete command list. If reference material or an environment is missing, state what is missing and coordinate the corresponding check with maintainers. Do not remove assertions or skip failures to claim success. Existing CI gates remain unchanged; forks without maintainer resources are not guaranteed to run or pass every CI check directly.
+
+### Maintain the test environment and current contracts
+
+- jsdom is not a browser. Adapt missing standard APIs in the shared [Vitest setup](src/test/vitest-setup.ts). For example, use the standard `CSS.escape` polyfill rather than changing production selectors or returning unescaped values for fixtures. The `ResizeObserver` adapter supplies lifecycle methods only; it does not verify layout or dimensions.
+- Test authors must follow the [current CI workflow](.github/workflows/ci.yml) and this section's testing rules, including toolchains, lockfiles, and shared initialization. A locally runnable test does not establish compatibility with the CI contract.
+- Prefer real pure functions, Markdown parsers, and sanitizers. Necessary module doubles should preserve unrelated real exports and replace only controlled boundaries such as HTTP or native bridges. A newly exported helper should not disappear from unrelated tests because of a whole-module fake.
+- When a component depends on routing, service scope, or durable tasks, establish that context in its fixture. Preserve request, ownership, state, idempotency, and receipt assertions; do not dismiss a real contract failure as a mock issue.
+- Copy, classes, and source shape can change with an approved design. Check the authoritative design and behavior before maintaining obsolete assertions. Do not restore old UI to satisfy a test or treat source strings as the sole behavioral evidence. Follow project restrictions on adding or editing UI display tests; unit tests do not replace actual UI verification.
+- Before a full run, explain why targeted evidence is insufficient and reuse evidence whose relevant conditions have not changed. Preserve fixed CI gates and obtain the applicable authorization for live models, IM, and native operations. A local result describes its recorded environment; it does not mean that an unexecuted GitHub Actions run passed.
 
 ## Submit a Pull Request
 
