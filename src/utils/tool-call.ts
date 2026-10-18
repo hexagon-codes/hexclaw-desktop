@@ -104,6 +104,28 @@ export function resolveProcessToolName(call: ToolCall, t: Translate, showServer 
   return t('chat.toolName.' + name, name)
 }
 
+/** 概览只按真实注册来源合并；MCP 归属缺失时保留每个原调用的独立身份。 */
+export function processToolIdentity(call: ToolCall): string {
+  const origin = call.origin
+  const identity = [origin?.kind ?? '', origin?.server_name ?? '', origin?.name || call.name]
+  if (origin?.kind === 'mcp' && (!origin.server_name?.trim() || !origin.name?.trim()))
+    identity.push(call.id)
+  return JSON.stringify(identity)
+}
+
+/** 只读内置知识检索的真实参数，不从结果正文推测本次动作。 */
+export function knowledgeSearchQuery(call: ToolCall, maxLen = 88): string {
+  if (call.origin?.kind === 'mcp' || (call.origin?.name || call.name) !== 'knowledge_search')
+    return ''
+  const parameters = tryParseJson(call.arguments)
+  if (!isPlainObject(parameters)) return ''
+  for (const key of ['query', 'q']) {
+    const query = parameters[key]
+    if (typeof query === 'string' && query.trim()) return clampOneLine(query, maxLen)
+  }
+  return ''
+}
+
 /**
  * 折叠成一行摘要：去 markdown 强调标记（** ` 等，真实工具结果常是 emoji+markdown 文本）、
  * 换行/连续空白压成单空格，再**按 Unicode 码点**截断——避免在 UTF-16 代理对中间切裂

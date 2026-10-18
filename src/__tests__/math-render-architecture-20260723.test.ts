@@ -162,8 +162,33 @@ function expectCanonicalComponent(
 }
 
 describe('数学公式架构防漂移', () => {
-  it('MarkdownIt 运行时只允许存在于共享 MarkdownRenderer', () => {
-    expect(ownersOfModule('markdown-it')).toEqual(['components/chat/MarkdownRenderer.vue'])
+  it('MarkdownIt 渲染只由共享 MarkdownRenderer 负责，来源投影仅解析块语义', () => {
+    expect(ownersOfModule('markdown-it')).toEqual([
+      'components/chat/MarkdownRenderer.vue',
+      'utils/retrieval-hits.ts',
+    ])
+    const projection = byPath.get('utils/retrieval-hits.ts')!
+    const constructor = defaultImport(projection, 'MarkdownIt')
+    expect(constructor).toBe('markdown-it')
+    const parsers = new Set<string>()
+    const collectParsers = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+        ts.isNewExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) &&
+        node.initializer.expression.text === 'MarkdownIt') parsers.add(node.name.text)
+      ts.forEachChild(node, collectParsers)
+    }
+    collectParsers(projection.ast)
+    expect(parsers.size).toBeGreaterThan(0)
+    const methods: string[] = []
+    const collectMethods = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) && parsers.has(node.expression.expression.text)) {
+        methods.push(node.expression.name.text)
+      }
+      ts.forEachChild(node, collectMethods)
+    }
+    collectMethods(projection.ast)
+    expect([...new Set(methods)]).toEqual(['parse'])
   })
 
   it('KaTeX runtime 与 mhchem 只存在于共享 math-render adapter', () => {

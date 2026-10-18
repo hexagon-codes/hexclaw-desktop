@@ -5,50 +5,14 @@ import zhCN from '@/i18n/locales/zh-CN'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import MarkdownRenderer from '../MarkdownRenderer.vue'
 
-vi.mock('markdown-it', () => ({
-  default: class MockMarkdownIt {
-    renderer = { rules: {} as Record<string, unknown> }
-    utils = {
-      escapeHtml: (value: string) =>
-        value
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;'),
-    }
-
-    // 真实组件用 .use(katex) 注册公式插件；mock 需支持链式 no-op
-    use() {
-      return this
-    }
-
-    render(content: string) {
-      const match = content.match(/```(\w+)?\n([\s\S]*?)```/)
-      if (!match) {
-        const typographed = content.replace(/'([^'\n]*)'/g, '‘$1’')
-        return `<p>${this.utils.escapeHtml(typographed)}</p>`
-      }
-      const lang = match[1] || 'text'
-      const code = match[2] || ''
-      return `<div class="code-block-wrapper">
-        <div class="code-block-header">
-          <span class="code-lang">${lang}</span>
-          <button class="copy-btn" data-code="${this.utils.escapeHtml(code)}">复制</button>
-        </div>
-        <pre class="code-block"><code class="language-${lang}">${this.utils.escapeHtml(code)}</code></pre>
-      </div>`
-    }
-  },
-}))
-
-vi.mock('dompurify', () => ({
-  default: {
-    sanitize: (value: string) => value,
-  },
-}))
-
+// 解析与过滤使用真实依赖，仅替换与本组协议断言无关的异步高亮。
 vi.mock('shiki', () => ({
-  codeToHtml: vi.fn().mockResolvedValue('<pre><code>const a = 1</code></pre>'),
+  codeToHtml: vi.fn(async (source: string, options: { lang: string }) => {
+    const code = document.createElement('code')
+    code.className = `language-${options.lang}`
+    code.textContent = source
+    return `<pre>${code.outerHTML}</pre>`
+  }),
 }))
 
 function createTestI18n() {

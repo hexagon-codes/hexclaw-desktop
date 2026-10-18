@@ -7,7 +7,29 @@
  * （BUG-20260711-B：此前兜底链缺 content 一级，合法数据渲染成整排「知识库命中」占位卡）。
  */
 
+import MarkdownIt from 'markdown-it'
+
 type Translate = (key: string) => string
+
+const sourceMarkerParser = new MarkdownIt({ html: false })
+const SOURCE_PAGE_MARKER = /^ {0,3}<!--\s*source_page_span=\d+-\d+\s*-->[ \t]*\r?$/
+
+/** 只读隐藏知识检索结果的独立来源标记段；代码、行内示例和其他正文保留。 */
+export function projectKnowledgeSourceMarkdown(markdown: string): string {
+  if (!markdown.includes('source_page_span=')) return markdown
+  const lines = markdown.split('\n')
+  let changed = false
+  // 复用 Markdown 块语义，避免把围栏、缩进代码或行内代码中的示例当作元数据。
+  for (const token of sourceMarkerParser.parse(markdown, {})) {
+    if (token.type !== 'inline' || !token.map || token.map[1] !== token.map[0] + 1) continue
+    if (!SOURCE_PAGE_MARKER.test(token.content)) continue
+    const line = token.map[0]
+    if (!SOURCE_PAGE_MARKER.test(lines[line] ?? '')) continue
+    lines[line] = ''
+    changed = true
+  }
+  return changed ? lines.join('\n') : markdown
+}
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''

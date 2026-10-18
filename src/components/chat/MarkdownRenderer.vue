@@ -10,6 +10,7 @@ import { setClipboard } from '@/api/desktop'
 import { KATEX_DOMPURIFY_CONFIG, normalizeMathMarkdown } from '@/utils/math-content'
 import { isKatexParseError, renderKatexToHtml } from '@/utils/math-render'
 import { decoratePromptPreviewHtml, projectPromptPreview } from '@/utils/prompt-preview'
+import { projectKnowledgeSourceMarkdown } from '@/utils/retrieval-hits'
 import {
   createRenderManifest,
   resolveMessageContent,
@@ -26,12 +27,14 @@ const props = withDefaults(
     receiptRef?: string
     highlightPromptArgs?: boolean
     showArtifacts?: boolean
+    hideSourcePageMarkers?: boolean
   }>(),
   {
     surface: 'desktop',
     receiptRef: undefined,
     highlightPromptArgs: false,
     showArtifacts: true,
+    hideSourcePageMarkers: false,
   },
 )
 
@@ -86,7 +89,10 @@ function projectLegacyToolProtocol(markdown: string) {
 
 const resolvedContent = computed(() => resolveMessageContent(props.content))
 const canonicalMarkdown = computed(() => resolvedContent.value.markdown)
-const displayMarkdown = computed(() => projectLegacyToolProtocol(canonicalMarkdown.value))
+const sourceMarkdownProjection = computed(() => props.hideSourcePageMarkers
+  ? projectKnowledgeSourceMarkdown(canonicalMarkdown.value)
+  : canonicalMarkdown.value)
+const displayMarkdown = computed(() => projectLegacyToolProtocol(sourceMarkdownProjection.value))
 const rawLegacyToolProtocol = computed(() => {
   const markdown = canonicalMarkdown.value
   return displayMarkdown.value === markdown && LEGACY_TOOL_PROTOCOL_PREFIX.test(markdown)
@@ -379,17 +385,19 @@ const rendered = computed(() => {
 const renderManifest = computed<RenderManifest | undefined>(() => {
   if (resolvedContent.value.protocol !== 'canonical') return undefined
   const content = props.content as MessageContent
+  const sourceMarkersHidden = sourceMarkdownProjection.value !== content.markdown
   return createRenderManifest(content, {
-    renderId: `render:${content.content_id.slice('content:'.length)}:${props.surface}`,
+    renderId: `render:${content.content_id.slice('content:'.length)}:${props.surface}${sourceMarkersHidden ? ':knowledge-source-v1' : ''}`,
     surface: props.surface,
-    rendererVersion: 'desktop-markdown-v1',
+    rendererVersion: sourceMarkersHidden ? 'desktop-markdown-source-pages-v1' : 'desktop-markdown-v1',
     capabilities: {
       markdown: true,
       tex_math: true,
       mathml: true,
       attachments: true,
     },
-    parts: [{ kind: 'markdown', text: content.markdown }],
+    parts: [{ kind: 'markdown', text: sourceMarkdownProjection.value }],
+    fallbackReason: sourceMarkersHidden ? 'knowledge_source_page_markers_hidden' : undefined,
     receiptRef: props.receiptRef,
   })
 })

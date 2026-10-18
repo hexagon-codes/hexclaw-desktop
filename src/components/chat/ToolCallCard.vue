@@ -6,6 +6,7 @@ import type { ToolCall } from '@/types/chat'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import CodeSnippet from './CodeSnippet.vue'
 import type { RenderManifest } from '@/contracts/message-content'
+import { projectKnowledgeSourceMarkdown } from '@/utils/retrieval-hits'
 import {
   toolCallStatus,
   resolveToolDisplayName,
@@ -13,6 +14,7 @@ import {
   summarizeToolResult,
   prettyToolJson,
   toolDurationLabel,
+  knowledgeSearchQuery,
 } from '@/utils/tool-call'
 
 const props = defineProps<{
@@ -20,14 +22,24 @@ const props = defineProps<{
   appearance?: 'activity'
   settled?: boolean
   showServer?: boolean
+  /** 概览内的完整原调用列表；逐次详情不再传入，复用原单调用展示。 */
+  relatedCalls?: readonly ToolCall[]
 }>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 const { t } = useI18n()
 
 const status = computed(() => toolCallStatus(props.call))
-const outcome = computed(() =>
-  props.settled && status.value === 'running' ? 'unknown' : status.value,
-)
+const activityCalls = computed(() => props.relatedCalls?.length ? props.relatedCalls : [props.call])
+const grouped = computed(() => activityCalls.value.length > 1)
+const activityOutcomes = computed(() => activityCalls.value.map(call => {
+  const current = toolCallStatus(call)
+  return props.settled && current === 'running' ? 'unknown' : current
+}))
+const outcome = computed(() => {
+  for (const candidate of ['error', 'unknown', 'running'] as const)
+    if (activityOutcomes.value.includes(candidate)) return candidate
+  return 'success'
+})
 const displayName = computed(() =>
   props.appearance === 'activity'
     ? resolveProcessToolName(props.call, t, props.showServer)
@@ -39,7 +51,14 @@ const toolKind = computed(() => {
   if (call.execution || call.name === 'code_exec') return 'Sandbox'
   return call.origin?.kind === 'skill' ? 'Skill' : ''
 })
-const summary = computed(() => summarizeToolResult(props.call))
+const hideSourcePageMarkers = computed(() => props.call.name === 'knowledge_search'
+  && props.call.origin?.kind !== 'mcp'
+  && (!props.call.origin?.name || props.call.origin.name === 'knowledge_search'))
+const prettyResult = computed(() => {
+  const raw = props.call.result ?? ''
+  return hideSourcePageMarkers.value ? projectKnowledgeSourceMarkdown(raw) : raw
+})
+const summary = computed(() => summarizeToolResult({ result: prettyResult.value }))
 const durationLabel = computed(() => toolDurationLabel(props.call.duration_ms))
 const sandboxCode = computed(() => {
   if (toolKind.value !== 'Sandbox') return null
@@ -50,19 +69,27 @@ const sandboxCode = computed(() => {
   } catch { return null }
 })
 const activitySummary = computed(() => {
+  for (const call of [...activityCalls.value].reverse()) {
+    const query = knowledgeSearchQuery(call)
+    if (query) return t('chat.toolQueryAction', { query })
+  }
+  const call = activityCalls.value[activityCalls.value.length - 1] ?? props.call
   if (toolKind.value === 'Sandbox') {
     const action = t('chat.toolName.code')
-    let language = props.call.execution?.language
-    if (!language && sandboxCode.value) {
-      const parameters = JSON.parse(props.call.arguments)
-      if (typeof parameters.language === 'string' && parameters.language.trim()) language = sandboxCode.value.language
+    let language = call.execution?.language
+    if (!language) {
+      try {
+        const parameters = JSON.parse(call.arguments)
+        if (parameters && typeof parameters.language === 'string' && parameters.language.trim())
+          language = parameters.language
+      } catch { /* 未记录语言时仅展示既有动作名。 */ }
     }
     return language ? `${language} ${action}` : action
   }
   // 活动行只采用成功回执的明确摘要，任意返回和技术字段仍留在详情中。
-  if (outcome.value !== 'success' || !props.call.result) return ''
+  if (toolCallStatus(call) !== 'success' || !call.result) return ''
   try {
-    const result = JSON.parse(props.call.result)
+    const result = JSON.parse(call.result)
     if (!result || typeof result !== 'object' || Array.isArray(result)) return ''
     for (const key of ['summary', 'message', 'description', 'title']) {
       if (typeof result[key] !== 'string' || !result[key].trim()) continue
@@ -81,7 +108,6 @@ const prettyArgs = computed(() => {
 const resultLanguage = computed(() => {
   try { JSON.parse(props.call.result || ''); return 'json' } catch { return 'text' }
 })
-const prettyResult = computed(() => props.call.result ?? '')
 
 const statusIcon = computed(() =>
   status.value === 'success' ? CircleCheck : status.value === 'error' ? CircleX : LoaderCircle,
@@ -111,43 +137,59 @@ const statusLabel = computed(() =>
         ><span v-if="toolKind" class="hc-process-tool__kind">{{ toolKind }} · </span
         >{{ displayName }}</span
       >
-      <span v-if="activitySummary" class="hc-process-tool__meta">{{ activitySummary }}</span>
-      <span v-if="outcome === 'unknown'" class="hc-process-tool__meta">Outcome unknown</span>
-      <span v-else-if="outcome === 'error'" class="hc-process-tool__meta">{{ statusLabel }}</span>
-      <span class="hc-process-tool__meta hc-process-tool__duration">{{
+      <span v-if="activitySummary" class="hc-process-tool__meta">· {{ activitySummary }}</span>
+      <span v-if="relatedCalls?.length" class="hc-process-tool__meta">· {{ t('chat.toolCallsCount', { count: activityCalls.length }) }}</span>
+      <span v-if="activityOutcomes.includes('unknown')" class="hc-process-tool__meta">{{ t('chat.operationProcess.unknown') }}</span>
+      <span v-if="activityOutcomes.includes('error')" class="hc-process-tool__meta">{{ t('chat.toolFailed', '失败') }}</span>
+      <span v-if="activityOutcomes.includes('running')" class="hc-process-tool__meta">{{ t('chat.toolRunning', '运行中') }}</span>
+      <span v-if="!grouped" class="hc-process-tool__meta hc-process-tool__duration">{{
         outcome === 'running' || outcome === 'unknown' ? '' : durationLabel
       }}</span>
     </summary>
     <div class="hc-process-tool__detail">
-      <div class="hc-process-tool__meta">{{ call.name }}</div>
-      <div v-if="call.origin?.kind === 'mcp'" class="hc-process-tool__meta">
-        {{ [call.origin.server_name, call.origin.name].filter(Boolean).join(' · ') }}
-      </div>
-      <template v-if="call.arguments"
-        ><div>{{ t('chat.toolParams') }}</div>
-        <CodeSnippet :code="prettyArgs" language="json" />
-        <CodeSnippet v-if="sandboxCode" :code="sandboxCode.code" :language="sandboxCode.language" />
-      </template>
-      <template v-if="call.execution">
-        <div>{{ call.execution.language }} · Exit code: {{ call.execution.exit_code }}</div>
-        <CodeSnippet v-if="call.execution.command?.length" :code="call.execution.command.join(' ')" language="text" />
-        <p v-if="call.execution.timeout">Execution timed out</p>
-        <CodeSnippet v-if="call.execution.error" :code="call.execution.error" language="text" />
-        <ul v-if="call.execution.artifacts?.length">
-          <li v-for="artifact in call.execution.artifacts" :key="artifact.id">
-            {{ artifact.name }} · {{ artifact.size }} B
-          </li>
-        </ul>
-      </template>
-      <template v-if="call.result || call.message_content">
-        <div>{{ t('chat.toolResult') }}</div>
-        <MarkdownRenderer
-          v-if="call.message_content"
-          :content="call.message_content"
-          surface="desktop"
+      <template v-if="grouped">
+        <ToolCallCard
+          v-for="related in activityCalls"
+          :key="related.id"
+          :call="related"
+          appearance="activity"
+          :settled="settled"
+          :show-server="showServer"
           @rendered="emit('rendered', $event)"
         />
-        <CodeSnippet v-else :code="prettyResult" :language="resultLanguage" />
+      </template>
+      <template v-else>
+        <div class="hc-process-tool__meta">{{ call.name }} · {{ call.id }}</div>
+        <div v-if="call.origin?.kind === 'mcp'" class="hc-process-tool__meta">
+          {{ [call.origin.server_name, call.origin.name].filter(Boolean).join(' · ') }}
+        </div>
+        <template v-if="call.arguments"
+          ><div>{{ t('chat.toolParams') }}</div>
+          <CodeSnippet :code="prettyArgs" language="json" />
+          <CodeSnippet v-if="sandboxCode" :code="sandboxCode.code" :language="sandboxCode.language" />
+        </template>
+        <template v-if="call.execution">
+          <div>{{ call.execution.language }} · Exit code: {{ call.execution.exit_code }}</div>
+          <CodeSnippet v-if="call.execution.command?.length" :code="call.execution.command.join(' ')" language="text" />
+          <p v-if="call.execution.timeout">Execution timed out</p>
+          <CodeSnippet v-if="call.execution.error" :code="call.execution.error" language="text" />
+          <ul v-if="call.execution.artifacts?.length">
+            <li v-for="artifact in call.execution.artifacts" :key="artifact.id">
+              {{ artifact.name }} · {{ artifact.size }} B
+            </li>
+          </ul>
+        </template>
+        <template v-if="call.result || call.message_content">
+          <div>{{ t('chat.toolResult') }}</div>
+          <MarkdownRenderer
+            v-if="call.message_content"
+            :content="call.message_content"
+            :hide-source-page-markers="hideSourcePageMarkers"
+            surface="desktop"
+            @rendered="emit('rendered', $event)"
+          />
+          <CodeSnippet v-else :code="prettyResult" :language="resultLanguage" />
+        </template>
       </template>
     </div>
   </details>
@@ -176,6 +218,7 @@ const statusLabel = computed(() =>
         v-if="call.message_content"
         class="hc-tool__result-markdown"
         :content="call.message_content"
+        :hide-source-page-markers="hideSourcePageMarkers"
         surface="desktop"
         @rendered="emit('rendered', $event)"
       />

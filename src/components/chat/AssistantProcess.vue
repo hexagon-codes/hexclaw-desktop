@@ -5,7 +5,7 @@ import type { ChatMessage, ToolCall } from '@/types/chat'
 import type { RenderManifest } from '@/contracts/message-content'
 import type { SkillContextReceipt } from '@/types/skill'
 import { splitProcessBlocks } from '@/utils/assistant-process'
-import { toolCallStatus, resolveProcessToolName } from '@/utils/tool-call'
+import { toolCallStatus, resolveProcessToolName, processToolIdentity } from '@/utils/tool-call'
 import { skillContextReceipts, skillDisplayName, skillMethodStructure } from '@/utils/skill-display'
 import AssistantRunStatus from './AssistantRunStatus.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
@@ -106,6 +106,28 @@ const steps = computed(() => {
       (block.retrieval.memory_hits?.length ?? 0) > 0 ||
       (block.retrieval.resident_hits?.length ?? 0) > 0,
   )
+})
+// 仅把同工具调用汇入首个活动概览；文本、召回和原持久时间线不变。
+const overviewSteps = computed(() => {
+  const overview: Array<(typeof steps.value)[number] & { relatedCalls?: ToolCall[] }> = []
+  const groups = new Map<string, ToolCall[]>()
+  for (const block of steps.value) {
+    if (block.type !== 'tool_use') {
+      overview.push(block)
+      continue
+    }
+    const call = callFor(block.id, block.name, block.input)
+    const identity = processToolIdentity(call)
+    const related = groups.get(identity)
+    if (related) {
+      if (!related.some((previous) => previous.id === call.id)) related.push(call)
+      continue
+    }
+    const relatedCalls = [call]
+    groups.set(identity, relatedCalls)
+    overview.push({ ...block, relatedCalls })
+  }
+  return overview
 })
 const fallbackReasoning = computed(() =>
   visibleReasoning.value && !steps.value.some((block) => block.type === 'thinking')
@@ -212,7 +234,7 @@ function callFor(id: string, name: string, input: string): ToolCall {
         <MarkdownRenderer :content="fallbackReasoning" surface="desktop" :show-artifacts="false" />
       </div>
       <div
-        v-for="(block, index) in steps"
+        v-for="(block, index) in overviewSteps"
         :key="block.type === 'tool_use' || block.type === 'retrieval' ? block.id : index"
         class="hc-process__step"
         :class="{ 'hc-process__reasoning': block.type === 'thinking' || block.type === 'text' }"
@@ -225,6 +247,7 @@ function callFor(id: string, name: string, input: string): ToolCall {
         <ToolCallCard
           v-else-if="block.type === 'tool_use'"
           :call="callFor(block.id, block.name, block.input)"
+          :related-calls="block.relatedCalls"
           appearance="activity"
           :settled="!live"
           :show-server="
