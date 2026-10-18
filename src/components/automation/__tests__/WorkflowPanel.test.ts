@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import zhCN from '@/i18n/locales/zh-CN'
 import WorkflowPanel from '../WorkflowPanel.vue'
 import { useCanvasStore } from '@/stores/canvas'
+import HcSelect from '@/components/common/HcSelect.vue'
 
 const saveWorkflowMock = vi.fn()
 const getWorkflowsMock = vi.fn()
@@ -44,7 +46,15 @@ vi.mock('@/api/canvas', () => ({
   deleteWorkflow: (...a: unknown[]) => deleteWorkflowMock(...a),
   runWorkflow: (...a: unknown[]) => runWorkflowMock(...a),
   getWorkflowRun: (...a: unknown[]) => getWorkflowRunMock(...a),
+  getWorkflowRuns: vi.fn().mockResolvedValue({ runs: [], total: 0 }),
+  getWorkflowTriggers: vi.fn().mockResolvedValue({ triggers: [] }),
 }))
+
+vi.mock('@/api/agents', () => ({ getAgents: vi.fn().mockResolvedValue({ agents: [], default: '' }) }))
+vi.mock('@/api/mcp', () => ({ getMcpTools: vi.fn().mockResolvedValue({ tools: [{ name: 'read-marker', description: 'Read marker' }] }) }))
+vi.mock('@/api/skills', () => ({ getSkills: vi.fn().mockResolvedValue({ skills: [] }) }))
+vi.mock('@/api/prompts', () => ({ getPrompts: vi.fn().mockResolvedValue({ prompts: [] }) }))
+vi.mock('@/api/knowledge', () => ({ getDocuments: vi.fn().mockResolvedValue({ documents: [] }) }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
@@ -58,9 +68,15 @@ function createTestI18n() {
   return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })
 }
 
-async function mountPanel() {
+async function mountPanel(path = '/automation/workflows/editor') {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/automation/workflows/:page?', component: { template: '<div />' } }],
+  })
+  await router.push(path)
+  await router.isReady()
   const wrapper = mount(WorkflowPanel, {
-    global: { plugins: [createTestI18n()], stubs: { teleport: true, transition: false } },
+    global: { plugins: [createTestI18n(), router], stubs: { teleport: true, transition: false } },
   })
   await flushPromises()
   return wrapper
@@ -71,17 +87,17 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     getWorkflowsMock.mockResolvedValue([])
-    saveWorkflowMock.mockResolvedValue({ id: 'wf-1', name: '新工作流' })
+    saveWorkflowMock.mockImplementation(async (workflow) => ({ ...workflow, id: 'wf-1' }))
     runWorkflowMock.mockResolvedValue({
-      id: 'run-1', status: 'completed', output: '跑通了',
+      id: 'run-1', workflow_id: 'wf-1', status: 'completed', output: '跑通了',
       node_results: [{ node_id: 'n1', type: 'agent', status: 'completed' }],
     })
   })
 
-  it('空态：无工作流时展示空状态 + 新建按钮', async () => {
-    const wrapper = await mountPanel()
+  it('空态：无工作流时展示空状态且不注入本地工作流', async () => {
+    const wrapper = await mountPanel('/automation/workflows')
     expect(wrapper.text()).toContain('暂无工作流')
-    expect(wrapper.text()).toContain('新建工作流')
+    expect(useCanvasStore().savedWorkflows).toHaveLength(0)
   })
 
   it('createWorkflow 注入 触发→模型→输出 三步起步模板', async () => {
@@ -90,21 +106,27 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     await flushPromises()
     // 3 个线性节点 + 2 条线性连接边
     expect(wrapper.findAll('.wf-node')).toHaveLength(3)
-    expect(wrapper.findAll('.wf-link')).toHaveLength(3) // 2 节点间 + 1 尾部到「添加步骤」
-    expect(wrapper.text()).toContain('触发 / 输入')
+    expect(wrapper.findAll('.wf-link')).toHaveLength(2)
+    expect(wrapper.text()).toContain('输入')
     expect(wrapper.text()).toContain('透传最终输出') // output 节点摘要
   })
 
-  it('添加步骤：点「添加步骤」→ 选「工具」追加一个节点', async () => {
+  it('添加步骤：配置工具后保存追加一个节点', async () => {
     const wrapper = await mountPanel()
     ;(wrapper.vm as unknown as { createWorkflow: () => void }).createWorkflow()
     await flushPromises()
     expect(wrapper.findAll('.wf-node')).toHaveLength(3)
 
     await wrapper.find('.wf-add').trigger('click')
-    const toolBtn = wrapper.findAll('.wf-addmenu button').find((b) => b.text().includes('工具'))
-    expect(toolBtn).toBeTruthy()
-    await toolBtn!.trigger('click')
+    const typeSelect = wrapper.findAllComponents(HcSelect).find((select) => select.props('ariaLabel') === '处理方式')
+    expect(typeSelect).toBeTruthy()
+    typeSelect!.vm.$emit('update:modelValue', 'tool')
+    await flushPromises()
+    const toolSelect = wrapper.findAllComponents(HcSelect).find((select) => select.props('options').some((option) => option.value === 'read-marker'))
+    expect(toolSelect).toBeTruthy()
+    toolSelect!.vm.$emit('update:modelValue', 'read-marker')
+    await flushPromises()
+    await wrapper.find('.wfp-panel__foot .hc-btn-primary').trigger('click')
     expect(wrapper.findAll('.wf-node')).toHaveLength(4)
   })
 
@@ -129,9 +151,14 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     const store = useCanvasStore()
     const agent = store.nodes.find((n) => n.type === 'agent')!
     store.updateNode(agent.id, { config: { prompt: '总结输入' } })
+    // 输入模板需要用户填写本次试运行输入，不能以一次空点击替代运行。
     await flushPromises()
     const runBtn = wrapper.findAll('button').find((b) => b.text().includes('试运行'))
     await runBtn!.trigger('click')
+    await flushPromises()
+    const input = wrapper.find('#workflow-run-input')
+    await input.setValue('测试输入')
+    await wrapper.findAll('button').find((button) => button.text().trim() === '开始运行')!.trigger('click')
     await flushPromises()
     expect(runWorkflowMock).toHaveBeenCalledTimes(1)
     // 运行结果面板出现
@@ -155,8 +182,8 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     ;(wrapper.vm as unknown as { createWorkflow: () => void }).createWorkflow()
     await flushPromises()
     const delBtns = wrapper.findAll('.wf-op--danger')
-    expect(delBtns.length).toBe(3)
-    await delBtns[1]!.trigger('click')
+    expect(delBtns.length).toBe(1)
+    await delBtns[0]!.trigger('click')
     expect(wrapper.findAll('.wf-node')).toHaveLength(2)
   })
 })

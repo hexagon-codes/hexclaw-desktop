@@ -609,12 +609,22 @@ function settingsFromConfig(config: Record<string, unknown>): WorkflowStepSettin
   const resources = Object.fromEntries(resourceKeys.map((key) => [key, { mode: raw.resources?.[key]?.mode || 'inherit', value: [...raw.resources?.[key]?.value || []] }])) as WorkflowStepSettings['resources']
   return { resources, memory: { retrieval: { mode: raw.memory?.retrieval?.mode || 'inherit', query: raw.memory?.retrieval?.query || '' }, writeback: { mode: raw.memory?.writeback?.mode || 'inherit' } }, output: { kind: raw.output?.kind || 'inherit', fields: raw.output?.fields || '', instructions: raw.output?.instructions || '', artifactKinds: [...raw.output?.artifactKinds || ['file', 'image']] }, input_selection: { kind: raw.input_selection?.kind || 'text', field: raw.input_selection?.field || '' }, output_template: raw.output_template || '', output_field: config.output_object && typeof config.output_object === 'object' ? Object.keys(config.output_object)[0] || '' : '', outputs: { formats: [...raw.outputs?.formats || []] }, delivery: {
     session: { mode: raw.delivery?.session?.mode || 'none' },
-    dingtalk: { enabled: raw.delivery?.dingtalk?.enabled === true, instance_id: raw.delivery?.dingtalk?.instance_id || '', chat_id: raw.delivery?.dingtalk?.chat_id || '' },
+    // 已启用且缺少mode的旧配置保持缺省，打开或保存面板不会把原全文投递改为节选。
+    dingtalk: { enabled: raw.delivery?.dingtalk?.enabled === true, mode: raw.delivery?.dingtalk?.mode || (raw.delivery?.dingtalk?.enabled ? undefined : 'message'), instance_id: raw.delivery?.dingtalk?.instance_id || '', chat_id: raw.delivery?.dingtalk?.chat_id || '' },
     email: { enabled: raw.delivery?.email?.enabled === true, instance_id: raw.delivery?.email?.instance_id || '', to: raw.delivery?.email?.to || '', subject: raw.delivery?.email?.subject || '' },
     directory: { enabled: raw.delivery?.directory?.enabled === true, location: raw.delivery?.directory?.location === 'service' ? 'service' : 'desktop', path: raw.delivery?.directory?.path || '', directory_ref: raw.delivery?.directory?.directory_ref || '', client_id: raw.delivery?.directory?.client_id || '', label: raw.delivery?.directory?.label || '' },
   } }
 }
 const stepSettings = ref<WorkflowStepSettings>(settingsFromConfig({}))
+const dingtalkContentNote = computed(() => {
+  const mode = stepSettings.value.delivery.dingtalk.mode
+  return t(mode === 'message' ? 'workflow.delivery.messageOnlyNote'
+    : mode === 'files' ? 'workflow.delivery.filesOnlyNote'
+      : mode === 'both' ? 'workflow.delivery.messageAndFilesNote' : 'workflow.delivery.legacyContentNote')
+})
+function changeDingtalkContentMode(value: string) {
+  if (value === 'message' || value === 'files' || value === 'both') stepSettings.value.delivery.dingtalk.mode = value
+}
 const importReviewConfirmations = ref<Record<string, boolean>>({})
 const importedSource = computed(() => editingId.value ? editingNode(editingId.value)?.config?.import_source : undefined)
 const needsImportReview = computed(() => !!editingId.value && editingNode(editingId.value)?.config?.import_requires_review === true)
@@ -1267,6 +1277,8 @@ defineExpose({ loadWorkflows: refreshPage, createWorkflow, locatePermissionTarge
                 <p class="wfp-field__note">{{ t('workflow.delivery.' + stepSettings.delivery.session.mode + 'Note') }}</p>
                 <label class="wfp-field"><span class="wfp-field__label">{{ t('workflow.delivery.dingtalk') }}</span><HcSelect :model-value="String(stepSettings.delivery.dingtalk.enabled)" @update:model-value="stepSettings.delivery.dingtalk.enabled = $event === 'true'" :disabled="isRunning" :options="[{ value: 'false', label: t('workflow.delivery.none') }, { value: 'true', label: t('workflow.delivery.sendDingtalk') }]" :ariaLabel="t('workflow.delivery.dingtalk')" /></label>
                 <template v-if="stepSettings.delivery.dingtalk.enabled">
+                  <label class="wfp-field"><span class="wfp-field__label">{{ t('workflow.delivery.contentMode') }}</span><HcSelect :model-value="stepSettings.delivery.dingtalk.mode ?? 'both'" @update:model-value="changeDingtalkContentMode" :disabled="isRunning" :options="[{ value: 'message', label: t('workflow.delivery.messageOnly') }, { value: 'files', label: t('workflow.delivery.filesOnly') }, { value: 'both', label: t('workflow.delivery.messageAndFiles') }]" :ariaLabel="t('workflow.delivery.contentMode')" /></label>
+                  <p class="wfp-field__note">{{ dingtalkContentNote }}</p>
                   <p v-if="deliveryTargetsLoading" class="wfp-field__note" role="status">{{ t('common.loading') }}</p>
                   <p v-else-if="deliveryTargetsError" class="wfp-field__note" role="alert">{{ workflowErrorText(deliveryTargetsError) }} <button type="button" class="wfp-text-action" @click="loadDeliveryTargets">{{ t('common.retry') }}</button></p>
                   <label class="wfp-field"><span class="wfp-field__label">{{ t('workflow.delivery.instance') }}</span><HcSelect :model-value="stepSettings.delivery.dingtalk.instance_id" @update:model-value="changeDeliveryInstance" :disabled="isRunning || deliveryTargetsLoading" :options="deliveryInstanceOptions" :placeholder="t('workflow.delivery.selectInstance')" :ariaLabel="t('workflow.delivery.instance')" /></label>

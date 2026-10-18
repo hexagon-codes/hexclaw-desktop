@@ -8,7 +8,7 @@ import type { MessageContent, RenderManifest } from '@/contracts/message-content
 export type WorkflowResourceKey = 'skills' | 'prompts' | 'knowledge' | 'tools'
 export interface WorkflowDeliverySettings {
   session: { mode: 'none' | 'source' | 'workflow' }
-  dingtalk: { enabled: boolean; instance_id: string; chat_id: string }
+  dingtalk: { enabled: boolean; mode?: 'message' | 'files' | 'both'; instance_id: string; chat_id: string }
   email: { enabled: boolean; instance_id: string; to: string; subject: string }
   directory: { enabled: boolean; location: 'desktop' | 'service'; path: string; directory_ref: string; client_id: string; label?: string }
 }
@@ -26,6 +26,7 @@ export interface WorkflowDelivery {
   session_id?: string
   instance_id?: string
   chat_id?: string
+  content_mode?: 'message' | 'files' | 'both'
   error?: string
   error_code?: string
   external_message_id?: string
