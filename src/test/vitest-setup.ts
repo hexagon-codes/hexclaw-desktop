@@ -4,10 +4,25 @@
  * 依赖 vi.spyOn(Storage.prototype, ...) 的用例失败。
  */
 import { beforeEach } from 'vitest'
+// jsdom未提供CSS.escape；复用规范polyfill，保持生产消息锚点与选择器语义。
+import 'css.escape'
 import { config } from '@vue/test-utils'
 import HcClearableField from '@/components/common/HcClearableField.vue'
 
 config.global.components.HcClearableField = HcClearableField
+
+// jsdom不执行布局；此适配仅提供观察者生命周期，尺寸变化仍由相关用例显式驱动。
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  Object.defineProperty(globalThis, 'ResizeObserver', {
+    configurable: true,
+    writable: true,
+    value: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  })
+}
 
 function createMemoryStorage(): Storage {
   const map = new Map<string, string>()
