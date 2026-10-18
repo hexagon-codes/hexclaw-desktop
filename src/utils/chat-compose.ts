@@ -25,11 +25,34 @@ export function shouldSendOnEnter(
   return true
 }
 
-/** 附件图片 src：按 ChatAttachment.data 契约 auto-detect——已是 http(S)/data:/blob:/hexclaw-preview: URL 则原样，
+/** 服务端附件允许 data 与 url 二选一；读取来源时保留有效 data 的既有优先级。 */
+export function chatAttachmentSource(attachment: { data?: unknown; url?: unknown } | null | undefined): string {
+  if (typeof attachment?.data === 'string' && attachment.data.trim()) return attachment.data
+  return typeof attachment?.url === 'string' ? attachment.url : ''
+}
+
+/** 历史消息只规范读取副本，保留附件身份、其他元数据和持久记录原文。 */
+export function normalizeMessageAttachmentSources(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!Array.isArray(metadata?.attachments)) return metadata
+  return {
+    ...metadata,
+    attachments: metadata.attachments
+      .filter((attachment): attachment is Record<string, unknown> =>
+        !!attachment && typeof attachment === 'object' && !Array.isArray(attachment))
+      .map(attachment => ({ ...attachment, data: chatAttachmentSource(attachment) })),
+  }
+}
+
+/** 附件图片 src：按附件来源契约 auto-detect——已是 http(S)/data:/blob:/hexclaw-preview:/asset: URL 则原样，
  *  否则视为裸 base64 加 `data:<mime>;base64,` 前缀。避免对 data-URL/http 图双重前缀致破图。 */
-export function imageSrc(att: { data: string; mime: string }): string {
-  const d = att.data
-  if (d.startsWith('http') || d.startsWith('data:') || d.startsWith('blob:') || d.startsWith('hexclaw-preview:')) return d
+export function imageSrc(att: { data?: string; url?: string; mime: string }): string {
+  const d = chatAttachmentSource(att)
+  if (!d) return ''
+  // 明确的 URL 来源包括服务端相对 API 路径，不能再按裸 base64 包装。
+  if (typeof att.url === 'string' && d === att.url) return d
+  if (d.startsWith('http') || d.startsWith('data:') || d.startsWith('blob:') || d.startsWith('hexclaw-preview:') || d.startsWith('asset://')) return d
   return `data:${att.mime};base64,${d}`
 }
 

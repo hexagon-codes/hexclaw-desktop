@@ -23,6 +23,7 @@ import type { ChatMessage, ChatSession, Artifact } from '@/types'
 import { normalizeRuntimeSnapshotMetadata, normalizeThinkingMetadata } from '@/types/chat'
 import { isDegenerateTail, trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
 import { freezeProcessAnswer } from '@/utils/assistant-process'
+import { normalizeMessageAttachmentSources } from '@/utils/chat-compose'
 
 // ─── 消息序列化（保留，供外部 normalize 使用） ───────
 
@@ -42,7 +43,7 @@ export function normalizeLoadedMessage(row: {
   timestamp: string
   metadata: string | null
 }): ChatMessage {
-  const parsedMetadata = parseMessageMetadata(row.metadata)
+  const parsedMetadata = normalizeMessageAttachmentSources(parseMessageMetadata(row.metadata))
   const toolCalls = Array.isArray(parsedMetadata?.tool_calls) ? parsedMetadata.tool_calls : undefined
   // 重载有序内容块：多步 ReAct 切会话/重启后仍按真实交错序渲染（后端 meta.blocks 已落库）。
   const blocks = Array.isArray(parsedMetadata?.blocks) ? parsedMetadata.blocks : undefined
@@ -145,9 +146,9 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
     const res = await listSessionMessages(sessionId, { limit: 500 })
     return (res.messages || []).map(m => {
       // 后端返回的 metadata / meta 可能是 JSON 字符串或已解析对象
-      const meta = typeof m.metadata === 'string'
+      const meta = normalizeMessageAttachmentSources(typeof m.metadata === 'string'
         ? parseMessageMetadata(m.metadata)
-        : (m.metadata ?? undefined)
+        : (m.metadata ?? undefined))
       // reasoning 存储在 meta 字段（扩展元数据）中
       const rawMetaExt = (m as unknown as Record<string, unknown>).meta
       const metaExt = typeof rawMetaExt === 'string'

@@ -676,6 +676,8 @@ export interface ChatAttachment {
   mime: string
   /** Opaque owner-bound Sidecar receipt used on the chat wire. */
   attachmentId?: string
+  /** 服务端历史附件的 URL 来源；读取时与 data 共用同一规范化规则。 */
+  url?: string
   /**
    * 附件数据。可能是：
    * - base64（历史持久消息或 Provider 输出），形如 "xxxxxx"

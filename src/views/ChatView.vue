@@ -75,6 +75,7 @@ import MessageText from '@/components/chat/MessageText.vue'
 import {
   shouldSendOnEnter,
   imageSrc as attachmentSource,
+  chatAttachmentSource,
   scrollNavFlags,
   resolveChatScroll,
   videoPosterFromMetadata as posterSource,
@@ -611,7 +612,10 @@ function videoPosterFromMetadata(
 watch(
   () =>
     chatStore.messages.flatMap((message) => [
-      ...getMessageAttachments(message).map(attachmentSource),
+      ...getMessageAttachments(message)
+        .filter(attachment => attachment.type === 'image' || attachment.type === 'video'
+          || attachment.type === 'audio' || attachment.mime?.startsWith('audio/'))
+        .map(attachmentSource),
       posterSource(message.metadata) ?? '',
     ]),
   (sources) => backendMedia.retain(sources),
@@ -630,7 +634,7 @@ const k12AssetPreviewOwnerships = new Map<string, ScenarioImagePreviewOwnership>
 const scenarioPendingPreviewOwnerships = new Map<string, ScenarioImagePreviewOwnership>()
 
 function k12AssetIdentity(attachment: ChatAttachment): string {
-  const raw = attachment.data.trim()
+  const raw = chatAttachmentSource(attachment).trim()
   if (raw.startsWith('asset://')) return raw
   // 旧消息可能已经持久化过裸 K12 URL；读取时收敛回同一个稳定身份，不再裸连。
   if (!/^https?:\/\//i.test(raw)) return ''
