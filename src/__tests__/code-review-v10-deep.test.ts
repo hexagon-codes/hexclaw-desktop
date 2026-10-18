@@ -100,23 +100,21 @@ describe('Issue #3: Canvas store self-loop prevention', () => {
 describe('Issue #4: Canvas store runWorkflow marks nodes as failed on backend error', () => {
   const src = readSrc('stores/canvas.ts')
 
-  it('else branch marks nodes as failed not completed', () => {
-    // The else branch (backend unavailable) should mark all nodes as 'failed'
-    const runWorkflowStart = src.indexOf('async function runWorkflow()')
-    const runWorkflowBody = src.slice(runWorkflowStart)
-    const elseBranch = runWorkflowBody.slice(runWorkflowBody.indexOf('} else {'))
-    expect(elseBranch).toContain("'failed'")
+  it('projects failed node state only from a received node result', () => {
+    const projection = src.match(/function projectRun\([\s\S]*?\n  \}/)?.[0] ?? ''
+    expect(projection).toContain('for (const result of run.node_results ?? [])')
+    expect(projection).toContain("result.status === 'failed' ? 'failed'")
   })
 
   it('else branch sets runStatus to failed', () => {
-    const runWorkflowStart = src.indexOf('async function runWorkflow()')
+    const runWorkflowStart = src.indexOf('async function runWorkflow(')
     const runWorkflowBody = src.slice(runWorkflowStart)
     const elseBranch = runWorkflowBody.slice(runWorkflowBody.indexOf('} else {'))
-    expect(elseBranch).toContain("runStatus.value = 'failed'")
+    expect(elseBranch).toContain("err?.status === 404 ? 'unavailable' : 'failed'")
   })
 
   it('else branch does NOT mark nodes as completed', () => {
-    const runWorkflowStart = src.indexOf('async function runWorkflow()')
+    const runWorkflowStart = src.indexOf('async function runWorkflow(')
     const runWorkflowBody = src.slice(runWorkflowStart)
     const elseBranch = runWorkflowBody.slice(
       runWorkflowBody.indexOf('} else {'),
@@ -126,16 +124,10 @@ describe('Issue #4: Canvas store runWorkflow marks nodes as failed on backend er
     expect(elseBranch).not.toMatch(/\[nid\]:\s*'completed'/)
   })
 
-  it('success branch marks nodes as completed with animation', () => {
-    const runWorkflowStart = src.indexOf('async function runWorkflow()')
-    const runWorkflowBody = src.slice(runWorkflowStart)
-    // Between if (res) { and } else {
-    const successBranch = runWorkflowBody.slice(
-      runWorkflowBody.indexOf('if (res)'),
-      runWorkflowBody.indexOf('} else {'),
-    )
-    expect(successBranch).toContain("'completed'")
-    expect(successBranch).toContain("'running'")
+  it('success projects completed and running nodes from server results without simulated animation', () => {
+    const projection = src.match(/function projectRun\([\s\S]*?\n  \}/)?.[0] ?? ''
+    expect(projection).toContain("result.status === 'completed' ? 'completed'")
+    expect(projection).toContain("result.status === 'running' ? 'running'")
   })
 })
 
@@ -200,7 +192,7 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
 
   it('renders row timestamps via formatLogTime (absolute, no 1Hz now.value timer)', () => {
     // \u65f6\u95f4\u6233\u76f4\u63a5 formatLogTime(entry.timestamp) \u6e32\u67d3\uff0c\u65e0 now.value \u5b9a\u65f6\u5668\uff08\u907f\u514d\u6bcf\u79d2\u6574\u5217\u91cd\u6e32\uff09
-    expect(src).toContain('formatLogTime(entry.timestamp)')
+    expect(src).toContain('formatLogTime(group.latest.timestamp)')
     expect(src).not.toContain('now.value')
   })
 })
@@ -218,18 +210,23 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
 
 describe('Issue #10 [DOCUMENTED]: ChatExportMenu filename lacks sanitization', () => {
   const src = readSrc('components/chat/ChatExportMenu.vue')
+  const exporter = readSrc('components/chat/conversation-export.ts')
 
   it('uses sessionTitle directly in filename for Markdown export', () => {
-    expect(src).toMatch(/download\(md,\s*`\$\{title\}\.md`/)
+    expect(src).toContain("exportFormat('markdown')")
+    expect(exporter).toContain("input.format === 'json' ? 'json' : 'md'")
+    expect(exporter).toContain('`${input.title}.${extension}`')
   })
 
   it('uses sessionTitle directly in filename for JSON export', () => {
-    expect(src).toMatch(/download\(JSON\.stringify.*`\$\{title\}\.json`/)
+    expect(src).toContain("exportFormat('json')")
+    expect(exporter).toContain('JSON.stringify(')
+    expect(exporter).toContain('`${input.title}.${extension}`')
   })
 
   it('[SMELL] title comes from sessionTitle without sanitization', () => {
     // title is set from props.sessionTitle which can contain special chars
-    expect(src).toContain('const title = props.sessionTitle || t(')
+    expect(src).toContain("title: props.sessionTitle || t('chat.title')")
   })
 
   it('[SMELL] no replace/sanitize call exists for filename characters', () => {

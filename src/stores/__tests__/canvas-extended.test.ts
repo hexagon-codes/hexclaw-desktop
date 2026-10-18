@@ -29,6 +29,7 @@ vi.mock('@/api/canvas', () => ({
   deleteWorkflow: (...args: unknown[]) => deleteWorkflowMock(...args),
   runWorkflow: (...args: unknown[]) => runWorkflowMock(...args),
   getWorkflowRun: (...args: unknown[]) => getWorkflowRunMock(...args),
+  getWorkflowRuns: vi.fn().mockResolvedValue({ runs: [] }),
 }))
 
 vi.mock('@/utils/logger', () => ({
@@ -376,9 +377,9 @@ describe('useCanvasStore — extended', () => {
       store.addNode(makeNode('a'))
 
       const runPromise = store.runWorkflow()
-      // 推进两个 600ms 轮询周期
-      await vi.advanceTimersByTimeAsync(600)
-      await vi.advanceTimersByTimeAsync(600)
+      // 精确推进两次后台观察周期，不模拟节点执行动画。
+      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(1000)
       await runPromise
 
       expect(getWorkflowRunMock).toHaveBeenCalledWith('run-poll')
@@ -387,7 +388,7 @@ describe('useCanvasStore — extended', () => {
       expect(store.nodeRunStatus['a']).toBe('completed')
     })
 
-    it('marks nodes failed when backend call fails', async () => {
+    it('keeps submission failure distinct from unreceived per-node execution results', async () => {
       saveWorkflowMock.mockResolvedValue({ id: 'wf-run-2' })
       runWorkflowMock.mockRejectedValue(new Error('backend unreachable'))
 
@@ -398,9 +399,8 @@ describe('useCanvasStore — extended', () => {
 
       await store.runWorkflow()
 
-      // All nodes should be marked 'failed', not 'completed'
-      expect(store.nodeRunStatus['a']).toBe('failed')
-      expect(store.nodeRunStatus['b']).toBe('failed')
+      expect(store.nodeRunStatus['a']).toBeUndefined()
+      expect(store.nodeRunStatus['b']).toBeUndefined()
       expect(store.runStatus).toBe('failed')
       expect(store.runResult).not.toBeNull()
       expect(store.runResult!.error).toBeDefined()

@@ -12,18 +12,13 @@ import { readFileSync } from 'fs'
 // ═══════════════════════════════════════════════════
 
 describe('Canvas runWorkflow — 并发防护', () => {
-  it('runStatus 在整个执行期间保持 running，阻止二次调用', () => {
+  it('pending 和 running 都阻止重复提交，由服务端回执推进终态', () => {
     const source = readFileSync('src/stores/canvas.ts', 'utf-8')
     // runWorkflow 入口检查
-    expect(source).toContain("if (runStatus.value === 'running') return")
-    // 在函数开头就设为 running
-    expect(source).toContain("runStatus.value = 'running'")
-    // runStatus 只在整个流程结束后才改变（completed/failed）
-    // 验证：runStatus.value 不在动画循环中被重置
-    const animSection = source.match(/for \(const nid of order\)[\s\S]*?nodeRunStatus/)
-    expect(animSection).toBeTruthy()
-    // 动画只修改 nodeRunStatus，不修改 runStatus
-    expect(animSection![0]).not.toContain('runStatus.value = ')
+    expect(source).toMatch(/if \(runStatus\.value === 'running' \|\| runStatus\.value === 'pending'[^\n]*\) return/)
+    expect(source).toContain("runStatus.value = 'pending'")
+    expect(source).toContain('runStatus.value = run.status')
+    expect(source).toContain('for (const result of run.node_results ?? [])')
   })
 })
 

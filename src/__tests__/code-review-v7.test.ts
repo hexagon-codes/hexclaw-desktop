@@ -31,8 +31,8 @@ describe('IM Channels updateIMInstance — sidecar by-id update', () => {
 // 2. Canvas — saveWorkflow localStorage 降级
 // ═══════════════════════════════════════════════════
 
-describe('Canvas saveWorkflow — localStorage 降级', () => {
-  it('API 失败时降级到 localStorage 保存', () => {
+describe('Canvas saveWorkflow — 服务端持久事实源', () => {
+  it('保存由服务端确认，不把 API 失败伪装成本地成功', () => {
     const source = readFileSync('src/api/canvas.ts', 'utf-8')
     const saveFn = source.match(/export async function saveWorkflow[\s\S]*?^}/m)
     expect(saveFn).toBeTruthy()
@@ -40,18 +40,18 @@ describe('Canvas saveWorkflow — localStorage 降级', () => {
 
     // 正常路径调 API
     expect(fn).toContain("apiPost<Workflow>('/api/v1/canvas/workflows'")
-    // 降级路径写 localStorage
-    expect(fn).toContain('setLocalWorkflows(workflows)')
-    // catch 块处理（带错误参数和日志）
-    expect(fn).toContain('} catch (e) {')
-    expect(fn).toContain('logger.warn')
+    expect(fn).not.toContain('localStorage')
+    expect(fn).not.toContain('catch')
+    expect(fn).toContain('return apiPost<Workflow>')
   })
 
-  it('deleteWorkflow 也有 localStorage 降级', () => {
+  it('删除失败由调用方处理，不删除本地替代记录', () => {
     const source = readFileSync('src/api/canvas.ts', 'utf-8')
     const deleteFn = source.match(/export async function deleteWorkflow[\s\S]*?^}/m)
     expect(deleteFn).toBeTruthy()
-    expect(deleteFn![0]).toContain('getLocalWorkflows().filter')
+    expect(deleteFn![0]).toContain('await apiDelete')
+    expect(deleteFn![0]).not.toContain('localStorage')
+    expect(deleteFn![0]).not.toContain('catch')
   })
 })
 
@@ -62,7 +62,7 @@ describe('Canvas saveWorkflow — localStorage 降级', () => {
 describe('Logs store — 条目上限和去重', () => {
   it('实时日志超过 MAX_ENTRIES 时移除最老的', () => {
     const source = readFileSync('src/stores/logs.ts', 'utf-8')
-    expect(source).toContain('MAX_ENTRIES = 1000')
+    expect(source).toMatch(/const MAX_ENTRIES = \d+/)
     // 超限时切片
     expect(source).toContain('entries.value.length >= MAX_ENTRIES')
     expect(source).toContain('entries.value.slice(1)')
@@ -88,14 +88,14 @@ describe('Logs store — 条目上限和去重', () => {
 describe('App store — restartSidecar 并发锁', () => {
   it('重复调用 restartSidecar 复用同一 promise', () => {
     const source = readFileSync('src/stores/app.ts', 'utf-8')
-    const restartFn = source.match(/function restartSidecar[\s\S]*?return restartPromise\s*\}/m)
+    const restartFn = source.match(/function runServiceRestart[\s\S]*?\n  \}/m)
     expect(restartFn).toBeTruthy()
     const fn = restartFn![0]
 
-    // 锁：if (restartPromise) return restartPromise
-    expect(fn).toContain('if (restartPromise) return restartPromise')
-    // finally 清锁
-    expect(fn).toContain('restartPromise = null')
+    expect(fn).toContain('serviceRestart')
+    expect(fn).toContain('return serviceRestart.promise')
+    expect(fn).toContain('serviceRestart = null')
+    expect(source.match(/function restartSidecar[\s\S]*?\n  \}/)?.[0]).toContain('runServiceRestart')
   })
 })
 

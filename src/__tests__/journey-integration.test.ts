@@ -178,6 +178,7 @@ vi.mock('@/api/canvas', () => ({
   getWorkflows: mockApiGetWorkflows,
   deleteWorkflow: mockApiDeleteWorkflow,
   runWorkflow: mockApiRunWorkflow,
+  getWorkflowRuns: vi.fn().mockResolvedValue({ runs: [] }),
 }))
 
 // ── Setup ────────────────────────────────────────────────────────
@@ -524,6 +525,10 @@ describe('Journey 3: Canvas workflow save -> run -> backend failure', () => {
       output: 'All nodes executed',
       started_at: '2026-01-01T00:00:00Z',
       finished_at: '2026-01-01T00:01:00Z',
+      node_results: [
+        { node_id: 'n1', type: 'agent', status: 'completed', output: 'All nodes executed' },
+        { node_id: 'n2', type: 'tool', status: 'completed', output: 'All nodes executed' },
+      ],
     }
     mockApiRunWorkflow.mockResolvedValue(runResult)
 
@@ -535,7 +540,7 @@ describe('Journey 3: Canvas workflow save -> run -> backend failure', () => {
     expect(store.runOutput).toBe('All nodes executed')
   })
 
-  it('runWorkflow with backend failure marks nodes failed, NOT completed', async () => {
+  it('runWorkflow submission failure never invents per-node execution results', async () => {
     const { useCanvasStore } = await import('@/stores/canvas')
     const store = useCanvasStore()
 
@@ -557,8 +562,8 @@ describe('Journey 3: Canvas workflow save -> run -> backend failure', () => {
     await store.runWorkflow()
 
     expect(store.runStatus).toBe('failed')
-    expect(store.nodeRunStatus['n1']).toBe('failed')
-    expect(store.nodeRunStatus['n2']).toBe('failed')
+    expect(store.nodeRunStatus['n1']).toBeUndefined()
+    expect(store.nodeRunStatus['n2']).toBeUndefined()
     // Error should be set
     expect(store.error).not.toBeNull()
   })

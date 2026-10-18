@@ -604,13 +604,16 @@ describe('Canvas 画布链路', () => {
     expect(hasFakeCompleted).toBe(false) // EXPECTED TO FAIL: exposes bug
   })
 
-  it('saveWorkflow 降级到 localStorage 应正确更新已存在的工作流', () => {
-    expect(canvasSrc).toContain('const existing = workflows.findIndex((w) => w.id === payload.id)')
-    expect(canvasSrc).toContain('workflows[existing] = saved')
+  it('saveWorkflow 只采用服务端保存结果，不写替代工作流', () => {
+    const save = canvasSrc.match(/export async function saveWorkflow[\s\S]*?^}/m)?.[0] ?? ''
+    expect(save).toContain('return apiPost<Workflow>')
+    expect(save).not.toContain('localStorage')
   })
 
-  it('deleteWorkflow 降级时应过滤 localStorage', () => {
-    expect(canvasSrc).toContain("getLocalWorkflows().filter((w) => w.id !== id)")
+  it('deleteWorkflow 只由后端确认，不读替代工作流', () => {
+    const remove = canvasSrc.match(/export async function deleteWorkflow[\s\S]*?^}/m)?.[0] ?? ''
+    expect(remove).toContain('await apiDelete')
+    expect(remove).not.toContain('localStorage')
   })
 })
 

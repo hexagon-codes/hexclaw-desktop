@@ -6,9 +6,9 @@
  * 与真正的执行失败/后端宕机无法区分，误导用户以为是自己的工作流挂了。
  *
  * 期望：
- *  - 404 / NOT_FOUND → runStatus = 'unavailable'，节点保持 idle（从未执行，
- *    不能标 failed），输出文案为「未启用」而非「失败 / 引擎不可用」。
- *  - 其它错误（500 / 网络）→ 仍为 failed + 引擎不可用（保持原行为）。
+ *  - 404 / NOT_FOUND → runStatus = 'unavailable'，没有逐节点执行回执。
+ *  - 其它提交错误（500 / 网络）→ 整体 failed，保留服务端/传输错误；
+ *    未收到节点回执时不伪造逐节点失败。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
@@ -22,7 +22,8 @@ vi.mock('@/api/canvas', () => ({
   saveWorkflow: vi.fn().mockImplementation((wf) =>
     Promise.resolve({ ...wf, created_at: '2026-01-01', updated_at: '2026-01-01' }),
   ),
-  getWorkflows: vi.fn().mockResolvedValue({ workflows: [] }),
+  getWorkflows: vi.fn().mockResolvedValue([]),
+  getWorkflowRuns: vi.fn().mockResolvedValue({ runs: [] }),
   deleteWorkflow: vi.fn().mockResolvedValue({ message: 'ok' }),
   getWorkflowRun: vi.fn(),
   runWorkflow: vi.fn(),
@@ -34,7 +35,7 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
     vi.clearAllMocks()
   })
 
-  it('后端 404 → runStatus=unavailable，节点保持 idle（不可标 failed）', async () => {
+  it('后端 404 → runStatus=unavailable，没有逐节点执行回执', async () => {
     vi.mocked(apiRunWorkflow).mockRejectedValueOnce({
       code: 'NOT_FOUND',
       message: '请求的资源不存在',
@@ -46,13 +47,13 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
     await store.runWorkflow()
 
     expect(store.runStatus).toBe('unavailable')
-    expect(store.nodeRunStatus.a).toBe('idle') // 从未执行 → 不能是 failed
+    expect(store.nodeRunStatus.a).toBeUndefined() // 从未执行，没有逐节点回执。
     expect(store.nodeRunStatus.a).not.toBe('failed')
-    expect(store.runOutput).toContain('未启用')
+    expect(store.runOutput).toContain('请求的资源不存在')
     expect(store.runOutput).not.toContain('引擎不可用')
   })
 
-  it('后端 500 → 仍为 failed + 引擎不可用（保持原行为）', async () => {
+  it('后端 500 → 提交失败并保留原错误，不伪造逐节点执行回执', async () => {
     vi.mocked(apiRunWorkflow).mockRejectedValueOnce({
       code: 'SERVER_ERROR',
       message: '服务器内部错误',
@@ -64,8 +65,8 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
     await store.runWorkflow()
 
     expect(store.runStatus).toBe('failed')
-    expect(store.nodeRunStatus.a).toBe('failed')
-    expect(store.runOutput).toContain('引擎不可用')
+    expect(store.nodeRunStatus.a).toBeUndefined()
+    expect(store.runOutput).toContain('服务器内部错误')
   })
 
   it('网络错误（无 status）→ 仍为 failed（不误判为未启用）', async () => {
@@ -79,6 +80,7 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
     await store.runWorkflow()
 
     expect(store.runStatus).toBe('failed')
-    expect(store.nodeRunStatus.a).toBe('failed')
+    expect(store.nodeRunStatus.a).toBeUndefined()
+    expect(store.runOutput).toContain('HexClaw 服务未启动或网络不可达')
   })
 })

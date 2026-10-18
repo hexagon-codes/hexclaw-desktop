@@ -289,9 +289,14 @@ describe('集成: Canvas workflow 保存→执行→节点状态', () => {
 
     // Mock API: 保存成功 + 执行成功
     mockApi.mockResolvedValueOnce({ id: 'wf-1', name: 'Test WF' })
+    mockApi.mockResolvedValueOnce({ workflows: [] })
     mockApi.mockResolvedValueOnce({
       id: 'run-1', workflow_id: 'wf-1', status: 'completed',
       output: '执行完成', started_at: '2026-04-03', finished_at: '2026-04-03',
+      node_results: [
+        { node_id: 'n1', type: 'agent', status: 'completed', output: '执行完成' },
+        { node_id: 'n2', type: 'output', status: 'completed', output: '执行完成' },
+      ],
     })
 
     const runPromise = store.runWorkflow()
@@ -306,7 +311,7 @@ describe('集成: Canvas workflow 保存→执行→节点状态', () => {
     expect(store.runOutput).toContain('执行完成')
   })
 
-  it('后端不可用 → Canvas API 自动降级到 localStorage + mock run', async () => {
+  it('保存失败保留服务端错误，不再伪造本地工作流或提交运行', async () => {
     const { useCanvasStore } = await import('@/stores/canvas')
     const store = useCanvasStore()
     store.addNode({ id: 'n1', type: 'llm', label: 'Node', position: { x: 0, y: 0 }, data: {} } as any)
@@ -318,10 +323,11 @@ describe('集成: Canvas workflow 保存→执行→节点状态', () => {
     await vi.advanceTimersByTimeAsync(500)
     await runPromise
 
-    // Canvas 的降级策略：saveWorkflow 回退到 localStorage，runWorkflow 返回 mock run
-    // 后端不可用时 runWorkflow fallback 返回 status: 'failed'
-    expect(store.runStatus).toBe('failed')
-    expect(store.runOutput).toBeDefined()
+    expect(store.runStatus).toBe('idle')
+    expect(store.error?.message).toContain('backend down')
+    expect(store.lastRunId).toBeNull()
+    expect(mockApi).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('hexclaw_workflows')).toBeNull()
   })
 })
 

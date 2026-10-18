@@ -266,25 +266,25 @@ describe('Issue #4: deleteWebhook uses name parameter, not id', () => {
 // 5. CANVAS API SILENT ERROR SWALLOWING
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #5: Canvas workflow functions silently catch ALL errors', () => {
+describe('Canvas workflow persistence errors remain observable to the caller', () => {
   const canvasTs = readSrc('api/canvas.ts')
 
-  it('saveWorkflow catches errors with parameter and logs via logger', () => {
+  it('saveWorkflow propagates persistence failures instead of producing a local success', () => {
     const saveBlock = canvasTs.match(/async function saveWorkflow[\s\S]*?^}/m)?.[0] || ''
-    expect(saveBlock).toContain('} catch (e) {')
-    expect(saveBlock).toContain('logger.warn')
+    expect(saveBlock).toContain('return apiPost<Workflow>')
+    expect(saveBlock).not.toContain('catch')
   })
 
-  it('getWorkflows catches errors with parameter and logs via logger', () => {
+  it('getWorkflows propagates read failures instead of reading another local fact source', () => {
     const getBlock = canvasTs.match(/async function getWorkflows[\s\S]*?^}/m)?.[0] || ''
-    expect(getBlock).toContain('} catch (e) {')
-    expect(getBlock).toContain('logger.warn')
+    expect(getBlock).toContain('await apiGet<')
+    expect(getBlock).not.toContain('catch')
   })
 
-  it('deleteWorkflow catches errors with parameter and logs via logger', () => {
+  it('deleteWorkflow propagates rejected deletion to the caller', () => {
     const deleteBlock = canvasTs.match(/async function deleteWorkflow[\s\S]*?^}/m)?.[0] || ''
-    expect(deleteBlock).toContain('} catch (e) {')
-    expect(deleteBlock).toContain('logger.warn')
+    expect(deleteBlock).toContain('await apiDelete<')
+    expect(deleteBlock).not.toContain('catch')
   })
 
   it('runWorkflow propagates errors to caller (store handles fallback)', () => {
@@ -683,14 +683,13 @@ describe('voice.ts STT format/language 经 URL query（已对齐后端 r.URL.Que
 // 16. CANVAS CRUD: getLocalWorkflows CATCHES SILENTLY
 // ════════════════════════════════════════════════════════════
 
-describe('Canvas localStorage fallback: getLocalWorkflows error handling', () => {
+describe('Canvas workflows retain one server-owned persistence source', () => {
   const canvasTs = readSrc('api/canvas.ts')
 
-  it('getLocalWorkflows catches JSON parse errors silently', () => {
-    // If localStorage contains invalid JSON, it returns []
-    const block = canvasTs.match(/function getLocalWorkflows[\s\S]*?^}/m)?.[0] || ''
-    expect(block).toContain('} catch {')
-    expect(block).toContain('return []')
+  it('does not restore retired local workflow state or invent an empty successful read', () => {
+    expect(canvasTs).not.toContain('function getLocalWorkflows')
+    expect(canvasTs).not.toContain('localStorage')
+    expect(canvasTs).toContain("apiGet<{ workflows: Workflow[] }>('/api/v1/canvas/workflows'")
   })
 })
 

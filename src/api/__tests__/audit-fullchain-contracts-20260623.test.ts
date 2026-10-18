@@ -125,13 +125,10 @@ describe('AUDIT workflow 契约', () => {
     expect(res.created_at).toBeTruthy()
   })
 
-  it('saveWorkflow 后端失败时降级 localStorage 并返回完整 Workflow（兜底分支覆盖）', async () => {
+  it('saveWorkflow 后端失败时向调用方保留错误，不伪造本地已保存工作流', async () => {
     apiPost.mockRejectedValue(new Error('backend down'))
-    const res = await saveWorkflow(wf)
-    expect(res.nodes).toEqual([])
-    expect(res.created_at).toBeTruthy()
-    expect(res.updated_at).toBeTruthy()
-    expect(JSON.parse(localStorage.getItem('hexclaw_workflows') || '[]')[0].id).toBe('wf1')
+    await expect(saveWorkflow(wf)).rejects.toThrow('backend down')
+    expect(localStorage.getItem('hexclaw_workflows')).toBeNull()
   })
 })
 
