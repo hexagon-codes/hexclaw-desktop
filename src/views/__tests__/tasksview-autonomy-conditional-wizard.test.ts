@@ -114,7 +114,7 @@ async function fillCreateForm(wrapper: ReturnType<typeof mountTasksView>) {
   await wrapper.vm.$nextTick()
   const inputs = wrapper.findAll('input')
   await inputs[0]!.setValue('发布周报')
-  await inputs[1]!.setValue('@daily')
+  await wrapper.get('.schedule-raw input').setValue('@daily')
   await wrapper.find('textarea').setValue('汇总本周内容并发布到公众号')
 }
 

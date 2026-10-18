@@ -184,7 +184,7 @@ describe('TasksView', () => {
     const inputs = wrapper.findAll('input')
     expect(inputs.length).toBeGreaterThanOrEqual(2)
     await inputs[0]!.setValue('晚报生成')
-    await inputs[1]!.setValue('@daily')
+    await wrapper.get('.schedule-raw input').setValue('@daily')
     await wrapper.find('textarea').setValue('生成今晚总结')
 
     const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('创建'))
@@ -229,7 +229,7 @@ describe('TasksView', () => {
 
     const inputs = wrapper.findAll('input')
     await inputs[0]!.setValue('日报')
-    await inputs[1]!.setValue('@daily')
+    await wrapper.get('.schedule-raw input').setValue('@daily')
     await wrapper.find('textarea').setValue('生成日报')
 
     // 选通用渠道 feishu + 连接库实例（按 id 引用）

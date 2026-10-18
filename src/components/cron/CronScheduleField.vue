@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown } from 'lucide-vue-next'
 import HcClearableField from '@/components/common/HcClearableField.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import {
   CRON_SCHEDULE_PRESETS,
   formatCronSchedule,
@@ -57,8 +58,8 @@ function updateSimpleSchedule(kind: Exclude<CronSchedulePattern['kind'], 'custom
   if (next !== null) emit('update:modelValue', next)
 }
 
-function selectKind(event: Event) {
-  const kind = (event.target as HTMLSelectElement).value as CronSchedulePattern['kind']
+function selectKind(value: string) {
+  const kind = value as CronSchedulePattern['kind']
   customSelected.value = kind === 'custom'
   advancedOpen.value = false
   if (kind !== 'custom') updateSimpleSchedule(kind)
@@ -69,8 +70,8 @@ function selectTime(event: Event) {
   if (selectedKind.value !== 'custom') updateSimpleSchedule(selectedKind.value)
 }
 
-function selectWeekday(event: Event) {
-  simpleWeekday.value = Number((event.target as HTMLSelectElement).value)
+function selectWeekday(value: string) {
+  simpleWeekday.value = Number(value)
   if (selectedKind.value !== 'custom') updateSimpleSchedule(selectedKind.value)
 }
 
@@ -89,12 +90,18 @@ function toggleAdvanced(event: Event) {
     <template v-if="props.simple">
       <label class="schedule-field">
         <span class="schedule-field__label">{{ t('tasks.scheduleMode') }}</span>
-        <select class="hc-input" :value="selectedKind" :disabled="props.disabled" @change="selectKind">
-          <option value="daily">{{ t('tasks.scheduleDaily') }}</option>
-          <option value="weekdays">{{ t('tasks.scheduleWeekdays') }}</option>
-          <option value="weekly">{{ t('tasks.scheduleWeekly') }}</option>
-          <option value="custom">{{ t('tasks.scheduleCustom') }}</option>
-        </select>
+        <HcSelect
+          :model-value="selectedKind"
+          :disabled="props.disabled"
+          :aria-label="t('tasks.scheduleMode')"
+          :options="[
+            { value: 'daily', label: t('tasks.scheduleDaily') },
+            { value: 'weekdays', label: t('tasks.scheduleWeekdays') },
+            { value: 'weekly', label: t('tasks.scheduleWeekly') },
+            { value: 'custom', label: t('tasks.scheduleCustom') },
+          ]"
+          @update:model-value="selectKind"
+        />
       </label>
       <div v-if="selectedKind !== 'custom'" class="schedule-time-row">
         <label class="schedule-field">
@@ -103,9 +110,13 @@ function toggleAdvanced(event: Event) {
         </label>
         <label v-if="selectedKind === 'weekly'" class="schedule-field">
           <span class="schedule-field__label">{{ t('tasks.scheduleWeekday') }}</span>
-          <select class="hc-input" :value="simpleWeekday" :disabled="props.disabled" @change="selectWeekday">
-            <option v-for="weekday in weekdays" :key="weekday.value" :value="weekday.value">{{ weekday.label }}</option>
-          </select>
+          <HcSelect
+            :model-value="String(simpleWeekday)"
+            :disabled="props.disabled"
+            :aria-label="t('tasks.scheduleWeekday')"
+            :options="weekdays.map((weekday) => ({ value: String(weekday.value), label: weekday.label }))"
+            @update:model-value="selectWeekday"
+          />
         </label>
       </div>
     </template>
