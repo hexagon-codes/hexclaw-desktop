@@ -26,6 +26,7 @@ pub(crate) mod sidecar_supervisor;
 pub mod test_runtime;
 pub mod tray;
 pub mod window;
+pub mod workflow_directory;
 
 /// 运行 Tauri 应用
 ///
@@ -89,6 +90,7 @@ pub fn run() {
         .manage(commands::SidecarFetchRegistry::default())
         .manage(sidecar_socket::NativeSidecarSocketRegistry::default())
         .manage(sidecar_stream::NativeSidecarStreamRegistry::default())
+        .manage(workflow_directory::WorkflowDirectoryRegistry::default())
         // 初始化
         .setup(|app| {
             eprintln!("[HexClaw] setup 开始...");
@@ -216,6 +218,9 @@ pub fn run() {
             native_file::download_file_grant,
             native_file::copy_file_grant,
             native_file::render_artifact_to_grant,
+            workflow_directory::workflow_directory_pick,
+            workflow_directory::workflow_directory_list,
+            workflow_directory::workflow_directory_save,
             provider_credentials::get_llm_config_with_credentials,
             provider_credentials::apply_llm_config_with_credentials,
             provider_credentials::read_provider_api_key,

@@ -12,12 +12,14 @@ import { useSettingsStore } from '@/stores/settings'
 import router from '@/router'
 import { dismissSplash } from '@/utils/splash'
 import { scenarioRegistry } from '@/shell/scenario/registry'
+import { startWorkflowDirectorySync } from '@/services/workflow-directory-sync'
 
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
 const globalPresentationExtensions = scenarioRegistry.globalPresentationExtensions
 let stopSidecarReadyListener: (() => void) | null = null
 let sidecarReadyListenerDisposed = false
+let stopWorkflowDirectorySync: (() => void) | null = null
 
 async function installSidecarReadyListener() {
   try {
@@ -101,6 +103,7 @@ async function warmupOllamaModel() {
 
 
 onMounted(() => {
+  stopWorkflowDirectorySync = startWorkflowDirectorySync()
   // 事件监听注册可能迟滞，健康轮询与 splash 兜底必须独立建立。
   const splashTimeout = setTimeout(dismissSplash, 30000)
   watch(
@@ -124,6 +127,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopWorkflowDirectorySync?.()
   sidecarReadyListenerDisposed = true
   stopSidecarReadyListener?.()
   stopSidecarReadyListener = null
