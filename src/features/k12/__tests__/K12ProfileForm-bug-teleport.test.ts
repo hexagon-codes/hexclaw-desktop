@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -42,8 +42,12 @@ describe('bug: 编辑档案弹窗须 Teleport 到 body（防 transform 祖先破
     setActivePinia(createPinia())
     document.body.innerHTML = ''
   })
-  afterEach(() => {
-    document.body.innerHTML = ''
+  enableAutoUnmount((unmount) => {
+    afterEach(async () => {
+      unmount()
+      await flushPromises()
+      document.body.innerHTML = ''
+    })
   })
 
   it('弹窗 overlay 被 Teleport 到 document.body（而非留在组件子树内）', () => {

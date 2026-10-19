@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
+import { mount, flushPromises, DOMWrapper, type ComponentMountingOptions, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -79,8 +79,17 @@ function i18n() {
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
+const mountedWrappers = new Set<VueWrapper>()
+
+// 保留用例中途手动卸载的语义，收尾只卸载仍存在的根实例。
+function mountProfile(options: ComponentMountingOptions<typeof K12ProfileForm>) {
+  const wrapper = mount(K12ProfileForm, options)
+  mountedWrappers.add(wrapper)
+  return wrapper
+}
+
 function render() {
-  return mount(K12ProfileForm, {
+  return mountProfile({
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
   })
@@ -207,8 +216,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.toastSuccessSpy.mockReset()
     h.toastWarningSpy.mockReset()
   })
-  afterEach(() => {
+  afterEach(async () => {
+    for (const wrapper of mountedWrappers) {
+      if (wrapper.exists()) wrapper.unmount()
+    }
+    mountedWrappers.clear()
     vi.useRealTimers()
+    await flushPromises()
     vi.restoreAllMocks()
   })
 
@@ -279,7 +293,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('按定版原型只渲染数学教材行，legacy textbook_edition 作为数学 fallback', () => {
-    mount(K12ProfileForm, {
+    mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -315,7 +329,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       ...progress,
       progress: { ...progress.progress, textbook_manifest_id: items[0].manifest_id, volume: '上册' },
     })
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -422,7 +436,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
 
   it('改档 bundle 失败 → Agent 基础字段零写入且无补偿写', async () => {
     h.profileBundleSpy.mockRejectedValueOnce(new Error('profile update failed'))
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -456,7 +470,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
 
   it('改档持久化成功后按具体 agent 补齐默认任务，失败保留档案终态并可由下次保存重试', async () => {
     h.provisionSpy.mockRejectedValueOnce(new Error('cron temporarily unavailable'))
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -516,7 +530,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
     const settings = { ...(await h.settingsSpy()), textbook_consolidation_enabled: true }
     h.settingsSpy.mockResolvedValue(settings)
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -590,7 +604,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('卡片副标题：改档改年级 → profile-bundle 同步派生 description（不写死）', async () => {
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -635,7 +649,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
 
   it('编辑删除使用 alertdialog 确认语义，第一次点击不执行删除', async () => {
     vi.useFakeTimers()
-    const w = mount(K12ProfileForm, {
+    const w = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -711,7 +725,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       nativeFocus.call(this, options)
     })
 
-    const wrapper = mount(K12ProfileForm, {
+    const wrapper = mountProfile({
       props: {
         focusMathProgress: true,
         agent: {
@@ -753,7 +767,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     document.body.append(opener)
     opener.focus()
 
-    const wrapper = mount(K12ProfileForm, {
+    const wrapper = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -798,7 +812,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         })),
       ],
     })
-    const wrapper = mount(K12ProfileForm, {
+    const wrapper = mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',
@@ -856,7 +870,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('[K12-PROFILE-061] 高级档案区保留能力说明并与升学提示保持同一原型内容轨', async () => {
-    mount(K12ProfileForm, {
+    mountProfile({
       props: {
         agent: {
           name: 'k12-tutor-x',

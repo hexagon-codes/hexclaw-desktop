@@ -9,14 +9,21 @@
  * 正确语义：仅当实例 system_prompt ≠「按其档案自动派生的人设」时才视为家长自定义。
  * 本测试在未修复代码上 FAIL（system_prompt 仍含旧年级），修复后 PASS，永久留作回归锁。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const h = vi.hoisted(() => ({
   updateSpy: vi.fn().mockResolvedValue({}),

@@ -1,11 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import { k12GetCurriculumProgress } from '@/api/k12'
 import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const h = vi.hoisted(() => ({
   updateAgent: vi.fn(),

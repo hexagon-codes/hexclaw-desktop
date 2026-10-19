@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -7,6 +7,13 @@ import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
 import { PRIMARY_GRADES } from '../curriculum'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const h = vi.hoisted(() => ({
   updateAgent: vi.fn().mockResolvedValue({}),

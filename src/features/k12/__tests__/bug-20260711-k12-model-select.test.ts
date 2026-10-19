@@ -10,8 +10,8 @@
  * settingsStore.runtimeProviders/availableModels），默认 ''=跟随全局默认；
  * 建档/改档均随 registerAgent/updateAgent 回写 provider/model。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -19,6 +19,13 @@ import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),

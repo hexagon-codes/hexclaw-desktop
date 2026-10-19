@@ -9,13 +9,20 @@
  *   辅导老师人设），使 tutor 自我认同为「{child}的辅导老师」而非小蟹。
  * 回归锁：payload.system_prompt 非空且含身份锚（辅导老师 + 孩子称呼）。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),

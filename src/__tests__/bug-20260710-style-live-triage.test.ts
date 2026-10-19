@@ -11,8 +11,8 @@
  * ③ 的根治锁：扫描全部 src/**（.vue/.ts/.css）里引用的 --hc-* 变量，每一处都必须在
  *    global.css 有定义（或是本文件内自定义）。粒度=每个引用点，新增未定义 token 直接 FAIL。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import fs from 'node:fs'
@@ -21,6 +21,13 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '@/features/k12/i18n/zh-CN'
 import K12ProfileForm from '@/features/k12/views/K12ProfileForm.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+  })
+})
 
 const SRC = path.resolve(__dirname, '..')
 
