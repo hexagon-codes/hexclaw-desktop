@@ -1787,7 +1787,7 @@ async function toggleApiKeyVisibility(provider: ProviderConfig) {
     }
     try {
       const plain = await readProviderApiKey(
-        provider.backendKey || provider.providerInstanceId || provider.id,
+        provider.providerInstanceId || provider.backendKey || provider.id,
       )
       if (!plain) {
         toast.error(t('settings.llm.apiKeyRevealFailed', '暂时无法读取已保存的 API Key'))

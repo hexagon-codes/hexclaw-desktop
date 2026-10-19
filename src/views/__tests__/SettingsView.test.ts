@@ -86,7 +86,9 @@ vi.mock('@/api/config', () => ({
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
   fetchProviderModels: mockFetchProviderModels,
   readProviderApiKey: vi.fn(async (providerId: string) => {
-    if (providerId === 'openai') return 'sk-test-plain-readback'
+    if (providerId === 'pvd_v1_11112222333344445555666677778888' || providerId === 'openai') {
+      return 'sk-test-plain-readback'
+    }
     return ''
   }),
 }))
@@ -684,7 +686,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await eyeButton.trigger('click')
     await flushPromises()
 
-    expect(readMock).toHaveBeenCalledWith('openai')
+    expect(readMock).toHaveBeenCalledWith('pvd_v1_11112222333344445555666677778888')
     expect((apiKeyInput.element as HTMLInputElement).getAttribute('type')).toBe('text')
     expect((apiKeyInput.element as HTMLInputElement).value).toBe('sk-test-plain-readback')
     expect(document.activeElement).toBe(apiKeyInput.element)
