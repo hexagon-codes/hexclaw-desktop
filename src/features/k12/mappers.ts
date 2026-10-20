@@ -7,6 +7,13 @@ import type { RecordItem, RecordCollectionView, VerifyResult, VerifyEvidence } f
 import type { MistakeDTO, GradeResp, EvidenceType, AccumDTO } from '@/api/k12'
 import { MISTAKE_COLLECTION, ACCUMULATION_COLLECTION } from './schemas'
 
+// 列表仅投影题目首段；完整原文由详情消费，不改写领域记录。
+export function mistakeTitlePreview(value: string): string {
+  const paragraph = value.split(/\r?\n\s*\r?\n/, 1)[0] ?? ''
+  // 题号按字面保留，避免 Markdown 将单条标题投影成带额外缩进和段距的列表。
+  return paragraph.replace(/^(\s*\d+)([.)])(?=\s)/, '$1\\$2')
+}
+
 const STRONG_EVIDENCE: EvidenceType[] = ['numeric_exec', 'symbolic_exec', 'heterogeneous_model']
 function evidenceOf(t: EvidenceType): VerifyEvidence {
   return STRONG_EVIDENCE.includes(t) ? 'program_verified' : 'model_review'

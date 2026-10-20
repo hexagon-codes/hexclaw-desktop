@@ -18,6 +18,7 @@ import K12BookTabs from './K12BookTabs.vue'
 import K12ManualQuestionCountField from './K12ManualQuestionCountField.vue'
 import K12MistakeReviewMenu from './K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
+import { mistakeTitlePreview } from '../mappers'
 
 const props = defineProps<{
   progress: CurriculumProgressDTO | null
@@ -45,6 +46,7 @@ const emit = defineEmits<{
   (e: 'retry'): void
   (e: 'join-practice', item: WeeklyPracticeItemDTO): void
   (e: 'view-practice', item: WeeklyPracticeItemDTO): void
+  (e: 'view-mistake', item: WeeklyPracticeItemDTO): void
   (e: 'update:view', view: 'current' | 'history'): void
   (e: 'open-history', item: WeeklyPracticeHistorySummaryDTO): void
   (
@@ -352,7 +354,7 @@ function arithmeticAction(track: WeeklyPracticeTrackDTO): {
     }
     return availability === 'available'
       ? {
-          label: '生成口算热身题',
+          label: '生成',
           disabled: selectedArithmeticItemCount.value === null,
           action: 'create',
         }
@@ -615,38 +617,40 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                   >
                   <small>按本周学习负担推荐，可直接调整题数</small>
                 </span>
-                <K12ManualQuestionCountField
-                  v-model="selectedTextbookItemCount"
-                  track="textbook_consolidation"
-                  label="同步巩固题数"
-                  :min="textbookRecommendation.min_item_count"
-                  :max="textbookRecommendation.max_item_count"
-                  :disabled="busy || textbookRecommendation.availability !== 'available'"
-                />
-                <button
-                  v-if="
-                    textbookRecommendation.availability === 'available' ||
-                    textbookRecommendation.availability === 'processing'
-                  "
-                  type="button"
-                  class="btn weekly-track__action"
-                  data-consolidation-action
-                  :disabled="
-                    busy ||
-                    textbookRecommendation.availability !== 'available' ||
-                    selectedTextbookItemCount === null
-                  "
-                  @click="
-                    selectedTextbookItemCount !== null &&
-                    emit('prepare-textbook', { item_count: selectedTextbookItemCount })
-                  "
-                >
-                  {{
-                    textbookRecommendation.availability === 'processing'
-                      ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
-                      : '生成同步巩固题'
-                  }}
-                </button>
+                <div class="weekly-manual__actions k12-manual-generation-actions">
+                  <K12ManualQuestionCountField
+                    v-model="selectedTextbookItemCount"
+                    track="textbook_consolidation"
+                    label="同步巩固题数"
+                    :min="textbookRecommendation.min_item_count"
+                    :max="textbookRecommendation.max_item_count"
+                    :disabled="busy || textbookRecommendation.availability !== 'available'"
+                  />
+                  <button
+                    v-if="
+                      textbookRecommendation.availability === 'available' ||
+                      textbookRecommendation.availability === 'processing'
+                    "
+                    type="button"
+                    class="btn weekly-track__action"
+                    data-consolidation-action
+                    :disabled="
+                      busy ||
+                      textbookRecommendation.availability !== 'available' ||
+                      selectedTextbookItemCount === null
+                    "
+                    @click="
+                      selectedTextbookItemCount !== null &&
+                      emit('prepare-textbook', { item_count: selectedTextbookItemCount })
+                    "
+                  >
+                    {{
+                      textbookRecommendation.availability === 'processing'
+                        ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
+                        : '生成'
+                    }}
+                  </button>
+                </div>
               </div>
               <div
                 v-if="
@@ -669,24 +673,26 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                   >
                   <small>短时完成，可直接调整题数</small>
                 </span>
-                <K12ManualQuestionCountField
-                  v-model="selectedArithmeticItemCount"
-                  track="arithmetic_warmup"
-                  label="口算热身题数"
-                  :min="arithmeticRecommendation.min_item_count"
-                  :max="arithmeticRecommendation.max_item_count"
-                  :disabled="busy || arithmeticRecommendation.availability !== 'available'"
-                />
-                <button
-                  v-if="arithmeticAction(track)"
-                  type="button"
-                  class="btn weekly-track__action"
-                  data-arithmetic-action
-                  :disabled="busy || arithmeticAction(track)?.disabled"
-                  @click="dispatchArithmetic(track)"
-                >
-                  {{ arithmeticAction(track)?.label }}
-                </button>
+                <div class="weekly-manual__actions k12-manual-generation-actions">
+                  <K12ManualQuestionCountField
+                    v-model="selectedArithmeticItemCount"
+                    track="arithmetic_warmup"
+                    label="口算热身题数"
+                    :min="arithmeticRecommendation.min_item_count"
+                    :max="arithmeticRecommendation.max_item_count"
+                    :disabled="busy || arithmeticRecommendation.availability !== 'available'"
+                  />
+                  <button
+                    v-if="arithmeticAction(track)"
+                    type="button"
+                    class="btn weekly-track__action"
+                    data-arithmetic-action
+                    :disabled="busy || arithmeticAction(track)?.disabled"
+                    @click="dispatchArithmetic(track)"
+                  >
+                    {{ arithmeticAction(track)?.label }}
+                  </button>
+                </div>
               </div>
               <div
                 v-if="
@@ -730,7 +736,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     :class="{
                       'k12-compact-row__title': track.plan_section === 'due_review',
                     }"
-                    :content="item.prompt_markdown"
+                    :content="
+                      track.plan_section === 'due_review'
+                        ? mistakeTitlePreview(item.prompt_markdown)
+                        : item.prompt_markdown
+                    "
                   />
                   <div class="weekly-item__origin rc-practice-origin">
                     <b>
@@ -847,6 +857,14 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     display="visible"
                     @suppress="emit('suppress-item', item)"
                   />
+                  <button
+                    v-if="track.plan_section === 'due_review'"
+                    type="button"
+                    class="btn btn-ghost"
+                    @click="emit('view-mistake', item)"
+                  >
+                    详情
+                  </button>
                 </div>
               </article>
             </div>
@@ -1472,7 +1490,9 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
 .weekly-hero.rc-week-hero .weekly-hero__head {
   display: flex;
-  align-items: center;
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
   gap: 12px;
   margin: 0 0 14px;
   padding: 0;
@@ -1483,8 +1503,10 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 }
 
 .weekly-hero.rc-week-hero .weekly-hero__count {
+  flex: none;
   gap: 7px;
   margin-left: 0;
+  white-space: nowrap;
 }
 
 .weekly-hero.rc-week-hero .weekly-hero__count b {
@@ -1513,12 +1535,20 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
 .weekly-hero.rc-week-hero .weekly-hero__meta {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 5px;
-  flex: 1;
+  flex: 1 0 auto;
+  flex-wrap: nowrap;
   min-width: 0;
   margin: 0;
   padding: 0;
+}
+
+@media (max-width: 680px) {
+  .weekly-hero.rc-week-hero .weekly-hero__meta {
+    order: 1;
+    flex-basis: 100%;
+  }
 }
 
 .weekly-hero.rc-week-hero .weekly-hero__context {
@@ -1617,6 +1647,14 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   min-height: 60px;
   padding: 8px 10px;
   overflow: hidden;
+  transition:
+    border-color 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out);
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly:hover {
+  border-color: var(--hc-border-hl);
+  box-shadow: var(--hc-shadow-sm);
 }
 
 .k12-compact-row__primary {
@@ -1634,6 +1672,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-item.resource-row.k12-compact-row--weekly .weekly-item__origin {
   display: flex;
   align-items: baseline;
+  justify-content: flex-start;
   gap: 6px;
   min-width: 0;
 }
@@ -1657,9 +1696,9 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   justify-content: flex-start;
   align-content: center;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
-  max-width: 148px;
+  max-width: none;
   margin: 0;
 }
 
@@ -1692,6 +1731,27 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__prompt {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__prompt :deep(.markdown-body) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__prompt :deep(.markdown-body > *) {
+  display: inline;
+  margin: 0;
+}
+
+.weekly-item.resource-row.k12-compact-row--weekly .weekly-item__prompt :deep(br) {
+  display: none;
 }
 
 .weekly-item.resource-row .kpill,
@@ -1745,8 +1805,17 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   justify-content: flex-start;
 }
 
+.weekly-manual__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .weekly-manual.resource-row > b {
-  flex: 0 0 250px;
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -1821,20 +1890,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
   .weekly-item:not(.k12-compact-row--weekly).resource-row .weekly-item__origin {
     flex: 1 1 178px;
-  }
-}
-
-@container (min-width: 1000px) {
-  .weekly-item.resource-row.k12-compact-row--weekly {
-    display: flex;
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__primary,
-  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__meta,
-  .weekly-item.resource-row.k12-compact-row--weekly > .k12-compact-row__actions {
-    display: contents;
   }
 }
 

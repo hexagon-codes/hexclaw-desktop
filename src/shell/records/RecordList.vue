@@ -202,7 +202,9 @@ const reviewItems = computed(() => {
         <div class="rl-primary">
           <div class="rl-primary__heading">
             <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
-            <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
+            <slot name="list-row-title" :item="item" :value="fieldValue(item, titleField)">
+              <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
+            </slot>
           </div>
           <div class="rl-primary__detail">
             <span

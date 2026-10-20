@@ -25,6 +25,7 @@ import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
+import { mistakeTitlePreview } from '../mappers'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import {
   k12ExportArchive,
@@ -665,6 +666,7 @@ async function submitAccum() {
 // 绝不复用 store.grade 的 solve+verify 对抗验算链（那是「不知道对不对」才要跑，真机 1-2 分钟）；秒级完成。
 const mistakeAddOpen = ref(false)
 const mistakeForm = ref({ subject: '', problem: '', studentAnswer: '', knowledgePoints: '' })
+
 const mistakeSubjectOptions = computed(() =>
   K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
     value,
@@ -709,6 +711,17 @@ async function submitMistake() {
 
 function joinWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
   void runPracticeGeneration(item.source_ref)
+}
+
+function viewWeeklyMistake(item: WeeklyPracticeItemDTO) {
+  const record = view.value?.items.find((entry) => entry.recordId === item.source_ref)
+  if (!record || record.agentId !== props.agentId) {
+    toast.error('Mistake record unavailable; refresh and try again.')
+    return
+  }
+  openDetail(record)
+  // 周练正文可含本次讲解，详情完整展示它；原记录及其作答状态保持不变。
+  detail.value.question = item.prompt_markdown
 }
 
 // 查看新题（原型 openGeneratedPractice 弹层：新题/来源错题/同类依据/参考答案与验算）。
@@ -1148,7 +1161,12 @@ onBeforeUnmount(resetPracticeGenerationProjection)
 // ── 详情弹层（BUG-20260712-#2）──
 // 复用列表已有的 RecordItem 字段，不额外请求后端，弹层可关闭。kind 区分错题（题目/知识点/错因）
 // 与积累（内容/学科/类型），走各自 schema 状态机上色。
-const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' | 'accum' }>({
+const detail = ref<{
+  open: boolean
+  record: RecordItem | null
+  kind: 'mistake' | 'accum'
+  question?: string
+}>({
   open: false,
   record: null,
   kind: 'mistake',
@@ -1175,7 +1193,9 @@ function closeDetail() {
   accumulationDeleteReturnState.value = null
   detail.value = { open: false, record: null, kind: 'mistake' }
 }
-const detailQuestion = computed(() => String(detail.value.record?.fields.question ?? ''))
+const detailQuestion = computed(() =>
+  detail.value.question ?? String(detail.value.record?.fields.question ?? ''),
+)
 const detailKp = computed(() => String(detail.value.record?.fields.knowledge_point ?? ''))
 const detailError = computed(() => String(detail.value.record?.fields.error_cause ?? ''))
 // 抽查复验（§3.6 规则 4）：复验未过的题在档案留「家长确认（复验未过）」事实标注——
@@ -1672,6 +1692,7 @@ async function doExportMd() {
           @defer-item="deferWeeklyPracticeItem"
           @join-practice="joinWeeklyPracticeItem"
           @view-practice="viewWeeklyPracticeItem"
+          @view-mistake="viewWeeklyMistake"
           @suppress-item="suppressWeeklyPracticeItem"
           @retry-mistake-practice="runPracticeGeneration"
         >
@@ -1842,6 +1863,12 @@ async function doExportMd() {
               hide-mastery-action
               @action="onAction"
             >
+              <template #list-row-title="{ value }">
+                <MarkdownRenderer
+                  class="rl-title k12rec__mistake-question"
+                  :content="mistakeTitlePreview(value)"
+                />
+              </template>
               <template #list-practice-action="{ item }">
                 <button
                   v-if="practiceProjection(item.recordId).kind === 'action'"
@@ -3037,6 +3064,13 @@ async function doExportMd() {
   font-family: inherit;
   font-size: 12px;
   line-height: 18px;
+  transition:
+    border-color 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out);
+}
+.k12mistakes :deep(.rl-row:hover) {
+  border-color: var(--hc-border-hl);
+  box-shadow: var(--hc-shadow-sm);
 }
 .k12mistakes :deep(.rl-primary) {
   grid-area: primary;
@@ -3080,6 +3114,27 @@ async function doExportMd() {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 18px;
+}
+.k12mistakes :deep(.rl-title.k12rec__mistake-question) {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.k12mistakes :deep(.k12rec__mistake-question .markdown-body) {
+  margin: 0;
+  color: var(--hc-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k12mistakes :deep(.k12rec__mistake-question .markdown-body > *) {
+  display: inline;
+  margin: 0;
+}
+.k12mistakes :deep(.k12rec__mistake-question br) {
+  display: none;
 }
 .k12mistakes :deep(.rl-date) {
   flex: 0 0 35.91px;
@@ -3167,31 +3222,6 @@ async function doExportMd() {
 .k12mistakes :deep(.rl-actions > .rl-btn:last-child) {
   border-color: transparent;
   padding-inline: 8px;
-}
-/* 内容足够宽时解除三域分组，恢复原型的平铺单行；DOM 与键盘焦点顺序保持不变。 */
-@container (min-width: 1000px) {
-  .k12mistakes :deep(.rl-row) {
-    display: flex;
-    min-height: 0;
-    overflow: visible;
-  }
-  .k12mistakes :deep(.rl-primary),
-  .k12mistakes :deep(.rl-primary__heading),
-  .k12mistakes :deep(.rl-primary__detail),
-  .k12mistakes :deep(.rl-context),
-  .k12mistakes :deep(.rl-actions) {
-    display: contents;
-  }
-  .k12mistakes :deep(.rl-primary__heading > .rl-title) {
-    flex: 0 0 250px;
-  }
-  .k12mistakes :deep(.rl-primary__detail > .rl-meta) {
-    flex: 1;
-  }
-  .k12mistakes :deep(.rl-source) {
-    min-width: 92px;
-    text-align: center;
-  }
 }
 /* 窄档只让完整动作组整体下移并右对齐，禁止单个动作自行换行。 */
 @container (max-width: 619px) {
