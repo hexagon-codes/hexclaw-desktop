@@ -1722,6 +1722,12 @@ export interface RenderReq {
   content: string
   format: 'pdf' | 'docx' | 'html'
   title?: string
+  /** PDF默认采用共享版式，仅当次明确请求可覆盖，不改变其他格式。 */
+  options?: {
+    Locale?: string
+    pdf_header_footer?: boolean
+    pdf_layout?: 'standard' | 'custom'
+  }
 }
 /** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
 export async function renderDocument(req: RenderReq): Promise<Blob> {
