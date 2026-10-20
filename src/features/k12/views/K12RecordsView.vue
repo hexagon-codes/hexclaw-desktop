@@ -33,6 +33,7 @@ import {
   k12DeleteAccumulation,
   k12GenerateAccumulationDictation,
   k12GetCurriculumProgress,
+  k12GetCurrentWeeklyPracticePlan,
   k12GetWeeklyPracticeSnapshot,
   k12GetWeeklyPracticeHistory,
   k12GetWeeklyPracticeSettings,
@@ -123,6 +124,9 @@ const hasWeeklyTrend = computed(() => {
 })
 const weeklyLoading = ref(true)
 const weeklyBusy = ref(false)
+const weeklyTextbookBusy = ref<string | null>(null)
+const weeklyArithmeticBusy = ref<string | null>(null)
+let weeklyReadSequence = 0
 const weeklyError = ref('')
 const weeklyView = ref<'current' | 'history'>('current')
 const weeklyPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
@@ -166,6 +170,8 @@ function weeklyPlanCommandKey(): string {
 
 async function loadWeeklyPractice() {
   if (!props.agentId) return
+  const agent = props.agentId
+  const sequence = ++weeklyReadSequence
   weeklyLoading.value = true
   weeklyError.value = ''
   try {
@@ -175,6 +181,7 @@ async function loadWeeklyPractice() {
       k12EnsureWeeklyPracticePlan(props.agentId, weeklyPlanCommandKey()),
       k12GetWeeklyPracticeHistory(props.agentId, undefined, 20),
     ])
+    if (agent !== props.agentId || sequence !== weeklyReadSequence) return
     weeklyProgress.value = progressResp.progress
     weeklySettings.value = settingsResp
     weeklyPlan.value = planResp.plan
@@ -188,9 +195,24 @@ async function loadWeeklyPractice() {
     }
     weeklyPlanIntent.value = null
   } catch (cause) {
-    weeklyError.value = cause instanceof Error ? cause.message : String(cause)
+    if (agent === props.agentId && sequence === weeklyReadSequence) {
+      weeklyError.value = cause instanceof Error ? cause.message : String(cause)
+    }
   } finally {
-    weeklyLoading.value = false
+    if (agent === props.agentId && sequence === weeklyReadSequence) weeklyLoading.value = false
+  }
+}
+
+// 分区完成后只回读服务端当前计划，保留工作区；迟到响应不能覆盖另一分区或孩子。
+async function refreshCurrentWeeklyPlan(agent: string) {
+  if (agent !== props.agentId) return
+  const sequence = ++weeklyReadSequence
+  const response = await k12GetCurrentWeeklyPracticePlan(agent)
+  if (agent !== props.agentId || sequence !== weeklyReadSequence) return
+  weeklyPlan.value = response.plan
+  if (weeklyOutput.value && weeklyOutput.value.snapshot.plan_revision !== response.plan?.revision) {
+    weeklyOutput.value = null
+    weeklyDelivery.reset()
   }
 }
 
@@ -301,8 +323,9 @@ async function runWeeklyArithmeticAction(intent: {
   item_count?: number
 }) {
   const plan = weeklyPlan.value
-  if (!plan || weeklyBusy.value || intent.action === 'resume') return
-  weeklyBusy.value = true
+  const agent = props.agentId
+  if (!plan || weeklyArithmeticBusy.value === agent || intent.action === 'resume') return
+  weeklyArithmeticBusy.value = agent
   try {
     if (intent.action === 'create') {
       if (!intent.item_count) {
@@ -327,53 +350,57 @@ async function runWeeklyArithmeticAction(intent: {
       await k12RetryWeeklyArithmeticBatch(
         props.agentId,
         intent.batch_id,
-        weeklyCommandKey('arithmetic-retry', intent.batch_id),
+        weeklyCommandKey(
+          'arithmetic-retry',
+          `${intent.batch_id}:${globalThis.crypto.randomUUID()}`,
+        ),
       )
     }
-    weeklyPlanIntent.value = null
-    await loadWeeklyPractice()
+    await refreshCurrentWeeklyPlan(agent)
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
   } finally {
-    weeklyBusy.value = false
+    if (weeklyArithmeticBusy.value === agent) weeklyArithmeticBusy.value = null
   }
 }
 
 async function prepareWeeklyTextbookTrack(intent: { item_count: number }) {
   const plan = weeklyPlan.value
-  if (!plan || weeklyBusy.value) return
-  weeklyBusy.value = true
+  const agent = props.agentId
+  if (!plan || weeklyTextbookBusy.value === agent) return
+  weeklyTextbookBusy.value = agent
   try {
-    const response = await k12PrepareWeeklyPracticeTextbookTrack(
+    await k12PrepareWeeklyPracticeTextbookTrack(
       plan.plan_id,
       plan.revision,
       intent.item_count,
       weeklyCommandKey('textbook-prepare', `${plan.plan_id}:${plan.revision}:${intent.item_count}`),
     )
-    weeklyPlan.value = response.plan
+    await refreshCurrentWeeklyPlan(agent)
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
   } finally {
-    weeklyBusy.value = false
+    if (weeklyTextbookBusy.value === agent) weeklyTextbookBusy.value = null
   }
 }
 
 async function refreshWeeklyTextbookTrack() {
   const plan = weeklyPlan.value
-  if (!plan || weeklyBusy.value) return
-  weeklyBusy.value = true
+  const agent = props.agentId
+  if (!plan || weeklyTextbookBusy.value === agent) return
+  weeklyTextbookBusy.value = agent
   try {
-    const response = await k12RefreshWeeklyPracticeTextbookTrack(
+    await k12RefreshWeeklyPracticeTextbookTrack(
       props.agentId,
       plan.plan_id,
       plan.revision,
       weeklyCommandKey('textbook-refresh', `${plan.plan_id}:${plan.revision}`),
     )
-    weeklyPlan.value = response.plan
+    await refreshCurrentWeeklyPlan(agent)
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
   } finally {
-    weeklyBusy.value = false
+    if (weeklyTextbookBusy.value === agent) weeklyTextbookBusy.value = null
   }
 }
 
@@ -592,6 +619,9 @@ watch(
 watch(
   () => props.agentId,
   () => {
+    weeklyTextbookBusy.value = null
+    weeklyArithmeticBusy.value = null
+    weeklyReadSequence++
     clearArchiveUndos()
     clearAccumulationPoll()
     archiveBusy.value = []
@@ -1193,8 +1223,8 @@ function closeDetail() {
   accumulationDeleteReturnState.value = null
   detail.value = { open: false, record: null, kind: 'mistake' }
 }
-const detailQuestion = computed(() =>
-  detail.value.question ?? String(detail.value.record?.fields.question ?? ''),
+const detailQuestion = computed(
+  () => detail.value.question ?? String(detail.value.record?.fields.question ?? ''),
 )
 const detailKp = computed(() => String(detail.value.record?.fields.knowledge_point ?? ''))
 const detailError = computed(() => String(detail.value.record?.fields.error_cause ?? ''))
@@ -1673,6 +1703,8 @@ async function doExportMd() {
           :output="weeklyOutput"
           :loading="weeklyLoading"
           :busy="weeklyBusy || weeklyDeferBusy"
+          :textbook-busy="weeklyTextbookBusy === agentId"
+          :arithmetic-busy="weeklyArithmeticBusy === agentId"
           :error="weeklyError"
           :delivery-label="weeklyDelivery.label.value"
           :delivery-disabled="weeklyDelivery.disabled.value"

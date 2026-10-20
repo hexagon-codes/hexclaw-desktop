@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type {
   CurriculumProgressDTO,
@@ -20,6 +21,16 @@ import K12MistakeReviewMenu from './K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
 import { mistakeTitlePreview } from '../mappers'
 
+const { t } = useI18n()
+
+function generationFailure(message: string): string {
+  const keys: Record<string, string> = {
+    'weekly candidate duplicates practiced problem': 'k12.records.weeklyDuplicate',
+    'weekly duplicate replacement limit reached': 'k12.records.weeklyDuplicateLimit',
+  }
+  return keys[message] ? t(keys[message]) : message
+}
+
 const props = defineProps<{
   progress: CurriculumProgressDTO | null
   settings: WeeklyPracticeSettingsDTO | null
@@ -29,6 +40,8 @@ const props = defineProps<{
   output?: WeeklyPracticePrepareOutputResp | null
   loading?: boolean
   busy?: boolean
+  textbookBusy?: boolean
+  arithmeticBusy?: boolean
   error?: string
   deliveryLabel?: string
   deliveryDisabled?: boolean
@@ -237,6 +250,23 @@ watch(
   },
   { immediate: true },
 )
+
+function generating(section: WeeklyPracticeSection): boolean {
+  if (section === 'textbook_consolidation') {
+    return Boolean(
+      props.textbookBusy || textbookRecommendation.value?.availability === 'processing',
+    )
+  }
+  return (
+    section === 'arithmetic_warmup' &&
+    Boolean(
+      props.arithmeticBusy ||
+      arithmeticRecommendation.value?.availability === 'processing' ||
+      props.plan?.tracks.find((track) => track.plan_section === section)?.arithmetic_batch
+        ?.state === 'preparing',
+    )
+  )
+}
 
 function verifiedPageLabel(item: WeeklyPracticeItemDTO): string {
   const verification = item.verification
@@ -530,70 +560,117 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             </div>
 
             <div
-              v-if="track.plan_section !== 'arithmetic_warmup' && track.status === 'failed'"
-              class="weekly-track__failure"
-              role="status"
-            >
-              {{
-                setupRequiredFor(track.plan_section)
-                  ? setupRequiredMessage[track.plan_section]
-                  : track.failure_message || '这一部分暂时无法生成，到期复习不受影响。'
-              }}
-            </div>
-            <div v-if="arithmeticFailure(track)" class="weekly-track__failure" role="status">
-              {{
-                setupRequiredFor(track.plan_section)
-                  ? setupRequiredMessage[track.plan_section]
-                  : arithmeticFailure(track)
-              }}
-            </div>
-            <button
-              v-if="track.plan_section === 'textbook_consolidation' && track.status === 'stale'"
-              type="button"
-              class="btn weekly-track__action"
-              :disabled="busy"
-              @click="emit('refresh-textbook')"
-            >
-              按新进度更新
-            </button>
-            <button
               v-if="
-                track.plan_section === 'textbook_consolidation' &&
-                track.status === 'failed' &&
-                (!textbookRecommendation ||
-                  textbookRecommendation.availability === 'failed_retryable')
+                (track.plan_section === 'textbook_consolidation' &&
+                  ['failed', 'stale'].includes(track.status)) ||
+                (track.plan_section === 'arithmetic_warmup' &&
+                  (arithmeticFailure(track) ||
+                    (arithmeticAction(track) &&
+                      (track.arithmetic_batch || !arithmeticRecommendation))))
               "
-              type="button"
-              class="btn weekly-track__action"
-              :disabled="
-                busy ||
-                (textbookRecommendation?.availability === 'failed_retryable' &&
-                  selectedTextbookItemCount === null)
-              "
-              @click="
-                textbookRecommendation?.availability === 'failed_retryable' &&
-                selectedTextbookItemCount !== null
-                  ? emit('prepare-textbook', { item_count: selectedTextbookItemCount })
-                  : emit('refresh-textbook')
-              "
+              class="weekly-track__feedback"
             >
-              {{
-                textbookRecommendation?.availability === 'failed_retryable'
-                  ? `重试生成 ${selectedTextbookItemCount ?? 0} 道`
-                  : '重试'
-              }}
-            </button>
-            <button
-              v-if="
-                arithmeticAction(track) && (track.arithmetic_batch || !arithmeticRecommendation)
-              "
-              type="button"
-              class="btn weekly-track__action"
-              :disabled="busy || arithmeticAction(track)?.disabled"
-              @click="dispatchArithmetic(track)"
-            >
-              {{ arithmeticAction(track)?.label }}
-            </button>
+              <div
+                v-if="track.plan_section !== 'arithmetic_warmup' && track.status === 'failed'"
+                class="weekly-track__failure"
+                role="status"
+              >
+                {{
+                  setupRequiredFor(track.plan_section)
+                    ? setupRequiredMessage[track.plan_section]
+                    : generationFailure(track.failure_message || '') ||
+                      '这一部分暂时无法生成，到期复习不受影响。'
+                }}
+              </div>
+              <div v-if="arithmeticFailure(track)" class="weekly-track__failure" role="status">
+                {{
+                  setupRequiredFor(track.plan_section)
+                    ? setupRequiredMessage[track.plan_section]
+                    : generationFailure(arithmeticFailure(track))
+                }}
+              </div>
+              <button
+                v-if="track.plan_section === 'textbook_consolidation' && track.status === 'stale'"
+                type="button"
+                class="btn weekly-track__action weekly-generation-button"
+                :aria-busy="generating(track.plan_section)"
+                :data-loading-label="t('k12.customPaper.generatingShort')"
+                :disabled="busy || generating(track.plan_section)"
+                @click="emit('refresh-textbook')"
+              >
+                <span v-if="generating(track.plan_section)" class="weekly-generation-label"
+                  ><i class="weekly-generation-spinner" aria-hidden="true" />{{
+                    t('k12.customPaper.generatingShort')
+                  }}</span
+                >
+                <span :style="{ visibility: generating(track.plan_section) ? 'hidden' : undefined }"
+                  >按新进度更新</span
+                >
+              </button>
+              <button
+                v-if="
+                  track.plan_section === 'textbook_consolidation' &&
+                  track.status === 'failed' &&
+                  (!textbookRecommendation ||
+                    textbookRecommendation.availability === 'failed_retryable')
+                "
+                type="button"
+                class="btn weekly-track__action weekly-generation-button"
+                :aria-busy="generating(track.plan_section)"
+                :data-loading-label="t('k12.customPaper.generatingShort')"
+                :disabled="
+                  busy ||
+                  generating(track.plan_section) ||
+                  (textbookRecommendation?.availability === 'failed_retryable' &&
+                    selectedTextbookItemCount === null)
+                "
+                @click="
+                  textbookRecommendation?.availability === 'failed_retryable' &&
+                  selectedTextbookItemCount !== null
+                    ? emit('prepare-textbook', { item_count: selectedTextbookItemCount })
+                    : emit('refresh-textbook')
+                "
+              >
+                <span v-if="generating(track.plan_section)" class="weekly-generation-label"
+                  ><i class="weekly-generation-spinner" aria-hidden="true" />{{
+                    t('k12.customPaper.generatingShort')
+                  }}</span
+                >
+                <span
+                  :style="{ visibility: generating(track.plan_section) ? 'hidden' : undefined }"
+                >
+                  {{
+                    textbookRecommendation?.availability === 'failed_retryable'
+                      ? `重试生成 ${selectedTextbookItemCount ?? 0} 道`
+                      : '重试'
+                  }}
+                </span>
+              </button>
+              <button
+                v-if="
+                  arithmeticAction(track) && (track.arithmetic_batch || !arithmeticRecommendation)
+                "
+                type="button"
+                class="btn weekly-track__action weekly-generation-button"
+                :aria-busy="generating(track.plan_section)"
+                :data-loading-label="t('k12.customPaper.generatingShort')"
+                :disabled="
+                  busy || generating(track.plan_section) || arithmeticAction(track)?.disabled
+                "
+                @click="dispatchArithmetic(track)"
+              >
+                <span v-if="generating(track.plan_section)" class="weekly-generation-label"
+                  ><i class="weekly-generation-spinner" aria-hidden="true" />{{
+                    t('k12.customPaper.generatingShort')
+                  }}</span
+                >
+                <span
+                  :style="{ visibility: generating(track.plan_section) ? 'hidden' : undefined }"
+                >
+                  {{ arithmeticAction(track)?.label }}
+                </span>
+              </button>
+            </div>
 
             <div class="weekly-resource-list">
               <div
@@ -624,7 +701,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     label="同步巩固题数"
                     :min="textbookRecommendation.min_item_count"
                     :max="textbookRecommendation.max_item_count"
-                    :disabled="busy || textbookRecommendation.availability !== 'available'"
+                    :disabled="
+                      busy ||
+                      generating(track.plan_section) ||
+                      textbookRecommendation.availability !== 'available'
+                    "
                   />
                   <button
                     v-if="
@@ -632,10 +713,13 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                       textbookRecommendation.availability === 'processing'
                     "
                     type="button"
-                    class="btn weekly-track__action"
+                    class="btn weekly-track__action weekly-generation-button"
+                    :aria-busy="generating(track.plan_section)"
+                    :data-loading-label="t('k12.customPaper.generatingShort')"
                     data-consolidation-action
                     :disabled="
                       busy ||
+                      generating(track.plan_section) ||
                       textbookRecommendation.availability !== 'available' ||
                       selectedTextbookItemCount === null
                     "
@@ -644,11 +728,20 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                       emit('prepare-textbook', { item_count: selectedTextbookItemCount })
                     "
                   >
-                    {{
-                      textbookRecommendation.availability === 'processing'
-                        ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
-                        : '生成'
-                    }}
+                    <span v-if="generating(track.plan_section)" class="weekly-generation-label"
+                      ><i class="weekly-generation-spinner" aria-hidden="true" />{{
+                        t('k12.customPaper.generatingShort')
+                      }}</span
+                    >
+                    <span
+                      :style="{ visibility: generating(track.plan_section) ? 'hidden' : undefined }"
+                    >
+                      {{
+                        textbookRecommendation.availability === 'processing'
+                          ? `正在生成 ${selectedTextbookItemCount ?? 0} 道…`
+                          : '生成'
+                      }}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -680,17 +773,34 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                     label="口算热身题数"
                     :min="arithmeticRecommendation.min_item_count"
                     :max="arithmeticRecommendation.max_item_count"
-                    :disabled="busy || arithmeticRecommendation.availability !== 'available'"
+                    :disabled="
+                      busy ||
+                      generating(track.plan_section) ||
+                      arithmeticRecommendation.availability !== 'available'
+                    "
                   />
                   <button
                     v-if="arithmeticAction(track)"
                     type="button"
-                    class="btn weekly-track__action"
+                    class="btn weekly-track__action weekly-generation-button"
+                    :aria-busy="generating(track.plan_section)"
+                    :data-loading-label="t('k12.customPaper.generatingShort')"
                     data-arithmetic-action
-                    :disabled="busy || arithmeticAction(track)?.disabled"
+                    :disabled="
+                      busy || generating(track.plan_section) || arithmeticAction(track)?.disabled
+                    "
                     @click="dispatchArithmetic(track)"
                   >
-                    {{ arithmeticAction(track)?.label }}
+                    <span v-if="generating(track.plan_section)" class="weekly-generation-label"
+                      ><i class="weekly-generation-spinner" aria-hidden="true" />{{
+                        t('k12.customPaper.generatingShort')
+                      }}</span
+                    >
+                    <span
+                      :style="{ visibility: generating(track.plan_section) ? 'hidden' : undefined }"
+                    >
+                      {{ arithmeticAction(track)?.label }}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1000,6 +1110,42 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-no-mistakes b {
   color: var(--hc-text-primary);
 }
+.weekly-generation-button {
+  display: inline-grid;
+  place-items: center;
+}
+.weekly-generation-button::before {
+  content: attr(data-loading-label);
+  padding-inline-start: 18px;
+  visibility: hidden;
+  grid-area: 1 / 1;
+}
+.weekly-generation-button > span {
+  grid-area: 1 / 1;
+}
+.weekly-generation-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.weekly-generation-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: weekly-generation-spin 0.8s linear infinite;
+}
+@keyframes weekly-generation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .weekly-generation-spinner {
+    animation: none;
+  }
+}
 .weekly-manual {
   display: flex;
   align-items: center;
@@ -1173,6 +1319,22 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 .weekly-track__head span {
   color: var(--hc-text-secondary);
   font-size: 11.5px;
+}
+.weekly-track__feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.weekly-track__feedback > .weekly-track__failure {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.weekly-track__feedback > .weekly-track__action {
+  flex: none;
 }
 .weekly-track__failure {
   color: var(--hc-warning, #9a5b00);
@@ -1801,7 +1963,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 }
 
 .weekly-manual.resource-row {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-start;
 }
 
@@ -1821,9 +1983,10 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 
 .weekly-manual.resource-row .weekly-manual__origin {
   display: grid;
-  flex: 0 0 178px;
+  flex: 0 1 178px;
   gap: 1px;
-  min-width: 178px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .weekly-manual.resource-row .weekly-manual__origin b {
