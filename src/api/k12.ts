@@ -1225,10 +1225,14 @@ export function k12UpdateProfileBundle(req: UpdateProfileBundleReq) {
 }
 
 export function k12EnsureWeeklyPracticePlan(agent: string, idempotencyKey: string) {
-  return apiPost<WeeklyPracticePlanResp>(`${BASE}/weekly-practice/plans`, {
-    agent,
-    idempotency_key: idempotencyKey,
-  })
+  return apiPost<WeeklyPracticePlanResp>(
+    `${BASE}/weekly-practice/plans`,
+    {
+      agent,
+      idempotency_key: idempotencyKey,
+    },
+    { timeout: false },
+  )
 }
 
 export function k12GetCurrentWeeklyPracticePlan(agent: string) {
@@ -1308,6 +1312,8 @@ export function k12CreateWeeklyArithmeticBatch(
       item_count: itemCount,
       idempotency_key: idempotencyKey,
     },
+    // 整批生成沿用后端逐次调用时限和题量边界，避免短请求计时取消已外发的验算。
+    { timeout: false },
   )
 }
 
@@ -1336,6 +1342,8 @@ export function k12RetryWeeklyArithmeticBatch(
       agent,
       idempotency_key: idempotencyKey,
     },
+    // 整批生成沿用后端逐次调用时限和题量边界，避免短请求计时取消已外发的验算。
+    { timeout: false },
   )
 }
 
@@ -1370,6 +1378,8 @@ export function k12RefreshWeeklyPracticeTextbookTrack(
       expected_revision: expectedRevision,
       idempotency_key: idempotencyKey,
     },
+    // 整批生成沿用后端逐次调用时限和题量边界，避免短请求计时取消已外发的验算。
+    { timeout: false },
   )
 }
 
@@ -1386,6 +1396,8 @@ export function k12PrepareWeeklyPracticeTextbookTrack(
       item_count: itemCount,
       idempotency_key: idempotencyKey,
     },
+    // 整批生成沿用后端逐次调用时限和题量边界，避免短请求计时取消已外发的验算。
+    { timeout: false },
   )
 }
 
