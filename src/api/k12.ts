@@ -36,21 +36,47 @@ export { k12AssetURL } from './k12-asset-url'
 const BASE = '/api/k12'
 
 /** 已发布学习资料的语义内容；Markdown/PDF 均为这一冻结内容的投影。 */
-export type UnitSummarySubject = 'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art'
+export type UnitSummarySubject =
+  | 'math'
+  | 'chinese'
+  | 'english'
+  | 'science'
+  | 'information_technology'
+  | 'art'
 export interface UnitSummaryContentV1 {
   schema_version: 1
   subject: UnitSummarySubject
   title: string
   parent_plan: string[]
   goals: Array<{ id: string; text: string; source_refs: string[] }>
-  knowledge: Array<{ id: string; kind: string; title: string; body_md: string; source_refs: string[] }>
-  examples: Array<{ id: string; goal_ids: string[]; origin: 'source' | 'ai_created'; prompt_md: string; demonstration_md: string; parent_guide: { ask: string; explain: string; hint: string; alternative?: string }; source_refs: string[] }>
+  knowledge: Array<{
+    id: string
+    kind: string
+    title: string
+    body_md: string
+    source_refs: string[]
+  }>
+  examples: Array<{
+    id: string
+    goal_ids: string[]
+    origin: 'source' | 'ai_created'
+    prompt_md: string
+    demonstration_md: string
+    parent_guide: { ask: string; explain: string; hint: string; alternative?: string }
+    source_refs: string[]
+  }>
   transfer_checks: Array<{ id: string; example_id: string; question_md: string }>
   reference_explanations: Array<{ check_id: string; explanation_md: string }>
   common_pitfalls: string[]
   personal_guidance: Array<{ text: string; evidence_refs: string[] }>
   coverage: { level: 'full' | 'partial'; covered: string[]; missing: string[] }
-  sources: Array<{ ref: string; origin: 'textbook' | 'provided_material' | 'student_work'; label: string; page?: string; locator: string }>
+  sources: Array<{
+    ref: string
+    origin: 'textbook' | 'provided_material' | 'student_work'
+    label: string
+    page?: string
+    locator: string
+  }>
 }
 export interface UnitSummaryReference {
   kind?: 'unit_summary'
@@ -85,7 +111,13 @@ export interface UnitSummaryMaterialDTO {
   generated_timezone: string
   generated_date: string
   filename: string
-  artifact: { artifact_id: string; source_kind: 'unit_summary'; content_type: string; byte_digest: string; byte_size: number }
+  artifact: {
+    artifact_id: string
+    source_kind: 'unit_summary'
+    content_type: string
+    byte_digest: string
+    byte_size: number
+  }
 }
 export interface UnitSummaryJobDTO {
   attempt_id?: string
@@ -115,17 +147,39 @@ export interface UnitSummaryDocumentListResponse {
   next_cursor?: string
 }
 /** 列表展示当前版，历史会话正文必须通过 revision_id 读取具体版本。 */
-export function k12ListUnitSummaryDocuments(agent: string, query: { session_id?: string; cursor?: string; limit?: number } = {}) {
-  return apiGet<UnitSummaryDocumentListResponse>(`${BASE}/unit-summary-documents`, { agent, ...query })
+export function k12ListUnitSummaryDocuments(
+  agent: string,
+  query: { session_id?: string; cursor?: string; limit?: number } = {},
+) {
+  return apiGet<UnitSummaryDocumentListResponse>(`${BASE}/unit-summary-documents`, {
+    agent,
+    ...query,
+  })
 }
 export function k12GetUnitSummaryDocument(agent: string, documentId: string, revisionId?: string) {
-  return apiGet<UnitSummaryResponse>(`${BASE}/unit-summary-documents/${encodeURIComponent(documentId)}`, { agent, revision_id: revisionId })
+  return apiGet<UnitSummaryResponse>(
+    `${BASE}/unit-summary-documents/${encodeURIComponent(documentId)}`,
+    { agent, revision_id: revisionId },
+  )
 }
 export function k12GetUnitSummaryJob(agent: string, jobId: string) {
-  return apiGet<UnitSummaryResponse>(`${BASE}/unit-summary-jobs/${encodeURIComponent(jobId)}`, { agent })
+  return apiGet<UnitSummaryResponse>(`${BASE}/unit-summary-jobs/${encodeURIComponent(jobId)}`, {
+    agent,
+  })
 }
-export function k12ResumeUnitSummaryJob(jobId: string, body: { agent: string; expected_revision: number; idempotency_key: string; followup_message_id?: string }) {
-  return apiPost<UnitSummaryResponse>(`${BASE}/unit-summary-jobs/${encodeURIComponent(jobId)}/resume`, body)
+export function k12ResumeUnitSummaryJob(
+  jobId: string,
+  body: {
+    agent: string
+    expected_revision: number
+    idempotency_key: string
+    followup_message_id?: string
+  },
+) {
+  return apiPost<UnitSummaryResponse>(
+    `${BASE}/unit-summary-jobs/${encodeURIComponent(jobId)}/resume`,
+    body,
+  )
 }
 
 // ── view-descriptor ──────────────────────────────────────────
@@ -2109,7 +2163,7 @@ export interface CreativeConflictDTO {
 }
 
 export type CreativeWorkIntakeStatus =
-	| 'unreadable'
+  | 'unreadable'
   | 'preparing'
   | 'awaiting_confirmation'
   | 'ready'
@@ -2118,8 +2172,8 @@ export type CreativeWorkIntakeStatus =
   | 'cancelled'
 
 export interface ImageTaskCreativeProjectionDTO {
-	 outcome?: 'complete' | 'partial' | 'unreadable'
-	 notice?: string
+  outcome?: 'complete' | 'partial' | 'unreadable'
+  notice?: string
   kind: 'creative'
   intake_id: string
   work_type: 'writing' | 'art'
@@ -2289,8 +2343,8 @@ export interface ImageTaskCreativeFeedbackDTO {
 }
 
 export interface ImageTaskCreativeResultPayload {
-	 outcome?: 'complete' | 'partial' | 'unreadable'
-	 notice?: string
+  outcome?: 'complete' | 'partial' | 'unreadable'
+  notice?: string
   intake: {
     intake_id: string
     status: CreativeWorkIntakeStatus
