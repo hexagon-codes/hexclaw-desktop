@@ -1281,6 +1281,20 @@ export function k12SendWeeklyPracticeSnapshot(
   )
 }
 
+/** 分区 PDF 使用服务端已验题面；不会冻结整周计划或重新调用模型。 */
+export function k12PrepareWeeklyTrackOutput(
+  agent: string,
+  planId: string,
+  section: 'textbook_consolidation' | 'arithmetic_warmup',
+  expectedRevision: number,
+) {
+  return apiPost<PreparePrintableArtifactResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/tracks/${section}/prepare-output`,
+    { agent, expected_revision: expectedRevision },
+    { timeout: false },
+  )
+}
+
 export function k12SubmitWeeklyPracticeAttempt(
   agent: string,
   snapshotId: string,
