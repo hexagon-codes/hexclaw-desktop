@@ -83,6 +83,15 @@ if (
   user-select: none;
 }
 
+/* 语言方向只镜像无交互的插画与环境装饰，正文由正常布局承载。 */
+:global(html[dir='rtl'] .k12-global-presentation) {
+  transform: scaleX(-1);
+}
+
+:global(html[dir='rtl'] .k12-global-presentation__fireflies) {
+  top: calc(-1 * var(--hc-titlebar-height));
+}
+
 .k12-global-presentation__sidebar-scene,
 .k12-global-presentation__main-scene,
 .k12-global-presentation__butterflies,

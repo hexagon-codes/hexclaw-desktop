@@ -3198,7 +3198,7 @@ async function coldStart() {
           :key="`${index}:${part}`"
         >
           <span v-if="index">·</span>
-          <span>{{ part }}</span>
+          <bdi :dir="part === taskModelDisplayName || part === taskTimeDisplay ? 'ltr' : 'auto'">{{ part }}</bdi>
         </template>
       </div>
       <MessageActions

@@ -2332,7 +2332,7 @@ async function saveConfig() {
                       />
                     </div>
                     <div class="hc-provider__card-identity">
-                      <div class="hc-provider__card-name">{{ provider.name }}</div>
+                      <div class="hc-provider__card-name" dir="auto">{{ provider.name }}</div>
                       <div class="hc-provider__card-meta">
                         {{ providerBaseUrl(provider) }} ·
                         <span class="hc-provider__model-count">{{ provider.models.length }}</span>
@@ -2429,6 +2429,7 @@ async function saveConfig() {
                         <input
                           :id="`provider-${provider.id}-name`"
                           v-model="provider.name"
+                          dir="auto"
                           data-provider-field="name"
                           type="text"
                           class="hc-input"
@@ -3149,7 +3150,7 @@ async function saveConfig() {
   <HcModal :open="showAddProvider" :title="t('settings.llm.addProvider')" :busy="addingProvider" initial-focus=".hc-provider-select__trigger" @close="closeAddProvider">
     <form class="hc-provider__add-form" :inert="addingProvider ? true : undefined" @submit.prevent="handleAddProvider">
       <div class="hc-provider__add-field"><label>{{ t('settings.llm.serviceProvider', 'Provider') }}</label><ProviderSelect v-model="addProviderType" :include-custom="true" /></div>
-      <div v-if="addProviderType === 'custom'" class="hc-provider__add-field"><label for="add-provider-name">{{ t('settings.experience.providerName') }}</label><HcClearableField><input id="add-provider-name" v-model="addProviderDraft.name" class="hc-input" autocomplete="off" :placeholder="t('settings.experience.providerNamePlaceholder')" /></HcClearableField></div>
+      <div v-if="addProviderType === 'custom'" class="hc-provider__add-field"><label for="add-provider-name">{{ t('settings.experience.providerName') }}</label><HcClearableField><input id="add-provider-name" v-model="addProviderDraft.name" dir="auto" class="hc-input" autocomplete="off" :placeholder="t('settings.experience.providerNamePlaceholder')" /></HcClearableField></div>
       <div class="hc-provider__add-field"><label for="add-provider-url">Base URL</label><HcClearableField><input id="add-provider-url" v-model="addProviderDraft.baseUrl" class="hc-input" autocomplete="off" spellcheck="false" /></HcClearableField></div>
       <div class="hc-provider__add-field"><label for="add-provider-key">API Key</label><div class="hc-settings__input-group"><HcClearableField :trailing="38"><input id="add-provider-key" v-model="addProviderDraft.apiKey" class="hc-input" :type="showAddProviderKey ? 'text' : 'password'" :placeholder="PROVIDER_PRESETS[addProviderType].placeholder || 'API Key'" autocomplete="off" spellcheck="false" /></HcClearableField><button type="button" class="hc-settings__eye-btn" :aria-label="showAddProviderKey ? t('settings.experience.hideApiKey') : t('settings.experience.showApiKey')" @click="showAddProviderKey = !showAddProviderKey"><Eye :size="15" /></button></div></div>
     </form>

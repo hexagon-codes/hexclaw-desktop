@@ -3848,7 +3848,10 @@ function startSidebarResize(event: MouseEvent) {
                   <MessageFooter class="hc-msg__footer">
                     <div class="hc-msg__meta">
                       <span v-if="messageProviderDisplay(msg) || messageSourceDisplay(msg)">
-                        {{ messageSourceDisplay(msg) }}
+                        <template v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">
+                          <bdi v-if="messageProviderDisplay(msg)" dir="auto">{{ messageProviderDisplay(msg) }}</bdi><template v-if="messageProviderDisplay(msg) && metadataValue(msg, 'model')"> · </template><bdi v-if="metadataValue(msg, 'model')" dir="ltr">{{ metadataValue(msg, 'model') }}</bdi>
+                        </template>
+                        <template v-else>{{ messageSourceDisplay(msg) }}</template>
                       </span>
                     </div>
                     <div class="hc-msg__actions-inline">
