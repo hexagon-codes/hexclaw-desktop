@@ -9,6 +9,7 @@ export function resolveProviderDisplayName(
   providers: ProviderConfig[],
   frozenDisplayName?: string | null,
 ): string {
+  if (frozenDisplayName?.trim()) return frozenDisplayName
   const identity = normalizedIdentity(providerIdentity)
   if (identity) {
     const configured = providers.find((provider) =>
@@ -18,6 +19,5 @@ export function resolveProviderDisplayName(
     )
     if (configured?.name?.trim()) return configured.name
   }
-  if (frozenDisplayName?.trim()) return frozenDisplayName
   return providerIdentity ?? ''
 }
