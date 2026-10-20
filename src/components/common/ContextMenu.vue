@@ -141,6 +141,7 @@ defineExpose({ show, showAt, hide })
         class="hc-ctx"
         :class="{ 'hc-ctx--session': variant === 'session' }"
         role="menu"
+        data-scroll-reveal="off"
         aria-orientation="vertical"
         :style="{ left: x + 'px', top: y + 'px' }"
         @contextmenu.prevent

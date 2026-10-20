@@ -171,7 +171,11 @@ export function installScrollReveal(
   }
 
   function paint() {
-    if (!active?.isConnected || excludesScrollbar(active)) {
+    if (
+      !active?.isConnected ||
+      excludesScrollbar(active) ||
+      excludesScrollbar(ownerDocument.activeElement)
+    ) {
       hide()
       return
     }
@@ -263,6 +267,10 @@ export function installScrollReveal(
     if (active && event.relatedTarget instanceof Node && active.contains(event.relatedTarget)) return
     scheduleHide()
   }
+  const onFocusIn = (event: FocusEvent) => {
+    // 菜单打开会先聚焦首项，尚未移动指针时也要清除底层镜像。
+    if (excludesScrollbar(event.target)) hide()
+  }
   const onPointerMove = (event: PointerEvent) => {
     if (!drag || drag.pointerId !== event.pointerId || !active) return
     const pointer = drag.axis === 'y' ? event.clientY : event.clientX
@@ -283,6 +291,7 @@ export function installScrollReveal(
   ownerDocument.addEventListener('scroll', onScroll, true)
   ownerDocument.addEventListener('pointerover', onPointerOver, true)
   ownerDocument.addEventListener('pointerout', onPointerOut, true)
+  ownerDocument.addEventListener('focusin', onFocusIn, true)
   view?.addEventListener('pointermove', onPointerMove)
   view?.addEventListener('pointerup', onPointerUp)
   view?.addEventListener('resize', paint)
@@ -321,6 +330,7 @@ export function installScrollReveal(
       ownerDocument.removeEventListener('scroll', onScroll, true)
       ownerDocument.removeEventListener('pointerover', onPointerOver, true)
       ownerDocument.removeEventListener('pointerout', onPointerOut, true)
+      ownerDocument.removeEventListener('focusin', onFocusIn, true)
       view?.removeEventListener('pointermove', onPointerMove)
       view?.removeEventListener('pointerup', onPointerUp)
       view?.removeEventListener('resize', paint)
