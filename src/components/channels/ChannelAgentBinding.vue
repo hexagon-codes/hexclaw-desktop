@@ -10,7 +10,7 @@
  * 历史遗留 @im/* 一次性回收：纯接待模型不再创建 @im/*，但旧版可能残留 → 挂载时兜底注销无规则
  * 引用者，失败 warn 不静默（AP-110）。
  */
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { Plus, Pencil } from 'lucide-vue-next'
@@ -73,9 +73,12 @@ const agentOptions = computed<AgentConfig[]>(() => {
   return [...visible, ...fromRoles]
 })
 
+let agentDataLoadVersion = 0
 async function loadAgentData() {
+  const version = ++agentDataLoadVersion
   try {
     const [agentsRes, rulesRes, rolesRes] = await Promise.all([getAgents(), getRules(), getRoles()])
+    if (version !== agentDataLoadVersion) return
     agentsList.value = agentsRes.agents || []
     routingRules.value = rulesRes.rules || []
     rolesList.value = rolesRes.roles || []
@@ -297,6 +300,10 @@ function handleClickOutside(e: MouseEvent) {
 onMounted(() => {
   void loadAgentData().then(reclaimOrphanChannelAgents)
   document.addEventListener('mousedown', handleClickOutside, true)
+})
+// 同一实例改名不会重建卡片，提交后需重新读取随名称迁移的规则。
+watch(() => [props.instance.id, props.instance.name, props.instance.type], () => {
+  void loadAgentData()
 })
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', handleClickOutside, true)
