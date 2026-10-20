@@ -16,6 +16,7 @@ import type {
   WeeklyPracticeTrackDTO,
 } from '@/api/k12'
 import K12BookTabs from './K12BookTabs.vue'
+import K12SupplementPractice from './K12SupplementPractice.vue'
 import K12ManualQuestionCountField from './K12ManualQuestionCountField.vue'
 import K12MistakeReviewMenu from './K12MistakeReviewMenu.vue'
 import { projectMistakePracticeGeneration } from '../practice-generation-projection'
@@ -530,7 +531,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             </div>
           </div>
           <section
-            v-for="track in visibleTracks"
+            v-for="track in visibleTracks.filter((item) => item.plan_section === 'due_review')"
             :key="track.plan_section"
             class="weekly-track rc-week-plan__section"
             :data-track="track.plan_section"
@@ -979,6 +980,29 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
               </article>
             </div>
           </section>
+          <K12SupplementPractice
+            v-if="plan"
+            :agent="plan.agent"
+            :plan="plan"
+            :scope-label="compactProgressLabel || progressLabel"
+            :textbook-busy="textbookBusy"
+            :arithmetic-busy="arithmeticBusy"
+            @generate="
+              (section, count) =>
+                section === 'textbook_consolidation'
+                  ? emit('prepare-textbook', { item_count: count })
+                  : emit('arithmetic-action', {
+                      action:
+                        plan?.tracks.find((track) => track.plan_section === section)
+                          ?.arithmetic_batch?.state === 'failed_retryable'
+                          ? 'retry'
+                          : 'create',
+                      batch_id: plan?.tracks.find((track) => track.plan_section === section)
+                        ?.arithmetic_batch?.batch_id,
+                      item_count: count,
+                    })
+            "
+          />
           <p v-if="activeTab === 'current'" class="weekly-lifecycle rc-week-hero__foot">
             <span class="note"
               >每周五 19:00 自动整理本周错题 · 同步巩固和口算热身按需准备 · 不自动加入练习集</span

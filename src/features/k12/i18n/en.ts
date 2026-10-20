@@ -51,6 +51,29 @@ export default {
     na: '—',
   },
 
+  supplement: {
+    title: 'Supplementary practice',
+    description: 'Prepare a worksheet for the student to complete on paper',
+    type: 'Practice type',
+    textbook: 'Consolidation',
+    arithmetic: 'Arithmetic warm-up',
+    arithmeticScope: 'Only calculations already learned',
+    sheet: '{type} worksheet',
+    setup: 'Set textbook progress before preparing a worksheet',
+    generate: 'Generate',
+    regenerate: 'Regenerate',
+    independent: 'Preparing this worksheet; other actions remain available',
+    meta: 'Math · {count} questions · PDF · A4',
+    preparing: 'Preparing PDF…',
+    ready: 'Ready',
+    saved: 'Saved locally',
+    printed: 'Printed',
+    savedPrinted: 'Saved · Printed',
+    print: 'Print',
+    download: 'Download PDF',
+    nativePrintRequired: 'Use system printing in the desktop app',
+  },
+
   records: {
     weeklyDuplicate: 'A generated question repeats a selected or practiced question. Please retry.',
     weeklyDuplicateLimit:
