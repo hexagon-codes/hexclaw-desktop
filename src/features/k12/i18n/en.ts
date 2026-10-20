@@ -52,6 +52,9 @@ export default {
   },
 
   records: {
+    weeklyDuplicate: 'A generated question repeats a selected or practiced question. Please retry.',
+    weeklyDuplicateLimit:
+      'Duplicate questions remain after replacement. Generation was not completed.',
     trendUp: 'Trend ↑ improving',
     trendFlat: 'Trend → consolidating',
     allMistakes: 'All mistakes',
@@ -292,8 +295,7 @@ export default {
     desc: 'Each uploaded essay or artwork is saved separately and reviewed automatically; suggestions only, no scores.',
     empty: 'No works yet — add the first writing piece or artwork.',
     emptyTitle: 'No works yet',
-    emptyValue:
-      'Add an essay or artwork to save it and get automatic feedback.',
+    emptyValue: 'Add an essay or artwork to save it and get automatic feedback.',
     filterEmptyTitle: 'No works of this type',
     filterEmptyValue: 'Switch types to view other works.',
     loading: 'Loading works…',
@@ -443,8 +445,7 @@ export default {
     // app.html:2352: insights = learning overview (router), monthly-report framing retired
     title: 'Learning overview',
     titleWithGrade: '{grade} learning overview',
-    monthlyNote:
-      'Plan the next practice from grading and review records.',
+    monthlyNote: 'Plan the next practice from grading and review records.',
     loading: 'Loading learning overview…',
     empty:
       'Not enough grading and re-practice evidence yet. The next action will appear after the first grading result.',
@@ -504,8 +505,7 @@ export default {
       art: 'Art',
     },
     skillsLabel: 'Built-in skills',
-    capabilityNote:
-      'Configured by the K12 template; manage skills in Advanced settings.',
+    capabilityNote: 'Configured by the K12 template; manage skills in Advanced settings.',
     builtinSkills: {
       photo: '📷 Photo recognition',
       progressive: '💡 Progressive hints',

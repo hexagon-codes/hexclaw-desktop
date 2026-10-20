@@ -55,6 +55,8 @@ export default {
   },
 
   records: {
+    weeklyDuplicate: '生成的题目与已选题或已练题重复，请重试。',
+    weeklyDuplicateLimit: '补题后仍有重复，本次生成未完成。',
     trendUp: '趋势 ↑ 在进步',
     trendFlat: '趋势 → 待巩固',
     allMistakes: '全部错题',
@@ -442,8 +444,7 @@ export default {
     priorityNote: '按知识点错误次数 · 点击下钻错题',
     consecutiveFail: '连续挫败 · {topics}',
     weekActionTitle: '本周行动已经排好',
-    weekActionBody:
-      '{n} 道题已加入练习集；打印作答后上传照片，自动批改。',
+    weekActionBody: '{n} 道题已加入练习集；打印作答后上传照片，自动批改。',
     semesterTotal: '本学期错题共 {n} 条',
     semesterStatus: '已掌握 {m} · 待复习 {r} · 已重做 {d}',
     goWeek: '去本周复习 ›',
@@ -504,8 +505,7 @@ export default {
     providerLabel: '服务商',
     modelLabel: '模型',
     modelNote: '默认已配好强推理模型，可不管',
-    twoChildHint:
-      '多个孩子请分别创建辅导助手，并绑定各自的私聊；档案、学习记录和记忆分别保存。',
+    twoChildHint: '多个孩子请分别创建辅导助手，并绑定各自的私聊；档案、学习记录和记忆分别保存。',
     autoName: '{child}的辅导助手 · {grade}',
     assistantName: '{child}的辅导助手',
     cardDesc: '{grade} · 数学教材与当前进度 · 按年级边界讲解',
@@ -553,8 +553,7 @@ export default {
     exportBtn: '一键导出归档',
     restoreLabel: '恢复',
     dropHint: '拖放 .hexbak 归档到此处',
-    previewCount:
-      '备份含 {count} 条记录：从 {source} 恢复到 {target}。确认后校验并恢复。',
+    previewCount: '备份含 {count} 条记录：从 {source} 恢复到 {target}。确认后校验并恢复。',
     restored: '已恢复 {count} 条记录，校验通过。',
     restorePending: '记录已校验；合并到本地将在引擎支持后生效。',
     targetMismatch:
