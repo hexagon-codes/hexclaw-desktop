@@ -9,6 +9,7 @@ import { useToast } from '@/composables/useToast'
 import { getVersion } from '@/api/system'
 import { getOllamaStatus } from '@/api/ollama'
 import { dismissSplash } from '@/utils/splash'
+import productFacts from '@/generated/product-facts.json'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -59,12 +60,12 @@ const techStack = computed(() => [
 ])
 
 const ecosystem = computed(() => [
-  { name: 'toolkit', sub: t('about.ecoInfra', '基础设施'), icon: Wrench, url: 'https://github.com/hexagon-codes/toolkit' },
-  { name: 'ai-core', sub: t('about.ecoLlm', 'LLM 适配'), icon: BrainCircuit, url: 'https://github.com/hexagon-codes/ai-core' },
-  { name: 'hexagon', sub: t('about.ecoAgent', 'Agent 框架'), icon: Hexagon, url: 'https://github.com/hexagon-codes/hexagon' },
-  { name: 'hexclaw', sub: t('about.ecoBackend', '后端服务'), icon: Server, url: 'https://github.com/everyday-items/hexclaw' },
-  { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), icon: Monitor, url: 'https://github.com/hexagon-codes/hexclaw-desktop' },
-  { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), icon: BarChart3, url: 'https://github.com/hexagon-codes/hexagon-ui' },
+  { name: 'toolkit', sub: t('about.ecoInfra', '基础设施'), icon: Wrench, url: productFacts.repositories.toolkit },
+  { name: 'ai-core', sub: t('about.ecoLlm', 'LLM 适配'), icon: BrainCircuit, url: productFacts.repositories.ai_core },
+  { name: 'hexagon', sub: t('about.ecoAgent', 'Agent 框架'), icon: Hexagon, url: productFacts.repositories.hexagon },
+  { name: 'hexclaw', sub: t('about.ecoBackend', '后端服务'), icon: Server, url: productFacts.repositories.backend },
+  { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), icon: Monitor, url: productFacts.repositories.desktop },
+  { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), icon: BarChart3, url: productFacts.repositories.console },
 ])
 
 function formatUpdaterErrorMessage(message: string, install = false) {

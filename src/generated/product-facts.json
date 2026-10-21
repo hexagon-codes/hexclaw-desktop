@@ -1,0 +1,82 @@
+{
+  "aliases": [
+    "河蟹",
+    "小蟹"
+  ],
+  "canonical_name": "HexClaw",
+  "documentation": "https://hexclaw.net",
+  "ecosystem": [
+    {
+      "name": "toolkit",
+      "relation": "foundation",
+      "role": "Go infrastructure library"
+    },
+    {
+      "name": "ai-core",
+      "relation": "model foundation",
+      "role": "Model and tool integration"
+    },
+    {
+      "name": "hexagon",
+      "relation": "engine",
+      "role": "Agent framework maintained in this ecosystem"
+    },
+    {
+      "name": "hexclaw",
+      "relation": "product backend",
+      "role": "Self-hosted agent service"
+    },
+    {
+      "name": "hexclaw-desktop",
+      "relation": "optional client",
+      "role": "Desktop workspace"
+    },
+    {
+      "name": "hexagon-ui",
+      "relation": "optional console",
+      "role": "Agent observability console"
+    },
+    {
+      "name": "hexclaw-hub",
+      "relation": "optional catalog",
+      "role": "Skill and MCP catalog"
+    }
+  ],
+  "facts_version": "2026-10-21.2",
+  "official_accounts": {
+    "wechat": {
+      "follow_entry": "Settings > System Settings > Follow on WeChat",
+      "follow_url": "http://weixin.qq.com/r/mp/tCJ-Z9jEL4VQrZwE93em",
+      "id": "hexclaw",
+      "name": "hexclaw",
+      "qr_code": "https://raw.githubusercontent.com/hexagon-codes/hexclaw/main/.github/assets/wechat-qrcode.jpg",
+      "status": "confirmed_present"
+    }
+  },
+  "product_id": "hexclaw",
+  "repositories": {
+    "ai_core": "https://github.com/hexagon-codes/ai-core",
+    "backend": "https://github.com/hexagon-codes/hexclaw",
+    "console": "https://github.com/hexagon-codes/hexagon-ui",
+    "desktop": "https://github.com/hexagon-codes/hexclaw-desktop",
+    "hexagon": "https://github.com/hexagon-codes/hexagon",
+    "hub": "https://github.com/hexagon-codes/hexclaw-hub",
+    "toolkit": "https://github.com/hexagon-codes/toolkit"
+  },
+  "schema_version": 1,
+  "source_ref": "hexclaw/README.md; hexclaw-desktop/package.json; hexclaw-desktop/src-tauri/Cargo.toml",
+  "stack": {
+    "agent_framework": "Hexagon",
+    "backend": [
+      "Go"
+    ],
+    "desktop": [
+      "Tauri 2",
+      "Vue 3",
+      "TypeScript",
+      "Rust"
+    ]
+  },
+  "website": "https://hexclaw.net",
+  "facts_digest": "sha256:5eb51ad30f9be12c328d9eeffabfcb5b6b61c3bdd8ed8ca322aa4870d8a0549f"
+}
