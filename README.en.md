@@ -105,6 +105,10 @@ Homework-image grading is complete when you **receive and can view the original 
 
 Learning records retain mistakes and notes, learning insights summarize progress, and weekly practice combines textbooks, curriculum progress, and existing learning records. The current source supports curriculum progress estimates and preserves the source of manually adjusted progress. Available textbooks and exercise coverage depend on the materials available to the service.
 
+The tutor name follows the child name and grade by default; expand “Custom name” to edit it. If a profile save outcome is unknown, saving again first reconciles the same request. A profile conflict preserves your input; reopen the latest profile before editing again.
+
+In “Due this week,” consolidation and arithmetic warm-up worksheets can be generated separately on demand. Preview, printing, and download use the same frozen PDF, and recovery of a failed batch retains its original question count. An Agent card's “IM bound” badge indicates a configured route; connection status and actual delivery must be checked separately. These descriptions cover current source code; consult the version records for the contents of an installer.
+
 ### First-use troubleshooting
 
 | Symptom | Where to check |

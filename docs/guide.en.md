@@ -234,6 +234,8 @@ Built-in preset roles:
 
 Route channel messages to an Agent through Connections. For multi-role tasks, a workflow parallel step can call configured roles and merge their results; see [Workflows](#workflows-workflows-tab).
 
+The “IM bound” badge indicates that a supported IM channel has a route configured for this Agent. A default recipient without an actual binding does not receive the badge. It does not indicate an online connection or successful message delivery.
+
 ### Scenario Templates
 
 In addition to generic role templates, the template library can expose scenario-pack templates. The current built-in scenario template is **Homework Tutor**.
@@ -247,6 +249,10 @@ Create a Homework Tutor:
 5. Create the instance. The display name uses the child name plus the selected grade term, for example “Ming's Study Assistant · 五年级” (a helper that guides parents as professionally as a teacher)
 
 Create one instance per child. Profile, Mistake Book, Notebook, insights, and memory are isolated by Agent instance.
+
+The name follows the child name and grade by default. Expand “Custom name” when creating or editing a profile to change it; collapsing the section retains your input, and an existing custom name does not follow child-name changes. Using the global model default inherits both Provider and model. If you select an independent Provider, finish selecting its model before saving.
+
+Profile editing loads fields and revisions from the same snapshot; cancellation remains available while loading. If a save outcome is unknown, saving again first reconciles the same request. Do not create a duplicate instance. A concurrent update preserves your input and reports a conflict; reopen the latest profile before editing again.
 
 ---
 
@@ -287,6 +293,10 @@ View the following in the child's Learning Records and Insights:
 - **Insights**: new mistakes, review completion, top weak topics, and repeated-setback alerts
 
 Review records and mastery are tracked separately. Reviewed does not mean mastered, and an incorrect answer remains due for review. Review evidence is accumulated only for answers actually covered and reliably evaluated; unreadable content is excluded, and replaying the same task does not count twice.
+
+In “Due this week,” set counts and generate consolidation and arithmetic warm-up worksheets separately. Arithmetic covers previously learned fraction and decimal basics within the active service's available materials. Recovery of a failed batch displays and locks that batch's original count; editing resumes after success, while other sections remain usable.
+
+Preview, print, or download a generated worksheet. Printing from a preview uses that preview's frozen PDF, even if another worksheet is generated later. “PDF saved” appears only after a successful save; cancellation is not recorded as success. Click the worksheet to retry a failed PDF preparation. Saving or printing a worksheet does not count as answering, review, or mastery evidence.
 
 ### Tutoring Tips for This Homework
 

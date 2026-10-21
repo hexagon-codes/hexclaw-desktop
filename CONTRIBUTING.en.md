@@ -64,6 +64,17 @@ make dev
 
 `make sidecar-local` includes committed code and uncommitted workspace changes. Rebuild the Sidecar after changing Go code. `make package-local` generates macOS installation artifacts from a complete local ecosystem workspace; it is not the default starting point for a standalone desktop clone.
 
+## Synchronize product facts
+
+About reads ecosystem links from `src/generated/product-facts.json`. The authoritative source is `engine/product_facts.json` in the HexClaw backend. Update that source first, then run these commands from the Desktop repository:
+
+```bash
+node scripts/sync-product-facts.mjs
+node scripts/sync-product-facts.mjs --check
+```
+
+The default source is the adjacent `../hexclaw` checkout; set `HEXCLAW_SOURCE_ROOT` for another location. The generator recursively excludes objects marked `visibility: internal`, underscore-prefixed fields, and existing digest fields. It creates a public projection with stable key ordering and a `facts_digest`. Commit the script and generated JSON together rather than editing the generated file directly. These commands do not start services or call models. They are not currently wired into package scripts or CI; a manual check is not an existing automated gate.
+
 ## Choose checks relevant to the change
 
 These frontend checks need only the public repository and installed Node.js dependencies:
@@ -95,10 +106,10 @@ See [package.json](package.json) for the complete command list. If reference mat
 ### Maintain the test environment and current contracts
 
 - jsdom is not a browser. Adapt missing standard APIs in the shared [Vitest setup](src/test/vitest-setup.ts). For example, use the standard `CSS.escape` polyfill rather than changing production selectors or returning unescaped values for fixtures. The `ResizeObserver` adapter supplies lifecycle methods only; it does not verify layout or dimensions.
-- Test authors must follow the [current CI workflow](.github/workflows/ci.yml) and this section's testing rules, including toolchains, lockfiles, and shared initialization. A locally runnable test does not establish compatibility with the CI contract.
+- Test authors must follow the [current CI workflow](.github/workflows/ci.yml) and this section's testing rules, including toolchains, lockfiles, actual commands, shared initialization, and the pinned `HEXCLAW_DOCS_TEST_REF`. An uncommitted local prototype is not the CI reference. Run the relevant entry points before delivery and record platform differences; isolated passing cases do not establish CI readiness.
 - Prefer real pure functions, Markdown parsers, and sanitizers. Necessary module doubles should preserve unrelated real exports and replace only controlled boundaries such as HTTP or native bridges. A newly exported helper should not disappear from unrelated tests because of a whole-module fake.
 - When a component depends on routing, service scope, or durable tasks, establish that context in its fixture. Preserve request, ownership, state, idempotency, and receipt assertions; do not dismiss a real contract failure as a mock issue.
-- Copy, classes, and source shape can change with an approved design. Check the authoritative design and behavior before maintaining obsolete assertions. Do not restore old UI to satisfy a test or treat source strings as the sole behavioral evidence. Follow project restrictions on adding or editing UI display tests; unit tests do not replace actual UI verification.
+- Unit tests verify requests, identity, state, idempotency, data, and side effects. Remove tests of layout, font size, colors, icons, fixed copy, classes, or source inventories when they provide no independent business checks, rather than rewriting assertions after every UI change. Preserve concrete HTTP contracts and action behavior. Verify display against the actual page and prototype; source strings and unit tests do not replace that evidence.
 - Before a full run, explain why targeted evidence is insufficient and reuse evidence whose relevant conditions have not changed. Preserve fixed CI gates and obtain the applicable authorization for live models, IM, and native operations. A local result describes its recorded environment; it does not mean that an unexecuted GitHub Actions run passed.
 
 ## Submit a Pull Request

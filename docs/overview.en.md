@@ -48,6 +48,8 @@ The active HexClaw service's engine handles knowledge retrieval and context inje
 
 `Agents` manage role templates, registered agents, and the default agent. Manage channel-to-agent bindings and message routing in `Connections`.
 
+The “IM bound” card badge reflects actual IM routing rules. It is separate from the default recipient, connection status, and message delivery.
+
 ### Scenario Packs
 
 `Scenario packs` are not separate top-level pages. They are enhanced capabilities mounted onto Agent instances.

@@ -64,6 +64,17 @@ make dev
 
 `make sidecar-local` 包含本地工作区的已提交代码与未提交改动；Go 代码变化后需要重建 Sidecar。`make package-local` 用于完整本地生态工作区的 macOS 安装产物，不是单独克隆桌面仓库后的默认起点。
 
+## 同步产品事实
+
+关于页的生态链接读取 `src/generated/product-facts.json`。权威源是 HexClaw 后端的 `engine/product_facts.json`，修改事实时先改权威源，再从 Desktop 仓库执行：
+
+```bash
+node scripts/sync-product-facts.mjs
+node scripts/sync-product-facts.mjs --check
+```
+
+默认读取相邻的 `../hexclaw`；其他源码位置通过 `HEXCLAW_SOURCE_ROOT` 指定。生成器递归排除 `visibility: internal` 对象、下划线字段及已有摘要字段，按稳定键序生成公开投影与 `facts_digest`。提交同步脚本和生成 JSON，避免直接修改生成结果。该命令不启动服务、不调用模型；当前未接入 package scripts 或 CI，不把手动检查写成已有自动门禁。
+
 ## 选择与改动相关的验证
 
 以下前端检查只需要当前公开仓库及已安装的 Node.js 依赖：
@@ -95,10 +106,10 @@ pnpm exec vitest run src/api/__tests__/knowledge-retry-intent.test.ts
 ### 维护测试环境与当前合同
 
 - jsdom 不等于浏览器。规范 API 的缺失在共享 [Vitest 环境](src/test/vitest-setup.ts) 中适配；例如 `CSS.escape` 使用规范 polyfill，不能修改生产选择器或返回未转义值来迁就夹具。`ResizeObserver` 的环境适配只提供生命周期，不证明布局或尺寸正确。
-- 编写和维护测试必须遵守[当前 CI 工作流](.github/workflows/ci.yml)及本节测试规范，核对工具链、锁文件及共享初始化，不以本机可运行替代 CI 合同。
+- 编写和维护测试必须遵守[当前 CI 工作流](.github/workflows/ci.yml)及本节测试规范，核对工具链、锁文件、实际命令、共享初始化和 `HEXCLAW_DOCS_TEST_REF` 固定参考。本机未提交原型不等于 CI 参考；交付前按对应入口验证并说明平台差异，不能只凭零散用例通过宣称 CI 就绪。
 - 优先使用真实的纯函数、Markdown 解析器和净化器。必要的模块替身保留无关真实导出，只替换 HTTP、原生桥接等受控边界；新增导出不应因整模块假实现而在无关用例中缺失。
 - 组件依赖路由、服务作用域或持久任务时，夹具应建立对应上下文。请求、归属、状态、幂等和回执断言继续保留；不要把真实合同失败当成可忽略的 mock 问题。
-- 文案、class 和源码写法可能随已批准设计变化。核对权威设计与业务合同后维护过时断言，不为测试恢复旧 UI，也不把源码字符串当成唯一行为证明。UI 显示测试的新增和改写遵守项目限制；实际 UI 验收不能由单测替代。
+- 单测验证请求、身份、状态、幂等、数据与副作用。纯布局、字号、颜色、图标、固定文案、class 或源码目录清单没有独立业务检错价值时，删除对应用例，不随每次界面调整反复改断言；保留具体 HTTP 契约及操作行为验证。界面显示通过实际页面和原型验收，不用源码字符串或单测代替。
 - 启动整体测试前说明局部验证为何不足；相关条件未变的有效证据继续复用。固定 CI 门禁照常保留，真实模型、IM 和原生操作按各自授权执行。本地通过只代表已记录环境中的结果，不能写成尚未运行的 GitHub Actions 已通过。
 
 ## 提交 Pull Request

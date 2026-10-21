@@ -4,9 +4,9 @@
 
 ## v0.5.0 (2026-10-19)
 
-Desktop version metadata is aligned to `0.5.0`, with backend source pinned to `refs/tags/v0.5.0`; see the [Changelog](../CHANGELOG.md). This change only prepares local metadata and documentation. It does not commit, push, create tags, install, deploy, or publish, and it does not change the installed app or cloud service version.
+Desktop version metadata is `0.5.0`, with release backend source pinned to `refs/tags/v0.5.0`. See the [Changelog](../CHANGELOG.md) for the October 21 source additions. A matching version number does not establish that a published installer, installed app, or cloud service includes those commits; verify source commits and artifact identities separately.
 
-Before release packaging, complete the existing CI on the backend commit containing the final fixes and publish backend tag `v0.5.0`, then build Desktop. If that tag is unavailable, the fixed-source build cannot complete; do not fall back to an older backend or follow main. Development builds using uncommitted backend changes still use `make sidecar-local` / `make build-local`. Workflows, platform matrices, deployment branches, and distribution channels remain unchanged.
+Release packaging must use a published backend tag containing the relevant fixes and passing the existing CI. The existing `v0.5.0` tag does not gain later fixes when a working tree changes. Subsequent releases need a new valid version; do not move pushed tags or change the pinned source as part of documentation synchronization. Use `make sidecar-local` / `make build-local` to verify current local ecosystem source. Workflows, platform matrices, deployment branches, and distribution channels remain unchanged.
 
 ## v0.5.0-beta.3 (2026-10-04)
 
