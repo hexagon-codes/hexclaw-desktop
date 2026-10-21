@@ -10,6 +10,7 @@
  * 回归锁：payload.system_prompt 非空且含身份锚（辅导老师 + 孩子称呼）。
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -35,7 +36,8 @@ vi.mock('@/api/agents', () => ({
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
@@ -59,7 +61,15 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     arithmetic_minutes: 2,
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return {
+    ...mocked,
+    k12GetProfileBundle: async (name: string) => profileBundleFixture(
+      { name, display_name: '小明的辅导老师 · 五年级' }, await mocked.k12GetProfile(),
+      await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings(),
+    ),
+  }
+})
 
 function i18n() {
   return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN } })

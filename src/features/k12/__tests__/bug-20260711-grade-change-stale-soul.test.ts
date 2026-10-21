@@ -10,6 +10,7 @@
  * 本测试在未修复代码上 FAIL（system_prompt 仍含旧年级），修复后 PASS，永久留作回归锁。
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -26,6 +27,7 @@ enableAutoUnmount((unmount) => {
 })
 
 const h = vi.hoisted(() => ({
+  snapshotAgent: undefined as Parameters<typeof profileBundleFixture>[0],
   updateSpy: vi.fn().mockResolvedValue({}),
   bundleSpy: vi.fn().mockResolvedValue({}),
 }))
@@ -36,7 +38,8 @@ vi.mock('@/api/agents', () => ({
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
@@ -60,7 +63,15 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     arithmetic_minutes: 2,
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return {
+    ...mocked,
+    k12GetProfileBundle: async () => profileBundleFixture(
+      h.snapshotAgent, await mocked.k12GetProfile(),
+      await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings(),
+    ),
+  }
+})
 
 function i18n() {
   return createI18n({
@@ -76,6 +87,11 @@ function derivedSoul(child: string, grade: string, textbook: string): string {
 }
 
 function mountEdit(systemPrompt: string) {
+  h.snapshotAgent = {
+    name: 'k12-tutor-x',
+    display_name: '小明的辅导助手 · 五年级',
+    system_prompt: systemPrompt,
+  }
   return mount(K12ProfileForm, {
     props: {
       agent: {
@@ -101,6 +117,7 @@ describe('BUG-20260711-A：改档年级后 tutor 人设必须重派生', () => {
   it('★实例人设=自动派生（未自定义）时：改年级 五年级上→五年级下 → 回写的 system_prompt 跟随新年级', async () => {
     // 建档写入的正是派生人设——这不是家长自定义
     const w = mountEdit(derivedSoul('小明', '五年级上', '人教版'))
+    await flushPromises()
     w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '下')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
@@ -120,6 +137,7 @@ describe('BUG-20260711-A：改档年级后 tutor 人设必须重派生', () => {
   it('对照：家长自定义过人设（≠派生模板）时改年级 → 自定义人设保留不被覆盖', async () => {
     const custom = '你是小明的专属老师，说话要幽默。'
     const w = mountEdit(custom)
+    await flushPromises()
     w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '下')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')

@@ -11,6 +11,7 @@
  * 建档/改档均随 registerAgent/updateAgent 回写 provider/model。
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { enableAutoUnmount, mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -39,7 +40,8 @@ vi.mock('@/api/agents', () => ({
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
@@ -63,7 +65,15 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     arithmetic_minutes: 2,
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return {
+    ...mocked,
+    k12GetProfileBundle: async (name: string) => profileBundleFixture(
+      { name, display_name: '小明的辅导助手 · 五年级' }, await mocked.k12GetProfile(),
+      await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings(),
+    ),
+  }
+})
 
 function i18n() {
   return createI18n({
@@ -121,6 +131,7 @@ describe('BUG-20260711-H：K12 辅导助手必须能选择 LLM 模型（高级�
 
   it('★改档表单含 服务商→模型 级联，选模型后由唯一 bundle 的 agent_config 原子回写', async () => {
     const w = mountEdit(pinia)
+    await flushPromises()
     const modelFold = B().find('[data-testid="k12pf-model"]')
     expect(modelFold.exists(), '高级区必须有模型选择折叠（对齐原型 tutorForm）').toBe(true)
 
