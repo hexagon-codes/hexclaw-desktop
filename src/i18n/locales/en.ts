@@ -629,9 +629,8 @@ export default {
         'On apply, free sections are assembled into the SOUL text; auto sections stay assembly-time',
       apply: 'Apply & backfill',
     },
-    imFallback: 'IM fallback',
-    imFallbackTitle:
-      "Takes over IM channels with no bound agent; desktop chats always go to Little Crab or the agent you {'@'}",
+    imBound: 'IM bound',
+    imBoundTitle: 'IM channel routing is configured; this does not indicate connection status',
     loadAgentsFailed: 'Failed to load agents',
     loadRulesFailed: 'Failed to load routing rules',
     setDefaultFailed: 'Failed to set default agent',

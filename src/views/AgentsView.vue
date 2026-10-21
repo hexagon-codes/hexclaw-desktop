@@ -44,6 +44,7 @@ import { isAgentDisplayNameValid } from '@/utils/agent-display-name'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 import { logger } from '@/utils/logger'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
+import { CHANNEL_TYPES } from '@/config/im-channels'
 import { useToast } from '@/composables/useToast'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -216,6 +217,15 @@ const rules = ref<AgentRule[]>([])
 const rulesLoading = ref(false)
 const unregistering = ref(false)
 
+// IM 绑定只取已配置的通道路由规则，不把运行时默认接待者当成绑定。
+const imBoundAgentNames = computed(
+  () => new Set(
+    rules.value
+      .filter((rule) => CHANNEL_TYPES.some((channel) => channel.type === rule.platform))
+      .map((rule) => rule.agent_name),
+  ),
+)
+
 /** Agent → deployed platform names (derived from existing routing rules) */
 function getAgentDeployedPlatforms(agentName: string): string[] {
   return [
@@ -248,8 +258,9 @@ onMounted(async () => {
   }
 })
 
-async function loadAgents() {
-  agentsLoading.value = true
+async function loadAgents(background = false) {
+  const showLoading = !background || agents.value.length === 0
+  if (showLoading) agentsLoading.value = true
   errorMsg.value = ''
   try {
     const res = await getAgents()
@@ -260,7 +271,7 @@ async function loadAgents() {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadAgentsFailed')
     logger.error('加载 Agents 失败:', e)
   } finally {
-    agentsLoading.value = false
+    if (showLoading) agentsLoading.value = false
   }
 }
 
@@ -674,7 +685,10 @@ async function handleEditAgent() {
         : {}),
     }
     const limitError = inputLimitError(
-      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+      JSON.stringify(payload),
+      'Agent request',
+      INPUT_LIMITS.jsonBytes,
+      { unit: 'bytes' },
     )
     if (limitError) throw new Error(limitError)
     await updateAgent(editingAgent.value.name, payload)
@@ -1116,7 +1130,10 @@ async function handleRegisterAgent(andChat = false) {
     }
     const createdName = payload.name.trim()
     const limitError = inputLimitError(
-      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+      JSON.stringify(payload),
+      'Agent request',
+      INPUT_LIMITS.jsonBytes,
+      { unit: 'bytes' },
     )
     if (limitError) throw new Error(limitError)
     await registerAgent(payload)
@@ -1252,14 +1269,13 @@ async function handleUnregisterAgent() {
                         data-testid="scenario-agent-title-badge"
                         >{{ t(agentCardBadgeKey) }}</span
                       >
-                      <!-- BUG-20260703 问题4：router 自动兜底（第一个注册者）≠ 小蟹「默认助理」。
-                           徽章按真实语义命名，title 讲清桌面聊天不受它影响，消除双「默认」撞车。 -->
+                      <!-- 已配置的 IM 绑定与默认接待、连接在线状态相互独立。 -->
                       <span
-                        v-if="agent.name === defaultAgent"
+                        v-if="imBoundAgentNames.has(agent.name)"
                         class="hc-pill hc-pill--green hc-cxnm__badge"
-                        data-testid="agent-im-fallback-badge"
-                        :title="t('agents.imFallbackTitle')"
-                        >{{ t('agents.imFallback') }}</span
+                        data-testid="agent-im-bound-badge"
+                        :title="t('agents.imBoundTitle')"
+                        >{{ t('agents.imBound') }}</span
                       >
                     </div>
                     <div class="hc-cxmeta hc-cxmeta--card">
@@ -1285,7 +1301,7 @@ async function handleUnregisterAgent() {
                   :is="agentCardExtension"
                   v-if="agentCardExtension && isScenarioAgent(agent)"
                   :agent="agent"
-                  @updated="loadAgents"
+                  @updated="() => loadAgents(true)"
                 />
 
                 <!-- 操作行：进入对话 + 编辑 + 停用（对齐原型；停用=注销，功能接线保留）。
@@ -1345,7 +1361,10 @@ async function handleUnregisterAgent() {
             :key="stpl.key"
             type="button"
             class="hc-cxcard hc-tplcard"
-            @click="closeScenarioForm(); activeScenarioForm = stpl.form"
+            @click="
+              closeScenarioForm();
+              activeScenarioForm = stpl.form
+            "
           >
             <div class="hc-cxtop">
               <div class="hc-cxlogo" style="font-size: 20px">{{ stpl.icon }}</div>
