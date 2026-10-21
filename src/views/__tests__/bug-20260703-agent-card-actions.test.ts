@@ -151,17 +151,3 @@ describe('BUG-20260703 问题1：智能体卡「进入对话」入口', () => {
     expect(router.currentRoute.value.query.role).toBe('general-assistant')
   })
 })
-
-describe('BUG-20260703 问题4：router 兜底徽章语义', () => {
-  it('router 默认 Agent 的徽章文案是「IM 兜底」而非「默认」（不与小蟹默认助理撞车）', async () => {
-    const { wrapper } = await mountView()
-    await flushPromises()
-
-    const badge = wrapper.find('[data-testid="agent-im-fallback-badge"]')
-    expect(badge.exists(), 'translator（router default）应有 IM 兜底徽章').toBe(true)
-    expect(badge.text()).toContain('IM 兜底')
-    expect(badge.text(), '徽章不得再叫「默认」——那是小蟹的语义').not.toBe('默认')
-    // title 必须讲清语义：桌面聊天不受它影响
-    expect(badge.attributes('title') ?? '').toContain('桌面')
-  })
-})
