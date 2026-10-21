@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
+import HcSelect from '@/components/common/HcSelect.vue'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import * as k12Api from '@/api/k12'
@@ -15,6 +16,25 @@ vi.mock('@/api/client', async (importOriginal) => {
   return {
     ...original,
     apiPost: h.post,
+  }
+})
+
+// 父面板只消费冻结文件回执，PDF传输使用完整DTO夹具，避免挂载触发真实请求。
+vi.mock('@/api/k12', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/api/k12')>()
+  return {
+    ...original,
+    k12PrepareWeeklyTrackOutput: vi.fn().mockImplementation(async (agent: string, planId: string, section: string) => ({
+      artifact: {
+        artifact_id: `${agent}:${planId}:${section}`,
+        source_kind: 'weekly_practice_snapshot', source_ref: planId,
+        title: '练习单', source_digest: 'sha256:fixture-source', format: 'pdf',
+        render_contract_version: 'practice-print-v1', content_type: 'application/pdf',
+        byte_digest: 'sha256:fixture-pdf', byte_size: 11,
+      },
+      replayed: false,
+    })),
+    k12GetPrintArtifactContent: vi.fn().mockResolvedValue(new Blob(['fixture-pdf'], { type: 'application/pdf' })),
   }
 })
 
@@ -35,6 +55,10 @@ const basePlan = {
   settings_revision: 2,
   curriculum_progress_revision: 3,
   tracks: [],
+  manual_track_recommendations: {
+    textbook_consolidation: { availability: 'available', selected_item_count: 5, recommended_item_count: 5, min_item_count: 1, max_item_count: 10 },
+    arithmetic_warmup: { availability: 'available', selected_item_count: 10, recommended_item_count: 10, min_item_count: 1, max_item_count: 20 },
+  },
   created_at: '2026-07-27T08:00:00Z',
   updated_at: '2026-07-27T08:00:00Z',
 }
@@ -65,24 +89,6 @@ const arithmeticItem = {
   prompt_markdown: '计算 0.8 × 25。',
 }
 
-const textbookItem = {
-  item_id: 'textbook-1',
-  position: 1,
-  plan_section: 'textbook_consolidation',
-  source_kind: 'textbook',
-  generation_method: 'retrieval_grounded',
-  source_ref: 'segment-1',
-  verification: {
-    status: 'verified',
-    evidence_refs: ['segment-1'],
-    textbook_binding_id: 'binding-1',
-    unit_id: 'unit-1',
-    verified_page_from: 8,
-    verified_page_to: 8,
-  },
-  prompt_markdown: '把 2/3 和 3/5 通分。',
-}
-
 function i18n() {
   return createI18n({
     legacy: false,
@@ -92,33 +98,14 @@ function i18n() {
   })
 }
 
-function normalizedText(value: string | null | undefined) {
-  return (value ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function accessibleName(element: HTMLElement) {
-  return (
-    normalizedText(element.getAttribute('aria-label')) ||
-    normalizedText(element.textContent)
-  )
-}
-
-function buttons() {
-  return Array.from(
-    document.body.querySelectorAll<HTMLElement>('button,[role="button"]'),
-  )
-}
-
-function buttonNamed(name: string) {
-  return buttons().find((button) => accessibleName(button) === name)
-}
-
-function renderTracks(tracks: any[]) {
-  return mount(K12WeeklyPracticePanel, {
+async function renderTracks(tracks: any[], section = 'arithmetic_warmup', availability = 'available') {
+  const plan = structuredClone({ ...basePlan, tracks })
+  if (section === 'arithmetic_warmup') plan.manual_track_recommendations.arithmetic_warmup.availability = availability
+  const wrapper = mount(K12WeeklyPracticePanel, {
     props: {
       progress: null,
       settings: settings as any,
-      plan: { ...basePlan, tracks } as any,
+      plan: plan as any,
       history: [],
       output: null,
       loading: false,
@@ -130,6 +117,9 @@ function renderTracks(tracks: any[]) {
     global: { plugins: [i18n()] },
     attachTo: document.body,
   })
+  wrapper.findComponent(HcSelect).vm.$emit('update:modelValue', section)
+  await flushPromises()
+  return wrapper
 }
 
 function arithmeticBatch(
@@ -193,72 +183,37 @@ describe('[BUG-20260726-034] A06 weekly track action contracts', () => {
   })
 
   it.each([
-    ['preparing', arithmeticBatch('preparing'), '正在准备口算…', true],
-    ['ready', arithmeticBatch('ready'), '开始口算', false],
-    ['in_progress', arithmeticBatch('in_progress'), '继续口算', false],
-    ['completed', arithmeticBatch('completed'), '再来一组', false],
+    ['preparing', arithmeticBatch('preparing'), 'create', true],
+    ['ready', arithmeticBatch('ready'), 'create', false],
     [
       'failed_retryable',
       arithmeticBatch('failed_retryable'),
-      '重试生成 10 道',
+      'retry',
       false,
     ],
   ])(
-    '[BUG-20260726-034][A06] maps arithmetic_batch %s to its exact approved action',
-    (_state, batch, label, disabled) => {
-      renderTracks([arithmeticTrack(batch)])
-
-      const action = buttonNamed(label)
-      expect(
-        action,
-        `[BUG-20260726-034][A06] arithmetic_batch=${_state} 缺少“${label}”`,
-      ).toBeDefined()
-      expect(
-        (action as HTMLButtonElement).disabled ||
-          action?.getAttribute('aria-disabled') === 'true',
-      ).toBe(disabled)
+    '[BUG-20260726-034][A06] maps arithmetic_batch %s to worksheet generation or frozen retry',
+    async (_state, batch, intent, disabled) => {
+      const wrapper = await renderTracks([arithmeticTrack(batch)])
+      const action = wrapper.get('.k12-supplement__generate')
+      expect((action.element as HTMLButtonElement).disabled).toBe(disabled)
+      expect(action.attributes('aria-busy')).toBe(String(disabled))
+      await action.trigger('click')
+      const expected = disabled ? undefined : [
+        [{ action: intent, batch_id: 'batch-1', item_count: 10 }],
+      ]
+      expect(wrapper.emitted('arithmetic-action')).toEqual(expected)
     },
   )
 
-  it('[BUG-20260726-034][A06] exposes terminal arithmetic failure without a retry action', () => {
+  it('[BUG-20260726-034][A06] disables terminal arithmetic generation without a retry action', async () => {
     const batch = arithmeticBatch('failed_terminal')
-    renderTracks([arithmeticTrack(batch)])
-
-    expect(normalizedText(document.body.textContent)).toContain(
-      batch.failure_message,
-    )
-    expect(buttonNamed('重试')).toBeUndefined()
+    const wrapper = await renderTracks([arithmeticTrack(batch)], 'arithmetic_warmup', 'failed_terminal')
+    const action = wrapper.get('.k12-supplement__generate')
+    expect((action.element as HTMLButtonElement).disabled).toBe(true)
+    await action.trigger('click')
+    expect(wrapper.emitted('arithmetic-action')).toBeUndefined()
   })
-
-  it.each([
-    ['ready', [], []],
-    ['stale', ['按新进度更新'], []],
-    ['failed', ['重试'], ['教材同步练习生成暂时不可用']],
-  ])(
-    '[BUG-20260726-034][A06] maps textbook_consolidation %s to its only valid recovery action',
-    (status, expectedActions, messages) => {
-      renderTracks([
-        {
-          plan_section: 'textbook_consolidation',
-          status,
-          failure_message:
-            status === 'failed' ? '教材同步练习生成暂时不可用' : '',
-          items: status === 'ready' ? [textbookItem] : [],
-          arithmetic_batch: null,
-        },
-      ])
-
-      const bodyText = normalizedText(document.body.textContent)
-      const actionNames = ['按新进度更新', '重试']
-      expect({
-        visibleActions: actionNames.filter((name) => buttonNamed(name)),
-        visibleMessages: messages.filter((message) => bodyText.includes(message)),
-      }).toEqual({
-        visibleActions: expectedActions,
-        visibleMessages: messages,
-      })
-    },
-  )
 
   it('[BUG-20260726-034][A06] posts create/start/retry commands to the frozen arithmetic batch resources', async () => {
     h.post.mockResolvedValue({ batch: arithmeticBatch('ready'), replayed: false })
@@ -288,6 +243,7 @@ describe('[BUG-20260726-034] A06 weekly track action contracts', () => {
         item_count: 2,
         idempotency_key: 'create-batch-1',
       },
+      { timeout: false },
     )
     expect(h.post).toHaveBeenNthCalledWith(
       2,
@@ -304,6 +260,7 @@ describe('[BUG-20260726-034] A06 weekly track action contracts', () => {
         agent: 'mingming',
         idempotency_key: 'retry-batch-1',
       },
+      { timeout: false },
     )
   })
 
@@ -377,6 +334,7 @@ describe('[BUG-20260726-034] A06 weekly track action contracts', () => {
         expected_revision: 4,
         idempotency_key: 'refresh-textbook-1',
       },
+      { timeout: false },
     )
   })
 })

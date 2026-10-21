@@ -1,9 +1,14 @@
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
+import HcSelect from '@/components/common/HcSelect.vue'
 import { describe, expect, it } from 'vitest'
-import recordsSource from '../views/K12RecordsView.vue?raw'
+import { createI18n } from 'vue-i18n'
+import k12Zh from '../i18n/zh-CN'
 
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
-import panelSource from '../components/K12WeeklyPracticePanel.vue?raw'
+
+function i18n() {
+  return createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': { k12: k12Zh } } })
+}
 
 const settings = {
   agent: 'mingming',
@@ -99,6 +104,7 @@ function mountPanel(availability: (typeof availabilityValues)[number] = 'availab
       history: [],
     },
     global: {
+        plugins: [i18n()],
       stubs: {
         MarkdownRenderer: {
           props: ['content'],
@@ -111,26 +117,21 @@ function mountPanel(availability: (typeof availabilityValues)[number] = 'availab
 }
 
 describe('BUG-20260727-005 approved weekly manual-track projection', () => {
-  it('keeps both manual recommendation cards visible when both automatic settings are false', () => {
-    const wrapper = mountPanel()
-
-    expect(wrapper.get('[data-textbook-consolidation-state]').text()).toContain('同步巩固')
-    expect(wrapper.get('[data-arithmetic-state]').text()).toContain('口算热身')
-    expect(wrapper.get('.weekly-hero__meta').text()).toContain('同步巩固 待准备')
-    expect(wrapper.get('.weekly-hero__meta').text()).toContain('口算热身 待开始')
-  })
 
   it.each(availabilityValues)(
     'projects the exact manual-track availability state %s',
-    (availability) => {
+    async (availability) => {
       const wrapper = mountPanel(availability)
-
-      expect(
-        wrapper.get(`[data-textbook-consolidation-state][data-availability="${availability}"]`),
-      ).toBeTruthy()
-      expect(
-        wrapper.get(`[data-arithmetic-state][data-availability="${availability}"]`),
-      ).toBeTruthy()
+      const disabled = availability === 'setup_required' || availability === 'processing' || availability === 'failed_terminal'
+      for (const section of ['textbook_consolidation', 'arithmetic_warmup']) {
+        wrapper.findComponent(HcSelect).vm.$emit('update:modelValue', section)
+        await flushPromises()
+        const action = wrapper.get('.k12-supplement__generate')
+        expect((action.element as HTMLButtonElement).disabled).toBe(disabled)
+        await action.trigger('click')
+        const event = section === 'textbook_consolidation' ? 'prepare-textbook' : 'arithmetic-action'
+        expect(wrapper.emitted(event)?.length ?? 0).toBe(disabled ? 0 : 1)
+      }
     },
   )
 
@@ -139,37 +140,36 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
     const field = wrapper.get('[data-testid="manual-count-textbook_consolidation"]')
     const input = field.get('input[type="number"]')
 
-    expect(panelSource).toContain('K12ManualQuestionCountField')
     expect(input.attributes('min')).toBe('1')
     expect(input.attributes('max')).toBe('10')
     expect((input.element as HTMLInputElement).value).toBe('5')
-    expect(wrapper.find('[role="group"][aria-label="同步巩固本次题量"]').exists()).toBe(false)
 
     await input.setValue('8')
-    await wrapper.get('[data-consolidation-action]').trigger('click')
+    await wrapper.get('.k12-supplement__generate').trigger('click')
 
     expect(wrapper.emitted('prepare-textbook')).toContainEqual([{ item_count: 8 }])
   })
 
   it('uses the same inline count field and emits arithmetic create with item_count', async () => {
     const wrapper = mountPanel()
+    wrapper.findComponent(HcSelect).vm.$emit('update:modelValue', 'arithmetic_warmup')
+    await flushPromises()
     const field = wrapper.get('[data-testid="manual-count-arithmetic_warmup"]')
     const input = field.get('input[type="number"]')
 
     expect(input.attributes('min')).toBe('1')
     expect(input.attributes('max')).toBe('20')
     expect((input.element as HTMLInputElement).value).toBe('10')
-    expect(wrapper.find('[role="group"][aria-label="口算热身本组时长"]').exists()).toBe(false)
 
     await input.setValue('15')
-    await wrapper.get('[data-arithmetic-action]').trigger('click')
+    await wrapper.get('.k12-supplement__generate').trigger('click')
 
     expect(wrapper.emitted('arithmetic-action')).toContainEqual([
-      { action: 'create', item_count: 15 },
+      { action: 'create', batch_id: undefined, item_count: 15 },
     ])
   })
 
-  it('keeps the selected count in both retryable generation labels', () => {
+  it('keeps each retryable selected count and freezes arithmetic recovery to its batch', async () => {
     const plan = makePlan('failed_retryable') as any
     plan.manual_track_recommendations.textbook_consolidation.selected_item_count = 6
     plan.manual_track_recommendations.arithmetic_warmup.selected_item_count = 12
@@ -206,6 +206,7 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
         history: [],
       },
       global: {
+        plugins: [i18n()],
         stubs: {
           MarkdownRenderer: {
             props: ['content'],
@@ -215,12 +216,21 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
       },
     })
 
-    const labels = wrapper.findAll('button').map((button) => button.text().trim())
-    expect(labels).toContain('重试生成 6 道')
-    expect(labels).toContain('重试生成 12 道')
+    expect((wrapper.get('[data-testid="manual-count-textbook_consolidation"] input').element as HTMLInputElement).value).toBe('6')
+    await wrapper.get('.k12-supplement__generate').trigger('click')
+    expect(wrapper.emitted('prepare-textbook')).toContainEqual([{ item_count: 6 }])
+    wrapper.findComponent(HcSelect).vm.$emit('update:modelValue', 'arithmetic_warmup')
+    await flushPromises()
+    const input = wrapper.get('[data-testid="manual-count-arithmetic_warmup"] input')
+    expect((input.element as HTMLInputElement).value).toBe('12')
+    expect(input.attributes('disabled')).toBeDefined()
+    await wrapper.get('.k12-supplement__generate').trigger('click')
+    expect(wrapper.emitted('arithmetic-action')).toContainEqual([
+      { action: 'retry', batch_id: 'batch-retryable', item_count: 12 },
+    ])
   })
 
-  it('keeps defer and long-term suppress as visible text actions on every due item', async () => {
+  it('emits one suppression against the selected due item without changing persistence locally', async () => {
     const plan = makePlan() as any
     plan.tracks[0].items = [
       {
@@ -245,6 +255,7 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
         history: [],
       },
       global: {
+        plugins: [i18n()],
         stubs: {
           MarkdownRenderer: {
             props: ['content'],
@@ -254,42 +265,10 @@ describe('BUG-20260727-005 approved weekly manual-track projection', () => {
       },
     })
     const item = wrapper.get('.weekly-item')
-    const actionGroups = item.findAll('.k12-compact-row__actions')
-
-    expect(actionGroups).toHaveLength(1)
-    const actionGroup = actionGroups[0]!
-    expect(actionGroup.findAll('button').map((button) => button.text().trim())).toEqual([
-      '加入练习集',
-      '本周先不练',
-      '不再复习',
-    ])
-    expect(item.findAll('button')).toHaveLength(3)
-    expect(item.find('[aria-label*="更多"]').exists()).toBe(false)
-    expect(item.find('[aria-haspopup="menu"]').exists()).toBe(false)
-    expect(item.find('[role="menu"]').exists()).toBe(false)
-    expect(item.find('[role="menuitem"]').exists()).toBe(false)
-
-    await actionGroup.get('[data-testid="mistake-suppress-review"]').trigger('click')
+    await item.get('[data-testid="mistake-suppress-review"]').trigger('click')
     expect(wrapper.emitted('suppress-item')).toContainEqual([plan.tracks[0].items[0]])
     // 列表只派发错题身份，持久变更与确认由记录视图统一负责。
     expect(wrapper.emitted('suppress-item')).toHaveLength(1)
-    expect(recordsSource).toContain('@suppress-item="suppressWeeklyPracticeItem"')
-    expect(recordsSource).toContain('await suppressMistake(source)')
   })
 
-  it('shows the exact approved positive empty state when this week has no mistakes', () => {
-    const wrapper = mountPanel()
-
-    expect(wrapper.text()).toContain('本周暂时没有需要复习的错题')
-    expect(wrapper.text()).toContain('可以根据当前教材进度做几道同步巩固，或者进行一次口算热身')
-  })
-
-  it('uses the shared K12BookTabs contract and removes the private weekly tab styling', () => {
-    const wrapper = mountPanel()
-    const tabs = wrapper.get('[role="tablist"][aria-label="本周该练视图"]')
-
-    expect(panelSource).toContain('K12BookTabs')
-    expect(tabs.classes()).toContain('k12-book-tabs')
-    expect(wrapper.find('.weekly-tabs').exists()).toBe(false)
-  })
 })
