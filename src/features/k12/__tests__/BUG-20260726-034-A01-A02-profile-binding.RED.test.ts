@@ -1,3 +1,4 @@
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -28,7 +29,8 @@ vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfile: vi.fn().mockResolvedValue({}),
   k12UpdateProfileBundle: h.updateProfileBundle,
@@ -93,7 +95,12 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     updated_at: '2026-07-27T08:00:00Z',
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return { ...mocked, k12GetProfileBundle: async (agentName: string) => profileBundleFixture(
+    { ...agent, name: agentName }, await mocked.k12GetProfile(),
+    await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings()
+  ) }
+})
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({

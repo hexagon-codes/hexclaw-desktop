@@ -1,3 +1,4 @@
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, DOMWrapper, type ComponentMountingOptions, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -9,6 +10,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import { PRIMARY_GRADES } from '../curriculum'
 
 const h = vi.hoisted(() => ({
+  snapshotAgent: undefined as Parameters<typeof profileBundleFixture>[0],
   registerSpy: vi.fn().mockResolvedValue({}),
   unregisterSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
@@ -41,7 +43,8 @@ vi.mock('@/api/skills', () => ({
     dir: '',
   }),
 }))
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', () => {
+  const mocked = {
   k12UpdateProfile: (r: unknown) => h.profileSpy(r),
   k12GetProfile: (agent: string) => h.getProfileSpy(agent),
   k12UpdateProfileBundle: (r: unknown) => h.profileBundleSpy(r),
@@ -61,7 +64,12 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
-}))
+  }
+  return { ...mocked, k12GetProfileBundle: async (agentName: string) => profileBundleFixture(
+    { ...h.snapshotAgent, name: agentName }, await mocked.k12GetProfile(agentName),
+    await mocked.k12GetCurriculumProgress(agentName), await mocked.k12GetWeeklyPracticeSettings(agentName)
+  ) }
+})
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
     success: h.toastSuccessSpy,
@@ -83,6 +91,7 @@ const mountedWrappers = new Set<VueWrapper>()
 
 // 保留用例中途手动卸载的语义，收尾只卸载仍存在的根实例。
 function mountProfile(options: ComponentMountingOptions<typeof K12ProfileForm>) {
+  h.snapshotAgent = options.props?.agent
   const wrapper = mount(K12ProfileForm, options)
   mountedWrappers.add(wrapper)
   return wrapper

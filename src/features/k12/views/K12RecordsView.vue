@@ -337,8 +337,9 @@ async function runWeeklyArithmeticAction(intent: {
         intent.item_count,
         weeklyCommandKey(
           'arithmetic-create',
-          `${plan.plan_id}:${plan.revision}:${intent.item_count}`,
+          `${plan.plan_id}:${plan.revision}:${intent.item_count}:${plan.tracks.find((track) => track.plan_section === 'arithmetic_warmup')?.arithmetic_batch?.batch_id ?? 'initial'}`,
         ),
+        true,
       )
     } else if (intent.action === 'start' && intent.batch_id) {
       await k12StartWeeklyArithmeticBatch(

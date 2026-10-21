@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText, Printer, Download, LoaderCircle } from 'lucide-vue-next'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { useToast } from '@/composables/useToast'
 import { backendScopeKey } from '@/services/backend-context'
 import {
   k12PrepareWeeklyTrackOutput,
@@ -25,6 +26,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ generate: [section: Section, count: number] }>()
 const { t } = useI18n()
+const toast = useToast()
 const selected = ref<Section>('textbook_consolidation')
 const counts = reactive<Record<Section, number | null>>({
   textbook_consolidation: 5,
@@ -38,6 +40,7 @@ type FileState = {
   delivering: boolean
   saved: boolean
   printed: boolean
+  count: number
   error: string
 }
 const files = reactive<Record<Section, FileState>>({
@@ -45,11 +48,31 @@ const files = reactive<Record<Section, FileState>>({
   arithmetic_warmup: blank(),
 })
 function blank(): FileState {
-  return { key: '', preparing: false, delivering: false, saved: false, printed: false, error: '' }
+  return {
+    key: '',
+    preparing: false,
+    delivering: false,
+    saved: false,
+    printed: false,
+    count: 0,
+    error: '',
+  }
 }
-const preview = ref<{ section: Section; title: string; pdf: Blob } | null>(null)
+const preview = ref<{
+  section: Section
+  title: string
+  artifact: PrintableArtifactDTO
+  pdf: Blob
+} | null>(null)
 const printController = ref<InstanceType<typeof K12PersistentPrintController>>()
 const printing = ref<Section | null>(null)
+let printTarget: {
+  file: FileState
+  section: Section
+  artifactId: string
+  agent: string
+  scope: string
+} | null = null
 const labels = computed(() => ({
   textbook_consolidation: t('k12.supplement.textbook'),
   arithmetic_warmup: t('k12.supplement.arithmetic'),
@@ -77,6 +100,12 @@ const generating = (section: Section) =>
     track(section)?.arithmetic_batch?.state === 'preparing',
   )
 const busy = computed(() => generating(selected.value))
+const arithmeticRetryPending = computed(
+  () => track('arithmetic_warmup')?.arithmetic_batch?.state === 'failed_retryable',
+)
+const countFrozen = computed(
+  () => selected.value === 'arithmetic_warmup' && arithmeticRetryPending.value,
+)
 const unavailable = computed(
   () =>
     recommendation.value?.availability === 'setup_required' ||
@@ -99,7 +128,9 @@ const failure = computed(() => {
     'weekly candidate duplicates practiced problem': 'k12.records.weeklyDuplicate',
     'weekly duplicate replacement limit reached': 'k12.records.weeklyDuplicateLimit',
   }
-  return known[message] ? t(known[message]) : message
+  return known[message]
+    ? t(known[message])
+    : current.value.error || (message ? t('k12.supplement.generateFailed') : '')
 })
 function receiptKey(artifact: PrintableArtifactDTO) {
   return `k12-sheet-delivery:${backendScopeKey()}:${props.agent}:${artifact.artifact_id}`
@@ -130,7 +161,13 @@ async function prepare(section: Section) {
     const response = await k12PrepareWeeklyTrackOutput(agent, plan.plan_id, section, plan.revision)
     const pdf = await k12GetPrintArtifactContent(agent, response.artifact.artifact_id)
     if (key !== trackKey(section) || file !== files[section]) return
-    Object.assign(file, { artifact: response.artifact, pdf, saved: false, printed: false })
+    Object.assign(file, {
+      artifact: response.artifact,
+      pdf,
+      count: items(section).length,
+      saved: false,
+      printed: false,
+    })
     try {
       const facts = JSON.parse(localStorage.getItem(receiptKey(response.artifact)) || '{}')
       file.saved = facts.saved === true
@@ -138,36 +175,55 @@ async function prepare(section: Section) {
     } catch {
       /* 损坏的展示缓存不影响冻结 PDF。 */
     }
-  } catch (cause) {
+  } catch {
     if (key === trackKey(section)) {
       file.key = ''
-      file.error = cause instanceof Error ? cause.message : String(cause)
+      file.error = t('k12.supplement.pdfFailed')
     }
   } finally {
-    if (file === files[section]) file.preparing = false
+    if (file === files[section] && (file.key === key || !file.key)) file.preparing = false
   }
 }
-async function output(section: Section, action: 'preview' | 'print' | 'download') {
-  await prepare(section)
+async function output(
+  section: Section,
+  action: 'preview' | 'print' | 'download',
+  frozen?: { artifact: PrintableArtifactDTO; pdf: Blob },
+) {
+  if (!frozen) await prepare(section)
   const file = files[section],
-    artifact = file.artifact,
+    artifact = frozen?.artifact ?? file.artifact,
+    pdf = frozen?.pdf ?? file.pdf,
     agent = props.agent
-  if (!artifact || !file.pdf || file.delivering) return
+  if (!artifact || !pdf || file.delivering) return
   if (action === 'preview') {
-    preview.value = { section, title: artifact.title, pdf: file.pdf }
+    preview.value = { section, title: artifact.title, artifact, pdf }
     return
   }
   file.delivering = true
   file.error = ''
   try {
     if (action === 'download') {
-      const saved = await download(`${artifact.title}.pdf`, file.pdf, 'application/pdf')
-      if (saved && agent === props.agent && files[section] === file) {
+      const saved = await download(`${artifact.title}.pdf`, pdf, 'application/pdf')
+      if (
+        saved &&
+        agent === props.agent &&
+        files[section] === file &&
+        file.artifact?.artifact_id === artifact.artifact_id
+      ) {
         file.saved = true
         remember(section)
+        toast.success(t('k12.supplement.pdfSaved'))
       }
     } else {
+      if (printing.value) return
       printing.value = section
+      printTarget = {
+        file,
+        section,
+        artifactId: artifact.artifact_id,
+        agent,
+        scope: backendScopeKey(),
+      }
       await printController.value?.open({
         agent,
         scope: backendScopeKey(),
@@ -182,16 +238,37 @@ async function output(section: Section, action: 'preview' | 'print' | 'download'
     }
   } catch (cause) {
     file.error = cause instanceof Error ? cause.message : String(cause)
+    if (action === 'print') printed(false)
   } finally {
     file.delivering = false
   }
 }
+function printFailed(cause: Error) {
+  const target = printTarget
+  if (
+    target &&
+    target.agent === props.agent &&
+    target.scope === backendScopeKey() &&
+    target.file.artifact?.artifact_id === target.artifactId
+  )
+    target.file.error = cause.message
+  printed(false)
+}
 function printed(result: boolean) {
-  if (result && printing.value) {
-    files[printing.value].printed = true
-    remember(printing.value)
+  const target = printTarget
+  if (
+    result &&
+    target &&
+    target.agent === props.agent &&
+    target.scope === backendScopeKey() &&
+    files[target.section] === target.file &&
+    target.file.artifact?.artifact_id === target.artifactId
+  ) {
+    target.file.printed = true
+    remember(target.section)
   }
   printing.value = null
+  printTarget = null
 }
 watch(
   () => [backendScopeKey(), props.agent, props.plan.plan_id],
@@ -203,6 +280,19 @@ watch(
       counts[section] =
         props.plan.manual_track_recommendations?.[section]?.selected_item_count ??
         (section === 'textbook_consolidation' ? 5 : 10)
+  },
+  { immediate: true },
+)
+watch(
+  () => [
+    track('arithmetic_warmup')?.arithmetic_batch?.batch_id,
+    arithmeticRetryPending.value,
+    props.plan.manual_track_recommendations?.arithmetic_warmup.selected_item_count,
+  ],
+  () => {
+    const frozenCount = props.plan.manual_track_recommendations?.arithmetic_warmup.selected_item_count
+    if (arithmeticRetryPending.value && frozenCount !== undefined)
+      counts.arithmetic_warmup = frozenCount
   },
   { immediate: true },
 )
@@ -237,7 +327,7 @@ watch(
           :label="labels[selected]"
           :min="recommendation?.min_item_count ?? 1"
           :max="recommendation?.max_item_count ?? (selected === 'textbook_consolidation' ? 10 : 20)"
-          :disabled="busy || unavailable"
+          :disabled="busy || unavailable || countFrozen"
         />
         <button
           type="button"
@@ -246,13 +336,14 @@ watch(
           :aria-busy="busy"
           @click="emit('generate', selected, counts[selected]!)"
         >
-          <LoaderCircle v-if="busy" :size="12" class="k12-supplement__spinner" />{{
-            busy
-              ? t('k12.customPaper.generatingShort')
-              : current.artifact
-                ? t('k12.supplement.regenerate')
-                : t('k12.supplement.generate')
-          }}
+          <span :style="{ visibility: busy ? 'hidden' : undefined }">{{
+            current.artifact ? t('k12.supplement.regenerate') : t('k12.supplement.generate')
+          }}</span>
+          <span :style="{ visibility: busy ? undefined : 'hidden' }"
+            ><LoaderCircle :size="12" class="k12-supplement__spinner" />{{
+              t('k12.customPaper.generatingShort')
+            }}</span
+          >
         </button>
       </div>
       <p v-if="failure" class="k12-supplement__feedback is-error" role="status">{{ failure }}</p>
@@ -271,7 +362,11 @@ watch(
             {{ fileTitle }}
           </button>
           <div class="k12-supplement__filemeta">
-            <span>{{ t('k12.supplement.meta', { count: items(selected).length }) }}</span
+            <span>{{
+              t('k12.supplement.meta', {
+                count: current.artifact ? current.count : items(selected).length,
+              })
+            }}</span
             ><span class="stpill" :class="{ got: current.saved || current.printed }">{{
               current.preparing
                 ? t('k12.supplement.preparing')
@@ -281,7 +376,9 @@ watch(
                     ? t('k12.supplement.saved')
                     : current.printed
                       ? t('k12.supplement.printed')
-                      : t('k12.supplement.ready')
+                      : current.artifact
+                        ? t('k12.supplement.ready')
+                        : t('k12.supplement.pdfFailed')
             }}</span>
           </div>
         </div>
@@ -310,17 +407,13 @@ watch(
       :title="preview?.title ?? ''"
       :pdf="preview?.pdf ?? null"
       @close="preview = null"
-      @print="preview && output(preview.section, 'print')"
+      @print="preview && output(preview.section, 'print', preview)"
     />
     <K12PersistentPrintController
       ref="printController"
       mode="native-dialog"
       @result="printed"
-      @error="
-        (cause) => {
-          if (printing) files[printing].error = cause.message
-        }
-      "
+      @error="printFailed"
     />
   </section>
 </template>
@@ -358,6 +451,12 @@ watch(
   gap: 10px;
   min-width: 0;
 }
+.k12-supplement__toolbar :deep(.manual-count) {
+  flex: none;
+}
+.k12-supplement__toolbar :deep(.k12-manual-count-control__error:empty) {
+  display: none;
+}
 .k12-supplement__type {
   flex: 0 0 134px;
   min-width: 0;
@@ -378,10 +477,18 @@ watch(
   text-overflow: ellipsis;
 }
 .k12-supplement__generate {
+  display: grid;
   flex: none;
   min-width: 98px;
   height: 36px;
   white-space: nowrap;
+  justify-content: center;
+}
+.k12-supplement__generate > span {
+  grid-area: 1/1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   justify-content: center;
 }
 .k12-supplement__feedback {

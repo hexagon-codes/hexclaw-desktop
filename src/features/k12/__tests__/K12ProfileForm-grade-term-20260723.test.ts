@@ -1,3 +1,4 @@
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -30,7 +31,8 @@ vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfile: h.updateProfile,
   k12UpdateProfileBundle: h.updateProfileBundle,
@@ -129,7 +131,12 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     updated_at: '',
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return { ...mocked, k12GetProfileBundle: async (agentName: string) => profileBundleFixture(
+    { name: agentName, display_name: '小明的辅导助手 · 五年级', metadata: { 'k12.child_name': '小明', 'k12.grade_term': '五年级下' } }, await mocked.k12GetProfile(),
+    await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings()
+  ) }
+})
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
@@ -178,6 +185,7 @@ describe('K12ProfileForm 年级与学期二级联动', () => {
       attachTo: document.body,
     })
 
+    await flushPromises()
     const selects = wrapper.findAllComponents(HcSelect)
     const gradeSelect = selects.find(
       (select) => select.attributes('data-testid') === 'k12pf-grade',

@@ -15,6 +15,7 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { BBox, ParentTeachingGuideDTO, PhotoJobItemStatus } from '@/api/k12'
 import { isValidGradingBBox } from '../graded-photo'
 import { k12MathDisplayMarkdown, k12QuestionSourceDisplayLabel } from '../source-display'
+import TeachingDiagram from '../components/TeachingDiagram.vue'
 import {
   PHOTO_PROCESS_ISSUE_COLOR,
   projectPhotoAssessmentStatus,
@@ -466,8 +467,11 @@ function markStatusLabel(mark: IndexedMark): string {
               <div class="grade-card__row">
                 <span>必要步骤</span>
                 <ol class="grade-card__list">
-                  <li v-for="step in m.parentGuide.full_solution_steps" :key="step">
+                  <li v-for="(step, stepIndex) in m.parentGuide.full_solution_steps" :key="step">
                     <MarkdownRenderer class="grade-card__md" :content="step" />
+                    <template v-if="stepIndex === 0">
+                      <TeachingDiagram v-for="diagram in m.parentGuide.teaching_diagrams" :key="diagram.asset_id" :diagram="diagram" />
+                    </template>
                   </li>
                 </ol>
               </div>

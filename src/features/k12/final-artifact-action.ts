@@ -26,6 +26,23 @@ function finalArtifactSourceRef(intent: FinalArtifactActionIntent): string {
   return `final_artifact:${intent.artifact_id}:${intent.artifact_digest}`
 }
 
+// 图片产物在终稿身份后附加图片摘要和渲染版本，仍须逐项验证身份与后缀合同。
+export function matchesFinalArtifactSourceRef(
+  sourceRef: string,
+  intent: FinalArtifactActionIntent,
+): boolean {
+  const base = finalArtifactSourceRef(intent)
+  if (sourceRef === base) return true
+  if (!sourceRef.startsWith(`${base}:`)) return false
+  const suffix = sourceRef.slice(base.length + 1).split(':')
+  if (suffix.length !== 2 && suffix.length !== 3) return false
+  if (!/^[a-f0-9]{64}$/.test(suffix[0] ?? '')) return false
+  if (suffix.length === 3 && !/^(grading-pdf|blank-worksheet-pdf)-v[1-9]\d*$/.test(suffix[1] ?? '')) {
+    return false
+  }
+  return /^k12-image-pdf-v[1-9]\d*$/.test(suffix[suffix.length - 1] ?? '')
+}
+
 function assertFinalArtifactIntent(intent: FinalArtifactActionIntent) {
   if (
     !intent.artifact_id.trim() ||
@@ -59,7 +76,7 @@ export function createFinalArtifactActionHandler(host: FinalArtifactActionHost) 
       .then(({ artifact }) => {
         if (
           artifact.source_kind !== 'grading_final_artifact' ||
-          artifact.source_ref !== sourceRef
+          !matchesFinalArtifactSourceRef(artifact.source_ref, intent)
         ) {
           throw new Error('批改最终产物身份校验失败')
         }

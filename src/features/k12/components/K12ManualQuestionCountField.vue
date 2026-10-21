@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: number | null
@@ -53,13 +56,13 @@ function step(delta: number) {
     :aria-label="label"
     :data-testid="`manual-count-${track}`"
   >
-    <span class="manual-count__label k12-manual-count-control__label">题数</span>
+    <span class="manual-count__label k12-manual-count-control__label">{{ t('k12.manualCount.label') }}</span>
     <span class="manual-count__stepper k12-manual-count-stepper">
       <button
         type="button"
         class="manual-count__step"
         :disabled="disabled || parsed === min"
-        :aria-label="`${label}减少 1 道`"
+        :aria-label="t('k12.manualCount.decrease', { label })"
         @click="step(-1)"
       >
         −
@@ -79,15 +82,15 @@ function step(delta: number) {
         type="button"
         class="manual-count__step"
         :disabled="disabled || parsed === max"
-        :aria-label="`${label}增加 1 道`"
+        :aria-label="t('k12.manualCount.increase', { label })"
         @click="step(1)"
       >
         +
       </button>
     </span>
-    <span class="manual-count__unit k12-manual-count-control__unit">道</span>
+    <span class="manual-count__unit k12-manual-count-control__unit">{{ t('k12.manualCount.unit') }}</span>
     <small class="k12-manual-count-control__error" role="alert">
-      {{ invalid ? `请输入 ${min}–${max} 的整数` : '' }}
+      {{ invalid ? t('k12.manualCount.invalid', { min, max }) : '' }}
     </small>
   </div>
 </template>

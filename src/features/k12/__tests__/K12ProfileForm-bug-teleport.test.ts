@@ -1,3 +1,4 @@
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -13,6 +14,7 @@ vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 vi.mock('@/api/k12', () => ({
+  k12GetProfileBundle: async (name: string) => profileBundleFixture({ name, metadata: { 'k12.child_name': '小明', 'k12.grade_term': '五年级上' } }, {}, {}, { revision: 0, timezone: 'Asia/Shanghai' }),
   k12UpdateProfile: vi.fn().mockResolvedValue({}),
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),

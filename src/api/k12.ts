@@ -963,10 +963,19 @@ export interface UpdateProfileBundleReq {
 
 export interface ProfileBundleResp {
   agent_config: UpdateProfileBundleReq['agent_config']
-  profile: ProfileBundleProfileDTO
+  profile: Omit<ProfileBundleProfileDTO, 'revision'> & { subject_textbooks: SubjectTextbooksDTO }
   curriculum_progress: CurriculumProgressDTO | null
   weekly_practice_settings: WeeklyPracticeSettingsDTO
   replayed: boolean
+}
+
+export interface ProfileBundleSnapshotDTO {
+  agent_config: UpdateProfileBundleReq['agent_config']
+  profile: ProfileBundleProfileDTO & { subject_textbooks: SubjectTextbooksDTO }
+  curriculum_progress: CurriculumProgressDTO | null
+  progress_revision: number
+  weekly_practice_settings: WeeklyPracticeSettingsDTO
+  command: ProfileBundleResp | null
 }
 
 export type WeeklyPracticeSection = 'due_review' | 'textbook_consolidation' | 'arithmetic_warmup'
@@ -1224,6 +1233,14 @@ export function k12UpdateProfileBundle(req: UpdateProfileBundleReq) {
   return apiPut<ProfileBundleResp>(`${BASE}/profile-bundle`, req)
 }
 
+/** 编辑字段、版本和可选原命令回执由同一持久快照读取。 */
+export function k12GetProfileBundle(agent: string, commandKey?: string) {
+  return apiGet<ProfileBundleSnapshotDTO>(`${BASE}/profile-bundle`, {
+    agent,
+    ...(commandKey ? { idempotency_key: commandKey } : {}),
+  })
+}
+
 export function k12EnsureWeeklyPracticePlan(agent: string, idempotencyKey: string) {
   return apiPost<WeeklyPracticePlanResp>(
     `${BASE}/weekly-practice/plans`,
@@ -1318,6 +1335,7 @@ export function k12CreateWeeklyArithmeticBatch(
   planRevision: number,
   itemCount: number,
   idempotencyKey: string,
+  replaceCurrent = false,
 ) {
   return apiPost<WeeklyArithmeticBatchResp>(
     `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/arithmetic-batches`,
@@ -1325,6 +1343,7 @@ export function k12CreateWeeklyArithmeticBatch(
       plan_revision: planRevision,
       item_count: itemCount,
       idempotency_key: idempotencyKey,
+      ...(replaceCurrent ? { replace_current: true } : {}),
     },
     // 整批生成沿用后端逐次调用时限和题量边界，避免短请求计时取消已外发的验算。
     { timeout: false },
@@ -1619,6 +1638,15 @@ export interface HexbakProblemAttemptSnapshot {
   problems: HexbakProblem[]
   attempts: HexbakAttempt[]
 }
+export interface HexbakTeachingDiagramArchive {
+  owner_scope: string
+  agent_name: string
+  asset_id: string
+  asset_digest: string
+  /** 精确SVG字节的Base64投影，由服务端摘要和归档校验和验证。 */
+  svg: string
+  created_at: number
+}
 export interface HexbakArchive {
   version: number
   /** v3 content-addressed immutable archive identity; absent on compatible v1/v2 files. */
@@ -1633,6 +1661,8 @@ export interface HexbakArchive {
   creative_work_ocr?: HexbakCreativeWorkOCREvidence[]
   /** v5 canonical photographed-problem and answer snapshots, covered by checksum validation. */
   problem_attempts?: HexbakProblemAttemptSnapshot[]
+  /** v8冻结教学图；导入导出必须完整保留，不在客户端重绘。 */
+  teaching_diagrams?: HexbakTeachingDiagramArchive[]
   checksum: string
 }
 export interface K12RestoreResp {
@@ -2013,6 +2043,7 @@ export type PhotoJobResultKind =
  * question; the UI must not synthesize them from generic grade text.
  */
 export interface ParentTeachingGuideDTO {
+  teaching_diagrams?: TeachingDiagramAssetDTO[]
   answer: string
   full_solution_steps: string[]
   grade_level_method: string
@@ -2020,6 +2051,22 @@ export interface ParentTeachingGuideDTO {
   parent_teaching_sequence: string[]
   follow_up_questions: string[]
   checking_method: string
+}
+
+/** 当前题目冻结的教学图示；Desktop与PDF使用同一资产字节。 */
+export interface TeachingDiagramAssetDTO {
+  asset_id: string
+  asset_digest: string
+  spec_digest: string
+  renderer_version: string
+  problem_id: string
+  input_revision: number
+  problem_input_digest: string
+  solution_digest: string
+  mime: 'image/svg+xml'
+  width: number
+  height: number
+  alt_text: string
 }
 export interface PhotoJobResult {
   mode: 'grade' | 'solve'
@@ -2745,8 +2792,20 @@ export interface PracticeItemDTO {
   result_correct?: boolean
   /** 系统独立核验 / 家长手工兜底；二者不得混同为同等级掌握证据。 */
   result_evidence?: PracticeResultEvidence
+  /** 作答条件和来源分类；不代替复批结论或掌握策略。 */
+  learning_evidence?: LearningEvidenceDTO[]
+}
+export interface LearningEvidenceDTO {
+  kind: 'unknown' | 'prompted_answer' | 'independent_answer' | 'delayed_retest' | 'human_confirmed'
+  source?: string
+  event_id?: string
+  occurred_at?: number
+  basis_id?: string
+  basis_at?: number
 }
 export interface PracticeReturnAssetDTO {
+  /** 旧服务可能不返回，缺失按未知读取。 */
+  learning_evidence?: LearningEvidenceDTO[]
   return_id: string
   asset_id: string
   item_ids: string[]
@@ -3221,6 +3280,8 @@ export function k12AdvancePracticeSet(
  * 自动回传只提供真实照片及意图；服务端冻结候选并投影实际覆盖。历史显式题集仍可重放。
  */
 export interface SubmitPracticeReturnReq {
+  /** 仅转交家长明确报告的条件，客户端不从交付行为推断。 */
+  answer_context?: 'unknown' | 'prompted_answer' | 'independent_answer'
   return_id: string
   asset_id: string
   item_ids?: string[]
@@ -3242,6 +3303,7 @@ export function k12SubmitPracticeSet(
     asset_id: req.asset_id,
     item_ids: req.item_ids,
     ...(req.auto_match ? { auto_match: true } : {}),
+    ...(req.answer_context ? { answer_context: req.answer_context } : {}),
   })
 }
 

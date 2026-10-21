@@ -57,7 +57,7 @@ export default {
     type: 'Practice type',
     textbook: 'Consolidation',
     arithmetic: 'Arithmetic warm-up',
-    arithmeticScope: 'Only calculations already learned',
+    arithmeticScope: 'Previously learned fraction and decimal arithmetic',
     sheet: '{type} worksheet',
     setup: 'Set textbook progress before preparing a worksheet',
     generate: 'Generate',
@@ -65,13 +65,24 @@ export default {
     independent: 'Preparing this worksheet; other actions remain available',
     meta: 'Math · {count} questions · PDF · A4',
     preparing: 'Preparing PDF…',
+    pdfFailed: 'PDF unavailable; open the worksheet to retry',
+    generateFailed: 'The worksheet is not ready. Please try again later.',
     ready: 'Ready',
     saved: 'Saved locally',
+    pdfSaved: 'PDF saved',
     printed: 'Printed',
     savedPrinted: 'Saved · Printed',
     print: 'Print',
     download: 'Download PDF',
     nativePrintRequired: 'Use system printing in the desktop app',
+  },
+
+  manualCount: {
+    label: 'Count',
+    unit: 'questions',
+    decrease: 'Decrease {label} by 1',
+    increase: 'Increase {label} by 1',
+    invalid: 'Enter an integer from {min} to {max}',
   },
 
   records: {
@@ -538,6 +549,11 @@ export default {
     },
     toneAdvanced: 'Tutoring tone · preconfigured, adjustable',
     toneReset: 'Restore default tone',
+    modelRequired: 'Select a model for this provider, or use the global default.',
+    profileChanged:
+      'The profile was updated elsewhere. Your input is preserved; reopen the latest profile to edit it.',
+    saveOutcomePending:
+      'The save result is not confirmed. Saving again will reconcile the same request; do not create another profile.',
     modelAdvanced: 'Model · a strong reasoning model is preconfigured',
     providerLabel: 'Provider',
     modelLabel: 'Model',
@@ -545,6 +561,10 @@ export default {
     twoChildHint:
       'Create a tutor for each child and link their private chat; profiles, learning records and memories are stored separately.',
     autoName: "{child}'s Study Assistant · {grade}",
+    agentName: 'Agent name',
+    nameAdvanced: 'Custom name',
+    agentNameRequired: 'Enter an agent name',
+    agentNameTooLong: 'Agent name must be 64 characters or fewer',
     assistantName: "{child}'s Study Assistant",
     cardDesc: '{grade} · Math textbook and current progress · Teaching bounded by grade level',
     back: 'Back',

@@ -1288,7 +1288,7 @@ function validateParentGuide(value: unknown, path: string): WireRecord {
     'follow_up_questions',
     'checking_method',
   ] as const
-  exact(guide, keys, path)
+  exact(guide, [...keys, 'teaching_diagrams'], path)
   required(guide, keys, path)
   for (const key of ['answer', 'grade_level_method', 'checking_method']) {
     stringValue(guide[key], `${path}.${key}`)
@@ -1302,6 +1302,25 @@ function validateParentGuide(value: unknown, path: string): WireRecord {
     stringArray(guide[key], `${path}.${key}`, {
       nonEmptyItems: true,
       minItems: 1,
+    })
+  }
+  // 同源图为可选资产元数据，不改变七项讲法正文或旧无图响应的合同。
+  if (guide.teaching_diagrams !== undefined) {
+    arrayValue(guide.teaching_diagrams, `${path}.teaching_diagrams`).forEach((value, index) => {
+      const assetPath = `${path}.teaching_diagrams[${index}]`
+      const asset = record(value, assetPath)
+      const fields = ['asset_id', 'asset_digest', 'spec_digest', 'renderer_version', 'problem_id',
+        'input_revision', 'problem_input_digest', 'solution_digest', 'mime', 'width', 'height', 'alt_text']
+      exact(asset, fields, assetPath)
+      required(asset, fields, assetPath)
+      for (const key of ['asset_id', 'asset_digest', 'spec_digest', 'renderer_version', 'problem_id',
+        'problem_input_digest', 'solution_digest', 'alt_text']) {
+        stringValue(asset[key], `${assetPath}.${key}`)
+      }
+      for (const key of ['input_revision', 'width', 'height']) {
+        numberValue(asset[key], `${assetPath}.${key}`, true)
+      }
+      enumValue(asset.mime, new Set(['image/svg+xml']), `${assetPath}.mime`)
     })
   }
   return guide

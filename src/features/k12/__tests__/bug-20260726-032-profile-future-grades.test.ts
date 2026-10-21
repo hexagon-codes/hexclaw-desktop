@@ -1,3 +1,4 @@
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -20,7 +21,8 @@ vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 
-vi.mock('@/api/k12', async (importOriginal) => ({
+vi.mock('@/api/k12', async (importOriginal) => {
+  const mocked = {
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfileBundle: h.updateProfileBundle,
   k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
@@ -62,7 +64,12 @@ vi.mock('@/api/k12', async (importOriginal) => ({
     updated_at: '2026-07-26T00:00:00Z',
   }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-}))
+  }
+  return { ...mocked, k12GetProfileBundle: async (agentName: string) => profileBundleFixture(
+    { name: agentName, metadata: { 'k12.child_name': '小明', 'k12.grade_term': '五年级下' } }, await mocked.k12GetProfile(),
+    await mocked.k12GetCurriculumProgress(), await mocked.k12GetWeeklyPracticeSettings()
+  ) }
+})
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({

@@ -3,7 +3,7 @@
  * 作业辅导助手建档表单（features/k12）· M1-2 · PRD §5.2.2。
  *
  * 采集 称呼/年级学期/分科教材；创建由 registerAgent 原子初始化，编辑由 profile-bundle 组合写。
- * 显示名自动生成「{称呼}的辅导助手 · {年级}」；provider/model 留空=跟随全局默认强推理模型。
+ * 显示名默认生成并可独立编辑；provider/model 留空=跟随全局默认强推理模型。
  * 回归锁：不按学段×学科拆分老师卡——一张模板一份实例，多孩靠多实例结构隔离。
  */
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
@@ -13,16 +13,16 @@ import { nanoid } from 'nanoid'
 import { registerAgent, unregisterAgent } from '@/api/agents'
 import { getSkills } from '@/api/skills'
 import {
-  k12GetProfile,
+  k12GetProfileBundle,
   k12GetCurriculumProgress,
   k12GetTextbookBindingOptions,
-  k12GetWeeklyPracticeSettings,
   k12UpdateProfileBundle,
   type CurriculumProgressDTO,
   type TextbookBindingOptionDTO,
   type TextbookManifestCatalogDTO,
   type TextbookManifestState,
   type UpdateProfileBundleReq,
+  type ProfileBundleSnapshotDTO,
   type WeeklyPracticeSettingsDTO,
 } from '@/api/k12'
 import { useK12Store } from '../store'
@@ -78,6 +78,7 @@ const agentsStore = useAgentsStore()
 const k12Store = useK12Store()
 
 const isEdit = computed(() => !!props.agent)
+const baselineAgent = ref(props.agent)
 // Learner owner 与可改的 child_name/display_name 解耦：新建时独立生成一次；改档复用既有 metadata，
 // 且 updateAgent 不写 metadata，因此改名/升年级不会轮换 owner。
 const learnerID = props.agent?.metadata?.['k12.learner_id'] || `learner-${nanoid(12)}`
@@ -86,14 +87,16 @@ const creationAgentName = props.agent?.name || `${K12_SCENARIO_ID}-${nanoid(8)}`
 
 // 档案存在 agent metadata 的 k12.* 键（后端契约）
 const childName = ref(props.agent?.metadata?.['k12.child_name'] ?? '')
-const originalChildName = props.agent?.metadata?.['k12.child_name'] ?? ''
+const originalChildName = computed(() => baselineAgent.value?.metadata?.['k12.child_name'] ?? '')
 const childNameInput = ref<HTMLInputElement | null>(null)
-const childNameError = computed(() => inputLimitError(
-  childName.value,
-  'Child name',
-  INPUT_LIMITS.childName,
-  isEdit.value ? { original: originalChildName } : {},
-))
+const childNameError = computed(() =>
+  inputLimitError(
+    childName.value,
+    'Child name',
+    INPUT_LIMITS.childName,
+    isEdit.value ? { original: originalChildName.value } : {},
+  ),
+)
 watch([childName, childNameInput], () => {
   childNameInput.value?.setCustomValidity(childNameError.value)
 })
@@ -150,7 +153,7 @@ const BUILTIN_SKILL_KEYS = [
 ] as const
 function initialMountedSkills(): Set<string> {
   const skills = new Set(
-    props.agent?.skills?.length ? props.agent.skills : defaultBoundSkills(),
+    baselineAgent.value?.skills?.length ? baselineAgent.value.skills : defaultBoundSkills(),
   )
   for (const skill of K12_TEMPLATE_SKILLS) {
     if (skill.tier === 'P0') skills.add(skill.name)
@@ -186,9 +189,10 @@ async function loadRuntimeSkillMetadata() {
 }
 
 function mountedSkillLabel(name: string): string {
-  const metadata = runtimeSkillScope.value === backendScopeKey()
-    ? runtimeSkillMetadata.value.find((skill) => skill.name === name)
-    : undefined
+  const metadata =
+    runtimeSkillScope.value === backendScopeKey()
+      ? runtimeSkillMetadata.value.find((skill) => skill.name === name)
+      : undefined
   return skillDisplayName(metadata ?? { name }, locale.value)
 }
 
@@ -255,15 +259,22 @@ let formDisposed = false
 let candidateRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let candidateRefreshInFlight = false
 const normalizedVolume = (value: string) => value.replace(/^.*年级/, '')
-const curriculumScope = computed(() => JSON.stringify([
-  grade.value, textbook.value, normalizedVolume(volume.value), textbookManifestID.value,
-  textbookBindingOptions.value.find((item) => item.manifest_id === textbookManifestID.value)
-    ?.document_generation ?? 0,
-]))
-const hasReadyCurriculum = computed(() => !!curriculumCatalog.value &&
-  curriculumCatalog.value.textbook_edition === textbook.value &&
-  normalizedVolume(curriculumCatalog.value.volume) === normalizedVolume(volume.value) &&
-  (!curriculumCatalog.value.grade_term || curriculumCatalog.value.grade_term === grade.value),
+const curriculumScope = computed(() =>
+  JSON.stringify([
+    grade.value,
+    textbook.value,
+    normalizedVolume(volume.value),
+    textbookManifestID.value,
+    textbookBindingOptions.value.find((item) => item.manifest_id === textbookManifestID.value)
+      ?.document_generation ?? 0,
+  ]),
+)
+const hasReadyCurriculum = computed(
+  () =>
+    !!curriculumCatalog.value &&
+    curriculumCatalog.value.textbook_edition === textbook.value &&
+    normalizedVolume(curriculumCatalog.value.volume) === normalizedVolume(volume.value) &&
+    (!curriculumCatalog.value.grade_term || curriculumCatalog.value.grade_term === grade.value),
 )
 const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   agent: props.agent?.name ?? '',
@@ -278,27 +289,35 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   updated_at: '',
 })
 const profileBundleKey = ref('')
+let pendingProfileCommand: UpdateProfileBundleReq | null = null
+let hydratingProfile = false
 // 空草稿可直接保存；AI 进度由后端按当前作用域补全，显式单元仍沿完整性校验。
-const saveWithoutCurriculumProgress = computed(() =>
-  (!curriculumProgress.value || curriculumProgressInvalidated.value) &&
+const saveWithoutCurriculumProgress = computed(
+  () =>
+    (!curriculumProgress.value || curriculumProgressInvalidated.value) &&
+    !textbookManifestID.value &&
+    !unitID.value &&
+    !lessonID.value &&
+    pageFrom.value === '' &&
+    pageTo.value === '',
+)
+const curriculumProgressPayload = computed<UpdateProfileBundleReq['curriculum_progress']>(() =>
   !textbookManifestID.value &&
   !unitID.value &&
   !lessonID.value &&
   pageFrom.value === '' &&
-  pageTo.value === '',
-)
-const curriculumProgressPayload = computed<UpdateProfileBundleReq['curriculum_progress']>(() =>
-  (!textbookManifestID.value && !unitID.value && !lessonID.value &&
-    pageFrom.value === '' && pageTo.value === '') ? undefined : {
-    subject: 'math',
-    textbook_manifest_id: effectiveTextbookManifestID.value,
-    volume: volume.value,
-    unit_id: unitID.value,
-    ...(lessonID.value ? { lesson_id: lessonID.value } : {}),
-    ...(typeof pageFrom.value === 'number' ? { page_from: pageFrom.value } : {}),
-    ...(typeof pageTo.value === 'number' ? { page_to: pageTo.value } : {}),
-    evidence_source: progressEvidenceSource.value,
-  },
+  pageTo.value === ''
+    ? undefined
+    : {
+        subject: 'math',
+        textbook_manifest_id: effectiveTextbookManifestID.value,
+        volume: volume.value,
+        unit_id: unitID.value,
+        ...(lessonID.value ? { lesson_id: lessonID.value } : {}),
+        ...(typeof pageFrom.value === 'number' ? { page_from: pageFrom.value } : {}),
+        ...(typeof pageTo.value === 'number' ? { page_to: pageTo.value } : {}),
+        evidence_source: progressEvidenceSource.value,
+      },
 )
 
 const volumeOptions = computed(() =>
@@ -306,14 +325,15 @@ const volumeOptions = computed(() =>
     const shortVolume = `${term}册`
     const label = `${gradeLevel.value}${shortVolume}`
     // 标签补全年级，选中和提交仍消费目录或既有进度的原始册别值。
-    const value = curriculumCatalog.value?.volume === shortVolume || volume.value === shortVolume
-      ? shortVolume
-      : label
+    const value =
+      curriculumCatalog.value?.volume === shortVolume || volume.value === shortVolume
+        ? shortVolume
+        : label
     return { value, label }
   }),
 )
 const unitOptions = computed(() =>
-  (hasReadyCurriculum.value ? curriculumCatalog.value?.units ?? [] : []).map((unit) => ({
+  (hasReadyCurriculum.value ? (curriculumCatalog.value?.units ?? []) : []).map((unit) => ({
     value: unit.unit_id,
     label: unit.title,
   })),
@@ -359,9 +379,10 @@ const textbookBindingStatus = computed(() => {
   if (!selected) return { state: 'none', label: '未关联教材文件' }
   return {
     state: selected.state,
-    label: selected.state === 'ready_for_confirmation'
-      ? '已识别，可关联'
-      : textbookManifestStatusLabel(selected),
+    label:
+      selected.state === 'ready_for_confirmation'
+        ? '已识别，可关联'
+        : textbookManifestStatusLabel(selected),
   }
 })
 const lessonOptions = computed(() => {
@@ -374,11 +395,16 @@ const lessonOptions = computed(() => {
 })
 const hasLessonOptions = computed(() => lessonOptions.value.length > 1)
 
-function matchesProgressScope(progress: CurriculumProgressDTO, fallbackGrade: string = grade.value) {
-  return (progress.grade_term ?? fallbackGrade) === grade.value &&
+function matchesProgressScope(
+  progress: CurriculumProgressDTO,
+  fallbackGrade: string = grade.value,
+) {
+  return (
+    (progress.grade_term ?? fallbackGrade) === grade.value &&
     progress.textbook_edition === textbook.value &&
     normalizedVolume(progress.volume) === normalizedVolume(volume.value) &&
     (!textbookManifestID.value || progress.textbook_manifest_id === textbookManifestID.value)
+  )
 }
 
 function invalidateSuggestion() {
@@ -400,6 +426,7 @@ function selectLesson(value: string) {
 }
 
 function resetProgressScope() {
+  if (hydratingProfile) return
   if (projectingProgress) return
   invalidateSuggestion()
   explicitUnitScope = ''
@@ -411,11 +438,22 @@ function resetProgressScope() {
 }
 
 async function suggestCurriculumProgress() {
-  if (!curriculumReady.value || projectingProgress || formDisposed ||
-    explicitUnitScope === curriculumScope.value) return
+  if (
+    !curriculumReady.value ||
+    projectingProgress ||
+    formDisposed ||
+    explicitUnitScope === curriculumScope.value
+  )
+    return
   const scope = curriculumScope.value
   const connection = backendScopeKey()
-  const inputs = JSON.stringify([scope, lessonID.value, pageFrom.value, pageTo.value, interactionVersion])
+  const inputs = JSON.stringify([
+    scope,
+    lessonID.value,
+    pageFrom.value,
+    pageTo.value,
+    interactionVersion,
+  ])
   if (lastSuggestionRequest === inputs) return
   lastSuggestionRequest = inputs
   const version = ++suggestionVersion
@@ -430,29 +468,61 @@ async function suggestCurriculumProgress() {
       ...(typeof pageFrom.value === 'number' ? { page_from: pageFrom.value } : {}),
       ...(typeof pageTo.value === 'number' ? { page_to: pageTo.value } : {}),
     })
-    if (formDisposed || version !== suggestionVersion || connection !== backendScopeKey() ||
-      inputs !== JSON.stringify([curriculumScope.value, lessonID.value, pageFrom.value,
-        pageTo.value, interactionVersion])) return
+    if (
+      formDisposed ||
+      version !== suggestionVersion ||
+      connection !== backendScopeKey() ||
+      inputs !==
+        JSON.stringify([
+          curriculumScope.value,
+          lessonID.value,
+          pageFrom.value,
+          pageTo.value,
+          interactionVersion,
+        ])
+    )
+      return
     const progress = response.progress
     if (!progress || !matchesProgressScope(progress)) return
-    const option = textbookBindingOptions.value.find((item) =>
-      item.manifest_id === progress.textbook_manifest_id && item.state === 'ready_for_confirmation')
-    if (!option?.catalog || !option.catalog.units.some((unit) => unit.unit_id === progress.unit_id)) return
+    const option = textbookBindingOptions.value.find(
+      (item) =>
+        item.manifest_id === progress.textbook_manifest_id &&
+        item.state === 'ready_for_confirmation',
+    )
+    if (!option?.catalog || !option.catalog.units.some((unit) => unit.unit_id === progress.unit_id))
+      return
     projectingProgress = true
     textbookManifestID.value = progress.textbook_manifest_id
     projectSelectedManifest()
     unitID.value = progress.unit_id
-    progressEvidenceSource.value = progress.evidence_source === 'parent_confirmed'
-      ? 'parent_confirmed' : 'ai_estimated'
-    if (progressEvidenceSource.value === 'parent_confirmed') explicitUnitScope = curriculumScope.value
-    lastSuggestionRequest = JSON.stringify([curriculumScope.value, lessonID.value, pageFrom.value,
-      pageTo.value, interactionVersion])
+    progressEvidenceSource.value =
+      progress.evidence_source === 'parent_confirmed' ? 'parent_confirmed' : 'ai_estimated'
+    if (progressEvidenceSource.value === 'parent_confirmed')
+      explicitUnitScope = curriculumScope.value
+    lastSuggestionRequest = JSON.stringify([
+      curriculumScope.value,
+      lessonID.value,
+      pageFrom.value,
+      pageTo.value,
+      interactionVersion,
+    ])
     await nextTick()
   } catch (cause) {
-    if (version === suggestionVersion && !formDisposed && connection === backendScopeKey() &&
-      inputs === JSON.stringify([curriculumScope.value, lessonID.value, pageFrom.value,
-        pageTo.value, interactionVersion])) {
-      curriculumError.value = cause instanceof Error ? cause.message : 'Progress suggestion unavailable'
+    if (
+      version === suggestionVersion &&
+      !formDisposed &&
+      connection === backendScopeKey() &&
+      inputs ===
+        JSON.stringify([
+          curriculumScope.value,
+          lessonID.value,
+          pageFrom.value,
+          pageTo.value,
+          interactionVersion,
+        ])
+    ) {
+      curriculumError.value =
+        cause instanceof Error ? cause.message : 'Progress suggestion unavailable'
     }
   } finally {
     projectingProgress = false
@@ -473,10 +543,7 @@ function projectSelectedManifest() {
   if (!selected?.catalog) return
   textbookEditions.math = selected.catalog.textbook_edition
   volume.value = selected.catalog.volume
-  if (
-    unitID.value &&
-    !selected.catalog.units.some((unit) => unit.unit_id === unitID.value)
-  ) {
+  if (unitID.value && !selected.catalog.units.some((unit) => unit.unit_id === unitID.value)) {
     unitID.value = ''
     lessonID.value = ''
   }
@@ -488,18 +555,52 @@ async function loadCurriculumProjection() {
   curriculumReady.value = false
   curriculumError.value = ''
   try {
-    const [profileResp, progressResp, settingsResp, bindingResp] = await Promise.all([
-      k12GetProfile(props.agent.name),
-      k12GetCurriculumProgress(props.agent.name),
-      k12GetWeeklyPracticeSettings(props.agent.name),
+    const connection = backendScopeKey()
+    const [snapshot, bindingResp] = await Promise.all([
+      k12GetProfileBundle(props.agent.name),
       k12GetTextbookBindingOptions(props.agent.name),
     ])
+    if (formDisposed || connection !== backendScopeKey()) return
+    hydratingProfile = true
+    projectingProgress = true
+    childName.value = snapshot.profile.child_name
+    const term = splitGradeTerm(snapshot.profile.grade_term)
+    gradeLevel.value = term.grade
+    semester.value = term.semester
+    Object.assign(textbookEditions, snapshot.profile.subject_textbooks)
+    baselineAgent.value = {
+      ...props.agent,
+      ...snapshot.agent_config,
+      metadata: metadataWithSubjectTextbooks({
+        ...props.agent.metadata,
+        'k12.child_name': snapshot.profile.child_name,
+        'k12.grade_term': snapshot.profile.grade_term,
+      }),
+    }
+    displayNameOverride.value = null
+    mountedSkills.value = initialMountedSkills()
+    provider.value = snapshot.agent_config.provider
+    model.value = snapshot.agent_config.model
+    const soul = snapshot.agent_config.system_prompt.trim()
+    soulDirty.value =
+      !!soul &&
+      ![tutorSoul.value, legacyTutorSoul.value, legacySubjectTutorSoul.value].includes(soul)
+    soulText.value = soulDirty.value ? soul : tutorSoul.value
+    const profileResp = snapshot.profile
+    const progressResp = {
+      progress: snapshot.curriculum_progress,
+      revision: snapshot.progress_revision,
+    }
+    const settingsResp = snapshot.weekly_practice_settings
     profileRevision.value = profileResp.revision
     curriculumProgress.value = progressResp.progress
     curriculumProgressRevision.value = progressResp.revision
     weeklySettings.value = settingsResp
     textbookBindingOptions.value = bindingResp.items
-    if (progressResp.progress && matchesProgressScope(progressResp.progress, profileResp.grade_term)) {
+    if (
+      progressResp.progress &&
+      matchesProgressScope(progressResp.progress, profileResp.grade_term)
+    ) {
       projectingProgress = true
       textbookEditions.math = progressResp.progress.textbook_edition
       volume.value = progressResp.progress.volume
@@ -507,18 +608,19 @@ async function loadCurriculumProjection() {
       lessonID.value = progressResp.progress.lesson_id ?? ''
       pageFrom.value = progressResp.progress.requested_page_from ?? ''
       pageTo.value = progressResp.progress.requested_page_to ?? ''
-      progressEvidenceSource.value = progressResp.progress.evidence_source === 'parent_confirmed'
-        ? 'parent_confirmed' : 'ai_estimated'
+      progressEvidenceSource.value =
+        progressResp.progress.evidence_source === 'parent_confirmed'
+          ? 'parent_confirmed'
+          : 'ai_estimated'
     }
-    const activeManifest = projectingProgress ? progressResp.progress?.textbook_manifest_id : undefined
+    const activeManifest = projectingProgress
+      ? progressResp.progress?.textbook_manifest_id
+      : undefined
     const selectableActive = textbookBindingOptions.value.some(
       (option) =>
-        option.manifest_id === activeManifest &&
-        option.state === 'ready_for_confirmation',
+        option.manifest_id === activeManifest && option.state === 'ready_for_confirmation',
     )
-    textbookManifestID.value = selectableActive
-      ? activeManifest!
-      : ''
+    textbookManifestID.value = selectableActive ? activeManifest! : ''
     if (curriculumProgressInvalidated.value) {
       unitID.value = ''
       lessonID.value = ''
@@ -543,16 +645,15 @@ async function loadCurriculumProjection() {
         const bodyPaddingTop = Number.parseFloat(getComputedStyle(body).paddingTop) || 0
         const sectionBorderTop = Number.parseFloat(getComputedStyle(section).borderTopWidth) || 0
         const targetTop = bodyRect.top + bodyPaddingTop + sectionBorderTop
-        body.scrollTop = Math.max(
-          0,
-          Math.round(body.scrollTop + sectionRect.top - targetTop),
-        )
+        body.scrollTop = Math.max(0, Math.round(body.scrollTop + sectionRect.top - targetTop))
       }
       section?.focus({ preventScroll: true })
     }
   } catch (cause) {
     curriculumError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
+    hydratingProfile = false
+    projectingProgress = false
     curriculumLoading.value = false
   }
 }
@@ -575,9 +676,14 @@ async function loadCreateCurriculumOptions() {
 function scheduleCandidateRefresh() {
   if (candidateRefreshTimer) clearTimeout(candidateRefreshTimer)
   candidateRefreshTimer = undefined
-  if (formDisposed || candidateRefreshInFlight || !textbookBindingOptions.value.some(
-    (item) => item.state === 'waiting_ingest' || item.state === 'extracting',
-  )) return
+  if (
+    formDisposed ||
+    candidateRefreshInFlight ||
+    !textbookBindingOptions.value.some(
+      (item) => item.state === 'waiting_ingest' || item.state === 'extracting',
+    )
+  )
+    return
   const scope = curriculumScope.value
   const interaction = interactionVersion
   const connection = backendScopeKey()
@@ -587,23 +693,39 @@ function scheduleCandidateRefresh() {
     let readFailed = false
     try {
       const response = await k12GetTextbookBindingOptions(props.agent?.name ?? { mode: 'create' })
-      if (formDisposed || scope !== curriculumScope.value || interaction !== interactionVersion ||
-        connection !== backendScopeKey()) return
-      const previousReady = new Set(textbookBindingOptions.value.filter(
-        (item) => item.state === 'ready_for_confirmation',
-      ).map((item) => `${item.manifest_id}:${item.document_generation}`))
+      if (
+        formDisposed ||
+        scope !== curriculumScope.value ||
+        interaction !== interactionVersion ||
+        connection !== backendScopeKey()
+      )
+        return
+      const previousReady = new Set(
+        textbookBindingOptions.value
+          .filter((item) => item.state === 'ready_for_confirmation')
+          .map((item) => `${item.manifest_id}:${item.document_generation}`),
+      )
       textbookBindingOptions.value = response.items
       projectSelectedManifest()
-      if (response.items.some((item) => item.state === 'ready_for_confirmation' &&
-        !previousReady.has(`${item.manifest_id}:${item.document_generation}`))) {
+      if (
+        response.items.some(
+          (item) =>
+            item.state === 'ready_for_confirmation' &&
+            !previousReady.has(`${item.manifest_id}:${item.document_generation}`),
+        )
+      ) {
         lastSuggestionRequest = ''
         void suggestCurriculumProgress()
       }
     } catch (cause) {
-      readFailed = !formDisposed && scope === curriculumScope.value &&
-        interaction === interactionVersion && connection === backendScopeKey()
+      readFailed =
+        !formDisposed &&
+        scope === curriculumScope.value &&
+        interaction === interactionVersion &&
+        connection === backendScopeKey()
       if (readFailed) {
-        curriculumError.value = cause instanceof Error ? cause.message : 'Textbook candidates unavailable'
+        curriculumError.value =
+          cause instanceof Error ? cause.message : 'Textbook candidates unavailable'
       }
     } finally {
       candidateRefreshInFlight = false
@@ -612,29 +734,42 @@ function scheduleCandidateRefresh() {
   }, 1000)
 }
 
-watch([gradeLevel, semester], () => {
-  resetProgressScope()
-  if (!projectingProgress) textbookManifestID.value = ''
-  volume.value = `${gradeLevel.value}${semester.value}册`
-}, { flush: 'sync' })
-watch([textbook, volume], () => {
-  profileBundleKey.value = ''
-  resetProgressScope()
-}, { flush: 'sync' })
-watch(textbook, () => {
-  if (!projectingProgress) textbookManifestID.value = ''
-}, { flush: 'sync' })
-watch(textbookManifestID, () => {
-  profileBundleKey.value = ''
-  resetProgressScope()
-  projectSelectedManifest()
-}, { flush: 'sync' })
+watch(
+  [gradeLevel, semester],
+  () => {
+    resetProgressScope()
+    if (!projectingProgress) textbookManifestID.value = ''
+    volume.value = `${gradeLevel.value}${semester.value}册`
+  },
+  { flush: 'sync' },
+)
+watch(
+  [textbook, volume],
+  () => {
+    profileBundleKey.value = ''
+    resetProgressScope()
+  },
+  { flush: 'sync' },
+)
+watch(
+  textbook,
+  () => {
+    if (!projectingProgress) textbookManifestID.value = ''
+  },
+  { flush: 'sync' },
+)
+watch(
+  textbookManifestID,
+  () => {
+    profileBundleKey.value = ''
+    resetProgressScope()
+    projectSelectedManifest()
+  },
+  { flush: 'sync' },
+)
 watch(unitID, () => {
   profileBundleKey.value = ''
-  if (
-    lessonID.value &&
-    !lessonOptions.value.some((option) => option.value === lessonID.value)
-  ) {
+  if (lessonID.value && !lessonOptions.value.some((option) => option.value === lessonID.value)) {
     lessonID.value = ''
   }
 })
@@ -666,9 +801,13 @@ onMounted(() => {
   }
   void loadCurriculumProjection()
 })
-watch([curriculumReady, curriculumScope, lessonID, pageFrom, pageTo], () => {
-  void suggestCurriculumProgress()
-}, { flush: 'post' })
+watch(
+  [curriculumReady, curriculumScope, lessonID, pageFrom, pageTo],
+  () => {
+    void suggestCurriculumProgress()
+  },
+  { flush: 'post' },
+)
 watch([textbookBindingOptions, curriculumScope], scheduleCandidateRefresh, { flush: 'post' })
 onBeforeUnmount(() => {
   formDisposed = true
@@ -722,45 +861,90 @@ const autoDisplayName = computed(() =>
     grade: gradeShort(grade.value),
   }),
 )
-const storedDisplayName = props.agent?.display_name ?? ''
+const storedDisplayName = computed(() => baselineAgent.value?.display_name ?? '')
 // 精确对应原称呼的旧自动名称保留“的学习助手”格式；其他显式名称保持原值。
-const displayNameUsesLegacyTemplate =
-  !!originalChildName.trim() && storedDisplayName === `${originalChildName.trim()}的学习助手`
-const displayNameIsAutomatic =
-  !storedDisplayName.trim() || storedDisplayName === autoDisplayName.value
-const displayName = computed(() => {
-  if (displayNameUsesLegacyTemplate) {
-    return `${childName.value.trim() || t('k12.profile.namePlaceholder')}的学习助手`
-  }
-  return displayNameIsAutomatic ? autoDisplayName.value : storedDisplayName
+const displayNameUsesLegacyTemplate = computed(
+  () =>
+    !!originalChildName.value.trim() &&
+    storedDisplayName.value === `${originalChildName.value.trim()}的学习助手`,
+)
+const displayNameIsAutomatic = computed(() => {
+  const child = originalChildName.value.trim()
+  const originalGrade = gradeShort(baselineAgent.value?.metadata?.['k12.grade_term'] ?? grade.value)
+  return (
+    !storedDisplayName.value.trim() ||
+    [
+      `${child}的辅导助手`,
+      ...['zh-CN', 'en', 'ug-CN'].map((language) =>
+        t('k12.profile.autoName', { child, grade: originalGrade }, { locale: language }),
+      ),
+    ].includes(storedDisplayName.value)
+  )
+})
+const displayNameOverride = ref<string | null>(null)
+const displayName = computed({
+  get() {
+    if (displayNameOverride.value !== null) return displayNameOverride.value
+    if (displayNameUsesLegacyTemplate.value) {
+      return `${childName.value.trim() || t('k12.profile.namePlaceholder')}的学习助手`
+    }
+    return displayNameIsAutomatic.value ? autoDisplayName.value : storedDisplayName.value
+  },
+  set(value: string) {
+    displayNameOverride.value = value
+  },
+})
+const displayNameInput = ref<HTMLInputElement | null>(null)
+const nameAdvanced = ref<HTMLDetailsElement | null>(null)
+const displayNameError = computed(() =>
+  !displayName.value.trim()
+    ? t('k12.profile.agentNameRequired')
+    : !isAgentDisplayNameValid(
+          displayName.value,
+          isEdit.value ? storedDisplayName.value : undefined,
+        )
+      ? t('k12.profile.agentNameTooLong')
+      : '',
+)
+watch([displayName, displayNameInput, displayNameError], () => {
+  displayNameInput.value?.setCustomValidity(displayNameError.value)
 })
 
 // 卡片副标题说明数学教材与当前进度入口，不声明实际绑定状态；自动模板随年级派生。
 const cardDescription = computed(() => t('k12.profile.cardDesc', { grade: grade.value }))
-const storedDescription = props.agent?.description
-const storedDescriptionGrade = props.agent?.metadata?.['k12.grade_term']
+const storedDescription = computed(() => baselineAgent.value?.description)
+const storedDescriptionGrade = computed(() => baselineAgent.value?.metadata?.['k12.grade_term'])
 // 只按原年级精确识别三种语言的历史和当前自动模板，自定义简介原样保留。
-const automaticDescriptions = storedDescriptionGrade === undefined ? [] : [
-  `${storedDescriptionGrade} · 数学教材与进度已绑定 · 按年级边界讲解`,
-  `${storedDescriptionGrade} · Math textbook and progress linked · Teaching bounded by grade level`,
-  `${storedDescriptionGrade} · ماتېماتىكا دەرسلىكى ۋە ئىلگىرىلەش باغلانغان · سىنىپ چېكى بويىچە چۈشەندۈرۈش`,
-  ...['zh-CN', 'en', 'ug-CN'].map((descriptionLocale) =>
-    t('k12.profile.cardDesc', { grade: storedDescriptionGrade }, { locale: descriptionLocale }),
-  ),
-]
-const storedDescriptionIsAutomatic =
-  storedDescription === undefined || automaticDescriptions.includes(storedDescription)
+const automaticDescriptions = computed(() =>
+  storedDescriptionGrade.value === undefined
+    ? []
+    : [
+        `${storedDescriptionGrade.value} · 数学教材与进度已绑定 · 按年级边界讲解`,
+        `${storedDescriptionGrade.value} · Math textbook and progress linked · Teaching bounded by grade level`,
+        `${storedDescriptionGrade.value} · ماتېماتىكا دەرسلىكى ۋە ئىلگىرىلەش باغلانغان · سىنىپ چېكى بويىچە چۈشەندۈرۈش`,
+        ...['zh-CN', 'en', 'ug-CN'].map((descriptionLocale) =>
+          t(
+            'k12.profile.cardDesc',
+            { grade: storedDescriptionGrade.value },
+            { locale: descriptionLocale },
+          ),
+        ),
+      ],
+)
+const storedDescriptionIsAutomatic = computed(
+  () =>
+    !storedDescription.value?.trim() ||
+    automaticDescriptions.value.includes(storedDescription.value),
+)
 
 // HcSelect 选项（替代原生 <select>；WKWebView 下原生 select 显 macOS Aqua 样式 · BUG-20260708 B2）
-const gradeOptions = computed(() =>
-  [
-    ...PRIMARY_GRADES.map((value, index) => ({
-      value,
-      label: t(`k12.profile.gradeLevels.${index + 1}`),
-    })),
-    ...FUTURE_GRADE_OPTIONS,
-  ],
-)
+const gradeOptions = computed(() => [
+  ...PRIMARY_GRADES.map((value, index) => ({
+    value,
+    label: t(`k12.profile.gradeLevels.${index + 1}`),
+  })),
+  ...FUTURE_GRADE_OPTIONS,
+])
 const semesterOptions = computed(() =>
   SEMESTERS.map((value) => ({
     value,
@@ -777,9 +961,17 @@ function textbookOptions(subject: (typeof COMPAT_TEXTBOOK_SUBJECTS)[number]) {
 const settingsStore = useSettingsStore()
 const provider = ref(props.agent?.provider ?? '')
 const model = ref(props.agent?.model ?? '')
-watch(provider, () => {
-  model.value = ''
-})
+watch(
+  provider,
+  () => {
+    if (!hydratingProfile) model.value = ''
+  },
+  { flush: 'sync' },
+)
+function selectModel(value: string) {
+  model.value = value
+  if (!value) provider.value = ''
+}
 const providerOptions = computed(() => {
   const seen = new Map<string, string>()
   for (const m of settingsStore.availableModels) {
@@ -848,6 +1040,66 @@ function resetSoul() {
   soulText.value = tutorSoul.value
 }
 
+function updateSoulCustomState(event: Event) {
+  soulDirty.value = (event.target as HTMLTextAreaElement).value !== tutorSoul.value
+}
+
+function profileCommandIdentity(command: UpdateProfileBundleReq) {
+  return JSON.stringify({
+    agent: command.agent,
+    agent_config: command.agent_config,
+    profile: command.profile,
+    curriculum_progress: command.curriculum_progress,
+    weekly_practice_settings: command.weekly_practice_settings,
+  })
+}
+
+function commandMatchesSnapshot(snapshot: ProfileBundleSnapshotDTO) {
+  const receipt = snapshot.command
+  if (!receipt?.agent_config) return false
+  const config = (value: UpdateProfileBundleReq['agent_config']) => [
+    value.display_name,
+    value.description,
+    value.system_prompt,
+    value.provider,
+    value.model,
+    [...value.skills].sort(),
+  ]
+  const profile = (value: {
+    child_name: string
+    grade_term: string
+    subject_textbooks: ProfileBundleSnapshotDTO['profile']['subject_textbooks']
+  }) => [
+    value.child_name,
+    value.grade_term,
+    ...COMPAT_TEXTBOOK_SUBJECTS.map((subject) => value.subject_textbooks[subject.key]),
+  ]
+  return (
+    JSON.stringify(config(snapshot.agent_config)) ===
+      JSON.stringify(config(receipt.agent_config)) &&
+    JSON.stringify(profile(snapshot.profile)) === JSON.stringify(profile(receipt.profile)) &&
+    JSON.stringify(snapshot.curriculum_progress) === JSON.stringify(receipt.curriculum_progress) &&
+    JSON.stringify(snapshot.weekly_practice_settings) ===
+      JSON.stringify(receipt.weekly_practice_settings)
+  )
+}
+
+async function persistProfileCommand(command: UpdateProfileBundleReq) {
+  try {
+    await k12UpdateProfileBundle(command)
+  } catch (cause) {
+    const status =
+      (cause as { status?: number; statusCode?: number } | null)?.status ??
+      (cause as { statusCode?: number } | null)?.statusCode
+    // 明确拒绝未提交；超时、网络错误和服务端异常保留冻结命令等待核对。
+    if (status && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+      pendingProfileCommand = null
+      profileBundleKey.value = ''
+    }
+    throw cause
+  }
+}
+
 async function refreshAgentsAfterPersistence() {
   const refreshed = await agentsStore.loadAgents()
   if (!refreshed) toast.warning(t('k12.profile.refreshFailed'))
@@ -879,8 +1131,15 @@ async function submit() {
     childNameInput.value?.reportValidity()
     return
   }
-  if (!isAgentDisplayNameValid(displayName.value, isEdit.value ? storedDisplayName : undefined)) {
-    error.value = t('agents.displayNameTooLong')
+  if (displayNameError.value) {
+    error.value = displayNameError.value
+    if (nameAdvanced.value) nameAdvanced.value.open = true
+    await nextTick()
+    displayNameInput.value?.reportValidity()
+    return
+  }
+  if (Boolean(provider.value) !== Boolean(model.value)) {
+    error.value = t('k12.profile.modelRequired')
     return
   }
   submitting.value = true
@@ -905,35 +1164,64 @@ async function submit() {
         expected_settings_revision: weeklySettings.value.revision,
         agent_config: {
           display_name: displayName.value,
-          description: storedDescriptionIsAutomatic
+          description: storedDescriptionIsAutomatic.value
             ? cardDescription.value
-            : props.agent.description ?? cardDescription.value,
+            : (baselineAgent.value?.description ?? cardDescription.value),
           system_prompt: soulText.value,
           provider: provider.value,
           model: model.value,
           skills: boundSkills(),
         },
         profile: {
-          child_name: childName.value === originalChildName ? originalChildName : childName.value.trim(),
+          child_name:
+            childName.value === originalChildName.value
+              ? originalChildName.value
+              : childName.value.trim(),
           grade_term: grade.value,
           subject_textbooks: { ...textbookEditions },
         },
         curriculum_progress: curriculumProgressPayload.value,
         weekly_practice_settings: {
           timezone: weeklySettings.value.timezone,
-          textbook_consolidation_enabled:
-            weeklySettings.value.textbook_consolidation_enabled,
-          textbook_consolidation_tier:
-            weeklySettings.value.textbook_consolidation_tier,
+          textbook_consolidation_enabled: weeklySettings.value.textbook_consolidation_enabled,
+          textbook_consolidation_tier: weeklySettings.value.textbook_consolidation_tier,
           arithmetic_warmup_enabled: weeklySettings.value.arithmetic_warmup_enabled,
           arithmetic_minutes: weeklySettings.value.arithmetic_minutes,
         },
       }
       const limitError = inputLimitError(
-        JSON.stringify(payload), 'Profile request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+        JSON.stringify(payload),
+        'Profile request',
+        INPUT_LIMITS.jsonBytes,
+        { unit: 'bytes' },
       )
       if (limitError) throw new Error(limitError)
-      await k12UpdateProfileBundle(payload)
+      let alreadySaved = false
+      if (pendingProfileCommand) {
+        const frozen = pendingProfileCommand
+        let snapshot = await k12GetProfileBundle(props.agent.name, frozen.idempotency_key)
+        if (snapshot.command && !commandMatchesSnapshot(snapshot)) {
+          throw new Error(t('k12.profile.profileChanged'))
+        }
+        // 只重放原冻结命令；后端命令表保证不会形成第二次保存。
+        await persistProfileCommand(frozen)
+        snapshot = await k12GetProfileBundle(props.agent.name, frozen.idempotency_key)
+        if (!snapshot.command) throw new Error(t('k12.profile.saveOutcomePending'))
+        if (!commandMatchesSnapshot(snapshot)) throw new Error(t('k12.profile.profileChanged'))
+        alreadySaved = profileCommandIdentity(payload) === profileCommandIdentity(frozen)
+        pendingProfileCommand = null
+        if (!alreadySaved) {
+          payload.expected_profile_revision = snapshot.profile.revision
+          payload.expected_progress_revision = snapshot.progress_revision
+          payload.expected_settings_revision = snapshot.weekly_practice_settings.revision
+          payload.idempotency_key = newCommandKey('profile-bundle')
+        }
+      }
+      if (!alreadySaved) {
+        pendingProfileCommand = structuredClone(payload)
+        await persistProfileCommand(pendingProfileCommand)
+        pendingProfileCommand = null
+      }
       await refreshAgentsAfterPersistence()
       // 档案保存是唯一作用域明确的存量修复触发点：只补该 agent 缺失的默认任务。
       // 失败不回滚已成功的档案，也不写“已完成”标记；下次保存会自然重试。
@@ -973,7 +1261,10 @@ async function submit() {
       curriculum_progress: curriculumProgressPayload.value,
     }
     const limitError = inputLimitError(
-      JSON.stringify(payload), 'Agent request', INPUT_LIMITS.jsonBytes, { unit: 'bytes' },
+      JSON.stringify(payload),
+      'Agent request',
+      INPUT_LIMITS.jsonBytes,
+      { unit: 'bytes' },
     )
     if (limitError) throw new Error(limitError)
     await registerAgent(payload)
@@ -1020,7 +1311,7 @@ async function submit() {
           </button>
         </div>
 
-        <div class="k12pf__body">
+        <div class="k12pf__body" :inert="submitting || (isEdit && !curriculumReady)">
           <div class="k12pf__profile-general">
             <p v-if="!isEdit" class="k12pf__intro">
               {{ t('k12.profile.intro', { name: displayName }) }}
@@ -1073,114 +1364,127 @@ async function submit() {
               aria-labelledby="k12pf-math-progress-title"
               data-testid="k12-math-progress"
             >
-            <div class="k12pf__curriculum-head">
-              <b id="k12pf-math-progress-title">数学教材与当前进度</b>
-              <span>教材可用后，系统自动推荐进度，你可随时调整。</span>
-            </div>
-            <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
-              正在读取教材进度…
-            </div>
-            <template v-else>
-              <div class="k12pf__curriculum-grid">
-                <div class="k12pf__field">
-                  <span>教材版本</span>
-                  <HcSelect
-                    v-model="textbookEditions.math"
-                    class="k12pf__textbook-select"
-                    :options="textbookOptions(COMPAT_TEXTBOOK_SUBJECTS[0])"
-                    :aria-label="`${t(COMPAT_TEXTBOOK_SUBJECTS[0].labelKey)}教材版本`"
-                    data-testid="k12-textbook-math"
-                  />
-                </div>
-                <div class="k12pf__field">
-                  <span>册</span>
-                  <HcSelect
-                    v-model="volume"
-                    :options="volumeOptions"
-                    data-testid="k12-progress-volume"
-                  />
-                </div>
-                <div class="k12pf__field k12pf__field--wide k12pf__textbook-field">
-                  <span>关联教材文件</span>
-                  <HcSelect
-                    :model-value="effectiveTextbookManifestID"
-                    @update:model-value="textbookManifestID = $event"
-                    :options="textbookManifestOptions"
-                    :disabled="!textbookBindingOptions.length"
-                    placeholder="未上传"
-                    aria-label="关联教材文件"
-                    data-testid="k12-textbook-manifest"
-                  >
-                    <template #selected-label="{ option }">
-                      {{ textbookBindingOptions.find((item) => item.manifest_id === option?.value)?.document_title ?? option?.label ?? '未上传' }}
-                    </template>
-                  </HcSelect>
-                  <span
-                    class="k12pf__textbook-binding-status"
-                    :data-state="textbookBindingStatus.state"
-                    data-testid="k12-textbook-binding-status"
-                  >
-                    <small>{{ textbookBindingStatus.label }}</small>
-                  </span>
-                </div>
-                <div class="k12pf__field k12pf__field--wide">
-                  <span>当前单元 <small v-if="progressEvidenceSource === 'ai_estimated' && unitID" class="k12pf__hint">AI建议，可调整</small></span>
-                  <HcSelect
-                    :model-value="unitID"
-                    @update:model-value="selectUnit"
-                    :options="unitOptions"
-                    :disabled="!unitOptions.length"
-                    placeholder="选择当前单元"
-                    class="k12pf__current-unit-value"
-                    :aria-label="`当前单元：${
-                      unitOptions.find((option) => option.value === unitID)?.label ?? '选择当前单元'
-                    }`"
-                    data-testid="k12-current-unit-value"
-                  />
-                </div>
-                <div class="k12pf__curriculum-detail-row">
+              <div class="k12pf__curriculum-head">
+                <b id="k12pf-math-progress-title">数学教材与当前进度</b>
+                <span>教材可用后，系统自动推荐进度，你可随时调整。</span>
+              </div>
+              <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
+                正在读取教材进度…
+              </div>
+              <template v-else>
+                <div class="k12pf__curriculum-grid">
                   <div class="k12pf__field">
-                    <span>课时（选填）</span>
+                    <span>教材版本</span>
                     <HcSelect
-                      :model-value="lessonID"
-                      @update:model-value="selectLesson"
-                      :options="lessonOptions"
-                      :disabled="!hasLessonOptions"
-                      data-testid="k12-progress-lesson"
+                      v-model="textbookEditions.math"
+                      class="k12pf__textbook-select"
+                      :options="textbookOptions(COMPAT_TEXTBOOK_SUBJECTS[0])"
+                      :aria-label="`${t(COMPAT_TEXTBOOK_SUBJECTS[0].labelKey)}教材版本`"
+                      data-testid="k12-textbook-math"
                     />
                   </div>
                   <div class="k12pf__field">
-                    <span>页码范围（选填）</span>
-                    <div class="k12pf__pages">
-                      <input
-                        v-model.number="pageFrom"
-                        @input="invalidateSuggestion"
-                        :disabled="!hasReadyCurriculum"
-                        class="k12pf__input"
-                        type="number"
-                        min="1"
-                        inputmode="numeric"
-                        placeholder="起始页"
+                    <span>册</span>
+                    <HcSelect
+                      v-model="volume"
+                      :options="volumeOptions"
+                      data-testid="k12-progress-volume"
+                    />
+                  </div>
+                  <div class="k12pf__field k12pf__field--wide k12pf__textbook-field">
+                    <span>关联教材文件</span>
+                    <HcSelect
+                      :model-value="effectiveTextbookManifestID"
+                      @update:model-value="textbookManifestID = $event"
+                      :options="textbookManifestOptions"
+                      :disabled="!textbookBindingOptions.length"
+                      placeholder="未上传"
+                      aria-label="关联教材文件"
+                      data-testid="k12-textbook-manifest"
+                    >
+                      <template #selected-label="{ option }">
+                        {{
+                          textbookBindingOptions.find((item) => item.manifest_id === option?.value)
+                            ?.document_title ??
+                          option?.label ??
+                          '未上传'
+                        }}
+                      </template>
+                    </HcSelect>
+                    <span
+                      class="k12pf__textbook-binding-status"
+                      :data-state="textbookBindingStatus.state"
+                      data-testid="k12-textbook-binding-status"
+                    >
+                      <small>{{ textbookBindingStatus.label }}</small>
+                    </span>
+                  </div>
+                  <div class="k12pf__field k12pf__field--wide">
+                    <span
+                      >当前单元
+                      <small
+                        v-if="progressEvidenceSource === 'ai_estimated' && unitID"
+                        class="k12pf__hint"
+                        >AI建议，可调整</small
+                      ></span
+                    >
+                    <HcSelect
+                      :model-value="unitID"
+                      @update:model-value="selectUnit"
+                      :options="unitOptions"
+                      :disabled="!unitOptions.length"
+                      placeholder="选择当前单元"
+                      class="k12pf__current-unit-value"
+                      :aria-label="`当前单元：${
+                        unitOptions.find((option) => option.value === unitID)?.label ??
+                        '选择当前单元'
+                      }`"
+                      data-testid="k12-current-unit-value"
+                    />
+                  </div>
+                  <div class="k12pf__curriculum-detail-row">
+                    <div class="k12pf__field">
+                      <span>课时（选填）</span>
+                      <HcSelect
+                        :model-value="lessonID"
+                        @update:model-value="selectLesson"
+                        :options="lessonOptions"
+                        :disabled="!hasLessonOptions"
+                        data-testid="k12-progress-lesson"
                       />
-                      <span>至</span>
-                      <input
-                        v-model.number="pageTo"
-                        @input="invalidateSuggestion"
-                        :disabled="!hasReadyCurriculum"
-                        class="k12pf__input"
-                        type="number"
-                        min="1"
-                        inputmode="numeric"
-                        placeholder="结束页"
-                      />
+                    </div>
+                    <div class="k12pf__field">
+                      <span>页码范围（选填）</span>
+                      <div class="k12pf__pages">
+                        <input
+                          v-model.number="pageFrom"
+                          @input="invalidateSuggestion"
+                          :disabled="!hasReadyCurriculum"
+                          class="k12pf__input"
+                          type="number"
+                          min="1"
+                          inputmode="numeric"
+                          placeholder="起始页"
+                        />
+                        <span>至</span>
+                        <input
+                          v-model.number="pageTo"
+                          @input="invalidateSuggestion"
+                          :disabled="!hasReadyCurriculum"
+                          class="k12pf__input"
+                          type="number"
+                          min="1"
+                          inputmode="numeric"
+                          placeholder="结束页"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-              <p class="k12pf__curriculum-hint">
-                保存后，同步巩固将使用该进度；口算热身仍由你按需开始。
-              </p>
-            </template>
+                <p class="k12pf__curriculum-hint">
+                  保存后，同步巩固将使用该进度；口算热身仍由你按需开始。
+                </p>
+              </template>
               <p v-if="curriculumError" class="k12pf__err">{{ curriculumError }}</p>
             </section>
           </div>
@@ -1231,7 +1535,7 @@ async function submit() {
                   class="k12pf__soultext"
                   data-testid="k12-soul-text"
                   rows="4"
-                  @input="soulDirty = true"
+                  @input="updateSoulCustomState"
                 />
                 <button v-if="soulDirty" type="button" class="k12pf__soulreset" @click="resetSoul">
                   {{ t('k12.profile.toneReset') }}
@@ -1242,9 +1546,7 @@ async function submit() {
             <!-- 模型（高级折叠·BUG-20260711-H，对齐原型 tutorForm）：默认跟随全局强推理模型，可不管；
                极客/多 Provider 家庭可为辅导实例单独指定（服务商→模型级联，与通用智能体编辑同通道）。 -->
             <details class="k12pf__adv" data-testid="k12pf-model">
-              <summary>
-                模型 · {{ providerDisplayName }} · {{ modelDisplayName }}
-              </summary>
+              <summary>模型 · {{ providerDisplayName }} · {{ modelDisplayName }}</summary>
               <div class="k12pf__row k12pf__model-row">
                 <div class="k12pf__field">
                   <span>{{ t('k12.profile.providerLabel', '服务商') }}</span>
@@ -1257,11 +1559,29 @@ async function submit() {
                 <div class="k12pf__field">
                   <span>{{ t('k12.profile.modelLabel', '模型') }}</span>
                   <HcSelect
-                    v-model="model"
+                    :model-value="model"
+                    @update:model-value="selectModel"
                     :options="modelOptions"
                     data-testid="k12pf-model-select"
                   />
                 </div>
+              </div>
+            </details>
+            <!-- 名称默认自动派生；自定义属于低频编辑，折叠时保留输入值。 -->
+            <details ref="nameAdvanced" class="k12pf__adv" data-testid="k12pf-name-advanced">
+              <summary>{{ t('k12.profile.nameAdvanced') }}</summary>
+              <div class="mt-2">
+                <label class="k12pf__field">
+                  <span>{{ t('k12.profile.agentName') }}</span>
+                  <input
+                    v-model="displayName"
+                    ref="displayNameInput"
+                    class="k12pf__input"
+                    :placeholder="autoDisplayName"
+                    :aria-invalid="!!displayNameError"
+                    required
+                  />
+                </label>
               </div>
             </details>
           </div>
@@ -1288,7 +1608,8 @@ async function submit() {
                 submitting ||
                 curriculumLoading ||
                 !curriculumReady ||
-                (progressEvidenceSource === 'parent_confirmed' && (!effectiveTextbookManifestID || !unitID))
+                (progressEvidenceSource === 'parent_confirmed' &&
+                  (!effectiveTextbookManifestID || !unitID))
               "
               @click="submit"
             >

@@ -23,6 +23,7 @@ import AssistantProcess from '@/components/chat/AssistantProcess.vue'
 import type { SkillContextReceipt } from '@/types/skill'
 import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
+import TeachingDiagram from '../components/TeachingDiagram.vue'
 import TaskProgressCard from '../components/TaskProgressCard.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -2856,8 +2857,11 @@ async function coldStart() {
             <div class="grade-card__row">
               <span>必要步骤</span>
               <ol class="grade-card__list">
-                <li v-for="step in item.guide.full_solution_steps" :key="step">
+                <li v-for="(step, stepIndex) in item.guide.full_solution_steps" :key="step">
                   <MarkdownRenderer class="grade-card__md" :content="step" />
+                  <template v-if="stepIndex === 0">
+                    <TeachingDiagram v-for="diagram in item.guide.teaching_diagrams" :key="diagram.asset_id" :diagram="diagram" />
+                  </template>
                 </li>
               </ol>
             </div>
