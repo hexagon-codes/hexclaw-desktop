@@ -283,10 +283,11 @@ describe('K12 weekly-practice HTTP contract', () => {
     await expect(k12GetWeeklyPracticeHistory('mingming', 'cursor-1', 20)).resolves.toBe(history)
     await expect(k12GetWeeklyPracticeSnapshot('mingming', 'snapshot-30')).resolves.toBe(snapshot)
 
-    expect(h.post).toHaveBeenCalledWith('/api/k12/weekly-practice/plans', {
-      agent: 'mingming',
-      idempotency_key: 'plan-key',
-    })
+    expect(h.post).toHaveBeenCalledWith(
+      '/api/k12/weekly-practice/plans',
+      { agent: 'mingming', idempotency_key: 'plan-key' },
+      { timeout: false },
+    )
     expect(h.get).toHaveBeenNthCalledWith(2, '/api/k12/weekly-practice/plans/history', {
       agent: 'mingming',
       cursor: 'cursor-1',
@@ -312,6 +313,7 @@ describe('K12 weekly-practice HTTP contract', () => {
         item_count: 8,
         idempotency_key: 'sync-1',
       },
+      { timeout: false },
     )
     expect(h.post).toHaveBeenNthCalledWith(
       2,
@@ -321,6 +323,7 @@ describe('K12 weekly-practice HTTP contract', () => {
         item_count: 15,
         idempotency_key: 'arithmetic-1',
       },
+      { timeout: false },
     )
     for (const [, body] of h.post.mock.calls) {
       expect(body).not.toHaveProperty('agent')
