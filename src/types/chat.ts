@@ -483,6 +483,19 @@ export interface SandboxExecution {
 
 /** 工具调用 */
 export interface ToolCall {
+	/** 同次执行事实；旧消息缺失时不推测原因。 */
+	detail?: {
+		phase?: string
+		outcome: 'success' | 'failure' | 'unknown'
+		reason?: string
+		action?: string
+		http_status?: number
+		response_received: boolean
+		target_host?: string
+		approval_request_id?: string
+		approval_status?: string
+		approval_deadline?: string
+	}
   id: string
   name: string
   arguments: string
