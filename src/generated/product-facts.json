@@ -42,12 +42,13 @@
       "role": "Skill and MCP catalog"
     }
   ],
-  "facts_version": "2026-10-21.2",
+  "facts_version": "2026-10-21.3",
   "official_accounts": {
     "wechat": {
       "follow_entry": "Settings > System Settings > Follow on WeChat",
-      "follow_url": "http://weixin.qq.com/r/mp/tCJ-Z9jEL4VQrZwE93em",
+      "follow_message": "微信扫一扫，给小蟹点个关注呗 🦀",
       "id": "hexclaw",
+      "id_label": "公众号 ID",
       "name": "hexclaw",
       "qr_code": "https://raw.githubusercontent.com/hexagon-codes/hexclaw/main/.github/assets/wechat-qrcode.jpg",
       "status": "confirmed_present"
@@ -78,5 +79,5 @@
     ]
   },
   "website": "https://hexclaw.net",
-  "facts_digest": "sha256:5eb51ad30f9be12c328d9eeffabfcb5b6b61c3bdd8ed8ca322aa4870d8a0549f"
+  "facts_digest": "sha256:0838c328ff2d2c81d3826e32a0e5d501865eaa1c39eafb0f11750f7220083319"
 }
