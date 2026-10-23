@@ -2,7 +2,7 @@
  * ChannelAgentBinding — 纯接待模型测试。
  *
  * 评审定论：渠道只绑「智能体」，模型 100% 跟随接待者、渠道层只读、**不暴露模型选择器**。
- * 覆盖：默认项=小蟹·默认助理 / 绑 Agent 有模型→来源 Agent / 绑 Agent 无模型→「<名>·跟随全局默认」/
+ * 覆盖：默认助理 / 绑定 Agent 的模型与思考信息 /
  * 绑定接线 / 历史遗留 @im/* 孤儿回收(happy+warn) / 结构守卫(无任何渠道级模型选择器·经 userVisibleAgents)。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -128,27 +128,13 @@ describe('ChannelAgentBinding — 纯接待模型 行为', () => {
     expect(w.findComponent({ name: 'HcSelect' }).exists()).toBe(false)
   })
 
-  it('绑命名 Agent(有模型偏好) → 徽标显示模型 + 来源「Agent <名>」', async () => {
+  it('绑命名 Agent(有模型偏好) → 徽标显示对应模型', async () => {
     seedSettings()
     h.getAgents.mockResolvedValue({ agents: [{ name: 'support', display_name: '客服', model: 'gpt-4o', provider: 'openai' }], total: 1, default: '' })
     h.getRules.mockResolvedValue({ rules: [{ id: 1, platform: 'feishu', instance_id: '', user_id: '', chat_id: '', agent_name: 'support', priority: 0 }], total: 1 })
     const w = mountBinding('feishu')
     await flushPromises()
     expect(w.find('.hc-cab__effmodel-badge').text()).toContain('GPT-4o')
-    const src = w.find('.hc-cab__effmodel-source').text()
-    expect(src).toContain('客服')
-    expect(src).not.toContain('{name}')
-  })
-
-  it('绑命名 Agent 但无模型偏好 → 来源「<名> · 跟随全局默认」(保留 Agent 关联,不裸显全局默认)', async () => {
-    seedSettings()
-    h.getAgents.mockResolvedValue({ agents: [{ name: 'support', display_name: '客服', model: '', provider: '' }], total: 1, default: '' })
-    h.getRules.mockResolvedValue({ rules: [{ id: 1, platform: 'feishu', instance_id: '', user_id: '', chat_id: '', agent_name: 'support', priority: 0 }], total: 1 })
-    const w = mountBinding('feishu')
-    await flushPromises()
-    const src = w.find('.hc-cab__effmodel-source').text()
-    expect(src).toContain('客服')
-    expect(src).toContain('跟随全局默认')
   })
 
   it('按 Agent 的精确 provider + model 展示派生模型和 supported 的「思考 · 高」', async () => {

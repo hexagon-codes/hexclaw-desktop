@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import ConnectionChannelCards from '../ConnectionChannelCards.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -61,7 +62,7 @@ function createTestI18n() {
 function mountCards() {
   return mount(ConnectionChannelCards, {
     global: {
-      plugins: [createTestI18n()],
+      plugins: [createPinia(), createTestI18n()],
       // ConfirmDialog 用 <Teleport to="body">，teleport: true 让其内联渲染从而可被 find 命中
       stubs: { ChannelConfigModal: { template: '<div class="modal-stub" />' }, teleport: true },
     },

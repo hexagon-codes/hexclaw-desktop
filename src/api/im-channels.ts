@@ -36,6 +36,8 @@ export interface IMInstance {
   enabled: boolean
   config: Record<string, string>
   createdAt: number
+  tokenUsage?: { input_tokens: number; output_tokens: number; total_tokens: number } | null
+  messageCount?: number | null
 }
 
 export function getPlatformHookUrl(instance: Pick<IMInstance, 'name' | 'type'>): string {
@@ -133,6 +135,8 @@ interface BackendInstanceRecord {
   config?: Record<string, unknown>
   created_at?: string
   updated_at?: string
+  token_usage?: { input_tokens: number; output_tokens: number; total_tokens: number } | null
+  message_count?: number | null
 }
 
 function backendToIMInstance(item: BackendInstanceRecord): IMInstance {
@@ -146,6 +150,8 @@ function backendToIMInstance(item: BackendInstanceRecord): IMInstance {
       Object.entries(item.config || {}).map(([key, value]) => [key, value == null ? '' : String(value)]),
     ),
     createdAt: Date.parse(item.created_at || item.updated_at || '') || 0,
+    tokenUsage: item.token_usage ?? null,
+    messageCount: item.message_count ?? null,
   }
 }
 
@@ -386,11 +392,19 @@ export async function getConnections(): Promise<ConnectionSummary[]> {
   return result.connections
 }
 
+/** 连接测试的同源结果，pending保留未确认请求，不从提示文本猜测。 */
+export interface IMInstanceTestResult {
+  success: boolean
+  message: string
+  pending?: boolean
+  request_id?: string
+}
+
 /** 对已保存实例执行真实运行时健康检查 */
 export async function testSavedIMInstanceRuntime(
   instance: IMInstance,
   signal?: AbortSignal,
-): Promise<{ success: boolean; message: string }> {
+): Promise<IMInstanceTestResult> {
   const { invoke } = await import('@tauri-apps/api/core')
   const scope = backendScopeKey()
 
@@ -451,7 +465,7 @@ export async function testSavedIMInstanceDelivery(
   instance: IMInstance,
   content: string,
   signal?: AbortSignal,
-): Promise<{ success: boolean; message: string }> {
+): Promise<IMInstanceTestResult> {
   if (!instance.enabled || instance.type === 'email') return testSavedIMInstanceRuntime(instance, signal)
   const scope = backendScopeKey()
   const storageKey = backendStorageKey(`im-test-request:${instance.id}`)
@@ -465,11 +479,7 @@ export async function testSavedIMInstanceDelivery(
   }
   try {
     assertConnectionTestActive(scope, signal)
-    const result = await proxyApiRequest<{
-      success: boolean
-      message: string
-      pending?: boolean
-    }>('POST', `/api/v1/platforms/instances/by-id/${encodeURIComponent(instance.id)}/send-test`, {
+    const result = await proxyApiRequest<IMInstanceTestResult>('POST', `/api/v1/platforms/instances/by-id/${encodeURIComponent(instance.id)}/send-test`, {
       request_id: requestID,
       content,
     })
@@ -483,6 +493,8 @@ export async function testSavedIMInstanceDelivery(
     return {
       success: false,
       message: 'Test message outcome is unknown. Test again to check the same request; no automatic resend.',
+      pending: true,
+      request_id: requestID,
     }
   }
 }

@@ -162,15 +162,6 @@ const channelReasoningValue = computed(() => {
   return t('chat.reasoning.display', { value })
 })
 
-function effectiveModelSourceLabel(): string {
-  const eff = effectiveModel()
-  if (eff.source === 'agent') return t('imChannels.modelSourceAgent', { name: eff.agentLabel ?? '' })
-  // 绑了命名 Agent 但它没钉模型 → 保留 Agent 关联 + 明示跟随全局（不裸显「全局默认」）。
-  if (eff.agentLabel) return `${eff.agentLabel} · ${t('imChannels.followGlobal', '跟随全局默认')}`
-  // BUG-20260704 默认助理接待同理保留接待者身份（原型 app.html:1620「小蟹 · 跟随全局默认」）。
-  return `${t('chat.botName', '小蟹')} · ${t('imChannels.followGlobal', '跟随全局默认')}`
-}
-
 /**
  * 切本实例的 instance 级路由规则到 agentName（空=解绑回默认助理）。先增后删避免无规则
  * 空窗；旧的 instance 级规则与遗留 platform 级规则一并清（重选即完成 platform→instance
@@ -404,7 +395,6 @@ onBeforeUnmount(() => {
       >
         {{ channelReasoningValue }}
       </span>
-      <span class="hc-cab__effmodel-source">{{ effectiveModelSourceLabel() }}</span>
     </div>
 
     <!-- 绑定失败提示：catch 写入 errorMsg 后 surface 给用户（不静默吞错，对齐 audit-silent-failure 纪律）。 -->
@@ -461,6 +451,5 @@ onBeforeUnmount(() => {
   padding: 2px 7px; border: 1px solid var(--hc-border); border-radius: 999px;
   font-size: 11px; color: var(--hc-text-secondary); background: var(--hc-bg-input);
 }
-.hc-cab__effmodel-source { font-size: 11px; color: var(--hc-text-muted); }
 .hc-cab__error { font-size: 12px; color: var(--hc-error); margin-top: 2px; }
 </style>

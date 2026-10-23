@@ -19,16 +19,19 @@ import {
   getRequiredFieldLabels,
   CHANNEL_CONFIG_FIELDS,
 } from '@/api/im-channels'
-import type { IMInstance, IMChannelType, IMInstanceHealth } from '@/api/im-channels'
+import type { IMInstance, IMChannelType, IMInstanceHealth, IMInstanceTestResult } from '@/api/im-channels'
 import { getCronJobs } from '@/api/tasks'
 import type { CronJob } from '@/types'
-import { backendScopeKey } from '@/services/backend-context'
+import { backendScopeKey, backendStorageKey } from '@/services/backend-context'
+import { formatMessageTokenStats, formatTokenCount } from '@/utils/token-count'
+import { useNotificationsStore } from '@/stores/notifications'
 import ChannelConfigModal from '@/components/channels/ChannelConfigModal.vue'
 import ChannelAgentBinding from '@/components/channels/ChannelAgentBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const { t, locale } = useI18n()
+const notifications = useNotificationsStore()
 
 // 顶栏搜索词（来自 ConnectionsView PageToolbar）：仅过滤渲染，不影响 count 徽标（保持总数）。
 const props = withDefaults(defineProps<{ filter?: string }>(), { filter: '' })
@@ -41,7 +44,8 @@ const instances = ref<IMInstance[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
 const busyId = ref<string | null>(null)
-const testResults = ref<Record<string, { success: boolean; message: string }>>({})
+const testingId = ref<string | null>(null)
+const testResults = ref<Record<string, IMInstanceTestResult>>({})
 
 // 后台定时任务引用数据与健康态均优雅降级：拉取失败时留空且不阻塞卡片。
 // 定时任务引用数据不投影到卡片可见 UI；health 按实例 name 索引。
@@ -53,7 +57,6 @@ let healthRequest = 0
 let refreshVersion = 0
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let testController: AbortController | undefined
-const resultTimers = new Set<ReturnType<typeof setTimeout>>()
 
 function stopHealthRefresh() {
   refreshVersion++
@@ -67,8 +70,8 @@ function deactivate() {
   stopHealthRefresh()
   testController?.abort()
   testController = undefined
-  for (const timer of resultTimers) clearTimeout(timer)
-  resultTimers.clear()
+  if (testingId.value !== null) busyId.value = null
+  testingId.value = null
 }
 
 // 弹层状态：editing=要编辑的实例（null=新建）；presetType=新建时预选类型
@@ -82,6 +85,7 @@ async function load() {
   healthByName.value = {}
   loading.value = true
   errorMsg.value = ''
+  testResults.value = {}
   try {
     const list = await getIMInstances()
     if (!active || version !== viewVersion) return
@@ -120,6 +124,12 @@ async function loadHealth() {
     healthByName.value = map
   } catch {
     if (active && version === viewVersion && request === healthRequest) healthByName.value = {}
+  } finally {
+    if (active && version === viewVersion && request === healthRequest) {
+      for (const inst of instances.value) {
+        if (testResults.value[inst.id]?.success) delete testResults.value[inst.id]
+      }
+    }
   }
 }
 
@@ -185,6 +195,20 @@ function metaName(inst: IMInstance) {
   return inst.name || (locale.value === 'zh-CN' ? meta.name : meta.nameEn)
 }
 
+// 服务端区分零用量与统计不可用，前端不把未知转换为零。
+function accountTokens(inst: IMInstance): string {
+  const total = inst.tokenUsage?.total_tokens
+  const tokenBadge = total == null || !Number.isFinite(total) || total < 0
+    ? '— tokens'
+    : t('chat.aboutTokens', { n: formatTokenCount(total) })
+  const count = inst.messageCount
+  return formatMessageTokenStats(
+    count != null && Number.isSafeInteger(count) && count >= 0 ? count : null,
+    t('chat.messagesStat'),
+    tokenBadge,
+  )
+}
+
 function isIncomplete(inst: IMInstance): boolean {
   return getRequiredFieldLabels(inst).length > 0
 }
@@ -197,8 +221,12 @@ function hasCredentialError(inst: IMInstance): boolean {
 
 // 绿色只由真实健康结果决定；尚未取得结果时保持未连接。
 function statusKind(inst: IMInstance): 'green' | 'amber' | 'red' | 'grey' {
-  if (isIncomplete(inst)) return 'amber'
+  if (testingId.value === inst.id) return 'amber'
   if (!inst.enabled) return 'grey'
+  const result = testResults.value[inst.id]
+  if (result?.pending) return 'grey'
+  if (result) return result.success ? 'green' : 'red'
+  if (isIncomplete(inst)) return 'amber'
   if (hasCredentialError(inst)) return 'red'
   const h = healthByName.value[inst.name]
   if (h?.healthy === true) return 'green'
@@ -206,6 +234,11 @@ function statusKind(inst: IMInstance): 'green' | 'amber' | 'red' | 'grey' {
 }
 
 function statusLabel(inst: IMInstance): string {
+  if (testingId.value === inst.id) return t('connections.channels.testing')
+  if (!inst.enabled) return t('connections.channels.disabled')
+  const result = testResults.value[inst.id]
+  if (result?.pending) return t('connections.channels.testUnknown')
+  if (result) return result.success ? t('connections.legend.connected') : t('connections.channels.testFailed')
   const kind = statusKind(inst)
   if (kind === 'red') return t('connections.legend.invalid')
   if (kind === 'amber') return isIncomplete(inst) ? t('connections.legend.unconfigured') : t('imChannels.connecting')
@@ -287,8 +320,10 @@ async function confirmDeleteInstance() {
 async function testInstance(inst: IMInstance) {
   if (busyId.value) return
   busyId.value = inst.id
+  testingId.value = inst.id
   const version = viewVersion
   const controller = new AbortController()
+  const attemptID = crypto.randomUUID()
   testController = controller
   delete testResults.value[inst.id]
   try {
@@ -304,13 +339,20 @@ async function testInstance(inst: IMInstance) {
   } finally {
     if (active && version === viewVersion) {
       busyId.value = null
+      testingId.value = null
       testController = undefined
       startHealthRefresh()
-      const timer = setTimeout(() => {
-        delete testResults.value[inst.id]
-        resultTimers.delete(timer)
-      }, 5000)
-      resultTimers.add(timer)
+      const result = testResults.value[inst.id]
+      if (result && !result.success) {
+        notifications.push({
+          kind: 'channel',
+          level: result.pending ? 'warning' : 'error',
+          title: `${metaName(inst)} · ${t(result.pending ? 'connections.channels.testUnknown' : 'connections.channels.testFailed')}`,
+          body: result.message,
+          route: '/channels',
+          dedupeKey: backendStorageKey(`channel-test:${inst.id}:${result.request_id ?? attemptID}`),
+        })
+      }
     }
   }
 }
@@ -360,9 +402,16 @@ defineExpose({ openCreate })
           </div>
           <div class="hc-cxcard__head">
             <div class="hc-cxcard__name">{{ metaName(inst) }}</div>
-            <div class="hc-cxcard__meta">{{ metaSub(inst) }}</div>
+            <div class="hc-cxcard__meta">
+              <span v-if="inst.type !== 'dingtalk'" class="hc-cxcard__meta-source">{{ metaSub(inst) }}</span>
+              <span class="hc-cxcard__usage" data-channel-token-usage>{{ inst.type === 'dingtalk' ? '' : '· ' }}{{ accountTokens(inst) }}</span>
+            </div>
           </div>
-          <span class="hc-cxpill" :class="`hc-cxpill--${statusKind(inst)}`">
+          <span
+            class="hc-cxpill"
+            :class="`hc-cxpill--${statusKind(inst)}`"
+            :title="testResults[inst.id]?.success === false ? testResults[inst.id]?.message : undefined"
+          >
             {{ statusLabel(inst) }}
           </span>
         </div>
@@ -380,15 +429,6 @@ defineExpose({ openCreate })
 
         <!-- 接待 Agent 绑定（活页面入口）：通道绑 Agent，模型为 Agent 内聚属性；裸模型走折叠「高级」。 -->
         <ChannelAgentBinding :instance="inst" />
-
-        <div
-          v-if="testResults[inst.id]"
-          class="hc-cxcard__testresult"
-          :class="testResults[inst.id]!.success ? 'is-ok' : 'is-err'"
-          :data-testid="`channel-test-result-${inst.type}`"
-        >
-          {{ testResults[inst.id]!.message }}
-        </div>
 
         <div class="hc-cxcard__actions">
           <button
@@ -552,12 +592,25 @@ defineExpose({ openCreate })
 }
 
 .hc-cxcard__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
   font-size: 12px;
   color: var(--hc-text-muted);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hc-cxcard__meta-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-cxcard__usage {
+  flex-shrink: 0;
 }
 
 .hc-cxpill {
@@ -569,6 +622,7 @@ defineExpose({ openCreate })
   font-weight: 600;
   padding: 3px 9px;
   border-radius: 999px;
+  white-space: nowrap;
 }
 
 .hc-cxpill::before {
@@ -620,22 +674,6 @@ defineExpose({ openCreate })
 .hc-cxcap--send {
   background: color-mix(in srgb, var(--hc-success) 12%, transparent);
   color: var(--hc-success);
-}
-
-.hc-cxcard__testresult {
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 8px;
-}
-
-.hc-cxcard__testresult.is-ok {
-  background: color-mix(in srgb, var(--hc-success) 8%, transparent);
-  color: var(--hc-success);
-}
-
-.hc-cxcard__testresult.is-err {
-  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
-  color: var(--hc-error);
 }
 
 .hc-cxcard__actions {
