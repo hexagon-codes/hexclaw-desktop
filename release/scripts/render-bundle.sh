@@ -635,6 +635,44 @@ def audit_archive(args):
     reject(selected["size"] > maximum_member)
 
 
+def archive_cache_path(args):
+    root, name, target, version, url, expected_sha256 = args
+    reject(not os.path.isabs(root) or "\0" in root)
+    expected_sha256 = safe_sha256(expected_sha256)
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    root_info = os.lstat(root)
+    reject(not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode))
+    directory = os.path.join(root, "render-archives")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    info = os.lstat(directory)
+    reject(not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode))
+    identity = "\0".join((name, target, version, url, expected_sha256))
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    sys.stdout.write(os.path.join(directory, key + ".archive") + "\n")
+
+
+def cache_archive(args):
+    source, target, expected_bytes, expected_sha256 = args
+    expected_bytes = parse_positive_integer(expected_bytes, 512 * 1024 * 1024)
+    data = secure_file_bytes(source, expected_bytes, expected_size=expected_bytes,
+                             expected_sha256=safe_sha256(expected_sha256))
+    descriptor, temporary = tempfile.mkstemp(prefix=".archive-", dir=os.path.dirname(target))
+    try:
+        offset = 0
+        while offset < len(data):
+            offset += os.write(descriptor, data[offset:offset + 1024 * 1024])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, target)
+        fsync_directory(os.path.dirname(target))
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
 def safe_destination_root(root, name):
     reject(not os.path.isabs(root) or "\0" in root)
     relative = normalize_member(name)
@@ -702,7 +740,10 @@ def prepare_destination(destination, source_mode, outputs):
         destination_info = os.lstat(destination)
         reject(not stat.S_ISDIR(destination_info.st_mode) or stat.S_ISLNK(destination_info.st_mode))
         for output in outputs:
-            reject(os.path.lexists(os.path.join(destination, output)))
+            path = os.path.join(destination, output)
+            if os.path.lexists(path):
+                value = os.lstat(path)
+                reject(not stat.S_ISREG(value.st_mode) or stat.S_ISLNK(value.st_mode))
     work = tempfile.mkdtemp(prefix=".render-stage-", dir=parent)
     for name in ("publish", "downloads", "home", "tmp", "cargo", "cargo-target", "install", "source"):
         os.mkdir(os.path.join(work, name), 0o700)
@@ -752,9 +793,16 @@ def publish_outputs(stage, destination, expected, source_mode):
     reject(not stat.S_ISDIR(destination_info.st_mode) or stat.S_ISLNK(destination_info.st_mode))
     for name in expected_names:
         target = os.path.join(destination, name)
-        reject(os.path.lexists(target))
-    for name in expected_names:
-        os.rename(os.path.join(stage, name), os.path.join(destination, name))
+        candidate = os.path.join(stage, name)
+        if os.path.lexists(target):
+            value = os.lstat(target)
+            reject(not stat.S_ISREG(value.st_mode) or stat.S_ISLNK(value.st_mode))
+            if value.st_nlink == 1 and value.st_size == os.stat(candidate).st_size:
+                # 只比较同一对象的摘要；未变的已验证二进制保留时间戳。
+                candidate_digest = hashlib.sha256(secure_file_bytes(candidate, 1024 * 1024 * 1024)).digest()
+                if hashlib.sha256(secure_file_bytes(target, 1024 * 1024 * 1024)).digest() == candidate_digest:
+                    continue
+        os.replace(candidate, target)
     fsync_directory(destination)
 
 
@@ -809,6 +857,10 @@ def main():
         extract_source_tree(args)
     elif command == "verify-hash" and len(args) == 2:
         verify_file_hash(*args)
+    elif command == "archive-cache-path" and len(args) == 6:
+        archive_cache_path(args)
+    elif command == "cache-archive" and len(args) == 4:
+        cache_archive(args)
     elif command == "canonical-tool" and len(args) == 2:
         canonical_tool(*args)
     elif command == "prepare-source" and len(args) == 3:
@@ -912,41 +964,7 @@ if [ "$render_mode" = "source" ]; then
     exit 1
   fi
 else
-  # 装机幂等：两个 prebuilt 引擎已存在且摘要与版本清单匹配时直接复用，
-  # 不重复下载；摘要不匹配的旧二进制先移除再走既有下载校验流程（BUG-20260816-001）。
-  prebuilt_current=1
-  for name in pandoc typst; do
-    output_name="$(external_output_name "$name")"
-    path="$DEST_INPUT/$output_name"
-    if [ ! -f "$path" ] || [ -L "$path" ]; then
-      prebuilt_current=0
-      break
-    fi
-    if ! metadata="$(python_helper manifest-platform "$VERSIONS_JSON" "$name" "$target")"; then
-      fail "render version manifest is invalid."
-      exit 1
-    fi
-    old_ifs="$IFS"
-    IFS=$'\x1f'
-    read -r version url expected_sha256 archive_format archive_bytes archive_member archive_max_entries expanded_bytes_max binary_bytes <<EOF
-$metadata
-EOF
-    IFS="$old_ifs"
-    if ! python_helper verify-hash "$path" "$expected_sha256" >/dev/null 2>&1; then
-      prebuilt_current=0
-      break
-    fi
-  done
-  if [ "$prebuilt_current" = "1" ]; then
-    echo "render prebuilt engines already present with matching digests, reusing."
-    exit 0
-  fi
-  for name in pandoc typst; do
-    path="$DEST_INPUT/$(external_output_name "$name")"
-    if [ -f "$path" ] && [ ! -L "$path" ]; then
-      rm -f "$path" || fail "stale render prebuilt removal failed."
-    fi
-  done
+  # 旧输出在候选完全验证后才替换，下载或校验失败不会先删除可用工具。
   if ! prepared="$(python_helper prepare-prebuilt "$DEST_INPUT" "$pandoc_output" "$typst_output")"; then
     fail "prebuilt render destination is invalid."
     exit 1
@@ -1057,6 +1075,24 @@ EOF
   if [ "$target" = "windows-x86_64" ]; then
     candidate="$name.exe"
   fi
+  cache_root="${RENDER_BUNDLE_CACHE_ROOT:-$(dirname "$DEST_DIR")/.render-bundle-cache}"
+  cache_archive=''
+  if cache_archive="$(python_helper archive-cache-path "$cache_root" "$name" "$target" "$version" "$url" "$expected_sha256")"; then
+    if [ -f "$cache_archive" ] && [ ! -L "$cache_archive" ]; then
+      # 每次复用仍核验完整归档、成员及解包上限，不把缓存存在当作可信依据。
+      if python_helper extract-one \
+        "$cache_archive" "$archive_format" "$archive_member" "$candidate" \
+        "$archive_bytes" "$binary_bytes" "$archive_max_entries" "$expanded_bytes_max" \
+        "$expected_sha256" "$STAGE_DIR/$output_name" "$binary_bytes"; then
+        printf 'render archive cache hit: %s\n' "$name"
+        return 0
+      fi
+      rm -f "$STAGE_DIR/$output_name"
+    fi
+  else
+    cache_archive=''
+    printf 'render archive cache unavailable; using verified download.\n'
+  fi
   download_file "$url" "$archive" "$archive_bytes"
   if ! python_helper extract-one \
     "$archive" \
@@ -1072,6 +1108,9 @@ EOF
     "$binary_bytes"; then
     fail "render archive verification failed."
     return 1
+  fi
+  if [ -n "$cache_archive" ] && ! python_helper cache-archive "$archive" "$cache_archive" "$archive_bytes" "$expected_sha256"; then
+    printf 'render archive cache write unavailable; verified output retained.\n'
   fi
 }
 

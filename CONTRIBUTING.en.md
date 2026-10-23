@@ -49,6 +49,8 @@ The current Desktop source version is `0.5.0`. `make sidecar` builds the backend
 
 The current `make render-bundle` shortcut applies to macOS. See the [Release workflow](.github/workflows/release.yml) for Windows and Linux native dependencies and component preparation.
 
+Pinned official renderer archives are cached in `.render-bundle-cache/render-archives` beside the output directory, or under `RENDER_BUNDLE_CACHE_ROOT` when provided. Every reuse verifies archive hashes, sizes, members and extraction limits; invalid cache entries are downloaded again. Existing outputs remain until candidates are ready, and unchanged binary bytes retain their timestamps. The cache does not replace the version manifest or change build budgets.
+
 Use `pnpm dev` to start only the frontend; actual tasks still require an accessible HexClaw service. Verify native files, previews, exports, printing, and installation through the corresponding desktop flow.
 
 ## Change the backend and desktop together

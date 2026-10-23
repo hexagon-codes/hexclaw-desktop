@@ -49,6 +49,8 @@ make dev
 
 `make render-bundle` 的当前快捷目标适用于 macOS。Windows 和 Linux 的原生依赖与组件准备步骤见 [Release 工作流](.github/workflows/release.yml)。
 
+渲染工具的固定官方归档缓存在目标目录旁的 `.render-bundle-cache/render-archives`；设置 `RENDER_BUNDLE_CACHE_ROOT` 时改用该缓存根目录。每次复用仍核验归档摘要、长度、成员及解包上限，损坏缓存重新下载，已验证输出在候选准备完成前保留。内容未变的二进制保留时间戳；缓存不替代版本清单，也不修改构建预算。
+
 只启动前端可运行 `pnpm dev`，但实际任务仍需要可访问的 HexClaw 服务。验证原生文件、预览、导出、打印或安装行为时，应使用对应桌面链路。
 
 ## 同时修改后端与桌面
