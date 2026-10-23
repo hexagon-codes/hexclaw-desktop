@@ -24,6 +24,7 @@ import {
   type ReasoningRequest,
 } from '@/types/chat'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+import { normalizeMessageAttachmentSources } from '@/utils/chat-compose'
 
 // Real cloud models can spend more than two minutes in provider queueing before
 // the first chunk or tool approval arrives. Keep the request socket alive long
@@ -158,7 +159,7 @@ function runtimeMetadata(
     next.assistant_message_id = snapshot.assistantMessageId
     next.message_id = snapshot.assistantMessageId
   }
-  return next
+  return normalizeMessageAttachmentSources(next)
 }
 
 function reasoningRequestFromMetadata(

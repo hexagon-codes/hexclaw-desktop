@@ -177,6 +177,31 @@ describe('chatService', () => {
   })
 
   // ─── sendViaWebSocket ───
+  it.each(['reply', 'chunk', 'stream_snapshot'] as const)(
+    'preserves generated media asset order and identities in %s results',
+    async (type) => {
+      const handle = openWebSocketStream('generate media', 's1', {}, '', undefined, {})
+      const socket = socketInstances[0]!
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      socket.onmessage?.({ data: JSON.stringify({
+        type,
+        content: 'Media generated.',
+        done: true,
+        metadata: { artifacts: JSON.stringify([
+          { asset_id: 'asset-video', kind: 'video', file_path: 'media/clip.mp4', mime: 'video/mp4', size: 20 },
+          { asset_id: 'asset-image', kind: 'image', file_path: 'media/photo.png', mime: 'image/png', size: 10 },
+        ]) },
+      }) })
+      const result = await handle.done
+      expect(result?.metadata?.attachments).toEqual([
+        { assetId: 'asset-video', type: 'video', name: 'clip.mp4', mime: 'video/mp4', size: 20, url: '/api/v1/files/generated/media/clip.mp4', data: '/api/v1/files/generated/media/clip.mp4' },
+        { assetId: 'asset-image', type: 'image', name: 'photo.png', mime: 'image/png', size: 10, url: '/api/v1/files/generated/media/photo.png', data: '/api/v1/files/generated/media/photo.png' },
+      ])
+      expect(result?.metadata?.attachments).not.toContainEqual(expect.objectContaining({ attachmentId: expect.anything() }))
+    },
+  )
+
   it('sends message with temperature/maxTokens via WebSocket', async () => {
     wsOnReply.mockImplementation((cb) => {
       cb({ content: 'done', type: 'reply' })

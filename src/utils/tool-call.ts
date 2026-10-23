@@ -3,18 +3,17 @@ import type { ToolCall } from '@/types/chat'
 /**
  * 工具调用展示层纯函数 —— 与 ToolCallCard.vue 配套。
  *
- * 数据现实：后端在最终 reply 里**整批**返回已完成的 tool_calls（无逐工具流式、
- * 当前不带 status/isError/耗时）。所以状态只能在前端**诚实**推导：以"是否拿到结果 +
- * 是否被显式标错"为准，**绝不**对结果正文做"error 字样"正则嗅探（脆弱、误判）。
- * 唯一例外是 engine 的**工具错误信封契约**——失败工具被整批回灌成纯串
+ * 新回执优先保留 detail.outcome 的未知结论，不能被旧兼容错误标志覆盖。
+ * 缺少新字段的历史回执继续按明确状态、结果和错误信封推导；不从正文中的
+ * error 字样猜测失败。engine 的工具错误信封可能以纯串返回：
  * `Error executing tool %q: <err>`（engine/react.go、runtime_adapters.go），这是结构化
  * 错误信号（与 is_error 同类），只是以固定前缀的纯串而非 JSON 下发，按精确前缀判定。
- * status/isError/durationMs 作为向后兼容钩子——后端将来下发时自动点亮，无需改前端。
+ * 状态与耗时字段保持旧回执兼容，不为缺失值编造执行结论。
  */
 
-export type ToolCallStatus = 'running' | 'success' | 'error'
+export type ToolCallStatus = 'running' | 'success' | 'error' | 'unknown'
 
-type ToolLike = Pick<ToolCall, 'result'> & {
+type ToolLike = Pick<ToolCall, 'result' | 'detail'> & {
   status?: ToolCallStatus
   is_error?: boolean
 }
@@ -58,6 +57,8 @@ function looksLikeBackendToolError(raw: string): boolean {
 
 /** 工具调用状态：诚实推导，向后兼容后端字段。 */
 export function toolCallStatus(tc: ToolLike): ToolCallStatus {
+  // 动作结果未知优先于旧客户端兼容用的错误标志，不能据此推断动作未发生。
+  if (tc.detail?.outcome === 'unknown') return 'unknown'
   if (tc.status === 'running' || tc.status === 'success' || tc.status === 'error') return tc.status
   if (tc.is_error) return 'error'
   if (tc.result == null) return 'running'

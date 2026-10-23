@@ -146,7 +146,7 @@ const failed = computed(
     steps.value.some((block) => block.type === 'retrieval' && block.retrieval.status === 'failed'),
 )
 const pending = computed(() => calls.value.filter((call) => toolCallStatus(call) === 'running'))
-const unknown = computed(() => !props.live && (pending.value.length > 0 || operations.value.some((operation) => operation.status === 'unknown' || operation.status === 'running')))
+const unknown = computed(() => !props.live && (pending.value.length > 0 || calls.value.some((call) => toolCallStatus(call) === 'unknown') || operations.value.some((operation) => operation.status === 'unknown' || operation.status === 'running')))
 const runPresentation = computed(() =>
   deriveAssistantRunPresentation(
     {

@@ -16,6 +16,7 @@ import ModelSelector from '@/components/common/ModelSelector.vue'
 import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import { useAppStore } from '@/stores/app'
 import { skillDisplayName } from '@/utils/skill-display'
+import { formatTokenCount } from '@/utils/token-count'
 import type { SkillDisplayMetadata } from '@/types/skill'
 import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
 import {
@@ -69,7 +70,7 @@ import { getStreamThinkingDuration } from '@/stores/chat-stream-helpers'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { closeImagePreview, releaseImagePreviewResource } from '@/composables/useImagePreview'
-import { useBackendMedia } from '@/composables/useBackendMedia'
+import { backendMediaURL, isGeneratedMediaSource, useBackendMedia } from '@/composables/useBackendMedia'
 import AssistantProcess from '@/components/chat/AssistantProcess.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
@@ -581,11 +582,6 @@ const estimatedTokens = computed(() => {
   return total
 })
 
-function formatTokenCount(n: number): string {
-  if (n < 1000) return String(n)
-  return (n / 1000).toFixed(1) + 'k'
-}
-
 const EMPTY_REPLY_PATTERN = /^模型未生成有效回复|^模型未返回有效内容|^\(空回复\)$/
 function isEmptyReply(content: string): boolean {
   return !content.trim() || EMPTY_REPLY_PATTERN.test(content.trim())
@@ -599,14 +595,29 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
 }
 
+function getDisplayedMediaSources(message: ChatMessage): string[] {
+  return [
+    ...getMessageAttachments(message).flatMap(attachment =>
+      attachment.type === 'image' ? [attachmentSource(attachment)]
+        : attachment.type === 'video' && attachment.poster ? [attachment.poster] : []),
+    posterSource(message.metadata) ?? '',
+  ]
+}
+
 const backendMedia = useBackendMedia()
 function imageSrc(attachment: ChatAttachment): string {
   return backendMedia.display(attachmentSource(attachment))
 }
+function mediaDownloadSource(attachment: ChatAttachment): string {
+  const source = attachmentSource(attachment)
+  return isGeneratedMediaSource(source) ? backendMediaURL(source)
+    : attachment.type === 'image' ? messageImageSrc(attachment) : imageSrc(attachment)
+}
 function videoPosterFromMetadata(
   metadata: Record<string, unknown> | undefined | null,
+  attachment?: ChatAttachment,
 ): string | undefined {
-  const source = posterSource(metadata)
+  const source = attachment?.poster || posterSource(metadata)
   return source ? backendMedia.display(source) || undefined : undefined
 }
 watch(
@@ -615,7 +626,7 @@ watch(
       ...getMessageAttachments(message)
         .filter(attachment => attachment.type === 'image' || attachment.type === 'video'
           || attachment.type === 'audio' || attachment.mime?.startsWith('audio/'))
-        .map(attachmentSource),
+        .flatMap(attachment => [attachmentSource(attachment), attachment.poster ?? '']),
       posterSource(message.metadata) ?? '',
     ]),
   (sources) => backendMedia.retain(sources),
@@ -1832,6 +1843,7 @@ function makeUniqueDownloadName(hintName: string, src: string): string {
 
 /** 媒体保存统一消费 opaque grant：Sidecar 资源由 Rust 流式下载，WebView 资源分片暂存。 */
 async function downloadImage(src: string, name: string) {
+  src = backendMediaURL(src)
   const filename = makeUniqueDownloadName(name, src)
   try {
     let chosen: string | null
@@ -3648,7 +3660,7 @@ function startSidebarResize(event: MouseEvent) {
                                 <button
                                   class="hc-msg__media-download"
                                   :title="t('chat.downloadImage', '下载图片')"
-                                  @click.stop="downloadImage(messageImageSrc(att), att.name)"
+                                  @click.stop="downloadImage(mediaDownloadSource(att), att.name)"
                                 >
                                   ⬇
                                 </button>
@@ -3661,18 +3673,18 @@ function startSidebarResize(event: MouseEvent) {
                                 controls
                                 preload="metadata"
                                 class="hc-msg__video"
-                                :poster="videoPosterFromMetadata(msg.metadata)"
+                                :poster="videoPosterFromMetadata(msg.metadata, att)"
                                 :src="
                                   videoDisplaySrc(
                                     imageSrc(att),
-                                    videoPosterFromMetadata(msg.metadata),
+                                    videoPosterFromMetadata(msg.metadata, att),
                                   )
                                 "
                               />
                               <button
                                 class="hc-msg__media-download"
                                 :title="t('chat.downloadVideo', '下载视频')"
-                                @click.stop="downloadImage(imageSrc(att), att.name)"
+                                @click.stop="downloadImage(mediaDownloadSource(att), att.name)"
                               >
                                 ⬇
                               </button>
@@ -3694,11 +3706,13 @@ function startSidebarResize(event: MouseEvent) {
                           process-mode
                           :tool-calls="msg.tool_calls"
                           :fallback-content="sanitizeMessageContent(msg.content)"
+                          :displayed-media-sources="getDisplayedMediaSources(msg)"
                           @rendered="captureNestedManifest(msg, $event)"
                         />
                         <MarkdownRenderer
                           v-else
                           :content="msg.message_content ?? sanitizeMessageContent(msg.content)"
+                          :displayed-media-sources="getDisplayedMediaSources(msg)"
                           surface="desktop"
                           @rendered="captureRenderManifest(msg, $event)"
                         />

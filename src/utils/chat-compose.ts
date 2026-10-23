@@ -35,13 +35,87 @@ export function chatAttachmentSource(attachment: { data?: unknown; url?: unknown
 export function normalizeMessageAttachmentSources(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (!Array.isArray(metadata?.attachments)) return metadata
-  return {
-    ...metadata,
-    attachments: metadata.attachments
+  if (!metadata) return metadata
+  const attachments: Record<string, unknown>[] = Array.isArray(metadata.attachments)
+    ? metadata.attachments
       .filter((attachment): attachment is Record<string, unknown> =>
         !!attachment && typeof attachment === 'object' && !Array.isArray(attachment))
-      .map(attachment => ({ ...attachment, data: chatAttachmentSource(attachment) })),
+      .map((attachment) => {
+        const source = chatAttachmentSource(attachment)
+        const assetId = typeof attachment.attachment_id === 'string'
+          && attachment.attachment_id.startsWith('asset-')
+          ? attachment.attachment_id
+          : attachment.assetId
+        return {
+          ...attachment,
+          data: source,
+          ...(assetId ? { assetId } : {}),
+          ...(!attachment.name && typeof attachment.url === 'string'
+            ? { name: attachment.url.split(/[?#]/)[0]?.split('/').pop() || 'media' }
+            : {}),
+        }
+      })
+    : []
+  let artifacts: unknown = metadata.artifacts
+  if (typeof artifacts === 'string') {
+    try { artifacts = JSON.parse(artifacts) } catch { artifacts = undefined }
+  }
+  const mediaAssets = Array.isArray(artifacts)
+    ? artifacts.filter((value): value is Record<string, unknown> & {
+      asset_id: string; file_path: string; mime: string
+    } => !!value && typeof value === 'object' && !Array.isArray(value)
+      && ['image', 'video', 'audio'].includes(String(value.kind))
+      && typeof value.asset_id === 'string' && !!value.asset_id
+      && typeof value.file_path === 'string' && !!value.file_path
+      && typeof value.mime === 'string')
+    : []
+  const covers = new Map<string, { assetId: string; url: string }>()
+  for (const asset of mediaAssets) {
+    if (asset.role === 'cover' && asset.kind === 'image'
+      && typeof asset.operation_id === 'string' && asset.operation_id
+      && mediaAssets.some(video => video.kind === 'video' && video.operation_id === asset.operation_id)) {
+      covers.set(asset.operation_id, {
+        assetId: asset.asset_id,
+        url: `/api/v1/files/generated/${asset.file_path.replace(/^\/+/, '')}`,
+      })
+    }
+  }
+  const coverAssets = new Set([...covers.values()].map(cover => cover.assetId))
+  const coverURLs = new Set([...covers.values()].map(cover => cover.url))
+  for (const asset of mediaAssets) {
+    if (coverAssets.has(asset.asset_id)) continue
+    const url = `/api/v1/files/generated/${asset.file_path.replace(/^\/+/, '')}`
+    const cover = asset.kind === 'video' && typeof asset.operation_id === 'string'
+      ? covers.get(asset.operation_id)
+      : undefined
+    const existing = attachments.find(attachment => attachment.assetId === asset.asset_id
+      || chatAttachmentSource(attachment) === url)
+    if (existing) {
+      if (cover) existing.poster = cover.url
+      continue
+    }
+    // 生成资产和输入上传回执属于不同合同，不能把 asset_id 写成 attachmentId。
+    attachments.push({
+      assetId: asset.asset_id,
+      type: asset.kind,
+      name: asset.file_path.split('/').pop() || 'media',
+      mime: asset.mime,
+      size: asset.size,
+      url,
+      data: url,
+      ...(cover ? { poster: cover.url } : {}),
+    })
+  }
+  // 封面仍完整保留在 artifacts；展示投影只将它绑定到同一操作的视频。
+  const projectedAttachments = attachments.filter(attachment =>
+    !coverAssets.has(String(attachment.assetId)) && !coverURLs.has(chatAttachmentSource(attachment)))
+  const videos = projectedAttachments.filter(attachment => attachment.type === 'video')
+  const poster = videos.length === 1 && typeof videos[0]?.poster === 'string' ? videos[0].poster : undefined
+  if (!Array.isArray(metadata.attachments) && attachments.length === 0) return metadata
+  return {
+    ...metadata,
+    attachments: projectedAttachments,
+    ...(poster ? { poster } : {}),
   }
 }
 

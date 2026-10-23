@@ -22,6 +22,7 @@ pub mod sidecar;
 pub(crate) mod sidecar_client;
 pub mod sidecar_socket;
 pub mod sidecar_stream;
+mod generated_media;
 pub(crate) mod sidecar_supervisor;
 pub mod test_runtime;
 pub mod tray;
@@ -75,6 +76,12 @@ pub fn run() {
                 .app_handle()
                 .state::<native_file::NativeFileGrantRegistry>();
             native_file::native_image_preview_response(&registry, context.webview_label(), request)
+        })
+        .register_asynchronous_uri_scheme_protocol("hexclaw-media", |_context, request, responder| {
+            tauri::async_runtime::spawn(async move {
+                let response = generated_media::read(request).await.unwrap_or_else(|_| generated_media::failure());
+                responder.respond(response);
+            });
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 已有实例运行时，聚焦主窗口

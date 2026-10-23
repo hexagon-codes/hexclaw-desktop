@@ -19,6 +19,10 @@ import {
   type RenderSurface,
 } from '@/contracts/message-content'
 import { useMathOverflowAccessibility } from '@/composables/useMathOverflowAccessibility'
+import { backendMediaURL, isGeneratedMediaSource, useBackendMedia } from '@/composables/useBackendMedia'
+import { downloadInApp } from '@/utils/download'
+import { logger } from '@/utils/logger'
+import { backendRelativePath } from '@/services/backend-context'
 
 const props = withDefaults(
   defineProps<{
@@ -28,6 +32,7 @@ const props = withDefaults(
     highlightPromptArgs?: boolean
     showArtifacts?: boolean
     hideSourcePageMarkers?: boolean
+    displayedMediaSources?: string[]
   }>(),
   {
     surface: 'desktop',
@@ -35,6 +40,7 @@ const props = withDefaults(
     highlightPromptArgs: false,
     showArtifacts: true,
     hideSourcePageMarkers: false,
+    displayedMediaSources: () => [],
   },
 )
 
@@ -44,6 +50,10 @@ const emit = defineEmits<{
 
 const rendererRoot = ref<HTMLElement | null>(null)
 useMathOverflowAccessibility(rendererRoot)
+const backendMedia = useBackendMedia()
+const displayedMediaPaths = computed(() => new Set(props.displayedMediaSources
+  .filter(isGeneratedMediaSource)
+  .map(source => backendRelativePath(backendMediaURL(source)))))
 
 const LEGACY_TOOL_PROTOCOL =
   /^\s*(?:(<tool_call>)\s*)?<function=(code_exec|shell|bash)>\s*<parameter=(code|command)>([\s\S]*?)<\/parameter>\s*<\/function>\s*(?:(<\/tool_call>))?\s*$/
@@ -166,14 +176,56 @@ function createMarkdownRenderer(copyLabel: string) {
     return false
   })
 
+  // 同一生成图片已由消息附件交付时，仅去掉重复的正文投影，不改原文和摘要。
+  instance.core.ruler.after('inline', 'generated-media-deduplication', (state) => {
+    state.tokens.forEach((token, index) => {
+      if (token.type !== 'inline' || !token.children?.length) return
+      const children = token.children.filter((child) => {
+        const source = child.type === 'image' ? child.attrGet('src') ?? '' : ''
+        return !source || !isGeneratedMediaSource(source)
+          || !displayedMediaPaths.value.has(backendRelativePath(backendMediaURL(source)))
+      })
+      if (children.length === token.children.length) return
+      token.children = children
+      if (!children.some(child => child.type !== 'softbreak' && (child.type !== 'text' || child.content.trim()))) {
+        const before = state.tokens[index - 1]
+        const after = state.tokens[index + 1]
+        if (before?.type === 'paragraph_open' && after?.type === 'paragraph_close') {
+          before.hidden = true
+          after.hidden = true
+          token.children = []
+        }
+      }
+    })
+  })
+
   // 正文图片进入全应用预览，公式和交互产物仍沿各自渲染器。
   const renderImage = instance.renderer.rules.image!
   instance.renderer.rules.image = (tokens, index, options, env, self) => {
     const token = tokens[index]!
+    const source = token.attrGet('src') ?? ''
+    if (isGeneratedMediaSource(source)) {
+      env.mediaSources?.add(source)
+      const url = backendMedia.display(source)
+      if (url) token.attrSet('src', url)
+      else token.attrs = token.attrs?.filter(([name]) => name !== 'src') ?? null
+    }
     token.attrSet('data-image-preview', '')
     token.attrSet('role', 'button')
     token.attrSet('tabindex', '0')
     return renderImage(tokens, index, options, env, self)
+  }
+
+  const renderLink = instance.renderer.rules.link_open
+  instance.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    const token = tokens[index]!
+    const source = token.attrGet('href') ?? ''
+    if (isGeneratedMediaSource(source)) {
+      // 保留原链接文字；生成文件由既有下载通道取得，不交给外部浏览器裸连。
+      token.attrSet('data-generated-media', backendMediaURL(source))
+      token.attrSet('download', source.split(/[?#]/)[0]?.split('/').pop() || 'media')
+    }
+    return renderLink ? renderLink(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
   }
 
   // 本组件只拥有 TeX delimiter/token 解析；KaTeX 执行统一委托给 math-render adapter。
@@ -327,6 +379,19 @@ function handleCopyClick(e: MouseEvent) {
     })
 }
 
+function handleMediaLinkClick(event: MouseEvent) {
+  const anchor = event.target instanceof Element
+    ? event.target.closest<HTMLAnchorElement>('a[data-generated-media]')
+    : null
+  const source = anchor?.dataset.generatedMedia
+  if (!source) return
+  event.preventDefault()
+  event.stopPropagation()
+  void downloadInApp(source, anchor!.download || 'media').catch((error: unknown) => {
+    logger.error('Media download failed', error)
+  })
+}
+
 onMounted(() => {
   if (activeInstanceCount === 0) {
     document.addEventListener('click', handleCopyClick)
@@ -363,24 +428,31 @@ watch(
   { immediate: true },
 )
 
-const rendered = computed(() => {
+const renderedResult = computed(() => {
   void renderVersion.value
+  const mediaSources = new Set<string>()
   const projection = promptPreviewProjection.value
   if (!projection && rawLegacyToolProtocol.value !== undefined) {
     const rawHtml = `<p>${mdInstance.value.utils.escapeHtml(rawLegacyToolProtocol.value)}</p>`
-    return DOMPurify.sanitize(rawHtml, KATEX_DOMPURIFY_CONFIG)
+    return { html: DOMPurify.sanitize(rawHtml, KATEX_DOMPURIFY_CONFIG), mediaSources: [] as string[] }
   }
   const markdown = projection?.markdown ?? displayMarkdown.value
   // 渲染管线原生支持 `\[...\]`（tex 插件 delimiters:'all'）：保留方括号形态，
   // 避开 normalize 转独占行 `$$` 后在缩进列表内的跨块误配对（乱码根因）。
   const html = mdInstance.value.render(
     normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true }),
+    { mediaSources },
   )
-  return DOMPurify.sanitize(
-    projection ? decoratePromptPreviewHtml(html, projection) : html,
-    KATEX_DOMPURIFY_CONFIG,
-  )
+  return {
+    html: DOMPurify.sanitize(
+      projection ? decoratePromptPreviewHtml(html, projection) : html,
+      KATEX_DOMPURIFY_CONFIG,
+    ),
+    mediaSources: [...mediaSources],
+  }
 })
+const rendered = computed(() => renderedResult.value.html)
+watch(() => renderedResult.value.mediaSources, (sources) => backendMedia.retain(sources))
 
 const renderManifest = computed<RenderManifest | undefined>(() => {
   if (resolvedContent.value.protocol !== 'canonical') return undefined
@@ -418,6 +490,7 @@ watch(
     :data-source-digest="resolvedContent.sourceDigest"
     :data-producer-kind="resolvedContent.producerKind"
     :data-render-id="renderManifest?.render_id"
+    @click="handleMediaLinkClick"
   >
     <div class="markdown-body" v-html="rendered" />
     <template v-if="showArtifacts">

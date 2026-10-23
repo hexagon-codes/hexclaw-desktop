@@ -118,6 +118,8 @@ const statusLabel = computed(() =>
     ? t('chat.toolFailed', '失败')
     : status.value === 'running'
       ? t('chat.toolRunning', '运行中')
+      : status.value === 'unknown'
+        ? t('chat.operationProcess.unknown')
       : '',
 )
 </script>
@@ -196,11 +198,13 @@ const statusLabel = computed(() =>
   <div v-else class="hc-tool" :class="`hc-tool--${status}`">
     <div class="hc-tool__head">
       <component
+        v-if="status !== 'unknown'"
         :is="statusIcon"
         :size="13"
         class="hc-tool__status"
         :class="{ 'hc-tool__status--spin': status === 'running' }"
       />
+      <span v-else class="hc-tool__status" aria-hidden="true">!</span>
       <Wrench :size="12" class="hc-tool__wrench" />
       <span class="hc-tool__name">{{ displayName }}</span>
       <span v-if="statusLabel" class="hc-tool__badge">{{ statusLabel }}</span>

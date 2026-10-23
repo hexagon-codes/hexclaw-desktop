@@ -4,6 +4,7 @@ import { Download, PanelLeft, PanelRight, Boxes } from 'lucide-vue-next'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import { useChatStore } from '@/stores/chat'
 import { ref } from 'vue'
+import { formatMessageTokenStats } from '@/utils/token-count'
 import {
   toggleChatWorkspaceEntry,
   type ChatWorkspaceMode,
@@ -51,7 +52,7 @@ defineProps<{
 
       <div class="hc-chat__stat-strip">
         <span v-if="messageCount > 0" class="hc-token-badge" :title="tokenBadge">
-          {{ messageCount }} {{ t('chat.messagesStat') }} · {{ tokenBadge }}
+          {{ formatMessageTokenStats(messageCount, t('chat.messagesStat'), tokenBadge) }}
         </span>
       </div>
 

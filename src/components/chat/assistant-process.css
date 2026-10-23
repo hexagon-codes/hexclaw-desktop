@@ -152,9 +152,11 @@
 .hc-process-tool__detail a {
   color: var(--hc-accent);
 }
-.hc-process-tool[data-status='error'] > summary,
-.hc-process-tool[data-status='unknown'] > summary {
+.hc-process-tool[data-status='error'] > summary {
   color: var(--hc-error);
+}
+.hc-process-tool[data-status='unknown'] > summary {
+  color: var(--hc-text-secondary);
 }
 /* 完成状态让位于活动名称；所有工具与召回共用弱化色。 */
 .hc-process-tool[data-status='success'] > summary .hc-process__marker {

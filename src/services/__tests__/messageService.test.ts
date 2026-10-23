@@ -155,6 +155,61 @@ describe('messageService', () => {
     expect(msgs).toEqual([])
   })
 
+  it('restores media sources without duplicating assets or changing upload receipts', async () => {
+    const metadata = {
+      attachments: [
+        { attachment_id: 'asset-video', type: 'video', mime: 'video/mp4', url: '/api/v1/files/generated/media/clip.mp4', size: 20 },
+        { attachmentId: 'att-upload', type: 'image', name: 'input.png', mime: 'image/png', data: 'existing-data' },
+      ],
+      artifacts: JSON.stringify([
+        { asset_id: 'asset-video', kind: 'video', file_path: 'media/clip.mp4', mime: 'video/mp4', size: 20 },
+        { asset_id: 'asset-audio', kind: 'audio', file_path: 'media/voice.wav', mime: 'audio/wav', size: 30 },
+      ]),
+    }
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{ id: 'media-reply', role: 'assistant', content: 'Media generated.', metadata }],
+      total: 1,
+    })
+    const messages = await loadMessages('s1')
+    expect(messages[0]?.metadata?.attachments).toEqual([
+      { ...metadata.attachments[0], assetId: 'asset-video', name: 'clip.mp4', data: '/api/v1/files/generated/media/clip.mp4' },
+      metadata.attachments[1],
+      { assetId: 'asset-audio', type: 'audio', name: 'voice.wav', mime: 'audio/wav', size: 30, url: '/api/v1/files/generated/media/voice.wav', data: '/api/v1/files/generated/media/voice.wav' },
+    ])
+    expect(metadata.attachments[0]).not.toHaveProperty('data')
+    expect(metadata.attachments[0]).not.toHaveProperty('assetId')
+  })
+
+  it('binds each persisted video cover to its operation and keeps every original asset reference', async () => {
+    const assets = [
+      { asset_id: 'asset-video-a', operation_id: 'operation-a', kind: 'video', role: 'output', file_path: 'media/a.mp4', mime: 'video/mp4' },
+      { asset_id: 'asset-cover-b', operation_id: 'operation-b', kind: 'image', role: 'cover', file_path: 'media/b.png', mime: 'image/png' },
+      { asset_id: 'asset-video-b', operation_id: 'operation-b', kind: 'video', role: 'output', file_path: 'media/b.mp4', mime: 'video/mp4' },
+      { asset_id: 'asset-cover-a', operation_id: 'operation-a', kind: 'image', role: 'cover', file_path: 'media/a.png', mime: 'image/png' },
+    ]
+    const metadata = {
+      artifacts: JSON.stringify(assets),
+      attachments: assets.map(asset => ({ attachment_id: asset.asset_id, type: asset.kind, mime: asset.mime, url: `/api/v1/files/generated/${asset.file_path}` })),
+    }
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [
+        { id: 'multiple-videos', role: 'assistant', content: 'Media generated.', metadata },
+        { id: 'single-video', role: 'assistant', content: 'Media generated.', metadata: { artifacts: JSON.stringify([assets[0], assets[3]]) } },
+      ],
+      total: 2,
+    })
+    const messages = await loadMessages('s1')
+    expect(messages[0]?.metadata?.attachments).toEqual([
+      expect.objectContaining({ assetId: 'asset-video-a', type: 'video', poster: '/api/v1/files/generated/media/a.png' }),
+      expect.objectContaining({ assetId: 'asset-video-b', type: 'video', poster: '/api/v1/files/generated/media/b.png' }),
+    ])
+    expect(messages[0]?.metadata?.poster).toBeUndefined()
+    expect(messages[1]?.metadata?.poster).toBe('/api/v1/files/generated/media/a.png')
+    expect(messages[0]?.metadata?.artifacts).toBe(metadata.artifacts)
+    expect(metadata.attachments).toHaveLength(4)
+    expect(metadata.attachments[0]).not.toHaveProperty('poster')
+  })
+
   // ─── Bug 复现: 第二次打开会话 reasoning 丢失 ───
   // 后端 API 将 reasoning 存在 metadata 对象内，而非消息顶层字段。
   // 修复前 loadMessages 直接 spread，顶层 reasoning 为 undefined。

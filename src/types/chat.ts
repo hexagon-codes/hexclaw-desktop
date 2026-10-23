@@ -689,6 +689,10 @@ export interface ChatAttachment {
   mime: string
   /** Opaque owner-bound Sidecar receipt used on the chat wire. */
   attachmentId?: string
+  /** 生成媒体的稳定资产身份，不作为输入附件上传回执发送。 */
+  assetId?: string
+  /** 同一媒体操作的视频封面来源。 */
+  poster?: string
   /** 服务端历史附件的 URL 来源；读取时与 data 共用同一规范化规则。 */
   url?: string
   /**
