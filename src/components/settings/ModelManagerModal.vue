@@ -13,7 +13,7 @@ import {
 } from '@/config/model-contract'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
 import type { CatalogModel, ModelCapability, ModelOption, ProviderConfig } from '@/types'
-import { displayModelCapabilities, MODEL_CAPABILITY_DISPLAY } from '@/config/model-capability-display'
+import { displayModelCapabilities, MODEL_CAPABILITY_DISPLAY, localizedModelCapabilityDisplay } from '@/config/model-capability-display'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 
@@ -250,6 +250,8 @@ const groupedModels = computed(() => {
   }
   return [...groups.entries()]
 })
+
+const mediaCapabilityBadges = ['image_generation', 'video_generation', 'audio'] as const
 
 // ─── 推荐（聚合商首次接入引导） ─────────────────────────
 const recommended = computed<CatalogModel[]>(() => {
@@ -738,6 +740,16 @@ function handleKeydown(e: KeyboardEvent) {
                         {{ MODEL_CAPABILITY_DISPLAY.thinking.icon }}
                         {{ MODEL_CAPABILITY_DISPLAY.thinking.label }}
                       </span>
+                      <template v-for="capability in mediaCapabilityBadges" :key="capability">
+                        <span
+                          v-if="capabilitiesOf(m).includes(capability)"
+                          class="mm-badge"
+                          :title="localizedModelCapabilityDisplay(capability, t).title"
+                        >
+                          {{ MODEL_CAPABILITY_DISPLAY[capability].icon }}
+                          {{ localizedModelCapabilityDisplay(capability, t).label }}
+                        </span>
+                      </template>
                       <template v-if="hasMetadata">
                         <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">
                           {{ t('settings.modelManager.badgeFree', '免费') }}

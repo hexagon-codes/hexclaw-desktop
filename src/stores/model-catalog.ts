@@ -283,8 +283,8 @@ function modelListSignature(models: ModelOption[], selectedModelId: string | und
 /**
  * 将远端目录投影到 Provider 的“已启用模型”层。
  *
- * - 已有手动启用子集或大目录：保留启用选择，刷新既有模型资料并应用持久排除集合。
- * - 无手动子集的小目录：自动启用未排除目录项；既有暂缺项继续保留，由目录层投影为 stale。
+ * - 显式启用集合、已有手动启用子集或大目录：保留启用选择，刷新既有模型资料并应用持久排除集合。
+ * - legacy 无手动子集的小目录：自动启用未排除目录项；既有暂缺项继续保留，由目录层投影为 stale。
  */
 export function reconcileProviderCatalog(
   target: ProviderConfig,
@@ -300,7 +300,10 @@ export function reconcileProviderCatalog(
       const normalized = normalizeExcludedModelId(model.id)
       return !excludedModelIds.has(normalized) && remoteModels.some((remote) => normalizeExcludedModelId(remote.id) === normalized)
     })
-  const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT || isCuratedSubset
+  const managed =
+    target.modelSpecsMode === 'explicit' ||
+    remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT ||
+    isCuratedSubset
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
   const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
   const normalizedExclusions = new Set(

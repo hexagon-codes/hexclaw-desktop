@@ -1,9 +1,8 @@
 import { onBeforeUnmount, ref } from 'vue'
 import { sidecarFetch } from '@/api/client'
-import { backendRelativePath } from '@/services/backend-context'
+import { backendRelativePath, backendScopeKey, assertBackendActive } from '@/services/backend-context'
 import { env } from '@/config/env'
 import { isTauri } from '@/utils/platform'
-import { backendScopeKey } from '@/services/backend-context'
 import { releaseImagePreviewResource } from './useImagePreview'
 
 const GENERATED_MEDIA_PATH = '/api/v1/files/generated/'
@@ -44,19 +43,22 @@ export function useBackendMedia() {
   }
 
   async function load(source: string): Promise<string> {
+    source = backendMediaURL(source)
     if (!source || !managed(source)) return source
     const cached = urls.value.get(source)
     if (cached) return cached
     const existing = pending.get(source)
     if (existing) return existing
     const controller = new AbortController()
+    const scope = backendScopeKey()
     controllers.set(source, controller)
     const task = (async () => {
       if (isTauri() && isGeneratedMediaSource(source)) {
         const relative = backendRelativePath(backendMediaURL(source))!
         const { convertFileSrc } = await import('@tauri-apps/api/core')
         const root = convertFileSrc('asset', 'hexclaw-media')
-        const url = `${root}?path=${encodeURIComponent(relative)}&scope=${encodeURIComponent(backendScopeKey())}`
+        assertBackendActive(scope)
+        const url = `${root}?path=${encodeURIComponent(relative)}&scope=${encodeURIComponent(scope)}`
         if (disposed || controller.signal.aborted) throw new DOMException('Media released', 'AbortError')
         urls.value.set(source, url)
         failed.delete(source)
@@ -65,6 +67,7 @@ export function useBackendMedia() {
       const response = await sidecarFetch(backendMediaURL(source), { signal: controller.signal })
       if (!response.ok) throw new Error(`Media fetch failed: HTTP ${response.status}`)
       const blob = await response.blob()
+      assertBackendActive(scope)
       if (disposed || controller.signal.aborted) throw new DOMException('Media released', 'AbortError')
       const url = URL.createObjectURL(blob)
       urls.value.set(source, url)
@@ -79,6 +82,7 @@ export function useBackendMedia() {
   }
 
   function display(source: string): string {
+    source = backendMediaURL(source)
     if (!source || !managed(source)) return source
     const cached = urls.value.get(source)
     if (cached) return cached
@@ -87,18 +91,19 @@ export function useBackendMedia() {
   }
 
   function release(source: string) {
+    source = backendMediaURL(source)
     controllers.get(source)?.abort()
     const url = urls.value.get(source)
     if (url) {
       releaseImagePreviewResource(url)
-      URL.revokeObjectURL(url)
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url)
       urls.value.delete(source)
     }
     failed.delete(source)
   }
 
   function retain(sources: string[]) {
-    const active = new Set(sources)
+    const active = new Set(sources.map(backendMediaURL))
     for (const source of new Set([...urls.value.keys(), ...controllers.keys(), ...failed])) {
       if (!active.has(source)) release(source)
     }

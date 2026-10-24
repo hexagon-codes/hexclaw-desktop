@@ -2107,6 +2107,8 @@ function openModelManager(providerId: string, event: MouseEvent) {
   managerSyncing.value = false
   modelManagerReturnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   modelManagerProviderId.value = providerId
+  // 先显示已有目录，再复用同步流程刷新，避免旧缓存长期遮住新增的媒体模型。
+  void handleManagerResync()
 }
 
 function closeModelManager() {
@@ -4881,7 +4883,7 @@ async function saveConfig() {
   border-radius: 999px;
 }
 
-/* 完整名称提示脱离文档流，悬停和聚焦均不改变网格尺寸。 */
+/* 完整名称提示脱离文档流，前景与背景使用当前主题的反向对比，悬停和聚焦不改变网格尺寸。 */
 .hc-model-chip[data-model-name]::after {
   content: attr(data-model-name);
   position: absolute;
@@ -4893,7 +4895,7 @@ async function saveConfig() {
   padding: 8px 12px;
   border-radius: var(--hc-radius-md);
   background: var(--hc-text-primary);
-  color: var(--hc-text-inverse, #fff);
+  color: var(--hc-bg-main);
   font-size: 12px;
   font-weight: 400;
   line-height: 1.5;
