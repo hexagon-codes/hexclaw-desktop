@@ -12,6 +12,15 @@ import type { InstanceViewDescriptor, RecordSchema } from '@/contracts'
 import type { AgentConfig, ChatAttachment, CronJob } from '@/types'
 import { EMPTY_VIEW_DESCRIPTOR } from '@/contracts'
 import type { ChatWorkspaceMode } from '@/components/chat/workspace-mode'
+import type { ConversationExportFormat } from '@/components/chat/conversation-export'
+
+/** 场景已展示的正文按来源消息归位，仅用于导出，不改写持久消息。 */
+export interface ScenarioConversationExportContent {
+  sourceMessageId: string
+  content: string
+  timestamp?: string
+  agent_name?: string
+}
 
 /** Shell 拥有布局和通用会话动作；场景头只消费状态与动作，不创建第二布局源。 */
 export interface ScenarioChatActions {
@@ -21,7 +30,10 @@ export interface ScenarioChatActions {
   toggleSessions(): void
   toggleArtifacts(): void
   openContext(): void
-  exportConversation(format: 'markdown' | 'json'): Promise<void>
+  exportConversation(
+    format: ConversationExportFormat,
+    content?: ScenarioConversationExportContent[],
+  ): Promise<void>
   revealContent(identity: string): Promise<void>
 }
 export interface ScenarioArtifactAction {

@@ -505,6 +505,8 @@ export default {
     exportUser: '用户',
     exportMarkdownDesc: '.md 格式，适合阅读和分享',
     exportJsonDesc: '.json 格式，适合数据处理',
+    exportConversation: '导出会话',
+    exportPdfDesc: '.pdf 格式，适合打印和存档',
     desktopWorkspace: '桌面工作区',
     currentContext: '当前上下文',
     activeSession: '当前会话',

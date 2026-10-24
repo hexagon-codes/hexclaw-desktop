@@ -376,7 +376,7 @@ export const useK12Store = defineStore('k12', () => {
       return {
         // gradeToVerify 只读 badge/evidence_type/out_of_scope[_kp]，SolveResp 全部具备（结构子集）。
         verify: gradeToVerify(resp as unknown as import('@/api/k12').GradeResp),
-        solution: resp.solution,
+        solution: resp.report_markdown || resp.solution,
         outOfScope: resp.out_of_scope,
         outOfScopeKnowledgePoint: resp.out_of_scope_kp,
       }

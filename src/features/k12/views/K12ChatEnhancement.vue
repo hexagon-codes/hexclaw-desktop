@@ -44,6 +44,7 @@ import UnitSummaryContent from '../unit-summary/UnitSummaryContent.vue'
 import { createUnitSummaryController } from '../unit-summary/controller'
 import { materialArtifact } from '../unit-summary/types'
 import type { FailedReplyRecoveryRequest } from '@/composables/useChatActions'
+import type { ConversationExportFormat } from '@/components/chat/conversation-export'
 
 const props = defineProps<{
   agentId: string
@@ -252,6 +253,8 @@ onBeforeUnmount(() => {
 })
 const moreOpen = ref(false)
 const exportOpen = ref(false)
+const exporting = ref(false)
+const taskExportPanels = ref<InstanceType<typeof RecognizeGuardPanel>[]>([])
 const moreRoot = ref<HTMLElement>()
 function closeMore() {
   moreOpen.value = false
@@ -273,13 +276,29 @@ function dismissMore(event: MouseEvent) {
 }
 onMounted(() => document.addEventListener('mousedown', dismissMore))
 onBeforeUnmount(() => document.removeEventListener('mousedown', dismissMore))
-async function exportUnitConversation(format: 'markdown' | 'json') {
+async function exportUnitConversation(format: ConversationExportFormat) {
+  if (exporting.value) return
+  exporting.value = true
   moreOpen.value = false
   exportOpen.value = false
   try {
-    await props.chatActions?.exportConversation(format)
+    const visibleSources = new Set(visibleTaskShells.value.map((task) => task.sourceMessageId))
+    const content = taskExportPanels.value
+      .map((panel) => panel.getConversationExportContent())
+      .filter((item) => visibleSources.has(item.sourceMessageId))
+    for (const item of unitMessageMaterials.value) {
+      if (item.view.material?.canonical_markdown) content.push({
+        sourceMessageId: item.messageId,
+        content: item.view.material.canonical_markdown,
+        timestamp: new Date(item.view.material.generated_at * 1000).toISOString(),
+        agent_name: headerName.value,
+      })
+    }
+    await props.chatActions?.exportConversation(format, content)
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    exporting.value = false
   }
 }
 const finalArtifactActionHandler = createFinalArtifactActionHandler({
@@ -685,16 +704,19 @@ watch(
         </button>
         <div v-if="moreOpen" class="k12enh-menu" role="menu">
           <template v-if="!exportOpen"
-            ><button type="button" role="menuitem" @click="exportOpen = true">导出会话</button
+            ><button type="button" role="menuitem" @click="exportOpen = true">{{ t('chat.exportConversation') }}</button
             ><button type="button" role="menuitem" @click="openConversationContext">
               会话上下文
             </button></template
           >
           <template v-else
-            ><button type="button" role="menuitem" @click="exportUnitConversation('markdown')">
+            ><button type="button" role="menuitem" :disabled="exporting" @click="exportUnitConversation('markdown')">
               Markdown</button
-            ><button type="button" role="menuitem" @click="exportUnitConversation('json')">
+            ><button type="button" role="menuitem" :disabled="exporting" @click="exportUnitConversation('json')">
               JSON
+            </button
+            ><button type="button" role="menuitem" :disabled="exporting" @click="exportUnitConversation('pdf')">
+              PDF
             </button></template
           >
         </div>
@@ -736,6 +758,7 @@ watch(
           <div class="k12enh-tutor__bubble">
             <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
             <RecognizeGuardPanel
+              ref="taskExportPanels"
               :key="`${agentId}:${sessionId || ''}:${task.sourceMessageId}:${task.restoreDispatchId || 'new'}`"
               :agent-id="agentId"
               :agent-display-name="headerName"
@@ -1016,6 +1039,9 @@ watch(
 
 <style scoped>
 .k12enh-tabs {
+  /* 玻璃顶栏形成独立堆叠上下文；其菜单必须整体高于正文的定位内容。 */
+  position: relative;
+  z-index: var(--hc-z-dropdown);
   display: flex;
   align-items: center;
   gap: 10px;

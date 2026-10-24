@@ -479,6 +479,39 @@ const taskMessageContent = computed(() => {
   }
   return taskShellTitle.value
 })
+
+// 导出读取与当前任务相同的冻结结果，不能以空的用户图片消息代替讲题正文。
+function getConversationExportContent() {
+  let content = finalArtifact.value?.canonical_markdown || ''
+  if (blankWorksheetGuide.value.length) {
+    content = blankWorksheetGuide.value.map(({ question, guide }, index) => [
+      `## ${index + 1}. ${question}`,
+      `**答案**\n\n${guide.answer}`,
+      '**必要步骤**',
+      ...guide.full_solution_steps.flatMap((step, stepIndex) => [
+        step,
+        ...(stepIndex === 0 ? (guide.teaching_diagrams || []).map(
+          (diagram) => `![${diagram.alt_text}](${diagram.asset_id})`,
+        ) : []),
+      ]),
+      `**本年级方法**\n\n${guide.grade_level_method}`,
+      '**易错点**', ...guide.likely_mistakes,
+      '**家长怎么讲**', ...guide.parent_teaching_sequence,
+      '**可以追问**', ...guide.follow_up_questions,
+      `**怎么检查**\n\n${guide.checking_method}`,
+    ].join('\n\n')).join('\n\n')
+  }
+  if (!content) content = creativeResult.value?.payload.feedback?.projection_markdown || taskMessageContent.value
+  return {
+    sourceMessageId: props.sourceMessageId || '',
+    content,
+    timestamp: taskCreatedAt.value
+      ? new Date(taskCreatedAt.value < 1_000_000_000_000 ? taskCreatedAt.value * 1000 : taskCreatedAt.value).toISOString()
+      : undefined,
+    agent_name: props.agentDisplayName,
+  }
+}
+defineExpose({ getConversationExportContent })
 const unconfirmedCreativeConflictCount = computed(
   () => creativeConflicts.value.filter((conflict) => !conflict.confirmed).length,
 )

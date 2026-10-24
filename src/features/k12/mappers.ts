@@ -207,7 +207,7 @@ export function gradeToResult(resp: GradeResp): GradeViewResult {
   const recorded = Boolean(resp.record_id)
   return {
     verify: gradeToVerify(resp),
-    solution: resp.solution,
+    solution: resp.report_markdown || resp.solution,
     verdict: resp.verdict,
     evidenceType: resp.evidence_type,
     badge: resp.badge,

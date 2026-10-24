@@ -165,7 +165,7 @@ export default {
     spotCheckFailedHint:
       "Let's go over this one together again — it clears automatically once solved",
     footnote:
-      'Tap “Practice” in the list above for a same-concept variant; tap “Parent confirmed” to remove it from the review queue.',
+      'Return to the list and select “加入练习集” (Add to practice set) to prepare a review. “不再复习” (No longer review) can be restored; mastery is based on actual answers and system assessment.',
     alreadyMastered: 'Parent confirmed ✓',
     delete: 'Delete this mistake',
     deleteHint: 'For removing mis-logged / duplicate entries — not for skipping hard problems.',

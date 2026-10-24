@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { FileText, FileJson, X } from 'lucide-vue-next'
+import { FileText, FileJson, FileType, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { exportConversationSnapshot } from './conversation-export'
+import type { ConversationExportFormat } from './conversation-export'
+import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
+const toast = useToast()
+const exporting = ref(false)
 
 const props = defineProps<{
   messages: { id: string; role: string; content: string; timestamp: string; agent_name?: string }[]
@@ -29,39 +33,54 @@ function onClickOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener('mousedown', onClickOutside, true))
 onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside, true))
 
-async function exportFormat(format: 'markdown' | 'json') {
-  await exportConversationSnapshot({
-    format,
-    title: props.sessionTitle || t('chat.title'),
-    messages: props.messages,
-    exportedAtLabel: t('chat.exportedAt'),
-    userLabel: t('chat.exportUser'),
-    assistantLabel: t('chat.modeAgent'),
-  })
-  emit('close')
+async function exportFormat(format: ConversationExportFormat) {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    await exportConversationSnapshot({
+      format,
+      title: props.sessionTitle || t('chat.title'),
+      messages: props.messages,
+      exportedAtLabel: t('chat.exportedAt'),
+      userLabel: t('chat.exportUser'),
+      assistantLabel: t('chat.modeAgent'),
+    })
+    emit('close')
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
 <template>
   <div ref="rootEl" class="hc-export-menu">
     <div class="hc-export-menu__header">
-      <span class="hc-export-menu__title">{{ t('common.download') }}</span>
+      <span class="hc-export-menu__title">{{ t('chat.exportConversation') }}</span>
       <button class="hc-export-menu__close" @click="emit('close')">
         <X :size="14" />
       </button>
     </div>
-    <button class="hc-export-menu__item" @click="exportFormat('markdown')">
+    <button class="hc-export-menu__item" :disabled="exporting" @click="exportFormat('markdown')">
       <FileText :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">Markdown</span>
         <span class="hc-export-menu__desc">{{ t('chat.exportMarkdownDesc') }}</span>
       </div>
     </button>
-    <button class="hc-export-menu__item" @click="exportFormat('json')">
+    <button class="hc-export-menu__item" :disabled="exporting" @click="exportFormat('json')">
       <FileJson :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">JSON</span>
         <span class="hc-export-menu__desc">{{ t('chat.exportJsonDesc') }}</span>
+      </div>
+    </button>
+    <button class="hc-export-menu__item" :disabled="exporting" @click="exportFormat('pdf')">
+      <FileType :size="16" />
+      <div class="hc-export-menu__info">
+        <span class="hc-export-menu__name">PDF</span>
+        <span class="hc-export-menu__desc">{{ t('chat.exportPdfDesc') }}</span>
       </div>
     </button>
   </div>

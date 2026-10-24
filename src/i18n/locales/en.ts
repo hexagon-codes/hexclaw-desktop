@@ -509,6 +509,8 @@ export default {
     exportUser: 'User',
     exportMarkdownDesc: '.md format for reading and sharing',
     exportJsonDesc: '.json format for data processing',
+    exportConversation: 'Export conversation',
+    exportPdfDesc: '.pdf format for printing and archiving',
     desktopWorkspace: 'Desktop Workspace',
     currentContext: 'Current Context',
     activeSession: 'Active Session',

@@ -59,10 +59,10 @@ defineProps<{
       <div style="flex: 1" />
 
       <!-- 右：会话操作 -->
-      <button v-if="messageCount > 0" ref="exportBtn" class="hc-chat__toolbar-btn" :title="t('common.download')" @click="showExport = !showExport">
+      <button v-if="messageCount > 0" ref="exportBtn" class="hc-chat__toolbar-btn" :title="t('chat.exportConversation')" :aria-label="t('chat.exportConversation')" @click="showExport = !showExport">
         <Download :size="15" />
       </button>
-      <ChatExportMenu v-if="showExport" :messages="chatStore.messages" :trigger-el="exportBtn" @close="showExport = false" />
+      <ChatExportMenu v-if="showExport" :messages="chatStore.messages" :session-title="chatStore.sessions.find((session) => session.id === chatStore.currentSessionId)?.title" :trigger-el="exportBtn" @close="showExport = false" />
 
       <span class="hc-chat__toolbar-sep" />
 

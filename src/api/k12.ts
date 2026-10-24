@@ -20,6 +20,7 @@ import {
  */
 import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
+import { assertBackendActive, backendScopeKey } from '@/services/backend-context'
 import { i18n } from '@/i18n'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
@@ -244,7 +245,28 @@ export type GradingAssessmentStatus =
   | 'out_of_scope'
   | 'untrusted'
 
+/** 客户端保留报告身份与题序，完整内容使用服务端同源 Markdown。 */
+export interface TeachingReportDTO {
+  schema_version: number
+  content_version: string
+  source: { kind: 'grading' | 'text_solve'; source_id: string; revision: number; digest: string }
+  metadata: { title: string; agent_display_name: string; grade_term: string; subject: string; report_date: string; timezone: string }
+  items: Array<{ problem_id: string; display_label: string; short_title: string }>
+}
+
+/** 原文字求解结算身份，用于准备同源文件，不改写求解证据。 */
+export interface TextSolveFinalizationDTO {
+  source_kind: 'text_solve'
+  solve_run_id: string
+  finalization_id: string
+  result_digest: string
+  input_digest: string
+}
+
 export interface GradeResp {
+  teaching_report?: TeachingReportDTO
+  report_markdown?: string
+  finalization?: TextSolveFinalizationDTO
   solution: string
   /** 证据比较结论；不得据此反推最终逐题状态。 */
   verdict: GradeVerdict
@@ -309,8 +331,15 @@ export interface SolveReq {
   grade: string
   problem: string
   knowledge_points?: string[]
+  solve_run_id?: string
+  source_session?: string
+  source_message_id?: string
+  input_revision?: number
 }
 export interface SolveResp {
+  teaching_report?: TeachingReportDTO
+  report_markdown?: string
+  finalization?: TextSolveFinalizationDTO
   solution: string
   verdict: GradeVerdict
   evidence_type: EvidenceType
@@ -1840,13 +1869,18 @@ export interface RenderReq {
   }
 }
 /** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
-export async function renderDocument(req: RenderReq): Promise<Blob> {
+export async function renderDocument(
+  req: RenderReq,
+  connectionScope = backendScopeKey(),
+): Promise<Blob> {
   const blob = await api<Blob, 'blob'>('/api/v1/render', {
     method: 'POST',
     body: req,
     responseType: 'blob',
     timeout: 120_000,
+    headers: { 'x-hexclaw-connection-scope': connectionScope },
   })
+  assertBackendActive(connectionScope)
   await assertRenderedDocument(blob, req.format)
   return blob
 }
@@ -3102,6 +3136,18 @@ export interface PrepareGradingFinalArtifactOutputReq {
 export interface PreparePrintableArtifactResp {
   artifact: PrintableArtifactDTO
   replayed?: boolean
+}
+
+export interface PrepareTextSolveOutputReq {
+  agent: string
+  solve_run_id: string
+  text_finalization_id: string
+  text_finalization_digest: string
+  title?: string
+}
+
+export function k12PrepareTextSolveOutput(req: PrepareTextSolveOutputReq) {
+  return apiPost<PreparePrintableArtifactResp>(`${BASE}/print-artifacts`, req)
 }
 
 export function k12PrepareGradingFinalArtifactOutput(req: PrepareGradingFinalArtifactOutputReq) {

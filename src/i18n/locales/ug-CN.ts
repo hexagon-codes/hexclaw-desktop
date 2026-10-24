@@ -527,6 +527,8 @@ export default {
     exportUser: 'ئىشلەتكۈچى',
     exportMarkdownDesc: '.md فورماتى، ئوقۇش ۋە ھەمبەھرلەشكە ماس',
     exportJsonDesc: '.json فورماتى، سانلىق مەلۇمات بىر تەرەپ قىلىشقا ماس',
+    exportConversation: 'سۆھبەتنى چىقىرىش',
+    exportPdfDesc: '.pdf فورماتى، بېسىش ۋە ئارخىپلاشقا ماس',
     desktopWorkspace: 'ئۈستەلئۈستى خىزمەت رايونى',
     currentContext: 'نۆۋەتتىكى ئارقا كۆرۈنۈش',
     activeSession: 'نۆۋەتتىكى سۆھبەت',

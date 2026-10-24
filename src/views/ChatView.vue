@@ -1150,18 +1150,30 @@ const scenarioChatActions = computed<ScenarioChatActions>(() => ({
   toggleArtifacts: () =>
     onWorkspaceModeChange(chatWorkspaceMode.value === 'artifacts' ? 'focus' : 'artifacts'),
   openContext: () => onWorkspaceModeChange('context'),
-  exportConversation: (format) =>
+  exportConversation: (format, content = []) =>
     exportConversationSnapshot({
       format,
       title:
         chatStore.sessions.find((item) => item.id === chatStore.currentSessionId)?.title ||
         t('chat.title'),
-      messages: chatStore.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp,
-        agent_name: message.agent_name,
-      })),
+      messages: chatStore.messages.flatMap((message) => {
+        const images = getMessageAttachments(message)
+          .filter((attachment) => attachment.type === 'image')
+          .map((attachment) => attachmentSource(attachment))
+          .filter((source) => source && !message.content.includes(source))
+          .map((source) => `![](${source})`)
+        return [{
+          role: message.role,
+          content: [message.content, ...images].filter(Boolean).join('\n\n'),
+          timestamp: message.timestamp,
+          agent_name: message.agent_name,
+        }, ...content.filter((item) => item.sourceMessageId === message.id).map((item) => ({
+          role: 'assistant',
+          content: item.content,
+          timestamp: item.timestamp || message.timestamp,
+          agent_name: item.agent_name,
+        }))]
+      }),
       exportedAtLabel: t('chat.exportedAt'),
       userLabel: t('chat.exportUser'),
       assistantLabel: t('chat.modeAgent'),
