@@ -23,6 +23,8 @@ import {
 import logoUrl from '@/assets/logo.png'
 import { useAgentsStore } from '@/stores/agents'
 import { scenarioRegistry } from '@/shell/scenario/registry'
+import { bundledAgentTemplates, loadAgentTemplateCatalog, agentTemplateMetadata, type AgentTemplateSnapshot } from '@/services/agentTemplateCatalog'
+import { backendScopeKey } from '@/services/backend-context'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import { getSkills } from '@/api/skills'
@@ -143,9 +145,15 @@ function clearSoulToDefault() {
 
 /** 第一步「空白新建」→ 第二步空表单 */
 function startFromBlank() {
+  templateSelectionGeneration += 1
   resetAddAgentDialog()
   selectedTemplateName.value = ''
   addStep.value = 2
+}
+
+function backToAddAgentStart() {
+  templateSelectionGeneration += 1
+  addStep.value = 1
 }
 
 /** 第一步「从模板库开始」→ 关弹窗，交给唯一货架（模板库 tab）。
@@ -241,6 +249,7 @@ onMounted(async () => {
     loadAgents(),
     loadRules(),
     settingsStore.loadConfig(),
+    loadTemplateCatalog(),
   ])
 
   // Handle query params from IM page navigation: ?edit=agentName
@@ -625,6 +634,7 @@ function resetAddAgentDialog() {
 const addAgentDialog = ref<HTMLElement | null>(null)
 
 function openAddAgentDialog(focusDialog = false) {
+  templateSelectionGeneration += 1
   errorMsg.value = ''
   resetAddAgentDialog()
   showAddAgent.value = true
@@ -637,6 +647,7 @@ function openAddAgentDialog(focusDialog = false) {
 }
 
 function closeAddAgentDialog() {
+  templateSelectionGeneration += 1
   showAddAgent.value = false
   showAddAdvanced.value = false
   showAddSkills.value = false
@@ -731,146 +742,43 @@ interface AgentTemplate {
   desc: string
   soul: string
   expertise: string[]
+  snapshot: AgentTemplateSnapshot
 }
-const splitExp = (s: string): string[] =>
-  s
-    .split('·')
-    .map((x) => x.trim())
-    .filter(Boolean)
-const AGENT_TEMPLATES = computed<AgentTemplate[]>(() => [
-  {
-    key: 'assistant',
-    slug: 'general-assistant',
-    icon: Bot,
-    name: t('agents.tpl.assistant.name', '通用助手'),
-    desc: t('agents.tpl.assistant.desc', '全能问答 · 友好简洁'),
-    soul: t(
-      'agents.tpl.assistant.soul',
-      '你是通用智能助手，全面、准确地帮助用户解决各种问题，善于理解意图、把复杂问题讲清楚，不编造不确定的信息。',
-    ),
-    expertise: splitExp(t('agents.tpl.assistant.exp', '通用问答·任务规划·信息整理')),
-  },
-  {
-    key: 'support',
-    slug: 'support-agent',
-    icon: Headset,
-    name: t('agents.tpl.support.name', '客服助手'),
-    desc: t('agents.tpl.support.desc', 'IM 群答疑 · 耐心专业'),
-    soul: t(
-      'agents.tpl.support.soul',
-      '你是 IM 群里的客服助手，耐心、专业地解答用户疑问，遇到不确定的问题先澄清再回答，不编造信息。',
-    ),
-    expertise: splitExp(t('agents.tpl.support.exp', '问题排查·话术应答·工单流转')),
-  },
-  {
-    key: 'content',
-    slug: 'content-writer',
-    icon: PenLine,
-    name: t('agents.tpl.content.name', '内容创作'),
-    desc: t('agents.tpl.content.desc', '社媒文案 · 活泼有网感'),
-    soul: t(
-      'agents.tpl.content.soul',
-      '你是内容创作助手，擅长写小红书、公众号等社媒文案，语气活泼、有网感、会用 emoji，并能给出标题与话题标签建议。',
-    ),
-    expertise: splitExp(t('agents.tpl.content.exp', '社媒文案·标题优化·话题标签')),
-  },
-  {
-    key: 'code',
-    slug: 'coding-buddy',
-    icon: Code,
-    name: t('agents.tpl.code.name', '编程搭子'),
-    desc: t('agents.tpl.code.desc', '读写代码 · 简洁可运行'),
-    soul: t(
-      'agents.tpl.code.soul',
-      '你是编程搭子，能读写代码、解释实现、执行命令，回答简洁，优先给出可运行的最小方案。',
-    ),
-    expertise: splitExp(t('agents.tpl.code.exp', '读写代码·调试排错·命令执行')),
-  },
-  {
-    key: 'translate',
-    slug: 'translator',
-    icon: Languages,
-    name: t('agents.tpl.translate.name', '翻译官'),
-    desc: t('agents.tpl.translate.desc', '多语种互译 · 信达雅'),
-    soul: t(
-      'agents.tpl.translate.soul',
-      '你是专业翻译官，在中、英等多语种之间互译，做到信、达、雅，保留专有名词与代码不译，必要时附注解。',
-    ),
-    expertise: splitExp(t('agents.tpl.translate.exp', '多语种互译·术语保留·译注说明')),
-  },
-  {
-    key: 'report',
-    slug: 'daily-report',
-    icon: BarChart3,
-    name: t('agents.tpl.report.name', '日报助理'),
-    desc: t('agents.tpl.report.desc', '定时日报 · 简洁理性'),
-    soul: t(
-      'agents.tpl.report.soul',
-      '你是日报分析助理，把零散信息整理成结构清晰、简洁理性的日报，突出关键指标与异常，给出可执行建议。',
-    ),
-    expertise: splitExp(t('agents.tpl.report.exp', '信息归纳·指标提炼·异常提示')),
-  },
-  {
-    key: 'email',
-    slug: 'email-assistant',
-    icon: Mail,
-    name: t('agents.tpl.email.name', '邮件助理'),
-    desc: t('agents.tpl.email.desc', '邮件收发 · 正式礼貌'),
-    soul: t(
-      'agents.tpl.email.soul',
-      '你是邮件助理，帮用户起草、回复邮件，语气正式礼貌、条理清楚，按收件人身份调整措辞。',
-    ),
-    expertise: splitExp(t('agents.tpl.email.exp', '邮件起草·礼貌措辞·收发管理')),
-  },
-  {
-    key: 'data',
-    slug: 'data-analyst',
-    icon: Database,
-    name: t('agents.tpl.data.name', '数据分析师'),
-    desc: t('agents.tpl.data.desc', 'SQL · 报表 · 洞察'),
-    soul: t(
-      'agents.tpl.data.soul',
-      '你是数据分析师，能写 SQL、解读报表、发现趋势与异常，结论先行并用数据支撑，避免主观臆断。',
-    ),
-    expertise: splitExp(t('agents.tpl.data.exp', 'SQL·报表解读·趋势洞察')),
-  },
-  {
-    key: 'kb',
-    slug: 'kb-qa',
-    icon: BookOpen,
-    name: t('agents.tpl.kb.name', '知识库问答'),
-    desc: t('agents.tpl.kb.desc', '知识库检索 · 引用严谨'),
-    soul: t(
-      'agents.tpl.kb.soul',
-      '你是知识库问答助手，基于检索到的资料作答，严格引用来源，资料不足时明确说“未找到”，不编造。',
-    ),
-    expertise: splitExp(t('agents.tpl.kb.exp', '知识库检索·来源引用·严谨作答')),
-  },
-  {
-    key: 'meeting',
-    slug: 'meeting-notes',
-    icon: FileText,
-    name: t('agents.tpl.meeting.name', '会议纪要'),
-    desc: t('agents.tpl.meeting.desc', '录音纪要 · 结构化'),
-    soul: t(
-      'agents.tpl.meeting.soul',
-      '你是会议纪要助手，把录音或讨论整理成结构化纪要：议题、结论、待办（含负责人与截止），措辞中立。',
-    ),
-    expertise: splitExp(t('agents.tpl.meeting.exp', '结构化纪要·待办提取·中立措辞')),
-  },
-  {
-    key: 'research',
-    slug: 'research-assistant',
-    icon: Search,
-    name: t('agents.tpl.research.name', '研究助理'),
-    desc: t('agents.tpl.research.desc', '资料检索 · 综述引用'),
-    soul: t(
-      'agents.tpl.research.soul',
-      '你是研究助理，擅长检索资料、归纳综述、对比观点，给出带引用的结论，区分事实与推测。',
-    ),
-    expertise: splitExp(t('agents.tpl.research.exp', '资料检索·综述归纳·引用标注')),
-  },
-])
+// 图标属于本端组件；模板正文和语言来自同一后端机读主源及其镜像。
+const templateIcons: Record<string, Component> = { Bot, Headset, PenLine, Code, Languages, BarChart3, Mail, Database, BookOpen, FileText, Search }
+const templateSnapshots = ref<AgentTemplateSnapshot[]>([])
+const templateCatalogLoaded = ref(false)
+const templateCatalogLocale = ref('')
+const templateCatalogScope = ref('')
+const templateCatalogError = ref('')
+let templateCatalogGeneration = 0
+let templateSelectionGeneration = 0
+async function loadTemplateCatalog() {
+  const scope = backendScopeKey()
+  const requestedLocale = locale.value
+  const generation = ++templateCatalogGeneration
+  const isCurrent = () => generation === templateCatalogGeneration && scope === backendScopeKey() && requestedLocale === locale.value
+  try {
+    const snapshots = await loadAgentTemplateCatalog(requestedLocale)
+    if (!isCurrent()) return
+    templateSnapshots.value = snapshots
+    templateCatalogLoaded.value = true
+    templateCatalogLocale.value = requestedLocale
+    templateCatalogScope.value = scope
+    templateCatalogError.value = ''
+  } catch (error) {
+    if (!isCurrent()) return
+    templateCatalogError.value = error instanceof Error ? error.message : String((error as { message?: string }).message || 'Agent template catalog is unavailable')
+    logger.warn('加载智能体模板目录失败', error)
+  }
+}
+watch(locale, () => { void loadTemplateCatalog() })
+watch(() => backendScopeKey(), () => { void loadTemplateCatalog() })
+const AGENT_TEMPLATES = computed<AgentTemplate[]>(() => {
+  const snapshots = templateCatalogLoaded.value && templateCatalogLocale.value === locale.value && templateCatalogScope.value === backendScopeKey()
+    ? templateSnapshots.value : bundledAgentTemplates(locale.value)
+  return snapshots.map(snapshot => ({ key: snapshot.template_key, slug: snapshot.slug, icon: templateIcons[snapshot.icon_key] || Bot, name: snapshot.name, desc: snapshot.description, soul: snapshot.system_prompt, expertise: [...snapshot.expertise], snapshot }))
+})
 
 // 二级 tab 进顶部栏（PageToolbar #tabs 槽），用 SegmentedControl，与其它页一致（对齐原型 tbar .seg）
 const agentTabs = computed(() => [
@@ -889,13 +797,27 @@ const filteredTemplates = computed(() => {
 /** 模板库卡片 → 预填新建表单并直接进第二步（与角色模板入口同样的 nextTick 时序）。 */
 async function useLibraryTemplate(tpl: AgentTemplate) {
   errorMsg.value = ''
+  const selectionGeneration = ++templateSelectionGeneration
+  const scope = backendScopeKey()
+  const requestedLocale = locale.value
+  const isCurrentSelection = () => selectionGeneration === templateSelectionGeneration
+    && scope === backendScopeKey() && requestedLocale === locale.value
+  if (!templateCatalogLoaded.value || templateCatalogLocale.value !== locale.value || templateCatalogScope.value !== backendScopeKey() || templateCatalogError.value) await loadTemplateCatalog()
+  if (!isCurrentSelection()) return
+  if (templateCatalogError.value) { errorMsg.value = templateCatalogError.value; return }
+  if (!templateCatalogLoaded.value || templateCatalogLocale.value !== locale.value || templateCatalogScope.value !== backendScopeKey()) return
+  const selected = templateSnapshots.value.find(snapshot => snapshot.template_key === tpl.key)
+  if (!selected) { errorMsg.value = 'Agent template is unavailable'; return }
+  tpl = { ...tpl, slug: selected.slug, name: selected.name, desc: selected.description, soul: selected.system_prompt, expertise: [...selected.expertise], snapshot: selected }
   showAddAgent.value = true
   // 等 showAddAgent watcher 的 reset 跑完，再写入预填值（否则会被清空）
   await nextTick()
+  if (!isCurrentSelection()) return
   newAgent.value.name = tpl.slug
   newAgent.value.display_name = tpl.name
   newAgent.value.description = tpl.desc
   newAgent.value.system_prompt = tpl.soul
+  newAgent.value.metadata = { ...newAgent.value.metadata, ...agentTemplateMetadata(tpl.snapshot) }
   selectedTemplateName.value = tpl.name
   selectedTemplateExpertise.value = tpl.expertise
   addStep.value = 2
@@ -920,6 +842,7 @@ function openScenarioAgentEditor(agent: AgentConfig): boolean {
 }
 
 function closeScenarioForm() {
+  templateSelectionGeneration += 1
   activeScenarioAgent.value = null
   activeScenarioForm.value = null
 }
@@ -1865,7 +1788,7 @@ async function handleUnregisterAgent() {
                 <button
                   class="px-3 py-1.5 rounded-lg text-sm font-medium"
                   :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
-                  @click="addStep = 1"
+                  @click="backToAddAgentStart()"
                 >
                   {{ t('common.back', '上一步') }}
                 </button>
