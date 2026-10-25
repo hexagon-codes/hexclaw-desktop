@@ -1692,6 +1692,8 @@ export interface HexbakArchive {
   problem_attempts?: HexbakProblemAttemptSnapshot[]
   /** v8冻结教学图；导入导出必须完整保留，不在客户端重绘。 */
   teaching_diagrams?: HexbakTeachingDiagramArchive[]
+  /** v9冻结来源关联、原题输入及页元数据；客户端完整透传，由服务端核验归属与有效性。 */
+  review_sources?: Record<string, unknown> | null
   checksum: string
 }
 export interface K12RestoreResp {
@@ -2187,6 +2189,7 @@ export interface ImageTaskHomeworkProjectionDTO {
 }
 
 export interface GradingFinalArtifactDTO {
+  teaching_report?: TeachingReportDTO
   artifact_id: string
   artifact_digest: string
   title?: string
@@ -3078,6 +3081,7 @@ export type GenericPrintSourceKind =
   | 'practice_answer'
   | 'weekly_practice_snapshot'
   | 'grading_final_artifact'
+  | 'text_solve_finalization'
   | 'unit_summary'
 
 export interface PrepareGenericPrintJobReq {
