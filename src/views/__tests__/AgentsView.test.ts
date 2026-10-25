@@ -100,6 +100,16 @@ vi.mock('@/api/assistant', () => ({
   updateAssistantSoul,
 }))
 
+vi.mock('@/services/agentTemplateCatalog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/agentTemplateCatalog')>()
+  return {
+    ...actual,
+    loadAgentTemplateCatalog: vi.fn(async (locale: string) =>
+      actual.bundledAgentTemplates(locale),
+    ),
+  }
+})
+
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }
