@@ -56,7 +56,7 @@ function onProfileLoaded(entry: MemoryEntry | null) {
 
 async function onProfileSaved() {
   await loadMemory()
-  if (searchApplied.value) await handleSearch()
+  if (searchApplied.value) await handleSearch(true)
 }
 const capacity = ref<{ used: number; max: number; archived?: number } | null>(null)
 const legacyMode = ref(false)
@@ -70,6 +70,7 @@ const hasMore = ref(false)
 const totalEntries = ref(0)
 const loadingMore = ref(false)
 let memoryRequestGen = 0
+let memoryLoaded = false
 const movingId = ref<string | null>(null)
 const MEMORY_PAGE_SIZE = 50
 
@@ -155,7 +156,7 @@ const typeFilterModel = computed<string>({
   set: (v) => {
     if (typeFilter.value === (v as 'all' | MemoryType)) return
     typeFilter.value = v as 'all' | MemoryType
-    refreshMemoryList()
+    refreshMemoryList(true)
   },
 })
 const sourceFilterModel = computed<string>({
@@ -163,7 +164,7 @@ const sourceFilterModel = computed<string>({
   set: (v) => {
     if (sourceFilter.value === (v as 'all' | MemorySource)) return
     sourceFilter.value = v as 'all' | MemorySource
-    refreshMemoryList()
+    refreshMemoryList(true)
   },
 })
 // 新增记忆弹窗的「类型」下拉（替代原生 <select>，value 一律 string）
@@ -221,11 +222,13 @@ watch(searchQuery, (value) => {
   }
 })
 
-async function loadMemory(reset = true) {
+async function loadMemory(reset = true, preserveLoaded = true) {
   if (!reset && !nextCursor.value) return
   const requestGen = ++memoryRequestGen
-  if (reset) loading.value = true
-  else loadingMore.value = true
+  // 已有内容刷新时保持同一列表节点，只有首次读取使用整页加载态。
+  if (reset && !memoryLoaded) loading.value = true
+  if (!reset) loadingMore.value = true
+  const wantedCount = reset && preserveLoaded ? entries.value.length : 0
   errorMsg.value = ''
   try {
     const params: {
@@ -243,12 +246,21 @@ async function loadMemory(reset = true) {
     if (typeFilter.value !== 'all') params.type = typeFilter.value
     if (sourceFilter.value !== 'all') params.source = sourceFilter.value
     if (!reset) params.cursor = nextCursor.value
-    const res = await getMemoryEntries(params)
+    let res = await getMemoryEntries(params)
     if (requestGen !== memoryRequestGen) return
+    const nextEntries = [...(res.entries || [])]
+    // 后台刷新覆盖已加载的全部页，避免刷新后退回首屏并改变滚动位置。
+    while (reset && nextEntries.length < wantedCount && res.has_more && res.next_cursor) {
+      const cursor = res.next_cursor
+      res = await getMemoryEntries({ ...params, cursor })
+      if (requestGen !== memoryRequestGen) return
+      nextEntries.push(...(res.entries || []))
+      if (res.next_cursor === cursor) break
+    }
     legacyMode.value = Boolean(res.legacy_mode)
     legacyContent.value = res.legacy_content ?? ''
-    const nextEntries = res.entries || []
     entries.value = reset ? nextEntries : [...entries.value, ...nextEntries]
+    memoryLoaded = true
     summary.value = res.summary || ''
     capacity.value = res.capacity || null
     if (legacyMode.value) {
@@ -278,13 +290,16 @@ async function switchMemoryView(view: MemoryViewMode) {
   if (legacyMode.value || memoryView.value === view || loading.value) return
   memoryView.value = view
   cancelEdit()
-  await loadMemory()
+  await loadMemory(true, false)
 }
 
-async function refreshMemoryList() {
-  cancelEdit()
-  clearSearchState()
-  await loadMemory()
+async function refreshMemoryList(resetInteraction = false) {
+  if (resetInteraction) {
+    cancelEdit()
+    clearSearchState()
+  }
+  await loadMemory(true, !resetInteraction)
+  if (!resetInteraction && searchApplied.value) await handleSearch(true)
 }
 
 async function loadMoreMemory() {
@@ -519,7 +534,7 @@ async function handleSave() {
 }
 
 // ─── Search ──────────────────────────────────────────────
-async function handleSearch() {
+async function handleSearch(silent = false) {
   if (!searchQuery.value.trim()) {
     clearSearchState(true)
     return
@@ -534,7 +549,7 @@ async function handleSearch() {
   if (searchAbortController) searchAbortController.abort()
   const ac = new AbortController()
   searchAbortController = ac
-  searching.value = true
+  searching.value = !silent || !searchApplied.value
   searchApplied.value = true
   errorMsg.value = ''
   try {

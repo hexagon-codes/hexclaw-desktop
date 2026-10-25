@@ -37,6 +37,7 @@ export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
 export type {
   MemoryEntry,
+  MemoryScope,
   MemoryType,
   MemorySource,
   MemoryStatus,

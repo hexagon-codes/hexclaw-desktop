@@ -5,6 +5,7 @@ import type {
   MemoryType,
   MemorySource,
   MemoryViewMode,
+  MemoryScope,
 } from '@/types'
 
 export type { MemoryEntry, MemoryListResponse }
@@ -113,11 +114,12 @@ export async function getMemoryEntries(params?: MemoryListParams) {
 }
 
 /** 创建单条记忆 */
-export function createMemoryEntry(content: string, type?: MemoryType, source?: MemorySource) {
+export function createMemoryEntry(content: string, type?: MemoryType, source?: MemorySource, scope?: MemoryScope) {
   return apiPost<MemoryEntry>('/api/v1/memory', {
     content,
     type: type ?? 'fact',
     source: source ?? 'manual',
+    ...(scope ? { scope } : {}),
   })
 }
 

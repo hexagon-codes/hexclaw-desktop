@@ -16,7 +16,15 @@ export type MemoryStatus = 'active' | 'archived'
 export type MemoryViewMode = MemoryStatus | 'all'
 
 /** 单条记忆 */
+export interface MemoryScope {
+  agent?: string
+  skills?: string[]
+  subject_id?: string
+  project_id?: string
+}
+
 export interface MemoryEntry {
+  scope?: MemoryScope
   id: string
   content: string
   type: MemoryType

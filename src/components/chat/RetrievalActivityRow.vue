@@ -8,15 +8,43 @@ const props = defineProps<{ activity: RetrievalActivity; historical?: boolean }>
 const { t } = useI18n()
 const hits = computed(() => props.activity.knowledge_hits ?? props.activity.memory_hits ?? [])
 const residentHits = computed(() => props.activity.resident_hits ?? [])
+const isTurnMemory = computed(
+  () => props.activity.kind === 'memory' && props.activity.source !== 'history',
+)
+const memoryCount = computed(() => {
+  const ids = new Set<string>()
+  let unidentified = 0
+  for (const hit of [...residentHits.value, ...hits.value]) {
+    const id = typeof hit.id === 'string' ? hit.id.trim() : ''
+    if (id) ids.add(id)
+    else unidentified++
+  }
+  // 旧回执缺少身份时保留独立记录，不按正文猜测合并。
+  return ids.size + unidentified
+})
 const source = ref<Record<string, unknown> | null>(null)
-const hasDetails = computed(() => hits.value.length > 0)
+const hasDetails = computed(() => residentHits.value.length > 0 || hits.value.length > 0)
 const groups = computed(() => [
+  ...(residentHits.value.length
+    ? [{
+        name: isTurnMemory.value
+          ? t('memory.includedMemory')
+          : hits.value.length ? 'Resident' : '',
+        hits: residentHits.value,
+      }]
+    : []),
   ...(hits.value.length
-    ? [{ name: residentHits.value.length ? 'Recalled' : '', hits: hits.value }]
+    ? [{
+        name: isTurnMemory.value
+          ? t('memory.retrievedMemory')
+          : residentHits.value.length ? 'Recalled' : '',
+        hits: hits.value,
+      }]
     : []),
 ])
 const countLabel = computed(() => {
   if (props.activity.status === 'failed') return 'Retrieval failed'
+  if (isTurnMemory.value) return t('memory.turnContextCount', { count: memoryCount.value })
   if (residentHits.value.length)
     return `${residentHits.value.length} resident${hits.value.length ? ` · ${hits.value.length} recalled` : ''}`
   return hits.value.length
@@ -44,11 +72,13 @@ function displayContent(hit: Record<string, unknown>) {
     : ''
 }
 const title = computed(() =>
-  props.activity.kind === 'knowledge'
-    ? '知识库检索'
-    : props.activity.source === 'history'
-      ? '历史会话召回'
-      : '记忆召回',
+  isTurnMemory.value
+    ? t('memory.turnContextTitle')
+    : props.activity.kind === 'knowledge'
+      ? '知识库检索'
+      : props.activity.source === 'history'
+        ? '历史会话召回'
+        : '记忆召回',
 )
 function sourceURL(hit: Record<string, unknown>) {
   if (typeof hit.source !== 'string') return undefined
@@ -78,6 +108,7 @@ function sourceURL(hit: Record<string, unknown>) {
       <span v-if="historical" class="hc-process-tool__meta">Summary</span>
     </summary>
     <div v-if="hasDetails" class="hc-process-tool__detail">
+      <p v-if="isTurnMemory" class="hc-process-tool__meta">{{ t('memory.turnContextNotice') }}</p>
       <template v-for="group in groups" :key="group.name">
         <div v-if="group.name" class="hc-process-tool__meta">{{ group.name }}</div>
         <div
