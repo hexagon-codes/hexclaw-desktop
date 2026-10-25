@@ -1,5 +1,6 @@
-import { apiPost } from './client'
+import { api, apiPost } from './client'
 import { env } from '@/config/env'
+import { assertBackendActive, backendScopeKey } from '@/services/backend-context'
 
 export interface ExtractedDocument {
   text: string
@@ -66,3 +67,62 @@ import {
 } from './native-files'
 
 const DOCUMENT_EXTRACT_PATH = '/api/v1/documents/extract'
+
+export interface RenderReq {
+  content: string
+  format: 'pdf' | 'docx' | 'html'
+  title?: string
+  /** PDF默认采用共享版式，仅当次明确请求可覆盖，不改变其他格式。 */
+  options?: {
+    Locale?: string
+    pdf_header_footer?: boolean
+    pdf_layout?: 'standard' | 'custom'
+  }
+}
+
+/** 将Markdown发送到平台渲染服务；返回当前连接的真实文档字节，失败保留原错误。 */
+export async function renderDocument(
+  req: RenderReq,
+  connectionScope = backendScopeKey(),
+): Promise<Blob> {
+  const blob = await api<Blob, 'blob'>('/api/v1/render', {
+    method: 'POST',
+    body: req,
+    responseType: 'blob',
+    timeout: 120_000,
+    headers: { 'x-hexclaw-connection-scope': connectionScope },
+  })
+  assertBackendActive(connectionScope)
+  await assertRenderedDocument(blob, req.format)
+  return blob
+}
+
+/** 格式核验沿用原合同，防止错误正文被保存为文档。 */
+async function assertRenderedDocument(blob: Blob, format: RenderReq['format']): Promise<void> {
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new Error(`render 返回空的 ${format.toUpperCase()} 文件`)
+  }
+  const mime = blob.type.toLowerCase()
+  if (mime.includes('json')) {
+    throw new Error(`render 返回错误 JSON，不能保存为 ${format.toUpperCase()} 文件`)
+  }
+  const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer())
+  if (format === 'pdf') {
+    const pdfMagic = [0x25, 0x50, 0x44, 0x46, 0x2d]
+    if (!pdfMagic.every((value, index) => bytes[index] === value)) {
+      throw new Error('render 返回的 PDF 文件格式无效（缺少 %PDF- magic）')
+    }
+    return
+  }
+  if (format === 'docx') {
+    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+    if (!isZip) {
+      throw new Error('render 返回的 DOCX 文件格式无效（缺少 ZIP magic）')
+    }
+    return
+  }
+  const prefix = new TextDecoder().decode(bytes).trimStart().toLowerCase()
+  if (!prefix.startsWith('<!doctype') && !prefix.startsWith('<html')) {
+    throw new Error('render 返回的 HTML 文件格式无效')
+  }
+}

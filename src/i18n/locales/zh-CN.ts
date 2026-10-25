@@ -353,6 +353,7 @@ export default {
     clearConfirm: '清空',
     receivedReply: '收到回复',
     builtinSkillNoModel: '内置技能 · 未调用模型',
+    modelUsed: '本次模型：',
     noModels: '未配置模型',
     typing: '正在输入...',
     botName: '小蟹',

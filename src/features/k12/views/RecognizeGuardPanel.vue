@@ -32,6 +32,7 @@ import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import SourceIssueResolver from '../components/SourceIssueResolver.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
+import FinalArtifactPdfAttachment from '../components/FinalArtifactPdfAttachment.vue'
 import {
   sourceIssueOperationLocked,
   type SourceIssueIntent,
@@ -42,6 +43,7 @@ import { k12GetImageTask, k12SubmitImageTaskProblemSourceAction, k12UploadAsset 
 import { projectImageTaskProblemSourceActionSnapshot } from '../source-action-projection'
 import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
+import { finalArtifactPdfTitle } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { k12MathDisplayMarkdown, k12QuestionSourceDisplayLabel } from '../source-display'
 import {
@@ -483,7 +485,7 @@ const taskMessageContent = computed(() => {
 // 导出读取与当前任务相同的冻结结果，不能以空的用户图片消息代替讲题正文。
 function getConversationExportContent() {
   let content = finalArtifact.value?.canonical_markdown || ''
-  if (blankWorksheetGuide.value.length) {
+  if (!content && blankWorksheetGuide.value.length) {
     content = blankWorksheetGuide.value.map(({ question, guide }, index) => [
       `## ${index + 1}. ${question}`,
       `**答案**\n\n${guide.answer}`,
@@ -592,8 +594,7 @@ const finalArtifactDigest = computed(() => {
   return typeof digest === 'string' ? digest.trim() : ''
 })
 const finalArtifactTitle = computed(() => {
-  const title = finalArtifact.value?.title
-  if (typeof title === 'string' && title.trim()) return title.trim()
+  if (finalArtifact.value) return finalArtifactPdfTitle(finalArtifact.value)
   if (currentTaskIntent.value === 'blank_worksheet') return '空白卷 · 家长讲题指南'
   if (isWithSkips.value) {
     return `整页批改完成 · 有 ${taskCoverage.value?.skipped ?? 0} 题跳过`
@@ -3019,7 +3020,7 @@ async function coldStart() {
           :artifact-id="finalArtifactID"
           :artifact-digest="finalArtifactDigest"
           :artifact-title="finalArtifactTitle"
-          :actions="['print', 'export_pdf']"
+          :actions="['print']"
           @intent="emit('finalArtifactAction', $event)"
         />
       </template>
@@ -3218,6 +3219,13 @@ async function coldStart() {
       {{ t('k12.recognize.empty') }}
     </p>
 
+    <FinalArtifactPdfAttachment
+      v-if="finalArtifactID && finalArtifactDigest && (currentTaskIntent === 'completed_homework' || currentTaskIntent === 'blank_worksheet')"
+      :agent="agentId"
+      :artifact-id="finalArtifactID"
+      :artifact-digest="finalArtifactDigest"
+      :title="finalArtifactTitle"
+    />
     <MessageFooter
       v-if="showTaskFooter"
       class="rec-panel__footer msg-footer"

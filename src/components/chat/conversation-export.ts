@@ -1,8 +1,8 @@
 import { saveBlobInApp } from '@/utils/download'
 import { isTauri } from '@/utils/platform'
-import { renderDocument } from '@/api/k12'
+import { renderDocument } from '@/api/documents'
 import { api } from '@/api/client'
-import { k12AssetURL } from '@/api/k12-asset-url'
+import { assetContentURL } from '@/api/assets'
 import { backendMediaURL } from '@/composables/useBackendMedia'
 import { assertBackendActive, backendRelativePath, backendScopeKey } from '@/services/backend-context'
 import { imageSrc } from '@/utils/chat-compose'
@@ -22,7 +22,7 @@ async function inlineConversationImages(content: string, scope: string): Promise
     const assetOwner = source.startsWith('asset://')
       ? source.slice('asset://'.length, source.lastIndexOf('/'))
       : ''
-    const normalized = assetOwner ? k12AssetURL(assetOwner, source) : backendMediaURL(source)
+    const normalized = assetOwner ? assetContentURL(assetOwner, source) : backendMediaURL(source)
     const path = normalized.startsWith('/api/') ? normalized : backendRelativePath(normalized)
     if (!path?.startsWith('/api/')) continue
     assertBackendActive(scope)

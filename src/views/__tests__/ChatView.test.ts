@@ -886,6 +886,7 @@ describe('ChatView — E2E 关键路径', () => {
         agent_name: 'model-agent',
         metadata: {
           provider: 'fixture-provider',
+          provider_display_name: 'OpenAI',
           model: 'gpt-5.6-sol',
         },
       },

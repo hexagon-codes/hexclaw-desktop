@@ -6,6 +6,7 @@
  */
 import type { RecordItem } from '@/contracts'
 import { isTauri } from '@/utils/platform'
+import { savePdfFile } from '@/utils/download'
 import { renderDocument, type ExportMdResp } from '@/api/k12'
 
 export interface WorksheetMeta {
@@ -363,7 +364,7 @@ export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta)
 }
 
 /** 生成跨平台安全的 PDF 文件名。 */
-function safePdfFilename(title: string): string {
+export function safePdfFilename(title: string): string {
   const base = title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'HexClaw'
   return `${base}.pdf`
 }
@@ -409,27 +410,7 @@ export function savePracticePaperPdf(markdown: string, title: string): Promise<b
 
 /** 保存服务端已冻结的 PDF Artifact；不得重新渲染或改写其字节。 */
 export async function savePdfArtifact(pdf: Blob, title: string): Promise<boolean> {
-  if (!isTauri()) {
-    if (typeof document === 'undefined') return false
-    const url = URL.createObjectURL(pdf)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = safePdfFilename(title)
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
-    return true
-  }
-  const { copyGrantedFile, createNativeFileOperation, pickSaveFileGrant, stageBlob } =
-    await import('@/api/native-files')
-  const filename = safePdfFilename(title)
-  const operationId = createNativeFileOperation('save-pdf-artifact')
-  const destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
-  if (!destination) return false
-  const source = await stageBlob(pdf, filename, { purpose: 'save_copy', operationId })
-  await copyGrantedFile(source, destination)
-  return true
+  return savePdfFile(pdf, safePdfFilename(title))
 }
 
 /** 正式打印预览与保存 PDF 共用同一服务端 PDF 渲染结果，避免出现两套分页规则。 */

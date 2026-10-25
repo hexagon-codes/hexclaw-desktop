@@ -34,7 +34,7 @@ describe('BUG-20260802-013 · Chat 媒体保存使用 opaque grant 共享链', (
     expect(messageImageSrcSource).toContain("k12AssetDisplayURLs.value.get(assetId) ?? ''")
 
     expect(source).toMatch(
-      /<span v-if="messageImageSrc\(att\)" class="hc-msg__img-wrap">[\s\S]*?downloadImage\(messageImageSrc\(att\), att\.name\)/,
+      /<span v-if="messageImageSrc\(att\)" class="hc-msg__img-wrap">[\s\S]*?downloadImage\(mediaDownloadSource\(att\), att\.name\)/,
     )
     expect(source).toMatch(
       /<template v-if="att\.type === 'image'">\s*<img\s+v-if="messageImageSrc\(att\)"/,
@@ -42,6 +42,7 @@ describe('BUG-20260802-013 · Chat 媒体保存使用 opaque grant 共享链', (
     expect(source).toMatch(
       /<template v-for="\(att, ai\) in editingImages\(msg\)" :key="ai">\s*<img\s+v-if="messageImageSrc\(att\)"/,
     )
-    expect(source).toContain('downloadImage(imageSrc(att), att.name)')
+    expect(source).toContain('isGeneratedMediaSource(source) ? backendMediaURL(source)')
+    expect(source).toContain(": attachment.type === 'image' ? messageImageSrc(attachment) : imageSrc(attachment)")
   })
 })

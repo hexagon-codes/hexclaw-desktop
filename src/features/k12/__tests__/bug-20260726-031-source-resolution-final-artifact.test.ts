@@ -5,6 +5,12 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
+import FinalArtifactPdfAttachment from '../components/FinalArtifactPdfAttachment.vue'
+import type {
+  GradingFinalArtifactDTO,
+  PrepareGradingFinalArtifactOutputReq,
+  PreparePrintableArtifactResp,
+} from '@/api/k12'
 
 const h = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -38,6 +44,21 @@ vi.mock('@/api/k12', () => ({
   k12RetryImageTask: (...args: unknown[]) => h.retry(...args),
   k12CancelImageTask: (...args: unknown[]) => h.cancel(...args),
   k12SubmitImageTaskProblemSourceAction: (...args: unknown[]) => h.sourceAction(...args),
+  k12PrepareGradingFinalArtifactOutput: vi.fn(async (req: PrepareGradingFinalArtifactOutputReq) => ({
+    artifact: {
+      artifact_id: `pdf-${req.final_artifact_id}`,
+      source_kind: 'grading_final_artifact',
+      source_ref: `final_artifact:${req.final_artifact_id}:${req.final_artifact_digest}`,
+      title: req.title ?? '批改报告',
+      source_digest: req.final_artifact_digest,
+      format: 'pdf',
+      render_contract_version: 'fixture-render-v1',
+      content_type: 'application/pdf',
+      byte_digest: `sha256:${'d'.repeat(64)}`,
+      byte_size: 16,
+    },
+  } satisfies PreparePrintableArtifactResp)),
+  k12GetPrintArtifactContent: vi.fn(),
   k12ColdStart: vi.fn(),
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn(),
@@ -103,7 +124,7 @@ interface DispatchOptions {
     skipped: number
   }
   stage?: string
-  finalArtifact?: Record<string, unknown> | null
+  finalArtifact?: GradingFinalArtifactDTO | null
 }
 
 function imageTaskDispatch(options: DispatchOptions) {
@@ -502,10 +523,15 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     const artifact = {
       artifact_id: 'artifact-with-skips',
       artifact_digest: 'sha256:canonical-with-skips',
-      kind: 'completed_homework',
       title: '整页批改完成 · 有 2 题跳过',
-      coverage: { state: 'with_skips', total: 4, processed: 2, skipped: 2 },
-    }
+      canonical_markdown: '# 批改报告',
+      coverage_status: 'with_skips',
+      total_count: 4,
+      published_count: 2,
+      skipped_count: 2,
+      created_at: 1,
+      updated_at: 2,
+    } satisfies GradingFinalArtifactDTO
     const snapshot = imageTaskDispatch({
       questions,
       problems,
@@ -553,6 +579,7 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
       }),
     )
     const partialShell = partial.get('[data-testid="recognize-guard"]').element
+    expect(partial.findComponent(FinalArtifactPdfAttachment).exists()).toBe(false)
     for (const action of ['打印', '导出 PDF', '发送到手机']) {
       expect(
         buttonByName(partialShell, action),
@@ -564,10 +591,15 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     const finalArtifact = {
       artifact_id: 'artifact-final-only',
       artifact_digest: 'sha256:canonical-final-only',
-      kind: 'completed_homework',
       title: '整页批改完成',
-      coverage: { state: 'full', total: 2, processed: 2, skipped: 0 },
-    }
+      canonical_markdown: '# 批改报告',
+      coverage_status: 'complete',
+      total_count: 2,
+      published_count: 2,
+      skipped_count: 0,
+      created_at: 1,
+      updated_at: 2,
+    } satisfies GradingFinalArtifactDTO
     const final = await renderTask(
       imageTaskDispatch({
         questions,
@@ -584,7 +616,7 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
 
     expect(final.findAll('[data-testid="recognize-guard"]')).toHaveLength(1)
     const finalShell = final.get('[data-testid="recognize-guard"]').element
-    for (const action of ['打印', '导出 PDF']) {
+    for (const action of ['打印']) {
       const button = buttonByName(finalShell, action)
       expect(
         button,
@@ -593,6 +625,11 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
       expect(button!.disabled).toBe(false)
       expect(button!.closest('[data-testid="recognize-guard"]')).toBe(finalShell)
     }
+    expect(final.getComponent(FinalArtifactPdfAttachment).props()).toMatchObject({
+      agent: 'mingming',
+      artifactId: finalArtifact.artifact_id,
+      artifactDigest: finalArtifact.artifact_digest,
+    })
     expect(final.get('[data-testid="final-artifact-actions"]').text()).not.toContain('发送到手机')
   })
 })

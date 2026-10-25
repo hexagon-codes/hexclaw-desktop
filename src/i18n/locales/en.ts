@@ -353,6 +353,7 @@ export default {
     clearConfirm: 'Clear',
     receivedReply: 'Reply received',
     builtinSkillNoModel: 'Built-in Skill · No model invoked',
+    modelUsed: 'Model used:',
     noModels: 'No models configured',
     typing: 'Typing...',
     botName: 'Little Crab',

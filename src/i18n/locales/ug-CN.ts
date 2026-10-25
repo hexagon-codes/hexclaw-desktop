@@ -370,6 +370,7 @@ export default {
     clearConfirm: 'تازىلاش',
     receivedReply: 'جاۋاب تاپشۇرۇپ ئېلىندى',
     builtinSkillNoModel: 'ئىچكى Skill · مودېل چاقىرىلمىدى',
+    modelUsed: 'بۇ قېتىمقى مودېل:',
     noModels: 'مودېل تەڭشەلمىگەن',
     typing: 'يېزىۋاتىدۇ...',
     botName: 'كىچىك قىسقۇچپاقا',

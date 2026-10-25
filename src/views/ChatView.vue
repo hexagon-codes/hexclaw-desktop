@@ -89,6 +89,8 @@ import { isCompleteHtmlDocument } from '@/utils/safe-html'
 import { saveHtmlArtifact } from '@/utils/download'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
+import PdfAttachmentCard from '@/components/chat/PdfAttachmentCard.vue'
+import { messagePdfAttachments } from '@/utils/message-pdf-attachments'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import { useConversationScrollCoordinator } from '@/composables/useConversationScrollCoordinator'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
@@ -124,7 +126,6 @@ import { freezeChatRouteSnapshot, type ChatRouteSnapshot } from '@/stores/chat-r
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
-import { resolveProviderDisplayName } from '@/utils/provider-display-name'
 import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
@@ -596,7 +597,11 @@ function isEmptyReply(content: string): boolean {
 
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
-  return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
+  if (!Array.isArray(attachments)) return []
+  const reports = messagePdfAttachments(message)
+  return (attachments as ChatAttachment[]).filter((attachment) =>
+    attachment.type !== 'file' || !reports.some((report) => report.url === chatAttachmentSource(attachment)),
+  )
 }
 
 function getDisplayedMediaSources(message: ChatMessage): string[] {
@@ -3320,21 +3325,21 @@ function metadataValue(message: import('@/types').ChatMessage, key: string): str
 }
 
 function messageProviderDisplay(message: ChatMessage): string {
-  return resolveProviderDisplayName(
-    metadataValue(message, 'provider'),
-    settingsStore.config?.llm.providers ?? [],
-    metadataValue(message, 'provider_display_name'),
-  )
+  return metadataValue(message, 'provider_display_name') || metadataValue(message, 'provider') || ''
 }
 
 function messageSourceDisplay(message: ChatMessage): string | null {
+  const frozenLabel = metadataValue(message, 'model_display_label')
+  if (frozenLabel) return `${t('chat.modelUsed')} ${frozenLabel}`
   const provider = messageProviderDisplay(message)
-  const model = metadataValue(message, 'model')
+  const storedModel = metadataValue(message, 'model')?.trim()
+  const model = storedModel?.toLowerCase() === 'auto' ? null : storedModel
   const isBuiltinSkill =
     message.message_content?.producer_kind === 'skill' ||
     metadataValue(message, 'producer_kind') === 'skill'
   if (!provider && !model && isBuiltinSkill) return t('chat.builtinSkillNoModel')
-  return [provider, model].filter(Boolean).join(' · ') || null
+  const identity = [provider, model].filter(Boolean).join(' · ')
+  return model ? `${t('chat.modelUsed')} ${identity}` : identity || null
 }
 
 function messageFeedbackValue(message: import('@/types').ChatMessage) {
@@ -3905,13 +3910,19 @@ function startSidebarResize(event: MouseEvent) {
                       </div>
                     </div>
                   </div>
+                  <template v-if="!isLiveAssistantMessage(msg)">
+                    <PdfAttachmentCard
+                      v-for="report in messagePdfAttachments(msg)"
+                      :key="report.key"
+                      :filename="report.filename"
+                      :source-key="report.key"
+                      :load-pdf="report.read"
+                    />
+                  </template>
                   <MessageFooter class="hc-msg__footer">
                     <div class="hc-msg__meta">
-                      <span v-if="messageProviderDisplay(msg) || messageSourceDisplay(msg)">
-                        <template v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">
-                          <bdi v-if="messageProviderDisplay(msg)" dir="auto">{{ messageProviderDisplay(msg) }}</bdi><template v-if="messageProviderDisplay(msg) && metadataValue(msg, 'model')"> · </template><bdi v-if="metadataValue(msg, 'model')" dir="ltr">{{ metadataValue(msg, 'model') }}</bdi>
-                        </template>
-                        <template v-else>{{ messageSourceDisplay(msg) }}</template>
+                      <span v-if="messageSourceDisplay(msg)" class="hc-msg__source-label">
+                        <bdi dir="auto">{{ messageSourceDisplay(msg) }}</bdi>
                       </span>
                     </div>
                     <div class="hc-msg__actions-inline">
@@ -6369,6 +6380,13 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
 .hc-msg__meta > span + span::before {
   content: ' · ';
   opacity: 0.5;
+}
+
+/* 模型名称在原列内换行，操作组和时间继续保持单行。 */
+.hc-msg__source-label {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hc-msg__source-tag {

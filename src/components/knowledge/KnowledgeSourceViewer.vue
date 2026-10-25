@@ -6,7 +6,7 @@ import { documentSourceStatus, getDocumentSource } from '@/api/knowledge'
 import { backendScopeKey } from '@/services/backend-context'
 
 const props = withDefaults(
-  defineProps<{ documentId: string; sourceDigest?: string; initialPage?: number }>(),
+  defineProps<{ documentId?: string; pdf?: Blob; sourceDigest?: string; initialPage?: number }>(),
   { initialPage: 1 },
 )
 const emit = defineEmits<{ unavailable: [error: unknown] }>()
@@ -97,7 +97,8 @@ async function load() {
   zoom.value = 100
   request = new AbortController()
   try {
-    const blob = await getDocumentSource(props.documentId, props.sourceDigest, request.signal)
+    if (!props.pdf && !props.documentId) throw new Error('PDF source is unavailable')
+    const blob = props.pdf ?? await getDocumentSource(props.documentId!, props.sourceDigest, request.signal)
     const [{ GlobalWorkerOptions, getDocument }, { default: workerSrc }] = await Promise.all([
       import('pdfjs-dist/legacy/build/pdf.mjs'),
       import('pdfjs-dist/legacy/build/pdf.worker.mjs?url'),
@@ -143,7 +144,7 @@ async function load() {
   }
 }
 
-watch(() => [props.documentId, props.sourceDigest, props.initialPage, backendScopeKey()], load)
+watch(() => [props.documentId, props.sourceDigest, props.pdf, props.initialPage, backendScopeKey()], load)
 watch(pageNumber, (value) => {
   pageDraft.value = String(value)
 })

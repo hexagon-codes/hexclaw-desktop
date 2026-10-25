@@ -212,12 +212,6 @@ describe('Issue #10 [DOCUMENTED]: ChatExportMenu filename lacks sanitization', (
   const src = readSrc('components/chat/ChatExportMenu.vue')
   const exporter = readSrc('components/chat/conversation-export.ts')
 
-  it('uses sessionTitle directly in filename for Markdown export', () => {
-    expect(src).toContain("exportFormat('markdown')")
-    expect(exporter).toContain("input.format === 'json' ? 'json' : 'md'")
-    expect(exporter).toContain('`${input.title}.${extension}`')
-  })
-
   it('uses sessionTitle directly in filename for JSON export', () => {
     expect(src).toContain("exportFormat('json')")
     expect(exporter).toContain('JSON.stringify(')

@@ -20,7 +20,6 @@ import {
  */
 import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
-import { assertBackendActive, backendScopeKey } from '@/services/backend-context'
 import { i18n } from '@/i18n'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
@@ -33,6 +32,7 @@ import {
   type NativeFileGrant,
 } from './native-files'
 export { k12AssetURL } from './k12-asset-url'
+export { renderDocument, type RenderReq } from './documents'
 
 const BASE = '/api/k12'
 
@@ -263,10 +263,17 @@ export interface TextSolveFinalizationDTO {
   input_digest: string
 }
 
+/** 本次真实评分回执；省略时保持原未评分的文字报告合同。 */
+export interface TextGradeReportReferenceDTO {
+  invocation_id: string
+  result_digest: string
+}
+
 export interface GradeResp {
   teaching_report?: TeachingReportDTO
   report_markdown?: string
   finalization?: TextSolveFinalizationDTO
+  grade_report_ref?: TextGradeReportReferenceDTO
   solution: string
   /** 证据比较结论；不得据此反推最终逐题状态。 */
   verdict: GradeVerdict
@@ -1167,6 +1174,9 @@ export interface PrintableArtifactDTO {
   source_digest: string
   format: string
   render_contract_version: string
+  render_spec_digest?: string
+  render_spec_json?: string
+  layout_check?: 'passed' | 'not_run'
   content_type: string
   byte_digest: string
   byte_size: number
@@ -1855,68 +1865,6 @@ export async function k12ExportArchive(
     objectCounts,
   }
 }
-// ── render（平台 pandoc + typst 出真二进制文档：POST /api/v1/render）──────────
-// 项-7：桌面端 WKWebView 里 iframe 打印失效 → 之前 PDF 兜底存成 .html。改走后端 render 端点
-// 出真 .pdf。契约：请求 {content:<markdown>, format:'pdf', title?}，成功返回二进制文件流
-// （Content-Type=application/pdf），失败返回 JSON {error:{...}} + 非 2xx。pandoc 读 markdown。
-export interface RenderReq {
-  content: string
-  format: 'pdf' | 'docx' | 'html'
-  title?: string
-  /** PDF默认采用共享版式，仅当次明确请求可覆盖，不改变其他格式。 */
-  options?: {
-    Locale?: string
-    pdf_header_footer?: boolean
-    pdf_layout?: 'standard' | 'custom'
-  }
-}
-/** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
-export async function renderDocument(
-  req: RenderReq,
-  connectionScope = backendScopeKey(),
-): Promise<Blob> {
-  const blob = await api<Blob, 'blob'>('/api/v1/render', {
-    method: 'POST',
-    body: req,
-    responseType: 'blob',
-    timeout: 120_000,
-    headers: { 'x-hexclaw-connection-scope': connectionScope },
-  })
-  assertBackendActive(connectionScope)
-  await assertRenderedDocument(blob, req.format)
-  return blob
-}
-
-/** Fail closed before a JSON/HTML error body can be saved with a PDF/DOCX extension. */
-async function assertRenderedDocument(blob: Blob, format: RenderReq['format']): Promise<void> {
-  if (!(blob instanceof Blob) || blob.size === 0) {
-    throw new Error(`render 返回空的 ${format.toUpperCase()} 文件`)
-  }
-  const mime = blob.type.toLowerCase()
-  if (mime.includes('json')) {
-    throw new Error(`render 返回错误 JSON，不能保存为 ${format.toUpperCase()} 文件`)
-  }
-  const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer())
-  if (format === 'pdf') {
-    const pdfMagic = [0x25, 0x50, 0x44, 0x46, 0x2d]
-    if (!pdfMagic.every((value, index) => bytes[index] === value)) {
-      throw new Error('render 返回的 PDF 文件格式无效（缺少 %PDF- magic）')
-    }
-    return
-  }
-  if (format === 'docx') {
-    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
-    if (!isZip) {
-      throw new Error('render 返回的 DOCX 文件格式无效（缺少 ZIP magic）')
-    }
-    return
-  }
-  const prefix = new TextDecoder().decode(bytes).trimStart().toLowerCase()
-  if (!prefix.startsWith('<!doctype') && !prefix.startsWith('<html')) {
-    throw new Error('render 返回的 HTML 文件格式无效')
-  }
-}
-
 // 注：GET /mistake-sheet 的前端客户端已删除——前端错题卷由客户端 printWorksheet 生成（当前视图错题
 // → A4 iframe 打印），后端周错题卷 md 仅供 cron 投递用（审计 #7 冗余死绑定清理）。
 
@@ -3128,13 +3076,17 @@ export interface GenericPrintArtifactDTO {
   title: string
   source_digest: string
   markdown: string
+  render_spec_digest?: string
+  render_spec_json?: string
+  layout_check?: 'passed' | 'not_run'
 }
 
 export interface PrepareGradingFinalArtifactOutputReq {
   agent: string
   final_artifact_id: string
   final_artifact_digest: string
-  title: string
+  /** 省略时由服务端使用与IM相同的冻结报告标题。 */
+  title?: string
 }
 
 export interface PreparePrintableArtifactResp {
@@ -3147,6 +3099,7 @@ export interface PrepareTextSolveOutputReq {
   solve_run_id: string
   text_finalization_id: string
   text_finalization_digest: string
+  grade_report_ref?: TextGradeReportReferenceDTO
   title?: string
 }
 
@@ -3154,16 +3107,15 @@ export function k12PrepareTextSolveOutput(req: PrepareTextSolveOutputReq) {
   return apiPost<PreparePrintableArtifactResp>(`${BASE}/print-artifacts`, req)
 }
 
-export function k12PrepareGradingFinalArtifactOutput(req: PrepareGradingFinalArtifactOutputReq) {
+export function k12PrepareGradingFinalArtifactOutput(req: PrepareGradingFinalArtifactOutputReq, signal?: AbortSignal) {
   if (
     !req.agent.trim() ||
     !req.final_artifact_id.trim() ||
-    !req.final_artifact_digest.trim() ||
-    !req.title.trim()
+    !req.final_artifact_digest.trim()
   ) {
-    throw new Error('批改最终产物身份与标题不能为空')
+    throw new Error('Final report identity is required')
   }
-  return apiPost<PreparePrintableArtifactResp>(`${BASE}/print-artifacts`, req)
+  return api<PreparePrintableArtifactResp>(`${BASE}/print-artifacts`, { method: 'POST', body: req, signal })
 }
 
 export function k12PrepareGenericPrintJob(req: PrepareGenericPrintJobReq) {
@@ -3192,11 +3144,12 @@ export function k12PrepareArtifactPrintJob(req: PrepareArtifactPrintJobReq) {
   return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs`, req)
 }
 
-export function k12GetPrintArtifactContent(agent: string, artifactId: string) {
+export function k12GetPrintArtifactContent(agent: string, artifactId: string, signal?: AbortSignal) {
   return api<Blob, 'blob'>(`${BASE}/print-artifacts/${encodeURIComponent(artifactId)}/content`, {
     method: 'GET',
     query: { agent },
     responseType: 'blob',
+    signal,
   })
 }
 

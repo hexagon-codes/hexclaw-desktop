@@ -20,6 +20,11 @@ import {
 } from '@/contracts/message-content'
 import { useMathOverflowAccessibility } from '@/composables/useMathOverflowAccessibility'
 import { backendMediaURL, isGeneratedMediaSource, useBackendMedia } from '@/composables/useBackendMedia'
+import {
+  isK12MarkdownImageSource,
+  K12_MARKDOWN_IMAGE_ATTRIBUTE,
+  useK12MarkdownImages,
+} from '@/composables/useK12MarkdownImages'
 import { downloadInApp } from '@/utils/download'
 import { logger } from '@/utils/logger'
 import { backendRelativePath } from '@/services/backend-context'
@@ -209,7 +214,10 @@ function createMarkdownRenderer(copyLabel: string) {
   instance.renderer.rules.image = (tokens, index, options, env, self) => {
     const token = tokens[index]!
     const source = token.attrGet('src') ?? ''
-    if (isGeneratedMediaSource(source)) {
+    if (isK12MarkdownImageSource(source)) {
+      token.attrSet(K12_MARKDOWN_IMAGE_ATTRIBUTE, source)
+      token.attrs = token.attrs?.filter(([name]) => name !== 'src') ?? null
+    } else if (isGeneratedMediaSource(source)) {
       env.mediaSources?.add(source)
       const url = backendMedia.display(source)
       if (url) token.attrSet('src', url)
@@ -459,6 +467,7 @@ const renderedResult = computed(() => {
   }
 })
 const rendered = computed(() => renderedResult.value.html)
+useK12MarkdownImages(rendererRoot, rendered)
 watch(() => renderedResult.value.mediaSources, (sources) => backendMedia.retain(sources))
 
 const renderManifest = computed<RenderManifest | undefined>(() => {

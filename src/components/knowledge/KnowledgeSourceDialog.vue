@@ -7,7 +7,9 @@ import { checkDocumentSource, documentSourceStatus } from '@/api/knowledge'
 import { backendScopeKey } from '@/services/backend-context'
 import { useToast } from '@/composables/useToast'
 const props = defineProps<{
-  documentId: string
+  documentId?: string
+  /** 已冻结报告直接传入原始PDF字节，沿用同一阅读器。 */
+  pdf?: Blob
   title: string
   sourceDigest?: string
   initialPage?: number
@@ -42,8 +44,11 @@ async function prepareSource() {
   root.value?.close()
   available.value = false
   try {
-    // 先核对原文件，避免已删除来源进入空白预览；HEAD 不下载 PDF 正文。
-    await checkDocumentSource(props.documentId, props.sourceDigest, current.signal)
+    // 知识库仍先核对原文件；报告已提供冻结字节，不请求知识库来源接口。
+    if (!props.pdf) {
+      if (!props.documentId) throw new Error('PDF source is unavailable')
+      await checkDocumentSource(props.documentId, props.sourceDigest, current.signal)
+    }
     if (current.signal.aborted || backendScopeKey() !== scope) return
     available.value = true
     await nextTick()
@@ -61,7 +66,7 @@ function cancelPending(event: KeyboardEvent) {
   request.abort()
   emit('close')
 }
-watch(() => [props.documentId, props.sourceDigest], prepareSource)
+watch(() => [props.documentId, props.sourceDigest, props.pdf], prepareSource)
 onMounted(() => {
   previous = document.activeElement as HTMLElement
   document.addEventListener('keydown', cancelPending, true)
@@ -98,6 +103,7 @@ onBeforeUnmount(() => {
       <KnowledgeSourceViewer
         ref="viewer"
         :document-id="documentId"
+        :pdf="pdf"
         :source-digest="sourceDigest"
         :initial-page="initialPage"
         @unavailable="unavailable"

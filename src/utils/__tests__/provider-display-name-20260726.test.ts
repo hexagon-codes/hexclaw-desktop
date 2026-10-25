@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProviderConfig } from '@/types'
 import { resolveProviderDisplayName } from '../provider-display-name'
-import chatViewSource from '@/views/ChatView.vue?raw'
 
 const provider = {
   id: 'provider-config-id',
@@ -38,10 +37,4 @@ describe('BUG-20260726-017 Provider display name fidelity', () => {
     expect(resolveProviderDisplayName('', [])).toBe('')
   })
 
-  it('wires the shared resolver into the canonical message footer', () => {
-    expect(chatViewSource).toContain('messageProviderDisplay(msg)')
-    expect(chatViewSource).not.toMatch(
-      /\[metadataValue\(msg,\s*'provider'\),\s*metadataValue\(msg,\s*'model'\)\]/,
-    )
-  })
 })

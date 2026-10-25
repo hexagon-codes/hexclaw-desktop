@@ -8,6 +8,31 @@
  */
 
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
+import { isTauri } from '@/utils/platform'
+
+/** 保存同一份已冻结PDF字节；浏览器及原生保存沿各自既有入口。 */
+export async function savePdfFile(pdf: Blob, filename: string): Promise<boolean> {
+  if (!isTauri()) {
+    if (typeof document === 'undefined') return false
+    const url = URL.createObjectURL(pdf)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+    return true
+  }
+  const { copyGrantedFile, createNativeFileOperation, pickSaveFileGrant, stageBlob } =
+    await import('@/api/native-files')
+  const operationId = createNativeFileOperation('save-pdf-artifact')
+  const destination = await pickSaveFileGrant(filename, 'save_copy', operationId)
+  if (!destination) return false
+  const source = await stageBlob(pdf, filename, { purpose: 'save_copy', operationId })
+  await copyGrantedFile(source, destination)
+  return true
+}
 
 /**
  * 弹原生 Save 对话框让用户选路径，再由 Rust 写盘。返回目标叶子名；用户取消返回 null。
