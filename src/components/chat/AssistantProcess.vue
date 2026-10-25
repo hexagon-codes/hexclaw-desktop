@@ -181,7 +181,7 @@ const label = computed(() => {
     return runPresentation.value.kind === 'thinking'
       ? runPresentation.value.text
       : t('chat.assistantRun.generating')
-  return '处理过程'
+  return t('chat.operationProcess.title')
 })
 const state = computed(() =>
   terminal.value === 'cancelled'

@@ -741,7 +741,7 @@ function toggleEditingProvider(providerId: string, explicitControl = false) {
 const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
   { value: 'en', label: 'English' },
-  { value: 'ug-CN', label: 'ئۇيغۇرچە' },
+  { value: 'ug-CN', label: '维吾尔语' },
 ]
 const languageModel = computed<string>({
   get: () => locale.value,
