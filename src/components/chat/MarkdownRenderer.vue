@@ -23,6 +23,7 @@ import { backendMediaURL, isGeneratedMediaSource, useBackendMedia } from '@/comp
 import { downloadInApp } from '@/utils/download'
 import { logger } from '@/utils/logger'
 import { backendRelativePath } from '@/services/backend-context'
+import { isCompleteHtmlDocument } from '@/utils/safe-html'
 
 const props = withDefaults(
   defineProps<{
@@ -33,6 +34,7 @@ const props = withDefaults(
     showArtifacts?: boolean
     hideSourcePageMarkers?: boolean
     displayedMediaSources?: string[]
+    collapseHtmlDocuments?: boolean
   }>(),
   {
     surface: 'desktop',
@@ -41,6 +43,7 @@ const props = withDefaults(
     showArtifacts: true,
     hideSourcePageMarkers: false,
     displayedMediaSources: () => [],
+    collapseHtmlDocuments: false,
   },
 )
 
@@ -116,10 +119,12 @@ const promptPreviewProjection = computed(() =>
 /** Extract previewable code blocks (html/svg) from raw markdown */
 const previewableBlocks = computed(() => {
   const blocks: { language: string; code: string }[] = []
-  const fenceRe = /```(html|svg)\n([\s\S]*?)```/g
+  const fenceRe = /```(html|svg)\n([\s\S]*?)```/gi
   let m: RegExpExecArray | null
   while ((m = fenceRe.exec(canonicalMarkdown.value)) !== null) {
-    blocks.push({ language: m[1]!, code: m[2] || '' })
+    const language = m[1]!.toLowerCase()
+    if (props.collapseHtmlDocuments && language === 'html' && isCompleteHtmlDocument(m[2] || '')) continue
+    blocks.push({ language, code: m[2] || '' })
   }
   return blocks
 })
@@ -309,6 +314,7 @@ function createMarkdownRenderer(copyLabel: string) {
     const token = tokens[idx]!
     const lang = token.info?.trim() || ''
     const code = token.content || ''
+    if (props.collapseHtmlDocuments && lang.toLowerCase() === 'html' && isCompleteHtmlDocument(code)) return ''
     const cacheKey = `${lang}:${code}`
     const highlighted = highlightCache.get(cacheKey)
 
@@ -340,6 +346,7 @@ async function highlightCodeBlocks(content: string) {
   while ((match = fenceRegex.exec(content)) !== null) {
     const lang = match[1] || 'text'
     const code = match[2] || ''
+    if (props.collapseHtmlDocuments && lang.toLowerCase() === 'html' && isCompleteHtmlDocument(code)) continue
     const cacheKey = `${lang}:${code}`
     if (highlightCache.has(cacheKey)) continue
 

@@ -109,6 +109,7 @@ export default {
     copy: '复制',
     upload: '上传',
     download: '下载',
+    preview: '预览',
     install: '安装',
     or: '或',
     enable: '启用',

@@ -64,6 +64,14 @@ export async function saveBlobInApp(
   }
 }
 
+/** HTML 卡片与 Code 下载同一份原始文档，预览 nonce 不进入保存内容。 */
+export function saveHtmlArtifact(content: string, title: string): Promise<string | null> {
+  // oxlint-disable-next-line no-control-regex -- 原生保存文件名不得包含路径分隔或控制字符。
+  const stem = title.replace(/\.html?$/i, '').replace(/[/\\:*?"<>|\x00-\x1f]/g, '-')
+    .trim().slice(0, 80) || 'document'
+  return saveBlobInApp(new Blob([content], { type: 'text/html;charset=utf-8' }), `${stem}.html`)
+}
+
 export interface OpenDocumentDeps {
   /** 本会话缓存的原始 File（重载后失效 → null）。 */
   file: File | null

@@ -104,6 +104,7 @@ export default {
     copy: 'Copy',
     upload: 'Upload',
     download: 'Download',
+    preview: 'Preview',
     install: 'Install',
     or: 'or',
     enable: 'Enable',

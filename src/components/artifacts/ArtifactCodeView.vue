@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify'
 import type { Artifact } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { useToast } from '@/composables'
+import { saveHtmlArtifact } from '@/utils/download'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -146,6 +147,11 @@ function deriveFilename(): string {
 async function downloadCode() {
   const filename = deriveFilename()
   try {
+    if (props.artifact.type === 'html') {
+      const saved = await saveHtmlArtifact(props.artifact.content, props.artifact.title)
+      if (saved) toast.success?.(t('common.savedTo', { path: saved }))
+      return
+    }
     const {
       copyGrantedFile,
       createNativeFileOperation,

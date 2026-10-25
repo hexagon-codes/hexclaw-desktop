@@ -13,7 +13,7 @@ import type { RenderManifest } from '@/contracts/message-content'
  * 分工：blocks 提供**顺序**；富数据（status/耗时/结果）走扁平 tool_calls，tool_use 块按 id 取。
  * thinking 块由共享处理过程渲染；tool_result 块折叠进对应工具卡，不单独渲染。
  */
-const props = defineProps<{ blocks: ContentBlock[]; toolCalls?: ToolCall[]; fallbackContent?: string; processMode?: boolean; displayedMediaSources?: string[] }>()
+const props = defineProps<{ blocks: ContentBlock[]; toolCalls?: ToolCall[]; fallbackContent?: string; processMode?: boolean; displayedMediaSources?: string[]; collapseHtmlDocuments?: boolean }>()
 const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 
 const displayBlocks = computed<ContentBlock[]>(() => {
@@ -42,6 +42,7 @@ function toolCallFor(block: Extract<ContentBlock, { type: 'tool_use' }>): ToolCa
         v-if="b.type === 'text' && (b.message_content || b.text)"
         :content="b.message_content ?? b.text"
         :displayed-media-sources="displayedMediaSources"
+        :collapse-html-documents="collapseHtmlDocuments"
         surface="desktop"
         @rendered="emit('rendered', $event)"
       />

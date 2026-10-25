@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { Artifact } from '@/types'
+import { htmlDocumentTitle, isCompleteHtmlDocument } from '@/utils/safe-html'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 type LoggerModule = typeof import('@/utils/logger').logger
@@ -29,13 +30,15 @@ export function createChatArtifactController(params: {
     artifacts.value = artifacts.value.filter((artifact) => artifact.messageId !== messageId)
     let blockIndex = 0
     while ((match = codeBlockRegex.exec(content)) !== null) {
-      const language = match[1] || 'text'
+      const language = (match[1] || 'text').toLowerCase()
       const code = match[2]!.trim()
       if (code.length < 5) continue
       const artifact: Artifact = {
         id: createId(),
         type: language === 'html' ? 'html' : 'code',
-        title: `${language} snippet`,
+        title: language === 'html' && isCompleteHtmlDocument(code)
+          ? htmlDocumentTitle(code) || 'HTML document'
+          : `${language} snippet`,
         language,
         content: code,
         messageId,

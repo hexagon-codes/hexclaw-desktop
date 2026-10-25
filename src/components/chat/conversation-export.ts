@@ -5,6 +5,8 @@ import { api } from '@/api/client'
 import { k12AssetURL } from '@/api/k12-asset-url'
 import { backendMediaURL } from '@/composables/useBackendMedia'
 import { assertBackendActive, backendRelativePath, backendScopeKey } from '@/services/backend-context'
+import { imageSrc } from '@/utils/chat-compose'
+import type { ChatAttachment } from '@/types'
 
 export type ConversationExportFormat = 'markdown' | 'json' | 'pdf'
 
@@ -58,21 +60,33 @@ async function inlineConversationImages(content: string, scope: string): Promise
 export async function exportConversationSnapshot(input: {
   format: ConversationExportFormat
   title: string
-  messages: Array<{ role: string; content: string; timestamp: string; agent_name?: string }>
+  messages: Array<{ role: string; content: string; timestamp: string; agent_name?: string; metadata?: Record<string, unknown> }>
   exportedAtLabel: string
   userLabel: string
   assistantLabel: string
 }): Promise<void> {
   const scope = backendScopeKey()
   const exportedAt = new Date()
+  // 附件属于原消息快照，普通会话和场景调用者共用同一展开规则。
+  const messages = input.messages.map((message) => {
+    const attachments = message.metadata?.attachments
+    const sources = Array.isArray(attachments)
+      ? (attachments as ChatAttachment[])
+          .filter((attachment) => attachment?.type === 'image')
+          .map(imageSrc)
+          .filter((source) => source && !message.content.includes(source))
+      : []
+    const images = [...new Set(sources)].map((source) => `![](${source})`)
+    return { ...message, content: [message.content, ...images].filter(Boolean).join('\n\n') }
+  })
   const body =
     input.format === 'json'
       ? JSON.stringify(
           {
             title: input.title,
             exported_at: exportedAt.toISOString(),
-            message_count: input.messages.length,
-            messages: input.messages.map(({ role, content, timestamp, agent_name }) => ({
+            message_count: messages.length,
+            messages: messages.map(({ role, content, timestamp, agent_name }) => ({
               role,
               content,
               timestamp,
@@ -83,7 +97,7 @@ export async function exportConversationSnapshot(input: {
           2,
         )
       : `# ${input.title}\n\n> ${input.exportedAtLabel}: ${exportedAt.toLocaleString()}\n\n---\n\n` +
-        input.messages
+        messages
           .map(
             (message) =>
               `### **${message.role === 'user' ? input.userLabel : message.agent_name || input.assistantLabel}** · ${new Date(message.timestamp).toLocaleString()}\n\n${message.content}\n\n---\n\n`,

@@ -117,6 +117,7 @@ export default {
     copy: 'كۆچۈرۈش',
     upload: 'يۈكلەش',
     download: 'چۈشۈرۈش',
+    preview: 'ئالدىن كۆرۈش',
     install: 'ئورنىتىش',
     or: 'ياكى',
     enable: 'قوزغىتىش',

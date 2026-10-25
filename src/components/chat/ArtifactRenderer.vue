@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { Play, Maximize2, X } from 'lucide-vue-next'
+import { attachPreviewStyleNonce } from '@/utils/safe-html'
 
 const props = defineProps<{
   content: string
@@ -16,10 +17,10 @@ const isPreviewable = computed(() =>
 
 const iframeSrcdoc = computed(() => {
   if (props.language === 'svg') {
-    return `<!DOCTYPE html><html><head><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff}</style></head><body>${props.content}</body></html>`
+    return attachPreviewStyleNonce(`<!DOCTYPE html><html><head><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff}</style></head><body>${props.content}</body></html>`)
   }
   // HTML — inject CSP for security
-  return `<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:"><style>body{margin:8px;font-family:system-ui}</style></head><body>${props.content}</body></html>`
+  return attachPreviewStyleNonce(`<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:"><style>body{margin:8px;font-family:system-ui}</style></head><body>${props.content}</body></html>`)
 })
 </script>
 

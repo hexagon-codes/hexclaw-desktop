@@ -10,6 +10,8 @@ import {
   Settings,
   Zap,
   Brain,
+  Eye,
+  Download,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import ModelSelector from '@/components/common/ModelSelector.vue'
@@ -83,6 +85,8 @@ import {
   videoDisplaySrc,
 } from '@/utils/chat-compose'
 import { sanitizeMessageContent } from '@/utils/messageContent'
+import { isCompleteHtmlDocument } from '@/utils/safe-html'
+import { saveHtmlArtifact } from '@/utils/download'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
@@ -1123,6 +1127,23 @@ const workspaceArtifacts = computed(() => [
   ...chatStore.artifacts,
   ...(scenarioCtx.value ? scenarioArtifacts.value : []),
 ])
+const artifactsPanelRef = ref<InstanceType<typeof ArtifactsPanel> | null>(null)
+
+async function previewHtmlArtifact(id: string) {
+  chatStore.selectArtifact(id)
+  await nextTick()
+  artifactsPanelRef.value?.showPreview()
+}
+
+async function downloadHtmlArtifact(artifact: Artifact) {
+  try {
+    const saved = await saveHtmlArtifact(artifact.content, artifact.title)
+    if (saved) toast.success(t('common.savedTo', { path: saved }))
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    toast.error(t('common.downloadFailed', { reason }))
+  }
+}
 function handleScenarioArtifactAction(payload: { id: string; action: string }) {
   scenarioArtifactAction.value = { ...payload, sequence: ++scenarioArtifactSequence }
 }
@@ -1157,16 +1178,12 @@ const scenarioChatActions = computed<ScenarioChatActions>(() => ({
         chatStore.sessions.find((item) => item.id === chatStore.currentSessionId)?.title ||
         t('chat.title'),
       messages: chatStore.messages.flatMap((message) => {
-        const images = getMessageAttachments(message)
-          .filter((attachment) => attachment.type === 'image')
-          .map((attachment) => attachmentSource(attachment))
-          .filter((source) => source && !message.content.includes(source))
-          .map((source) => `![](${source})`)
         return [{
           role: message.role,
-          content: [message.content, ...images].filter(Boolean).join('\n\n'),
+          content: message.content,
           timestamp: message.timestamp,
           agent_name: message.agent_name,
+          metadata: message.metadata,
         }, ...content.filter((item) => item.sourceMessageId === message.id).map((item) => ({
           role: 'assistant',
           content: item.content,
@@ -2458,6 +2475,11 @@ function getMessageArtifacts(messageId: string) {
   return chatStore.artifacts.filter((a) => a.messageId === messageId)
 }
 
+function hasHtmlDocumentArtifact(messageId: string) {
+  return !scenarioCtx.value && getMessageArtifacts(messageId)
+    .some(artifact => artifact.type === 'html' && isCompleteHtmlDocument(artifact.content))
+}
+
 // 会话「刚打开/切换」标记：由 currentSessionId watcher 置真（早于消息异步落地），消息数组整体
 // 替换落地后由 messages 引用 watcher 消费成「瞬时跳底」，并让 length watcher 跳过该帧避免平滑重复。
 let sessionJustOpened = false
@@ -3644,11 +3666,13 @@ function startSidebarResize(event: MouseEvent) {
                           :tool-calls="msg.tool_calls"
                           :fallback-content="sanitizeMessageContent(msg.content)"
                           process-mode
+                          :collapse-html-documents="hasHtmlDocumentArtifact(msg.id)"
                         />
                         <MarkdownRenderer
                           v-else-if="msg.content"
                           :content="sanitizeMessageContent(msg.content)"
                           surface="desktop"
+                          :collapse-html-documents="hasHtmlDocumentArtifact(msg.id)"
                         />
                       </template>
                       <template v-else>
@@ -3719,6 +3743,7 @@ function startSidebarResize(event: MouseEvent) {
                           :tool-calls="msg.tool_calls"
                           :fallback-content="sanitizeMessageContent(msg.content)"
                           :displayed-media-sources="getDisplayedMediaSources(msg)"
+                          :collapse-html-documents="hasHtmlDocumentArtifact(msg.id)"
                           @rendered="captureNestedManifest(msg, $event)"
                         />
                         <MarkdownRenderer
@@ -3726,6 +3751,7 @@ function startSidebarResize(event: MouseEvent) {
                           :content="msg.message_content ?? sanitizeMessageContent(msg.content)"
                           :displayed-media-sources="getDisplayedMediaSources(msg)"
                           surface="desktop"
+                          :collapse-html-documents="hasHtmlDocumentArtifact(msg.id)"
                           @rendered="captureRenderManifest(msg, $event)"
                         />
                         <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
@@ -3762,15 +3788,23 @@ function startSidebarResize(event: MouseEvent) {
                     </div>
                   </div>
                   <div v-if="getMessageArtifacts(msg.id).length > 0" class="hc-msg__artifacts">
-                    <button
-                      v-for="art in getMessageArtifacts(msg.id)"
-                      :key="art.id"
-                      class="hc-msg__artifact-card"
-                      @click="chatStore.selectArtifact(art.id)"
-                    >
-                      <FileCode :size="13" />
-                      <span>{{ art.title }}</span>
-                    </button>
+                    <template v-for="art in getMessageArtifacts(msg.id)" :key="art.id">
+                      <div
+                        v-if="!scenarioCtx && art.type === 'html' && isCompleteHtmlDocument(art.content)"
+                        class="hc-msg__artifact-card hc-msg__artifact-card--document"
+                      >
+                        <FileCode :size="18" />
+                        <button class="hc-msg__artifact-title" @click="previewHtmlArtifact(art.id)">{{ art.title }}</button>
+                        <span class="hc-msg__artifact-format">HTML</span>
+                        <div class="hc-msg__artifact-actions">
+                          <button @click="previewHtmlArtifact(art.id)"><Eye :size="14" />{{ t('common.preview') }}</button>
+                          <button @click="downloadHtmlArtifact(art)"><Download :size="14" />{{ t('common.download') }}</button>
+                        </div>
+                      </div>
+                      <button v-else class="hc-msg__artifact-card" @click="chatStore.selectArtifact(art.id)">
+                        <FileCode :size="13" /><span>{{ art.title }}</span>
+                      </button>
+                    </template>
                   </div>
                   <!-- Meta footer: 时间 · 模型 · Agent 合并一行 -->
                   <!-- (moved to hc-msg__footer below) -->
@@ -4437,8 +4471,10 @@ function startSidebarResize(event: MouseEvent) {
     <Transition name="hc-chat-panel">
       <ArtifactsPanel
         v-if="chatWorkspaceMode === 'artifacts' && !(scenarioCtx && scenarioRecordsActive)"
+        ref="artifactsPanelRef"
         :artifacts="workspaceArtifacts"
         :selected-id="chatStore.selectedArtifactId"
+        :prefer-html-preview="!scenarioCtx"
         @close="restoreWorkspaceAfterRightPanelClose"
         @select="chatStore.selectArtifact($event)"
         @action="handleScenarioArtifactAction"
@@ -5985,6 +6021,45 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
 .hc-msg__artifact-card:hover {
   border-color: var(--hc-accent);
   background: var(--hc-accent-subtle);
+}
+
+.hc-msg__artifact-card--document {
+  width: 100%;
+  min-width: 0;
+  gap: 10px;
+  padding: 14px;
+  cursor: default;
+  color: var(--hc-text-primary);
+  flex-wrap: wrap;
+}
+.hc-msg__artifact-title {
+  flex: 1;
+  min-width: 120px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.hc-msg__artifact-format { color: var(--hc-text-muted); font-size: 11px; }
+.hc-msg__artifact-actions { display: flex; gap: 8px; margin-inline-start: auto; }
+.hc-msg__artifact-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-sm);
+  background: var(--hc-bg-main);
+  color: var(--hc-text-secondary);
+  font: inherit;
+  cursor: pointer;
 }
 
 /* ─── Input area ───── */

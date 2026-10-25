@@ -7,12 +7,14 @@ import ArtifactCodeView from './ArtifactCodeView.vue'
 import ArtifactPreview from './ArtifactPreview.vue'
 import ArtifactDiffView from './ArtifactDiffView.vue'
 import { scenarioRegistry } from '@/shell/scenario/registry'
+import { isCompleteHtmlDocument } from '@/utils/safe-html'
 
 const { t } = useI18n()
 
 const props = defineProps<{
   artifacts: Artifact[]
   selectedId: string | null
+  preferHtmlPreview?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -48,12 +50,18 @@ const tabs = computed(() => {
 
 function handleSelect(id: string) {
   emit('select', id)
+  const artifact = props.artifacts.find(item => item.id === id)
+  if (props.preferHtmlPreview && artifact?.type === 'html' && isCompleteHtmlDocument(artifact.content)) {
+    activeTab.value = 'preview'
+    return
+  }
   activeTab.value = scenarioRegistry.resolveArtifactRenderer(
     props.artifacts.find((item) => item.id === id)?.type || '',
   )
     ? 'list'
     : 'code'
 }
+defineExpose({ showPreview: () => { activeTab.value = 'preview' } })
 watch(
   () => props.artifacts,
   (items) => {
