@@ -45,7 +45,7 @@ make ollama
 make dev
 ```
 
-The current Desktop source version is `0.5.0`. `make sidecar` builds the backend selected by `HEXCLAW_REF=refs/tags/v0.5.0` in the `Makefile` from the public HexClaw repository. Release packaging requires publishing that backend tag with the final fixes before building Desktop. Updating version metadata in both repositories does not create the tag or publish installers. The default source does not follow main; use `make sidecar-local` / `make build-local` to verify uncommitted backend changes during development. To use the latest main branch explicitly, use `make sidecar HEXCLAW_REF=origin/main` and check that frontend and backend contracts match.
+The current Desktop source version is `0.5.1`. `make sidecar` builds the backend selected by `HEXCLAW_REF` in the `Makefile` from the public HexClaw repository, currently pinned to `refs/tags/v0.5.1`. That backend commit passed CI, and the [backend Release](https://github.com/hexagon-codes/hexclaw/releases/tag/v0.5.1) includes all five platform archives and checksums. Desktop installers are verified independently through the Desktop CI and release process; see the [release guide](docs/updates.en.md). The default source does not follow main; use `make sidecar-local` / `make build-local` to verify uncommitted backend changes during development. To use the latest main branch explicitly, use `make sidecar HEXCLAW_REF=origin/main` and check that frontend and backend contracts match.
 
 The current `make render-bundle` shortcut applies to macOS. See the [Release workflow](.github/workflows/release.yml) for Windows and Linux native dependencies and component preparation.
 

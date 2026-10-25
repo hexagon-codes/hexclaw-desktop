@@ -18,7 +18,7 @@ HexClaw Desktop 用一个桌面应用连接 [HexClaw](https://github.com/hexagon
 
 应用采用 **Tauri 2 + Vue 3 + TypeScript**，本机 Agent 服务通过 Go Sidecar 运行。选择本地模型时可使用 Ollama；选择在线模型时需要对应 Provider 的网络连接和凭据。
 
-> 本 README 描述 `v0.5.0` 源码能力，Desktop 后端固定来源为 `refs/tags/v0.5.0`。版本和文档更新不代表已发布；已发布安装包包含对应 Release 的代码，可能与当前源码不同。
+> 本 README 描述 `v0.5.1` 源码能力。Desktop 后端源码固定为 `refs/tags/v0.5.1`；该 Tag 对应提交已通过后端 CI，正式 Release 产物发布尚未完成，详见[发布说明](docs/updates.md)。版本和文档更新不代表 Desktop 已发布；已发布安装包包含对应 Release 的代码，可能与当前源码不同。
 
 ![HexClaw Desktop 作业辅导工作台：在专属皮肤中查看带批注的作业原图](.github/assets/desktop-k12-workspace.png)
 
@@ -190,7 +190,7 @@ make ollama
 make dev
 ```
 
-`make sidecar` 使用 `Makefile` 中固定的 `HEXCLAW_REF=refs/tags/v0.5.0`，不会自动选择最新后端源码。正式打包前须先发布包含最终修复的后端 `v0.5.0` Tag；仅修改版本号不会把未提交代码带入该 Tag，也不会更新已安装的 Sidecar。开发时包含后端未提交修改的验证使用现有 `make sidecar-local` 或 `make build-local`。需要使用后端最新主分支时，可显式运行：
+`make sidecar` 使用 `Makefile` 中固定的 `HEXCLAW_REF`，当前为 `refs/tags/v0.5.1`，不会自动选择最新后端源码。后续更新须先确认目标后端提交通过 CI 并已有新的 SemVer Tag，再统一更新固定来源。已推送的旧 Tag 不因后续提交而更新；仅修改版本号也不会更新已安装的 Sidecar。开发时包含后端未提交修改的验证使用现有 `make sidecar-local` 或 `make build-local`。需要使用后端最新主分支时，可显式运行：
 
 ```bash
 make sidecar HEXCLAW_REF=origin/main

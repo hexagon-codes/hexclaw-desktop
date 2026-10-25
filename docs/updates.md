@@ -2,6 +2,16 @@
 
 # 自动更新发布说明
 
+## v0.5.1（2026-10-26）
+
+Desktop 版本元数据为 `0.5.1`，本版源码变化见 [Changelog](../CHANGELOG.md)。后端源码固定为 `refs/tags/v0.5.1`，对应提交 [`899ce739f128`](https://github.com/hexagon-codes/hexclaw/commit/899ce739f128a01bc23fec0af5d7ff33686ecace)，已通过[后端 CI](https://github.com/hexagon-codes/hexclaw/actions/runs/40328692622)与[部署工作流](https://github.com/hexagon-codes/hexclaw/actions/runs/40329970325)。
+
+Desktop Release 工作流直接检出该不可变 Tag 构建 Sidecar。[后端 Release](https://github.com/hexagon-codes/hexclaw/releases/tag/v0.5.1) 已发布，五个平台包及校验和已下载验证；[发布工作流](https://github.com/hexagon-codes/hexclaw/actions/runs/40331306722)已恢复成功，Tag 指向保持不变。
+
+`Makefile` 的 `HEXCLAW_REF` 与当前版本文档保持一致。Desktop 发布分别核对同一提交的 CI、固定提交四平台打包及 Tag 发布结果。版本号相同、后端 render 单独成功或本地 workspace 构建通过，都不能代替对应后端来源与远端 CI 证据。
+
+本次版本准备不改变现有 CI / Release 工作流、四平台矩阵、未签名 macOS 分发及 Homebrew Cask。Tauri updater 制品签名与 Apple 代码签名分别沿下文既有约定。
+
 ## v0.5.0（2026-10-19）
 
 Desktop 版本元数据为 `0.5.0`，正式包后端源码固定为 `refs/tags/v0.5.0`。10 月 21 日的后续源码提交及范围见 [Changelog](../CHANGELOG.md)；同一版本号不能证明已发布安装包、已安装 App 或云端服务包含这些提交，需分别核对来源提交与制品身份。
@@ -91,7 +101,7 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/Cargo.lock` 中 `hexclaw-desktop` 的根包版本
-2. 先发布包含本次最终修复的后端版本，再核对 `Makefile` 中的 `HEXCLAW_REF` 为固定、已存在的后端 SemVer tag，当前配置为 `refs/tags/v0.5.0`。元数据可先准备，远端正式构建须等该 Tag 可用；后端来源版号独立于 Desktop 版号。内置 Sidecar 制品身份随 Desktop 发行版号注入，不能仅凭该身份断言后端源码已更新，还须核对实际来源提交。
+2. 先确认包含本次所需修复的后端提交通过 CI 且已有不可变 SemVer tag，再核对 `Makefile` 中的 `HEXCLAW_REF` 固定到该 Tag，当前配置为 `refs/tags/v0.5.1`。元数据可先准备，远端正式构建须等该 Tag 可用；后端 Release 产物发布状态单独核对，后端来源版号独立于 Desktop 版号。内置 Sidecar 制品身份随 Desktop 发行版号注入，不能仅凭该身份断言后端源码已更新，还须核对实际来源提交。
 3. 提交代码并推送，确认普通 CI 通过。使用已推送的固定提交 SHA 手动触发 `Release`，确认四平台测试安装包构建通过；手动运行只上传 workflow artifacts，不发布 GitHub Release：
 
 ```bash

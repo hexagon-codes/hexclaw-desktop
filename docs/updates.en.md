@@ -2,6 +2,16 @@
 
 # Auto-Update Release Guide
 
+## v0.5.1 (2026-10-26)
+
+Desktop version metadata is `0.5.1`; see the [Changelog](../CHANGELOG.md) for the source changes. The backend source is pinned to `refs/tags/v0.5.1`, resolving to commit [`899ce739f128`](https://github.com/hexagon-codes/hexclaw/commit/899ce739f128a01bc23fec0af5d7ff33686ecace), which passed [backend CI](https://github.com/hexagon-codes/hexclaw/actions/runs/40328692622) and the [deployment workflow](https://github.com/hexagon-codes/hexclaw/actions/runs/40329970325).
+
+The Desktop Release workflow checks out this immutable tag to build the Sidecar. The [backend Release](https://github.com/hexagon-codes/hexclaw/releases/tag/v0.5.1) is published, and all five platform archives and checksums have been downloaded and verified. The [release workflow](https://github.com/hexagon-codes/hexclaw/actions/runs/40331306722) recovered successfully without changing the tag target.
+
+`HEXCLAW_REF` in `Makefile` and the current-version documentation remain synchronized. Desktop releases independently verify CI, four-platform packaging for the same fixed commit, and the tag publication result. Matching version numbers, a successful backend render workflow alone, or a local workspace build do not establish backend source identity or remote CI success.
+
+This version preparation keeps the existing CI / Release workflows, four-platform matrix, unsigned macOS distribution, and Homebrew Cask. Tauri updater signing and Apple code signing retain their separate roles described below.
+
 ## v0.5.0 (2026-10-19)
 
 Desktop version metadata is `0.5.0`, with release backend source pinned to `refs/tags/v0.5.0`. See the [Changelog](../CHANGELOG.md) for the October 21 source additions. A matching version number does not establish that a published installer, installed app, or cloud service includes those commits; verify source commits and artifact identities separately.
@@ -91,7 +101,7 @@ If your private key has no password, the second secret can stay empty or be omit
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - the `hexclaw-desktop` root package version in `src-tauri/Cargo.lock`
-2. Publish the backend version containing the final fixes first, then verify that `HEXCLAW_REF` in `Makefile` pins that existing backend SemVer tag, currently configured as `refs/tags/v0.5.0`. Metadata may be prepared earlier, but remote release builds must wait until the tag is available. Backend and Desktop source versions remain independent. The bundled Sidecar artifact identity is injected from its Desktop release version; verify the actual backend source commit as well, since that identity alone does not prove the source was updated.
+2. Confirm that the backend commit containing the required fixes has passed CI and has an immutable SemVer tag, then verify that `HEXCLAW_REF` in `Makefile` pins that tag, currently configured as `refs/tags/v0.5.1`. Metadata may be prepared earlier, but remote release builds must wait until the tag is available. Check publication of backend Release artifacts separately; backend and Desktop source versions remain independent. The bundled Sidecar artifact identity is injected from its Desktop release version; verify the actual backend source commit as well, since that identity alone does not prove the source was updated.
 3. Commit and push your changes, and confirm that routine CI passes. Trigger `Release` manually with the fixed SHA of the pushed commit and confirm that all four platform installer builds pass. A manual run uploads workflow artifacts without publishing a GitHub Release:
 
 ```bash

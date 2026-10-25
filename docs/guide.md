@@ -2,7 +2,7 @@
 
 # HexClaw Desktop 使用指南
 
-适用 Desktop 源码版本：`v0.5.0`，正式包后端源码固定引用 `refs/tags/v0.5.0`。版本准备不代表安装包已发布或当前运行服务已更新。本次工程更新见 [Changelog](../CHANGELOG.md)，后端 Tag 先发布、Desktop 后构建的顺序与自动更新条件见[自动更新发布说明](./updates.md)。
+适用 Desktop 源码版本：`v0.5.1`，后端源码固定引用为 `refs/tags/v0.5.1`，对应提交已通过后端 CI。后端正式 Release 产物发布尚未完成；版本准备不代表 Desktop 安装包已发布或当前运行服务已更新。本次工程更新见 [Changelog](../CHANGELOG.md)，发布状态、顺序与自动更新条件见[自动更新发布说明](./updates.md)。
 
 ## 目录
 
