@@ -210,6 +210,7 @@ export function useChatSend(deps: ChatSendDeps) {
     options?: {
       contextRefs?: import('@/types').ChatContextRef[]
       skillNames?: string[]
+      personaSkillName?: string
       requestMetadata?: Record<string, string>
       promptInvocation?: import('@/api/prompts').PromptInvocation
       onPayloadRejected?: (error: ChatPayloadLimitError) => void

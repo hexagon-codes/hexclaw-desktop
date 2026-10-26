@@ -26,6 +26,8 @@ export interface Skill extends SkillDisplayMetadata {
   version: string
   triggers: string[]
   tags: string[]
+  /** 由后端根据 persona 标签派生，会话绑定不根据名称或描述猜测。 */
+  is_persona?: boolean
   /** SKILL.md frontmatter `icon`：emoji（如 "📊"）或内置 lucide 名（如 "Code"）。
    *  缺省时前端按 category/tags/name 派生稳定图标，故为可选——不破坏 SKILL.md 可移植性。 */
   icon?: string

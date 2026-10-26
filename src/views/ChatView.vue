@@ -133,6 +133,7 @@ import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { appendSessionMessage, appendSessionMessagesBatch } from '@/api/chat'
+import { backendScopeKey } from '@/services/backend-context'
 import { k12GetAssetBlob } from '@/api/k12-asset-url'
 import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
@@ -2638,11 +2639,34 @@ const { handleSend } = useChatSend({
   attachConversationAutomationActions,
   captureRouteSnapshot: () => captureCurrentMessageRoute(),
 })
-function handleScenarioAwareSend(...args: Parameters<typeof handleSend>) {
+const currentPersonaSkill = computed(() => chatStore.sessions
+  .find((session) => session.id === chatStore.currentSessionId)?.persona_skill ?? '')
+const personaBindingEnabled = computed(() => !scenarioCtx.value
+  && (!chatStore.agentRole || chatStore.agentRole === 'default'))
+
+async function handlePersonaChange(name: string, sessionId: string) {
+  await chatStore.updateSessionPersona(sessionId, name)
+}
+
+async function handleScenarioAwareSend(...args: Parameters<typeof handleSend>) {
   const [text, files, options] = args
+  const requestMetadata = { ...scenarioRequestMetadata.value }
+  if (options?.personaSkillName && personaBindingEnabled.value) {
+    const backend = backendScopeKey()
+    const agent = chatStore.agentRole
+    try {
+      const sessionId = await chatStore.ensureSession()
+      if (backend !== backendScopeKey() || chatStore.currentSessionId !== sessionId || agent !== chatStore.agentRole) return false
+      await handlePersonaChange(options.personaSkillName, sessionId)
+      if (backend !== backendScopeKey() || chatStore.currentSessionId !== sessionId || agent !== chatStore.agentRole) return false
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+  }
   return handleSend(text, files, {
     ...options,
-    requestMetadata: { ...scenarioRequestMetadata.value },
+    requestMetadata,
   })
 }
 
@@ -4274,6 +4298,8 @@ function startSidebarResize(event: MouseEvent) {
             :recipient-name="agentRoleDisplay || t('chat.defaultAgent', '小蟹')"
             :draft-scope-key="chatStore.currentSessionId ?? ''"
             :draft-agent-key="chatStore.agentRole"
+            :persona-skill-name="personaBindingEnabled ? currentPersonaSkill : ''"
+            :persona-change-handler="personaBindingEnabled ? handlePersonaChange : undefined"
             :preset-chips="scenarioCtx ? scenarioComposerChips : []"
             :scenario-placeholder="scenarioComposerPlaceholder"
             :scenario-hint="scenarioComposerHint"

@@ -257,7 +257,7 @@ describeBE('Finding A5 [P2][对齐] getSessionBranches 类型契约 vs 后端 JS
     // 前端把元素类型声明成 ChatSession（缺 user_id/parent_session_id），且未声明 total
     expect(fn).toContain('branches: ChatSession[]')
     const chatTypes = read(FE('types/chat.ts'))
-    const sessIface = chatTypes.slice(chatTypes.indexOf('interface ChatSession'), chatTypes.indexOf('interface ChatSession') + 260)
+    const sessIface = /export interface ChatSession\s*\{([\s\S]*?)^\}/m.exec(chatTypes)?.[1] ?? ''
     // ChatSession 不含 user_id（单用户桌面无需暴露）→ 与后端 storage.Session 字段集仍有差
     expect(sessIface.includes('user_id')).toBe(false)
     // BUG-20260703 P2-1：fork UI 落地后 ChatSession 已含 parent_session_id（分支徽标数据源，

@@ -650,6 +650,9 @@ export interface ChatSession {
   created_at: string
   updated_at: string
   message_count: number
+  /** 服务端会话扩展信息，绑定以此处持久化数据为准。 */
+  meta?: string
+  persona_skill?: string
   /** 分支会话的源会话 id（BUG-20260703 P2-1 fork）；非分支为空 */
   parent_session_id?: string
 }

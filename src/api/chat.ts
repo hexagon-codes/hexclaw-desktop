@@ -40,25 +40,37 @@ const userQuery = () => ({ user_id: DESKTOP_USER_ID })
 const ownedPath = (path: string) =>
   `${path}${path.includes('?') ? '&' : '?'}user_id=${encodeURIComponent(DESKTOP_USER_ID)}`
 
+function normalizeSession(session: ChatSession): ChatSession {
+  let meta: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(session.meta || '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) meta = parsed as Record<string, unknown>
+  } catch { /* 兼容旧扩展信息。 */ }
+  return {
+    ...session,
+    persona_skill: typeof meta.persona_skill === 'string' ? meta.persona_skill : '',
+    ...(meta.workflow_id && typeof meta.agent_name === 'string'
+      ? { agent_name: session.agent_name || meta.agent_name } : {}),
+  }
+}
+
 export async function listSessions(params: { limit?: number; offset?: number } = {}) {
   const result = await apiGet<{ sessions: Array<ChatSession & { meta?: string }>; total: number }>('/api/v1/sessions', {
     ...userQuery(),
     ...(params.limit ? { limit: params.limit } : {}),
     ...(params.offset ? { offset: params.offset } : {}),
   })
-  // 工作流专属会话沿用持久归属，不从标题或最近活动猜测智能体。
-  return { ...result, sessions: result.sessions.map((session) => {
-    try {
-      const meta = JSON.parse(session.meta || '{}') as Record<string, unknown>
-      return meta.workflow_id && typeof meta.agent_name === 'string'
-        ? { ...session, agent_name: session.agent_name || meta.agent_name }
-        : session
-    } catch { return session }
-  }) }
+  return { ...result, sessions: result.sessions.map(normalizeSession) }
 }
 
 export function getSession(id: string) {
   return apiGet<ChatSession>(`/api/v1/sessions/${encodeURIComponent(id)}`, userQuery())
+}
+
+export async function updateSessionPersona(id: string, skillName: string) {
+  return normalizeSession(await apiPut<ChatSession>(ownedPath(`/api/v1/sessions/${encodeURIComponent(id)}/persona`), {
+    skill_name: skillName,
+  }))
 }
 
 export function createSession(id: string, title: string) {

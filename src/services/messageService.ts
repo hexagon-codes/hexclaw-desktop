@@ -11,6 +11,7 @@ import {
   listSessionMessages,
   createSession as createSessionApi,
   updateSessionTitle as updateSessionTitleApi,
+  updateSessionPersona as updateSessionPersonaApi,
   suggestSessionTitle as suggestSessionTitleApi,
   deleteSession as deleteSessionApi,
   deleteMessage as deleteMessageApi,
@@ -104,6 +105,8 @@ export async function loadAllSessionsResult(): Promise<LoadAllSessionsResult> {
         created_at: s.created_at || new Date().toISOString(),
         updated_at: s.updated_at || new Date().toISOString(),
         message_count: s.message_count ?? 0,
+        meta: s.meta,
+        persona_skill: s.persona_skill ?? '',
         // 分支标识透传（BUG-20260703 P2-1）：会话列表用它渲染分支徽标
         parent_session_id: s.parent_session_id || undefined,
       })),
@@ -124,6 +127,10 @@ export async function createSession(id: string, title: string): Promise<void> {
 
 export async function updateSessionTitle(id: string, title: string): Promise<void> {
   await updateSessionTitleApi(id, title)
+}
+
+export async function updateSessionPersona(id: string, skillName: string): Promise<ChatSession> {
+  return updateSessionPersonaApi(id, skillName)
 }
 
 export async function suggestSessionTitle(id: string, expectedTitle?: string) {

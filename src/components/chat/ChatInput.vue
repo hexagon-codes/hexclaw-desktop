@@ -122,6 +122,8 @@ const props = defineProps<{
   /** 附件草稿的会话作用域；作用域变化时回收当前附件预览能力。 */
   draftScopeKey?: string
   draftAgentKey?: string
+  personaSkillName?: string
+  personaChangeHandler?: (name: string, sessionId: string) => Promise<void>
   /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip）。
    *  string 保留后端旧契约兼容；结构化项只把 actionId 向父级派发，本组件不解释领域语义。 */
   presetChips?: Array<string | ScenarioComposerChip>
@@ -136,6 +138,7 @@ const props = defineProps<{
     options?: {
       contextRefs?: ChatContextRef[]
       skillNames?: string[]
+      personaSkillName?: string
       promptInvocation?: PromptInvocation
       onPayloadRejected?: (error: ChatPayloadLimitError) => void
     },
@@ -176,12 +179,33 @@ const emit = defineEmits<{
   'preset-chip-action': [actionId: string]
 }>()
 
-/** 本轮「已挂载技能」——选中 skill 后显示可移除 chip，让用户看得见在用什么。
- *  底层仍走 @name 文本 + 后端触发词，不改成结构化插件（守 SKILL.md 可移植性）。 */
+/** 任务技能与新会话待发送的人设选择；已生效的人设从会话投影。 */
 const mountedSkills = ref<Skill[]>([])
+const personaUpdating = ref(false)
+const visibleMountedSkills = computed(() => {
+  const name = props.personaChangeHandler ? props.personaSkillName : ''
+  const draftSkills = name
+    ? mountedSkills.value.filter((s) => !s.is_persona) : mountedSkills.value
+  if (!name) return draftSkills
+  const persona = (props.skills ?? []).find((s) => s.name === name) ?? {
+    name, is_persona: true, description: '', author: '', version: '', triggers: [], tags: ['persona'],
+  }
+  return [persona, ...draftSkills.filter((s) => s.name !== name)]
+})
 
-function removeMountedSkill(name: string) {
-  // chip 即唯一表示（不再有 @name 文本需要同步剥离）
+async function removeMountedSkill(name: string) {
+  if (personaUpdating.value) return
+  if (props.personaChangeHandler && props.draftScopeKey && name === props.personaSkillName) {
+    const sourceKey = composerDraftKey()
+    personaUpdating.value = true
+    try {
+      await props.personaChangeHandler('', props.draftScopeKey)
+      if (sourceKey === composerDraftKey()) mountedSkills.value = mountedSkills.value.filter((s) => !s.is_persona)
+    }
+    catch (error) { voiceToast.error(error instanceof Error ? error.message : String(error)) }
+    finally { personaUpdating.value = false }
+    return
+  }
   mountedSkills.value = mountedSkills.value.filter((s) => s.name !== name)
 }
 
@@ -536,7 +560,8 @@ function persistDraft(): Promise<void> {
   const key = activeDraftKey
   const text = inputText.value
   const prompt = promptDraft.value ? JSON.parse(JSON.stringify(promptDraft.value)) as PromptComposerDraft : undefined
-  const skills = JSON.parse(JSON.stringify(mountedSkills.value))
+  const skills = JSON.parse(JSON.stringify(mountedSkills.value
+    .filter((s) => !s.is_persona || s.name !== props.personaSkillName)))
   const contexts = JSON.parse(JSON.stringify(contextChips.value))
   const files = attachedFiles.value.map((item) => preserveComposerFile(item.file))
   draftWrite = draftWrite.catch(() => undefined).then(async () => {
@@ -745,7 +770,7 @@ async function handleSend() {
   if (draftLoading.value) return
   const text = normalizeMathMarkdown(inputText.value.trim())
   let files = attachedFiles.value.map((a) => a.file)
-  if (props.streaming || props.disabled || submitting.value || generating.value) return
+  if (props.streaming || props.disabled || submitting.value || generating.value || personaUpdating.value) return
   closePopups()
 
   // 图像生成：直接调 API（默认参数），无 UI 参数面板
@@ -856,7 +881,12 @@ async function handleSend() {
       label: c.label,
       content: c.content,
     }))
-    const skillNames = mountedSkills.value.map((s) => s.name)
+    // 人设由会话绑定继承，不把发送快照再次当成绑定写入，避免覆盖之后的取消或切换。
+    const skillNames = visibleMountedSkills.value
+      .filter((s) => !(props.personaChangeHandler && s.is_persona)).map((s) => s.name)
+    const pendingPersona = mountedSkills.value.find((s) => s.is_persona)?.name
+    const personaSkillName = props.personaChangeHandler && pendingPersona !== props.personaSkillName
+      ? pendingPersona : undefined
     const promptInvocation = promptDraft.value ? { ...promptDraft.value.invocation } : undefined
     const sourceBackend = backendScopeKey()
     const sourceAgent = props.draftAgentKey
@@ -957,7 +987,7 @@ async function handleSend() {
     const accepted = await props.sendHandler(
       text,
       files,
-      { contextRefs, skillNames, promptInvocation, onPayloadRejected },
+      { contextRefs, skillNames, personaSkillName, promptInvocation, onPayloadRejected },
     )
     if (accepted && !payloadRejected && sourceIsActive()
       && sourceContentRevision === draftContentRevision
@@ -1111,7 +1141,8 @@ function slashStripRange(): { start: number; end: number } | null {
 
 // 统一命令面板选中：skill → 插 @name；prompt → 插正文（含 $ARGUMENTS snippet 填参）。
 // 斜杠召回会剥掉 /query；按钮召回在光标处插入。
-function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; id?: string; title?: string; desc?: string; content?: string; name?: string; invocation?: PromptInvocation }) {
+async function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; id?: string; title?: string; desc?: string; content?: string; name?: string; invocation?: PromptInvocation }) {
+  if (personaUpdating.value) return
   const extraField = unitPromptActive.value && !promptDraft.value?.editor_expanded ? promptExtraRef.value : undefined
   const extraStart = promptDraft.value?.extra_range?.start
   const cursorPos = extraField && extraStart !== undefined
@@ -1127,9 +1158,22 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; id?: string; tit
   if (item.kind === 'skill') {
     const name = item.name ?? ''
     if (!name) return
-    // 记入「已挂载技能」chip（去重）
     const found = (props.skills ?? []).find((s) => s.name === name)
-    if (found && !mountedSkills.value.some((s) => s.name === name)) {
+    if (found?.is_persona && props.personaChangeHandler) {
+      if (props.draftScopeKey) {
+        const sourceKey = composerDraftKey()
+        personaUpdating.value = true
+        try { await props.personaChangeHandler(name, props.draftScopeKey) }
+        catch (error) {
+          voiceToast.error(error instanceof Error ? error.message : String(error))
+          return
+        } finally { personaUpdating.value = false }
+        if (sourceKey !== composerDraftKey()) return
+        mountedSkills.value = mountedSkills.value.filter((s) => !s.is_persona)
+      } else {
+        mountedSkills.value = [...mountedSkills.value.filter((s) => !s.is_persona), found]
+      }
+    } else if (found && !mountedSkills.value.some((s) => s.name === name)) {
       mountedSkills.value = [...mountedSkills.value, found]
     }
     // 统一为 chip 表示（与 @ 上下文一致）：不再往输入框插 @name 文本——
@@ -1616,7 +1660,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
       <!-- 预设能力 chips（收件人声明）/ 已挂载技能 / @ 召唤上下文 chip（盒内首行，对齐原型 .composer-chips） -->
       <div
-        v-if="presetChipList.length > 0 || mountedSkills.length > 0 || contextChips.length > 0"
+        v-if="presetChipList.length > 0 || visibleMountedSkills.length > 0 || contextChips.length > 0"
         class="hc-composer__skills"
       >
         <span
@@ -1644,12 +1688,13 @@ defineExpose({ focus, setInput, triggerFileUpload })
             ×
           </button>
         </span>
-        <span v-for="s in mountedSkills" :key="'skill:' + s.name" class="hc-composer__skill-chip">
+        <span v-for="s in visibleMountedSkills" :key="'skill:' + s.name" class="hc-composer__skill-chip">
           <SkillIcon :skill="s" :size="14" />
           <span class="hc-composer__skill-name">{{ skillDisplayName(s, locale) }}</span>
           <button
             class="hc-composer__skill-remove"
             :title="t('chat.removeSkill', '移除技能')"
+            :disabled="personaUpdating"
             @click="removeMountedSkill(s.name)"
           >
             ×

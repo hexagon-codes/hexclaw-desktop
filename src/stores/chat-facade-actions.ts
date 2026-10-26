@@ -28,6 +28,7 @@ export function createChatFacadeActions(params: {
     },
     newSession: sessionController.newSession,
     ensureSession: sessionController.ensureSession,
+    updateSessionPersona: sessionController.updateSessionPersona,
     async sendMessage(
       text: string,
       attachments?: ChatAttachment[],

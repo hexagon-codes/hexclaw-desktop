@@ -1,4 +1,5 @@
 import type { ChatSession } from '@/types'
+import { backendScopeKey } from '@/services/backend-context'
 import { createChatSessionLifecycleController } from './chat-session-lifecycle'
 import { createChatSessionLoadingController } from './chat-session-loading'
 import type { ChatSessionControllerParams } from './chat-session-types'
@@ -8,6 +9,13 @@ export function createChatSessionController(params: ChatSessionControllerParams)
 
   function upsertLocalSession(session: ChatSession, prepend = false) {
     sessions.value = upsertSession(sessions.value, session, prepend)
+  }
+
+  async function updateSessionPersona(sessionId: string, name: string) {
+    const backend = backendScopeKey()
+    const session = await params.msgSvc.updateSessionPersona(sessionId, name)
+    if (backend === backendScopeKey()) upsertLocalSession(session)
+    return session
   }
 
   function bumpLocalSession(sessionId: string) {
@@ -41,6 +49,7 @@ export function createChatSessionController(params: ChatSessionControllerParams)
   return {
     upsertLocalSession,
     bumpLocalSession,
+    updateSessionPersona,
     setLocalSessionTitle,
     setPendingSuggestedTitleExpectation,
     loadSessions: loadingController.loadSessions,
