@@ -6,15 +6,17 @@ import { knowledgeHitTitle } from '@/utils/retrieval-hits'
 import KnowledgeSourceDialog from '@/components/knowledge/KnowledgeSourceDialog.vue'
 const props = defineProps<{ activity: RetrievalActivity; historical?: boolean }>()
 const { t } = useI18n()
-const hits = computed(() => props.activity.knowledge_hits ?? props.activity.memory_hits ?? [])
-const residentHits = computed(() => props.activity.resident_hits ?? [])
 const isTurnMemory = computed(
   () => props.activity.kind === 'memory' && props.activity.source !== 'history',
 )
+const hits = computed(() => isTurnMemory.value
+  ? props.activity.memory_hits ?? []
+  : props.activity.knowledge_hits ?? props.activity.memory_hits ?? [])
+const residentHits = computed(() => isTurnMemory.value ? [] : props.activity.resident_hits ?? [])
 const memoryCount = computed(() => {
   const ids = new Set<string>()
   let unidentified = 0
-  for (const hit of [...residentHits.value, ...hits.value]) {
+  for (const hit of hits.value) {
     const id = typeof hit.id === 'string' ? hit.id.trim() : ''
     if (id) ids.add(id)
     else unidentified++
@@ -27,9 +29,7 @@ const hasDetails = computed(() => residentHits.value.length > 0 || hits.value.le
 const groups = computed(() => [
   ...(residentHits.value.length
     ? [{
-        name: isTurnMemory.value
-          ? t('memory.includedMemory')
-          : hits.value.length ? 'Resident' : '',
+        name: hits.value.length ? 'Resident' : '',
         hits: residentHits.value,
       }]
     : []),
@@ -92,6 +92,7 @@ function sourceURL(hit: Record<string, unknown>) {
 </script>
 <template>
   <details
+    v-if="!isTurnMemory || hasDetails"
     class="hc-process-tool"
     :class="{ 'hc-process-tool--empty': !hasDetails }"
     :data-status="activity.status === 'failed' ? 'error' : 'success'"

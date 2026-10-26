@@ -97,15 +97,17 @@ const steps = computed(() => {
         })
     }
   }
-  // 仅过滤展示：成功零命中不占行，失败与持久回执保持完整。
-  return ordered.filter(
-    (block) =>
-      block.type !== 'retrieval' ||
-      block.retrieval.status !== 'completed' ||
-      (block.retrieval.knowledge_hits?.length ?? 0) > 0 ||
-      (block.retrieval.memory_hits?.length ?? 0) > 0 ||
-      (block.retrieval.resident_hits?.length ?? 0) > 0,
-  )
+  // 普通长期记忆只显示检索命中；其他召回沿既有零命中与失败反馈，持久回执不变。
+  return ordered.filter((block) => {
+    if (block.type !== 'retrieval') return true
+    const { retrieval } = block
+    if (retrieval.kind === 'memory' && retrieval.source !== 'history')
+      return (retrieval.memory_hits?.length ?? 0) > 0
+    return retrieval.status !== 'completed' ||
+      (retrieval.knowledge_hits?.length ?? 0) > 0 ||
+      (retrieval.memory_hits?.length ?? 0) > 0 ||
+      (retrieval.resident_hits?.length ?? 0) > 0
+  })
 })
 // 仅把同工具调用汇入首个活动概览；文本、召回和原持久时间线不变。
 const overviewSteps = computed(() => {
