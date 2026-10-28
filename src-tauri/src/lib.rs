@@ -23,6 +23,7 @@ pub(crate) mod sidecar_client;
 pub mod sidecar_socket;
 pub mod sidecar_stream;
 mod generated_media;
+pub(crate) mod file_cache;
 pub(crate) mod sidecar_supervisor;
 pub mod test_runtime;
 pub mod tray;

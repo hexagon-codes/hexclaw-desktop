@@ -68,7 +68,7 @@ async function open(action: 'preview' | 'download') {
     document.addEventListener('keydown', cancelPendingPreview, true)
   }
   try {
-    // 预览与保存复用同一来源的不可变字节，不重新渲染报告。
+    // 同次打开持有冻结快照；新的远程读取由共享缓存校验，不重新渲染。
     const pdf = cached ?? (await props.loadPdf(current.signal))
     if (current.signal.aborted || version !== generation || scope !== backendScopeKey()) return
     cached = pdf
@@ -86,12 +86,14 @@ async function open(action: 'preview' | 'download') {
     if (version === generation) {
       request = null
       busy.value = false
+      if (action === 'download' && !preview.value) cached = null
     }
   }
 }
 
 async function closePreview() {
   preview.value = null
+  cached = null
   const target = trigger
   const version = generation
   trigger = null

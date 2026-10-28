@@ -105,6 +105,12 @@ export const api = ofetch.create(
       'Content-Type': 'application/json',
     },
     onRequest({ request, options }) {
+      if (options.cache === undefined
+        && (options.method ?? 'GET').toString().toUpperCase() === 'GET'
+        && (options.responseType === 'blob' || options.responseType === 'arrayBuffer')) {
+        // 浏览器文件沿HTTP条件缓存；原生文件由Rust共用持久缓存。
+        options.cache = 'no-cache'
+      }
       if (isTauri() && managedSidecarPath(request)) {
         // 重试沿用首次连接归属；旧回执被取消后不能带着原参数改发到新后端。
         const headers = new Headers(options.headers)
@@ -113,11 +119,16 @@ export const api = ofetch.create(
         headers.set('x-hexclaw-connection-scope', scope)
         options.headers = headers
       }
-      logger.debug(`→ ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`)
+      // 文件地址可能含下载token，日志只记录传输类型，不记录完整地址。
+      const target = options.responseType === 'blob' || options.responseType === 'arrayBuffer'
+        ? '[file]' : request.toString()
+      logger.debug(`→ ${(options.method ?? 'GET').toString().toUpperCase()} ${target}`)
     },
     onResponse({ request, response, options }) {
+      const target = options.responseType === 'blob' || options.responseType === 'arrayBuffer'
+        ? '[file]' : request.toString()
       logger.debug(
-        `← ${response.status} ${(options.method ?? 'GET').toString().toUpperCase()} ${request.toString()}`,
+        `← ${response.status} ${(options.method ?? 'GET').toString().toUpperCase()} ${target}`,
       )
     },
     onResponseError({ response }) {

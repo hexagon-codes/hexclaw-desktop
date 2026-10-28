@@ -284,10 +284,7 @@ async fn execute_sidecar_fetch(
         request = request.body(body);
     }
     let response = await_sidecar_or_cancel(cancellation.clone(), async {
-        request
-            .send()
-            .await
-            .map_err(|error| format!("Sidecar request failed: {error}"))
+        client.send(request).await
     })
     .await?;
     SidecarClient::require_non_redirect(&response)?;

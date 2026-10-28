@@ -78,10 +78,11 @@ impl SidecarClient {
     pub(crate) fn connection(&self) -> &ConnectionSnapshot { &self.connection }
 
     pub(crate) async fn get(&self, relative_path: &str) -> Result<Response, String> {
-        self.request(Method::GET, relative_path)?
-            .send()
-            .await
-            .map_err(|error| format!("Sidecar GET failed: {error}"))
+        self.send(self.request(Method::GET, relative_path)?).await
+    }
+
+    pub(crate) async fn send(&self, request: reqwest::RequestBuilder) -> Result<Response, String> {
+        crate::file_cache::send(&self.client, &self.connection, request).await
     }
 
     pub(crate) async fn post_json<T: Serialize + ?Sized>(

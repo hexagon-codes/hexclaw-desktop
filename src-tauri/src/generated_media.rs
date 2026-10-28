@@ -24,7 +24,7 @@ pub(crate) async fn read(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>,
             upstream = upstream.header(header, value);
         }
     }
-    let response = upstream.send().await.map_err(|error| format!("Media request failed: {error}"))?;
+    let response = client.send(upstream).await?;
     SidecarClient::require_non_redirect(&response)?;
     let mut output = Response::builder().status(response.status().as_u16());
     for header in ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "cache-control"] {
