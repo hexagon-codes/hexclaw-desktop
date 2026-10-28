@@ -17,8 +17,16 @@ import type { ChatResult } from './helpers'
 // ---------------------------------------------------------------------------
 
 let _availableSkills: string[] = []
-let availableProviders: Record<string, { model: string; has_key: boolean }> = {}
+let availableProviders: Record<string, { model: string; has_key: boolean; local?: boolean }> = {}
 let hasCloudProvider = false
+
+// 真实云模型由运行环境明确选择，不能从配置顺序推断或切换到其他提供方。
+function selectedCloudProvider() {
+  const name = process.env.HEX_E2E_PROVIDER?.trim() ?? ''
+  const configured = availableProviders[name]
+  if (!name || !configured || configured.local === true) return undefined
+  return { name, model: process.env.HEX_E2E_MODEL?.trim() || configured.model }
+}
 
 test.beforeAll(async () => {
   // 探测可用 skills
@@ -32,7 +40,7 @@ test.beforeAll(async () => {
     const { data } = await api('GET', '/api/v1/config')
     const llm = (data as any).llm ?? {}
     availableProviders = llm.providers ?? {}
-    hasCloudProvider = Object.values(availableProviders).some((p: any) => p.has_key)
+    hasCloudProvider = selectedCloudProvider() !== undefined
   } catch { /* ignore */ }
 })
 
@@ -101,17 +109,14 @@ test.describe('Skill system', () => {
   })
 
   test('cloud provider with skill triggers tool use (if available)', async () => {
-    test.skip(!hasCloudProvider, '无云端 provider，跳过 skill 触发测试')
+    test.skip(!hasCloudProvider, 'HEX_E2E_PROVIDER must identify the configured live cloud provider')
 
-    // 找到第一个有 API key 的 provider
-    const [providerName, providerCfg] = Object.entries(availableProviders)
-      .find(([, v]: [string, any]) => v.has_key) ?? ['', {} as any]
-    test.skip(!providerName, '无可用云端 provider')
+    const selected = selectedCloudProvider()
 
     const msg = `请直接把 Good morning 翻译成日语，标记 ${e2eTextMarker()}`
     const result: ChatResult = await wsChat(msg, {
-      provider: providerName,
-      model: (providerCfg as any).model,
+      provider: selected?.name,
+      model: selected?.model,
     })
     expect(result.content.length).toBeGreaterThan(0)
   })
@@ -149,17 +154,15 @@ test.describe('MCP tools', () => {
   })
 
   test('cloud provider with explicit tool request gets reply (if available)', async () => {
-    test.skip(!hasCloudProvider, '无云端 provider，跳过 MCP 工具触发测试')
+    test.skip(!hasCloudProvider, 'HEX_E2E_PROVIDER must identify the configured live cloud provider')
 
-    const [providerName, providerCfg] = Object.entries(availableProviders)
-      .find(([, v]: [string, any]) => v.has_key) ?? ['', {} as any]
-    test.skip(!providerName, '无可用云端 provider')
+    const selected = selectedCloudProvider()
 
     await new Promise((r) => setTimeout(r, 2000))
     const msg = `用 list_directory 工具查看 /tmp 目录有什么文件，标记 ${e2eTextMarker()}`
     const result: ChatResult = await wsChat(msg, {
-      provider: providerName,
-      model: (providerCfg as any).model,
+      provider: selected?.name,
+      model: selected?.model,
     })
     expect(result.content.length).toBeGreaterThan(0)
   })

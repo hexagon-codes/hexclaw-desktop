@@ -6,6 +6,8 @@
  *   pnpm add -D ws @types/ws
  */
 
+import { randomUUID } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 import WebSocket from 'ws'
 
 // ---------------------------------------------------------------------------
@@ -15,7 +17,7 @@ import WebSocket from 'ws'
 export const BASE_URL = (process.env.HEX_E2E_SIDECAR_URL || 'http://localhost:16060').replace(/\/$/, '')
 export const WS_URL = process.env.HEX_E2E_SIDECAR_WS_URL
   || `${BASE_URL.replace(/^http/, 'ws')}/ws`
-export const USER_ID = 'e2e-playwright'
+export const USER_ID = process.env.HEX_E2E_USER_ID?.trim() || 'api-user'
 
 export function e2eMarker(prefix = 'marker'): string {
   const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8).padEnd(8, 'x')
@@ -26,14 +28,37 @@ export function e2eTextMarker(): string {
   return e2eMarker('mark')
 }
 
-function isTransientLLMError(err: unknown): boolean {
-  const msg = String(err instanceof Error ? err.message : err).toLowerCase()
-  return /(?:unexpected\s+eof|\beof\b|tls handshake timeout|connection reset|connection refused|socket hang up|temporarily unavailable|timeout awaiting response headers)/.test(msg)
-    && /(siliconflow|api\.siliconflow|openai stream request failed|chat\/completions|llm complete|runtime stream)/.test(msg)
+// 复用真实 Sidecar 的能力令牌环境，不在测试中保存或输出凭据。
+function sidecarAuthorization(): Record<string, string> {
+  const token = process.env.HEXCLAW_SIDECAR_CAPABILITY_TOKEN?.trim()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function chatRequestId(value?: unknown): string {
+  return typeof value === 'string' && value.trim() ? value : `e2e-${randomUUID()}`
+}
+
+// 只记录协议身份与实际模型元数据，不保存提示词、正文、令牌或认证头。
+function recordChatEvidence(protocol: 'http' | 'ws', requestId: string, status: string | number, metadata: Record<string, unknown> = {}) {
+  const path = process.env.HEX_E2E_EVIDENCE_PATH
+  if (!path) return
+  appendFileSync(path, JSON.stringify({
+    time: new Date().toISOString(), protocol, request_id: requestId, status,
+    provider: typeof metadata.provider === 'string' ? metadata.provider : undefined,
+    model: typeof metadata.model === 'string' ? metadata.model : undefined,
+    session_id: typeof metadata.session_id === 'string' ? metadata.session_id : undefined,
+  }) + '\n', { mode: 0o600 })
+}
+
+// 传输结束不代表业务未执行；保留原请求身份供查询，绝不自动重发。
+export class E2ERequestError extends Error {
+  readonly requestId?: string
+
+  constructor(message: string, requestId?: string) {
+    super(requestId ? `${message}; request_id=${requestId}; query the original result before resending` : message)
+    this.name = 'E2ERequestError'
+    this.requestId = requestId
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +67,7 @@ function sleep(ms: number): Promise<void> {
 
 interface ApiResponse {
   status: number
+  requestId?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any
 }
@@ -63,24 +89,27 @@ export async function api(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-User-ID': USER_ID,
+    ...sidecarAuthorization(),
   }
 
   // 与 wsChat 同口径：HTTP /chat 默认 routing 走 app 的 llm.default（本机默认本地 provider，
   // 未安装本地 runtime 即 400）。HEX_E2E_PROVIDER / HEX_E2E_MODEL 把真机链路定向到已配置的云端
   // provider 及其模型（body 已显式给的字段优先，不覆盖）。
   let finalBody = body
+  let requestId: string | undefined
   if (body !== undefined && path.startsWith('/api/v1/chat')) {
+    const metadata = body.metadata as Record<string, unknown> | undefined
+    requestId = chatRequestId(body.request_id ?? metadata?.request_id)
     finalBody = {
       ...(process.env.HEX_E2E_PROVIDER ? { provider: process.env.HEX_E2E_PROVIDER } : {}),
       ...(process.env.HEX_E2E_MODEL ? { model: process.env.HEX_E2E_MODEL } : {}),
       ...(!('user_id' in body) ? { user_id: USER_ID } : {}),
       ...body,
+      request_id: requestId,
     }
   }
 
-  let last: ApiResponse | undefined
-  const attempts = path.startsWith('/api/v1/chat') ? 2 : 1
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  try {
     const init: RequestInit = { method, headers }
     if (finalBody !== undefined) {
       init.body = JSON.stringify(finalBody)
@@ -96,14 +125,14 @@ export async function api(
       data = { raw: text }
     }
 
-    last = { status: res.status, data }
-    if (res.status < 500 || attempt === attempts || !isTransientLLMError(JSON.stringify(data))) {
-      return last
+    if (requestId) {
+      const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata as Record<string, unknown> : {}
+      recordChatEvidence('http', requestId, res.status, { ...metadata, session_id: data.session_id })
     }
-    await sleep(1_500 * attempt)
+    return { status: res.status, data, requestId }
+  } catch {
+    throw new E2ERequestError(`${method} ${new URL(url).pathname} failed before a complete response (detail redacted)`, requestId)
   }
-
-  return last!
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +140,8 @@ export async function api(
 // ---------------------------------------------------------------------------
 
 export interface ChatResult {
+  /** 本次单次请求发送的稳定身份，失败时也保留。 */
+  requestId: string
   /** Concatenated content text from all chunks / final reply */
   content: string
   /** Concatenated reasoning text (thinking mode) */
@@ -126,6 +157,7 @@ export interface ChatResult {
 }
 
 interface WsChatOptions {
+  requestId?: string
   sessionId?: string
   provider?: string
   model?: string
@@ -149,26 +181,7 @@ export function wsChat(
   // 优先使用已配置的 provider/model：默认 routing 走 app 的 llm.default（本机默认是本地 provider，
   // 未安装本地 runtime 时会 400）。HEX_E2E_PROVIDER / HEX_E2E_MODEL 可把真机链路定向到已配置的
   // 云端 provider 及其模型，不改 app 默认配置；显式 options 仍最高优先。
-  return wsChatWithRetry(content, options)
-}
-
-async function wsChatWithRetry(
-  content: string,
-  options: WsChatOptions = {},
-): Promise<ChatResult> {
-  let lastErr: unknown
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await wsChatOnce(content, options)
-    } catch (err) {
-      lastErr = err
-      if (attempt === 2 || !isTransientLLMError(err)) {
-        throw err
-      }
-      await sleep(1_500 * attempt)
-    }
-  }
-  throw lastErr
+  return wsChatOnce(content, options)
 }
 
 function wsChatOnce(
@@ -182,13 +195,16 @@ function wsChatOnce(
     metadata,
     timeoutMs = 300_000,
   } = options
+  const requestId = chatRequestId(options.requestId ?? metadata?.request_id)
 
   return new Promise<ChatResult>((resolve, reject) => {
-    const ws = new WebSocket(WS_URL)
+    const ws = new WebSocket(WS_URL, { headers: sidecarAuthorization() })
 
     let timer: ReturnType<typeof setTimeout> | undefined
+    let settled = false
 
     const result: ChatResult = {
+      requestId,
       content: '',
       reasoning: '',
       metadata: {},
@@ -207,10 +223,30 @@ function wsChatOnce(
       }
     }
 
+    const fail = (message: string) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      try { recordChatEvidence('ws', requestId, 'failed', result.metadata) } catch { message += '; evidence recording failed' }
+      reject(new E2ERequestError(message, requestId))
+    }
+
+    const complete = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      try {
+        recordChatEvidence('ws', requestId, 'succeeded', result.metadata)
+      } catch {
+        reject(new E2ERequestError('Response completed but evidence recording failed', requestId))
+        return
+      }
+      resolve(result)
+    }
+
     // Timeout guard
     timer = setTimeout(() => {
-      cleanup()
-      reject(new Error(`wsChat timed out after ${timeoutMs}ms`))
+      fail(`wsChat timed out after ${timeoutMs}ms`)
     }, timeoutMs)
 
     ws.on('open', () => {
@@ -218,6 +254,7 @@ function wsChatOnce(
         type: 'message',
         content,
         user_id: USER_ID,
+        request_id: requestId,
       }
 
       if (sessionId !== undefined) msg.session_id = sessionId
@@ -262,8 +299,7 @@ function wsChatOnce(
           if (data.metadata !== undefined && data.metadata !== null) {
             result.metadata = data.metadata as Record<string, unknown>
           }
-          cleanup()
-          resolve(result)
+          complete()
         }
       } else if (msgType === 'reply') {
         // Some backends send a single "reply" instead of chunked stream
@@ -282,25 +318,21 @@ function wsChatOnce(
         if (Array.isArray(data.tool_calls)) {
           result.toolCalls.push(...(data.tool_calls as unknown[]))
         }
-        cleanup()
-        resolve(result)
+        complete()
       } else if (msgType === 'error') {
-        cleanup()
-        reject(new Error(`WebSocket error from server: ${data.content ?? 'unknown'}`))
+        fail(`WebSocket error from server: ${data.content ?? 'unknown'}`)
       }
       // Ignore pong and other message types
     })
 
     ws.on('error', (err: Error) => {
-      cleanup()
-      reject(err)
+      fail(err.message)
     })
 
     ws.on('close', () => {
       // If we haven't resolved/rejected yet, the connection dropped unexpectedly
-      if (timer !== undefined) {
-        cleanup()
-        reject(new Error('WebSocket closed before receiving a complete response'))
+      if (!settled) {
+        fail('WebSocket closed before receiving a complete response')
       }
     })
   })

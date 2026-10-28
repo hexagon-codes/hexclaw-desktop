@@ -266,13 +266,22 @@ test.describe('Gateway security', () => {
     expect(status).toBe(400)
   })
 
-  test('Cross-user isolation (different user_id sees empty sessions)', async () => {
-    const { status, data } = await api(
-      'GET',
-      `/api/v1/sessions?user_id=${e2eMarker('nobody')}`,
-    )
-    expect(status).toBe(200)
-    expect(data.sessions ?? []).toEqual([])
+  test('Authenticated session ownership ignores forged user_id', async () => {
+    const sessionId = `sess-${e2eMarker('principal')}`
+    const forgedUser = e2eMarker('nobody')
+    const created = await api('POST', '/api/v1/sessions', {
+      id: sessionId, title: 'Authenticated owner fixture', user_id: forgedUser,
+    })
+    expect(created.status).toBe(201)
+    try {
+      const scoped = await api('GET', `/api/v1/sessions/${sessionId}?user_id=${forgedUser}`)
+      expect(scoped.status).toBe(200)
+      expect(scoped.data.id).toBe(sessionId)
+      expect(scoped.data.user_id).toBe(USER_ID)
+    } finally {
+      const removed = await api('DELETE', `/api/v1/sessions/${sessionId}`)
+      expect([200, 204]).toContain(removed.status)
+    }
   })
 })
 

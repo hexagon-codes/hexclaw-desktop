@@ -105,6 +105,29 @@ pnpm exec vitest run src/api/__tests__/knowledge-retry-intent.test.ts
 
 完整命令清单在 [package.json](package.json)。测试缺少参考资料或环境时，说明缺少什么，并与维护者协调对应检查；不要通过删掉断言或跳过失败来宣称已通过。仓库既有 CI 门禁保持不变，fork 缺少维护者资源时，不保证全部 CI 检查可直接运行或通过。
 
+### 当前源码 API 与 WebSocket 链路
+
+`tests/e2e/api-chain.spec.ts` 与 `tests/e2e/streaming-chain.spec.ts` 使用调用方启动的隔离服务，运行前提供：
+
+| 环境变量 | 含义 |
+| --- | --- |
+| `HEX_E2E_BASE_URL` | 当前源码前端入口；默认配置要求显式提供，即使只执行 API 用例 |
+| `HEX_E2E_SIDECAR_URL` | 当前隔离 Sidecar 的 HTTP 根地址 |
+| `HEX_E2E_SIDECAR_WS_URL` | 同一 Sidecar 的完整 WebSocket 地址，以 `/ws` 结尾 |
+| `HEXCLAW_SIDECAR_CAPABILITY_TOKEN` | 该 Sidecar 的能力令牌；HTTP 与 WebSocket 握手均通过 Bearer 发送，沿用 live runner 的环境命名 |
+| `HEX_E2E_PROVIDER` | 从当前配置读取并明确授权的 Provider ID；使用配置键，不从列表顺序或显示名猜测 |
+| `HEX_E2E_MODEL` | 该 Provider 下明确授权的模型 ID |
+| `HEX_E2E_USER_ID` | 当前认证主体；普通 API Bearer 默认为 `api-user`，不能用请求字段切换主体 |
+| `HEX_E2E_EVIDENCE_PATH` | 可选私有 JSONL 路径，仅记录请求身份、状态及实际响应的 Provider/model，不记录正文或凭据 |
+
+令牌通过私有运行环境注入，不写入命令示例、测试报告或提交内容。API 与 WebSocket 的模型参数默认使用上述显式配置，单个用例明确给出的参数保留原有优先级；流式套件的云端能力用例只使用所选 Provider，不探测其他真实模型。指定单一 Provider 且没有 `HEX_E2E_ALT_PROVIDER` 时，跨 Provider 组明确跳过；运行该组前另行提供已授权的隔离目标。
+
+```sh
+pnpm exec playwright test -c playwright.config.ts tests/e2e/api-chain.spec.ts tests/e2e/streaming-chain.spec.ts --workers=1 --retries=0
+```
+
+HTTP 与 WebSocket 聊天均只发送一次。调用方提供的 `request_id` 沿用，否则生成本次请求身份；HTTP 返回值的 `requestId`、WebSocket 结果的 `requestId` 和传输错误的 `requestId` 保留这一身份。超时、EOF 或连接中断后先查询原请求的持久结果，不自动重发，也不切换其他 Provider。
+
 ### 维护测试环境与当前合同
 
 - jsdom 不等于浏览器。规范 API 的缺失在共享 [Vitest 环境](src/test/vitest-setup.ts) 中适配；例如 `CSS.escape` 使用规范 polyfill，不能修改生产选择器或返回未转义值来迁就夹具。`ResizeObserver` 的环境适配只提供生命周期，不证明布局或尺寸正确。
