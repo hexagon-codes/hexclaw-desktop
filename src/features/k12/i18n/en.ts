@@ -52,6 +52,7 @@ export default {
   },
 
   supplement: {
+    frozen: 'Weekly practice has been generated; no more questions can be added.',
     title: 'Supplementary practice',
     description: 'Prepare a worksheet for the student to complete on paper',
     type: 'Practice type',

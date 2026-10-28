@@ -118,19 +118,25 @@ const scope = computed(() =>
 )
 const fileTitle = computed(() => t('k12.supplement.sheet', { type: labels.value[selected.value] }))
 const failure = computed(() => {
+  if (current.value.error) return current.value.error
   const message =
-    current.value.error ||
     track(selected.value)?.arithmetic_batch?.failure_message ||
     track(selected.value)?.failure_message ||
     ''
-  if (unavailable.value) return t('k12.supplement.setup')
+  if (recommendation.value?.availability === 'setup_required') return t('k12.supplement.setup')
+  if (recommendation.value?.availability === 'failed_terminal' && props.plan.status === 'frozen') {
+    return t('k12.supplement.frozen')
+  }
   const known: Record<string, string> = {
     'weekly candidate duplicates practiced problem': 'k12.records.weeklyDuplicate',
     'weekly duplicate replacement limit reached': 'k12.records.weeklyDuplicateLimit',
   }
-  return known[message]
-    ? t(known[message])
-    : current.value.error || (message ? t('k12.supplement.generateFailed') : '')
+  if (known[message]) return t(known[message])
+  if (recommendation.value?.availability === 'failed_terminal') {
+    const summary = t('k12.supplement.generateFailed')
+    return message ? `${summary}: ${message}` : summary
+  }
+  return current.value.error || (message ? t('k12.supplement.generateFailed') : '')
 })
 function receiptKey(artifact: PrintableArtifactDTO) {
   return `k12-sheet-delivery:${backendScopeKey()}:${props.agent}:${artifact.artifact_id}`

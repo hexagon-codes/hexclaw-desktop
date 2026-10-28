@@ -55,6 +55,7 @@ export default {
   },
 
   supplement: {
+    frozen: '本周练习已生成，不能继续添加题目',
     title: '补充练习',
     description: '准备练习单，打印后交给孩子作答',
     type: '练习类型',
