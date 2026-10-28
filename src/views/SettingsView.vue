@@ -33,7 +33,6 @@ import {
   invalidateChangedProviderNativeReasoning,
   normalizeModelCapabilities,
   providerProbeConnectivityFingerprint,
-  reconcileDefaultSelection,
   resolveProviderSelectedModelId,
 } from '@/stores/settings-helpers'
 import { getRuntimeConfig } from '@/api/settings'
@@ -198,9 +197,32 @@ const pendingDeleteProviderId = ref<string | null>(null)
 const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(
   null,
 )
-const modelExclusionDraftUndos: Array<{ scope: string; modelId: string }> = []
+const modelExclusionDraftChanges: Array<{
+  scope: string
+  modelId: string
+  excluded: boolean
+  previouslyExcluded: boolean
+}> = []
+function stageModelExclusion(scope: string, modelId: string, excluded: boolean): boolean {
+  modelId = modelId.trim().toLowerCase()
+  const index = modelExclusionDraftChanges.findIndex(item => item.scope === scope && item.modelId === modelId)
+  const previouslyExcluded = modelExclusionDraftChanges[index]?.previouslyExcluded
+    ?? catalogStore.getExcludedModelIds(scope).has(modelId)
+  const updated = excluded
+    ? catalogStore.excludeModel(scope, modelId, false)
+    : catalogStore.clearModelExclusion(scope, modelId, false)
+  if (!updated) return false
+  // 每次编辑保留独立身份，保存回执只消费它冻结的那次意图。
+  const change = { scope, modelId, excluded, previouslyExcluded }
+  if (index >= 0) modelExclusionDraftChanges.splice(index, 1, change)
+  else modelExclusionDraftChanges.push(change)
+  return true
+}
 function revertModelExclusionDraft() {
-  for (const item of modelExclusionDraftUndos.splice(0)) catalogStore.clearModelExclusion(item.scope, item.modelId)
+  for (const item of modelExclusionDraftChanges.splice(0)) {
+    if (item.previouslyExcluded) catalogStore.excludeModel(item.scope, item.modelId, false)
+    else catalogStore.clearModelExclusion(item.scope, item.modelId, false)
+  }
 }
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
@@ -604,6 +626,7 @@ async function persistSettings({
   if (!settingsStore.config) return
 
   const owner: AppConfig = JSON.parse(JSON.stringify(settingsStore.config))
+  const exclusionChanges = [...modelExclusionDraftChanges]
   const ownerSession = settingsOwnerSession
   const scope = backendScopeKey()
   const isCurrentOwner = () => ownerSession === settingsOwnerSession && backendScopeKey() === scope
@@ -624,9 +647,21 @@ async function persistSettings({
     reconcileSavedModelFields(owner.llm, (result.savedConfig ?? owner).llm)
     // 共享保存会规范化配置快照；只有没有后来编辑时才承认该规范化结果。
     recordSavedSettingsBaseline(editableSettingsSignature(result.savedConfig ?? owner), (result.savedConfig ?? owner).llm)
-    for (let index = modelExclusionDraftUndos.length - 1; index >= 0; index--) {
-      const undo = modelExclusionDraftUndos[index]!
-      if (!owner.llm.providers.some(provider => providerModelExclusionScope(provider) === undo.scope && provider.models.some(model => model.id === undo.modelId))) modelExclusionDraftUndos.splice(index, 1)
+    for (const change of exclusionChanges) {
+      const excluded = !(result.savedConfig ?? owner).llm.providers.some(provider =>
+        providerModelExclusionScope(provider) === change.scope
+        && provider.models.some(model => model.id.trim().toLowerCase() === change.modelId))
+      const committed = excluded
+        ? catalogStore.excludeModel(change.scope, change.modelId)
+        : catalogStore.clearModelExclusion(change.scope, change.modelId)
+      const index = modelExclusionDraftChanges.findIndex(item => item.scope === change.scope && item.modelId === change.modelId)
+      const current = modelExclusionDraftChanges[index]
+      if (current && current !== change) {
+        // 已提交状态成为撤销基线，但不能让旧回执覆盖后来的草稿。
+        if (committed) current.previouslyExcluded = excluded
+        if (current.excluded) catalogStore.excludeModel(current.scope, current.modelId, false)
+        else catalogStore.clearModelExclusion(current.scope, current.modelId, false)
+      } else if (committed && current) modelExclusionDraftChanges.splice(index, 1)
     }
     if (refreshRuntimeInfo) {
       await loadRuntimeInfo()
@@ -1460,7 +1495,7 @@ function addCustomModel(provider: ProviderConfig): boolean {
   if (limitError) { toast.error(limitError); return false }
   const modelId = normalizedNewModelId.value
   if (!modelId || provider.models.some((model) => model.id === modelId)) return false
-  if (!catalogStore.clearModelExclusion(providerModelExclusionScope(provider), modelId)) {
+  if (!stageModelExclusion(providerModelExclusionScope(provider), modelId, false)) {
     return false
   }
   const model = canonicalizeModelOption({
@@ -1582,7 +1617,7 @@ function removeModel(provider: ProviderConfig, modelId: string) {
   autoSave()
 }
 
-async function confirmDeleteModel() {
+function confirmDeleteModel() {
   const target = pendingDeleteModel.value
   if (!target) return
 
@@ -1590,58 +1625,16 @@ async function confirmDeleteModel() {
     const llm = settingsStore.config?.llm
     const provider = llm?.providers.find((p) => p.id === target.providerId)
     if (!llm || !provider) return
-    const modelIndex = provider.models.findIndex((candidate) => candidate.id === target.modelId)
-    const model = provider.models[modelIndex]
+    const model = provider.models.find((candidate) => candidate.id === target.modelId)
     if (!model || !isProviderModelRemovable(provider, model)) return
 
-    const previousSelectedModelId = provider.selectedModelId
-    const previousDefaultProviderId = llm.defaultProviderId
-    const previousDefaultModel = llm.defaultModel
-    const providerInstanceId = provider.providerInstanceId
     const exclusionScope = providerModelExclusionScope(provider)
-    const previouslyExcluded = catalogStore.getExcludedModelIds(exclusionScope).has(target.modelId)
-    if (!catalogStore.excludeModel(exclusionScope, target.modelId)) {
-      if (!previouslyExcluded) catalogStore.clearModelExclusion(exclusionScope, target.modelId)
+    if (!stageModelExclusion(exclusionScope, target.modelId, true)) {
       toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
       return
     }
-    if (!previouslyExcluded) modelExclusionDraftUndos.push({ scope: exclusionScope, modelId: target.modelId })
+    // 删除只更新草稿；其它保存的失败不能撤销这次较新的编辑。
     removeModel(provider, target.modelId)
-    const removedSelectedModelId = settingsStore.config?.llm.providers.find((p) => p.id === provider.id)?.selectedModelId
-    const removedDefaultProviderId = settingsStore.config?.llm.defaultProviderId
-    const removedDefaultModel = settingsStore.config?.llm.defaultModel
-    try {
-      await flushAutoSave({ force: true })
-    } catch (e) {
-      if (!previouslyExcluded) catalogStore.clearModelExclusion(exclusionScope, target.modelId)
-      const currentLlm = settingsStore.config?.llm
-      const currentProvider = currentLlm?.providers.find((p) =>
-        p.id === provider.id && p.providerInstanceId === providerInstanceId,
-      )
-      if (currentLlm && currentProvider) {
-        // 只补回本次删除的模型，保留保存期间其它模型的编辑。
-        const models = [...currentProvider.models]
-        if (!models.some((candidate) => candidate.id === target.modelId)) {
-          models.splice(Math.min(modelIndex, models.length), 0, model)
-        }
-        const updates: Partial<ProviderConfig> = { models }
-        if (currentProvider.selectedModelId === removedSelectedModelId) {
-          updates.selectedModelId = previousSelectedModelId
-        }
-        const currentDefaultProviderId = currentLlm.defaultProviderId
-        const currentDefaultModel = currentLlm.defaultModel
-        const restoreDefault = (
-          previousDefaultProviderId !== removedDefaultProviderId || previousDefaultModel !== removedDefaultModel
-        ) && currentDefaultProviderId === removedDefaultProviderId && currentDefaultModel === removedDefaultModel
-        settingsStore.updateProvider(currentProvider.id, updates)
-        // 更新 Provider 会协调默认选择；仅恢复仍属于本次删除的绑定。
-        currentLlm.defaultProviderId = restoreDefault ? previousDefaultProviderId : currentDefaultProviderId
-        currentLlm.defaultModel = restoreDefault ? previousDefaultModel : currentDefaultModel
-        reconcileDefaultSelection(currentLlm)
-      }
-      logger.error('[Settings] 删除模型持久化失败:', e)
-      toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
-    }
   } finally {
     // 旧请求结束时不能关闭后来选择的另一个删除目标。
     if (pendingDeleteModel.value === target) pendingDeleteModel.value = null

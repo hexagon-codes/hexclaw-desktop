@@ -133,9 +133,9 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
     }
   }
 
-  function persistExclusions(): boolean {
+  function persistExclusions(snapshot: ExclusionMap): boolean {
     try {
-      backendLocalStorage.setItem(EXCLUSIONS_STORAGE_KEY, JSON.stringify(exclusions.value))
+      backendLocalStorage.setItem(EXCLUSIONS_STORAGE_KEY, JSON.stringify(snapshot))
       return true
     } catch (e) {
       logger.warn('[ModelCatalog] 写入模型排除集合失败:', e)
@@ -143,24 +143,33 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
     }
   }
 
-  function excludeModel(providerInstanceId: string, modelId: string): boolean {
+  function excludeModel(providerInstanceId: string, modelId: string, persist = true): boolean {
     const normalizedId = normalizeExcludedModelId(modelId)
     if (!providerInstanceId || !normalizedId) return false
     const previous = exclusions.value[providerInstanceId] ?? []
     if (!previous.includes(normalizedId)) {
       exclusions.value[providerInstanceId] = [...previous, normalizedId]
     }
-    return persistExclusions()
+    if (!persist) return true
+    // 仅提交本次排除项，不能连带保存仍在内存中的其它设置草稿。
+    const snapshot = loadExclusionsFromStorage()
+    snapshot[providerInstanceId] = [...new Set([...(snapshot[providerInstanceId] ?? []), normalizedId])]
+    return persistExclusions(snapshot)
   }
 
-  function clearModelExclusion(providerInstanceId: string, modelId: string): boolean {
+  function clearModelExclusion(providerInstanceId: string, modelId: string, persist = true): boolean {
     const normalizedId = normalizeExcludedModelId(modelId)
     if (!providerInstanceId || !normalizedId) return false
     const previous = exclusions.value[providerInstanceId] ?? []
     const next = previous.filter((candidate) => candidate !== normalizedId)
     if (next.length > 0) exclusions.value[providerInstanceId] = next
     else delete exclusions.value[providerInstanceId]
-    return persistExclusions()
+    if (!persist) return true
+    const snapshot = loadExclusionsFromStorage()
+    const retained = (snapshot[providerInstanceId] ?? []).filter((candidate) => candidate !== normalizedId)
+    if (retained.length) snapshot[providerInstanceId] = retained
+    else delete snapshot[providerInstanceId]
+    return persistExclusions(snapshot)
   }
 
   function getExcludedModelIds(providerInstanceId: string): ReadonlySet<string> {

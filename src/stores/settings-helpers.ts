@@ -592,7 +592,7 @@ export function providersToBackend(
   } else {
     for (const [key, val] of Object.entries(backendProviders)) {
       if (val.enabled === false) continue // 默认 provider 不能落到禁用项
-      if (val.model === defaultModel) {
+      if (defaultModel && val.model === defaultModel) {
         defaultProvider = key
         break
       }
