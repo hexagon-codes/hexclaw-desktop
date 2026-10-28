@@ -2,7 +2,7 @@
 
 # HexClaw Desktop User Guide
 
-Applies to the Desktop `v0.5.1` source. The backend source is pinned to `refs/tags/v0.5.1`, whose commit has passed backend CI. Publication of the backend Release artifacts remains incomplete; version preparation does not publish Desktop installers or update a running service. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for release status, order, and automatic-update requirements.
+Applies to the Desktop `v0.5.1` source. The backend source is pinned to `refs/tags/v0.5.1`, whose commit has passed backend CI; backend packages for five platforms and their checksums are publicly available. Version preparation does not itself publish installers or update a running service. See the [Changelog](../CHANGELOG.md) for this engineering update and the [Auto-Update Release Guide](./updates.en.md) for release status, order, and automatic-update requirements.
 
 ## Table of Contents
 

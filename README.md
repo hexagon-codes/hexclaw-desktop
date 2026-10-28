@@ -18,7 +18,7 @@ HexClaw Desktop 用一个桌面应用连接 [HexClaw](https://github.com/hexagon
 
 应用采用 **Tauri 2 + Vue 3 + TypeScript**，本机 Agent 服务通过 Go Sidecar 运行。选择本地模型时可使用 Ollama；选择在线模型时需要对应 Provider 的网络连接和凭据。
 
-> 本 README 描述 `v0.5.1` 源码能力。Desktop 后端源码固定为 `refs/tags/v0.5.1`；该 Tag 对应提交已通过后端 CI，正式 Release 产物发布尚未完成，详见[发布说明](docs/updates.md)。版本和文档更新不代表 Desktop 已发布；已发布安装包包含对应 Release 的代码，可能与当前源码不同。
+> 本 README 描述 `v0.5.1` 源码能力。Desktop 后端源码固定为 `refs/tags/v0.5.1`；该 Tag 对应提交已通过后端 CI，五个平台的后端发行包与校验和已公开，详见[发布说明](docs/updates.md)。版本和文档更新本身不发布安装包；已发布安装包包含对应 Release 的代码，可能与当前源码不同。
 
 ![HexClaw Desktop 作业辅导工作台：在专属皮肤中查看带批注的作业原图](.github/assets/desktop-k12-workspace.png)
 

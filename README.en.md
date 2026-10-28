@@ -18,7 +18,7 @@ HexClaw Desktop connects a desktop application to the [HexClaw](https://github.c
 
 The app uses **Tauri 2 + Vue 3 + TypeScript**, with a Go Sidecar running the local Agent service. Ollama is available for local models; online models require network access and credentials for the selected Provider.
 
-> This README describes the `v0.5.1` source. The backend source is pinned to `refs/tags/v0.5.1`; its commit has passed backend CI, while publication of the backend Release artifacts remains incomplete. See the [release guide](docs/updates.en.md). Updating version metadata and documentation does not publish Desktop; released installers contain their Release's code and may differ from the current source.
+> This README describes the `v0.5.1` source. The backend source is pinned to `refs/tags/v0.5.1`; its commit has passed backend CI, and backend packages for five platforms and their checksums are publicly available. See the [release guide](docs/updates.en.md). Updating version metadata and documentation does not itself publish installers; released installers contain their Release's code and may differ from the current source.
 
 ![HexClaw Desktop homework workspace showing the original homework image with annotations in the K12 skin](.github/assets/desktop-k12-workspace.png)
 
