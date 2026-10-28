@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchPostEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -219,9 +219,8 @@ function createMarkdownRenderer(copyLabel: string) {
       token.attrs = token.attrs?.filter(([name]) => name !== 'src') ?? null
     } else if (isGeneratedMediaSource(source)) {
       env.mediaSources?.add(source)
-      const url = backendMedia.display(source)
-      if (url) token.attrSet('src', url)
-      else token.attrs = token.attrs?.filter(([name]) => name !== 'src') ?? null
+      token.attrSet('data-generated-image-source', source)
+      token.attrs = token.attrs?.filter(([name]) => name !== 'src') ?? null
     }
     token.attrSet('data-image-preview', '')
     token.attrSet('role', 'button')
@@ -469,6 +468,19 @@ const renderedResult = computed(() => {
 const rendered = computed(() => renderedResult.value.html)
 useK12MarkdownImages(rendererRoot, rendered)
 watch(() => renderedResult.value.mediaSources, (sources) => backendMedia.retain(sources))
+// 与既有资产图片一样，在清洗后只给受管图片绑定当前连接的认证地址。
+watchPostEffect(() => {
+  void rendered.value
+  for (const image of rendererRoot.value?.querySelectorAll<HTMLImageElement>(
+    'img[data-generated-image-source]',
+  ) ?? []) {
+    const source = image.getAttribute('data-generated-image-source') ?? ''
+    if (!isGeneratedMediaSource(source)) continue
+    const url = backendMedia.display(source)
+    if (url) image.src = url
+    else image.removeAttribute('src')
+  }
+})
 
 const renderManifest = computed<RenderManifest | undefined>(() => {
   if (resolvedContent.value.protocol !== 'canonical') return undefined

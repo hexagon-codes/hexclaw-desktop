@@ -66,12 +66,17 @@ export function useK12MarkdownImages(
   async function load(source: string, agent: string, entry: AssetImageEntry) {
     try {
       const blob = await getAssetBlob(agent, source, entry.controller.signal)
-      if (!blob || !current(source, entry)) return
+      if (!current(source, entry)) return
+      if (!blob) {
+        release(source, entry)
+        return
+      }
       assertBackendActive(entry.scope)
       entry.url = URL.createObjectURL(blob)
       apply(source, entry)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
+      if (current(source, entry)) release(source, entry)
       logger.warn('K12 Markdown image could not be loaded', error)
     }
   }

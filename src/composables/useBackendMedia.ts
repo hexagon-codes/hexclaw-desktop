@@ -73,9 +73,16 @@ export function useBackendMedia() {
       urls.value.set(source, url)
       failed.delete(source)
       return url
-    })().finally(() => {
-      pending.delete(source)
-      controllers.delete(source)
+    })().catch((error: unknown) => {
+      // 取消及旧请求的迟到失败不能污染当前资源；实际读取失败仍等待原有显式恢复。
+      if (!disposed && !controller.signal.aborted && controllers.get(source) === controller
+        && !(error instanceof DOMException && error.name === 'AbortError')) failed.add(source)
+      throw error
+    }).finally(() => {
+      if (controllers.get(source) === controller) {
+        pending.delete(source)
+        controllers.delete(source)
+      }
     })
     pending.set(source, task)
     return task
@@ -86,13 +93,17 @@ export function useBackendMedia() {
     if (!source || !managed(source)) return source
     const cached = urls.value.get(source)
     if (cached) return cached
-    if (!failed.has(source)) void load(source).catch(() => failed.add(source))
+    if (!failed.has(source)) void load(source).catch(() => undefined)
     return ''
   }
 
   function release(source: string) {
     source = backendMediaURL(source)
-    controllers.get(source)?.abort()
+    const controller = controllers.get(source)
+    // 先解除旧请求归属，同源资源立即重现时可创建新读取。
+    pending.delete(source)
+    controllers.delete(source)
+    controller?.abort()
     const url = urls.value.get(source)
     if (url) {
       releaseImagePreviewResource(url)
