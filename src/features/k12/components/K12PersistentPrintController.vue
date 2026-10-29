@@ -37,9 +37,19 @@ function close(force = false) {
 
 async function open(request: PersistentPrintRequest): Promise<void> {
   const requestGeneration = ++generation
-  const prepared = await preparePersistentPrint(request)
+  if (props.mode === 'app-preview') {
+    state.value = { open: true, printing: false, title: request.title, preparation: null }
+  }
+  let prepared: PersistentPrintPreparation
+  try {
+    prepared = await preparePersistentPrint(request)
+  } catch (cause) {
+    if (requestGeneration === generation) close(true)
+    throw cause
+  }
   if (requestGeneration !== generation) return
   if (prepared.status === 'completed') {
+    close(true)
     emit('result', prepared.printed)
     return
   }
@@ -99,6 +109,7 @@ defineExpose({ open, close })
     :open="state.open"
     :title="state.title"
     :pdf="state.preparation?.pdf ?? null"
+    :preparing="state.open && !state.preparation"
     :printing="state.printing"
     @close="close"
     @print="confirm"

@@ -7,6 +7,7 @@ const props = defineProps<{
   title: string
   /** The exact frozen PDF Blob that is also handed to the native print adapter. */
   pdf: Blob | null
+  preparing?: boolean
   printing?: boolean
 }>()
 
@@ -204,11 +205,15 @@ function confirmPrint() {
 }
 
 watch(
-  () => [props.open, props.pdf] as const,
+  () => [props.open, props.pdf, props.preparing] as const,
   ([open, pdf]) => {
     resetPreview()
     if (!open) return
     if (!pdf) {
+      if (props.preparing) {
+        status.value = 'loading'
+        return
+      }
       errorMessage.value = '打印 PDF 不可用'
       status.value = 'error'
       return

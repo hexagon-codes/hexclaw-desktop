@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText, Printer, Download, LoaderCircle } from 'lucide-vue-next'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -61,9 +61,15 @@ function blank(): FileState {
 const preview = ref<{
   section: Section
   title: string
-  artifact: PrintableArtifactDTO
-  pdf: Blob
+  artifact: PrintableArtifactDTO | null
+  pdf: Blob | null
 } | null>(null)
+let previewGeneration = 0
+function closePreview() {
+  previewGeneration++
+  preview.value = null
+}
+onBeforeUnmount(closePreview)
 const printController = ref<InstanceType<typeof K12PersistentPrintController>>()
 const printing = ref<Section | null>(null)
 let printTarget: {
@@ -195,12 +201,21 @@ async function output(
   action: 'preview' | 'print' | 'download',
   frozen?: { artifact: PrintableArtifactDTO; pdf: Blob },
 ) {
+  const previewVersion = action === 'preview' ? ++previewGeneration : previewGeneration
+  const previewScope = backendScopeKey()
+  if (action === 'preview') {
+    preview.value = { section, title: files[section].artifact?.title ?? '', artifact: null, pdf: null }
+  }
   if (!frozen) await prepare(section)
+  if (action === 'preview' && (previewVersion !== previewGeneration || previewScope !== backendScopeKey() || !preview.value)) return
   const file = files[section],
     artifact = frozen?.artifact ?? file.artifact,
     pdf = frozen?.pdf ?? file.pdf,
     agent = props.agent
-  if (!artifact || !pdf || file.delivering) return
+  if (!artifact || !pdf || file.delivering) {
+    if (action === 'preview' && previewVersion === previewGeneration) closePreview()
+    return
+  }
   if (action === 'preview') {
     preview.value = { section, title: artifact.title, artifact, pdf }
     return
@@ -281,7 +296,7 @@ watch(
   () => {
     files.textbook_consolidation = blank()
     files.arithmetic_warmup = blank()
-    preview.value = null
+    closePreview()
     for (const section of ['textbook_consolidation', 'arithmetic_warmup'] as Section[])
       counts[section] =
         props.plan.manual_track_recommendations?.[section]?.selected_item_count ??
@@ -412,8 +427,9 @@ watch(
       :open="Boolean(preview)"
       :title="preview?.title ?? ''"
       :pdf="preview?.pdf ?? null"
-      @close="preview = null"
-      @print="preview && output(preview.section, 'print', preview)"
+      :preparing="Boolean(preview && !preview.pdf)"
+      @close="closePreview"
+      @print="preview?.artifact && preview.pdf && output(preview.section, 'print', { artifact: preview.artifact, pdf: preview.pdf })"
     />
     <K12PersistentPrintController
       ref="printController"

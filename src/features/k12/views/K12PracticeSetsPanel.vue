@@ -34,6 +34,7 @@ import { printPracticePaper, savePracticePaperPdf } from '../export'
 import { executeNativePrintJob, type PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
+import { backendScopeKey } from '@/services/backend-context'
 
 const props = defineProps<{
   agentId: string
@@ -70,6 +71,7 @@ const printPreview = ref({
   jobId: '',
   recordId: '',
 })
+let printPreviewGeneration = 0
 const panelRoot = ref<HTMLElement | null>(null)
 const focusedItemID = ref('')
 let focusClearTimer: ReturnType<typeof setTimeout> | null = null
@@ -154,6 +156,7 @@ function newPrintIdempotencyKey(recordId: string): string {
 
 function closePrintPreview(force = false) {
   if (printPreview.value.printing && !force) return
+  printPreviewGeneration++
   printPreview.value = {
     open: false,
     printing: false,
@@ -215,6 +218,7 @@ async function focusRequestedItem() {
 }
 
 onBeforeUnmount(() => {
+  closePrintPreview(true)
   if (focusClearTimer) clearTimeout(focusClearTimer)
   if (regradePollTimer) clearTimeout(regradePollTimer)
   releasePracticeAssets()
@@ -367,25 +371,32 @@ async function finalize(via: 'print' | 'send') {
     return
   }
   busy.value = b.record_id
+  const previewVersion = ++printPreviewGeneration
+  const previewAgent = props.agentId
+  const previewScope = backendScopeKey()
+  const isCurrentPreview = () => previewVersion === printPreviewGeneration && previewAgent === props.agentId && previewScope === backendScopeKey()
+  printPreview.value = { open: true, printing: false, title: '', pdf: null, jobId: '', recordId: b.record_id }
   let finalized = false
   try {
     // DD-023A：后端先冻结卷源并预占卷面号；原生对话框的 definitive
     // receipt 再原子推进 PrintJob + PracticeSet。旧 finalize(print) 不得
     // 旁路这条链，取消/失败/未知态都必须保留 draft。
     const prepared = await k12PreparePracticePrintJob(
-      props.agentId,
+      previewAgent,
       b.record_id,
       newPrintIdempotencyKey(b.record_id),
       'question',
     )
+    if (!isCurrentPreview()) return
     let job = prepared.print_job
     if (job.status === 'printed') {
+      closePrintPreview(true)
       finalized = true
       toast.success(t('k12.practice.print'))
       return
     }
     if (job.status === 'cancelled' || job.status === 'failed') {
-      job = (await k12RetryPracticePrintJob(props.agentId, job.print_job_id)).print_job
+      job = (await k12RetryPracticePrintJob(previewAgent, job.print_job_id)).print_job
     } else if (
       job.status === 'dialog_open' ||
       job.status === 'submitted' ||
@@ -394,8 +405,10 @@ async function finalize(via: 'print' | 'send') {
       throw new Error('上一次打印结果仍待核对，请先查询 PrintJob 回执')
     }
 
-    const rendered = await k12GetPracticePrintJobPaper(props.agentId, job.print_job_id, 'question')
-    const pdf = await k12GetPrintArtifactContent(props.agentId, job.artifact_id)
+    if (!isCurrentPreview()) return
+    const rendered = await k12GetPracticePrintJobPaper(previewAgent, job.print_job_id, 'question')
+    const pdf = await k12GetPrintArtifactContent(previewAgent, job.artifact_id)
+    if (!isCurrentPreview()) return
     printPreview.value = {
       open: true,
       printing: false,
@@ -406,7 +419,10 @@ async function finalize(via: 'print' | 'send') {
     }
     return
   } catch (e) {
-    toast.error((e as Error).message)
+    if (isCurrentPreview()) {
+      closePrintPreview(true)
+      toast.error((e as Error).message)
+    }
   } finally {
     if (finalized) await load()
     busy.value = ''
@@ -838,6 +854,7 @@ async function cancelSet(s: PracticeSetDTO) {
       :open="printPreview.open"
       :title="printPreview.title"
       :pdf="printPreview.pdf"
+      :preparing="printPreview.open && !printPreview.pdf"
       :printing="printPreview.printing"
       @close="closePrintPreview"
       @print="confirmPrintPreview"
