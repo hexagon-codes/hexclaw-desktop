@@ -10,8 +10,8 @@ const props = defineProps<{
   documentId?: string
   /** 已冻结报告直接传入原始PDF字节，沿用同一阅读器。 */
   pdf?: Blob
-	/** 外部附件尚在读取时，现有阅读器先显示加载态。 */
-	pending?: boolean
+  /** 外部附件尚在读取时，现有阅读器先显示加载态。 */
+  pending?: boolean
   title: string
   sourceDigest?: string
   initialPage?: number
@@ -45,7 +45,7 @@ async function prepareSource() {
   request = current
   available.value = false
   try {
-		if (props.pending && !props.pdf) return
+    if (props.pending && !props.pdf) return
     // 知识库仍先核对原文件；报告已提供冻结字节，不请求知识库来源接口。
     if (!props.pdf) {
       if (!props.documentId) throw new Error('PDF source is unavailable')

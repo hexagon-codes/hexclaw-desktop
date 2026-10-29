@@ -2703,6 +2703,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     <KnowledgeSourceDialog
       v-if="showDocDetail && selectedDoc && selectedIsPDF && (!showPreparationDetail || originalPage !== null)"
       :document-id="selectedDoc.id"
+      :pending="loadingDocContent || loadingPreparation"
       :title="selectedDoc.title"
       :source-digest="selectedDoc.source_digest"
       :initial-page="originalPage ?? 1"
