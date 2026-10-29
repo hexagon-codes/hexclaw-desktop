@@ -6,8 +6,8 @@ import { documentSourceStatus, getDocumentSource } from '@/api/knowledge'
 import { backendScopeKey } from '@/services/backend-context'
 
 const props = withDefaults(
-  defineProps<{ documentId?: string; pdf?: Blob; sourceDigest?: string; initialPage?: number }>(),
-  { initialPage: 1 },
+  defineProps<{ documentId?: string; pdf?: Blob; sourceDigest?: string; initialPage?: number; ready?: boolean }>(),
+  { initialPage: 1, ready: true },
 )
 const emit = defineEmits<{ unavailable: [error: unknown] }>()
 const pageNumber = ref(1)
@@ -95,6 +95,7 @@ async function load() {
   error.value = ''
   totalPages.value = 0
   zoom.value = 100
+  if (!props.ready) return
   request = new AbortController()
   try {
     if (!props.pdf && !props.documentId) throw new Error('PDF source is unavailable')
@@ -144,7 +145,7 @@ async function load() {
   }
 }
 
-watch(() => [props.documentId, props.sourceDigest, props.pdf, props.initialPage, backendScopeKey()], load)
+watch(() => [props.documentId, props.sourceDigest, props.pdf, props.initialPage, props.ready, backendScopeKey()], load)
 watch(pageNumber, (value) => {
   pageDraft.value = String(value)
 })

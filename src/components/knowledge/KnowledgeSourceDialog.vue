@@ -10,6 +10,8 @@ const props = defineProps<{
   documentId?: string
   /** 已冻结报告直接传入原始PDF字节，沿用同一阅读器。 */
   pdf?: Blob
+	/** 外部附件尚在读取时，现有阅读器先显示加载态。 */
+	pending?: boolean
   title: string
   sourceDigest?: string
   initialPage?: number
@@ -41,9 +43,9 @@ async function prepareSource() {
   request.abort()
   const current = new AbortController()
   request = current
-  root.value?.close()
   available.value = false
   try {
+		if (props.pending && !props.pdf) return
     // 知识库仍先核对原文件；报告已提供冻结字节，不请求知识库来源接口。
     if (!props.pdf) {
       if (!props.documentId) throw new Error('PDF source is unavailable')
@@ -51,10 +53,6 @@ async function prepareSource() {
     }
     if (current.signal.aborted || backendScopeKey() !== scope) return
     available.value = true
-    await nextTick()
-    if (current.signal.aborted) return
-    root.value?.showModal()
-    root.value?.focus({ preventScroll: true })
   } catch (error) {
     if (!current.signal.aborted) unavailable(error)
   }
@@ -66,10 +64,14 @@ function cancelPending(event: KeyboardEvent) {
   request.abort()
   emit('close')
 }
-watch(() => [props.documentId, props.sourceDigest, props.pdf], prepareSource)
-onMounted(() => {
+watch(() => [props.documentId, props.sourceDigest, props.pdf, props.pending], prepareSource)
+onMounted(async () => {
   previous = document.activeElement as HTMLElement
   document.addEventListener('keydown', cancelPending, true)
+  await nextTick()
+  if (request.signal.aborted) return
+  root.value?.showModal()
+  root.value?.focus({ preventScroll: true })
   void prepareSource()
 })
 onBeforeUnmount(() => {
@@ -82,7 +84,6 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <dialog
-      v-if="available"
       ref="root"
       class="hc-image-viewer hc-pdf-source"
       tabindex="-1"
@@ -106,6 +107,7 @@ onBeforeUnmount(() => {
         :pdf="pdf"
         :source-digest="sourceDigest"
         :initial-page="initialPage"
+        :ready="available"
         @unavailable="unavailable"
       />
     </dialog>

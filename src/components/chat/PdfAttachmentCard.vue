@@ -17,20 +17,19 @@ const { t } = useI18n()
 const toast = useToast()
 const busy = ref(false)
 const preview = shallowRef<Blob | null>(null)
+const previewOpen = ref(false)
 let cached: Blob | null = null
 let request: AbortController | null = null
 let generation = 0
 let trigger: HTMLElement | null = null
-let pendingPreviewCancel: ((event: KeyboardEvent) => void) | null = null
 
 function release() {
   generation++
-  if (pendingPreviewCancel) document.removeEventListener('keydown', pendingPreviewCancel, true)
-  pendingPreviewCancel = null
   request?.abort()
   request = null
   cached = null
   preview.value = null
+  previewOpen.value = false
   busy.value = false
   trigger = null
 }
@@ -47,25 +46,9 @@ async function open(action: 'preview' | 'download') {
   busy.value = true
   const current = new AbortController()
   request = current
-  const cancelPendingPreview = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape' || version !== generation || preview.value) return
-    event.preventDefault()
-    event.stopPropagation()
-    release()
-    const cancelledGeneration = generation
-    void nextTick(() => {
-      if (
-        generation === cancelledGeneration &&
-        scope === backendScopeKey() &&
-        sourceTrigger?.isConnected
-      )
-        sourceTrigger.focus({ preventScroll: true })
-    })
-  }
-  // 与知识库入口相同，等待文件期间的Esc也取消本次预览。
   if (action === 'preview') {
-    pendingPreviewCancel = cancelPendingPreview
-    document.addEventListener('keydown', cancelPendingPreview, true)
+    trigger = sourceTrigger
+    previewOpen.value = true
   }
   try {
     // 同次打开持有冻结快照；新的远程读取由共享缓存校验，不重新渲染。
@@ -79,10 +62,9 @@ async function open(action: 'preview' | 'download') {
   } catch (error) {
     if (!current.signal.aborted && version === generation && scope === backendScopeKey()) {
       toast.error(error instanceof Error ? error.message : 'Failed to read PDF report')
+      if (action === 'preview') await closePreview()
     }
   } finally {
-    document.removeEventListener('keydown', cancelPendingPreview, true)
-    if (pendingPreviewCancel === cancelPendingPreview) pendingPreviewCancel = null
     if (version === generation) {
       request = null
       busy.value = false
@@ -92,13 +74,12 @@ async function open(action: 'preview' | 'download') {
 }
 
 async function closePreview() {
-  preview.value = null
-  cached = null
   const target = trigger
+  const scope = backendScopeKey()
+  release()
   const version = generation
-  trigger = null
   await nextTick()
-  if (version === generation && target?.isConnected) target.focus({ preventScroll: true })
+  if (version === generation && scope === backendScopeKey() && target?.isConnected) target.focus({ preventScroll: true })
 }
 </script>
 
@@ -145,7 +126,7 @@ async function closePreview() {
       </button>
     </div>
   </div>
-  <KnowledgeSourceDialog v-if="preview" :pdf="preview" :title="filename" @close="closePreview" />
+  <KnowledgeSourceDialog v-if="previewOpen" :pdf="preview ?? undefined" :pending="busy && !preview" :title="filename" @close="closePreview" />
 </template>
 
 <style scoped>

@@ -2701,7 +2701,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     />
 
     <KnowledgeSourceDialog
-      v-if="showDocDetail && !loadingDocContent && !loadingPreparation && selectedDoc && selectedIsPDF && (!showPreparationDetail || originalPage !== null)"
+      v-if="showDocDetail && selectedDoc && selectedIsPDF && (!showPreparationDetail || originalPage !== null)"
       :document-id="selectedDoc.id"
       :title="selectedDoc.title"
       :source-digest="selectedDoc.source_digest"
@@ -2711,7 +2711,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     <Teleport to="body">
       <Transition name="modal">
         <div
-          v-if="showDocDetail && selectedDoc && (!selectedIsPDF || (!loadingPreparation && showPreparationDetail))"
+          v-if="showDocDetail && selectedDoc && (!selectedIsPDF || showPreparationDetail)"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
           @click.self="showDocDetail = false"
         >
