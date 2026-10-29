@@ -45,7 +45,7 @@ make ollama
 make dev
 ```
 
-当前 Desktop 源码版本为 `0.5.1`。`make sidecar` 从公开 HexClaw 仓库构建 `Makefile` 中 `HEXCLAW_REF` 指定的后端版本，当前固定来源为 `refs/tags/v0.5.1`，对应提交已通过后端 CI，[后端 Release](https://github.com/hexagon-codes/hexclaw/releases/tag/v0.5.1) 的五个平台包及校验和已发布。Desktop 安装包仍按自己的 CI 和发布流程独立验收，见[发布说明](docs/updates.md)。默认来源不随 main 浮动；开发时包含后端未提交修改的验证使用 `make sidecar-local` / `make build-local`。需要最新主分支时，可显式使用 `make sidecar HEXCLAW_REF=origin/main`，并确认前后端契约对应。
+当前 Desktop 源码版本为 `0.5.2`。`make sidecar` 从公开 HexClaw 仓库构建 `Makefile` 中 `HEXCLAW_REF` 指定的后端版本，当前仍固定到已有的 `refs/tags/v0.5.1`。本轮包含修复及 Hub `v0.1.0` 引用的正式构建，须先确认后端 `v0.5.2` 修复提交通过 CI、部署完成且不可变 Tag 可用，再同步固定来源；不能提前检出不存在的 Tag。Desktop 安装包按自己的 CI 和发布流程独立验收，见[发布说明](docs/updates.md)。默认来源不随 main 浮动；开发时包含后端未提交修改的验证使用 `make sidecar-local` / `make build-local`。需要最新主分支时，可显式使用 `make sidecar HEXCLAW_REF=origin/main`，并确认前后端契约对应。
 
 `make render-bundle` 的当前快捷目标适用于 macOS。Windows 和 Linux 的原生依赖与组件准备步骤见 [Release 工作流](.github/workflows/release.yml)。
 

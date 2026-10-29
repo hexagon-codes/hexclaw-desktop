@@ -2,6 +2,14 @@
 
 # 自动更新发布说明
 
+## v0.5.2（2026-10-29）
+
+Desktop 源码版本为 `0.5.2`，变化包括通用 PDF 附件的历史恢复与预览下载、持久文件条件缓存、会话人设与草稿恢复，以及模型配置和补充练习错误修复，见 [Changelog](../CHANGELOG.md)。
+
+本版后端协作目标为 HexClaw `v0.5.2` 与 Hub `v0.1.0`；Hub 资源引用由后端维护。当前 `Makefile` 保留已有 `refs/tags/v0.5.1`，避免检出尚不存在的新 Tag。正式发布按以下顺序推进：后端修复提交通过 CI 与部署核验 → 发布不可变后端 `v0.5.2` Tag → 同步 Desktop 的 `HEXCLAW_REF` 及本文固定来源 → 核对 Desktop CI 和固定提交四平台安装包 → 发布 Desktop Tag 与安装包。
+
+本次版本准备不创建 Tag、不发布安装包，也不改变当前运行服务。开发验证当前未提交后端源码继续使用 `make sidecar-local` / `make build-local`；已有真实模型、文件与 IM 验收按各自源码和制品身份记录，不能仅凭 `0.5.2` 版本号推断已包含修复。
+
 ## v0.5.1（2026-10-26）
 
 Desktop 版本元数据为 `0.5.1`，本版源码变化见 [Changelog](../CHANGELOG.md)。后端源码固定为 `refs/tags/v0.5.1`，对应提交 [`899ce739f128`](https://github.com/hexagon-codes/hexclaw/commit/899ce739f128a01bc23fec0af5d7ff33686ecace)，已通过[后端 CI](https://github.com/hexagon-codes/hexclaw/actions/runs/40328692622)与[部署工作流](https://github.com/hexagon-codes/hexclaw/actions/runs/40329970325)。

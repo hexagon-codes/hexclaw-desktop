@@ -2,6 +2,14 @@
 
 # Auto-Update Release Guide
 
+## v0.5.2 (2026-10-29)
+
+Desktop source version is `0.5.2`. Changes include persistent PDF attachment recovery, preview and download, conditional file caching, conversation persona and draft recovery, and model configuration and supplementary-practice error fixes; see the [Changelog](../CHANGELOG.md).
+
+The coordinated backend target is HexClaw `v0.5.2` with Hub `v0.1.0`; the backend owns Hub resource references. The `Makefile` currently retains the existing `refs/tags/v0.5.1` so builds do not check out an unavailable tag. Release order is: verify backend CI and deployment for the fixed source → publish the immutable backend `v0.5.2` tag → update Desktop `HEXCLAW_REF` and this guide → verify Desktop CI and four-platform installers from the fixed commit → publish the Desktop tag and installers.
+
+This version preparation does not create tags, publish installers, or update a running service. Continue using `make sidecar-local` / `make build-local` for uncommitted local backend source. Record real model, file, and IM acceptance against their actual source and artifact identities; the `0.5.2` version alone does not establish that a running artifact includes the fixes.
+
 ## v0.5.1 (2026-10-26)
 
 Desktop version metadata is `0.5.1`; see the [Changelog](../CHANGELOG.md) for the source changes. The backend source is pinned to `refs/tags/v0.5.1`, resolving to commit [`899ce739f128`](https://github.com/hexagon-codes/hexclaw/commit/899ce739f128a01bc23fec0af5d7ff33686ecace), which passed [backend CI](https://github.com/hexagon-codes/hexclaw/actions/runs/40328692622) and the [deployment workflow](https://github.com/hexagon-codes/hexclaw/actions/runs/40329970325).
