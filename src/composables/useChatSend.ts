@@ -25,6 +25,7 @@ import { useToast } from './useToast'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
 import type { ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
+import { freezeChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 import type { ChatPayloadLimitError } from '@/services/chatService'
 import {
   buildConversationAutomationActions,
@@ -33,12 +34,14 @@ import {
 } from '@/utils/chat-automation'
 import { parseCronSlashCommand } from './useCronSlashParser'
 import { ensureChatAttachmentReceipt, uploadChatAttachment } from '@/api/attachments'
+import { effectiveChatFileSize } from '@/contracts/chat-file-boundary'
+import { assertBackendActive, backendScopeKey } from '@/services/backend-context'
 
 type ChatStore = ReturnType<typeof useChatStore>
 
 export interface ChatSendDeps {
   chatStore: ChatStore
-  parsedDocument: Ref<{ text: string; fileName: string; pageCount?: number } | null>
+  parsedDocument: Ref<{ text: string; fileName: string; pageCount?: number; warnings?: string[] } | null>
   attachmentPreview: Ref<{
     url: string
     name: string
@@ -197,9 +200,10 @@ export function useChatSend(deps: ChatSendDeps) {
       type: 'image',
       name: file.name,
       mime: file.type,
-      // 仅供当前 WebView 会话渲染。聊天 wire 仍由 attachmentId 单独映射为
-      // `{ attachment_id }`，因此不能把文件内容或 data URL 放回 renderer 状态。
-      data: URL.createObjectURL(file),
+      // 回显读取已上传的同源资源；聊天wire仍只传attachment_id，
+      // 不从原生空占位File创建图片，也不回读本地原图为模型base64。
+      data: '',
+      url: `/api/v1/attachments/${encodeURIComponent(receipt.attachment_id)}/content`,
       attachmentId: receipt.attachment_id,
     }
   }
@@ -226,6 +230,12 @@ export function useChatSend(deps: ChatSendDeps) {
     // any future callers that bypass ChatInput's paste adapter.
     const intendedSessionId =
       options?.targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
+    const sourceBackend = backendScopeKey()
+    const sourceAgent = chatStore.agentRole
+    const sourceMode = chatStore.chatMode
+    const sourceRoute = options?.routeSnapshot ?? captureRouteSnapshot?.() ?? freezeChatRouteSnapshot({
+      agentRole: sourceAgent, chatParams: { ...chatStore.chatParams }, thinkingEnabled: chatStore.thinkingEnabled ?? false,
+    })
     if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
       return false
     }
@@ -363,6 +373,10 @@ export function useChatSend(deps: ChatSendDeps) {
           // （后端只收图片，二进制必被拒，用户只会看到误导性的「仅支持图片」）。
           try {
             const parsed = await parseDocument(file)
+            for (const warning of parsed.warnings ?? []) {
+              logger.warn(`[chat] ${file.name}: ${warning}`)
+              toast.warning(warning)
+            }
             if (parsed.text.trim()) {
               const pageInfo = parsed.pageCount ? ` (${parsed.pageCount}页)` : ''
               docTexts.push(`[文件: ${parsed.fileName}${pageInfo}]\n\n${parsed.text}`)
@@ -374,7 +388,7 @@ export function useChatSend(deps: ChatSendDeps) {
               })
               const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               registerDocPreview(docId, file)
-              documentRefs.push({ name: file.name, mime: file.type, size: file.size, id: docId })
+              documentRefs.push({ name: file.name, mime: file.type, size: effectiveChatFileSize(file), id: docId })
             } else {
               emptyDocs.push(file.name)
             }
@@ -394,6 +408,10 @@ export function useChatSend(deps: ChatSendDeps) {
     // 旧拖拽路径的已解析文档：同样进隐藏上下文 + 文件卡片。
     if (legacyParsedDocument && legacyParsedDocument.text.trim()) {
       const doc = legacyParsedDocument
+      for (const warning of doc.warnings ?? []) {
+        logger.warn(`[chat] ${doc.fileName}: ${warning}`)
+        toast.warning(warning)
+      }
       const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
       docTexts.unshift(`[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}`)
       providedMaterials.unshift({
@@ -405,7 +423,7 @@ export function useChatSend(deps: ChatSendDeps) {
       if (legacyAttachment) {
         const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         registerDocPreview(docId, legacyAttachment.file)
-        documentRefs.unshift({ name: doc.fileName, mime: legacyAttachment.file.type, size: legacyAttachment.file.size, id: docId })
+        documentRefs.unshift({ name: doc.fileName, mime: legacyAttachment.file.type, size: effectiveChatFileSize(legacyAttachment.file), id: docId })
       }
     }
     // ★ 文档正文只进**隐藏上下文**（backendText），不灌进可见气泡/可编辑正文。
@@ -448,10 +466,16 @@ export function useChatSend(deps: ChatSendDeps) {
     // 注意：技能激活**不**经正文 @name 注入——`@skill` 会被后端当 mention/tool 致空回答。
     // skillNames 作为前向兼容字段透传，由专用激活通道处理（不写进 backendText）。
 
+    assertBackendActive(sourceBackend)
+    // 附件准备不能把来源会话的内容投递到后来选中的会话或收件人。
+    if (!options?.targetSessionId?.trim()
+      && ((chatStore.currentSessionId?.trim() || '') !== intendedSessionId
+        || chatStore.agentRole !== sourceAgent)) return false
+
     // 深度思考是当前收件人的推理模式，不是改换收件人。已有绑定 Agent（含场景实例）必须保留，
     // 否则 sceneCtx/chips/placeholder 与 pinned_agent 会在发送瞬间一起漂移。
     // 只有没有显式/会话绑定收件人的普通 research 才使用通用 researcher。
-    if (chatStore.chatMode === 'research') {
+    if (sourceMode === 'research') {
       if (!chatStore.agentRole) chatStore.agentRole = 'researcher'
     } else if (chatStore.agentRole === 'researcher') {
       chatStore.agentRole = ''
@@ -460,6 +484,7 @@ export function useChatSend(deps: ChatSendDeps) {
     const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
     const skillNames = options?.skillNames ?? []
     const requestMetadata = { ...options?.requestMetadata }
+    if (docContextBlock || explicitContextBlock) requestMetadata.retrieval_query = finalText
     if (providedMaterials.length) {
       requestMetadata.k12_provided_materials = JSON.stringify(providedMaterials)
     }
@@ -475,7 +500,8 @@ export function useChatSend(deps: ChatSendDeps) {
       promptInvocation: options?.promptInvocation,
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,
-      routeSnapshot: options?.routeSnapshot ?? captureRouteSnapshot?.(),
+      routeSnapshot: !options?.routeSnapshot
+        ? freezeChatRouteSnapshot({ ...sourceRoute, agentRole: chatStore.agentRole }) : sourceRoute,
       onPayloadRejected: options?.onPayloadRejected,
     }
     const sendPromise = chatStore.sendMessage(

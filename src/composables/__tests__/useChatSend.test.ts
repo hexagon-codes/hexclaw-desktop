@@ -38,6 +38,7 @@ function makeDeps() {
     chatStore: {
       messages,
       sendMessage,
+      isSessionExecuting: vi.fn().mockReturnValue(false),
       chatMode: 'chat',
       agentRole: '',
       chatParams: { model: 'test-model' as string | undefined },
@@ -343,14 +344,15 @@ describe('useChatSend', () => {
 
         expect(uploadChatAttachment).toHaveBeenCalledWith(image)
         expect(readAsDataURL).not.toHaveBeenCalled()
-        expect(createObjectURL).toHaveBeenCalledWith(image)
+        expect(createObjectURL).not.toHaveBeenCalled()
         expect(deps.chatStore.sendMessage).toHaveBeenCalledWith(
           'describe this image',
           [expect.objectContaining({
             type: 'image',
             name: 'photo.png',
             mime: 'image/png',
-            data: 'blob:chat-image-preview',
+            data: '',
+            url: '/api/v1/attachments/attachment-test/content',
             attachmentId: 'attachment-test',
           })],
           expect.objectContaining({ backendText: expect.any(Function) }),
@@ -399,11 +401,42 @@ describe('useChatSend', () => {
     const call = deps.chatStore.sendMessage.mock.calls[0]!
     expect(call[0]).toBe('summarize') // 可见 = 用户文字
     expect(await call[2]!.backendText()).toContain('PDF 正文') // 正文进隐藏上下文
+    expect(call[2]!.requestMetadata.retrieval_query).toBe('summarize')
     expect(call[2]!.documents).toEqual([
       expect.objectContaining({ name: 'report.pdf', mime: 'application/pdf' }),
     ]) // 文件卡片
     expect(call[1]).toBeUndefined() // 没有二进制附件
     expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it.each(['session', 'recipient'] as const)('does not send to a changed %s while document parsing is pending', async (change) => {
+    let finish!: (value: { text: string; fileName: string }) => void
+    parseDocument.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const deps = makeDeps()
+    Object.assign(deps.chatStore, { currentSessionId: 'session-a', agentRole: 'agent-a' })
+    const { handleSend } = useChatSend(deps as any)
+    const pending = handleSend('describe', [new File(['pdf'], 'report.pdf', { type: 'application/pdf' })])
+    await flushPromises()
+    if (change === 'session') Object.assign(deps.chatStore, { currentSessionId: 'session-b' })
+    else deps.chatStore.agentRole = 'agent-b'
+    finish({ text: 'source document', fileName: 'report.pdf' })
+    await expect(pending).resolves.toBe(false)
+    expect(deps.chatStore.sendMessage).not.toHaveBeenCalled()
+    expect(deps.clearAttachmentPreview).not.toHaveBeenCalled()
+  })
+
+  it('preserves the clicked model route while parsing an attachment', async () => {
+    let finish!: (value: { text: string; fileName: string }) => void
+    parseDocument.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const deps = makeDeps()
+    const captureRouteSnapshot = vi.fn(() => ({ agentRole: '', chatParams: { ...deps.chatStore.chatParams }, thinkingEnabled: false, reasoningSupport: 'unknown', reasoningPolicy: { mode: 'off' } }))
+    const { handleSend } = useChatSend({ ...deps, captureRouteSnapshot } as any)
+    const pending = handleSend('describe', [new File(['pdf'], 'report.pdf')])
+    await flushPromises()
+    deps.chatStore.chatParams.model = 'later-model'
+    finish({ text: 'source document', fileName: 'report.pdf' })
+    await expect(pending).resolves.toBe(true)
+    expect(deps.chatStore.sendMessage.mock.calls[0]?.[2]?.routeSnapshot.chatParams.model).toBe('test-model')
   })
 
   it('旧拖拽路径：文档解析失败（parsedDocument 为 null）时不发二进制、中止并弹错', async () => {

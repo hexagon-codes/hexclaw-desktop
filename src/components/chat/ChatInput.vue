@@ -863,10 +863,12 @@ async function handleSend() {
     return
   }
   submitting.value = true
+  const preparingDraftKey = composerDraftKey()
   let handedToSendHandler = false
   try {
     files = await Promise.all(files.map(async (file) => nativeGrantFromFile(file)
       ? restoreComposerFile(await preserveComposerFile(file)) : file))
+    if (preparingDraftKey !== composerDraftKey()) return
     if (!props.sendHandler) {
       emit('send', text, files)
       await clearSentDrafts()
@@ -984,6 +986,7 @@ async function handleSend() {
         voiceToast.error(error instanceof Error ? error.message : String(error))
       })
     }
+    if (!sourceIsActive()) return
     handedToSendHandler = true
     const accepted = await props.sendHandler(
       text,

@@ -181,9 +181,9 @@ export function createChatSendDeliveryController(params: {
     // 否则切会话重载后文档退化成纯文本（卡片只在前端本地、不落库）。
     let requestMetadata = buildRequestMetadata(args.samplingSnapshot) ?? {}
     // 场景引用在点击发送时冻结；它只提供候选对象，不替代服务端身份和来源核验。
-    for (const key of ['k12_active_material', 'k12_task_intent', 'k12_provided_materials']) {
+    for (const key of ['k12_active_material', 'k12_task_intent', 'k12_provided_materials', 'retrieval_query']) {
       const value = args.requestMetadata?.[key]
-      if (value) requestMetadata[key] = value
+      if (value !== undefined) requestMetadata[key] = value
     }
     if (args.promptInvocation) {
       requestMetadata.prompt_invocation = JSON.stringify(args.promptInvocation)
