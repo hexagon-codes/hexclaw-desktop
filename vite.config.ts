@@ -10,7 +10,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
-import { createPDFWorkerPackageAssetPlugin } from './scripts/ci/pdf-worker-package-asset.mjs'
+import { createPDFWorkerPackageAssetPlugin, rewritePDFWorkerSyntheticHome } from './scripts/ci/pdf-worker-package-asset.mjs'
 
 // PDF 原文包含 CJK 字体和 JPX/JBIG2 图片；解码资产随同版本依赖打包，离线可用。
 function createPDFResourcePlugin(): import('vite').Plugin {
@@ -36,7 +36,12 @@ function createPDFResourcePlugin(): import('vite').Plugin {
     },
     generateBundle() {
       for (const [url, resource] of resources) {
-        this.emitFile({ type: 'asset', fileName: url.slice(1), source: readFileSync(resource.path) })
+        const original = readFileSync(resource.path)
+        // OpenJPEG 的无 Wasm 回退与主 Worker 共用已有的虚拟 HOME 约定。
+        const source = url === '/pdfjs/wasm/openjpeg_nowasm_fallback.js'
+          ? rewritePDFWorkerSyntheticHome(original.toString('utf8'))
+          : original
+        this.emitFile({ type: 'asset', fileName: url.slice(1), source })
       }
     },
   }

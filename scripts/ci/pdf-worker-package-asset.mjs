@@ -1,18 +1,20 @@
 import { readFile } from 'node:fs/promises'
 
 const PDF_WORKER_PATH_SUFFIX = '/pdfjs-dist/legacy/build/pdf.worker.mjs'
-const SYNTHETIC_HOME = 'HOME: "/home/web_user"'
-const PACKAGE_HOME = 'HOME: "/"'
+const SYNTHETIC_HOME = /\bHOME:\s*"\/home\/web_user"/gu
+const SYNTHETIC_HOME_VALUE = '/home/web_user'
 
 export function rewritePDFWorkerSyntheticHome(source) {
   if (typeof source !== 'string') {
     throw new TypeError('PDF worker source must be a string')
   }
-  const first = source.indexOf(SYNTHETIC_HOME)
-  if (first < 0 || source.indexOf(SYNTHETIC_HOME, first + SYNTHETIC_HOME.length) >= 0) {
+  const matches = [...source.matchAll(SYNTHETIC_HOME)]
+  if (matches.length !== 1) {
     throw new Error('PDF worker synthetic home contract changed')
   }
-  return `${source.slice(0, first)}${PACKAGE_HOME}${source.slice(first + SYNTHETIC_HOME.length)}`
+  // Worker 与压缩解码器只在属性空白上不同，替换唯一属性值并保留其它字节。
+  const first = matches[0].index + matches[0][0].indexOf(SYNTHETIC_HOME_VALUE)
+  return `${source.slice(0, first)}/${source.slice(first + SYNTHETIC_HOME_VALUE.length)}`
 }
 
 export function createPDFWorkerPackageAssetPlugin() {
