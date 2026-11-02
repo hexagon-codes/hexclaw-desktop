@@ -2,6 +2,16 @@
 
 HexClaw Desktop includes the following third-party software:
 
+## vscode-icons
+
+- **Project:** https://github.com/vscode-icons/vscode-icons
+- **License:** MIT License
+- **Usage:** Selected static SVG icons identify attachment file types.
+- **Source:** `0c8371c6d529957d5ff6661a98f3b09c6f3feec1`
+- **Copyright:** vscode-icons Contributors
+
+The full license is included in `public/licenses/vscode-icons-LICENSE.txt` and copied into the frontend distribution.
+
 ## Ollama
 
 - **Project:** https://github.com/ollama/ollama

@@ -91,7 +91,7 @@ import { saveHtmlArtifact } from '@/utils/download'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import PdfAttachmentCard from '@/components/chat/PdfAttachmentCard.vue'
-import { messagePdfAttachments } from '@/utils/message-pdf-attachments'
+import { messageFileAttachments } from '@/utils/message-pdf-attachments'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import { useConversationScrollCoordinator } from '@/composables/useConversationScrollCoordinator'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
@@ -600,7 +600,7 @@ function isEmptyReply(content: string): boolean {
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   if (!Array.isArray(attachments)) return []
-  const reports = messagePdfAttachments(message)
+  const reports = messageFileAttachments(message)
   return (attachments as ChatAttachment[]).filter((attachment) =>
     attachment.type !== 'file' || !reports.some((report) => report.url === chatAttachmentSource(attachment)),
   )
@@ -621,7 +621,7 @@ function imageSrc(attachment: ChatAttachment): string {
 }
 function mediaDownloadSource(attachment: ChatAttachment): string {
   const source = attachmentSource(attachment)
-  return isGeneratedMediaSource(source) ? backendMediaURL(source)
+  return isGeneratedMediaSource(source) || source.startsWith('/api/v1/attachments/') || source.startsWith('/api/v1/sessions/') ? backendMediaURL(source)
     : attachment.type === 'image' ? messageImageSrc(attachment) : imageSrc(attachment)
 }
 function videoPosterFromMetadata(
@@ -3937,11 +3937,12 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                   <template v-if="!isLiveAssistantMessage(msg)">
                     <PdfAttachmentCard
-                      v-for="report in messagePdfAttachments(msg)"
+                      v-for="report in messageFileAttachments(msg)"
                       :key="report.key"
                       :filename="report.filename"
                       :source-key="report.key"
                       :load-pdf="report.read"
+                      :mime="report.mime"
                     />
                   </template>
                   <MessageFooter class="hc-msg__footer">

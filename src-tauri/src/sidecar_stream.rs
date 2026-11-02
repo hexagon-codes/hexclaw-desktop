@@ -15,6 +15,15 @@ const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ACTIVE_STREAMS: usize = 16;
 
+// 已接纳原图的读取遵循附件大小合同，不扩大聊天事件流或请求体的边界。
+fn response_limit(method: &Method, path: &str) -> usize {
+    if method == Method::GET && crate::generated_media::is_uploaded_image_path(path) {
+        200 * 1024 * 1024
+    } else {
+        MAX_STREAM_BYTES
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct NativeSidecarStreamRegistry {
     streams: Arc<Mutex<HashMap<String, CancellationToken>>>,
@@ -161,6 +170,7 @@ pub async fn sidecar_stream_open(
 ) -> Result<String, String> {
     let scope = request.headers.remove("x-hexclaw-connection-scope");
     let method = validate_request(&request)?;
+    let response_limit = response_limit(&method, &request.path);
     let client = SidecarClient::new(Duration::from_secs(60 * 60))?;
     client.connection().validate_scope(scope.as_deref())?;
     let mut builder = client.renderer_request(method, &request.path)?;
@@ -212,7 +222,7 @@ pub async fn sidecar_stream_open(
                         received = received
                             .checked_add(chunk.len())
                             .ok_or_else(|| "Sidecar stream size overflow".to_string())?;
-                        if received > MAX_STREAM_BYTES {
+                        if received > response_limit {
                             return Err("Sidecar stream exceeds limit".into());
                         }
                         send_event(
@@ -250,6 +260,15 @@ pub fn sidecar_stream_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepted_image_reads_keep_the_attachment_limit_without_changing_event_streams() {
+        let image = "/api/v1/sessions/source/messages/saved/attachments/0/content?pending=image";
+        assert_eq!(response_limit(&Method::GET, image), 200 * 1024 * 1024);
+        assert_eq!(response_limit(&Method::GET, "/api/v1/attachments/pending/content"), 200 * 1024 * 1024);
+        assert_eq!(response_limit(&Method::POST, image), 64 * 1024 * 1024);
+        assert_eq!(response_limit(&Method::GET, "/api/v1/cron/jobs/stream"), 64 * 1024 * 1024);
+    }
 
     #[test]
     fn stream_request_shape_is_bounded_and_header_allowlisted() {

@@ -6,6 +6,8 @@ import {
 } from '@/contracts/chat-file-boundary'
 import { isTauri } from '@/utils/platform'
 import { apiPost, sidecarFetch } from './client'
+import { env } from '@/config/env'
+import { sidecarStreamFetch } from './native-sidecar-stream'
 import {
   createNativeFileOperation,
   nativeGrantFromFile,
@@ -137,17 +139,20 @@ function base64Blob(data: string, mime: string): Blob {
 export async function ensureChatAttachmentReceipt(
   attachment: ChatAttachment,
 ): Promise<ChatAttachment> {
-  if (attachment.attachmentId?.trim()) return attachment
+  const source = attachment.data?.trim() || attachment.url || ''
+  const persistedImage = /\/api\/v1\/sessions\/[^/]+\/messages\/[^/]+\/attachments\/\d+\/content(?:\?|$)/.test(source)
+  if (attachment.attachmentId?.trim() && !persistedImage) return attachment
   if (attachment.type !== 'image') {
     throw new Error('Only image chat attachments are supported')
   }
   let blob: Blob
-  if (/^https?:/i.test(attachment.data)) {
-    const response = await sidecarFetch(attachment.data)
+  if (/^https?:/i.test(source) || source.startsWith('/api/')) {
+    const url = source.startsWith('/api/') ? `${env.apiBase.replace(/\/+$/, '')}${source}` : source
+    const response = persistedImage ? await sidecarStreamFetch(url) : await sidecarFetch(url)
     if (!response.ok) throw new Error(`Attachment source fetch failed: HTTP ${response.status}`)
     blob = await response.blob()
   } else {
-    blob = base64Blob(attachment.data, attachment.mime)
+    blob = base64Blob(source, attachment.mime)
   }
   const receipt = await uploadChatAttachment(
     new File([blob], attachment.name, { type: attachment.mime || blob.type }),

@@ -26,6 +26,17 @@ afterEach(() => {
 })
 
 describe('generated media request contract', () => {
+  it.each([
+    '/api/v1/attachments/pending-image/content',
+    '/api/v1/sessions/source/messages/request/attachments/0/content?pending=image',
+  ])('uses the native media protocol for uploaded image %s instead of JSON IPC', async (source) => {
+    native.enabled = true
+    const media = useBackendMedia()
+    const url = new URL(await media.load(source))
+    expect(url.protocol).toBe('hexclaw-media:')
+    expect(url.searchParams.get('path')).toBe(source)
+    expect(sidecarFetch).not.toHaveBeenCalled()
+  })
   it('uses scoped native media reads without transferring the file through JSON IPC', async () => {
     native.enabled = true
     backendContext.value = { connectionId: 'fixture', backendId: 'fixture-backend', configRevision: 2, activationGeneration: 3, kind: 'remote', apiBase: 'http://localhost:5173/_hexclaw', wsBase: '', hasToken: true }

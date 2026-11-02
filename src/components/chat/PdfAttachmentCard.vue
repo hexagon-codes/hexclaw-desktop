@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import KnowledgeSourceDialog from '@/components/knowledge/KnowledgeSourceDialog.vue'
-import pdfIcon from '@/assets/pdf-file.png'
+import { fileTypeInfo } from '@/utils/file-type-icon'
 import { backendScopeKey } from '@/services/backend-context'
 import { useToast } from '@/composables/useToast'
-import { savePdfFile } from '@/utils/download'
+import { saveDocumentFile } from '@/utils/download'
 
 const props = defineProps<{
   filename: string
   sourceKey: string
   loadPdf: (signal: AbortSignal) => Promise<Blob>
   preparing?: boolean
+  mime?: string
 }>()
+const fileType = computed(() => fileTypeInfo(props.filename, props.mime))
 const { t } = useI18n()
 const toast = useToast()
 const busy = ref(false)
@@ -58,10 +60,10 @@ async function open(action: 'preview' | 'download') {
     if (action === 'preview') {
       trigger = sourceTrigger
       preview.value = pdf
-    } else await savePdfFile(pdf, filename)
+    } else await saveDocumentFile(pdf, filename)
   } catch (error) {
     if (!current.signal.aborted && version === generation && scope === backendScopeKey()) {
-      toast.error(error instanceof Error ? error.message : 'Failed to read PDF report')
+      toast.error(error instanceof Error ? error.message : 'Failed to read attachment')
       if (action === 'preview') await closePreview()
     }
   } finally {
@@ -84,10 +86,10 @@ async function closePreview() {
 </script>
 
 <template>
-  <div class="hc-report-pdf-card" :aria-busy="busy || preparing" data-testid="report-pdf-card">
+  <div class="hc-report-pdf-card" :aria-busy="busy || preparing" :data-testid="fileType.isPdf ? 'report-pdf-card' : 'document-file-card'">
     <img
       class="hc-report-pdf-card__icon"
-      :src="pdfIcon"
+      :src="fileType.icon"
       width="28"
       height="36"
       alt=""
@@ -97,13 +99,14 @@ async function closePreview() {
       class="hc-report-pdf-card__name"
       type="button"
       :disabled="busy || preparing"
-      @click="open('preview')"
+      @click="open(fileType.isPdf ? 'preview' : 'download')"
     >
       {{ filename }}
     </button>
-    <span class="hc-report-pdf-card__format">PDF</span>
+    <span class="hc-report-pdf-card__format">{{ fileType.label }}</span>
     <div class="hc-report-pdf-card__actions">
       <button
+        v-if="fileType.isPdf"
         class="hc-report-pdf-card__action"
         type="button"
         :disabled="busy || preparing"

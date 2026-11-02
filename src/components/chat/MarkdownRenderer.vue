@@ -25,9 +25,10 @@ import {
   K12_MARKDOWN_IMAGE_ATTRIBUTE,
   useK12MarkdownImages,
 } from '@/composables/useK12MarkdownImages'
-import { downloadInApp } from '@/utils/download'
+import { downloadInApp, saveDocumentFile } from '@/utils/download'
+import { api } from '@/api/client'
 import { logger } from '@/utils/logger'
-import { backendRelativePath } from '@/services/backend-context'
+import { backendRelativePath, backendScopeKey } from '@/services/backend-context'
 import { isCompleteHtmlDocument } from '@/utils/safe-html'
 
 const props = withDefaults(
@@ -236,6 +237,11 @@ function createMarkdownRenderer(copyLabel: string) {
       // 保留原链接文字；生成文件由既有下载通道取得，不交给外部浏览器裸连。
       token.attrSet('data-generated-media', backendMediaURL(source))
       token.attrSet('download', source.split(/[?#]/)[0]?.split('/').pop() || 'media')
+    } else {
+      const path = source.startsWith('/api/v1/document-artifacts/') ? source : backendRelativePath(source)
+      if (path && /^\/api\/v1\/document-artifacts\/[^/?]+\/content(?:\?|$)/.test(path)) {
+        token.attrSet('data-document-artifact', path)
+      }
     }
     return renderLink ? renderLink(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
   }
@@ -395,8 +401,26 @@ function handleCopyClick(e: MouseEvent) {
 
 function handleMediaLinkClick(event: MouseEvent) {
   const anchor = event.target instanceof Element
-    ? event.target.closest<HTMLAnchorElement>('a[data-generated-media]')
+    ? event.target.closest<HTMLAnchorElement>('a[data-generated-media], a[data-document-artifact]')
     : null
+  const documentSource = anchor?.dataset.documentArtifact
+  if (documentSource) {
+    event.preventDefault()
+    event.stopPropagation()
+    const scope = backendScopeKey()
+    // 正文链接与文件卡共用认证传输和冻结字节，不能被前端路由当作HTML页面。
+    void api.raw<Blob, 'blob'>(documentSource, { method: 'GET', responseType: 'blob' })
+      .then(async (response) => {
+        if (scope !== backendScopeKey()) return
+        if (!response._data) throw new Error('Document response is empty')
+        const disposition = response.headers.get('content-disposition') ?? ''
+        const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+        const name = encoded ? decodeURIComponent(encoded) : /filename="([^"]+)"/i.exec(disposition)?.[1]
+        await saveDocumentFile(response._data, name || anchor?.textContent?.trim() || 'document')
+      })
+      .catch((error: unknown) => logger.error('Document download failed', error))
+    return
+  }
   const source = anchor?.dataset.generatedMedia
   if (!source) return
   event.preventDefault()

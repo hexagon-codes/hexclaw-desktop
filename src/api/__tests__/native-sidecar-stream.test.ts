@@ -55,4 +55,14 @@ describe('native Sidecar stream request normalization', () => {
       path: '/api/v1/cron/jobs/stream?scope=desktop',
     })
   })
+
+  it('does not open native transport for an already aborted request', async () => {
+    const { sidecarStreamFetch } = await import('../native-sidecar-stream')
+    const controller = new AbortController()
+    controller.abort()
+    await expect(sidecarStreamFetch('/api/v1/test/stream', {
+      method: 'POST', body: '{}', signal: controller.signal,
+    })).rejects.toThrow('Sidecar stream aborted')
+    expect(tauri.calls.some((call) => call.command === 'sidecar_stream_open')).toBe(false)
+  })
 })

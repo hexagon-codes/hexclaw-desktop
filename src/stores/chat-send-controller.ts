@@ -222,6 +222,15 @@ export function createChatSendController(params: {
       // 因而只投递到显式目标，不污染当前会话的消息数组。
       if (projectsIntoCurrentSession) messages.value.push(userMessage)
       const sessionId = directedSessionId ?? await ensureSession()
+      // 消息保存后按持久身份读取原图；保存前仅借用同一上传回执。
+      if (attachments?.some((attachment) => attachment.type === 'image' && attachment.attachmentId)) {
+        attachments = attachments.map((attachment, index) => attachment.type === 'image' && attachment.attachmentId
+          ? { ...attachment, data: '', url: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(requestId)}/attachments/${index}/content?pending=${encodeURIComponent(attachment.attachmentId)}` }
+          : attachment)
+        userMeta.attachments = attachments
+        const projected = messages.value.find((message) => message.id === requestId)
+        if (projected) projected.metadata = { ...projected.metadata, attachments }
+      }
       // ensureSession 完成后立即释放 draftSending，不再阻塞后续发送
       draftSending.value = false
       refreshSendingState(sending, draftSending)

@@ -13,7 +13,7 @@ export function backendMediaURL(source: string): string {
   if (/^\/?\d{6}\/[a-f0-9]{64}\.[a-z0-9]+$/i.test(source)) {
     source = `${GENERATED_MEDIA_PATH}${source.replace(/^\//, '')}`
   }
-  return source.startsWith(GENERATED_MEDIA_PATH)
+  return source.startsWith('/api/')
     ? `${env.apiBase.replace(/\/+$/, '')}${source}`
     : source
 }
@@ -53,7 +53,9 @@ export function useBackendMedia() {
     const scope = backendScopeKey()
     controllers.set(source, controller)
     const task = (async () => {
-      if (isTauri() && isGeneratedMediaSource(source)) {
+      const relativeMedia = backendRelativePath(source)
+      const uploadedImage = relativeMedia && /^\/api\/v1\/(?:attachments\/[^/]+\/content|sessions\/[^/]+\/messages\/[^/]+\/attachments\/\d+\/content)(?:\?|$)/.test(relativeMedia)
+      if (isTauri() && (isGeneratedMediaSource(source) || uploadedImage)) {
         const relative = backendRelativePath(backendMediaURL(source))!
         const { convertFileSrc } = await import('@tauri-apps/api/core')
         const root = convertFileSrc('asset', 'hexclaw-media')

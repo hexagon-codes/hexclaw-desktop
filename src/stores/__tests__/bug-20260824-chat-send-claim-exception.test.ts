@@ -61,7 +61,7 @@ function createExceptionHarness(overrides?: {
   const handleSendError = vi.fn((errorValue, targetSessionId, streamState) => {
     errorController.handleSendError(errorValue, targetSessionId, sending, draftSending, streamState)
   })
-  const openWebSocketStream = vi.fn(
+  const openWebSocketStream = vi.fn<typeof import('@/services/chatService').openWebSocketStream>(
     overrides?.openWebSocketStream ??
       (() => {
         throw new Error('synchronous websocket construction failed')
@@ -161,6 +161,18 @@ function expectClaimReleased(harness: ReturnType<typeof createExceptionHarness>)
 }
 
 describe('BUG-CHAT-SEND-CLAIM-EXCEPTION-LEAK-20260824', () => {
+  it('binds the optimistic image to its persistent session and message without changing the upload identity', async () => {
+    const harness = createExceptionHarness()
+    const previousSource = '/api/v1/sessions/source/messages/original/attachments/0/content'
+    await harness.controller.sendMessage('describe', [{ type: 'image', name: 'original.png', mime: 'image/png', data: previousSource, attachmentId: 'pending-image', url: previousSource }])
+    const attachments = harness.messages.value[0]?.metadata?.attachments as Array<{ data: string; url: string; attachmentId: string }> | undefined
+    expect(attachments).toHaveLength(1)
+    const attachment = attachments![0]!
+    expect(attachment.url).toBe('/api/v1/sessions/session-claim/messages/request-claim/attachments/0/content?pending=pending-image')
+    expect(attachment.data).toBe('')
+    expect(attachment.attachmentId).toBe('pending-image')
+    expect(harness.openWebSocketStream.mock.calls[0]?.[4]).toEqual([expect.objectContaining(attachment)])
+  })
   it('terminates the claimed identity when backendText rejects', async () => {
     const harness = createExceptionHarness({
       backendText: vi.fn().mockRejectedValue(new Error('backend text failed')),
