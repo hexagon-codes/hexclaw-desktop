@@ -74,9 +74,19 @@ export async function uploadChatAttachment(file: File): Promise<AttachmentReceip
   }
 
   if (isTauri()) {
-    const grant = grantFromNative?.purpose === 'attachment_upload'
-      ? grantFromNative
-      : await stageBlob(file, file.name, {
+    let current = file
+    if (grantFromNative?.purpose === 'attachment_upload') {
+      if (!/^[0-9a-f]{64}$/.test(grantFromNative.sourceSha256 ?? '')) {
+        throw new Error('Native attachment grant is missing its attested source digest')
+      }
+      // 图片也可能排在长文档之后，上传时从已保存草稿恢复新授权。
+      const { preserveComposerFile, restoreComposerFile } = await import('@/services/composer-drafts')
+      current = await restoreComposerFile(await preserveComposerFile(file))
+    }
+    const currentGrant = nativeGrantFromFile(current)
+    const grant = currentGrant?.purpose === 'attachment_upload'
+      ? currentGrant
+      : await stageBlob(current, current.name, {
           purpose: 'attachment_upload',
           operationId: createNativeFileOperation('chat-attachment'),
         })

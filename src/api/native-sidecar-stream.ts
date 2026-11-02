@@ -23,11 +23,13 @@ export async function sidecarStreamFetch(
   const path = backendRelativePath(raw)
   if (!path) return await globalThis.fetch(input, init)
   const request = new Request(input instanceof Request ? input : url.toString(), init)
+  if (request.signal.aborted) throw new Error('Sidecar stream aborted')
   const body = request.body ? Array.from(new Uint8Array(await request.arrayBuffer())) : []
   const headers = Object.fromEntries(request.headers.entries())
   headers['x-hexclaw-connection-scope'] = scope
   assertBackendActive(scope)
   const { Channel, invoke } = await import('@tauri-apps/api/core')
+  if (request.signal.aborted) throw new Error('Sidecar stream aborted')
 
   let streamId: string | null = null
   let cancelPending = false
@@ -101,6 +103,7 @@ export async function sidecarStreamFetch(
   cleanupAbort = () => request.signal.removeEventListener('abort', onAbort)
   if (request.signal.aborted) {
     onAbort()
+    return await responsePromise
   } else {
     request.signal.addEventListener('abort', onAbort, { once: true })
   }

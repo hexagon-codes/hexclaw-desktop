@@ -132,7 +132,7 @@ export function getSessionBranches(id: string) {
 
 export function listSessionMessages(
   id: string,
-  params: { limit?: number; offset?: number } = {},
+  params: { limit?: number; offset?: number; attachmentMode?: 'url' } = {},
 ) {
   return apiGet<{ messages: ChatMessage[]; total: number }>(
     `/api/v1/sessions/${encodeURIComponent(id)}/messages`,
@@ -140,6 +140,7 @@ export function listSessionMessages(
       ...userQuery(),
       ...(params.limit ? { limit: params.limit } : {}),
       ...(params.offset ? { offset: params.offset } : {}),
+      ...(params.attachmentMode ? { attachment_mode: params.attachmentMode } : {}),
     },
   )
 }

@@ -149,10 +149,10 @@ describe('messageService', () => {
     expect(msgs[0]!.role).toBe('user')
   })
 
-  it('returns empty array when loadMessages API fails', async () => {
-    listSessionMessages.mockRejectedValueOnce(new Error('API error'))
-    const msgs = await loadMessages('s1')
-    expect(msgs).toEqual([])
+  it('preserves the loadMessages API failure for cache recovery', async () => {
+    const cause = new Error('API error')
+    listSessionMessages.mockRejectedValueOnce(cause)
+    await expect(loadMessages('s1')).rejects.toBe(cause)
   })
 
   it('restores media sources without duplicating assets or changing upload receipts', async () => {

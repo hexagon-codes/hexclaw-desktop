@@ -150,102 +150,98 @@ export async function deleteSession(id: string): Promise<void> {
 // ─── 消息操作 ──────────────────────────────────────
 
 export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
-  try {
-    const res = await listSessionMessages(sessionId, { limit: 500 })
-    return (res.messages || []).map(m => {
-      // 后端返回的 metadata / meta 可能是 JSON 字符串或已解析对象
-      const meta = normalizeMessageAttachmentSources(typeof m.metadata === 'string'
-        ? parseMessageMetadata(m.metadata)
-        : (m.metadata ?? undefined))
-      // reasoning 存储在 meta 字段（扩展元数据）中
-      const rawMetaExt = (m as unknown as Record<string, unknown>).meta
-      const metaExt = typeof rawMetaExt === 'string'
-        ? parseMessageMetadata(rawMetaExt)
-        : rawMetaExt && typeof rawMetaExt === 'object'
-          ? rawMetaExt as Record<string, unknown>
-          : undefined
-      const rawReasoning = m.reasoning
-        || (typeof metaExt?.reasoning === 'string' ? metaExt.reasoning : undefined)
-        || (typeof meta?.reasoning === 'string' ? meta.reasoning : undefined)
-      const reasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
-      const toolCalls = m.tool_calls
-        || (Array.isArray(meta?.tool_calls) ? meta.tool_calls as ChatMessage['tool_calls'] : undefined)
-      // 有序内容块：与 tool_calls 同存于 metadata（后端 SaveAssistantReply 同处落库）。
-      // 重载时必须一并还原，否则多步 ReAct 切会话/重启后交错序丢失、退回扁平渲染。
-      const blocks = (m as { blocks?: ChatMessage['blocks'] }).blocks
-        || (Array.isArray(meta?.blocks) ? meta.blocks as ChatMessage['blocks'] : undefined)
-      const agentName = m.agent_name
-        || (typeof meta?.agent_name === 'string' ? meta.agent_name : undefined)
+  const res = await listSessionMessages(sessionId, { limit: 500, attachmentMode: 'url' })
+  return (res.messages || []).map(m => {
+    // 后端返回的 metadata / meta 可能是 JSON 字符串或已解析对象
+    const meta = normalizeMessageAttachmentSources(typeof m.metadata === 'string'
+      ? parseMessageMetadata(m.metadata)
+      : (m.metadata ?? undefined))
+    // reasoning 存储在 meta 字段（扩展元数据）中
+    const rawMetaExt = (m as unknown as Record<string, unknown>).meta
+    const metaExt = typeof rawMetaExt === 'string'
+      ? parseMessageMetadata(rawMetaExt)
+      : rawMetaExt && typeof rawMetaExt === 'object'
+        ? rawMetaExt as Record<string, unknown>
+        : undefined
+    const rawReasoning = m.reasoning
+      || (typeof metaExt?.reasoning === 'string' ? metaExt.reasoning : undefined)
+      || (typeof meta?.reasoning === 'string' ? meta.reasoning : undefined)
+    const reasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
+    const toolCalls = m.tool_calls
+      || (Array.isArray(meta?.tool_calls) ? meta.tool_calls as ChatMessage['tool_calls'] : undefined)
+    // 有序内容块：与 tool_calls 同存于 metadata（后端 SaveAssistantReply 同处落库）。
+    // 重载时必须一并还原，否则多步 ReAct 切会话/重启后交错序丢失、退回扁平渲染。
+    const blocks = (m as { blocks?: ChatMessage['blocks'] }).blocks
+      || (Array.isArray(meta?.blocks) ? meta.blocks as ChatMessage['blocks'] : undefined)
+    const agentName = m.agent_name
+      || (typeof meta?.agent_name === 'string' ? meta.agent_name : undefined)
 
-      // 兜底解析：后端可能存储了带 <think> 标签的原始 content
-      let content = m.content || ''
-      let mergedReasoning = reasoning
-      if (m.role === 'assistant' && content) {
-        const parsed = extractThinkTags(content)
-        if (parsed.reasoning) {
-          content = parsed.content
-          mergedReasoning = mergedReasoning
-            ? mergedReasoning + '\n' + parsed.reasoning
-            : parsed.reasoning
-        }
+    // 兜底解析：后端可能存储了带 <think> 标签的原始 content
+    let content = m.content || ''
+    let mergedReasoning = reasoning
+    if (m.role === 'assistant' && content) {
+      const parsed = extractThinkTags(content)
+      if (parsed.reasoning) {
+        content = parsed.content
+        mergedReasoning = mergedReasoning
+          ? mergedReasoning + '\n' + parsed.reasoning
+          : parsed.reasoning
       }
-      mergedReasoning = mergedReasoning ? normalizeAssistantReasoning(mergedReasoning) || undefined : undefined
-      const displayContent = m.role === 'assistant'
-        ? getAssistantDisplayContent(content, mergedReasoning)
-        : content
+    }
+    mergedReasoning = mergedReasoning ? normalizeAssistantReasoning(mergedReasoning) || undefined : undefined
+    const displayContent = m.role === 'assistant'
+      ? getAssistantDisplayContent(content, mergedReasoning)
+      : content
 
-      // 反馈与后端消息 id 还原：后端把 like/dislike 存独立 feedback 列、消息 id 即 m.id。
-      // 重载时回填到 metadata，让 UI 高亮（user_feedback）与重载后再点赞落库（backend_message_id）都生效。
-      const mergedMeta: Record<string, unknown> = { ...meta }
-      // 思考时长与 reasoning 同存于后端 meta 扩展列（SaveAssistantReply 落库）。
-      // 重载时必须一并还原，否则切会话后「已思考 N 秒」退化为无时长（BUG-20260703）。
-      if (mergedMeta.thinking_duration == null && metaExt?.thinking_duration != null) {
-        mergedMeta.thinking_duration = metaExt.thinking_duration
-      }
-      if (mergedMeta.thinking_state == null && metaExt?.thinking_state != null) {
-        mergedMeta.thinking_state = metaExt.thinking_state
-      }
-      if (mergedMeta.reasoning_visibility == null && metaExt?.reasoning_visibility != null) {
-        mergedMeta.reasoning_visibility = metaExt.reasoning_visibility
-      }
-      for (const key of [
-        'assistant_message_id',
-        'message_id',
-        'assistant_message_aliases',
-        'reasoning_disclosure',
-        'runtime_events',
-        'last_sequence',
-      ]) {
-        if (mergedMeta[key] == null && metaExt?.[key] != null) mergedMeta[key] = metaExt[key]
-      }
-      const rawFeedback = (m as unknown as Record<string, unknown>).feedback
-      if (rawFeedback === 'like' || rawFeedback === 'dislike') {
-        mergedMeta.user_feedback = rawFeedback
-      }
-      if (m.id) mergedMeta.backend_message_id = m.id
-      const runtimeMeta = m.role === 'assistant'
-        ? normalizeRuntimeSnapshotMetadata(mergedMeta, m.id)
-        : mergedMeta
-      const finalMeta = normalizeThinkingMetadata(runtimeMeta, mergedReasoning)
-      if (finalMeta?.reasoning_disclosure?.visibility !== 'visible') {
-        mergedReasoning = undefined
-        if (finalMeta) delete finalMeta.reasoning
-      }
+    // 反馈与后端消息 id 还原：后端把 like/dislike 存独立 feedback 列、消息 id 即 m.id。
+    // 重载时回填到 metadata，让 UI 高亮（user_feedback）与重载后再点赞落库（backend_message_id）都生效。
+    const mergedMeta: Record<string, unknown> = { ...meta }
+    // 思考时长与 reasoning 同存于后端 meta 扩展列（SaveAssistantReply 落库）。
+    // 重载时必须一并还原，否则切会话后「已思考 N 秒」退化为无时长（BUG-20260703）。
+    if (mergedMeta.thinking_duration == null && metaExt?.thinking_duration != null) {
+      mergedMeta.thinking_duration = metaExt.thinking_duration
+    }
+    if (mergedMeta.thinking_state == null && metaExt?.thinking_state != null) {
+      mergedMeta.thinking_state = metaExt.thinking_state
+    }
+    if (mergedMeta.reasoning_visibility == null && metaExt?.reasoning_visibility != null) {
+      mergedMeta.reasoning_visibility = metaExt.reasoning_visibility
+    }
+    for (const key of [
+      'assistant_message_id',
+      'message_id',
+      'assistant_message_aliases',
+      'reasoning_disclosure',
+      'runtime_events',
+      'last_sequence',
+    ]) {
+      if (mergedMeta[key] == null && metaExt?.[key] != null) mergedMeta[key] = metaExt[key]
+    }
+    const rawFeedback = (m as unknown as Record<string, unknown>).feedback
+    if (rawFeedback === 'like' || rawFeedback === 'dislike') {
+      mergedMeta.user_feedback = rawFeedback
+    }
+    if (m.id) mergedMeta.backend_message_id = m.id
+    const runtimeMeta = m.role === 'assistant'
+      ? normalizeRuntimeSnapshotMetadata(mergedMeta, m.id)
+      : mergedMeta
+    const finalMeta = normalizeThinkingMetadata(runtimeMeta, mergedReasoning)
+    if (finalMeta?.reasoning_disclosure?.visibility !== 'visible') {
+      mergedReasoning = undefined
+      if (finalMeta) delete finalMeta.reasoning
+    }
 
-      return {
-        ...m,
-        content: displayContent,
-        timestamp: m.timestamp || m.created_at || new Date().toISOString(),
-        reasoning: mergedReasoning,
-        tool_calls: toolCalls,
-        blocks,
-        agent_name: agentName,
-        metadata: finalMeta,
-      }
-    })
-  } catch {
-    return []
-  }
+    return {
+      ...m,
+      content: displayContent,
+      timestamp: m.timestamp || m.created_at || new Date().toISOString(),
+      reasoning: mergedReasoning,
+      tool_calls: toolCalls,
+      blocks,
+      agent_name: agentName,
+      metadata: finalMeta,
+    }
+  })
 }
 
 /**

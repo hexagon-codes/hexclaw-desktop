@@ -1,9 +1,10 @@
 /**
- * Document file parser — extracts text content from PDF, Word, Excel, and plain text files.
+ * 文档解析统一读取真实来源，提取PDF、Office、开放文档及纯文本正文。
  *
- * PDF 解析下沉到后端（见 parsePDF）；docx/xlsx/纯文本仍在前端解析（纯 JS 库，无 Web Worker）。
+ * PDF、Word、演示与开放文档走后端；表格及纯文本使用原生授权字节。
  */
 import { extractDocument } from '@/api/documents'
+import { readDocumentFileBytes } from '@/api/native-files'
 
 const MAX_TEXT_LENGTH = 50000
 import {
@@ -16,6 +17,7 @@ export interface ParsedDocument {
   text: string
   fileName: string
   pageCount?: number
+  warnings?: string[]
 }
 
 /** Supported document extensions */
@@ -30,6 +32,11 @@ const DOCUMENT_EXTENSIONS = [
   '.txt',
   '.md',
   '.json',
+  '.html',
+  '.htm',
+  '.odt',
+  '.rtf',
+  '.epub',
 ]
 
 /** Check if a file is a parseable document (not image/video) */
@@ -57,6 +64,11 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
       case 'doc':
       case 'docx':
       case 'pptx':
+      case 'html':
+      case 'htm':
+      case 'odt':
+      case 'rtf':
+      case 'epub':
         // Office 二进制 / PDF：下沉后端统一解析（见 parseViaBackend）。
         return await parseViaBackend(file, fileName)
       case 'xlsx':
@@ -68,7 +80,7 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
       case 'json':
         return await parsePlainText(file, fileName)
       default:
-        // Try plain text as fallback
+        // 未知文本扩展名继续沿用原有正文解析合同。
         return await parsePlainText(file, fileName)
     }
   } catch (err) {
@@ -89,17 +101,17 @@ function truncateText(text: string): string {
 //   - PDF 文档抽取：为避免把通用解析与版面恢复压到渲染进程，统一走后端 poppler pdftotext；
 //     K12 打印预览是另一条受限链路，仅按需加载随应用打包的 PDF.js Worker，
 //     并渲染同一份冻结打印 Blob，不承担文档抽取职责；
-//   - 老 .doc(OLE)：需原生工具（macOS textutil）；
+//   - 老 .doc(OLE)：需原生工具（macOS textutil或Linux antiword）；
 //   - .docx/.pptx：复用 hexagon（OOXML，CJK 干净），顺带去掉前端 mammoth。
 // 表格 .xlsx/.xls 仍前端 SheetJS（唯一能解老 .xls 且更强）。
 async function parseViaBackend(file: File, fileName: string): Promise<ParsedDocument> {
   const res = await extractDocument(file)
-  return { text: truncateText(res.text), fileName, pageCount: res.page_count }
+  return { text: truncateText(res.text), fileName, pageCount: res.page_count, warnings: res.warnings }
 }
 
 async function parseExcel(file: File, fileName: string): Promise<ParsedDocument> {
   const XLSX = await import('xlsx')
-  const arrayBuffer = await file.arrayBuffer()
+  const arrayBuffer = await readDocumentFileBytes(file)
   const workbook = XLSX.read(arrayBuffer, { type: 'array' })
   const textParts: string[] = []
 
@@ -117,7 +129,7 @@ async function parseExcel(file: File, fileName: string): Promise<ParsedDocument>
 }
 
 async function parsePlainText(file: File, fileName: string): Promise<ParsedDocument> {
-  const rawText = await file.text()
+  const rawText = new TextDecoder().decode(await readDocumentFileBytes(file))
   const text = truncateText(rawText)
   return { text, fileName }
 }

@@ -971,6 +971,7 @@ fn validate_upload_contract(
         GrantPurpose::AttachmentUpload => {
             (path == "/api/v1/attachments" && query.is_empty())
                 || (path == "/api/v1/documents/extract" && query.is_empty())
+                || (path == "/api/v1/documents/preview" && query.is_empty())
                 || (path == "/api/k12/assets"
                     && query.len() == 1
                     && query[0].0 == "agent"
@@ -1848,6 +1849,40 @@ pub async fn upload_file_grant(
     result
 }
 
+/// 原生文档解析消费同一已冻结授权，不把空占位对象当作文件内容。
+#[tauri::command]
+pub async fn read_document_file_grant(
+    window: WebviewWindow,
+    grant_id: String,
+    operation_id: String,
+    scope: String,
+    registry: State<'_, NativeFileGrantRegistry>,
+) -> Result<tauri::ipc::Response, String> {
+    crate::backend_connection::current()?.validate_scope(Some(&scope))?;
+    let grant = registry.consume(&grant_id, window.label(), &operation_id, GrantPurpose::AttachmentUpload)?;
+    let result = read_document_grant_bytes(&grant).await;
+    if grant.cleanup_source { let _ = tokio::fs::remove_file(&grant.path).await; }
+    result.map(tauri::ipc::Response::new)
+}
+
+async fn read_document_grant_bytes(grant: &FileGrant) -> Result<Vec<u8>, String> {
+    if !grant.sealed || grant.purpose != GrantPurpose::AttachmentUpload {
+        return Err("Document read grant is invalid".into());
+    }
+    // 图片沿既有上传回执和受控预览链路读取，文档通道不改变其原始字节边界。
+    if grant.mime.starts_with("image/") || grant.mime.starts_with("audio/") || grant.mime.starts_with("video/") {
+        return Err("Media files must use their existing upload channel".into());
+    }
+    let file = open_verified_read_grant(grant).await?;
+    let mut bytes = Vec::new();
+    file.take(MAX_ATTACHMENT_BYTES + 1).read_to_end(&mut bytes).await
+        .map_err(|error| format!("Read document file: {error}"))?;
+    if bytes.len() as u64 != grant.expected_size {
+        return Err("Document source size changed".into());
+    }
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub fn cancel_file_transfer(
     operation_id: String,
@@ -2098,6 +2133,23 @@ pub async fn render_artifact_to_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn document_grant_reads_real_bytes_without_using_placeholder_file() {
+        for (name, bytes) in [("table.xlsx", b"PK\x03\x04frozen-sheet".as_slice()), ("notes.txt", "真实文档内容".as_bytes())] {
+            let root = std::env::temp_dir().join(format!("hexclaw-document-read-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(&root).await.unwrap();
+            let path = root.join(name);
+            tokio::fs::write(&path, bytes).await.unwrap();
+            let registry = NativeFileGrantRegistry::default();
+            let descriptor = issue_read_grant(&registry, "main", "document-read", path, GrantPurpose::AttachmentUpload).await.unwrap();
+            assert_eq!(descriptor.size, bytes.len() as u64);
+            let grant = registry.consume(&descriptor.grant_id, "main", "document-read", GrantPurpose::AttachmentUpload).unwrap();
+            assert_eq!(read_document_grant_bytes(&grant).await.unwrap(), bytes);
+            assert!(registry.consume(&descriptor.grant_id, "main", "document-read", GrantPurpose::AttachmentUpload).is_err());
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        }
+    }
 
     fn test_grant(operation_id: &str, purpose: GrantPurpose) -> FileGrant {
         FileGrant {

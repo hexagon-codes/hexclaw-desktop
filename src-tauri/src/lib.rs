@@ -222,6 +222,7 @@ pub fn run() {
             native_file::preserve_draft_attachment,
             native_file::restore_draft_attachment,
             native_file::upload_file_grant,
+            native_file::read_document_file_grant,
             native_file::cancel_file_transfer,
             native_file::download_file_grant,
             native_file::copy_file_grant,

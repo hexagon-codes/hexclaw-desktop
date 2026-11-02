@@ -14,6 +14,7 @@ import { backendScopeKey, backendStorageKey, registerBackendDraftFlush } from '@
 import { preserveComposerFile, restoreComposerFile, readComposerDraft, writeComposerDraft } from '@/services/composer-drafts'
 import type { ChatPayloadLimitError } from '@/services/chatService'
 import { DESKTOP_USER_ID } from '@/constants'
+import { effectiveChatFileSize } from '@/contracts/chat-file-boundary'
 import {
   ArrowUp,
   AudioLines,
@@ -263,7 +264,7 @@ async function resolveContextContent(item: MentionSelectItem): Promise<string> {
     return `【连接·${provider}·${item.name}】用户引用了该连接（${provider} 平台）作为上下文参考。`
   }
   // session：取近期消息做摘要
-  const { messages } = await listSessionMessages(item.id, { limit: 12 })
+  const { messages } = await listSessionMessages(item.id, { limit: 12, attachmentMode: 'url' })
   const recap = (messages ?? [])
     .map(
       (m) =>
@@ -749,7 +750,7 @@ const placeholder = computed(() => {
 })
 
 const fileAccept = computed(() => {
-  const types = ['.pdf', '.txt', '.md', '.doc', '.docx', '.pptx', '.xlsx', '.xls', '.csv', '.json']
+  const types = ['.pdf', '.txt', '.md', '.doc', '.docx', '.pptx', '.xlsx', '.xls', '.csv', '.json', '.html', '.htm', '.odt', '.rtf', '.epub']
   if (props.allowImage !== false) {
     types.push('.png', '.jpg', '.jpeg', '.gif', '.webp')
   }
@@ -1727,7 +1728,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
             <Paperclip :size="16" class="hc-composer__file-icon" />
             <div class="hc-composer__file-info">
               <span class="hc-composer__file-name">{{ item.file.name }}</span>
-              <span class="hc-composer__file-size">{{ formatFileSize(item.file.size) }}</span>
+              <span class="hc-composer__file-size">{{ formatFileSize(effectiveChatFileSize(item.file)) }}</span>
             </div>
           </div>
           <button class="hc-composer__file-remove" @click="removeFile(idx)">×</button>

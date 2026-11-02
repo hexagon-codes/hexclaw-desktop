@@ -79,6 +79,17 @@ export function nativeGrantFromFile(file: File): NativeFileGrant | undefined {
   return (file as File & { nativeFileGrant?: NativeFileGrant }).nativeFileGrant
 }
 
+/** 文档解析读取原生授权字节；上传授权与本次读取各自一次性消费。 */
+export async function readDocumentFileBytes(file: File): Promise<ArrayBuffer> {
+  if (!nativeGrantFromFile(file)) return file.arrayBuffer()
+  const { preserveComposerFile, restoreComposerFile } = await import('@/services/composer-drafts')
+  const restored = await restoreComposerFile(await preserveComposerFile(file))
+  const grant = nativeGrantFromFile(restored)!
+  return invoke<ArrayBuffer>('read_document_file_grant', {
+    grantId: grant.grantId, operationId: grant.operationId, scope: backendScopeKey(),
+  })
+}
+
 export function pickOpenFileGrant(
   purpose: Extract<NativeFilePurpose, 'attachment_upload' | 'knowledge_upload'>,
   operation = operationId('native-open'),

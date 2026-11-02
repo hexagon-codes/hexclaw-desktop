@@ -6,6 +6,7 @@ export interface ExtractedDocument {
   text: string
   file_name: string
   page_count?: number
+  warnings?: string[]
 }
 
 /**
@@ -20,7 +21,16 @@ export async function extractDocument(file: File): Promise<ExtractedDocument> {
     throw new Error('Native document grant purpose is invalid')
   }
   if (isTauri()) {
-    const grant = grantFromNative ?? await stageBlob(file, file.name, {
+    let current = file
+    if (grantFromNative) {
+      if (!/^[0-9a-f]{64}$/.test(grantFromNative.sourceSha256 ?? '')) {
+        throw new Error('Native document grant is missing its attested source digest')
+      }
+      // 在实际上传前恢复授权，避免排队等待耗尽原授权的有效期。
+      const { preserveComposerFile, restoreComposerFile } = await import('@/services/composer-drafts')
+      current = await restoreComposerFile(await preserveComposerFile(file))
+    }
+    const grant = nativeGrantFromFile(current) ?? await stageBlob(current, current.name, {
       purpose: 'attachment_upload',
       operationId: createNativeFileOperation('document-extract'),
     })
@@ -43,6 +53,20 @@ export async function extractDocument(file: File): Promise<ExtractedDocument> {
 
 /** 暂存原文件到 sidecar，返回预览 token。 */
 export async function uploadDocumentPreview(file: File): Promise<{ token: string }> {
+  if (isTauri()) {
+    const { preserveComposerFile, restoreComposerFile } = await import('@/services/composer-drafts')
+    const current = nativeGrantFromFile(file)
+      ? await restoreComposerFile(await preserveComposerFile(file)) : file
+    const grant = nativeGrantFromFile(current) ?? await stageBlob(current, current.name, {
+      purpose: 'attachment_upload', operationId: createNativeFileOperation('document-preview'),
+    })
+    const result = await uploadGrantedFile<{ token: string }>({
+      grant, url: '/api/v1/documents/preview', fieldName: 'file',
+      idempotencyKey: `document-preview:${grant.sourceSha256}`,
+    })
+    if (!result.body?.token) throw new Error('Document preview returned no token')
+    return result.body
+  }
   const form = new FormData()
   form.append('file', file)
   return apiPost<{ token: string }>('/api/v1/documents/preview', form)
