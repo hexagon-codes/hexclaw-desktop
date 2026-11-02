@@ -6103,7 +6103,7 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
 
 /* ─── Input area ───── */
 .hc-chat__input-area {
-  padding: 8px 24px 10px;
+  padding: 8px 24px 16px;
   flex-shrink: 0;
   /* 作为滚动导航箭头的定位锚点：箭头 bottom:100% 即悬于输入框正上方 */
   position: relative;
