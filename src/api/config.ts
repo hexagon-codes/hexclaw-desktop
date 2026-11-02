@@ -11,6 +11,9 @@ import type {
   BackendLLMConfig,
   CatalogModel,
   ModelCapability,
+  ModelCapabilitiesSource,
+  ModelCapabilityProbeKind,
+  ModelCapabilityProbeReceipt,
   LLMConfigMutationReceipt,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
@@ -200,21 +203,38 @@ export async function testLLMConnection(
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }
 
-export interface LLMModelCapabilityProbeResult {
-  probe_kind: string
-  outcome: string
-  failure_code?: string
-  probe_policy_version: string
-  tested_at: number
-  probe_started_at: number
-  latency_ms: number
+export interface LLMModelCapabilityProbeResult extends ModelCapabilityProbeReceipt {
   persisted: boolean
+  reasoning_tokens?: number
+  reported_model?: string
 }
 
-interface LLMModelCapabilityProbeResponse {
+export interface LLMModelCapabilityProbeResponse {
   provider_instance_id: string
   model: string
   results: LLMModelCapabilityProbeResult[]
+}
+
+/** 复用已保存实例逐项探测，失败回执保留为事实，由服务端投影有效状态。 */
+export async function probeLLMModelCapabilities(
+  providerInstanceId: string,
+  model: string,
+  kinds: readonly ModelCapabilityProbeKind[],
+): Promise<LLMModelCapabilityProbeResponse> {
+  const requestedKinds = [...new Set(kinds)]
+  if (requestedKinds.length < 1 || requestedKinds.length > 4) {
+    throw new Error('Model capability probe requires between one and four kinds')
+  }
+  const text = await proxyApiRequestText(
+    'POST',
+    '/api/v1/config/llm/probe',
+    JSON.stringify({
+      provider_instance_id: providerInstanceId,
+      model,
+      kinds: requestedKinds,
+    }),
+  )
+  return safeJsonParse<LLMModelCapabilityProbeResponse>(text, 'probeLLMModelCapabilities')
 }
 
 /** 为已保存的精确模型执行文本能力探测，并要求服务端持久化真实回执。 */
@@ -222,16 +242,7 @@ export async function probeLLMModelCapability(
   providerInstanceId: string,
   model: string,
 ): Promise<LLMModelCapabilityProbeResult> {
-  const text = await proxyApiRequestText(
-    'POST',
-    '/api/v1/config/llm/probe',
-    JSON.stringify({
-      provider_instance_id: providerInstanceId,
-      model,
-      kinds: ['text'],
-    }),
-  )
-  const result = safeJsonParse<LLMModelCapabilityProbeResponse>(text, 'probeLLMModelCapability')
+  const result = await probeLLMModelCapabilities(providerInstanceId, model, ['text'])
   const probe = result.results?.find((candidate) => candidate.probe_kind === 'text')
   if (!probe) throw new Error('Model text capability probe returned no text result')
   if (probe.outcome !== 'passed') {
@@ -246,6 +257,9 @@ export async function probeLLMModelCapability(
 /** 后端 /api/v1/config/llm/models 返回的模型条目（snake_case） */
 interface BackendProviderModel {
   capabilities?: ModelCapability[]
+  capabilities_source?: ModelCapabilitiesSource
+  capabilities_source_fingerprint?: string
+  capabilities_metadata_present?: boolean
   id: string
   name?: string
   context_length?: number
@@ -299,6 +313,13 @@ export async function fetchProviderModels(
     completionPrice: m.completion_price,
     inputModalities: m.input_modalities,
     ...(Array.isArray(m.capabilities) ? { capabilities: [...m.capabilities] } : {}),
+    ...(m.capabilities_source ? { capabilitiesSource: m.capabilities_source } : {}),
+    ...(m.capabilities_source_fingerprint
+      ? { capabilitiesSourceFingerprint: m.capabilities_source_fingerprint }
+      : {}),
+    ...(m.capabilities_metadata_present === undefined
+      ? {}
+      : { capabilitiesMetadataPresent: m.capabilities_metadata_present }),
     supportsTools: m.supports_tools,
     ...(m.reasoning_support === undefined
       ? {}

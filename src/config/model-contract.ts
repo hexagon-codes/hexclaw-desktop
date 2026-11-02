@@ -4,6 +4,9 @@ import type {
   CatalogModel,
   EmbeddingModelContract,
   ModelCapability,
+  ModelCapabilitiesSource,
+  ModelCapabilityProbeReceipt,
+  ModelCapabilityState,
   ModelOption,
   ModelReasoningControl,
   ModelReasoningDialect,
@@ -31,8 +34,9 @@ function cloneEmbeddingContract(
 }
 
 export function embeddingContractForModel(
-  model: Pick<ModelOption, 'id' | 'capabilities' | 'embedding'>,
+  model: Pick<ModelOption, 'id' | 'capabilities' | 'capabilitiesSource' | 'embedding'>,
 ): EmbeddingModelContract | undefined {
+  if (model.capabilitiesSource === 'manual' && !model.capabilities?.includes('embedding')) return undefined
   if (CANONICAL_OPENROUTER_EMBEDDING_MODEL_IDS.has(model.id)) {
     return { ...OPENROUTER_EMBEDDING_CONTRACT }
   }
@@ -40,27 +44,79 @@ export function embeddingContractForModel(
   return undefined
 }
 
-/** These two provider-owned IDs are embedding-only regardless of stale/incorrect client metadata. */
+/** 精确 embedding 旧预设兼容不覆盖明确的手工声明。 */
 export function normalizeModelCapabilities(
-  model: Pick<ModelOption, 'id' | 'capabilities'>,
+  model: Pick<ModelOption, 'id' | 'capabilities' | 'capabilitiesSource'>,
 ): ModelCapability[] {
+  if (model.capabilitiesSource === 'manual') return model.capabilities ?? ['text']
   if (CANONICAL_OPENROUTER_EMBEDDING_MODEL_IDS.has(model.id)) {
     return ['embedding']
   }
   return model.capabilities ?? ['text']
 }
 
-/** 目录空能力仅表示未知，不能覆盖同一已启用模型的明确合同。 */
+/** 持久化只使用声明，不能把探测得到的有效能力写回配置。 */
+export function declaredModelCapabilities(model: ModelOption): ModelCapability[] {
+  return [...normalizeModelCapabilities({
+    id: model.id,
+    capabilities: model.declaredCapabilities ?? model.capabilities,
+    capabilitiesSource: model.capabilitiesSource,
+  })]
+}
+
+/** 手工能力修改同时更新声明与本地显示，来源指纹仍由服务端签发。 */
+export function applyManualModelCapabilities(
+  model: ModelOption,
+  capabilities: readonly ModelCapability[],
+): ModelOption {
+  return {
+    ...model,
+    capabilities: [...capabilities],
+    declaredCapabilities: [...capabilities],
+    capabilitiesSource: 'manual',
+    capabilitiesMetadataPresent: undefined,
+  }
+}
+
+/** 没有机器声明的目录空能力表示未知；明确空数组与手工声明分别保留原义。 */
 export function mergeCatalogModelCapabilities(
-  catalogModel: Pick<CatalogModel, 'capabilities'>,
-  existingModel?: Pick<ModelOption, 'id' | 'capabilities'>,
+  catalogModel: Pick<CatalogModel, 'capabilities' | 'capabilitiesMetadataPresent'>,
+  existingModel?: Pick<ModelOption, 'id' | 'capabilities' | 'declaredCapabilities' | 'capabilitiesSource'>,
+  acceptLegacy = false,
 ): ModelCapability[] {
-  const capabilities = catalogModel.capabilities?.length
-    ? catalogModel.capabilities
+  if (existingModel && (
+    existingModel.capabilitiesSource === 'manual' ||
+    (!acceptLegacy && (existingModel.capabilitiesSource === 'legacy_unknown' ||
+      (!existingModel.capabilitiesSource && existingModel.capabilities !== undefined)))
+  )) return [...normalizeModelCapabilities(existingModel)]
+  const capabilities = catalogModel.capabilitiesMetadataPresent || catalogModel.capabilities?.length
+    ? catalogModel.capabilities ?? []
     : existingModel
       ? normalizeModelCapabilities(existingModel)
       : catalogModel.capabilities ?? []
   return [...capabilities]
+}
+
+/** 同时应用目录能力及其来源，避免展示与持久声明分叉。 */
+export function applyCatalogModelCapabilities(
+  model: ModelOption,
+  catalogModel: Pick<CatalogModel, 'capabilities' | 'capabilitiesSource' | 'capabilitiesSourceFingerprint' | 'capabilitiesMetadataPresent'>,
+  acceptLegacy = false,
+): ModelOption {
+  if ((!catalogModel.capabilitiesMetadataPresent && !catalogModel.capabilities?.length) || model.capabilitiesSource === 'manual') return { ...model }
+  const source = model.capabilitiesSource
+  if (!acceptLegacy && (source === 'legacy_unknown' || (!source && model.capabilities !== undefined))) {
+    return { ...model }
+  }
+  const capabilities = mergeCatalogModelCapabilities(catalogModel, model, acceptLegacy)
+  return {
+    ...model,
+    capabilities,
+    declaredCapabilities: [...capabilities],
+    capabilitiesSource: catalogModel.capabilitiesSource ?? 'catalog',
+    capabilitiesSourceFingerprint: catalogModel.capabilitiesSourceFingerprint,
+    capabilitiesMetadataPresent: catalogModel.capabilitiesMetadataPresent,
+  }
 }
 
 /** 不可信配置或旧数据只能收敛到精确三态，不能从模型 ID 补猜。 */
@@ -191,7 +247,7 @@ export function reasoningControlFromOllamaCapabilities(
 
 /** Canonical model record shared by config ingest, UI creation and persistence. */
 export function canonicalizeModelOption(model: ModelOption): ModelOption {
-  const capabilities = normalizeModelCapabilities(model)
+  const capabilities = [...normalizeModelCapabilities(model)]
   const embedding = embeddingContractForModel({ ...model, capabilities })
   const reasoning = normalizeModelReasoningContract(model.reasoningSupport, model.reasoningControl)
   const modelWithoutReasoningControl = { ...model }
@@ -199,9 +255,13 @@ export function canonicalizeModelOption(model: ModelOption): ModelOption {
     hasOwn(model, 'reasoningSupport') || hasOwn(model, 'reasoningControl')
   delete modelWithoutReasoningControl.reasoningControl
   delete modelWithoutReasoningControl.reasoningSupport
+  if (model.capabilitiesSource === 'manual' && !capabilities.includes('embedding')) delete modelWithoutReasoningControl.embedding
   return {
     ...modelWithoutReasoningControl,
     capabilities,
+    ...(model.declaredCapabilities === undefined
+      ? {}
+      : { declaredCapabilities: declaredModelCapabilities(model) }),
     ...(hasReasoningDeclaration ? { reasoningSupport: reasoning.support } : {}),
     ...(reasoning.control ? { reasoningControl: reasoning.control } : {}),
     ...(hasOwn(model, 'nativeReasoningSupport')
@@ -278,6 +338,7 @@ function reasoningContractFromModel(
 }
 
 export function isChatModelOption(model: Pick<ModelOption, 'id' | 'capabilities'>): boolean {
+  if (CANONICAL_OPENROUTER_EMBEDDING_MODEL_IDS.has(model.id)) return false
   return isChatModel(normalizeModelCapabilities(model))
 }
 
@@ -307,6 +368,12 @@ export interface EffectiveProviderModelProjection {
   id: string
   display_name?: string
   capabilities: ModelCapability[]
+  declared_capabilities?: ModelCapability[]
+  capabilities_source?: ModelCapabilitiesSource
+  capabilities_source_fingerprint?: string
+  capabilities_metadata_present?: boolean
+  capability_states?: Record<string, ModelCapabilityState>
+  probe_receipts?: ModelCapabilityProbeReceipt[]
   effective_native_reasoning_support?: ModelReasoningSupport
   native_reasoning_source_fingerprint?: string
 }
@@ -317,6 +384,7 @@ export function mergeProviderModels(
   backendModels?: string[],
   backendModelSpecs?: BackendProviderModelSpec[],
   backendEffectiveModels?: EffectiveProviderModelProjection[],
+  modelSpecsMode?: ProviderConfig['modelSpecsMode'],
 ): ModelOption[] {
   if (backendModelSpecs !== undefined || backendEffectiveModels !== undefined) {
     const specsByID = new Map((backendModelSpecs ?? []).map((model) => [model.id, model]))
@@ -399,6 +467,16 @@ export function mergeProviderModels(
               )
             : {}
         const isCustom = spec?.is_custom ?? local?.isCustom
+        const declaredCapabilities = spec
+          ? spec.capabilities ?? ['text'] as ModelCapability[]
+          : effectiveModel?.declared_capabilities ?? local?.declaredCapabilities ?? local?.capabilities ?? []
+        const capabilitiesSource = spec?.capabilities_source ?? effectiveModel?.capabilities_source ??
+          (spec && modelSpecsMode !== 'legacy' ? 'legacy_unknown' : local?.capabilitiesSource)
+        const capabilitiesSourceFingerprint = spec?.capabilities_source_fingerprint ??
+          effectiveModel?.capabilities_source_fingerprint
+        const capabilitiesMetadataPresent = spec
+          ? spec.capabilities_metadata_present
+          : effectiveModel?.capabilities_metadata_present ?? local?.capabilitiesMetadataPresent
         const reasoningSupport = hasBackendReasoningSupport
           ? normalizeModelReasoningSupport(spec?.reasoning_support)
           : omittedReasoning.reasoningSupport
@@ -416,6 +494,12 @@ export function mergeProviderModels(
               : spec.capabilities === undefined
                 ? ['text']
                 : spec.capabilities),
+          ...(declaredCapabilities === undefined ? {} : { declaredCapabilities: [...declaredCapabilities] }),
+          ...(capabilitiesSource ? { capabilitiesSource } : {}),
+          ...(capabilitiesSourceFingerprint ? { capabilitiesSourceFingerprint } : {}),
+          ...(capabilitiesMetadataPresent === undefined ? {} : { capabilitiesMetadataPresent }),
+          ...(effectiveModel?.capability_states ? { capabilityStates: { ...effectiveModel.capability_states } } : {}),
+          ...(effectiveModel?.probe_receipts ? { probeReceipts: effectiveModel.probe_receipts.map((receipt) => ({ ...receipt })) } : {}),
           ...(reasoningSupport === undefined ? {} : { reasoningSupport }),
           ...(hasBackendReasoningControl
             ? spec?.reasoning_control === undefined
@@ -473,11 +557,14 @@ export function mergeRemoteModelsIntoProvider(
   )
   for (const remoteModel of remoteModels) {
     if (existing.has(remoteModel.id)) continue
+    const presetCapabilities = presetCaps.get(remoteModel.id)
     target.models.push(
-      canonicalizeModelOption({
+      canonicalizeModelOption(applyCatalogModelCapabilities({
         id: remoteModel.id,
         name: remoteModel.name || remoteModel.id,
-        capabilities: [...(presetCaps.get(remoteModel.id) ?? [])],
+        capabilitiesSource: presetCapabilities ? 'preset' : 'catalog',
+        capabilities: [...(presetCapabilities ?? [])],
+        declaredCapabilities: [...(presetCapabilities ?? [])],
         reasoningSupport:
           remoteModel.reasoningSupport ?? presetReasoningSupport.get(remoteModel.id),
         reasoningControl:
@@ -488,7 +575,7 @@ export function mergeRemoteModelsIntoProvider(
         ...(remoteModel.nativeReasoningSourceFingerprint
           ? { nativeReasoningSourceFingerprint: remoteModel.nativeReasoningSourceFingerprint }
           : {}),
-      }),
+      }, remoteModel)),
     )
   }
 }

@@ -8,6 +8,25 @@ export type ModelCapability =
   | 'image_generation'
   | 'video_generation'
   | 'embedding'
+  | 'computer_use'
+
+/** 能力声明来源；旧声明无法可靠区分历史手工修改。 */
+export type ModelCapabilitiesSource = 'manual' | 'catalog' | 'preset' | 'legacy_unknown'
+export type ProviderAPIProtocol = 'auto' | 'responses' | 'chat_completions' | ''
+
+export type ModelCapabilityProbeKind = 'catalog' | 'text' | 'vision' | 'tools' | 'embedding' | 'reasoning'
+export type ModelCapabilityState = 'unknown' | 'declared' | 'verified' | 'failed'
+
+/** 当前配置指纹下的真实探测回执，不作为能力声明保存。 */
+export interface ModelCapabilityProbeReceipt {
+  probe_kind: ModelCapabilityProbeKind
+  outcome: 'passed' | 'failed'
+  failure_code?: string
+  probe_policy_version: string
+  tested_at: number
+  probe_started_at: number
+  latency_ms: number
+}
 
 /** 模型推理能力只能来自 Provider 的显式证据，未知时不得按模型名推断。 */
 export type ModelReasoningSupport = 'supported' | 'unsupported' | 'unknown'
@@ -60,8 +79,17 @@ export interface ModelOption {
   id: string
   name: string
   isCustom?: boolean
-  /** 模型支持的能力（静态声明），默认 ['text'] */
+  /** 当前有效能力；服务端可合并同来源的真实正向证据。 */
   capabilities?: ModelCapability[]
+  /** 原始持久声明，与有效能力分离；显式 [] 必须保留。 */
+  declaredCapabilities?: ModelCapability[]
+  capabilitiesSource?: ModelCapabilitiesSource
+  /** 服务端签发的精确能力来源指纹，客户端仅原样传递。 */
+  capabilitiesSourceFingerprint?: string
+  /** 上游确实提供能力字段；false 与缺省均表示未提供机器声明。 */
+  capabilitiesMetadataPresent?: boolean
+  capabilityStates?: Record<string, ModelCapabilityState>
+  probeReceipts?: ModelCapabilityProbeReceipt[]
   /** 模型是否支持推理；缺失或非法值在规范化后统一为 unknown。 */
   reasoningSupport?: ModelReasoningSupport
   /** 仅 supported 模型允许携带的精确上游控制映射。 */
@@ -89,6 +117,9 @@ export interface ModelOption {
 export interface CatalogModel {
   /** 上游生成方法声明；输入模态不等同于输出能力。 */
   capabilities?: ModelCapability[]
+  capabilitiesSource?: ModelCapabilitiesSource
+  capabilitiesSourceFingerprint?: string
+  capabilitiesMetadataPresent?: boolean
   id: string
   name: string
   /** 上下文窗口（token） */
@@ -116,7 +147,11 @@ export function isCatalogModelFree(m: CatalogModel): boolean {
 /** 目录条目是否带元数据（决定管理器里能否显示徽章/筛选） */
 export function catalogModelHasMetadata(m: CatalogModel): boolean {
   return (
-    m.promptPrice !== undefined || m.contextLength !== undefined || m.inputModalities !== undefined
+    m.promptPrice !== undefined || m.completionPrice !== undefined ||
+    m.contextLength !== undefined || m.inputModalities !== undefined ||
+    m.capabilities !== undefined || m.capabilitiesMetadataPresent !== undefined ||
+    m.supportsTools !== undefined || m.reasoningSupport !== undefined ||
+    m.reasoningControl !== undefined || m.nativeReasoningSupport !== undefined
   )
 }
 
@@ -168,6 +203,8 @@ export interface ProviderConfig {
   /** Explicit secret intent for the next config transaction. */
   apiKeyMutation?: 'preserve' | 'replace' | 'delete'
   baseUrl: string
+  /** 运行协议来自后端配置；不由模型显示名猜测。 */
+  apiProtocol?: ProviderAPIProtocol
   models: ModelOption[]
   /** 当前 provider 在后端运行时默认使用的模型 */
   selectedModelId?: string
@@ -198,6 +235,9 @@ export interface BackendProviderModelSpec {
   display_name: string
   is_custom?: boolean
   capabilities?: ModelCapability[]
+  capabilities_source?: ModelCapabilitiesSource
+  capabilities_source_fingerprint?: string
+  capabilities_metadata_present?: boolean
   reasoning_support?: ModelReasoningSupport
   reasoning_control?: ModelReasoningControl
   native_reasoning_support?: ModelReasoningSupport
@@ -369,6 +409,7 @@ export interface BackendLLMProvider {
     credential_ref?: string
   }
   base_url: string
+  api_protocol?: ProviderAPIProtocol
   model: string
   models?: string[] // 已配置的模型列表（桌面端持久化用）
   model_specs?: BackendProviderModelSpec[]
@@ -377,6 +418,12 @@ export interface BackendLLMProvider {
     id: string
     display_name?: string
     capabilities: ModelCapability[]
+    declared_capabilities?: ModelCapability[]
+    capabilities_source?: ModelCapabilitiesSource
+    capabilities_source_fingerprint?: string
+    capabilities_metadata_present?: boolean
+    capability_states?: Record<string, ModelCapabilityState>
+    probe_receipts?: ModelCapabilityProbeReceipt[]
     effective_native_reasoning_support?: ModelReasoningSupport
     native_reasoning_source_fingerprint?: string
   }>

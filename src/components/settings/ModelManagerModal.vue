@@ -8,7 +8,7 @@ import {
   canonicalizeModelOption,
   applyCatalogNativeReasoningContract,
   isChatModelOption,
-  mergeCatalogModelCapabilities,
+  applyCatalogModelCapabilities,
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
@@ -46,6 +46,7 @@ const view = ref('all')
 const vendorFilter = ref('__all__')
 const vendorSearch = ref('')
 const capFilters = ref<Set<string>>(new Set())
+const selectedCapability = ref<ModelCapability | 'all'>('all')
 const recDismissed = ref(false)
 const clearArmed = ref(false)
 let clearTimer: ReturnType<typeof setTimeout> | null = null
@@ -92,7 +93,11 @@ function comparableModel(model: ModelOption) {
     id: canonical.id,
     name: canonical.name,
     isCustom: Boolean(canonical.isCustom),
-    capabilities: canonical.capabilities ?? [],
+    capabilities: canonical.declaredCapabilities ?? canonical.capabilities ?? [],
+    declaredCapabilities: canonical.declaredCapabilities,
+    capabilitiesSource: canonical.capabilitiesSource,
+    capabilitiesSourceFingerprint: canonical.capabilitiesSourceFingerprint,
+    capabilitiesMetadataPresent: canonical.capabilitiesMetadataPresent,
     embedding: canonical.embedding ?? null,
     toolReliability: canonical.toolReliability ?? null,
     nativeReasoningSupport: canonical.nativeReasoningSupport ?? null,
@@ -118,6 +123,7 @@ watch(
     if (!open) return
     // 打开即视为已读"新增"，关闭入口蓝点；视图内仍可按"本次新增"筛选
     search.value = ''
+    selectedCapability.value = 'all'
     view.value = 'all'
     vendorFilter.value = '__all__'
     vendorSearch.value = ''
@@ -199,19 +205,15 @@ const viewSegments = computed(() => [
 ])
 
 const capFilterOptions = computed(() => {
-  const options = [
-    { key: 'chat', label: t('settings.modelManager.filterChat', '文本对话') },
-    { key: 'embedding', label: t('settings.modelManager.filterEmbedding', 'Embedding') },
-  ]
-  if (!hasMetadata.value) return options
+  if (!hasMetadata.value) return []
   return [
-    ...options,
     { key: 'free', label: t('settings.modelManager.filterFree', '免费') },
-    { key: 'vision', label: t('settings.modelManager.filterVision', '视觉') },
     { key: 'tools', label: t('settings.modelManager.filterTools', '工具调用') },
     { key: 'ctx128', label: t('settings.modelManager.filterCtx', '≥128K 上下文') },
   ]
 })
+
+const capabilityCategories: ModelCapability[] = ['text', 'vision', 'video', 'audio', 'code', 'image_generation', 'video_generation', 'embedding', 'computer_use']
 
 function toggleCapFilter(key: string) {
   const next = new Set(capFilters.value)
@@ -225,6 +227,7 @@ const filteredModels = computed(() => {
   const f = capFilters.value
   return managedModels.value.filter((m) => {
     const capabilities = capabilitiesOf(m)
+    if (selectedCapability.value !== 'all' && !capabilities.includes(selectedCapability.value)) return false
     if (view.value === 'enabled' && !enabledIds.value.has(m.id)) return false
     if (view.value === 'new' && !newIds.value.has(m.id)) return false
     if (vendorFilter.value !== '__all__' && vendorOf(m.id) !== vendorFilter.value) return false
@@ -251,7 +254,6 @@ const groupedModels = computed(() => {
   return [...groups.entries()]
 })
 
-const mediaCapabilityBadges = ['image_generation', 'video_generation', 'audio'] as const
 
 // ─── 推荐（聚合商首次接入引导） ─────────────────────────
 const recommended = computed<CatalogModel[]>(() => {
@@ -282,6 +284,7 @@ function cloneModelOption(model: ModelOption): ModelOption {
   return canonicalizeModelOption({
     ...model,
     ...(model.capabilities ? { capabilities: [...model.capabilities] } : {}),
+    ...(model.declaredCapabilities ? { declaredCapabilities: [...model.declaredCapabilities] } : {}),
     ...(model.embedding ? { embedding: { ...model.embedding } } : {}),
     ...(model.toolReliability ? { toolReliability: { ...model.toolReliability } } : {}),
   })
@@ -304,27 +307,28 @@ function applyCatalogReasoningContract(
 }
 
 function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelOption {
-  if (existing?.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(cloneModelOption(existing), m))
+  if (existing?.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(applyCatalogModelCapabilities(cloneModelOption(existing), m), m))
   if (existing) {
     return canonicalizeModelOption(
       applyCatalogReasoningContract(
-        {
+        applyCatalogModelCapabilities({
           ...cloneModelOption(existing),
           id: m.id,
-          name: m.name || m.id,
-          capabilities: mergeCatalogModelCapabilities(m, existing),
-        },
+          name: existing.name || m.name || m.id,
+        }, m),
         m,
       ),
     )
   }
   return canonicalizeModelOption(
     applyCatalogReasoningContract(
-      {
+      applyCatalogModelCapabilities({
         id: m.id,
         name: m.name || m.id,
-        capabilities: mergeCatalogModelCapabilities(m),
-      },
+        capabilities: [],
+        declaredCapabilities: [],
+        capabilitiesSource: m.capabilitiesSource ?? 'catalog',
+      }, m),
       m,
     ),
   )
@@ -342,7 +346,10 @@ function capabilitiesOf(m: CatalogModel): ModelCapability[] {
 
 function displayCapabilitiesOf(m: CatalogModel) {
   const enabledModel = draftModels.value.find((model) => model.id === m.id)
-  return displayModelCapabilities(modelOptionFromCatalog(m, enabledModel), [])
+  const model = modelOptionFromCatalog(m, enabledModel)
+  const capabilities = displayModelCapabilities(model, [])
+  if ((m.supportsTools || model.capabilityStates?.tools === 'verified') && !capabilities.includes('tools')) capabilities.push('tools')
+  return capabilities
 }
 
 function isStaleCatalogModel(modelId: string): boolean {
@@ -622,6 +629,18 @@ function handleKeydown(e: KeyboardEvent) {
                 </button>
               </template>
             </div>
+            <div class="mm-capability-filters" role="group" :aria-label="t('settings.modelList.capabilityCategory')">
+              <button type="button" class="mm-capability-filter" :aria-pressed="selectedCapability === 'all'" @click="selectedCapability = 'all'">{{ t('settings.modelList.allCapabilities') }}</button>
+              <button
+                v-for="capability in capabilityCategories"
+                :key="capability"
+                type="button"
+                class="mm-capability-filter"
+                :data-testid="`model-manager-category-${capability}`"
+                :aria-pressed="selectedCapability === capability"
+                @click="selectedCapability = capability"
+              >{{ capability === 'video' ? t('settings.modelList.videoUnderstanding') : localizedModelCapabilityDisplay(capability, t).label }}</button>
+            </div>
           </div>
 
           <!-- 主体 -->
@@ -725,50 +744,19 @@ function handleKeydown(e: KeyboardEvent) {
                 >
                   <div class="mm-row__info">
                     <div class="mm-row__name">
-                      {{ m.name }}
-                      <span v-if="newIds.has(m.id)" class="mm-badge mm-badge--new">
-                        {{ t('settings.modelManager.newTag', '新') }}
-                      </span>
-                      <span v-if="isStaleCatalogModel(m.id)" class="mm-badge mm-badge--stale">
-                        {{ t('settings.llm.modelStaleLabel', '已下架') }}
-                      </span>
-                      <span
-                        v-if="displayCapabilitiesOf(m).includes('thinking')"
-                        class="mm-badge"
-                        :title="MODEL_CAPABILITY_DISPLAY.thinking.title"
-                      >
-                        {{ MODEL_CAPABILITY_DISPLAY.thinking.icon }}
-                        {{ MODEL_CAPABILITY_DISPLAY.thinking.label }}
-                      </span>
-                      <template v-for="capability in mediaCapabilityBadges" :key="capability">
-                        <span
-                          v-if="capabilitiesOf(m).includes(capability)"
-                          class="mm-badge"
-                          :title="localizedModelCapabilityDisplay(capability, t).title"
-                        >
-                          {{ MODEL_CAPABILITY_DISPLAY[capability].icon }}
-                          {{ localizedModelCapabilityDisplay(capability, t).label }}
-                        </span>
-                      </template>
-                      <template v-if="hasMetadata">
-                        <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">
-                          {{ t('settings.modelManager.badgeFree', '免费') }}
-                        </span>
-                        <span v-if="capabilitiesOf(m).includes('vision')" class="mm-badge">
-                          {{ t('settings.modelManager.badgeVision', '视觉') }}
-                        </span>
-                        <span v-if="m.supportsTools" class="mm-badge">
-                          {{ t('settings.modelManager.badgeTools', '工具') }}
-                        </span>
-                        <span v-if="capabilitiesOf(m).includes('embedding')" class="mm-badge">
-                          {{ t('settings.modelManager.badgeEmbedding', 'Embedding') }}
-                        </span>
-                        <span v-if="m.contextLength" class="mm-badge">{{
-                          ctxLabel(m.contextLength)
-                        }}</span>
-                      </template>
+                      {{ m.name || m.id }}
+                      <span v-if="newIds.has(m.id)" class="mm-badge mm-badge--new">{{ t('settings.modelManager.newTag', '新') }}</span>
+                      <span v-if="isStaleCatalogModel(m.id)" class="mm-badge mm-badge--stale" :title="t('settings.modelList.unlistedHint')">{{ t('settings.modelList.unlisted') }}</span>
+                      <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">{{ t('settings.modelManager.badgeFree', '免费') }}</span>
+                      <span v-if="m.contextLength" class="mm-badge">{{ ctxLabel(m.contextLength) }}</span>
                     </div>
-                    <div class="mm-row__id">{{ m.id }}</div>
+                    <div v-if="m.name && m.name !== m.id" class="mm-row__id">{{ m.id }}</div>
+                    <div class="mm-row__capabilities">
+                      <span v-for="capability in displayCapabilitiesOf(m)" :key="capability" class="mm-capability-badge" :title="localizedModelCapabilityDisplay(capability, t).title">
+                        <span class="mm-capability-icon" aria-hidden="true">{{ MODEL_CAPABILITY_DISPLAY[capability].icon }}</span>{{ capability === 'video' ? t('settings.modelList.videoUnderstanding') : localizedModelCapabilityDisplay(capability, t).label }}
+                      </span>
+                      <span v-if="!displayCapabilitiesOf(m).length" class="mm-capability-badge">{{ t('settings.modelList.unknownCapability') }}</span>
+                    </div>
                   </div>
                   <button
                     v-if="enabledIds.has(m.id) && capabilitiesOf(m).includes('text')"
@@ -1356,4 +1344,14 @@ function handleKeydown(e: KeyboardEvent) {
     transform: scale(1) translateY(0);
   }
 }
+.mm-capability-filters { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+.mm-capability-filter { padding:5px 8px; border:0; border-radius:6px; background:transparent; color:var(--hc-text-secondary); font:inherit; font-size:11.5px; line-height:1.4; cursor:pointer; }
+.mm-capability-filter:hover { background:var(--hc-bg-hover); }
+.mm-capability-filter[aria-pressed='true'] { background:var(--hc-accent-subtle); color:var(--hc-accent); }
+.mm-capability-filter:focus-visible { outline:2px solid var(--hc-accent); outline-offset:1px; }
+.mm-row__id { overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.5; }
+.mm-row__capabilities { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:5px; }
+.mm-capability-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 6px; border-radius:5px; background:var(--hc-bg-active); color:var(--hc-text-secondary); font-size:11px; font-weight:400; line-height:1.4; white-space:nowrap; }
+.mm-row__name { font-weight:550; overflow-wrap:anywhere; }
+.mm-capability-icon { flex:none; font-size:10px; line-height:1; }
 </style>

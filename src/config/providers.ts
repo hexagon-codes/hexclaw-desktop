@@ -287,6 +287,15 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
   },
 }
 
+// 预设标记只描述声明来源，官方端点能力补充由服务端统一解析。
+for (const preset of Object.values(PROVIDER_PRESETS)) {
+  preset.defaultModels = preset.defaultModels.map((model) => ({
+    ...model,
+    capabilitiesSource: 'preset' as const,
+    ...(model.capabilities ? { declaredCapabilities: [...model.capabilities] } : {}),
+  }))
+}
+
 /** 获取所有可添加的 Provider 类型列表 */
 export function getProviderTypes(options?: { includeOllama?: boolean }): ProviderPreset[] {
   // 默认情况下 Ollama 由 OllamaCard 统一管理，不在添加服务商选择器中重复

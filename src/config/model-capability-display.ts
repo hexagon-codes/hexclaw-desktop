@@ -31,6 +31,7 @@ export const MODEL_CAPABILITY_DISPLAY: Record<
   image_generation: { icon: '🎨', label: '绘图', title: '图像生成' },
   video_generation: { icon: '📹', label: '视频生成', title: '视频生成' },
   embedding: { icon: '◈', label: 'Embedding', title: '向量嵌入' },
+  computer_use: { icon: '🔧', label: 'Computer Use', title: 'Computer Use' },
   tools: { icon: '🔧', label: '工具', title: '工具调用' },
   thinking: { icon: '🧠', label: '推理', title: '推理能力' },
 }

@@ -16,13 +16,12 @@ import {
   CheckCircle,
   RotateCcw,
   ShieldCheck,
-  SlidersHorizontal,
   GripVertical,
+  Pencil,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import {
   useModelCatalogStore,
-  AUTO_ENABLE_CATALOG_LIMIT,
   beginProviderCatalogSync,
   reconcileProviderCatalog,
 } from '@/stores/model-catalog'
@@ -41,8 +40,9 @@ import {
   testLLMConnection,
   fetchProviderModels,
   readProviderApiKey,
+  probeLLMModelCapabilities,
 } from '@/api/config'
-import { fetchCapabilities, probeCapability } from '@/api/capabilities'
+import { fetchCapabilities } from '@/api/capabilities'
 import { messageFromUnknownError } from '@/utils/errors'
 import { thirdPartyAiServicesUrl } from '@/utils/legal-links'
 import { logger } from '@/utils/logger'
@@ -56,10 +56,12 @@ import { useAboutWindow } from '@/composables/useAboutWindow'
 import { useToast } from '@/composables'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
+import { applyManualModelCapabilities } from '@/config/model-contract'
 import {
   displayModelCapabilities as displayCapabilities,
   MODEL_CAPABILITY_DISPLAY,
   localizedModelCapabilityDisplay,
+  type DisplayModelCapability,
 } from '@/config/model-capability-display'
 import { getOllamaTarget } from '@/api/ollama'
 import { isCatalogModelFree } from '@/types'
@@ -71,6 +73,7 @@ import type {
   ModelCapability,
   BackendRuntimeConfig,
   BackendLLMConfig,
+  ModelCapabilityProbeKind,
 } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
@@ -82,6 +85,7 @@ import ModelSelector from '@/components/common/ModelSelector.vue'
 import ReasoningPolicySelect from '@/components/settings/ReasoningPolicySelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
+import ModelCapabilityFields from '@/components/settings/ModelCapabilityFields.vue'
 import AutomationPermissionsPanel from '@/components/settings/AutomationPermissionsPanel.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -90,9 +94,10 @@ import { normalizeDefaultReasoningPolicy } from '@/utils/reasoning-policy'
 import { INPUT_LIMITS, inputLimitError } from '@/utils/input-limits'
 
 const { t, locale } = useI18n()
-// 日期跟随应用语言；宿主不支持对应语言时明确回退英文，不借用系统中文。
-const dateLocale = computed(() => Intl.DateTimeFormat.supportedLocalesOf([locale.value])[0] || 'en')
-const capabilityDisplay = (cap: import('@/config/model-capability-display').DisplayModelCapability) => localizedModelCapabilityDisplay(cap, t)
+const capabilityDisplay = (cap: import('@/config/model-capability-display').DisplayModelCapability) => ({
+  ...localizedModelCapabilityDisplay(cap, t),
+  ...(cap === 'video' ? { label: t('settings.modelList.videoUnderstanding') } : {}),
+})
 const toast = useToast()
 const settingsStore = useSettingsStore()
 let originalProviders = (settingsStore.config?.llm.providers ?? []).map(provider => ({ ...provider }))
@@ -156,7 +161,7 @@ let providerTextGesture = false
 let providerControlPointerGesture = false
 let providerDrag: { id: string; scope: string; pointerId: number; header: HTMLElement; startX: number; startY: number; x: number; y: number; offsetX: number; offsetY: number; active: boolean; frame: number; preview: HTMLElement | null } | null = null
 
-// 自定义模型输入（多选，仅系统自动识别的能力）
+// 模型能力保留明确声明；手工清空不补成文本能力。
 const newModelId = ref('')
 const newModelCapability = ref<Record<ModelCapability, boolean>>({
   text: true,
@@ -167,6 +172,7 @@ const newModelCapability = ref<Record<ModelCapability, boolean>>({
   image_generation: false,
   video_generation: false,
   embedding: false,
+  computer_use: false,
 })
 const customModelDialogProviderId = ref<string | null>(null)
 const customModelInputRef = ref<HTMLInputElement | null>(null)
@@ -175,9 +181,10 @@ let customModelReturnFocus: HTMLElement | null = null
 
 // 编辑模型 Modal
 const editingModel = ref<{ providerId: string; idx: number; model: ModelOption } | null>(null)
+let editModelReturnFocus: HTMLElement | null = null
 const editModelOverlayRef = ref<HTMLDivElement | null>(null)
 watch(editingModel, (v) => {
-  if (v) nextTick(() => editModelOverlayRef.value?.focus())
+  if (v) nextTick(() => editModelOverlayRef.value?.querySelector<HTMLInputElement>('input')?.focus())
 })
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
   name: '',
@@ -191,9 +198,11 @@ const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapabili
     image_generation: false,
     video_generation: false,
     embedding: false,
+    computer_use: false,
   },
 })
 const pendingDeleteProviderId = ref<string | null>(null)
+const pendingRestoreProviderId = ref<string | null>(null)
 const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(
   null,
 )
@@ -352,6 +361,11 @@ function editableSettingsSignature(owner = settingsStore.config) {
       ...owner.llm,
       providers: owner.llm.providers.map(provider => ({
         ...provider,
+        models: provider.models.map(model => ({
+          ...model,
+          capabilities: model.declaredCapabilities ?? model.capabilities,
+          declaredCapabilities: model.declaredCapabilities ?? model.capabilities,
+        })),
         locality: provider.localitySource === 'user' ? provider.locality : resolveEffectiveProviderLocality(provider),
         modelSpecsMode: provider.modelSpecsMode ?? 'legacy',
         keepAlive: provider.keepAlive || '',
@@ -367,7 +381,7 @@ function editableSettingsSignature(owner = settingsStore.config) {
     },
   } : owner
   return JSON.stringify(comparableOwner, (key, value) =>
-    ['probeReceipt', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength', 'credentialRef', 'credentialPresent', 'nativeReasoningSourceFingerprint', 'effectiveNativeReasoningSupport', 'effectiveNativeReasoningSourceFingerprint'].includes(key) ? undefined : value,
+    ['probeReceipt', 'probeReceipts', 'capabilityStates', 'capabilitiesSourceFingerprint', 'toolReliability', 'providerInstanceId', 'backendKey', 'apiKeyLength', 'credentialRef', 'credentialPresent', 'nativeReasoningSourceFingerprint', 'effectiveNativeReasoningSupport', 'effectiveNativeReasoningSourceFingerprint'].includes(key) ? undefined : value,
   ) ?? ''
 }
 
@@ -613,6 +627,7 @@ function resetPendingModelDraft() {
     image_generation: false,
     video_generation: false,
     embedding: false,
+    computer_use: false,
   }
 }
 
@@ -794,7 +809,6 @@ async function saveImmediateSetting(section: 'memory' | 'sandbox') {
 // ─── A7 模型 tool_call 能力探测 ──────────────────────────
 
 /** 正在探测中的 model，格式 "providerId:modelId" */
-const probingKey = ref<string | null>(null)
 
 /** 从后端拉取所有能力缓存并合并到对应 provider.models[*].toolReliability */
 async function loadCapabilities() {
@@ -820,47 +834,114 @@ async function loadCapabilities() {
   }
 }
 
-/** 手动刷新单个模型的 tool_call 能力探测 */
-async function refreshCapability(provider: ProviderConfig, model: ModelOption) {
-  const limitError = providerInputError(provider)
-  if (limitError) { toast.error(limitError); return }
-  if (!isChatModelOption(model)) return
-  const key = `${provider.id}:${model.id}`
-  if (probingKey.value === key) return
-  probingKey.value = key
-  try {
-    const pName = provider.backendKey || provider.name
-    const rec = await probeCapability(pName, model.id)
-    model.toolReliability = rec.reliability
-  } catch (e) {
-    logger.warn('[HexClaw] A7 能力探测失败:', e)
-    // 手动点击探测按钮失败不能静默——告知用户重试
-    toast.error(t('settings.llm.probeFailed', '能力探测失败，请重试'))
-  } finally {
-    probingKey.value = null
-  }
+type ProbeDisplayKey = DisplayModelCapability | 'catalog' | 'unknown'
+interface ModelProbeView {
+  providerId: string
+  modelId: string
+  name: string
+  rows: Array<{ key: ProbeDisplayKey; state: 'checking' | 'passed' | 'failed' | 'unknown'; detail: string }>
+}
+const modelProbe = ref<ModelProbeView | null>(null)
+const modelProbeDialogRef = ref<HTMLDivElement | null>(null)
+const activeCapabilityProbes = ref(new Map<string, ModelProbeView>())
+let modelProbeReturnFocus: HTMLElement | null = null
+
+function modelCapabilitiesForDisplay(provider: ProviderConfig, model: ModelOption): DisplayModelCapability[] {
+  const capabilities = displayCapabilities(model, [])
+  const catalog = catalogStore.getCatalog(provider.id)?.models.find(item => item.id === model.id)
+  if ((catalog?.supportsTools || model.capabilityStates?.tools === 'verified') && !capabilities.includes('tools')) capabilities.push('tools')
+  return capabilities
 }
 
-function reliabilityIcon(level: string): string {
-  return { good: '✅', partial: '⚠️', bad: '❌' }[level] ?? '❔'
+function probeKindsForModel(model: ModelOption): ModelCapabilityProbeKind[] {
+  const capabilities = model.capabilities ?? []
+  const declaration = model.declaredCapabilities ?? capabilities
+  if (isEmbeddingOnlyModel(model)) return ['catalog', 'embedding']
+  if (model.capabilitiesSource === 'manual' && declaration.length === 0) return ['catalog']
+  if (capabilities.includes('text') || capabilities.length === 0) return ['catalog', 'text', 'vision', 'tools']
+  return ['catalog']
 }
 
-function reliabilityTooltip(r: { level: string; lastProbe?: string; probeError?: string }): string {
-  const label =
-    { good: t('settings.experience.reliabilityGood'), partial: t('settings.experience.reliabilityPartial'), bad: t('settings.experience.reliabilityBad'), unknown: t('settings.experience.reliabilityUnknown') }[
-      r.level
-    ] ?? r.level
-  const parts = [label]
-  if (r.lastProbe) {
-    const d = new Date(r.lastProbe)
-    parts.push(t('settings.experience.lastProbe', { date: d.toLocaleDateString(dateLocale.value) }))
-  }
-  if (r.probeError) parts.push(t('settings.experience.probeError', { error: r.probeError }))
-  return parts.join(' · ')
+function probeLabel(key: ProbeDisplayKey): string {
+  if (key === 'catalog') return t('settings.modelList.catalog')
+  if (key === 'unknown') return t('settings.modelList.unknownCapability')
+  return capabilityDisplay(key).label
+}
+
+function closeModelProbe() {
+  modelProbe.value = null
+  const target = modelProbeReturnFocus
+  modelProbeReturnFocus = null
+  if (target?.isConnected) nextTick(() => target.focus())
 }
 
 function probingModel(providerId: string, modelId: string): boolean {
-  return probingKey.value === `${providerId}:${modelId}`
+  return activeCapabilityProbes.value.has(`${backendScopeKey()}:${providerId}:${modelId}`)
+}
+
+/** 同一模型在途探测复用当前视图；回执只刷新有效投影，不保存或覆盖配置草稿。 */
+async function openModelProbe(provider: ProviderConfig, model: ModelOption, event?: MouseEvent) {
+  const scope = backendScopeKey()
+  const key = `${scope}:${provider.id}:${model.id}`
+  modelProbeReturnFocus = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  const existing = activeCapabilityProbes.value.get(key)
+  if (existing) { modelProbe.value = existing; return }
+  const kinds = probeKindsForModel(model)
+  const displayKeys: ProbeDisplayKey[] = kinds.map(kind => kind === 'reasoning' ? 'thinking' : kind)
+  const rowKeys = [...new Set<ProbeDisplayKey>([...displayKeys, ...modelCapabilitiesForDisplay(provider, model)])]
+  const view: ModelProbeView = {
+    providerId: provider.id, modelId: model.id, name: model.name || model.id,
+    rows: (rowKeys.length ? rowKeys : ['unknown'] as ProbeDisplayKey[]).map(key => ({ key, state: 'checking', detail: t('settings.modelList.probeWaiting') })),
+  }
+  activeCapabilityProbes.value.set(key, view)
+  const current = activeCapabilityProbes.value.get(key)!
+  modelProbe.value = current
+  nextTick(() => modelProbeDialogRef.value?.focus())
+  const saved = originalProviders.find(item => item.providerInstanceId && item.providerInstanceId === provider.providerInstanceId)
+  const fingerprint = providerProbeConnectivityFingerprint({ ...provider, selectedModelId: model.id })
+  const declaration = JSON.stringify(model.declaredCapabilities ?? model.capabilities ?? [])
+  const relevant = () => scope === backendScopeKey() && activeCapabilityProbes.value.get(key) === current
+  const markUnknown = (detail = t('settings.modelList.probeNoReceipt')) => current.rows.forEach(row => { row.state = 'unknown'; row.detail = detail })
+  try {
+    // 探测接口只接收已保存实例；未保存端点、凭据或模型没有对应当前配置回执。
+    if (!provider.providerInstanceId || !saved?.models.some(item => item.id === model.id) ||
+      providerProbeConnectivityFingerprint({ ...saved, selectedModelId: model.id }) !== fingerprint) {
+      markUnknown()
+      return
+    }
+    const result = await probeLLMModelCapabilities(provider.providerInstanceId, model.id, kinds)
+    const snapshot = await getLLMConfig()
+    if (!relevant()) return
+    const live = settingsStore.config?.llm.providers.find(item => item.id === provider.id)
+    const configured = live?.models.find(item => item.id === model.id)
+    if (!live || !configured || providerProbeConnectivityFingerprint({ ...live, selectedModelId: model.id }) !== fingerprint ||
+      JSON.stringify(configured.declaredCapabilities ?? configured.capabilities ?? []) !== declaration) {
+      markUnknown()
+      return
+    }
+    const persisted = backendToProviders(snapshot, [live]).find(item => item.providerInstanceId === provider.providerInstanceId)
+    const effective = persisted?.models.find(item => item.id === model.id)
+    if (!effective || persisted?.type !== live.type || persisted.baseUrl.trim().replace(/\/+$/, '') !== live.baseUrl.trim().replace(/\/+$/, '')) { markUnknown(); return }
+    for (const row of current.rows) {
+      const kind = row.key === 'thinking' ? 'reasoning' : row.key
+      const supportedKind = ['catalog', 'text', 'vision', 'tools', 'embedding', 'reasoning'].includes(kind)
+      const state = supportedKind ? effective.capabilityStates?.[kind] : undefined
+      row.state = state === 'verified' ? 'passed' : state === 'failed' ? 'failed' : 'unknown'
+      const receipt = effective.probeReceipts?.find(item => item.probe_kind === kind)
+      const attempted = result.results.find(item => item.probe_kind === kind)
+      row.detail = receipt?.failure_code || attempted?.failure_code || (row.state === 'unknown' ? t('settings.modelList.probeNoReceipt') : t('settings.modelList.probeRecorded'))
+    }
+    configured.declaredCapabilities ??= configured.capabilities?.slice() ?? []
+    configured.capabilities = effective.capabilities?.slice() ?? []
+    configured.capabilityStates = effective.capabilityStates
+    configured.probeReceipts = effective.probeReceipts
+    configured.effectiveNativeReasoningSupport = effective.effectiveNativeReasoningSupport
+    configured.effectiveNativeReasoningSourceFingerprint = effective.effectiveNativeReasoningSourceFingerprint
+  } catch (error) {
+    if (relevant()) markUnknown(messageFromUnknownError(error))
+  } finally {
+    if (activeCapabilityProbes.value.get(key) === current) activeCapabilityProbes.value.delete(key)
+  }
 }
 
 onMounted(async () => {
@@ -947,6 +1028,11 @@ onBeforeUnmount(() => {
   unlistenCloseRequested?.()
   unlistenCloseRequested = null
   editingModel.value = null
+  editModelReturnFocus = null
+  modelProbe.value = null
+  modelProbeReturnFocus = null
+  activeCapabilityProbes.value.clear()
+  pendingRestoreProviderId.value = null
   customModelDialogProviderId.value = null
   customModelReturnFocus = null
   pendingDeleteProviderId.value = null
@@ -1382,7 +1468,7 @@ async function handleToggleOllamaProvider() {
 
 function isEmbeddingOnlyModel(model: ModelOption): boolean {
   const capabilities = normalizeModelCapabilities(model)
-  return capabilities.includes('embedding') && !capabilities.includes('text')
+  return capabilities.length === 1 && capabilities[0] === 'embedding'
 }
 
 function providerModelExclusionScope(provider: ProviderConfig): string {
@@ -1390,22 +1476,7 @@ function providerModelExclusionScope(provider: ProviderConfig): string {
 }
 
 function isProviderModelRemovable(provider: ProviderConfig, model: ModelOption): boolean {
-  // 上游目录已经移除的已配置模型必须允许用户显式清理；删除仍复用持久化排除集。
-  if (isStaleModel(provider, model)) {
-    return true
-  }
-  const presetModels = PROVIDER_PRESETS[provider.type]?.defaultModels ?? []
-  if (presetModels.some((preset) => preset.id === model.id)) {
-    return false
-  }
-  if (model.isCustom) {
-    return true
-  }
-  return Boolean(
-    catalogStore
-      .getCatalog(provider.id)
-      ?.models.some((catalogModel) => catalogModel.id === model.id),
-  )
+  return provider.models.some((configured) => configured.id === model.id)
 }
 
 function requestDeleteProviderModel(provider: ProviderConfig, model: ModelOption) {
@@ -1417,16 +1488,55 @@ function requestDeleteProviderModel(provider: ProviderConfig, model: ModelOption
   }
 }
 
-function capabilitiesForCustomModel(caps: Record<ModelCapability, boolean>): ModelCapability[] {
-  const selected = (Object.keys(caps) as ModelCapability[]).filter((cap) => caps[cap])
-  if (selected.length === 0) return ['text']
-  // 纯 embedding 模型（仅用于知识库）不含 text，由 isChatModel 区分
-  if (selected.includes('embedding') && selected.length === 1) return ['embedding']
-  // 混合时保证 text
-  if (selected.includes('embedding') && !selected.includes('text') && selected.length > 1) {
-    return [...new Set([...selected, 'text' as ModelCapability])] as ModelCapability[]
+function providerPresetModels(provider: ProviderConfig): ModelOption[] {
+  return (PROVIDER_PRESETS[provider.type]?.defaultModels ?? []).map(model => canonicalizeModelOption({
+    ...model,
+    capabilities: model.capabilities?.slice(),
+    declaredCapabilities: (model.declaredCapabilities ?? model.capabilities)?.slice(),
+    capabilitiesSource: 'preset',
+    isCustom: false,
+  }))
+}
+
+const restoreProviderMessage = computed(() => {
+  const provider = config.value?.llm.providers.find(item => item.id === pendingRestoreProviderId.value)
+  if (!provider) return ''
+  const presets = providerPresetModels(provider)
+  const ids = new Set(presets.map(model => model.id))
+  const names = provider.models.filter(model => !ids.has(model.id)).map(model => model.name || model.id).join(', ') || 'None'
+  const replacement = presets.find(isChatModelOption)
+  return t('settings.modelList.restoreConfirm', { n: presets.length, names, model: replacement?.name || 'None' })
+})
+
+function restoreProviderModels() {
+  const provider = config.value?.llm.providers.find(item => item.id === pendingRestoreProviderId.value)
+  if (!provider) return
+  const models = providerPresetModels(provider)
+  if (!models.length) return
+  const scope = providerModelExclusionScope(provider)
+  const ids = new Set(models.map(model => model.id))
+  for (const model of provider.models) if (!ids.has(model.id)) stageModelExclusion(scope, model.id, true)
+  for (const model of models) stageModelExclusion(scope, model.id, false)
+  settingsStore.updateProvider(provider.id, { models, selectedModelId: models.find(isChatModelOption)?.id || '' })
+  delete testProviderResult.value[provider.id]
+  pendingRestoreProviderId.value = null
+  autoSave()
+}
+
+const removeModelMessage = computed(() => {
+  const target = pendingDeleteModel.value
+  if (!target) return ''
+  const provider = config.value?.llm.providers.find(item => item.id === target.providerId)
+  let message = t('settings.modelList.removeConfirm', { id: target.modelId })
+  if (provider?.selectedModelId === target.modelId) {
+    const replacement = provider.models.find(model => model.id !== target.modelId && isChatModelOption(model))
+    message += '\n' + t('settings.modelList.replacement', { name: replacement?.name || 'None' })
   }
-  return [...new Set(selected)] as ModelCapability[]
+  return message
+})
+
+function capabilitiesForCustomModel(caps: Record<ModelCapability, boolean>): ModelCapability[] {
+  return (Object.keys(caps) as ModelCapability[]).filter((cap) => caps[cap])
 }
 
 function openCustomModelDialog(provider: ProviderConfig, event?: MouseEvent) {
@@ -1448,16 +1558,18 @@ function closeCustomModelDialog({ restoreFocus = true } = {}) {
   if (restoreFocus && returnFocus?.isConnected) nextTick(() => returnFocus.focus())
 }
 
-function handleCustomModelDialogKeydown(event: KeyboardEvent) {
+function handleModelDialogKeydown(event: KeyboardEvent, kind: 'custom' | 'edit' | 'probe' = 'custom') {
   if (event.key === 'Escape') {
     event.preventDefault()
     event.stopPropagation()
-    closeCustomModelDialog()
+    if (kind === 'edit') closeEditModel()
+    else if (kind === 'probe') closeModelProbe()
+    else closeCustomModelDialog()
     return
   }
   if (event.key !== 'Tab') return
 
-  const dialog = customModelDialogRef.value
+  const dialog = kind === 'edit' ? editModelOverlayRef.value : kind === 'probe' ? modelProbeDialogRef.value : customModelDialogRef.value
   if (!dialog) return
   const focusable = Array.from(
     dialog.querySelectorAll<HTMLElement>(
@@ -1498,12 +1610,11 @@ function addCustomModel(provider: ProviderConfig): boolean {
   if (!stageModelExclusion(providerModelExclusionScope(provider), modelId, false)) {
     return false
   }
-  const model = canonicalizeModelOption({
+  const model = canonicalizeModelOption(applyManualModelCapabilities({
     id: modelId,
     name: modelId,
     isCustom: true,
-    capabilities: capabilitiesForCustomModel(newModelCapability.value),
-  })
+  }, capabilitiesForCustomModel(newModelCapability.value)))
   settingsStore.updateProvider(provider.id, {
     models: [...provider.models, model],
     ...(isChatModelOption(model) ? { selectedModelId: model.id } : {}),
@@ -1641,37 +1752,84 @@ function confirmDeleteModel() {
   }
 }
 
-/** 保存编辑的模型 */
+function openEditModel(provider: ProviderConfig, model: ModelOption, event: MouseEvent) {
+  const declared = model.declaredCapabilities ?? model.capabilities ?? []
+  editModelReturnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  editModelForm.value = {
+    id: model.id,
+    name: model.name || model.id,
+    caps: Object.fromEntries((Object.keys(newModelCapability.value) as ModelCapability[]).map(cap => [cap, declared.includes(cap)])) as Record<ModelCapability, boolean>,
+  }
+  editingModel.value = {
+    providerId: provider.id,
+    idx: provider.models.findIndex(item => item.id === model.id),
+    model: { ...model, capabilities: model.capabilities?.slice(), declaredCapabilities: model.declaredCapabilities?.slice() },
+  }
+}
+
+function closeEditModel() {
+  editingModel.value = null
+  const target = editModelReturnFocus
+  editModelReturnFocus = null
+  if (target?.isConnected) nextTick(() => target.focus())
+}
+
+/** 完成只回填配置草稿，名称修改不把有效能力改写为人工声明。 */
 function saveEditModel() {
   if (!editingModel.value) return
-  const { providerId, idx } = editingModel.value
+  const { providerId, model: baseline } = editingModel.value
   const provider = settingsStore.config?.llm.providers.find((p) => p.id === providerId)
   if (!provider) return
+  const idx = provider.models.findIndex(model => model.id === baseline.id)
+  if (idx < 0) return
   const original = provider.models[idx]
   const limitError = inputLimitError(editModelForm.value.id, t('settings.llm.modelId'), INPUT_LIMITS.identifier, { original: original?.id }) ||
-    inputLimitError(editModelForm.value.name, t('settings.llm.modelName'), INPUT_LIMITS.title, { original: original?.name })
+    inputLimitError(editModelForm.value.name, t('settings.modelList.modelName'), INPUT_LIMITS.title, { original: original?.name })
   if (limitError) { toast.error(limitError); return }
   const previousModelId = provider.models[idx]!.id
+  const modelId = editModelForm.value.id.trim()
+  if (!modelId) return
+  if (provider.models.some((model, index) => index !== idx && model.id === modelId)) {
+    toast.error(t('settings.experience.duplicateModel'))
+    return
+  }
 
   const caps = (Object.entries(editModelForm.value.caps) as [ModelCapability, boolean][])
     .filter(([, v]) => v)
     .map(([k]) => k)
 
   const updated = [...provider.models]
-  updated[idx] = {
+  let updatedModel: ModelOption = {
     ...updated[idx]!,
-    name: editModelForm.value.name || editModelForm.value.id,
-    id: editModelForm.value.id,
-    capabilities: caps.length > 0 ? caps : ['text'],
+    name: editModelForm.value.name.trim() || modelId,
+    id: modelId,
   }
+  const declared = baseline.declaredCapabilities ?? baseline.capabilities ?? []
+  const capabilitiesChanged = caps.length !== declared.length || caps.some(cap => !declared.includes(cap))
+  if (capabilitiesChanged || modelId !== previousModelId) updatedModel = applyManualModelCapabilities(updatedModel, caps)
+  if (modelId !== previousModelId) {
+    const scope = providerModelExclusionScope(provider)
+    if (!stageModelExclusion(scope, previousModelId, true) || !stageModelExclusion(scope, modelId, false)) return
+    updatedModel.isCustom = true
+    delete updatedModel.capabilitiesSourceFingerprint
+    delete updatedModel.toolReliability
+    delete updatedModel.capabilityStates
+    delete updatedModel.probeReceipts
+    delete updatedModel.nativeReasoningSupport
+    delete updatedModel.nativeReasoningSourceFingerprint
+    delete updatedModel.effectiveNativeReasoningSupport
+    delete updatedModel.effectiveNativeReasoningSourceFingerprint
+    delete updatedModel.reasoningSupport
+    delete updatedModel.reasoningControl
+    delete updatedModel.embedding
+  }
+  updated[idx] = updatedModel
+  const selectedModelId = provider.selectedModelId === previousModelId ? modelId : provider.selectedModelId
   settingsStore.updateProvider(providerId, {
     models: updated,
-    selectedModelId:
-      provider.selectedModelId === previousModelId
-        ? editModelForm.value.id
-        : provider.selectedModelId,
+    selectedModelId: resolveProviderSelectedModelId({ ...provider, models: updated, selectedModelId }),
   })
-  editingModel.value = null
+  closeEditModel()
   delete testProviderResult.value[providerId]
   autoSave()
 }
@@ -2009,7 +2167,7 @@ async function testProvider(provider: ProviderConfig) {
 /** 连接成功后，从 Provider 动态拉取可用模型目录 */
 async function syncRemoteModels(
   provider: ProviderConfig,
-  { waitForPersistence = false }: { waitForPersistence?: boolean } = {},
+  { waitForPersistence = false, acceptLegacyCapabilities = false }: { waitForPersistence?: boolean; acceptLegacyCapabilities?: boolean } = {},
 ): Promise<boolean> {
   const limitError = providerInputError(provider)
   if (limitError) { toast.error(limitError); return false }
@@ -2042,6 +2200,7 @@ async function syncRemoteModels(
       remoteModels,
       currentPreset?.defaultModels ?? [],
       catalogStore.getExcludedModelIds(providerModelExclusionScope(currentProvider)),
+      acceptLegacyCapabilities,
     )
     if (result.changed) {
       delete testProviderResult.value[currentProvider.id]
@@ -2067,32 +2226,9 @@ function providerModelPreview(provider: ProviderConfig): ModelOption[] {
   return provider.models.slice(0, PROVIDER_MODEL_PREVIEW_LIMIT)
 }
 
-function providerCatalogCount(providerId: string): number {
-  return catalogStore.getCatalog(providerId)?.models.length ?? 0
-}
-
-/** 目录超过阈值时使用“摘要 + 管理器”，避免把聚合商全量目录铺进 Provider 卡片。 */
-function isManagedCatalog(providerId: string): boolean {
-  const catalogCount = providerCatalogCount(providerId)
-  if (catalogCount > AUTO_ENABLE_CATALOG_LIMIT) return true
-  const provider = config.value?.llm.providers.find((candidate) => candidate.id === providerId)
-  if (!provider || provider.models.length === 0) return false
-  return (
-    provider.models.length < catalogCount &&
-    provider.models.every((model) => {
-      const catalog = catalogStore.getCatalog(providerId)
-      return catalog?.models.some((catalogModel) => catalogModel.id === model.id)
-    })
-  )
-}
-
 /** 非 Ollama 的兼容服务共用目录管理器，不按端点物理位置隐藏入口。 */
 function canManageProviderCatalog(provider: ProviderConfig): boolean {
   return provider.type !== 'ollama'
-}
-
-function providerHasNewModels(providerId: string): boolean {
-  return (catalogStore.getCatalog(providerId)?.newIds.length ?? 0) > 0
 }
 
 function openModelManager(providerId: string, event: MouseEvent) {
@@ -2101,7 +2237,7 @@ function openModelManager(providerId: string, event: MouseEvent) {
   modelManagerReturnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   modelManagerProviderId.value = providerId
   // 先显示已有目录，再复用同步流程刷新，避免旧缓存长期遮住新增的媒体模型。
-  void handleManagerResync()
+  void handleManagerResync(false)
 }
 
 function closeModelManager() {
@@ -2122,14 +2258,14 @@ function handleManagerModelsChange() {
   autoSave()
 }
 
-async function handleManagerResync() {
+async function handleManagerResync(acceptLegacyCapabilities = true) {
   const provider = modelManagerProvider.value
   if (!provider || managerSyncing.value) return
   managerSyncing.value = true
   const session = modelManagerSession
   const isCurrent = () => session === modelManagerSession && modelManagerProviderId.value === provider.id
   try {
-    const ok = await syncRemoteModels(provider, { waitForPersistence: true })
+    const ok = await syncRemoteModels(provider, { acceptLegacyCapabilities })
     if (!ok && isCurrent()) {
       toast.error(t('settings.llm.syncModelsFailed', '同步模型列表失败，请检查连接'))
     }
@@ -2225,7 +2361,7 @@ async function saveConfig() {
 <template>
   <div
     class="hc-settings"
-    :inert="showAddProvider || customModelDialogProviderId || modelManagerProviderId || showWechatFollow ? true : undefined"
+    :inert="showAddProvider || customModelDialogProviderId || editingModel || modelProbe || modelManagerProviderId || showWechatFollow ? true : undefined"
   >
     <PageToolbar>
       <template #tabs>
@@ -2539,223 +2675,85 @@ async function saveConfig() {
                     </p>
                   </div>
 
-                  <!-- 模型选择（芯片式） -->
-                  <div class="hc-settings__field">
+                  <!-- 模型身份、能力与动作共用一行；选择和右侧操作独立。 -->
+                  <div class="hc-settings__field hc-model-section">
                     <div class="hc-model-section-header">
-                      <label class="hc-settings__label"
-                        >{{ t('settings.llm.models') }}
-                        <span class="hc-settings__required">*</span></label
-                      >
-                      <div class="hc-model-section-actions">
-                        <span v-if="isManagedCatalog(provider.id)" class="hc-model-enabled-summary">
-                          {{ t('settings.llm.modelsEnabledSummary', '已启用') }}
-                          <b>{{ provider.models.length }}</b> /
-                          {{ providerCatalogCount(provider.id) }}
-                          {{ t('settings.llm.modelsAvailable', '可用') }}
-                        </span>
-                        <button
-                          v-if="canManageProviderCatalog(provider)"
-                          type="button"
-                          class="hc-model-chip hc-model-chip--manage"
-                          @click="openModelManager(provider.id, $event)"
-                        >
-                          <SlidersHorizontal :size="12" />
-                          {{ t('settings.llm.manageModels', '管理模型') }}
-                          <span
-                            v-if="providerHasNewModels(provider.id)"
-                            class="hc-model-chip__new-dot"
-                            :title="t('settings.llm.newModelsFound', '本次同步发现新模型')"
-                          />
-                        </button>
-                        <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
-                          {{ t('settings.llm.modelsDynamic', '动态获取') }} ·
-                          {{ t('settings.llm.justSynced', '刚刚同步') }}
-                        </span>
-                        <span
-                          v-else-if="provider.models.length > 0 && !isManagedCatalog(provider.id)"
-                          class="hc-model-sync-hint"
-                        >
-                          {{ t('settings.llm.modelsPreset', '预设模型') }}
-                        </span>
-                      </div>
+                      <label class="hc-settings__label">{{ t('settings.modelList.configured', { n: provider.models.length }) }}</label>
+                      <button
+                        v-if="canManageProviderCatalog(provider)"
+                        type="button"
+                        class="hc-model-section-action"
+                        @click="openModelManager(provider.id, $event)"
+                      >{{ t('settings.llm.manageModels') }}</button>
+                      <button
+                        v-if="providerPresetModels(provider).length"
+                        type="button"
+                        class="hc-model-section-action hc-model-section-action--restore"
+                        @click="pendingRestoreProviderId = provider.id"
+                      ><RotateCcw :size="11" />{{ t('settings.modelList.restorePresets') }}</button>
                     </div>
                     <div class="hc-model-chips">
-                      <template v-for="model in providerModelPreview(provider)" :key="model.id">
-                        <!-- 非对话模型不参与当前模型选择，也不暴露聊天/tool-call 探测。 -->
+                      <div class="hc-model-list">
                         <div
-                          v-if="!isChatModelOption(model)"
-                          class="hc-model-chip hc-model-chip--non-chat"
+                          v-for="model in providerModelPreview(provider)"
+                          :key="model.id"
+                          class="hc-model-chip hc-model-row"
+                          :data-model-id="model.id"
                           :data-model-name="model.name || model.id"
-                          tabindex="0"
                           :class="{
-                            'hc-model-chip--embedding': isEmbeddingOnlyModel(model),
+                            'hc-model-chip--active': isChatModelOption(model) && provider.selectedModelId === model.id,
                             'hc-model-chip--stale': isStaleModel(provider, model),
                           }"
-                          :title="
-                            isEmbeddingOnlyModel(model)
-                              ? `${model.name || model.id} · Embedding · ${t('settings.experience.embeddingPurpose')}`
-                              : model.name || model.id
-                          "
                         >
-                          <span class="hc-model-chip__name" :title="model.name || model.id">
-                            {{ model.name || model.id }}
+                          <component
+                            :is="isChatModelOption(model) ? 'button' : 'div'"
+                            :type="isChatModelOption(model) ? 'button' : undefined"
+                            :class="isChatModelOption(model) ? 'hc-model-chip__select' : 'hc-model-row__info'"
+                            :aria-label="isChatModelOption(model) ? t('settings.experience.selectModel', { name: model.name || model.id }) : undefined"
+                            :aria-pressed="isChatModelOption(model) ? provider.selectedModelId === model.id : undefined"
+                            @click="isChatModelOption(model) && selectProviderModel(provider, model.id)"
+                          >
+                            <span class="hc-model-row__identity">
+                              <span class="hc-model-chip__name">{{ model.name || model.id }}</span>
+                              <span v-if="model.name && model.name !== model.id" class="hc-model-row__id">{{ model.id }}</span>
+                            </span>
+                            <span class="hc-model-row__details">
+                              <span class="hc-model-row__caps">
+                                <span
+                                  v-for="cap in modelCapabilitiesForDisplay(provider, model)"
+                                  :key="cap"
+                                  class="hc-model-chip__cap"
+                                  :title="capabilityDisplay(cap).title"
+                                ><span class="hc-model-chip__cap-icon" aria-hidden="true">{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}</span>{{ capabilityDisplay(cap).label }}</span>
+                                <span v-if="!modelCapabilitiesForDisplay(provider, model).length" class="hc-model-chip__cap">{{ t('settings.modelList.unknownCapability') }}</span>
+                                <span v-if="isModelFree(provider.id, model.id)" class="hc-model-chip__free-label">{{ t('settings.llm.modelFreeLabel') }}</span>
+                                <span v-if="isStaleModel(provider, model)" class="hc-model-chip__stale-label" :title="t('settings.modelList.unlistedHint')">{{ t('settings.modelList.unlisted') }}</span>
+                              </span>
+                              <span
+                                v-if="isChatModelOption(model) && provider.selectedModelId === model.id"
+                                class="hc-model-row__current"
+                                :title="t('settings.modelList.currentHint')"
+                              >{{ t('settings.modelList.current') }}</span>
+                            </span>
+                          </component>
+                          <span class="hc-model-row__actions">
+                            <button
+                              v-if="!isEmbeddingOnlyModel(model)"
+                              type="button"
+                              class="hc-model-chip__probe"
+                              :aria-label="t('settings.experience.reprobeModel', { name: model.name || model.id })"
+                              :title="t('settings.modelList.probe')"
+                              @click.stop="openModelProbe(provider, model, $event)"
+                            ><Loader2 v-if="probingModel(provider.id, model.id)" :size="12" class="animate-spin" /><RotateCcw v-else :size="12" /></button>
+                            <button type="button" class="hc-model-chip__edit" :title="t('settings.editModel')" :aria-label="`${t('settings.editModel')} ${model.name || model.id}`" @click.stop="openEditModel(provider, model, $event)"><Pencil :size="12" /></button>
+                            <button type="button" class="hc-model-chip__remove" :title="t('settings.modelList.remove')" :aria-label="`${t('settings.modelList.remove')} ${model.name || model.id}`" @click.stop="requestDeleteProviderModel(provider, model)">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
+                            </button>
                           </span>
-                          <span
-                            v-for="cap in displayCapabilities(model)"
-                            :key="cap"
-                            class="hc-model-chip__cap"
-                            :class="`hc-model-chip__cap--${cap}`"
-                            :title="capabilityDisplay(cap).title"
-                            >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                            {{ capabilityDisplay(cap).label }}</span
-                          >
-                          <button
-                            v-if="isProviderModelRemovable(provider, model)"
-                            type="button"
-                            class="hc-model-chip__remove"
-                            :aria-label="t('settings.experience.deleteModel', { name: model.name || model.id })"
-                            :title="t('settings.llm.deleteModel')"
-                            @click.stop="requestDeleteProviderModel(provider, model)"
-                          >
-                            ×
-                          </button>
                         </div>
-
-                        <!-- 可删除对话模型用非交互容器承载三个互不嵌套的按钮。 -->
-                        <div
-                          v-else-if="isProviderModelRemovable(provider, model)"
-                          class="hc-model-chip hc-model-chip--custom"
-                          :data-model-name="model.name || model.id"
-                          :class="{
-                            'hc-model-chip--active': provider.selectedModelId === model.id,
-                            'hc-model-chip--stale': isStaleModel(provider, model),
-                          }"
-                          :title="model.name || model.id"
-                        >
-                          <button
-                            type="button"
-                            class="hc-model-chip__select"
-                            :aria-label="t('settings.experience.selectModel', { name: model.name || model.id })"
-                            @click="selectProviderModel(provider, model.id)"
-                          >
-                            <span class="hc-model-chip__name" :title="model.name || model.id">
-                              {{ model.name || model.id }}
-                            </span>
-                            <span
-                              v-if="isModelFree(provider.id, model.id)"
-                              class="hc-model-chip__free-label"
-                            >
-                              {{ t('settings.llm.modelFreeLabel', '免费') }}
-                            </span>
-                            <span
-                              v-if="isStaleModel(provider, model)"
-                              class="hc-model-chip__stale-label"
-                            >
-                              {{ t('settings.llm.modelStaleLabel', '已下架') }}
-                            </span>
-                            <span
-                              v-for="cap in displayCapabilities(model)"
-                              :key="cap"
-                              class="hc-model-chip__cap"
-                              :class="`hc-model-chip__cap--${cap}`"
-                              :title="capabilityDisplay(cap).title"
-                              >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                              {{ capabilityDisplay(cap).label }}</span
-                            >
-                            <span
-                              v-if="
-                                model.toolReliability && model.toolReliability.level !== 'unknown'
-                              "
-                              class="hc-model-chip__reliability"
-                              :class="`hc-model-chip__reliability--${model.toolReliability.level}`"
-                              :title="reliabilityTooltip(model.toolReliability)"
-                              >{{ reliabilityIcon(model.toolReliability.level) }}</span
-                            >
-                          </button>
-                          <button
-                            type="button"
-                            class="hc-model-chip__probe"
-                            :aria-label="t('settings.experience.reprobeModel', { name: model.name || model.id })"
-                            :title="
-                              probingModel(provider.id, model.id)
-                                ? t('settings.experience.probing')
-                                : t('settings.experience.reprobe')
-                            "
-                            @click.stop="refreshCapability(provider, model)"
-                          >
-                            <Loader2
-                              v-if="probingModel(provider.id, model.id)"
-                              :size="10"
-                              class="animate-spin"
-                            />
-                            <RotateCcw v-else :size="10" />
-                          </button>
-                          <button
-                            type="button"
-                            class="hc-model-chip__remove"
-                            :aria-label="t('settings.experience.deleteModel', { name: model.name || model.id })"
-                            :title="t('settings.llm.deleteModel')"
-                            @click.stop="requestDeleteProviderModel(provider, model)"
-                          >
-                            ×
-                          </button>
-                        </div>
-
-                        <!-- 仍存在于上游目录的 Provider 预设对话模型不可删除。 -->
-                        <button
-                          v-else
-                          type="button"
-                          class="hc-model-chip"
-                          :data-model-name="model.name || model.id"
-                          :class="{
-                            'hc-model-chip--active': provider.selectedModelId === model.id,
-                            'hc-model-chip--stale': isStaleModel(provider, model),
-                          }"
-                          :title="
-                            isStaleModel(provider, model)
-                              ? t(
-                                  'settings.llm.modelStale',
-                                  '上游已下架：该模型在最近一次同步的目录中不存在',
-                                )
-                              : model.name || model.id
-                          "
-                          @click="selectProviderModel(provider, model.id)"
-                        >
-                          <span class="hc-model-chip__name" :title="model.name || model.id">
-                            {{ model.name || model.id }}
-                          </span>
-                          <span
-                            v-if="isModelFree(provider.id, model.id)"
-                            class="hc-model-chip__free-label"
-                          >
-                            {{ t('settings.llm.modelFreeLabel', '免费') }}
-                          </span>
-                          <span
-                            v-if="isStaleModel(provider, model)"
-                            class="hc-model-chip__stale-label"
-                          >
-                            {{ t('settings.llm.modelStaleLabel', '已下架') }}
-                          </span>
-                          <span
-                            v-for="cap in displayCapabilities(model)"
-                            :key="cap"
-                            class="hc-model-chip__cap"
-                            :class="`hc-model-chip__cap--${cap}`"
-                            :title="capabilityDisplay(cap).title"
-                            >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
-                            {{ capabilityDisplay(cap).label }}</span
-                          >
-                        </button>
-                      </template>
-                      <!-- 添加自定义模型 -->
-                      <button
-                        type="button"
-                        class="hc-model-chip hc-model-chip--add"
-                        :title="t('settings.llm.addModel')"
-                        @click="openCustomModelDialog(provider, $event)"
-                      >
-                        <Plus :size="11" /> {{ t('settings.llm.customModel', '自定义') }}
-                      </button>
+                        <p v-if="!provider.models.length" class="hc-model-empty">{{ t('settings.modelList.empty') }}</p>
+                      </div>
+                      <button type="button" class="hc-model-chip hc-model-chip--add" :title="t('settings.llm.addModel')" @click="openCustomModelDialog(provider, $event)"><Plus :size="11" />{{ t('settings.llm.addModel') }}</button>
                     </div>
                   </div>
                   <div class="hc-provider__management-actions">
@@ -3160,7 +3158,7 @@ async function saveConfig() {
         class="hc-dialog-overlay"
         data-testid="custom-model-dialog"
         @click.self="closeCustomModelDialog()"
-        @keydown="handleCustomModelDialogKeydown"
+        @keydown="handleModelDialogKeydown($event)"
       >
         <div
           ref="customModelDialogRef"
@@ -3178,7 +3176,7 @@ async function saveConfig() {
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
               <label for="hc-custom-model-id"
-                >{{ t('settings.llm.modelId') }} <span class="hc-settings__required">*</span></label
+                >{{ t('settings.llm.modelId') }}</label
               >
               <HcClearableField>
                 <input
@@ -3207,33 +3205,11 @@ async function saveConfig() {
                 {{ t('settings.experience.duplicateModel') }}
               </p>
             </div>
-            <fieldset class="hc-edit-model__field hc-custom-model-dialog__capability">
-              <legend>{{ t('settings.experience.coreCapabilities') }}</legend>
-              <div class="hc-edit-model__caps">
-                <label
-                  v-for="cap in [
-                    'text',
-                    'vision',
-                    'code',
-                    'image_generation',
-                    'video_generation',
-                    'embedding',
-                  ] as ModelCapability[]"
-                  :key="cap"
-                  class="hc-edit-model__cap-item"
-                >
-                  <input
-                    v-model="newModelCapability[cap]"
-                    type="checkbox"
-                    :data-testid="`custom-model-cap-${cap}`"
-                  />
-                  <span class="hc-edit-model__cap-icon">{{
-                    MODEL_CAPABILITY_DISPLAY[cap].icon
-                  }}</span>
-                  <span>{{ capabilityDisplay(cap).label }}</span>
-                </label>
-              </div>
-            </fieldset>
+            <div class="hc-edit-model__field">
+              <label>{{ t('settings.experience.coreCapabilities') }}</label>
+              <ModelCapabilityFields v-model="newModelCapability" test-id-prefix="custom-model-cap-" />
+            </div>
+            <p class="hc-model-draft-hint">{{ t('settings.modelList.addDraftHint') }}</p>
           </div>
           <div class="hc-edit-model-dialog__actions">
             <button type="button" class="hc-btn hc-btn-secondary" @click="closeCustomModelDialog()">
@@ -3262,16 +3238,16 @@ async function saveConfig() {
         ref="editModelOverlayRef"
         class="hc-dialog-overlay"
         tabindex="-1"
-        @click.self="editingModel = null"
-        @keydown.esc="editingModel = null"
+        @click.self="closeEditModel()"
+        @keydown="handleModelDialogKeydown($event, 'edit')"
       >
-        <div class="hc-edit-model-dialog">
+        <div class="hc-edit-model-dialog hc-edit-model-dialog--edit" role="dialog" aria-modal="true" :aria-label="t('settings.editModel')">
           <div class="hc-edit-model-dialog__header">
             <h3 class="hc-edit-model-dialog__title">{{ t('settings.editModel') }}</h3>
           </div>
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
-              <label>{{ t('settings.llm.modelId') }} <span class="hc-settings__required">*</span></label>
+              <label>{{ t('settings.llm.modelId') }}</label>
               <HcClearableField>
                 <input
                   v-model="editModelForm.id"
@@ -3282,7 +3258,7 @@ async function saveConfig() {
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
-              <label>{{ t('settings.llm.modelName') }}</label>
+              <label>{{ t('settings.modelList.modelName') }}</label>
               <HcClearableField>
                 <input
                   v-model="editModelForm.name"
@@ -3293,43 +3269,19 @@ async function saveConfig() {
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
-              <label>{{ t('settings.experience.modelCapabilities') }}</label>
-              <div class="hc-edit-model__caps">
-                <label
-                  v-for="cap in [
-                    'text',
-                    'vision',
-                    'video',
-                    'audio',
-                    'code',
-                    'image_generation',
-                    'video_generation',
-                    'embedding',
-                  ] as ModelCapability[]"
-                  :key="cap"
-                  class="hc-edit-model__cap-item"
-                >
-                  <input
-                    v-model="editModelForm.caps[cap]"
-                    type="checkbox"
-                    :disabled="cap === 'text'"
-                  />
-                  <span class="hc-edit-model__cap-icon">{{
-                    MODEL_CAPABILITY_DISPLAY[cap].icon
-                  }}</span>
-                  <span>{{ capabilityDisplay(cap).label }}</span>
-                </label>
-              </div>
+              <label>{{ t('settings.experience.coreCapabilities') }}</label>
+              <ModelCapabilityFields v-model="editModelForm.caps" editing test-id-prefix="edit-model-cap-" />
             </div>
+            <p class="hc-model-draft-hint">{{ t('settings.modelList.editDraftHint') }}</p>
           </div>
           <div class="hc-edit-model-dialog__actions">
-            <button class="hc-btn hc-btn-secondary" @click="editingModel = null">{{ t('common.cancel') }}</button>
+            <button class="hc-btn hc-btn-secondary" @click="closeEditModel()">{{ t('common.cancel') }}</button>
             <button
               class="hc-btn hc-btn-primary"
               :disabled="!editModelForm.id.trim()"
               @click="saveEditModel"
             >
-              {{ t('common.save') }}
+              {{ t('settings.modelList.done') }}
             </button>
           </div>
         </div>
@@ -3353,17 +3305,46 @@ async function saveConfig() {
     :confirmation-key="
       pendingDeleteModel ? `${pendingDeleteModel.providerId}:${pendingDeleteModel.modelId}` : null
     "
-    :title="t('settings.llm.deleteModel')"
-    :message="
-      pendingDeleteModel
-        ? t('settings.llm.deleteModelConfirm', { name: pendingDeleteModel.modelName })
-        : ''
-    "
-    :confirm-text="t('common.delete')"
+    :title="t('settings.modelList.removeTitle')"
+    :message="removeModelMessage"
+    :confirm-text="t('settings.modelList.remove')"
     :cancel-text="t('common.cancel')"
     @confirm="confirmDeleteModel"
     @cancel="pendingDeleteModel = null"
   />
+
+  <ConfirmDialog
+    :open="pendingRestoreProviderId !== null"
+    :confirmation-key="pendingRestoreProviderId"
+    :title="t('settings.modelList.restoreTitle')"
+    :message="restoreProviderMessage"
+    :confirm-text="t('settings.modelList.restorePresets')"
+    :cancel-text="t('common.cancel')"
+    @confirm="restoreProviderModels"
+    @cancel="pendingRestoreProviderId = null"
+  />
+
+  <Teleport to="body">
+    <Transition name="hc-dialog">
+      <div v-if="modelProbe" class="hc-dialog-overlay" @click.self="closeModelProbe()" @keydown="handleModelDialogKeydown($event, 'probe')">
+        <div ref="modelProbeDialogRef" class="hc-edit-model-dialog hc-model-probe-dialog" role="dialog" aria-modal="true" :aria-label="t('settings.modelList.probeTitle')" tabindex="-1">
+          <div class="hc-edit-model-dialog__header"><h3 class="hc-edit-model-dialog__title">{{ t('settings.modelList.probeTitle') }}</h3></div>
+          <div class="hc-edit-model">
+            <p class="hc-model-draft-hint">{{ modelProbe.name }}</p>
+            <div class="hc-model-probe-results" aria-live="polite" :aria-busy="modelProbe.rows.some(row => row.state === 'checking')">
+              <div v-for="row in modelProbe.rows" :key="row.key" class="hc-model-probe-result">
+                <b>{{ probeLabel(row.key) }}</b>
+                <span class="hc-model-probe-state" :data-state="row.state">{{ t(`settings.modelList.${row.state}`) }}</span>
+                <small>{{ row.detail }}</small>
+              </div>
+            </div>
+            <p class="hc-model-draft-hint">{{ t('settings.modelList.probeExplanation') }}</p>
+          </div>
+          <div class="hc-edit-model-dialog__actions"><button type="button" class="hc-btn hc-btn-secondary" @click="closeModelProbe()">{{ t('common.done') }}</button></div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 
   <ModelManagerModal
     v-if="modelManagerProvider"
@@ -5188,7 +5169,8 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
 }
 
 .hc-model-chip__cap--text,
-.hc-model-chip__cap--thinking {
+.hc-model-chip__cap--thinking,
+.hc-model-chip__cap--computer_use {
   background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
   color: var(--hc-text-secondary);
 }
@@ -5380,4 +5362,69 @@ html[data-hc-window-active='false'] .hc-model-chip[data-model-name]::after {
   .hc-settings__form--system .hc-settings__theme-row{flex-direction:column;align-items:flex-start;gap:8px;padding:8px 0}
   .hc-settings__form--system .hc-settings__theme-segmented{width:100%;max-width:100%}
 }
+/* 模型管理仅局部采用连续列表，完整身份与全部能力不再依赖悬停提示。 */
+.hc-model-section { display:flex; flex-direction:column; gap:10px; padding-top:2px; container-type:inline-size; }
+.hc-model-section-header { display:flex; align-items:center; justify-content:initial; gap:10px; min-height:26px; margin:0; }
+.hc-model-section-header > .hc-settings__label { margin:0; font-size:12px; font-weight:650; color:var(--hc-text-primary); }
+.hc-model-section-action { display:inline-flex; align-items:center; gap:4px; margin-left:auto; padding:4px 7px; border:0; border-radius:7px; background:transparent; color:var(--hc-text-muted); font:inherit; font-size:11.5px; cursor:pointer; }
+.hc-model-section-action:hover { background:var(--hc-bg-hover); color:var(--hc-accent); }
+.hc-model-section-action--restore { font-size:11px; }
+.hc-model-chips { grid-template-columns:minmax(0,1fr); width:100%; }
+.hc-model-list { position:relative; min-width:0; overflow:hidden; border:1px solid var(--hc-border); border-radius:var(--hc-radius-md); background:var(--hc-bg-main); }
+.hc-model-list > .hc-model-row { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; height:auto; min-height:46px; padding:7px 12px 7px 14px; border:0; border-bottom:1px solid var(--hc-border-subtle,var(--hc-border)); border-radius:0; background:transparent; color:var(--hc-text-secondary); font:inherit; font-size:12px; text-align:left; cursor:default; transition:background-color .16s var(--hc-ease-out); }
+.hc-model-list > .hc-model-row:last-child { border-bottom:0; }
+.hc-model-list > .hc-model-row.hc-model-chip--active { background:color-mix(in srgb,var(--hc-accent) 9%,transparent); }
+.hc-model-list > .hc-model-row.hc-model-chip--stale:not(.hc-model-chip--active) { background:color-mix(in srgb,var(--hc-warning) 4%,transparent); }
+.hc-model-list > .hc-model-row:hover { background:var(--hc-bg-hover); border-bottom-color:var(--hc-border-subtle,var(--hc-border)); }
+.hc-model-list > .hc-model-row.hc-model-chip--active:hover { background:color-mix(in srgb,var(--hc-accent) 12%,transparent); }
+.hc-model-list > .hc-model-row.hc-model-chip--stale:not(.hc-model-chip--active):hover { background:color-mix(in srgb,var(--hc-warning) 7%,transparent); }
+.hc-model-row[data-model-name]::after { display:none; }
+.hc-model-row .hc-model-chip__select,.hc-model-row__info { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; align-self:stretch; gap:5px 12px; min-width:0; width:100%; border-radius:6px; color:inherit; text-align:left; }
+.hc-model-row .hc-model-chip__select { padding:0; border:0; background:transparent; font:inherit; cursor:pointer; }
+.hc-model-row .hc-model-chip__select:focus-visible { outline:2px solid var(--hc-accent); outline-offset:-2px; }
+.hc-model-row__identity { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; max-width:100%; }
+.hc-model-row .hc-model-chip__name { flex:initial; overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; color:var(--hc-text-primary); font-size:13px; font-weight:550; line-height:1.35; letter-spacing:-.004em; }
+.hc-model-row__id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.5; font-weight:400; color:var(--hc-text-muted); overflow-wrap:anywhere; }
+.hc-model-row__details { display:flex; flex-wrap:wrap; align-items:center; gap:5px 8px; min-width:0; max-width:100%; }
+.hc-model-row__caps { display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-width:0; }
+.hc-model-row .hc-model-chip__cap { display:inline-flex; align-items:center; gap:4px; padding:2px 6px; border-radius:4px; background:var(--hc-bg-active); color:var(--hc-text-secondary); font-size:11px; font-weight:500; line-height:1.4; white-space:nowrap; }
+.hc-model-chip__cap-icon { font-size:10px; line-height:1; flex:none; }
+.hc-model-row .hc-model-chip__free-label,.hc-model-row .hc-model-chip__stale-label { padding:2px 6px; border-radius:4px; font-size:10px; }
+.hc-model-row__current { display:inline-flex; align-items:center; gap:5px; padding:2px 7px; border-radius:999px; background:var(--hc-accent-subtle); color:var(--hc-accent); font-size:10px; font-weight:650; line-height:1.4; white-space:nowrap; }
+.hc-model-row__current::before { content:''; width:4px; height:4px; border-radius:50%; background:currentColor; }
+.hc-model-row__actions { display:grid; grid-template-columns:repeat(3,28px); align-items:center; gap:2px; align-self:center; }
+.hc-model-row .hc-model-chip__probe,.hc-model-row .hc-model-chip__remove,.hc-model-chip__edit { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; margin:0; padding:0; border:0; border-radius:6px; background:transparent; color:var(--hc-text-muted); opacity:1; cursor:pointer; transition:background-color .15s var(--hc-ease-out),color .15s var(--hc-ease-out); }
+.hc-model-row.hc-model-chip--active .hc-model-chip__probe,.hc-model-row.hc-model-chip--active .hc-model-chip__remove { opacity:.6; }
+.hc-model-row:hover .hc-model-chip__probe,.hc-model-row:hover .hc-model-chip__remove,.hc-model-row:hover .hc-model-chip__edit { opacity:1; color:var(--hc-text-secondary); }
+.hc-model-row .hc-model-chip__probe:hover,.hc-model-chip__edit:hover { opacity:1; background:var(--hc-accent-subtle); color:var(--hc-accent); }
+.hc-model-row .hc-model-chip__remove:hover { opacity:1; background:color-mix(in srgb,var(--hc-error) 12%,transparent); color:var(--hc-error); }
+.hc-model-row__actions button:focus-visible { outline:2px solid var(--hc-accent); outline-offset:2px; }
+.hc-model-row .hc-model-chip__probe { grid-column:1; }
+.hc-model-chip__edit { grid-column:2; }
+.hc-model-row .hc-model-chip__remove { grid-column:3; }
+.hc-model-chips > .hc-model-chip--add { justify-self:start; height:30px; min-height:30px; margin-top:2px; padding:0 8px; border:0; border-radius:7px; background:transparent; color:var(--hc-text-secondary); font-size:12px; font-weight:500; }
+.hc-model-chips > .hc-model-chip--add:hover { background:color-mix(in srgb,var(--hc-accent) 5%,transparent); color:var(--hc-accent); }
+.hc-model-empty,.hc-model-draft-hint { margin:0; font-size:12px; line-height:1.6; color:var(--hc-text-muted); }
+.hc-model-empty { padding:16px; }
+.hc-edit-model-dialog--edit { max-width:560px; padding:22px 24px; }
+.hc-edit-model-dialog { width:calc(100vw - 32px); }
+.hc-edit-model-dialog__title { letter-spacing:-.01em; }
+.hc-edit-model-dialog--edit .hc-edit-model { max-height:none; overflow:visible; gap:14px; }
+.hc-dialog-overlay:has(.hc-edit-model-dialog--edit) { overflow-y:auto; }
+.hc-model-probe-dialog .hc-edit-model { max-height:62vh; overflow:auto; }
+.hc-model-probe-results { display:flex; flex-direction:column; gap:0; border:1px solid var(--hc-border); border-radius:var(--hc-radius-md); overflow:hidden; flex:none; }
+.hc-model-probe-result { display:grid; grid-template-columns:1fr auto; gap:6px 12px; padding:12px; border-bottom:1px solid var(--hc-border); }
+.hc-model-probe-result:last-child { border-bottom:0; }
+.hc-model-probe-result b { font-size:12px; font-weight:550; }
+.hc-model-probe-result small { grid-column:1 / -1; font-size:11px; line-height:1.5; color:var(--hc-text-muted); }
+.hc-model-probe-state { font-size:11px; font-weight:550; color:var(--hc-text-muted); }
+.hc-model-probe-state[data-state='passed'] { color:var(--hc-success); }
+.hc-model-probe-state[data-state='failed'] { color:var(--hc-error); }
+@container(max-width:680px) { .hc-model-row .hc-model-chip__select,.hc-model-row__info { flex-direction:column; align-items:flex-start; justify-content:center; gap:4px; } }
+@media(max-height:760px) {
+  .hc-edit-model-dialog--edit { padding:18px 22px; }
+  .hc-edit-model-dialog--edit .hc-edit-model { gap:10px; }
+  .hc-edit-model-dialog--edit .hc-edit-model-dialog__header { margin-bottom:14px; }
+}
+@media(prefers-reduced-motion:reduce) { .hc-model-list > .hc-model-row,.hc-model-row .hc-model-chip__probe,.hc-model-row .hc-model-chip__remove,.hc-model-chip__edit { transition:none; } }
 </style>

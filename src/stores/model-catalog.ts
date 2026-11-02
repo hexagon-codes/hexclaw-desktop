@@ -4,8 +4,9 @@ import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
 import {
   canonicalizeModelOption,
+  declaredModelCapabilities,
   applyCatalogNativeReasoningContract,
-  mergeCatalogModelCapabilities,
+  applyCatalogModelCapabilities,
   resolveProviderSelectedModelId,
 } from '@/config/model-contract'
 import { PROVIDER_PRESETS } from '@/config/providers'
@@ -207,7 +208,10 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
         return {
           id: canonical.id,
           name: canonical.name || canonical.id,
-          capabilities: canonical.capabilities,
+          capabilities: declaredModelCapabilities(canonical),
+          ...(canonical.capabilitiesSource ? { capabilitiesSource: canonical.capabilitiesSource } : {}),
+          ...(canonical.capabilitiesSourceFingerprint ? { capabilitiesSourceFingerprint: canonical.capabilitiesSourceFingerprint } : {}),
+          ...(canonical.capabilitiesMetadataPresent === undefined ? {} : { capabilitiesMetadataPresent: canonical.capabilitiesMetadataPresent }),
           ...reasoningContractFrom(canonical),
           ...(canonical.nativeReasoningSupport === undefined ? {} : { nativeReasoningSupport: canonical.nativeReasoningSupport }),
           ...(canonical.nativeReasoningSourceFingerprint ? { nativeReasoningSourceFingerprint: canonical.nativeReasoningSourceFingerprint } : {}),
@@ -227,20 +231,28 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
     if (!catalog || !provider) return catalog ?? null
     const currentSource = nativeSource(provider)
     const credentialSource = credentialSummary(provider.apiKey)
-    const sameSource =
-      Boolean(currentSource.sourceFingerprint) &&
+    const sameCatalogSource =
       JSON.stringify(catalog.nativeReasoningSource) === JSON.stringify(currentSource) &&
       (!nativeCredentialSources.has(providerId) || nativeCredentialSources.get(providerId) === credentialSource ||
         (provider.apiKey.includes('*') && provider.apiKeyMutation === 'preserve'))
-    if (!sameSource && catalog.models.some((model) =>
-      model.nativeReasoningSourceFingerprint ||
-      (model.nativeReasoningSupport !== undefined && model.nativeReasoningSupport !== 'unknown'),
+    const sameSource = Boolean(currentSource.sourceFingerprint) && sameCatalogSource
+    if (catalog.models.some((model) =>
+      (!sameCatalogSource && (model.capabilitiesSourceFingerprint || model.capabilitiesMetadataPresent)) ||
+      (!sameSource && (model.nativeReasoningSourceFingerprint ||
+        (model.nativeReasoningSupport !== undefined && model.nativeReasoningSupport !== 'unknown'))),
     )) {
-      // 保留目录及其他能力，只废止旧来源的原生声明，避免再次应用缓存。
+      // 废止已失效来源的自动能力与原生声明，避免再次应用旧目录证据。
       catalog.models = catalog.models.map((model) => {
         const next = { ...model }
-        if (Object.prototype.hasOwnProperty.call(model, 'nativeReasoningSupport')) next.nativeReasoningSupport = 'unknown'
-        delete next.nativeReasoningSourceFingerprint
+        if (!sameCatalogSource && (model.capabilitiesSourceFingerprint || model.capabilitiesMetadataPresent) && model.capabilitiesSource !== 'manual' && model.capabilitiesSource !== 'legacy_unknown') {
+          delete next.capabilities
+          delete next.capabilitiesSourceFingerprint
+          delete next.capabilitiesMetadataPresent
+        }
+        if (!sameSource) {
+          if (Object.prototype.hasOwnProperty.call(model, 'nativeReasoningSupport')) next.nativeReasoningSupport = 'unknown'
+          delete next.nativeReasoningSourceFingerprint
+        }
         return next
       })
       catalog.nativeReasoningSource = currentSource
@@ -300,6 +312,7 @@ export function reconcileProviderCatalog(
   remoteModels: CatalogModel[],
   presetDefaults: ModelOption[],
   excludedModelIds: ReadonlySet<string> = new Set(),
+  acceptLegacyCapabilities = false,
 ): ProviderCatalogReconcileResult {
   const before = modelListSignature(target.models, target.selectedModelId)
   const isCuratedSubset =
@@ -327,13 +340,14 @@ export function reconcileProviderCatalog(
       .map((model) => {
         const remote = remoteById.get(model.id)
         if (!remote) return model
-        if (model.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(model, remote))
-        return canonicalizeModelOption(applyCatalogNativeReasoningContract({
+        if (model.isCustom) return canonicalizeModelOption(applyCatalogNativeReasoningContract(
+          applyCatalogModelCapabilities(model, remote, acceptLegacyCapabilities), remote,
+        ))
+        return canonicalizeModelOption(applyCatalogNativeReasoningContract(applyCatalogModelCapabilities({
           ...withoutReasoningContract(model),
-          name: remote.name || model.name || remote.id,
-          capabilities: mergeCatalogModelCapabilities(remote, model),
+          name: model.name || remote.name || remote.id,
           ...reasoningContractFrom(remote, model, presetById.get(model.id)),
-        }, remote))
+        }, remote, acceptLegacyCapabilities), remote))
       })
   } else {
     const existingById = new Map(target.models.map((model) => [model.id, model]))
@@ -343,32 +357,30 @@ export function reconcileProviderCatalog(
         const existing = existingById.get(remote.id)
         const preset = presetById.get(remote.id)
         if (existing) {
-          return canonicalizeModelOption(applyCatalogNativeReasoningContract({
+          const updated = {
             ...withoutReasoningContract(existing),
-            name: remote.name || existing.name || remote.id,
-            ...(!existing.isCustom
-              ? { capabilities: mergeCatalogModelCapabilities(remote, existing) }
-              : {}),
+            name: existing.name || remote.name || remote.id,
             ...reasoningContractFrom(remote, existing, preset),
-          }, remote))
+          }
+          return canonicalizeModelOption(applyCatalogNativeReasoningContract(
+            applyCatalogModelCapabilities(updated, remote, acceptLegacyCapabilities),
+            remote,
+          ))
         }
-        return canonicalizeModelOption(applyCatalogNativeReasoningContract({
+        return canonicalizeModelOption(applyCatalogNativeReasoningContract(applyCatalogModelCapabilities({
           id: remote.id,
           name: remote.name || remote.id,
-          // 带输入模态但没有能力合同的目录项保持显式空数组，不能由模型名或目录元数据推断。
-          // 完全裸的 legacy 目录项保留能力缺失语义，沿用既有文本兼容默认。
-          // 只有命中静态 preset 才写入明确能力，避免把未知目录模型误判为 embedding-only。
+          capabilitiesSource: preset ? 'preset' : 'catalog',
+          // 新目录项缺少能力声明时保持未知；输入模态由服务端解析，不能由界面猜测。
           ...(preset
             ? {
                 capabilities: [...(preset.capabilities ?? [])],
+                declaredCapabilities: [...(preset.capabilities ?? [])],
                 ...(preset.embedding ? { embedding: { ...preset.embedding } } : {}),
               }
-            : remote.inputModalities === undefined
-              ? {}
-              : { capabilities: [] }),
-          ...(remote.capabilities ? { capabilities: [...remote.capabilities] } : {}),
+            : { capabilities: [], declaredCapabilities: [] }),
           ...reasoningContractFrom(remote, preset),
-        }, remote))
+        }, remote), remote))
       })
     for (const existing of target.models) {
       if (!remoteById.has(existing.id) && !isExcluded(existing.id)) {

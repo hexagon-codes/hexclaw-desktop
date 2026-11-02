@@ -5,6 +5,7 @@
 import {
   canonicalizeModelOption,
   cloneModels,
+  declaredModelCapabilities,
   embeddingContractForModel,
   isChatModelOption,
   invalidateModelNativeReasoning,
@@ -456,6 +457,9 @@ export function backendToProviders(
       // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
       enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
+      ...(p.api_protocol === undefined
+        ? localProvider?.apiProtocol === undefined ? {} : { apiProtocol: localProvider.apiProtocol }
+        : { apiProtocol: p.api_protocol }),
       apiKey:
         p.credential_present === false
           ? ''
@@ -475,6 +479,7 @@ export function backendToProviders(
         p.models,
         p.model_specs,
         p.effective_models,
+        p.model_specs_mode ?? 'legacy',
       ),
       selectedModelId: '',
       modelSpecsMode: p.model_specs_mode ?? 'legacy',
@@ -534,6 +539,7 @@ export function providersToBackend(
           }
         : {}),
       base_url: p.baseUrl || '',
+      ...(p.apiProtocol === undefined ? {} : { api_protocol: p.apiProtocol }),
       model: selectedModelId,
       models: p.models.map((m) => m.id).filter(Boolean),
       model_specs: p.models.map((model) => {
@@ -543,7 +549,14 @@ export function providersToBackend(
           id: canonical.id,
           display_name: canonical.name || canonical.id,
           ...(canonical.isCustom === undefined ? {} : { is_custom: canonical.isCustom }),
-          capabilities: normalizeModelCapabilities(canonical),
+          capabilities: declaredModelCapabilities(canonical),
+          ...(canonical.capabilitiesSource ? { capabilities_source: canonical.capabilitiesSource } : {}),
+          ...(canonical.capabilitiesSourceFingerprint
+            ? { capabilities_source_fingerprint: canonical.capabilitiesSourceFingerprint }
+            : {}),
+          ...(canonical.capabilitiesMetadataPresent === undefined
+            ? {}
+            : { capabilities_metadata_present: canonical.capabilitiesMetadataPresent }),
           ...(canonical.reasoningSupport === undefined
             ? {}
             : { reasoning_support: normalizeModelReasoningSupport(canonical.reasoningSupport) }),
@@ -661,7 +674,7 @@ export function mergeLLMConfigChanges(
   const groups = [
     ['base_url', 'locality', 'locality_source', 'confirmed_endpoint_host', 'private_network_access', 'http_authorization'],
     ['model', 'models', 'model_specs'],
-    ['display_name'], ['compatible'], ['tools_enabled'], ['max_tools'], ['enabled'], ['keep_alive'], ['num_ctx'],
+    ['display_name'], ['compatible'], ['api_protocol'], ['tools_enabled'], ['max_tools'], ['enabled'], ['keep_alive'], ['num_ctx'],
   ] as const
   const stripReadOnly = (provider: BackendLLMConfig['providers'][string]) => {
     const copy: BackendLLMProvider = {

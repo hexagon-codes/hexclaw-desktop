@@ -843,9 +843,9 @@ describe('backendToProviders', () => {
 
     const provider = backendToProviders(backend)[0]!
     expect(provider.models).toEqual([
-      { id: 'chat', name: 'Chat', capabilities: ['text'] },
-      { id: 'embed', name: 'Embed', capabilities: ['embedding'] },
-      { id: 'unknown', name: 'Unknown', capabilities: [] },
+      { id: 'chat', name: 'Chat', capabilities: ['text'], declaredCapabilities: ['text'], capabilitiesSource: 'legacy_unknown' },
+      { id: 'embed', name: 'Embed', capabilities: ['embedding'], declaredCapabilities: ['embedding'], capabilitiesSource: 'legacy_unknown' },
+      { id: 'unknown', name: 'Unknown', capabilities: [], declaredCapabilities: [], capabilitiesSource: 'legacy_unknown' },
     ])
     expect(provider.modelSpecsMode).toBe('explicit')
     expect(provider.providerInstanceId).toBe('provider-stable-01')
@@ -925,7 +925,7 @@ describe('backendToProviders', () => {
       { id: 'vector', name: 'vector', capabilities: [] },
     ])
     expect(providers.find((provider) => provider.backendKey === 'partial')?.models).toEqual([
-      { id: 'chat', name: 'Chat', capabilities: ['text'] },
+      { id: 'chat', name: 'Chat', capabilities: ['text'], declaredCapabilities: ['text'], capabilitiesSource: 'legacy_unknown' },
       { id: 'unknown', name: 'unknown', capabilities: [] },
     ])
   })
@@ -949,8 +949,8 @@ describe('backendToProviders', () => {
     })
 
     expect(backendToProviders(backend)[0]!.models).toEqual([
-      { id: 'legacy-item', name: 'Legacy item', capabilities: ['text'] },
-      { id: 'unclassified', name: 'Unclassified', capabilities: [] },
+      { id: 'legacy-item', name: 'Legacy item', capabilities: ['text'], declaredCapabilities: ['text'], capabilitiesSource: 'legacy_unknown' },
+      { id: 'unclassified', name: 'Unclassified', capabilities: [], declaredCapabilities: [], capabilitiesSource: 'legacy_unknown' },
     ])
   })
 })
