@@ -485,6 +485,10 @@ export interface SandboxExecution {
 export interface ToolCall {
 	/** 同次执行事实；旧消息缺失时不推测原因。 */
 	detail?: {
+		execution_id?: string
+		policy_profile?: string
+		policy_revision?: number
+		replayed?: boolean
 		phase?: string
 		outcome: 'success' | 'failure' | 'unknown'
 		reason?: string
