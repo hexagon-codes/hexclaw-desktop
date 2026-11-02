@@ -18,6 +18,7 @@ import ModelSelector from '@/components/common/ModelSelector.vue'
 import { projectReasoningPolicyForModel, reasoningModelState } from '@/config/model-contract'
 import { useAppStore } from '@/stores/app'
 import { skillDisplayName } from '@/utils/skill-display'
+import { freezeProcessAnswer } from '@/utils/assistant-process'
 import { formatTokenCount } from '@/utils/token-count'
 import type { SkillDisplayMetadata } from '@/types/skill'
 import { flushBackendDrafts, saveModelSettingsReturn } from '@/services/backend-context'
@@ -541,7 +542,7 @@ const liveAssistantMessage = computed<ChatMessage | null>(() => {
         : undefined,
     timestamp: new Date(stream.startedAt ?? Date.now()).toISOString(),
     agent_name: stream.agentDisplayName,
-    blocks: stream.blocks,
+    blocks: stream.degenerated ? freezeProcessAnswer(stream.blocks, stream.previewContent) : stream.blocks,
     tool_calls: stream.toolCalls,
     metadata: {
       thinking_state: stream.thinkingEnabled ? (stream.state ?? 'running') : undefined,

@@ -3,21 +3,11 @@ import { ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import { createChatStreamStateController } from '../chat-stream-state'
 import { createChatStreamRecoveryController } from '../chat-stream-recovery'
-import { DEGENERATION_NOTICE, trimDegenerateTail } from '@/utils/degeneration'
 
-/**
- * BUG-20260625 R3 M-1（AP-007 多路径只接一条）：退化「失控复读」熔断的 freeze→用冻结内容定稿 + cancel
- * 守卫只接 live 投递路径（chat-send-websocket-delivery.ts），漏接 **recovery/resume 路径**
- * （chat-stream-recovery.ts：app 重载/重连后恢复后台流）。
- * 后果：恢复的退化流完成时定稿用 `result.content`（后端整堵复读墙）胜出，且 onChunk 不 cancel → 熔断在该入口失效。
- *
- * 真实接线取证：把真实 updateStreamChunk(chat-stream-state) 接进真实 recovery 控制器，
- * 喂退化 chunk，断言定稿用冻结内容（非整堵墙）且触发 cancel。
- */
+/** 恢复流沿后台真实终态和正文收口，不能由展示保护改为取消或裁写终稿。 */
 const CLEAN_PREFIX = '计算如下：结果是'
 const WALL = '5861'.repeat(30)
 const DEGENERATE = CLEAN_PREFIX + WALL
-const FROZEN = trimDegenerateTail(DEGENERATE) + DEGENERATION_NOTICE
 
 function wire(sessionId = 's-rec') {
   const activeStreams = ref<Record<string, import('../chat-stream-helpers').SessionStreamState>>({})
@@ -47,9 +37,11 @@ function wire(sessionId = 's-rec') {
   let capturedOnChunk: ((content?: string, reasoning?: string) => void) | undefined
   const cancel = vi.fn()
   let resolveDone!: (value: any) => void
-  const done = new Promise<any>((res) => { resolveDone = res })
+  let rejectDone!: (reason: unknown) => void
+  const done = new Promise<any>((res, rej) => { resolveDone = res; rejectDone = rej })
   const handle = { cancel, done } as any
 
+  const handleSendError = vi.fn()
   const controller = createChatStreamRecoveryController({
     activeStreams,
     streamHandles,
@@ -70,14 +62,24 @@ function wire(sessionId = 's-rec') {
     updateStreamChunk: streamState.updateStreamChunk,
     finalizeAssistantMessage: finalizeAssistantMessage as any,
     resetSessionStream: streamState.resetSessionStream,
-    handleSendError: vi.fn(),
+    handleSendError,
   })
 
-  return { sessionId, controller, activeStreams, finalizeAssistantMessage, cancel, getOnChunk: () => capturedOnChunk, resolveDone }
+  return { sessionId, controller, activeStreams, finalizeAssistantMessage, cancel, getOnChunk: () => capturedOnChunk, resolveDone, rejectDone, streamHandles, handleSendError }
 }
 
 describe('BUG-20260625 R3 M-1 退化熔断 · recovery/resume 路径', () => {
-  it('恢复的退化流：onChunk 触发 cancel + 定稿用冻结内容（不用整堵复读墙）', async () => {
+  it('恢复旧句柄的迟到失败不能清掉新句柄', async () => {
+    const w = wire()
+    await w.controller.recoverActiveStreams(ref(false), ref(false))
+    const replacement = { cancel: vi.fn(), done: new Promise<null>(() => {}) }
+    w.streamHandles.set(w.sessionId, replacement)
+    w.rejectDone(new Error('old failure'))
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    expect(w.streamHandles.get(w.sessionId)).toBe(replacement)
+    expect(w.handleSendError).not.toHaveBeenCalled()
+  })
+  it('恢复的重复输出保留后台原文且不请求取消', async () => {
     const w = wire()
     await w.controller.recoverActiveStreams(ref(false), ref(false))
 
@@ -85,19 +87,19 @@ describe('BUG-20260625 R3 M-1 退化熔断 · recovery/resume 路径', () => {
     expect(onChunk).toBeTypeOf('function')
 
     onChunk!(DEGENERATE)
-    // 熔断后应 cancel 后端流（与 live 路径一致）
-    expect(w.cancel).toHaveBeenCalledTimes(1)
+    // 展示检测不能派发后台控制请求。
+    expect(w.cancel).not.toHaveBeenCalled()
     expect(w.activeStreams.value[w.sessionId]?.degenerated).toBe(true)
 
-    // 后端最终回传整堵墙，定稿必须用冻结内容
+    // 后台终稿保持完整原文。
     w.resolveDone({ content: DEGENERATE, metadata: {}, toolCalls: [] })
     await Promise.resolve(); await Promise.resolve()
 
     expect(w.finalizeAssistantMessage).toHaveBeenCalledTimes(1)
     expect(w.finalizeAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: w.sessionId, content: FROZEN }),
+      expect.objectContaining({ sessionId: w.sessionId, content: DEGENERATE }),
     )
     const finalized = w.finalizeAssistantMessage.mock.results[0]!.value as ChatMessage
-    expect(finalized.content).not.toContain('5861'.repeat(10))
+    expect(finalized.content).toBe(DEGENERATE)
   })
 })

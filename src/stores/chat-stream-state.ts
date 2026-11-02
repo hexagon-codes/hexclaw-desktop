@@ -4,10 +4,9 @@ import {
   buildRecoveredStreamState,
   buildStreamingMirrorState,
   mergeStreamChunkState,
+  projectStreamingPreview,
   type SessionStreamState,
 } from './chat-stream-helpers'
-import { isDegenerateTail, trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
-import { freezeProcessAnswer } from '@/utils/assistant-process'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -77,6 +76,7 @@ export function createChatStreamStateController(params: {
 
   function resetSessionStream(sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) {
     if (sessionId) {
+      streamHandles.get(sessionId)?.dispose?.()
       streamHandles.delete(sessionId)
       if (sending && draftSending) {
         setSessionPending(sessionId, false, sending, draftSending)
@@ -88,6 +88,7 @@ export function createChatStreamStateController(params: {
       upsertStreamState(sessionId, null)
       return
     }
+    for (const handle of streamHandles.values()) handle.dispose?.()
     streamHandles.clear()
     activeStreams.value = {}
     pendingSessionIds.value = {}
@@ -103,7 +104,7 @@ export function createChatStreamStateController(params: {
   }
 
   /**
-   * 累积一个流式 chunk。返回值 = 本次是否「刚触发退化熔断」，调用方据此 cancel 后端流以省 token。
+   * 累积流式展示；重复尾部保护只冻结投影，不取消后台或决定业务终稿。
    */
   function updateStreamChunk(
     sessionId: string,
@@ -113,8 +114,6 @@ export function createChatStreamStateController(params: {
   ): boolean {
     const current = activeStreams.value[sessionId]
     if (!current) return false
-    // 退化熔断：已判失控复读 → 冻结，丢弃后续复读 chunk，墙不再长（BUG-20260625 模型塌缩）。
-    if (current.degenerated) return false
     const merged = mergeStreamChunkState(
       current,
       content,
@@ -122,18 +121,7 @@ export function createChatStreamStateController(params: {
       runtimeFrame,
       current.requestRoute,
     )
-    // 在原始流（含 reasoning）上检测；命中即裁掉复读尾、追加提示、置熔断位。
-    const probe = merged.content || merged.rawContent
-    if (isDegenerateTail(probe)) {
-      upsertStreamState(sessionId, {
-        ...merged,
-        content: trimDegenerateTail(probe) + DEGENERATION_NOTICE,
-        blocks: freezeProcessAnswer(merged.blocks),
-        degenerated: true,
-      })
-      return true
-    }
-    upsertStreamState(sessionId, merged)
+    upsertStreamState(sessionId, projectStreamingPreview(merged, current))
     return false
   }
 
@@ -141,7 +129,7 @@ export function createChatStreamStateController(params: {
     sessionId: string,
     snapshot: Parameters<typeof buildRecoveredStreamState>[1],
   ) {
-    upsertStreamState(sessionId, buildRecoveredStreamState(sessionId, snapshot))
+    upsertStreamState(sessionId, projectStreamingPreview(buildRecoveredStreamState(sessionId, snapshot)))
   }
 
   return {

@@ -1,12 +1,12 @@
 import type { ContentBlock, RuntimeWireFrame, ToolCall } from '@/types/chat'
-import { trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
+import { trimDegenerateTail } from '@/utils/degeneration'
 
-/** 复读终止只收口最终回答；此前解释、工具与召回保持原顺序。 */
-export function freezeProcessAnswer(blocks: ContentBlock[] = []): ContentBlock[] {
+/** 只裁剪临时回答预览；此前解释、工具与召回保持原顺序，不决定业务终态。 */
+export function freezeProcessAnswer(blocks: ContentBlock[] = [], previewText?: string): ContentBlock[] {
   const { answer } = splitProcessBlocks(blocks)
   if (!answer.length) return blocks
   const text = answer.map(block => block.type === 'text' ? block.text : '').join('')
-  const frozen = trimDegenerateTail(text) + DEGENERATION_NOTICE
+  const frozen = previewText ?? trimDegenerateTail(text)
   const answerSet = new Set(answer)
   let emitted = false
   return blocks.flatMap((block): ContentBlock[] => {

@@ -1,10 +1,12 @@
 import type { Ref } from 'vue'
+import { backendScopeKey } from '@/services/backend-context'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import type { ChatPayloadLimitError } from '@/services/chatService'
 import {
   buildSessionStreamState,
+  isCurrentStreamRequest,
   type ChatSendErrorHandler,
   type SessionStreamState,
 } from './chat-stream-helpers'
@@ -34,6 +36,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     reasoning?: string
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
+    terminalState?: 'completed' | 'failed' | 'cancelled'
   }) => ChatMessage
   handleSendError: ChatSendErrorHandler
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
@@ -99,6 +102,8 @@ export function createChatSendWebSocketDeliveryController(params: {
     }
     setSessionPending(sessionId, false, sending, draftSending)
 
+    const deliveryScope = backendScopeKey()
+    const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId, requestId, handle, scope: deliveryScope })
     let memorySavedContent: string | undefined
     const handle = chatSvc.openWebSocketStream(
       backendText,
@@ -109,16 +114,13 @@ export function createChatSendWebSocketDeliveryController(params: {
       {
         onPayloadRejected: args.onPayloadRejected,
         onChunk: (content, reasoning, runtimeFrame) => {
-          // 退化熔断：本次刚判失控复读 → 取消后端流，停止生成、省 token、立刻停转圈。
-          if (updateStreamChunk(sessionId, content, reasoning, runtimeFrame)) {
-            streamHandles.get(sessionId)?.cancel()
-          }
+          if (ownsRequest()) updateStreamChunk(sessionId, content, reasoning, runtimeFrame)
         },
         onApprovalRequest: (request) => {
-          storePendingApproval(request)
+          if (ownsRequest()) storePendingApproval(request)
         },
         onMemorySaved: (content) => {
-          memorySavedContent = content
+          if (ownsRequest()) memorySavedContent = content
         },
       },
       requestMetadata,
@@ -128,19 +130,9 @@ export function createChatSendWebSocketDeliveryController(params: {
 
     try {
       const result = await handle.done
+      if (!ownsRequest()) return null
       streamHandles.delete(sessionId)
       const finalState = activeStreams.value[sessionId]
-      // 退化熔断：用冻结的「裁剪+提示」内容定稿，绝不用后端整堵复读墙；也不当作取消/失败丢弃。
-      if (finalState?.degenerated) {
-        return finalizeAssistantMessage({
-          content: finalState.content,
-          sessionId,
-          metadata: { ...result?.metadata },
-          reasoning: finalState.reasoning,
-          sending,
-          draftSending,
-        })
-      }
       if (!result) {
         resetSessionStream(sessionId, sending, draftSending)
         return null
@@ -164,20 +156,11 @@ export function createChatSendWebSocketDeliveryController(params: {
         reasoning: finalState?.reasoning || getAssistantReasoningFromMetadata(result.metadata),
         sending,
         draftSending,
+        terminalState: result.terminalState,
       })
     } catch (wsError) {
+      if (!ownsRequest()) return null
       streamHandles.delete(sessionId)
-      // 退化熔断触发的 cancel 若使 done reject，仍用冻结内容定稿，不当作错误。
-      const degState = activeStreams.value[sessionId]
-      if (degState?.degenerated) {
-        return finalizeAssistantMessage({
-          content: degState.content,
-          sessionId,
-          reasoning: degState.reasoning,
-          sending,
-          draftSending,
-        })
-      }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
         handleSendError(wsError, sessionId, activeStreams.value[sessionId])
         return null

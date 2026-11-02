@@ -4,16 +4,9 @@ import type { ChatMessage } from '@/types'
 import { createChatStreamStateController } from '../chat-stream-state'
 import { createChatSendWebSocketDeliveryController } from '../chat-send-websocket-delivery'
 import { DEGENERATION_NOTICE, isDegenerateTail, trimDegenerateTail } from '@/utils/degeneration'
+import { backendContext } from '@/services/backend-context'
 
-/**
- * BUG-20260625 模型「失控复读塌缩」退化熔断 —— delivery 层端到端集成测试。
- *
- * 既有覆盖只到纯函数层（utils/degeneration.test.ts 15 测试测 isDegenerateTail/trimDegenerateTail）。
- * 本文件补上真正缺口：把**真实** updateStreamChunk（chat-stream-state）接进**真实** deliverViaWebSocket
- * （chat-send-websocket-delivery），喂一个退化 chunk，断言完整 wire：
- *   退化检测 → cancel 后端流（省 token/停转圈）→ 用「冻结的裁剪+提示」内容定稿（绝不用后端整堵复读墙）。
- * 覆盖 done resolve 与 done reject（cancel 致 reject）两条定稿路径，外加干净路径反证不误触发。
- */
+/** 流式投递只保留原数据和终态，展示保护不得派发取消或制造成功结果。 */
 
 // 一段「干净正文 + 失控复读尾」：period=4 的 "5861" 连复 30 次 = 120 字符 ≥ minRun(48) → 必命中。
 const CLEAN_PREFIX = '计算如下：结果是'
@@ -62,7 +55,7 @@ function wire(sessionId = 's1') {
 
   const chatSvc = {
     ChatRequestError: class ChatRequestError extends Error {
-      noFallback = false
+      noFallback = true
     },
     openWebSocketStream: vi.fn((_text, _sessionId, _params, _role, _attachments, callbacks) => {
       capturedOnChunk = callbacks.onChunk
@@ -70,6 +63,7 @@ function wire(sessionId = 's1') {
     }),
   }
 
+  const handleSendError = vi.fn()
   const controller = createChatSendWebSocketDeliveryController({
     // 退化熔断与模型无关（纯客户端兜底），故用中性占位，不写具体测试模型名。
     chatParams: ref({ provider: 'test-provider', model: 'test-model' }),
@@ -82,7 +76,7 @@ function wire(sessionId = 's1') {
     updateStreamChunk: streamState.updateStreamChunk,
     resetSessionStream: streamState.resetSessionStream,
     finalizeAssistantMessage: finalizeAssistantMessage as any,
-    handleSendError: vi.fn(),
+    handleSendError,
     storePendingApproval: vi.fn(),
     streamHandles,
   })
@@ -96,10 +90,41 @@ function wire(sessionId = 's1') {
     getOnChunk: () => capturedOnChunk,
     resolveDone,
     rejectDone,
+    handleSendError,
+    ChatRequestError: chatSvc.ChatRequestError,
+    streamHandles,
   }
 }
 
 describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
+  it('旧句柄迟到完成不能删除新句柄或定稿到新运行', async () => {
+    const w = wire()
+    const pending = w.controller.deliverViaWebSocket({ backendText: 'old', sessionId: w.sessionId, requestId: 'old', sending: ref(false), draftSending: ref(false) })
+    const replacement = { cancel: vi.fn(), done: new Promise<null>(() => {}) }
+    w.streamHandles.set(w.sessionId, replacement)
+    w.activeStreams.value[w.sessionId]!.content = 'new run'
+    w.getOnChunk()!('old chunk')
+    w.resolveDone({ content: 'old final' })
+    expect(await pending).toBeNull()
+    expect(w.streamHandles.get(w.sessionId)).toBe(replacement)
+    expect(w.activeStreams.value[w.sessionId]!.content).toBe('new run')
+    expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
+  })
+
+  it('后端切换后的旧错误不能触发新后端回退或错误处理', async () => {
+    const previous = backendContext.value
+    const w = wire()
+    const pending = w.controller.deliverViaWebSocket({ backendText: 'old', sessionId: w.sessionId, requestId: 'old', sending: ref(false), draftSending: ref(false) })
+    try {
+      backendContext.value = { connectionId: 'new', backendId: 'new', configRevision: 1, activationGeneration: 1, kind: 'local', apiBase: 'http://127.0.0.1', wsBase: 'ws://127.0.0.1', hasToken: false }
+      w.rejectDone(new w.ChatRequestError('old failure'))
+      expect(await pending).toBeNull()
+      expect(w.handleSendError).not.toHaveBeenCalled()
+      expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
+    } finally {
+      backendContext.value = previous
+    }
+  })
   it('自检：构造的「正文+复读尾」确实被检测器判为退化', () => {
     expect(isDegenerateTail(DEGENERATE)).toBe(true)
     expect(isDegenerateTail(CLEAN_PREFIX)).toBe(false)
@@ -110,66 +135,37 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
     expect(FROZEN.length).toBeLessThan(DEGENERATE.length)
   })
 
-  it('done resolve：退化 chunk → cancel 后端流 → 用冻结内容定稿（不用整堵墙）', async () => {
+  it('重复输出不取消后台，终稿采用后台原文', async () => {
     const w = wire()
     const resultPromise = w.controller.deliverViaWebSocket({
-      backendText: '帮我算一下',
-      sessionId: w.sessionId,
-      requestId: 'req-1',
-      sending: ref(false),
-      draftSending: ref(false),
+      backendText: '计算', sessionId: w.sessionId, requestId: 'req-1',
+      sending: ref(false), draftSending: ref(false),
     })
-
-    // 同步部分已跑完：openWebSocketStream 已调、handle 已入 streamHandles、回调已捕获。
     const onChunk = w.getOnChunk()
-    expect(onChunk).toBeTypeOf('function')
-
-    // 退化 chunk 到达 → 触发熔断 → cancel 后端流。
     onChunk!(DEGENERATE)
-    expect(w.cancel).toHaveBeenCalledTimes(1)
-    expect(w.activeStreams.value[w.sessionId]?.degenerated).toBe(true)
-
-    // 二次复读 chunk：已冻结 → 不再 cancel、墙不再长（幂等）。
+    expect(w.cancel).not.toHaveBeenCalled()
     onChunk!('5861'.repeat(30))
-    expect(w.cancel).toHaveBeenCalledTimes(1)
-    expect(w.activeStreams.value[w.sessionId]?.content).toBe(FROZEN)
-
-    // 后端流即便最终回传整堵复读墙，定稿也必须用冻结内容，而非 result.content。
+    expect(w.cancel).not.toHaveBeenCalled()
+    expect(w.activeStreams.value[w.sessionId]?.content).toBe(DEGENERATE + WALL)
     w.resolveDone({ content: DEGENERATE, metadata: { backend_message_id: 'm1' }, toolCalls: [] })
-    const finalized = (await resultPromise) as ChatMessage | null
-
+    const finalized = await resultPromise as ChatMessage | null
     expect(w.finalizeAssistantMessage).toHaveBeenCalledTimes(1)
-    expect(w.finalizeAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: w.sessionId, content: FROZEN }),
-    )
-    expect(finalized?.content).toBe(FROZEN)
-    expect(finalized?.content).not.toContain('5861'.repeat(10))
+    expect(finalized?.content).toBe(DEGENERATE)
   })
 
-  it('done reject（cancel 致 reject）：catch 分支仍用冻结内容定稿，不当错误/不回退', async () => {
+  it('后台失败按原错误处理，不以局部内容制造成功终稿', async () => {
     const w = wire()
     const resultPromise = w.controller.deliverViaWebSocket({
-      backendText: '帮我算一下',
-      sessionId: w.sessionId,
-      requestId: 'req-1',
-      sending: ref(false),
-      draftSending: ref(false),
+      backendText: '计算', sessionId: w.sessionId, requestId: 'req-1',
+      sending: ref(false), draftSending: ref(false),
     })
-
-    const onChunk = w.getOnChunk()
-    onChunk!(DEGENERATE)
-    expect(w.cancel).toHaveBeenCalledTimes(1)
-
-    // cancel 使 done reject（如底层把 cancel 实现为 abort/reject）。
-    w.rejectDone(new Error('stream aborted by client'))
-    const finalized = (await resultPromise) as ChatMessage | null
-
-    // 不返回 fallback / 不报错，照样用冻结内容定稿。
-    expect(w.finalizeAssistantMessage).toHaveBeenCalledTimes(1)
-    expect(w.finalizeAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: w.sessionId, content: FROZEN }),
-    )
-    expect(finalized?.content).toBe(FROZEN)
+    w.getOnChunk()!(DEGENERATE)
+    expect(w.cancel).not.toHaveBeenCalled()
+    const failure = new w.ChatRequestError('provider failed')
+    w.rejectDone(failure)
+    expect(await resultPromise).toBeNull()
+    expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
+    expect(w.handleSendError).toHaveBeenCalledWith(failure, w.sessionId, expect.anything())
   })
 
   it('干净输出：不误触发熔断，正常用 result.content 定稿', async () => {

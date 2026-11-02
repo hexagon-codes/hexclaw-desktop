@@ -19,10 +19,13 @@ import {
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
 import { appendProcessBlocks, mergeProcessCalls } from '@/utils/assistant-process'
+import { isDegenerateTail, trimDegenerateTail } from '@/utils/degeneration'
+import { backendScopeKey } from '@/services/backend-context'
 
 export type SessionStreamState = {
   sessionId: string
   requestId: string
+  source?: ActiveStreamSnapshot['source']
   /** 请求发出时的模型路由；只用于校验运行时 reasoning disclosure。 */
   requestRoute?: Readonly<{ provider?: string; model?: string }>
   /** Stable frontend identity for the assistant message across live terminal transitions. */
@@ -55,6 +58,8 @@ export type SessionStreamState = {
   reasoningEndTime: number
   /** 已检测到失控复读退化并熔断（内容已冻结，丢弃后续复读 chunk）。 */
   degenerated?: boolean
+  /** 仅供当前流的临时展示，不参与业务终稿或持久化。 */
+  previewContent?: string
 }
 
 /** 发送链路使用的请求级错误投影契约。 */
@@ -196,6 +201,31 @@ export function getFallbackStreamState(
   return first ?? null
 }
 
+/** 旧观察者不能清理替代句柄，也不能向切换后的后端投影数据。 */
+export function isCurrentStreamRequest(params: {
+  streams: Record<string, SessionStreamState>
+  handles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
+  sessionId: string
+  requestId: string
+  handle: import('@/services/chatService').WebSocketStreamHandle
+  scope: string
+}): boolean {
+  const handle = params.handles.get(params.sessionId)
+  return backendScopeKey() === params.scope
+    && (!handle || handle === params.handle)
+    && params.streams[params.sessionId]?.requestId === params.requestId
+}
+
+/** 展示保护只冻结公开正文预览，完整运行数据继续用于终稿和事件归并。 */
+export function projectStreamingPreview(current: SessionStreamState, previous?: SessionStreamState): SessionStreamState {
+  if (!previous?.degenerated && !isDegenerateTail(current.content)) return current
+  return {
+    ...current,
+    degenerated: true,
+    previewContent: previous?.previewContent ?? trimDegenerateTail(current.content),
+  }
+}
+
 export function buildStreamingMirrorState(
   activeStreams: Record<string, SessionStreamState>,
   currentSessionId?: string | null,
@@ -216,7 +246,7 @@ export function buildStreamingMirrorState(
   return {
     streaming: true,
     streamingSessionId: fallback.sessionId,
-    streamingContent: fallback.content,
+    streamingContent: fallback.previewContent ?? fallback.content,
     streamingReasoning: fallback.reasoning,
     streamingReasoningStartTime: fallback.reasoningExecution === undefined
       ? (fallback.thinkingEnabled ? fallback.startedAt ?? fallback.reasoningStartTime : fallback.reasoningStartTime)
@@ -402,7 +432,15 @@ export function buildRecoveredStreamState(
         || normalizedThinkingEnabled === '0'
         ? false
         : reasoningReceipt.reasoning_request === 'on'
-  const rawState = metadata.thinking_state
+  const rawState = snapshot.source === 'rest'
+    ? snapshot.status === 'completed'
+      ? 'completed'
+      : snapshot.status === 'errored'
+        ? 'failed'
+        : snapshot.status === 'cancelled'
+          ? 'cancelled'
+          : 'running'
+    : metadata.thinking_state
   const state = rawState === 'running'
     || rawState === 'completed'
     || rawState === 'failed'
@@ -430,6 +468,7 @@ export function buildRecoveredStreamState(
   return {
     sessionId,
     requestId: snapshot.request_id,
+    ...(snapshot.source ? { source: snapshot.source } : {}),
     assistantMessageId: frontendAssistantMessageId,
     canonicalAssistantMessageId: canonicalAssistantMessageId !== frontendAssistantMessageId
       ? canonicalAssistantMessageId

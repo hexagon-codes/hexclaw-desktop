@@ -5,8 +5,8 @@ import {
   normalizeRuntimeSnapshotMetadata,
   normalizeThinkingMetadata,
 } from '@/types/chat'
-import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
-import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
+import { getAssistantDisplayContent } from '@/utils/assistant-reply'
+import { type SessionStreamState } from './chat-stream-helpers'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -46,7 +46,6 @@ export function createChatStreamCancelController(params: {
     streamHandles,
     msgSvc,
     createId,
-    appendMessageToSession,
     resetSessionStream,
     sendCancel,
     clearSocketCallbacks,
@@ -62,65 +61,11 @@ export function createChatStreamCancelController(params: {
     const current = activeStreams.value[sessionId]
     if (!current) return false
 
-    if (
-      preservePartial
-      && (current.thinkingEnabled || current.content.trim() || current.reasoning.trim()
-        || current.blocks?.length || current.toolCalls?.length)
-    ) {
-      const normalizedReasoning = current.visibility === 'visible' && current.reasoning
-        ? normalizeAssistantReasoning(current.reasoning) || undefined
-        : undefined
-      const fallbackReasoningRequest = current.reasoningReceipt?.reasoning_request
-        ?? (current.thinkingEnabled ? 'on' : 'off')
-      const reasoningReceipt = normalizeReasoningReceipt(
-        current.reasoningReceipt,
-        fallbackReasoningRequest,
-      )
-      const partialMessage: ChatMessage = {
-        id: current.assistantMessageId || createId(),
-        role: 'assistant',
-        content: current.content.trim() || normalizedReasoning
-          ? getAssistantDisplayContent(current.content, normalizedReasoning)
-          : '',
-        timestamp: new Date().toISOString(),
-        reasoning: normalizedReasoning,
-        metadata: normalizeThinkingMetadata(
-          normalizeRuntimeSnapshotMetadata({
-            thinking_state: 'cancelled',
-            reasoning_receipt: reasoningReceipt,
-            thinking_duration: reasoningReceipt.reasoning_execution === 'applied'
-              ? getStreamThinkingDuration(current) ?? 0
-              : undefined,
-            reasoning_visibility: current.thinkingEnabled
-              ? current.visibility ?? 'not_exposed'
-              : undefined,
-            reasoning_disclosure: current.reasoningDisclosure?.visibility === current.visibility
-              ? current.reasoningDisclosure
-              : undefined,
-            assistant_message_id: current.assistantMessageId,
-            message_id: current.assistantMessageId,
-            assistant_message_aliases: current.assistantMessageAliases,
-            runtime_events: current.runtimeEvents,
-            last_sequence: current.lastSequence,
-            recipient_display_name: current.recipientDisplayName,
-          }, current.assistantMessageId, undefined, fallbackReasoningRequest),
-          normalizedReasoning,
-          'cancelled',
-        ),
-        agent_name: current.agentDisplayName,
-        tool_calls: current.toolCalls,
-        blocks: current.blocks,
-      }
-      appendMessageToSession(sessionId, partialMessage)
-      try {
-        void msgSvc.persistCancelledReply(sessionId, partialMessage)
-      } catch {
-        // 部分测试 mock 或落库启动异常不阻塞本地取消。
-      }
-    }
-
-    streamHandles.get(sessionId)?.cancel()
-    resetSessionStream(sessionId, sending, draftSending)
+    // 停止只请求后台取消；原句柄继续观察同一请求的真实终态。
+    const handle = streamHandles.get(sessionId)
+    if (handle) handle.cancel()
+    else sendCancel(sessionId)
+    if (!preservePartial) resetSessionStream(sessionId, sending, draftSending)
     return true
   }
 

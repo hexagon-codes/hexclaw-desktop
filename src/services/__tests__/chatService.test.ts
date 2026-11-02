@@ -561,7 +561,7 @@ describe('chatService', () => {
     }
   })
 
-  it('openWebSocketStream cancel sends cancel on the dedicated socket and resolves without fallback', async () => {
+  it('openWebSocketStream cancel keeps observing until the backend terminal snapshot', async () => {
     const handle = openWebSocketStream(
       'hello',
       's1',
@@ -581,7 +581,16 @@ describe('chatService', () => {
     expect(socket!.send).toHaveBeenLastCalledWith(
       JSON.stringify({ type: 'cancel', session_id: 's1', request_id: 'req-2' }),
     )
-    await expect(handle.done).resolves.toBeNull()
+    let settled = false
+    void handle.done.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(socket!.close).not.toHaveBeenCalled()
+    socket!.onmessage?.({ data: JSON.stringify({
+      type: 'stream_snapshot', request_id: 'req-2', session_id: 's1',
+      content: 'partial', status: 'cancelled', done: true,
+    }) })
+    await expect(handle.done).resolves.toMatchObject({ content: 'partial', terminalState: 'cancelled' })
   })
 
   it('resumeWebSocketStream sends a resume payload and resolves from stream_snapshot', async () => {
@@ -716,7 +725,7 @@ describe('chatService', () => {
         expect.objectContaining({ sequence: 4 }),
       )
     } finally {
-      handle.cancel()
+      handle.dispose?.()
       await handle.done
     }
   })

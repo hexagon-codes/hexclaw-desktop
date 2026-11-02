@@ -1824,9 +1824,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
             class="hc-composer__send hc-composer__send--stop"
             :disabled="disabled"
             :title="t('chat.stopGenerate')"
+            :aria-label="t('chat.stopGenerate')"
             @click="emit('stop')"
           >
-            <Square :size="14" />
+            <Square :size="17" stroke-width="2.5" />
           </button>
           <button
             v-else-if="showVoicePrimary"
@@ -2517,6 +2518,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
 .hc-composer__send--stop {
   background: var(--hc-error, #ff3b30);
+  color: var(--hc-text-inverse);
+}
+
+.hc-composer__send--stop:not(:disabled):hover {
   color: var(--hc-text-inverse);
 }
 

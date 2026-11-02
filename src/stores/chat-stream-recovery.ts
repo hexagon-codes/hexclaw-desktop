@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
-import type { SessionStreamState } from './chat-stream-helpers'
+import { backendScopeKey } from '@/services/backend-context'
+import { isCurrentStreamRequest, type SessionStreamState } from './chat-stream-helpers'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type LoggerModule = typeof import('@/utils/logger').logger
@@ -20,6 +21,7 @@ export function createChatStreamRecoveryController(params: {
   updateStreamChunk: (sessionId: string, content?: string, reasoning?: string, runtimeFrame?: import('@/types').RuntimeWireFrame) => boolean
   finalizeAssistantMessage: (args: {
     content: string
+    messageContent?: import('@/contracts/message-content').MessageContent
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: import('@/types').ChatMessage['tool_calls']
@@ -28,6 +30,7 @@ export function createChatStreamRecoveryController(params: {
     reasoning?: string
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
+    terminalState?: 'completed' | 'failed' | 'cancelled'
   }) => import('@/types').ChatMessage
   resetSessionStream: (
     sessionId?: string | null,
@@ -63,13 +66,22 @@ export function createChatStreamRecoveryController(params: {
       for (const snapshot of response.streams || []) {
         if (!snapshot.request_id || !snapshot.session_id || snapshot.done) continue
         const existing = activeStreams.value[snapshot.session_id]
-        if (existing?.requestId === snapshot.request_id || streamHandles.has(snapshot.session_id)) continue
+        if (streamHandles.has(snapshot.session_id)
+          || (existing?.requestId === snapshot.request_id && snapshot.source !== 'rest')) continue
 
         seedRecoveredStream(snapshot.session_id, snapshot)
+        const recoveryScope = backendScopeKey()
+        const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId: snapshot.session_id, requestId: snapshot.request_id, handle, scope: recoveryScope })
         const recoveredReasoningRequest = activeStreams.value[snapshot.session_id]
           ?.reasoningReceipt?.reasoning_request ?? 'off'
-        const handle = chatSvc.resumeWebSocketStream(snapshot.session_id, snapshot.request_id, {
+        const handle: import('@/services/chatService').WebSocketStreamHandle = snapshot.source === 'rest'
+          ? chatSvc.resumeRestStream(snapshot.session_id, snapshot.request_id, (current) => {
+              if (!ownsRequest()) return
+              seedRecoveredStream(snapshot.session_id, current)
+            })
+          : chatSvc.resumeWebSocketStream(snapshot.session_id, snapshot.request_id, {
           onSnapshot: (current) => {
+            if (!ownsRequest()) return
             seedRecoveredStream(snapshot.session_id, {
               ...snapshot,
               content: current.content,
@@ -81,19 +93,17 @@ export function createChatStreamRecoveryController(params: {
             })
           },
           onChunk: (content, reasoning, runtimeFrame) => {
-            // 退化熔断：恢复路径也要在判失控复读时 cancel 后端流（与 live 投递路径一致，省 token/停转圈）。
-            if (updateStreamChunk(snapshot.session_id, content, reasoning, runtimeFrame)) {
-              streamHandles.get(snapshot.session_id)?.cancel()
-            }
+            if (ownsRequest()) updateStreamChunk(snapshot.session_id, content, reasoning, runtimeFrame)
           },
           onApprovalRequest: (request) => {
-            storePendingApproval(request)
+            if (ownsRequest()) storePendingApproval(request)
           },
         }, recoveredReasoningRequest)
         streamHandles.set(snapshot.session_id, handle)
 
         void handle.done
           .then((result) => {
+            if (!ownsRequest()) return
             streamHandles.delete(snapshot.session_id)
             if (!result) {
               resetSessionStream(snapshot.session_id, sending, draftSending)
@@ -104,20 +114,22 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             const finalState = activeStreams.value[snapshot.session_id]
-            // 退化熔断：用冻结的「裁剪+提示」内容定稿，绝不用后端整堵复读墙（与 live 投递路径 chat-send-websocket-delivery 一致）。
-            if (finalState?.degenerated) {
-              finalizeAssistantMessage({
-                content: finalState.content,
-                sessionId: snapshot.session_id,
-                metadata: result.metadata,
-                reasoning: finalState.reasoning,
-                sending,
-                draftSending,
-              })
+            if (snapshot.source === 'rest' && result.terminalState === 'failed') {
+              handleSendError(
+                new Error(typeof result.metadata?.error === 'string' ? result.metadata.error : 'REST stream failed'),
+                snapshot.session_id, sending, draftSending, finalState,
+              )
+              return
+            }
+            if (snapshot.source === 'rest' && result.terminalState === 'cancelled'
+              && !result.content.trim() && !finalState?.reasoning.trim()
+              && !result.toolCalls?.length && !result.blocks?.length && !result.messageContent) {
+              resetSessionStream(snapshot.session_id, sending, draftSending)
               return
             }
             finalizeAssistantMessage({
               content: result.content || finalState?.content || '',
+              messageContent: result.messageContent,
               sessionId: snapshot.session_id,
               metadata: result.metadata,
               toolCalls: result.toolCalls,
@@ -126,9 +138,11 @@ export function createChatStreamRecoveryController(params: {
               reasoning: finalState?.reasoning || getAssistantReasoningFromMetadata(result.metadata),
               sending,
               draftSending,
+              terminalState: result.terminalState,
             })
           })
           .catch((resumeError) => {
+            if (!ownsRequest()) return
             streamHandles.delete(snapshot.session_id)
             handleSendError(
               resumeError,

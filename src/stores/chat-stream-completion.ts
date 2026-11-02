@@ -60,6 +60,7 @@ export function createChatStreamCompletionController(params: {
     reasoning?: string
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
+    terminalState?: 'completed' | 'failed' | 'cancelled'
   }): ChatMessage {
     const parsed = extractThinkTags(args.content || '')
     const finalContent = parsed.content
@@ -105,6 +106,8 @@ export function createChatStreamCompletionController(params: {
       : undefined
     const thinkingDuration = getStreamThinkingDuration(streamState)
     const metadata = { ...incomingRuntimeMetadata } as Record<string, unknown>
+    // 明确的请求终态覆盖中间模型轮次的状态，不用旧思考状态改写取消结果。
+    if (args.terminalState) metadata.thinking_state = args.terminalState
     metadata.reasoning_receipt = reasoningReceipt
     if (streamState) {
       const canonicalAssistantMessageId = streamState.canonicalAssistantMessageId
@@ -160,9 +163,9 @@ export function createChatStreamCompletionController(params: {
       || args.toolCalls?.length
       || args.blocks?.length
     )
-    const terminalState = reasoningReceipt.reasoning_request === 'on' && !hasDeliverableOutput
-      ? 'failed'
-      : 'completed'
+    const terminalState = args.terminalState ?? (
+      reasoningReceipt.reasoning_request === 'on' && !hasDeliverableOutput ? 'failed' : 'completed'
+    )
     const normalizedRuntimeMetadata = normalizeRuntimeSnapshotMetadata(
       metadata,
       streamState?.canonicalAssistantMessageId ?? streamState?.assistantMessageId,
@@ -189,8 +192,6 @@ export function createChatStreamCompletionController(params: {
     }
 
     appendMessageToSession(args.sessionId, assistantMessage)
-    // 自动停止的流可能没有后端成功消息，沿现有终态接口保存冻结结果。
-    if (streamState?.degenerated) void msgSvc.persistCancelledReply?.(args.sessionId, assistantMessage)
     bumpLocalSession(args.sessionId)
 
     // 简化标题流程：直接调 suggest-title（不传 expectedTitle），后端无条件生成并写入

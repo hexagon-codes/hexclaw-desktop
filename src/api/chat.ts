@@ -21,7 +21,9 @@ export interface SessionMessageSearchResult {
 export interface ActiveStreamSnapshot {
   request_id: string
   session_id: string
-  content: string
+  source?: 'rest' | 'websocket'
+  status?: string
+  content?: string
   reasoning?: string
   metadata?: Record<string, unknown> & {
     assistant_message_id?: string
@@ -34,6 +36,12 @@ export interface ActiveStreamSnapshot {
   message_content?: ChatMessage['message_content']
   done: boolean
   [key: string]: unknown
+}
+
+export interface StreamCancelResponse {
+  request_id: string
+  cancel_requested: boolean
+  snapshot: ActiveStreamSnapshot
 }
 
 const userQuery = () => ({ user_id: DESKTOP_USER_ID })
@@ -149,11 +157,20 @@ export function listActiveStreams() {
   )
 }
 
-export function getActiveStreamSnapshot(requestId: string) {
-  return apiGet<ActiveStreamSnapshot>(
-    `/api/v1/streams/${encodeURIComponent(requestId)}`,
-    userQuery(),
-  )
+export function getActiveStreamSnapshot(
+  requestId: string,
+  options?: { signal?: AbortSignal; source?: ActiveStreamSnapshot['source'] },
+) {
+  const path = `/api/v1/streams/${encodeURIComponent(requestId)}`
+  const query = { ...userQuery(), ...(options?.source ? { source: options.source } : {}) }
+  return options?.signal
+    ? apiGet<ActiveStreamSnapshot>(path, query, { signal: options.signal })
+    : apiGet<ActiveStreamSnapshot>(path, query)
+}
+
+/** 仅发出原 owner 的取消意图；cancel_requested 不表示任务已经结束。 */
+export function cancelActiveStream(requestId: string) {
+  return apiPost<StreamCancelResponse>(`/api/v1/streams/${encodeURIComponent(requestId)}/cancel`)
 }
 
 export function deleteMessage(id: string) {
