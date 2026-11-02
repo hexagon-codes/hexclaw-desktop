@@ -981,10 +981,10 @@ export default {
       strictDesc:
         'All automated actions require confirmation. Good while observing newly connected external triggers.',
       fullAccess: 'Full access',
-      fullAccessLead: 'Trusted local actions run automatically; deny rules still apply.',
+      fullAccessLead: 'All tools run automatically with access to every file, directory and network available to the OS account.',
       fullAccessGuard: 'everything auto-approved, no extra confirmation',
       fullAccessDesc:
-        'Everything auto-approved. Trusted single-user machine only; requires high-consequence confirmation and forced auditing.',
+        'Every tool is allowed without per-call confirmation, with all files, directories and networks available to the OS account. Execution records are retained.',
       switched: 'Automation level switched and applied immediately',
       switchFailed: 'Switch failed',
       balanced: 'Balanced',
@@ -1029,7 +1029,7 @@ export default {
     },
     fullAccess: {
       title: 'Enable full access?',
-      desc: 'Once enabled, cron, webhook, heartbeat, workflow and spawn dispatches auto-run every capability — including host command execution, external writes and publishing. Explicit deny rules still win; every decision is force-audited.',
+      desc: 'Chat and automated tasks may use every tool and all files, directories and networks available to the OS account, including host commands, external writes and publishing. Application deny rules, directory allowlists and application sandbox restrictions do not block execution. No per-call confirmation is required; execution records are retained.',
       envTitle: 'Environment',
       envDesc:
         'Confirm this is a trusted single-user machine; not recommended where others have access.',

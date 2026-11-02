@@ -964,10 +964,10 @@ export default {
       strictGuard: '所有自动任务都会先问你',
       strictDesc: '自动任务全部转人工确认。适合刚接入外部触发（Webhook）时先观察一段时间。',
       fullAccess: '全功能',
-      fullAccessLead: '可信本机自动执行，仍遵守拒绝规则。',
+      fullAccessLead: '全部工具自动执行，可访问系统账户可访问的全部目录、文件和网络。',
       fullAccessGuard: '全部自动放行，无额外确认',
       fullAccessDesc:
-        '全部自动放行，仅限本机可信环境、压测或临时排障。启用需高后果确认，强制记录审计。',
+        '全部工具自动放行，无逐次确认；当前系统账户可访问的全部目录、文件和网络均可使用，执行记录继续保留。',
       switched: '自动化级别已切换，即时生效',
       switchFailed: '切换失败',
       balanced: '平衡',
@@ -1010,7 +1010,7 @@ export default {
     },
     fullAccess: {
       title: '启用全功能？',
-      desc: '启用后，Cron、Webhook、Heartbeat、Workflow、Spawn 将自动执行全部能力——包括在本机直执行命令、写外部系统与发布内容。显式 deny 规则仍保持最高优先级；所有决策强制记录审计。',
+      desc: '启用后，对话与自动任务可调用全部工具，访问当前系统账户可访问的全部目录、文件和网络，包括宿主命令、外部写入与发布。应用拒绝规则、目录白名单和应用沙箱限制不再阻断，无逐次确认；执行记录继续保留。',
       envTitle: '运行环境',
       envDesc: '确认这是本机单用户可信环境，不建议在他人可触达的机器上开启。',
       altTitle: '通常你其实想要的是',
