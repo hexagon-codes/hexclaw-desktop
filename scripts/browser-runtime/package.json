@@ -1,0 +1,9 @@
+{
+  "name": "hexclaw-browser-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned browser runtime resources for HexClaw",
+  "dependencies": {
+    "@playwright/mcp": "0.0.84"
+  }
+}

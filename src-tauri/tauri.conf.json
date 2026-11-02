@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm build-only",
+    "beforeBuildCommand": "pnpm build-only && node scripts/ci/browser-runtime-package.mjs",
     "beforeDevCommand": "pnpm dev"
   },
   "app": {
@@ -40,6 +40,7 @@
     ],
     "resources": {
       "binaries/ollama-bundle": "ollama",
+      "browser-runtime": "browser-runtime",
       "render-assets/*": "assets/render/"
     },
     "icon": [
@@ -50,7 +51,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "12.0"
     },
     "windows": {
       "nsis": {

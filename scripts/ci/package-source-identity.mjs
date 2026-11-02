@@ -332,7 +332,9 @@ function isCodexWorkspacePath(path) {
   return path.split('/').some((component) => component.toLowerCase().startsWith('.codex'))
 }
 
-function isExcludedOutputPath(path) {
+function isExcludedOutputPath(path, repositoryID) {
+  // 仅排除本仓 Makefile 与默认 go build 的明确产物，不忽略 bin 中其它输入。
+  if (repositoryID === 'hexclaw' && ['bin/hexclaw', 'hexclaw'].includes(path)) return true
   const components = path.split('/')
   const directories = components.slice(0, -1)
   if (directories.some((component) => component === '.git' || component === 'node_modules')) {
@@ -346,7 +348,19 @@ function isExcludedOutputPath(path) {
   ) {
     return true
   }
-  return rootDirectory === 'src-tauri' && ['binaries', 'target'].includes(directories[1])
+  if (rootDirectory !== 'src-tauri') return false
+  if (['binaries', 'target'].includes(directories[1])) return true
+  // 渲染归档缓存按锁定摘要重新核验；脚本、依赖锁及正式资源仍属于源码输入。
+  if (repositoryID === 'hexclaw-desktop' && directories[1] === '.render-bundle-cache') return true
+  if (directories[1] !== 'browser-runtime') return false
+  // 只排除浏览器打包器声明的生成物；说明文件和未知源码仍参与源身份。
+  // 生成字节由固定官方资源清单与 verifyPackagedBrowserRuntime 完整核验。
+  if (components.length === 3) {
+    return ['package.json', 'package-lock.json', 'manifest.json', 'resources.json'].includes(
+      components[2],
+    )
+  }
+  return components.length > 3 && ['node', 'node_modules', 'chromium'].includes(components[2])
 }
 
 function statIdentity(stat) {
@@ -707,14 +721,16 @@ async function selectionsShareFile(left, right) {
 
 function productionToolchainOptions() {
   const hostHome = homedir()
+  const goRoot = process.env.HEXCLAW_PACKAGE_GO_GOROOT ?? '/usr/local/go'
+  if (!isAbsolute(goRoot) || goRoot.includes('\0')) fail('toolchain:go-env')
   return Object.freeze({
     corepackHome: join(hostHome, 'Library', 'Caches', 'node', 'corepack'),
     gitPath: PRODUCTION_GIT_EXECUTABLE,
-    goRoot: '/usr/local/go',
+    goRoot: resolve(goRoot),
     nodePath: process.execPath,
     path: [
+      join(goRoot, 'bin'),
       dirname(process.execPath),
-      '/usr/local/go/bin',
       '/usr/local/bin',
       '/opt/homebrew/bin',
       join(hostHome, '.cargo', 'bin'),
@@ -1909,10 +1925,10 @@ async function listRepositoryPaths(repository, gitBinding, onGitCommand) {
     if (stat !== null) fail('source:sensitive-file')
   }
   const tracked = allTracked.filter(
-    (path) => isSensitiveEnvironmentPath(path) || !isExcludedOutputPath(path),
+    (path) => isSensitiveEnvironmentPath(path) || !isExcludedOutputPath(path, repository.id),
   )
-  const untracked = allUntracked.filter((path) => !isExcludedOutputPath(path))
-  const ignored = allIgnored.filter((path) => !isExcludedOutputPath(path))
+  const untracked = allUntracked.filter((path) => !isExcludedOutputPath(path, repository.id))
+  const ignored = allIgnored.filter((path) => !isExcludedOutputPath(path, repository.id))
   const classified = [...tracked, ...untracked, ...ignored]
   if (new Set(classified).size !== classified.length) fail('git:path-classification')
   return Object.freeze({ ignored, tracked, untracked })

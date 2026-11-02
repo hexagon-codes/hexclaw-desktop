@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -401,6 +401,47 @@ test('high-confidence secret shapes fail while the matched bytes stay redacted',
   await writeFile(join(paths.appBundle, 'Contents', 'Resources', 'opaque.bin'), synthetic)
 
   await expectCategory(paths, 'secret:openai', synthetic)
+})
+
+test('isolated PEM format labels are not private key payloads', async (t) => {
+  const paths = await fixture('pem-format-label')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const label = '-----BEGIN RSA PRIVATE KEY-----\n'
+  await writeFile(
+    join(paths.appBundle, 'Contents', 'Resources', 'protocol-format.bin'),
+    `${label}runtime format label: no key material\0${JSON.stringify(label)}\n`,
+  )
+
+  const verify = await loadBoundary()
+  const result = await verify(paths)
+  assert.equal(result.findingCount, 0)
+})
+
+test('PEM private key payloads remain rejected and redacted', async (t) => {
+  const paths = await fixture('pem-material')
+  t.after(() => rm(paths.root, { recursive: true, force: true }))
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 1024 })
+  const plain = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString()
+  const encrypted = privateKey.export({
+    type: 'pkcs1', format: 'pem', cipher: 'aes-256-cbc', passphrase: 'synthetic-only',
+  }).toString()
+  const truncated = plain.split('\n').slice(0, 2).join('\n')
+  const prefix = Buffer.alloc(1024 * 1024 - 16, 0x20)
+  const representations = [
+    plain,
+    JSON.stringify({ key: plain }),
+    truncated,
+    JSON.stringify({ key: truncated }),
+    encrypted,
+    JSON.stringify({ key: encrypted }),
+    encrypted.split('\n').slice(0, 2).join('\n'),
+    Buffer.concat([prefix, Buffer.from(plain)]),
+  ]
+  const pathname = join(paths.appBundle, 'Contents', 'Resources', 'protected-data.bin')
+  for (const representation of representations) {
+    await writeFile(pathname, representation)
+    await expectCategory(paths, 'secret:private-key', plain.split('\n')[1])
+  }
 })
 
 test('secret shapes crossing the bounded stream chunk boundary are rejected', async (t) => {

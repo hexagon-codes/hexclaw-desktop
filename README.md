@@ -42,7 +42,7 @@ HexClaw Desktop 用一个桌面应用连接 [HexClaw](https://github.com/hexagon
 
 ### 运行要求
 
-- **macOS**：当前随包的本地推理与文档渲染组件需要 macOS 14 及以上；支持 Apple Silicon 与 Intel。应用外壳配置的 macOS 11 下限不代表这些组件的兼容范围。
+- **macOS**：应用最低需要 macOS 12，支持 Apple Silicon 与 Intel。浏览器自动化与 Computer Use 需要 macOS 14 及以上；当前随包的本地推理与文档渲染组件仍按各自的 macOS 14+ 要求运行。
 - **Windows / Linux**：当前发布目标为 x86_64。Linux 发布构建使用 Ubuntu 22.04，运行环境需要满足 Tauri 的 WebKitGTK 4.1 等依赖。
 - **模型**：在线模型需要所选 Provider 的网络连接和凭据。macOS 安装包包含 Ollama；Windows 与 Linux 使用本地模型时，需要另行安装 [Ollama](https://ollama.com/download) 并下载模型。
 

@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "resources": {
+      "browser-runtime": null
+    },
+    "macOS": {
+      "files": {
+        "Resources/browser-runtime": "browser-runtime"
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { createGunzip } from 'node:zlib'
 
 import { createReleaseAttestation } from './k12-release-ui-attestation.mjs'
+import { stageBrowserRuntime, verifyPackagedBrowserRuntime } from './browser-runtime-package.mjs'
 import {
   PackageDependencyProvenanceError,
   preparePackageDependencyProvenance,
@@ -962,8 +963,8 @@ async function writePrivateFileExclusive(pathname, bytes, mode = PRIVATE_FILE_MO
 
 function trustedToolPath(plan) {
   const directories = [
+    join(plan.goRoot, 'bin'),
     dirname(process.execPath),
-    '/usr/local/go/bin',
     '/usr/local/bin',
     '/opt/homebrew/bin',
     join(plan.hostHome, '.cargo', 'bin'),
@@ -1003,6 +1004,7 @@ function sourceIdentityEnvironment(plan) {
     LANG: 'C',
     LC_ALL: 'C',
     PATH: trustedToolPath(plan),
+    HEXCLAW_PACKAGE_GO_GOROOT: plan.goRoot,
     RUSTUP_HOME: join(plan.hostHome, '.rustup'),
     TMPDIR: plan.paths.privateTemp,
   })
@@ -1950,6 +1952,7 @@ export function createPackageLocalPlan(options) {
   exactOptions(options, [
     'desktopRoot',
     'generationId',
+    'goRoot',
     'hostHome',
     'notBeforeEpochSeconds',
     'targetTriple',
@@ -1957,6 +1960,7 @@ export function createPackageLocalPlan(options) {
   ])
   const desktopRoot = absolutePath(options.desktopRoot, 'invalid-desktop-root')
   const hostHome = absolutePath(options.hostHome, 'invalid-host-home')
+  const goRoot = absolutePath(options.goRoot ?? '/usr/local/go', 'invalid-go-root')
   if (!GENERATION_ID_PATTERN.test(options.generationId ?? '')) fail('invalid-generation')
   if (!VERSION_PATTERN.test(options.version ?? '')) fail('invalid-version')
   const notBeforeEpochSeconds =
@@ -1981,6 +1985,7 @@ export function createPackageLocalPlan(options) {
   }
   const packageControlDirectory = join(releaseRoot, PACKAGE_GENERATION_CONTROL_BASENAME)
   const generationBinaries = join(generationRoot, 'binaries')
+  const generationBrowserRuntimeRoot = join(generationRoot, 'browser-runtime')
   const generationOllamaRoot = join(generationRoot, 'ollama')
   const projectedWorkRoot = join(generationRoot, 'source')
   const projectedDesktopRoot = join(projectedWorkRoot, 'hexclaw-desktop')
@@ -2006,6 +2011,7 @@ export function createPackageLocalPlan(options) {
     frontendNodeModules: join(projectedDesktopRoot, 'node_modules'),
     generationApp: publication.appBundle,
     generationBinaries,
+    generationBrowserRuntimeRoot,
     generationDist: publication.distRoot,
     generationDmg: publication.packagePath,
     generationDmgRoot: join(generationRoot, 'dmg-root'),
@@ -2043,6 +2049,7 @@ export function createPackageLocalPlan(options) {
   return Object.freeze({
     desktopRoot,
     generationId: options.generationId,
+    goRoot,
     hostHome,
     notBeforeEpochSeconds,
     paths,
@@ -2137,8 +2144,14 @@ export function createTauriPackageOverlay(plan) {
       ]),
       resources: Object.freeze({
         'binaries/ollama-bundle': null,
+        'browser-runtime': null,
         'render-assets/*': 'assets/render/',
         [tauriPath(plan.paths.generationOllamaRoot)]: 'ollama',
+      }),
+      macOS: Object.freeze({
+        files: Object.freeze({
+          'Resources/browser-runtime': tauriPath(plan.paths.generationBrowserRuntimeRoot),
+        }),
       }),
     }),
   })
@@ -2679,6 +2692,13 @@ function productionOperations() {
         },
       )
       if (result.code !== 0 || result.signal !== null) fail('render-bundle')
+      await stageBrowserRuntime({
+        targetTriple: plan.target.triple,
+        outputRoot: plan.paths.generationBrowserRuntimeRoot,
+        cacheRoot: join(plan.paths.cacheRoot, 'browser-runtime'),
+        generation: plan.generationId,
+        packageRoot: join(plan.paths.projectedDesktopRoot, 'scripts', 'browser-runtime'),
+      })
     },
 
     async buildSidecar(context) {
@@ -2921,6 +2941,10 @@ function productionOperations() {
       // 校验 generation 私有副本（stageReleaseApp 已复制），不直接扫描共享 builtApp：
       // 共享产物可能被残留构建重建，扫描私有副本可避免 tree-metadata 竞态。
       const appMacOS = join(plan.paths.generationApp, 'Contents', 'MacOS')
+      await verifyPackagedBrowserRuntime(
+        plan.paths.generationBrowserRuntimeRoot,
+        join(plan.paths.generationApp, 'Contents', 'Resources', 'browser-runtime'),
+      )
       await assertExactRegularTrees(
         plan.paths.generationOllamaRoot,
         join(plan.paths.generationApp, 'Contents', 'Resources', 'ollama'),
@@ -3168,6 +3192,7 @@ async function createProductionPlan({ generationId, notBeforeEpochSeconds }) {
   return createPackageLocalPlan({
     desktopRoot,
     generationId,
+    goRoot: process.env.HEXCLAW_PACKAGE_GO_GOROOT,
     hostHome,
     notBeforeEpochSeconds,
     targetTriple: nativeTargetTriple(),

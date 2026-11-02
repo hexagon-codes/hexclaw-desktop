@@ -42,7 +42,7 @@ The real interface and K12 skin are reused from the [official K12 tutorial (Chin
 
 ### Runtime requirements
 
-- **macOS**: bundled local inference and document rendering components require macOS 14 or later; Apple Silicon and Intel are supported. The app shell's configured macOS 11 minimum does not describe compatibility for those components.
+- **macOS**: the app requires macOS 12 or later and supports Apple Silicon and Intel. Browser automation and Computer Use require macOS 14 or later; bundled local inference and document rendering components retain their own macOS 14+ requirements.
 - **Windows / Linux**: current release targets are x86_64. Linux builds use Ubuntu 22.04 and require Tauri dependencies such as WebKitGTK 4.1.
 - **Models**: online models require network access and credentials for the selected Provider. macOS installers include Ollama; Windows and Linux users need to install [Ollama](https://ollama.com/download) and download a model to use local models.
 

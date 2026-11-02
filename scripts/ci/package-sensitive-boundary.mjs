@@ -3,10 +3,12 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open, opendir } from 'node:fs/promises'
+import { lstat, open, opendir, readlink, realpath } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { verifiedBrowserRuntimeLinks, verifiedBrowserRuntimeResources } from './browser-runtime-package.mjs'
 
 const XATTR = '/usr/bin/xattr'
 const CHMOD = '/bin/chmod'
@@ -153,7 +155,9 @@ const CONTENT_RULES = Object.freeze([
   }),
   Object.freeze({
     category: 'secret:private-key',
-    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/,
+    // 格式标签本身不含密钥；已有载荷或加密元数据仍拒绝，包含 JSON 转义及截断输入。
+    // oxlint-disable-next-line no-control-regex -- NUL 是二进制中已存在载荷的边界。
+    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[ \t]*(?:(?:\r?\n|\\(?:r\\)?n)[ \t]*)?(?:Proc-Type:[ \t]*4,[ \t]*ENCRYPTED|DEK-Info:[ \t]*[A-Za-z0-9-]+,[ \t]*[A-Fa-f0-9]+|[A-Za-z0-9+/=]+[ \t]*(?=\r?\n|\\(?:r\\)?n|-----END |["'\0]|$))/,
   }),
   Object.freeze({
     category: 'secret:anthropic',
@@ -235,6 +239,14 @@ function filenameCategory(pathname) {
     }
   }
   return null
+}
+
+// 计数工具的 Vite chunk 名称包含 token，但文件不是账号凭据容器。
+// 仅放行 dist 的这类普通文件名；实际内容继续经过完整凭据与路径检查。
+async function isFrontendTokenCountAsset(pathname, child, label) {
+  if (!['dist', 'dist-root'].includes(label) || !/^assets\/token-count-[A-Za-z0-9_-]{8}\.js$/u.test(child)) return false
+  const metadata = await lstat(pathname)
+  return metadata.isFile() && !metadata.isSymbolicLink()
 }
 
 function stablePatternMatch(pattern, text, stableLength) {
@@ -454,11 +466,38 @@ function verifyProvenanceValues(output, expectedCount) {
   if (waitingForValue || observed !== expectedCount) fail('metadata:provenance-format')
 }
 
+function browserLinkVerifier(root) {
+  const runtimeRoot = resolve(root, 'Contents', 'Resources', 'browser-runtime')
+  let verifiedLinks
+  return async (pathname) => {
+    const inRuntime = relative(runtimeRoot, pathname)
+    if (!inRuntime || isAbsolute(inRuntime) || inRuntime === '..' || inRuntime.startsWith(`..${sep}`)) return false
+    // 到达链接前，遍历已核对所有父目录；不沿包外链接读取运行时清单。
+    verifiedLinks ??= verifiedBrowserRuntimeLinks(runtimeRoot)
+    const expected = (await verifiedLinks).get(pathname)
+    return expected !== undefined && await readlink(pathname) === expected.target &&
+      await realpath(pathname) === expected.destination
+  }
+}
+
+function browserResourceVerifier(root) {
+  const runtimeRoot = resolve(root, 'Contents', 'Resources', 'browser-runtime')
+  let verifiedResources
+  return async (pathname) => {
+    const inRuntime = relative(runtimeRoot, pathname)
+    if (!inRuntime || isAbsolute(inRuntime) || inRuntime === '..' || inRuntime.startsWith(`..${sep}`)) return undefined
+    verifiedResources ??= verifiedBrowserRuntimeResources(runtimeRoot)
+    return (await verifiedResources).get(pathname)
+  }
+}
+
 async function preflightTreeStructure(pathname, label, budget, limits) {
   try {
     const root = requireAbsoluteDirectory(pathname, label)
     const rootMetadata = await lstat(root)
     if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) fail(`input:${label}`)
+    const allowedBrowserLink = browserLinkVerifier(root)
+    const officialBrowserResource = browserResourceVerifier(root)
     consumeEntryBudget(budget, limits)
     const visit = async (directory) => {
       const entries = await opendir(directory)
@@ -468,9 +507,16 @@ async function preflightTreeStructure(pathname, label, budget, limits) {
         const child = relativePath(root, childPath)
         const displayPath = `${label}/${child}`
         const forbidden = filenameCategory(child)
-        if (forbidden) fail(forbidden, displayPath)
+        if (
+          forbidden &&
+          !(forbidden === 'file:credential' && await isFrontendTokenCountAsset(childPath, child, label)) &&
+          !await officialBrowserResource(childPath)
+        ) fail(forbidden, displayPath)
         const metadata = await lstat(childPath)
-        if (metadata.isSymbolicLink()) fail('file:symbolic-link', displayPath)
+        if (metadata.isSymbolicLink()) {
+          if (await allowedBrowserLink(childPath)) continue
+          fail('file:symbolic-link', displayPath)
+        }
         if (metadata.isDirectory()) {
           await visit(childPath)
           continue
@@ -556,6 +602,7 @@ async function scanFile(
   observations,
   allowedOllamaProvenance,
   allowedPandocProvenance,
+  officialBrowserResource,
 ) {
   let handle
   try {
@@ -578,7 +625,7 @@ async function scanFile(
     const isPandocResource = PANDOC_RESOURCE_PREFIXES.some((prefix) =>
       displayPath.startsWith(prefix),
     )
-    const digest = isOllamaResource || isPandocResource ? createHash('sha256') : undefined
+    const digest = isOllamaResource || isPandocResource || officialBrowserResource ? createHash('sha256') : undefined
     const expectedBytes = Number(before.size)
     let carry = ''
    let observedOllamaProvenance = false
@@ -600,12 +647,17 @@ async function scanFile(
         observedPandocProvenance = true
       }
       const category = contentCategory(text, displayPath, stableLength)
-      if (category) fail(category, displayPath)
+      if (category && !officialBrowserResource) fail(category, displayPath)
       if (text.includes('/build/cargo/')) observations.rustCargoRemap = true
       carry = text.slice(-SCAN_OVERLAP_BYTES)
       position += bytesRead
     }
     const sha256 = digest?.digest('hex')
+    // 公开源码及二进制中的配置示例、密钥格式常量只在上游固定字节身份吻合时接受。
+    if (officialBrowserResource && (officialBrowserResource.type !== 'file' ||
+        officialBrowserResource.sha256 !== sha256 || officialBrowserResource.size !== expectedBytes)) {
+      fail('file:official-resource-identity', displayPath)
+    }
    if (observedOllamaProvenance && !allowedOllamaProvenance.has(sha256 ?? '')) {
      fail('path:user-home', displayPath)
    }
@@ -640,6 +692,8 @@ async function scanRoot(
   const beforeFiles = budget.files
   const beforeBytes = budget.bytes
   consumeEntryBudget(budget, limits)
+  const allowedBrowserLink = browserLinkVerifier(root)
+  const officialBrowserResource = browserResourceVerifier(root)
   const visit = async (directory) => {
     const entries = await opendir(directory)
     for await (const entry of entries) {
@@ -648,7 +702,11 @@ async function scanRoot(
       const child = relativePath(root, pathname)
       const displayPath = `${label}/${child}`
       const forbidden = filenameCategory(child)
-      if (forbidden) fail(forbidden, displayPath)
+      if (
+        forbidden &&
+        !(forbidden === 'file:credential' && await isFrontendTokenCountAsset(pathname, child, label)) &&
+        !await officialBrowserResource(pathname)
+      ) fail(forbidden, displayPath)
 
       const metadata = await lstat(pathname)
       if (metadata.isDirectory()) {
@@ -656,6 +714,7 @@ async function scanRoot(
         continue
       }
       if (metadata.isSymbolicLink()) {
+        if (await allowedBrowserLink(pathname)) continue
         fail('file:symbolic-link', displayPath)
       }
       if (!metadata.isFile()) fail('file:non-regular', displayPath)
@@ -667,6 +726,7 @@ async function scanRoot(
         observations,
         allowedOllamaProvenance,
         allowedPandocProvenance,
+        await officialBrowserResource(pathname),
       )
     }
   }

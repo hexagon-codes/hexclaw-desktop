@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, mkdir, open, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, readlink, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
+
+import { verifiedBrowserRuntimeLinks } from './browser-runtime-package.mjs'
 
 const GENERATION_ID_PATTERN = /^[a-f0-9]{32}$/u
 // macOS 会在被 Finder/终端访问的目录内自动生成 .DS_Store；它是本机系统元数据而非
@@ -238,12 +240,36 @@ async function hashAndSyncFile(pathname, expectedSize, category, shouldSync = tr
 async function inspectImmutableTree(root, shouldSync) {
   let entries = 0
   let bytes = 0
+  let browserLinks
+  const browserRoot = join(root, 'HexClaw.app', 'Contents', 'Resources', 'browser-runtime')
   const treeDigest = createHash('sha256')
   const visit = async (pathname, relativePath) => {
     entries += 1
     if (entries > MAX_TREE_ENTRIES) fail('generation-limit')
     const metadata = await lstat(pathname, { bigint: true }).catch(() => fail('generation-tree'))
-    if (metadata.isSymbolicLink() || metadata.uid !== currentUID()) fail('generation-tree')
+    if (metadata.uid !== currentUID()) fail('generation-tree')
+    if (metadata.isSymbolicLink()) {
+      // 只使用同一官方运行时完整身份中已验证的 Framework 链接，不遍历链接目标。
+      if (!relativePath.startsWith('HexClaw.app/Contents/Resources/browser-runtime/') || metadata.nlink !== 1n) {
+        fail('generation-tree')
+      }
+      browserLinks ??= verifiedBrowserRuntimeLinks(browserRoot).catch(() => fail('generation-tree'))
+      const expected = (await browserLinks).get(pathname)
+      if (!expected) fail('generation-tree')
+      const target = await readlink(pathname).catch(() => fail('generation-tree'))
+      const destination = await realpath(pathname).catch(() => fail('generation-tree'))
+      const after = await lstat(pathname, { bigint: true }).catch(() => fail('generation-tree'))
+      if (target !== expected.target || destination !== expected.destination || !sameIdentity(metadata, after)) {
+        fail('generation-tree')
+      }
+      bytes += Buffer.byteLength(target, 'utf8')
+      if (!Number.isSafeInteger(bytes) || bytes > MAX_TREE_BYTES) fail('generation-limit')
+      treeDigest.update(
+        `${JSON.stringify({ mode: Number(metadata.mode & 0o777n), path: relativePath, target, type: 'symlink' })}\n`,
+        'utf8',
+      )
+      return
+    }
     if (metadata.isDirectory()) {
       if ((Number(metadata.mode & 0o777n) & 0o022) !== 0) fail('generation-tree')
       treeDigest.update(
