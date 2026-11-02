@@ -9,6 +9,8 @@ import {
   getSessionAgent,
 } from '../session-agent-binding'
 import * as messageService from '@/services/messageService'
+import { getSessionModel, setSessionModel } from '../session-model-binding'
+import { getSessionDeepThinking, setSessionDeepThinking } from '../session-thinking-preference'
 
 const { listSessions } = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -108,7 +110,7 @@ describe('BUG-20260723-027 冷启动失败不销毁场景会话稳定身份', ()
     localStorage.clear()
   })
 
-  function loadingController(loadSucceeded: boolean) {
+  function loadingController(loadSucceeded: boolean, useService = false) {
     return createChatSessionLoadingController({
       sessions: ref([]),
       currentSessionId: ref(null),
@@ -125,11 +127,12 @@ describe('BUG-20260723-027 冷启动失败不销毁场景会话稳定身份', ()
       pendingSuggestedTitleExpectation: ref({}),
       ensureSessionPromise: ref(null),
       sessionSelectionGen: ref(0),
-      msgSvc: {
+      msgSvc: useService ? messageService : {
         loadAllSessions: vi.fn().mockResolvedValue([]),
         loadAllSessionsResult: vi.fn().mockResolvedValue({
           sessions: [],
           succeeded: loadSucceeded,
+          complete: loadSucceeded,
         }),
         getLastSessionId: vi.fn().mockResolvedValue(null),
       } as never,
@@ -150,6 +153,7 @@ describe('BUG-20260723-027 冷启动失败不销毁场景会话稳定身份', ()
     await expect(loadAllSessionsResult?.()).resolves.toEqual({
       sessions: [],
       succeeded: false,
+      complete: false,
     })
   })
 
@@ -167,5 +171,16 @@ describe('BUG-20260723-027 冷启动失败不销毁场景会话稳定身份', ()
     await loadingController(true).loadSessions()
 
     expect(getSessionAgent('deleted-session')).toBe('')
+  })
+
+  it.each([201, 1])('total=%s时仅完整集合清理页外偏好', async (total) => {
+    setSessionModel('off-page', { model: 'sample', providerId: 'sample', providerKey: 'sample', providerName: 'Sample' })
+    bindSessionAgent('off-page', 'agent-sample')
+    setSessionDeepThinking('off-page', true)
+    listSessions.mockResolvedValueOnce({ sessions: [{ id: 'on-page', title: 'Sample', created_at: '2026-01-01' }], total, has_more: total > 1 })
+    await loadingController(true, true).loadSessions({ suppressAutoSelect: true })
+    expect(getSessionModel('off-page') !== null).toBe(total > 1)
+    expect(getSessionAgent('off-page')).toBe(total > 1 ? 'agent-sample' : '')
+    expect(getSessionDeepThinking('off-page')).toBe(total > 1)
   })
 })

@@ -90,6 +90,8 @@ export interface LoadAllSessionsResult {
   sessions: ChatSession[]
   /** false 表示请求失败；true + [] 才是后端权威确认的空列表。 */
   succeeded: boolean
+  /** 仅完整集合可用于清理其它会话的持久偏好。 */
+  complete: boolean
 }
 
 export async function loadAllSessionsResult(): Promise<LoadAllSessionsResult> {
@@ -108,9 +110,11 @@ export async function loadAllSessionsResult(): Promise<LoadAllSessionsResult> {
         parent_session_id: s.parent_session_id || undefined,
       })),
       succeeded: true,
+      // total是现有接口的已加载数量，只有明确的无后续页才能证明集合完整。
+      complete: res.has_more === false,
     }
   } catch {
-    return { sessions: [], succeeded: false }
+    return { sessions: [], succeeded: false, complete: false }
   }
 }
 

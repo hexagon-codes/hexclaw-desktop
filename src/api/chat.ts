@@ -62,8 +62,9 @@ function normalizeSession(session: ChatSession): ChatSession {
   }
 }
 
+/** total是接口提供的已加载数量下界，集合完整性以has_more为准。 */
 export async function listSessions(params: { limit?: number; offset?: number } = {}) {
-  const result = await apiGet<{ sessions: Array<ChatSession & { meta?: string }>; total: number }>('/api/v1/sessions', {
+  const result = await apiGet<{ sessions: Array<ChatSession & { meta?: string }>; total: number; has_more?: boolean }>('/api/v1/sessions', {
     ...userQuery(),
     ...(params.limit ? { limit: params.limit } : {}),
     ...(params.offset ? { offset: params.offset } : {}),

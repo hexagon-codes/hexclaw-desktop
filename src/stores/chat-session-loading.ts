@@ -117,7 +117,7 @@ export function createChatSessionLoadingController(params: {
       const hasResultLoader = 'loadAllSessionsResult' in msgSvc
       const loadResult = hasResultLoader && typeof msgSvc.loadAllSessionsResult === 'function'
         ? await msgSvc.loadAllSessionsResult()
-        : { sessions: await msgSvc.loadAllSessions(), succeeded: true }
+        : { sessions: await msgSvc.loadAllSessions(), succeeded: true, complete: false }
       // 冷启动 sidecar 尚未就绪时，旧 loadAllSessions 会把请求失败压成 []。失败不是
       // “后端权威确认零会话”：此时既不能清空当前列表，也不能 prune 会话级模型/Agent/
       // 深度思考绑定，否则 sidecar-ready 后虽能补回会话，稳定身份（图标/固定置顶）已经丢失。
@@ -136,7 +136,7 @@ export function createChatSessionLoadingController(params: {
         }
       }
       for (const existing of sessions.value) {
-        const shouldPreserve = existing.id === currentSessionId.value
+        const shouldPreserve = !loadResult.complete || existing.id === currentSessionId.value
           || !!pendingSessionIds.value[existing.id]
           || isSessionStreaming(existing.id)
         if (shouldPreserve && !loadedSessions.some((session) => session.id === existing.id)) {
@@ -144,10 +144,12 @@ export function createChatSessionLoadingController(params: {
         }
       }
       sessions.value = nextSessions
-      // 防累积：丢弃已不存在会话的模型 / Agent / 深度思考绑定，使 localStorage map 永远 ≤ 会话数
-      pruneSessionModels(sessions.value.map((session) => session.id))
-      pruneSessionAgents(sessions.value.map((session) => session.id))
-      pruneSessionDeepThinking(sessions.value.map((session) => session.id))
+      // 只有完整后端集合才能证明会话已删除，部分分页必须保留页外偏好。
+      if (loadResult.complete) {
+        pruneSessionModels(sessions.value.map((session) => session.id))
+        pruneSessionAgents(sessions.value.map((session) => session.id))
+        pruneSessionDeepThinking(sessions.value.map((session) => session.id))
+      }
       // Don't auto-select a session while a new session is being created (race condition fix).
       // U1：后台流收尾刷新列表时 suppressAutoSelect——否则用户主动新建的空白态(currentSessionId=null)
       // 会被自动 selectSession(lastId) 拽回旧会话，新建按钮等于没点。
