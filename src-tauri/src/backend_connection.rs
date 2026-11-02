@@ -71,6 +71,18 @@ impl ConnectionSnapshot {
     pub(crate) fn is_local(&self) -> bool { self.context.kind == "local" }
 }
 
+// 本机端点始终直连；远端沿用进程或操作系统已有的代理选择。
+pub(crate) fn backend_http_client(endpoint: &Url) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    let loopback = match endpoint.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if loopback { builder.no_proxy() } else { builder }
+}
+
 struct ConnectionState { file: AuthFile, generation: u64 }
 static STATE: OnceLock<Mutex<ConnectionState>> = OnceLock::new();
 static INTENT: AtomicU64 = AtomicU64::new(0);
@@ -232,7 +244,7 @@ fn candidate_record(candidate: BackendCandidate) -> Result<ConnectionRecord, Str
 
 async fn inspect(record: &mut ConnectionRecord) -> Result<String, String> {
     let frozen = snapshot(record, 0);
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(12))
+    let client = backend_http_client(&frozen.endpoint("/health")?).timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Create backend connection check")?;
     let mut version = String::new();
     for path in ["/health", "/api/v1/version", "/api/v1/config"] {
@@ -267,7 +279,7 @@ pub async fn inspect_backend_readiness(candidate: BackendCandidate) -> Result<Ba
     let mut record = candidate_record(candidate)?;
     let version = inspect(&mut record).await?;
     let frozen = snapshot(&record, 0);
-    let response = reqwest::Client::builder().timeout(Duration::from_secs(12))
+    let response = backend_http_client(&frozen.endpoint("/api/v1/config/llm")?).timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Create backend model check")?
         .get(frozen.endpoint("/api/v1/config/llm")?).bearer_auth(frozen.token()).send().await
         .map_err(|_| "Backend model configuration check failed")?;

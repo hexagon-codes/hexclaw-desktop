@@ -20,13 +20,14 @@ pub(crate) struct SidecarClient {
 
 impl SidecarClient {
     pub(crate) fn new(timeout: Duration) -> Result<Self, String> {
-        let client = reqwest::Client::builder()
+        let connection = backend_connection::current()?;
+        let client = backend_connection::backend_http_client(&connection.endpoint("/health")?)
             .timeout(timeout)
             // 一个操作固定访问已选服务，重定向不能替换其凭据归属。
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("build Sidecar client: {error}"))?;
-        Ok(Self { client, connection: backend_connection::current()? })
+        Ok(Self { client, connection })
     }
 
     pub(crate) fn endpoint(relative_path: &str) -> Result<Url, String> {

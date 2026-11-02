@@ -177,6 +177,7 @@ pub(crate) async fn wait_for_healthy(
     // 进程就绪只由本机端点证明，不能使用仍指向远端的当前业务客户端。
     let token = crate::backend_connection::local_token()?;
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none())
         .build()
