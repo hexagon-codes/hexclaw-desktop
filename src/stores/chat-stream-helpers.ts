@@ -207,7 +207,8 @@ export function isCurrentStreamRequest(params: {
   handles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
   sessionId: string
   requestId: string
-  handle: import('@/services/chatService').WebSocketStreamHandle
+  /** 同步回调可能发生在句柄赋值前；为空时按当前请求状态判断归属。 */
+  handle?: import('@/services/chatService').WebSocketStreamHandle
   scope: string
 }): boolean {
   const handle = params.handles.get(params.sessionId)
