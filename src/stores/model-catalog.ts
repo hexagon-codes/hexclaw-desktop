@@ -297,6 +297,12 @@ export interface ProviderCatalogReconcileResult {
   managed: boolean
 }
 
+function refreshedCatalogModelName(existing: ModelOption, remote: CatalogModel): string {
+  // 自定义模型保留用户命名；目录模型以最新远端名称为准，旧名称仅在远端缺失时兜底。
+  if (existing.isCustom) return existing.name || remote.name || remote.id
+  return remote.name || existing.name || remote.id
+}
+
 function modelListSignature(models: ModelOption[], selectedModelId: string | undefined): string {
   return JSON.stringify({ models, selectedModelId: selectedModelId ?? '' })
 }
@@ -345,7 +351,7 @@ export function reconcileProviderCatalog(
         ))
         return canonicalizeModelOption(applyCatalogNativeReasoningContract(applyCatalogModelCapabilities({
           ...withoutReasoningContract(model),
-          name: model.name || remote.name || remote.id,
+          name: refreshedCatalogModelName(model, remote),
           ...reasoningContractFrom(remote, model, presetById.get(model.id)),
         }, remote, acceptLegacyCapabilities), remote))
       })
@@ -359,7 +365,7 @@ export function reconcileProviderCatalog(
         if (existing) {
           const updated = {
             ...withoutReasoningContract(existing),
-            name: existing.name || remote.name || remote.id,
+            name: refreshedCatalogModelName(existing, remote),
             ...reasoningContractFrom(remote, existing, preset),
           }
           return canonicalizeModelOption(applyCatalogNativeReasoningContract(

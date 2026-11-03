@@ -116,7 +116,8 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     )
     expect(store.config!.llm.providers[0]!.models[0]).toMatchObject({
       name: 'Refreshed Kimi',
-      capabilities: ['text', 'vision'],
+      // 无来源的历史声明按 legacy 保留，目录不得静默覆盖用户能力声明。
+      capabilities: ['text'],
     })
     expect(store.config!.llm.providers[0]!.selectedModelId).toBe('moonshotai/kimi-k2.6:free')
     expect(store.config!.llm.defaultModel).toBe('moonshotai/kimi-k2.6:free')
@@ -126,7 +127,7 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     }
     expect(persisted.providers.openRouter?.models).toEqual(['moonshotai/kimi-k2.6:free'])
     expect(persisted.providers.openRouter?.model_specs).toMatchObject([
-      { id: 'moonshotai/kimi-k2.6:free', display_name: 'Refreshed Kimi', capabilities: ['text', 'vision'] },
+      { id: 'moonshotai/kimi-k2.6:free', display_name: 'Refreshed Kimi', capabilities: ['text'] },
     ])
   }, 10_000)
 
@@ -246,7 +247,8 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(['moonshotai/kimi-k2.6:free'])
     expect(store.config!.llm.providers[0]!.models[0]).toMatchObject({
       name: 'Fresh Kimi',
-      capabilities: ['text', 'vision'],
+      // 无来源的历史声明按 legacy 保留，目录不得静默覆盖用户能力声明。
+      capabilities: ['text'],
     })
     expect(store.config!.llm.providers[0]!.selectedModelId).toBe('moonshotai/kimi-k2.6:free')
     expect(store.config!.llm.defaultModel).toBe('moonshotai/kimi-k2.6:free')

@@ -51,7 +51,10 @@ describe('provider model deletion contract 2026-07-26', () => {
     expect(settingsSource).toMatch(
       /@click\.stop="[^"]*(?:pendingDeleteModel|requestDelete)[^"]*"/,
     )
-    expect(settingsSource).toMatch(/isStaleModel\(provider,\s*model\)[\s\S]{0,240}return true/)
+    expect(settingsSource).toContain('isStaleModel(provider, model)')
+    expect(settingsSource).toMatch(
+      /function isStaleModel\(provider: ProviderConfig, model: ModelOption\): boolean \{[\s\S]{0,400}return !catalog\.models\.some/,
+    )
     expect(settingsSource).toMatch(/(?:preset|预设)[\s\S]{0,300}(?:不可删除|not removable)/i)
   })
 

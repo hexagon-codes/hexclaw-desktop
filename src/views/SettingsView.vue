@@ -1476,7 +1476,10 @@ function providerModelExclusionScope(provider: ProviderConfig): string {
 }
 
 function isProviderModelRemovable(provider: ProviderConfig, model: ModelOption): boolean {
-  return provider.models.some((configured) => configured.id === model.id)
+  if (!provider.models.some((configured) => configured.id === model.id)) return false
+  // 健康预设模型不可删除；仅已下架的 stale 预设或自定义模型可移除。
+  if (isStaleModel(provider, model) || model.isCustom) return true
+  return !providerPresetModels(provider).some((preset) => preset.id === model.id)
 }
 
 function requestDeleteProviderModel(provider: ProviderConfig, model: ModelOption) {
