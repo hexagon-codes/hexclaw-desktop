@@ -2,6 +2,10 @@
 
 # Auto-Update Release Guide
 
+## Unreleased (source increment, not published)
+
+The current source adds model capability declaration sources with per-capability probes, tool execution facts, and parallel source/document-detail loading in Knowledge. These changes have not created a tag, published installers, or updated a running service. Release still follows the backend tag, pinned source, and four-platform installer sequence in the `v0.5.2` section below.
+
 ## v0.5.2 (2026-10-29)
 
 Desktop source version is `0.5.2`. Changes include persistent PDF attachment recovery, preview and download, conditional file caching, conversation persona and draft recovery, and model configuration and supplementary-practice error fixes; see the [Changelog](../CHANGELOG.md).

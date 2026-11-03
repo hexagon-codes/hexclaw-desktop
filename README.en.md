@@ -125,12 +125,12 @@ In “Due this week,” consolidation and arithmetic warm-up worksheets can be g
 | Agents and scenarios | Manage roles, templates, and the default Agent, configure channel routing in Connections, and attach specialized capabilities to Agent instances through scenario packs. |
 | K12 homework tutoring | Create separate child profiles; solve and grade work from images, review writing and artwork, maintain mistakes and learning notes, generate weekly practice and learning reports, and receive annotated images, exercises, and exports. |
 | Knowledge and memory | Upload and manage documents, inspect processing status, retry failed tasks, retrieve context through full-text and vector search, and manage persistent memory. |
-| Tools and integrations | Manage Skills, the skill marketplace, MCP services, and Prompts in Capabilities; let agents use configured external tools and services. |
+| Tools and integrations | Manage Skills, the skill marketplace, MCP services, and Prompts in Capabilities; let agents use configured external tools and services, and inspect execution identity, policy version, and replay facts in tool-call details. |
 | Automation | Create scheduled tasks, Webhooks, and workflows that run on schedules or events. |
 | Connections | Manage IM channels, accounts, and data connectors, and route external messages into Agent execution. |
 | Desktop experience and diagnostics | System tray, Quick Chat, notifications, file previews, exports, and printing; inspect runtime logs and service status. |
 
-Models can be connected through Providers such as OpenAI, Anthropic, Gemini, DeepSeek, and Qwen, as well as OpenAI-compatible APIs. Ollama supports local models. Available models, input types, and tool capabilities depend on the active service configuration and Provider support.
+Models can be connected through Providers such as OpenAI, Anthropic, Gemini, DeepSeek, and Qwen, as well as OpenAI-compatible APIs. Ollama supports local models. Available models, input types, and tool capabilities depend on the active service configuration and Provider support. Model management distinguishes capability declaration sources and shows per-capability probe evidence; older evidence expires by source fingerprint when configuration changes.
 
 ## Runtime architecture
 

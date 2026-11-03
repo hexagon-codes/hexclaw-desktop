@@ -343,7 +343,7 @@ You can also search documents and rebuild indexes.
 
 #### Document Detail View
 
-Open a document to read its complete content from the active service document-detail endpoint, with processing details loaded separately. A source read failure exposes an error and retry action. Search chunks are not assembled into a substitute for the complete source, and a processing-detail failure does not replace the source read result.
+Open a document to read its complete content from the active service document-detail endpoint, with processing details loaded separately and in parallel. Source viewing does not wait for a parent loading marker; a source read failure exposes an error and retry action. Search chunks are not assembled into a substitute for the complete source, and a processing-detail failure does not replace the source read result.
 
 ### Memory System (Memory Tab)
 
@@ -413,6 +413,8 @@ Skills are external tool capabilities that Agents can invoke.
 4. Once connected, tools provided by the server are automatically registered to the Agent's available tool list
 5. View tool listings and test tools online
 
+Tool-call details show the execution identity, policy configuration, policy version, and replay marker returned by the service. These fields distinguish actual execution facts from replay/recovery; HTTP 200 or returned text does not by itself establish the business outcome. Fields the service does not provide remain absent.
+
 ### Prompt Library (Prompts Tab)
 
 The Prompt Library manages reusable prompt templates. You can create, search, and maintain common prompts, then reuse them from chat input.
@@ -466,18 +468,20 @@ Settings has three areas: **Model services, Automation Permissions, and System S
 |--------|-------------|
 | Provider | LLM service provider |
 | Default model | Select the active service's default chat model from enabled models |
-| Model management | Fetch the model catalog, add custom models, and enable or disable the models you need |
+| Model management | Fetch the model catalog, add custom models, distinguish manual/preset/catalog/legacy capability sources, inspect per-capability probe receipts, and enable or disable the models you need |
 | API Key | Provider API key |
 | Base URL | Custom API endpoint (optional) |
 | Connection test | Check the Provider interface connection; task completion still requires an actual answer or output |
 
 Default settings, conversations, and agents share the same model capability information. Native reasoning support does not establish that the Provider declares parameters to control reasoning. Switches or effort levels appear only when the selected model has a trusted control contract. Native support with unknown controls is shown as “Automatic model reasoning”; Provider and model names are not used to infer controls.
 
+Model management identifies whether capability declarations come from manual, preset, catalog, or legacy data, and shows per-capability probe receipts. Catalog evidence is tied to its source fingerprint; configuration changes invalidate older evidence, and probe results are displayed as current evidence rather than written back as static declarations. Computer Use and API protocol fields use the service's actual declaration and are not inferred from model names.
+
 The `auto` reasoning strategy lets the model decide; it does not mean off. Execution uses an explicit request first, then the agent setting, then the global setting, and finally `auto` when none is specified. Navigating between pages or refreshing capabilities does not itself change a saved strategy.
 
 ### Automation Permissions
 
-In **Settings → Automation Permissions**, choose Function First, Strict Approval, or Full Access, then inspect pending tasks, task-specific grants, audit records, and the effective policy matrix. Full Access requires an additional confirmation. Individual task approvals take place in the creation flow or task cards.
+In **Settings → Automation Permissions**, choose Function First, Strict Approval, or Full Access, then inspect pending tasks, task-specific grants, audit records, and the effective policy matrix. Full Access requires an additional confirmation and applies only to in-app tool execution approval; it does not change model, connector, or data permissions. Individual task approvals take place in the creation flow or task cards.
 
 The effective policy stays expanded. Recent permission decisions initially show three entries; expanding them shows the records already loaded.
 
