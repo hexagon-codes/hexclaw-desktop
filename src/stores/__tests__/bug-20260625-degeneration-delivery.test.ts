@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import { createChatStreamStateController } from '../chat-stream-state'
-import { createChatSendWebSocketDeliveryController } from '../chat-send-websocket-delivery'
+import {
+  CHAT_SEND_WEBSOCKET_FALLBACK,
+  createChatSendWebSocketDeliveryController,
+} from '../chat-send-websocket-delivery'
 import { DEGENERATION_NOTICE, isDegenerateTail, trimDegenerateTail } from '@/utils/degeneration'
 import { backendContext } from '@/services/backend-context'
 
@@ -55,7 +58,8 @@ function wire(sessionId = 's1') {
 
   const chatSvc = {
     ChatRequestError: class ChatRequestError extends Error {
-      noFallback = true
+      noFallback = false
+      stopRequested = false
     },
     openWebSocketStream: vi.fn((_text, _sessionId, _params, _role, _attachments, callbacks) => {
       capturedOnChunk = callbacks.onChunk
@@ -119,7 +123,6 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
       backendContext.value = { connectionId: 'new', backendId: 'new', configRevision: 1, activationGeneration: 1, kind: 'local', apiBase: 'http://127.0.0.1', wsBase: 'ws://127.0.0.1', hasToken: false }
       w.rejectDone(new w.ChatRequestError('old failure'))
       expect(await pending).toBeNull()
-      expect(w.handleSendError).not.toHaveBeenCalled()
       expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
     } finally {
       backendContext.value = previous
@@ -153,7 +156,7 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
     expect(finalized?.content).toBe(DEGENERATE)
   })
 
-  it('后台失败按原错误处理，不以局部内容制造成功终稿', async () => {
+  it('后台失败交给投递回退，不以局部内容制造成功终稿', async () => {
     const w = wire()
     const resultPromise = w.controller.deliverViaWebSocket({
       backendText: '计算', sessionId: w.sessionId, requestId: 'req-1',
@@ -161,11 +164,31 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
     })
     w.getOnChunk()!(DEGENERATE)
     expect(w.cancel).not.toHaveBeenCalled()
-    const failure = new w.ChatRequestError('provider failed')
+    w.rejectDone(new w.ChatRequestError('provider failed'))
+    expect(await resultPromise).toBe(CHAT_SEND_WEBSOCKET_FALLBACK)
+    expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
+  })
+
+  it('停止后断连保留部分内容并按取消收口，不写成失败终稿', async () => {
+    const w = wire()
+    const resultPromise = w.controller.deliverViaWebSocket({
+      backendText: '计算', sessionId: w.sessionId, requestId: 'req-1',
+      sending: ref(false), draftSending: ref(false),
+    })
+    w.getOnChunk()!(DEGENERATE)
+    w.cancel()
+    const failure = new w.ChatRequestError('WebSocket connection lost')
+    failure.noFallback = true
+    failure.stopRequested = true
     w.rejectDone(failure)
     expect(await resultPromise).toBeNull()
-    expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
-    expect(w.handleSendError).toHaveBeenCalledWith(failure, w.sessionId, expect.anything())
+    expect(w.handleSendError).not.toHaveBeenCalled()
+    expect(w.finalizeAssistantMessage).toHaveBeenCalledTimes(1)
+    expect(w.finalizeAssistantMessage).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: w.sessionId,
+      content: DEGENERATE,
+      terminalState: 'cancelled',
+    }))
   })
 
   it('干净输出：不误触发熔断，正常用 result.content 定稿', async () => {

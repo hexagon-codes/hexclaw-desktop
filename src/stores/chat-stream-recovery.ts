@@ -71,10 +71,12 @@ export function createChatStreamRecoveryController(params: {
 
         seedRecoveredStream(snapshot.session_id, snapshot)
         const recoveryScope = backendScopeKey()
-        const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId: snapshot.session_id, requestId: snapshot.request_id, handle, scope: recoveryScope })
+        // 恢复服务可能同步回调 onSnapshot；用 holder 在初始化前提供可读句柄，避免 TDZ。
+        const handleRef: { current?: import('@/services/chatService').WebSocketStreamHandle } = {}
+        const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId: snapshot.session_id, requestId: snapshot.request_id, handle: handleRef.current, scope: recoveryScope })
         const recoveredReasoningRequest = activeStreams.value[snapshot.session_id]
           ?.reasoningReceipt?.reasoning_request ?? 'off'
-        const handle: import('@/services/chatService').WebSocketStreamHandle = snapshot.source === 'rest'
+        handleRef.current = snapshot.source === 'rest'
           ? chatSvc.resumeRestStream(snapshot.session_id, snapshot.request_id, (current) => {
               if (!ownsRequest()) return
               seedRecoveredStream(snapshot.session_id, current)
@@ -99,6 +101,7 @@ export function createChatStreamRecoveryController(params: {
             if (ownsRequest()) storePendingApproval(request)
           },
         }, recoveredReasoningRequest)
+        const handle = handleRef.current!
         streamHandles.set(snapshot.session_id, handle)
 
         void handle.done

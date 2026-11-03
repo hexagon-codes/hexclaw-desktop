@@ -103,9 +103,12 @@ export function createChatSendWebSocketDeliveryController(params: {
     setSessionPending(sessionId, false, sending, draftSending)
 
     const deliveryScope = backendScopeKey()
-    const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId, requestId, handle, scope: deliveryScope })
+    // 流服务可能在 openWebSocketStream 返回前同步回调 onChunk（缓存/重放/测试桩）；
+    // 用 holder 在初始化前提供可读句柄，避免 TDZ，同时保持句柄本身不可重分配。
+    const handleRef: { current?: ReturnType<ChatServiceModule['openWebSocketStream']> } = {}
+    const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId, requestId, handle: handleRef.current, scope: deliveryScope })
     let memorySavedContent: string | undefined
-    const handle = chatSvc.openWebSocketStream(
+    handleRef.current = chatSvc.openWebSocketStream(
       backendText,
       sessionId,
       samplingSnapshot?.chatParams ?? chatParams.value,
@@ -126,6 +129,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       requestMetadata,
       requestId,
     )
+    const handle = handleRef.current!
     streamHandles.set(sessionId, handle)
 
     try {
@@ -161,6 +165,31 @@ export function createChatSendWebSocketDeliveryController(params: {
     } catch (wsError) {
       if (!ownsRequest()) return null
       streamHandles.delete(sessionId)
+      if (wsError instanceof chatSvc.ChatRequestError && wsError.stopRequested) {
+        // 停止已获本地接纳但后台终态尚未取得：保留已有部分内容，按取消收口本地展示；
+        // 不能把传输中断写成业务 failed，也不能因此转发新的业务请求。
+        const streamState = activeStreams.value[sessionId]
+        if (streamState && (
+          streamState.content.trim()
+          || streamState.reasoning.trim()
+          || streamState.toolCalls?.length
+          || streamState.blocks?.length
+        )) {
+          finalizeAssistantMessage({
+            content: streamState.content,
+            sessionId,
+            toolCalls: streamState.toolCalls,
+            blocks: streamState.blocks,
+            reasoning: streamState.reasoning,
+            sending,
+            draftSending,
+            terminalState: 'cancelled',
+          })
+        } else {
+          resetSessionStream(sessionId, sending, draftSending)
+        }
+        return null
+      }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
         handleSendError(wsError, sessionId, activeStreams.value[sessionId])
         return null

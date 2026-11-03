@@ -513,11 +513,13 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
     })
   })
 
-  it('routes active cancellation to durable terminal persistence', () => {
+  it('requests active cancellation without writing a local cancelled reply', () => {
+    const cancel = vi.fn()
     const appendMessageToSession = vi.fn()
     const persistCancelled = vi.fn()
+    const activeStreams = ref({ s1: streamState() })
     const controller = createChatStreamCancelController({
-      activeStreams: ref({ s1: streamState() }),
+      activeStreams,
       currentSessionId: ref('s1'),
       messages: ref([]),
       streaming: ref(false),
@@ -526,7 +528,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
       streamingReasoning: ref(''),
       streamingReasoningStartTime: ref(0),
       streamingReasoningEndTime: ref(0),
-      streamHandles: new Map([['s1', { cancel: vi.fn() } as any]]),
+      streamHandles: new Map([['s1', { cancel } as any]]),
       msgSvc: {
         persistMessage: vi.fn(),
         persistCancelledReply: persistCancelled,
@@ -540,78 +542,45 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
     })
 
     expect(controller.stopSessionStream('s1')).toBe(true)
-    expect(appendMessageToSession).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-        id: 'assistant-live-1',
-        metadata: expect.objectContaining({
-          thinking_state: 'cancelled',
-          thinking_duration: 3,
-          reasoning_visibility: 'visible',
-        }),
-      }),
-    )
-    expect(persistCancelled).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-        id: 'assistant-live-1',
-        metadata: expect.objectContaining({
-          thinking_state: 'cancelled',
-          thinking_duration: 3,
-          reasoning_visibility: 'visible',
-        }),
-      }),
-    )
+    expect(cancel).toHaveBeenCalled()
+    expect(appendMessageToSession).not.toHaveBeenCalled()
+    expect(persistCancelled).not.toHaveBeenCalled()
+    expect(activeStreams.value.s1?.content).toBe('answer')
   })
 
-  it('persists a zero-output thinking cancellation under the same assistant identity', () => {
+  it('finalizes a zero-output thinking cancellation through the terminal path', () => {
     const appendMessageToSession = vi.fn()
-    const persistCancelled = vi.fn()
-    const controller = createChatStreamCancelController({
-      activeStreams: ref({
-        s1: streamState({
-          content: '',
-          reasoning: '',
-          thinkingEnabled: true,
-          startedAt: Date.now() - 2_000,
-          state: 'running',
-          visibility: 'not_exposed',
-        } as Partial<SessionStreamState>),
-      }),
-      currentSessionId: ref('s1'),
-      messages: ref([]),
-      streaming: ref(false),
-      streamingSessionId: ref(null),
-      streamingContent: ref(''),
-      streamingReasoning: ref(''),
-      streamingReasoningStartTime: ref(0),
-      streamingReasoningEndTime: ref(0),
-      streamHandles: new Map([['s1', { cancel: vi.fn() } as any]]),
-      msgSvc: {
-        persistMessage: vi.fn(),
-        persistCancelledReply: persistCancelled,
-      } as any,
-      createId: () => 'unexpected-new-id',
-      appendMessageToSession,
-      resetSessionStream: vi.fn(),
-      sendCancel: vi.fn(),
-      clearSocketCallbacks: vi.fn(),
-      triggerSocketError: vi.fn(),
+    const state = streamState({
+      content: '',
+      reasoning: '',
+      thinkingEnabled: true,
+      startedAt: Date.now() - 2_000,
+      state: 'running',
+      visibility: 'not_exposed',
+    } as Partial<SessionStreamState>)
+    const controller = completionController(state, appendMessageToSession)
+    const message = controller.finalizeAssistantMessage({
+      content: '',
+      sessionId: 's1',
+      terminalState: 'cancelled',
     })
 
-    expect(controller.stopSessionStream('s1')).toBe(true)
+    expect(message.id).toBe('assistant-live-1')
+    expect(message.content).toBe('')
+    expect(message.metadata).toMatchObject({
+      thinking_state: 'cancelled',
+      reasoning_visibility: 'not_exposed',
+    })
     expect(appendMessageToSession).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({
         id: 'assistant-live-1',
         content: '',
-        reasoning: undefined,
         metadata: expect.objectContaining({
           thinking_state: 'cancelled',
           reasoning_visibility: 'not_exposed',
         }),
       }),
     )
-    expect(persistCancelled).toHaveBeenCalledTimes(1)
   })
 })

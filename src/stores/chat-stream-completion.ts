@@ -179,7 +179,7 @@ export function createChatStreamCompletionController(params: {
         || normalizedRuntimeMetadata.assistant_message_id
         || createId(),
       role: 'assistant',
-      content: terminalState === 'failed' && !hasDeliverableOutput
+      content: (terminalState === 'failed' || terminalState === 'cancelled') && !hasDeliverableOutput
         ? ''
         : getAssistantDisplayContent(finalContent, finalReasoning),
       message_content: args.messageContent,

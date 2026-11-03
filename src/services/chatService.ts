@@ -37,10 +37,13 @@ const WS_INACTIVITY_TIMEOUT_MS = 60_000
 
 export class ChatRequestError extends Error {
   noFallback: boolean
+  /** 用户已请求停止后连接中断；此时后台终态未知，不能写成业务失败。 */
+  stopRequested: boolean
   constructor(message: string, noFallback = false) {
     super(message)
     this.name = 'ChatRequestError'
     this.noFallback = noFallback
+    this.stopRequested = false
   }
 }
 
@@ -716,8 +719,12 @@ function openRequestSocket(
 
   function settleReject(err: unknown) {
     if (settled) return
-    // 主动停止后连接异常只结束观察，不能回退成一次新的业务请求。
-    if (cancelRequested && err instanceof ChatRequestError) err.noFallback = true
+    // 主动停止后连接异常只结束观察，不能回退成一次新的业务请求；
+    // stopRequested 与普通 noFallback 业务错误分开，后者仍应展示真实失败。
+    if (cancelRequested && err instanceof ChatRequestError) {
+      err.noFallback = true
+      err.stopRequested = true
+    }
     settled = true
     cleanup()
     try {

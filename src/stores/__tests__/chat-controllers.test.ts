@@ -526,29 +526,30 @@ describe('chat controller modules', () => {
     expect(resetSessionStream).toHaveBeenCalledWith('s1', expect.any(Object), expect.any(Object))
   })
 
-  it('preserves partial stream output when cancelling a session stream', () => {
+  it('requests cancellation without replacing the partial stream before the real terminal', () => {
     const cancel = vi.fn()
     const appendMessageToSession = vi.fn()
     const resetSessionStream = vi.fn()
+    const activeStreams = ref({
+      s1: {
+        sessionId: 's1',
+        requestId: 'req-1',
+        assistantMessageAliases: [],
+        lastSequence: 0,
+        runtimeEvents: [],
+        acceptedRuntimeFrames: {},
+        rawContent: '',
+        content: '半截回答',
+        explicitReasoning: '',
+        reasoning: '半截思考',
+        reasoningStartTime: 0,
+        reasoningEndTime: 0,
+        visibility: 'visible' as const,
+      },
+    })
 
     const controller = createChatStreamCancelController({
-      activeStreams: ref({
-        s1: {
-          sessionId: 's1',
-          requestId: 'req-1',
-          assistantMessageAliases: [],
-          lastSequence: 0,
-          runtimeEvents: [],
-          acceptedRuntimeFrames: {},
-          rawContent: '',
-          content: '半截回答',
-          explicitReasoning: '',
-          reasoning: '半截思考',
-          reasoningStartTime: 0,
-          reasoningEndTime: 0,
-          visibility: 'visible',
-        },
-      }),
+      activeStreams,
       currentSessionId: ref('s1'),
       messages: ref([]),
       streaming: ref(false),
@@ -569,21 +570,25 @@ describe('chat controller modules', () => {
 
     expect(controller.stopSessionStream('s1')).toBe(true)
     expect(cancel).toHaveBeenCalled()
-    expect(appendMessageToSession).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-        id: 'partial-1',
-        role: 'assistant',
-        content: '半截回答',
-        reasoning: '半截思考',
-      }),
-    )
-    expect(resetSessionStream).toHaveBeenCalledWith('s1', undefined, undefined)
+    expect(appendMessageToSession).not.toHaveBeenCalled()
+    expect(resetSessionStream).not.toHaveBeenCalled()
+    expect(activeStreams.value.s1?.content).toBe('半截回答')
   })
 
   it('recovers active streams through the resume flow and finalizes on completion', async () => {
     const finalizeAssistantMessage = vi.fn()
-    const seedRecoveredStream = vi.fn()
+    const activeStreams = ref<Record<string, any>>({})
+    const seedRecoveredStream = vi.fn((sessionId: string, snapshot: any) => {
+      activeStreams.value = {
+        ...activeStreams.value,
+        [sessionId]: {
+          ...snapshot,
+          requestId: snapshot.requestId ?? snapshot.request_id,
+          rawContent: snapshot.rawContent ?? snapshot.content ?? '',
+          explicitReasoning: snapshot.explicitReasoning ?? '',
+        },
+      }
+    })
     const updateStreamChunk = vi.fn()
     const storePendingApproval = vi.fn()
     const streamHandles = new Map<string, any>()
@@ -595,7 +600,7 @@ describe('chat controller modules', () => {
     })
 
     const controller = createChatStreamRecoveryController({
-      activeStreams: ref({}),
+      activeStreams,
       streamHandles,
       chatSvc: {
         resumeWebSocketStream: vi.fn().mockImplementation((_sessionId, _requestId, callbacks) => {
@@ -1254,6 +1259,7 @@ describe('chat controller modules', () => {
 
   it('directs an edited version to its explicit branch without mutating the visible source session', async () => {
     const currentSessionId = ref<string | null>('source-session')
+    const activeStreams = ref<Record<string, any>>({})
     const sourceMessages = [
       {
         id: 'source-user',
@@ -1286,7 +1292,7 @@ describe('chat controller modules', () => {
       messages,
       pendingSessionIds: ref({}),
       draftSending,
-      activeStreams: ref({}),
+      activeStreams,
       chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' }),
       agentRole: ref('k12-tutor-mingming'),
       thinkingEnabled: ref(false),
@@ -1315,7 +1321,10 @@ describe('chat controller modules', () => {
       setPendingSuggestedTitleExpectation: vi.fn(),
       pendingAutoTitleSync: new Map(),
       persistMessage,
-      upsertStreamState: vi.fn(),
+      upsertStreamState: vi.fn((sessionId: string, nextState: any) => {
+        if (nextState) activeStreams.value = { ...activeStreams.value, [sessionId]: nextState }
+        else delete activeStreams.value[sessionId]
+      }),
       updateStreamChunk: vi.fn().mockReturnValue(false),
       resetSessionStream: vi.fn(),
       finalizeAssistantMessage: finalizeAssistantMessage as any,
