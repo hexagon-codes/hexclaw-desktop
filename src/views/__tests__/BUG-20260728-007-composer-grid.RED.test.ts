@@ -15,7 +15,7 @@ describe('BUG-20260728-007 shared chat composer page grid', () => {
       /\.hc-chat__messages\s*\{[\s\S]*?padding:\s*20px 24px 10px/.test(chatViewSource),
     ).toBe(true)
     expect(
-      /\.hc-chat__input-area\s*\{[\s\S]*?padding:\s*8px 24px 10px/.test(chatViewSource),
+      /\.hc-chat__input-area\s*\{[\s\S]*?padding:\s*8px 24px 16px/.test(chatViewSource),
     ).toBe(true)
   })
 

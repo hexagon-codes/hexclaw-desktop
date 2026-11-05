@@ -326,7 +326,7 @@ describe('2. Chat store session lifecycle', () => {
     })
 
     await store.selectSession('sess-1')
-    expect(listSessionMessagesMock).toHaveBeenCalledWith('sess-1', { limit: 500 })
+    expect(listSessionMessagesMock).toHaveBeenCalledWith('sess-1', { limit: 500, attachmentMode: 'url' })
     expect(store.messages).toHaveLength(2)
     expect(store.currentSessionId).toBe('sess-1')
     // Verify timestamp is correctly preserved
@@ -1186,9 +1186,9 @@ describe('13. Structural edge cases', () => {
     expect(getLastSessionId()).toBe('session-xyz')
   })
 
-  it('loadMessages: API error returns empty array', async () => {
+  it('loadMessages: API error propagates to caller', async () => {
     listSessionMessagesMock.mockRejectedValueOnce(new Error('500 Internal'))
-    expect(await loadMessages('broken-session')).toEqual([])
+    await expect(loadMessages('broken-session')).rejects.toThrow('500 Internal')
   })
 
   it('deleteSession in messageService: propagates errors to caller', async () => {

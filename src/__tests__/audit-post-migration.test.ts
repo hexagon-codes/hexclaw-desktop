@@ -101,10 +101,9 @@ describe('Category 1: messageService API migration', () => {
     expect(result).toEqual([])
   })
 
-  it('loadMessages: API throws → returns [] not crash', async () => {
+  it('loadMessages: API throws → propagates so caller can keep cached history', async () => {
     listSessionMessages.mockRejectedValueOnce(new Error('500'))
-    const result = await loadMessages('s1')
-    expect(result).toEqual([])
+    await expect(loadMessages('s1')).rejects.toThrow('500')
   })
 
   // --- createSession ---

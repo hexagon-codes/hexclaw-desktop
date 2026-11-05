@@ -42,7 +42,8 @@ describe('BUG-20260802-013 · Chat 媒体保存使用 opaque grant 共享链', (
     expect(source).toMatch(
       /<template v-for="\(att, ai\) in editingImages\(msg\)" :key="ai">\s*<img\s+v-if="messageImageSrc\(att\)"/,
     )
-    expect(source).toContain('isGeneratedMediaSource(source) ? backendMediaURL(source)')
+    expect(source).toMatch(/isGeneratedMediaSource\(source\) \|\| source\.startsWith\('\/api\/v1\/attachments\/'\)/)
+    expect(source).toContain('? backendMediaURL(source)')
     expect(source).toContain(": attachment.type === 'image' ? messageImageSrc(attachment) : imageSrc(attachment)")
   })
 })
