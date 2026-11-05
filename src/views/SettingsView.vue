@@ -2749,7 +2749,7 @@ async function saveConfig() {
                               @click.stop="openModelProbe(provider, model, $event)"
                             ><Loader2 v-if="probingModel(provider.id, model.id)" :size="12" class="animate-spin" /><RotateCcw v-else :size="12" /></button>
                             <button type="button" class="hc-model-chip__edit" :title="t('settings.editModel')" :aria-label="`${t('settings.editModel')} ${model.name || model.id}`" @click.stop="openEditModel(provider, model, $event)"><Pencil :size="12" /></button>
-                            <button type="button" class="hc-model-chip__remove" :title="t('settings.modelList.remove')" :aria-label="`${t('settings.modelList.remove')} ${model.name || model.id}`" @click.stop="requestDeleteProviderModel(provider, model)">
+                            <button v-if="isProviderModelRemovable(provider, model)" type="button" class="hc-model-chip__remove" :title="t('settings.modelList.remove')" :aria-label="`${t('settings.modelList.remove')} ${model.name || model.id}`" @click.stop="requestDeleteProviderModel(provider, model)">
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
                             </button>
                           </span>
