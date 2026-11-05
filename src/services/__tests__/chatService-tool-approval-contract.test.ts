@@ -184,7 +184,15 @@ describe('backend/Desktop tool approval wire contract', () => {
     })
 
     handle.cancel()
-    await expect(handle.done).resolves.toBeNull()
+    socket.receive({
+      type: 'stream_snapshot',
+      request_id: 'chat-contract-1',
+      session_id: 'session-contract-1',
+      content: '',
+      status: 'cancelled',
+      done: true,
+    })
+    await expect(handle.done).resolves.toMatchObject({ terminalState: 'cancelled' })
   })
 
   it('publishes only the complete decision-less backend terminal wire contract', async () => {
@@ -252,7 +260,15 @@ describe('backend/Desktop tool approval wire contract', () => {
 
     stop()
     handle.cancel()
-    await expect(handle.done).resolves.toBeNull()
+    socket.receive({
+      type: 'stream_snapshot',
+      request_id: 'chat-contract-terminal',
+      session_id: 'session-contract-1',
+      content: '',
+      status: 'cancelled',
+      done: true,
+    })
+    await expect(handle.done).resolves.toMatchObject({ terminalState: 'cancelled' })
   })
 
   it('parses only a complete durable reconciliation acknowledgement', () => {
