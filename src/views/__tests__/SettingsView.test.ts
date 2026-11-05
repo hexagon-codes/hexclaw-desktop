@@ -1,11 +1,19 @@
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import { mount, flushPromises, enableAutoUnmount, DOMWrapper } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount, DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 import { PROVIDER_PRESETS } from '@/config/providers'
 import type { BackendLLMConfig } from '@/types'
+
+function modelManagerEntry(wrapper: VueWrapper) {
+  const entry = wrapper
+    .findAll('.hc-model-section-action')
+    .find((button) => button.text().includes('管理模型'))
+  if (!entry) throw new Error('model manager entry not found')
+  return entry
+}
 
 const backendFixture = vi.hoisted(() => ({ config: null as BackendLLMConfig | null }))
 
@@ -897,19 +905,13 @@ describe('SettingsView — E2E 关键路径', () => {
     await card.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
-    const embeddingChip = card.get('.hc-model-chip--embedding')
-    expect(embeddingChip.element.tagName).toBe('DIV')
+    const embeddingChip = card.get('[data-model-id="embed"]')
+    expect(embeddingChip.find('.hc-model-chip__select').exists()).toBe(false)
     expect(embeddingChip.classes()).not.toContain('hc-model-chip--active')
     expect(embeddingChip.find('.hc-model-chip__probe').exists()).toBe(false)
     expect(embeddingChip.find('.hc-model-chip__reliability').exists()).toBe(false)
     const remove = embeddingChip.get('button.hc-model-chip__remove')
     expect(remove.attributes('aria-label')).toContain('Embed')
-
-    const vm = wrapper.vm as unknown as {
-      refreshCapability: (provider: unknown, model: unknown) => Promise<void>
-    }
-    await vm.refreshCapability(provider!, provider!.models[1]!)
-    expect(capabilityApi.probeCapability).not.toHaveBeenCalled()
 
     vi.useFakeTimers()
     await remove.trigger('click')
@@ -965,11 +967,11 @@ describe('SettingsView — E2E 关键路径', () => {
       .find((item) => item.text().includes('Custom Chat'))!
     await card.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
-    const chip = card.get('.hc-model-chip--custom')
+    const chip = card.get('[data-model-id="custom-chat"]')
     expect(chip.attributes('role')).toBeUndefined()
     expect(chip.attributes('tabindex')).toBeUndefined()
     expect(chip.find('button button').exists()).toBe(false)
-    expect(chip.findAll('button')).toHaveLength(3)
+    expect(chip.findAll('button')).toHaveLength(4)
     await chip.get('.hc-model-chip__select').trigger('click')
     const provider = store.config!.llm.providers.find((item) => item.name === 'Custom Chat')!
     expect(provider.selectedModelId).toBe('custom-chat')
@@ -1018,7 +1020,7 @@ describe('SettingsView — E2E 关键路径', () => {
     })!
     const vm = wrapper.vm as unknown as {
       syncRemoteModels: (provider: unknown) => Promise<boolean>
-      displayCapabilities: (model: unknown) => string[]
+      modelCapabilitiesForDisplay: (provider: unknown, model: unknown) => string[]
     }
 
     await vm.syncRemoteModels(provider)
@@ -1026,28 +1028,31 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(
       provider.models.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.capabilities,
     ).toEqual(['embedding'])
-    expect(provider.selectedModelId).toBe('chat-model')
+    // 目录未返回能力声明时保持未知，不猜测为文本模型；已核定 embedding 不得进入聊天选择。
+    expect(provider.selectedModelId).toBe('')
     expect(
-      vm.displayCapabilities({ id: 'explicit-empty', name: 'Unknown', capabilities: [] }),
+      vm.modelCapabilitiesForDisplay(provider, { id: 'explicit-empty', name: 'Unknown', capabilities: [] }),
     ).toEqual([])
   })
 
   it('uses the explicit capability declaration instead of inferring vision from a model ID', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
     const vm = wrapper.vm as unknown as {
-      displayCapabilities: (model: unknown) => string[]
+      modelCapabilitiesForDisplay: (provider: unknown, model: unknown) => string[]
     }
 
     expect(
-      vm.displayCapabilities({
+      vm.modelCapabilitiesForDisplay(provider, {
         id: 'qwen-vl-max',
         name: 'Qwen VL Max',
         capabilities: ['text'],
       }),
     ).toEqual(['text'])
     expect(
-      vm.displayCapabilities({
+      vm.modelCapabilitiesForDisplay(provider, {
         id: 'qwen-vl-max',
         name: 'Qwen VL Max',
         capabilities: ['text', 'vision'],
@@ -1135,13 +1140,9 @@ describe('SettingsView — E2E 关键路径', () => {
       })
       expect(updated.selectedModelId).toBe('chat')
       expect(store.config!.llm.defaultModel).toBe('chat')
-      expect(card.get('.hc-model-chip--embedding').text()).toContain(modelId)
-
-      const vm = wrapper.vm as unknown as {
-        refreshCapability: (provider: unknown, model: unknown) => Promise<void>
-      }
-      await vm.refreshCapability(updated, added)
-      expect(capabilityApi.probeCapability).not.toHaveBeenCalled()
+      const embeddingChip = card.get(`[data-model-id="${modelId}"]`)
+      expect(embeddingChip.text()).toContain(modelId)
+      expect(embeddingChip.find('.hc-model-chip__probe').exists()).toBe(false)
     },
   )
 
@@ -1160,9 +1161,9 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
-    const manage = wrapper.get('.hc-model-chip--manage')
+    const manage = modelManagerEntry(wrapper)
     expect(manage.text()).toContain('管理模型')
-    expect(wrapper.get('.hc-model-enabled-summary').text()).toContain('1 / 11')
+    expect(wrapper.get('.hc-model-section-header').text()).toContain('已配置模型')
 
     await manage.trigger('click')
     await flushPromises()
@@ -1192,7 +1193,7 @@ describe('SettingsView — E2E 关键路径', () => {
     const settingsRoot = wrapper.get('.hc-settings')
     expect(settingsRoot.attributes()).not.toHaveProperty('inert')
 
-    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await modelManagerEntry(wrapper).trigger('click')
     await flushPromises()
     expect(settingsRoot.attributes()).toHaveProperty('inert')
 
@@ -1215,8 +1216,10 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
-    expect(wrapper.findAll('.hc-model-chip--manage')).toHaveLength(1)
-    expect(wrapper.get('.hc-model-chip--manage').text()).toContain('管理模型')
+    expect(
+      wrapper.findAll('.hc-model-section-action').filter((button) => button.text().includes('管理模型')),
+    ).toHaveLength(1)
+    expect(modelManagerEntry(wrapper).text()).toContain('管理模型')
   })
 
   it('gives an upstream-removed preset model the shared delete action without unlocking healthy presets', async () => {
@@ -1244,7 +1247,7 @@ describe('SettingsView — E2E 关键路径', () => {
       .findAll('.hc-model-chip--stale')
       .find((chip) => chip.text().includes(presetModel.id))
     expect(staleChip).toBeDefined()
-    expect(staleChip!.text()).toContain('已下架')
+    expect(staleChip!.text()).toContain('目录未返回')
     expect(staleChip!.find('button.hc-model-chip__remove').exists()).toBe(true)
 
     const healthyPresetChip = wrapper
@@ -1268,7 +1271,7 @@ describe('SettingsView — E2E 关键路径', () => {
     )
     mockFetchProviderModels.mockRejectedValueOnce(new Error('upstream unavailable'))
     await wrapper.get('.hc-provider__card-head').trigger('click')
-    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await modelManagerEntry(wrapper).trigger('click')
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
@@ -1292,7 +1295,7 @@ describe('SettingsView — E2E 关键路径', () => {
     )
     mockFetchProviderModels.mockResolvedValueOnce([])
     await wrapper.get('.hc-provider__card-head').trigger('click')
-    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await modelManagerEntry(wrapper).trigger('click')
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
@@ -1319,7 +1322,7 @@ describe('SettingsView — E2E 关键路径', () => {
     )
     const saveConfig = vi.spyOn(store, 'saveConfig').mockRejectedValueOnce(new Error('disk unavailable'))
     await wrapper.get('.hc-provider__card-head').trigger('click')
-    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await modelManagerEntry(wrapper).trigger('click')
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
@@ -1371,12 +1374,17 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-btn-primary').trigger('click')
     await vi.waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1))
 
-    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await modelManagerEntry(wrapper).trigger('click')
     await flushPromises()
     const body = new DOMWrapper(document.body)
     await body.get('button[title="重新同步"]').trigger('click')
+    // 打开管理器会自动同步一次，手动“重新同步”再同步一次。
     await vi.waitFor(() =>
-      expect(mockFetchProviderModels).toHaveBeenCalledTimes(startupFetchCalls + 1),
+      expect(mockFetchProviderModels).toHaveBeenCalledTimes(startupFetchCalls + 2),
+    )
+    // 等待本轮目录同步真正收口，避免显式保存与仍在进行的同步草稿竞争。
+    await vi.waitFor(() =>
+      expect(body.get('button[title="重新同步"]').attributes('disabled')).toBeUndefined(),
     )
     expect(saveConfig).toHaveBeenCalledTimes(1)
 
@@ -1385,6 +1393,7 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(saveConfig).toHaveBeenCalledTimes(1)
     await body.get('[data-testid="model-manager-cancel"]').trigger('click')
     await wrapper.get('.hc-toolbar .hc-btn-primary').trigger('click')
+    await flushPromises()
     await vi.waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(2))
 
     expect(savedSnapshots[0]).not.toEqual(Array.from({ length: 10 }, (_, index) => `new-${index}`))

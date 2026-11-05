@@ -109,10 +109,10 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     ])
 
     const body = dialogBody()
-    expect(body.find('[data-testid="model-manager-filter-chat"]').exists()).toBe(true)
-    expect(body.find('[data-testid="model-manager-filter-embedding"]').exists()).toBe(true)
+    expect(body.find('[data-testid="model-manager-category-text"]').exists()).toBe(true)
+    expect(body.find('[data-testid="model-manager-category-embedding"]').exists()).toBe(true)
 
-    await body.get('[data-testid="model-manager-filter-embedding"]').trigger('click')
+    await body.get('[data-testid="model-manager-category-embedding"]').trigger('click')
     const visibleRows = dialogBody().findAll('.mm-row')
     expect(visibleRows).toHaveLength(1)
     expect(visibleRows[0]!.text()).toContain(EMBEDDING_MODEL_ID)
@@ -168,7 +168,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     })
     const { settings } = mountManager(provider, [{ id: 'chat-a', name: 'Chat A' }])
 
-    expect(modelRow('legacy-chat').text()).toContain('已下架')
+    expect(modelRow('legacy-chat').text()).toContain('目录未返回')
     await toggleModelRow('legacy-chat')
     await dialogBody().get('[data-testid="model-manager-apply"]').trigger('click')
     await flushPromises()
@@ -190,7 +190,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     })
     mountManager(provider, [{ id: 'chat-a', name: 'Chat A' }])
 
-    expect(modelRow('private-model').text()).not.toContain('已下架')
+    expect(modelRow('private-model').text()).not.toContain('目录未返回')
   })
 
   it('applies a canonical embedding model without replacing the chat default', async () => {
@@ -321,7 +321,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     expect(settings.config!.llm.providers[0]!.models).toEqual([
       expect.objectContaining({
         id: 'chat-a',
-        name: 'Chat A (latest)',
+        name: 'Chat A (synced)',
         capabilities: ['text'],
       }),
     ])
@@ -415,7 +415,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     })
     await flushPromises()
 
-    expect(modelRow('stale-chat').text()).toContain('已下架')
+    expect(modelRow('stale-chat').text()).toContain('目录未返回')
     expect(
       dialogBody()
         .get('[data-testid="model-manager-toggle-stale-chat"]')
@@ -433,14 +433,15 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
       },
     ])
 
+    // 目录 input metadata 只作展示证据，不自动提升为已启用模型的能力声明，也不构成待应用草稿变更。
+    const row = modelRow('chat-a')
+    expect(row.text()).toContain('文本')
+    expect(row.text()).not.toContain('视觉')
     const apply = dialogBody().get<HTMLButtonElement>('[data-testid="model-manager-apply"]')
-    expect(apply.element.disabled).toBe(false)
-    await apply.trigger('click')
-    await flushPromises()
-
+    expect(apply.element.disabled).toBe(true)
     expect(settings.config!.llm.providers[0]!.models[0]).toMatchObject({
       id: 'chat-a',
-      name: 'Chat A Vision',
+      name: 'Chat A',
       capabilities: ['text'],
     })
   })
@@ -495,7 +496,7 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     await row.get('.mm-switch').trigger('click')
     expect(switchButton.attributes('aria-checked')).toBe('false')
     expect(
-      dialogBody().get('[data-testid="model-manager-filter-chat"]').attributes('aria-pressed'),
+      dialogBody().get('[data-testid="model-manager-category-text"]').attributes('aria-pressed'),
     ).toBe('false')
     expect(dialogBody().get('.mm-search input').attributes('aria-label')).toBeTruthy()
   })
