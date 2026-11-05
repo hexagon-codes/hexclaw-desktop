@@ -48,10 +48,11 @@ export function embeddingContractForModel(
 export function normalizeModelCapabilities(
   model: Pick<ModelOption, 'id' | 'capabilities' | 'capabilitiesSource'>,
 ): ModelCapability[] {
-  if (model.capabilitiesSource === 'manual') return model.capabilities ?? ['text']
+  // 已核定的 embedding 专用 ID 优先于手工声明：用户保留默认“文本”时也不能把向量模型选作聊天模型。
   if (CANONICAL_OPENROUTER_EMBEDDING_MODEL_IDS.has(model.id)) {
     return ['embedding']
   }
+  if (model.capabilitiesSource === 'manual') return model.capabilities ?? ['text']
   return model.capabilities ?? ['text']
 }
 
