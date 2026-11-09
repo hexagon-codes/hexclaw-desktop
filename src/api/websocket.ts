@@ -7,7 +7,7 @@ import type { MessageContent, RenderManifest } from '@/contracts/message-content
 
 type ChunkCallback = (message: WsServerMessage) => void
 type ReplyCallback = (message: WsServerMessage) => void
-type ErrorCallback = (error: string) => void
+type ErrorCallback = (error: string, frame?: WsServerMessage) => void
 
 /**
  * 回调分流范围（BUG-20260718 §15 防串）：把回调限定到某个 request/session。
@@ -78,6 +78,8 @@ interface WsServerMessage {
   render_manifest?: RenderManifest
   reasoning?: string
   done?: boolean
+  code?: string
+  retryable?: boolean
   session_id?: string
   /** 后端若回填请求 ID，可据此把回调按 request 分流防串（BUG-20260718）。 */
   request_id?: string
@@ -484,7 +486,7 @@ class HexClawWS {
         this.replyCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg) })
         break
       case 'error':
-        this.errorCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg.content) })
+        this.errorCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg.content, msg) })
         break
       case 'pong':
         this.lastPongTime = Date.now()

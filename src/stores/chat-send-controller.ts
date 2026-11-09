@@ -64,6 +64,7 @@ export function createChatSendController(params: {
   pendingAutoTitleSync: Map<string, Promise<void>>
   persistMessage: (message: ChatMessage, sessionId: string) => Promise<boolean>
   upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
+  seedRecoveredStream: (sessionId: string, snapshot: import('@/api/chat').ActiveStreamSnapshot) => void
   updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
@@ -111,6 +112,7 @@ export function createChatSendController(params: {
     pendingAutoTitleSync,
     persistMessage,
     upsertStreamState,
+    seedRecoveredStream,
     updateStreamChunk,
     resetSessionStream,
     finalizeAssistantMessage,
@@ -131,6 +133,7 @@ export function createChatSendController(params: {
     isSessionCancelled,
     setSessionPending,
     upsertStreamState,
+    seedRecoveredStream,
     updateStreamChunk,
     resetSessionStream,
     finalizeAssistantMessage,

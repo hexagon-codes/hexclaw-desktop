@@ -228,6 +228,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingAutoTitleSync: runtime.pendingAutoTitleSync,
     persistMessage: msgSvc.persistMessage,
     upsertStreamState: boundStreamController.upsertStreamState,
+    seedRecoveredStream: boundStreamController.seedRecoveredStream,
     updateStreamChunk: boundStreamController.updateStreamChunk,
     resetSessionStream: boundStreamController.resetSessionStream,
     finalizeAssistantMessage: boundStreamController.finalizeAssistantMessage,

@@ -39,6 +39,9 @@ export function createBoundChatStreamController(params: {
     ) {
       streamController.upsertStreamState(sessionId, nextState)
     },
+    seedRecoveredStream(sessionId: string, snapshot: import('@/api/chat').ActiveStreamSnapshot) {
+      streamController.seedRecoveredStream(sessionId, snapshot)
+    },
     resetSessionStream(sessionId?: string | null) {
       streamController.resetSessionStream(sessionId, sending, draftSending)
     },

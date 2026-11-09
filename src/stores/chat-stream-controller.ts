@@ -155,6 +155,7 @@ export function createChatStreamController(params: {
         /* messageService 部分 mock 或缺失：best-effort，忽略 */
       }
     },
+    finalizeAssistantMessage: completionController.finalizeAssistantMessage,
   })
 
   const recoveryController = createChatStreamRecoveryController({

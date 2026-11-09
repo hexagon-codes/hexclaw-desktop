@@ -39,11 +39,18 @@ export class ChatRequestError extends Error {
   noFallback: boolean
   /** 用户已请求停止后连接中断；此时后台终态未知，不能写成业务失败。 */
   stopRequested: boolean
-  constructor(message: string, noFallback = false) {
+  readonly result?: WebSocketStreamResult
+  readonly data?: StreamWsServerMessage | ActiveStreamSnapshot
+  constructor(message: string, noFallback = false, result?: WebSocketStreamResult, data?: StreamWsServerMessage | ActiveStreamSnapshot) {
     super(message)
     this.name = 'ChatRequestError'
     this.noFallback = noFallback
     this.stopRequested = false
+    // 回执供请求归约读取，不把正文和文件载荷带入通用错误枚举日志。
+    Object.defineProperties(this, {
+      result: { value: result, enumerable: false },
+      data: { value: data, enumerable: false },
+    })
   }
 }
 
@@ -92,6 +99,7 @@ export interface StreamCallbacks {
     metadata?: Record<string, unknown>
     done?: boolean
     messageContent?: MessageContent
+    renderManifest?: RenderManifest
     runtimeFrame?: RuntimeWireFrame
     blocks?: ChatMessage['blocks']
     toolCalls?: ChatMessage['tool_calls']
@@ -115,6 +123,8 @@ interface StreamWsServerMessage {
   render_manifest?: RenderManifest
   reasoning?: string
   done?: boolean
+  code?: string
+  retryable?: boolean
   status?: string
   session_id?: string
   request_id?: string
@@ -229,11 +239,39 @@ function foldRetrievalHits(
 export interface WebSocketStreamResult {
   content: string
   messageContent?: MessageContent
+  renderManifest?: RenderManifest
   metadata?: Record<string, unknown>
   toolCalls?: ChatMessage['tool_calls']
   blocks?: ChatMessage['blocks']
   agentName?: string
   terminalState?: 'completed' | 'failed' | 'cancelled'
+}
+
+/** 错误文字属于失败原因，正文与产物只取同次请求的已观察结果。 */
+function projectErrorResult(
+  msg: StreamWsServerMessage,
+  accumulatedContent: string,
+  snapshot: RuntimeWireSnapshot,
+): WebSocketStreamResult {
+  const terminal = snapshot.runtimeEvents[snapshot.runtimeEvents.length - 1]?.terminal_status
+  const terminalState = terminal === 'cancelled' || msg.status === 'cancelled'
+    || msg.metadata?.thinking_state === 'cancelled' || msg.content === USER_CANCELLED_MESSAGE
+    ? 'cancelled' : 'failed'
+  return {
+    content: msg.message_content?.markdown ?? accumulatedContent,
+    messageContent: msg.message_content,
+    renderManifest: msg.render_manifest,
+    metadata: runtimeMetadata(foldRetrievalHits({
+      ...msg.metadata,
+      thinking_state: terminalState,
+      ...(msg.session_id ? { session_id: msg.session_id } : {}),
+      ...(msg.request_id ? { request_id: msg.request_id } : {}),
+    }, msg), snapshot),
+    toolCalls: msg.tool_calls,
+    blocks: msg.blocks,
+    agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
+    terminalState,
+  }
 }
 
 export interface WebSocketStreamHandle {
@@ -614,16 +652,27 @@ export function sendViaWebSocket(
       resolve()
     }, streamScope)
 
-    hexclawWS.onError((errMsg: string) => {
+    hexclawWS.onError((errMsg: string, errorFrame) => {
+      if (settled) return
+      let result: WebSocketStreamResult | undefined
+      if (errorFrame) {
+        const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, errorFrame, chatParams, expectedReasoningRequest)
+        if (!merged.accepted || (errorFrame.sequence && !merged.frame)) return
+        expectedReasoningRequest = merged.expectedReasoningRequest
+        if (merged.frame) runtimeSnapshot = merged.snapshot
+        callbacks?.onChunk?.('', undefined, merged.frame)
+        result = projectErrorResult(errorFrame as StreamWsServerMessage, accumulatedContent, runtimeSnapshot)
+      }
       // User-initiated cancellation should not trigger fallback or surface as an error.
-      if (errMsg === USER_CANCELLED_MESSAGE) {
+      if (result?.terminalState === 'cancelled' || errMsg === USER_CANCELLED_MESSAGE) {
         if (settled) return
         settled = true
         clearTimers()
+        if (result) callbacks?.onSnapshot?.({ ...result, done: true })
         resolve()
         return
       }
-      fail(new ChatRequestError(errMsg || 'WebSocket request failed', true))
+      fail(new ChatRequestError(errMsg || 'WebSocket request failed', true, result, errorFrame as StreamWsServerMessage | undefined))
     }, streamScope)
 
     const wsAttachments = attachments?.map((attachment) => {
@@ -663,6 +712,7 @@ function openRequestSocket(
   route?: { provider?: string; model?: string },
   reasoningRequest: ReasoningRequest | null = null,
 ): WebSocketStreamHandle {
+  const scope = backendScopeKey()
   const ws = new NativeSidecarWebSocket('/ws')
 
   let settled = false
@@ -672,6 +722,7 @@ function openRequestSocket(
   let runtimeSnapshot = createRuntimeWireSnapshot(reasoningRequest ?? undefined)
   let firstReplyTimer: ReturnType<typeof setTimeout> | null = null
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
+  let snapshotObserver: WebSocketStreamHandle | undefined
   let resolveDone!: (value: WebSocketStreamResult | null) => void
   let rejectDone!: (reason?: unknown) => void
 
@@ -693,6 +744,7 @@ function openRequestSocket(
 
   function cleanup() {
     clearTimers()
+    snapshotObserver?.dispose?.()
     releaseApprovalSocket(ws, 'Approval request socket closed')
     ws.onopen = null
     ws.onmessage = null
@@ -721,7 +773,7 @@ function openRequestSocket(
     if (settled) return
     // 主动停止后连接异常只结束观察，不能回退成一次新的业务请求；
     // stopRequested 与普通 noFallback 业务错误分开，后者仍应展示真实失败。
-    if (cancelRequested && err instanceof ChatRequestError) {
+    if (cancelRequested && err instanceof ChatRequestError && !err.result?.terminalState) {
       err.noFallback = true
       err.stopRequested = true
     }
@@ -747,6 +799,35 @@ function openRequestSocket(
     } catch {
       // 发送失败继续观察原请求，不能把控制失败当作后台终态。
     }
+  }
+
+  function observeStoppedRequest(error: ChatRequestError) {
+    if (settled || snapshotObserver) return
+    if (!cancelRequested || !requestId) { settleReject(error); return }
+    if (backendScopeKey() !== scope) { settleResolve(null); return }
+    cleanup()
+    try { ws.close() } catch { /* 连接已中断，继续只读观察原请求。 */ }
+    // 保留当前部分预览，复用快照读取等待真实终态，不重发消息或取消控制。
+    snapshotObserver = observeStreamSnapshots(
+      sessionId, requestId, (snapshot) => {
+        const metadata = normalizeRuntimeSnapshotMetadata(snapshot.metadata, undefined, route, expectedReasoningRequest ?? undefined)
+        callbacks?.onSnapshot?.({
+          content: snapshot.content || '',
+          reasoning: metadata.reasoning_disclosure?.visibility === 'visible' ? snapshot.reasoning : undefined,
+          metadata,
+          done: snapshot.done,
+          messageContent: snapshot.message_content,
+          renderManifest: snapshot.render_manifest,
+          blocks: snapshot.blocks,
+          toolCalls: snapshot.tool_calls,
+        })
+      }, 'websocket', route, expectedReasoningRequest ?? undefined,
+    )
+    void snapshotObserver.done.then(settleResolve, (observationError) => {
+      settleReject(observationError instanceof ChatRequestError
+        ? observationError
+        : new ChatRequestError(observationError instanceof Error ? observationError.message : String(observationError), true))
+    })
   }
 
   function markActivity() {
@@ -793,12 +874,24 @@ function openRequestSocket(
   }
 
   ws.onmessage = (event: MessageEvent<string>) => {
+    if (settled) return
+    if (backendScopeKey() !== scope) { settleResolve(null); return }
     let msg: StreamWsServerMessage
     try {
       msg = JSON.parse(event.data)
     } catch {
       logger.warn('Request WebSocket received non-JSON message', event.data)
       return
+    }
+    // 私有连接仍核对显式来源，迟到或异源错误不能结束当前请求。
+    // 审批消息使用独立审批身份，继续交给已有审批归约校验。
+    if (['chunk', 'reply', 'error', 'stream_snapshot'].includes(msg.type)) {
+      for (const value of [msg.request_id, msg.metadata?.request_id]) {
+        if (requestId && typeof value === 'string' && value && value !== requestId) return
+      }
+      for (const value of [msg.session_id, msg.metadata?.session_id]) {
+        if (sessionId && typeof value === 'string' && value && value !== sessionId) return
+      }
     }
 
     if (consumeToolApprovalAck(msg as unknown as Record<string, unknown>)) {
@@ -891,26 +984,35 @@ function openRequestSocket(
         const publicReasoning =
           runtimeSnapshot.reasoningDisclosure?.visibility === 'visible' ? msg.reasoning : undefined
         callbacks?.onSnapshot?.({
-          content: msg.content,
+          content: msg.message_content?.markdown ?? msg.content,
           reasoning: publicReasoning,
           metadata: runtimeMetadata(msg.metadata, runtimeSnapshot),
           done: msg.done,
           messageContent: msg.message_content,
+          renderManifest: msg.render_manifest,
           runtimeFrame,
           blocks: msg.blocks,
           toolCalls: msg.tool_calls,
         })
         if (msg.done) {
-          settleResolve({
+          const result: WebSocketStreamResult = {
             terminalState: msg.status === 'cancelled' ? 'cancelled' : msg.status === 'errored' ? 'failed' : 'completed',
-            content: msg.content,
+            content: msg.message_content?.markdown ?? msg.content,
             messageContent: msg.message_content,
+            renderManifest: msg.render_manifest,
             metadata: runtimeMetadata(foldRetrievalHits(msg.metadata, msg), runtimeSnapshot),
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,
             agentName:
               typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
-          })
+          }
+          if (result.terminalState === 'failed') {
+            settleReject(new ChatRequestError(
+              typeof msg.metadata?.error === 'string' && msg.metadata.error
+                ? msg.metadata.error : 'WebSocket stream failed',
+              true, result, msg,
+            ))
+          } else settleResolve(result)
         }
         break
       }
@@ -931,13 +1033,20 @@ function openRequestSocket(
         })
         break
       }
-      case 'error':
-        if (msg.content === USER_CANCELLED_MESSAGE) {
-          settleResolve({ content: accumulatedContent, metadata: runtimeMetadata(msg.metadata, runtimeSnapshot), terminalState: 'cancelled' })
+      case 'error': {
+        const merged = mergeRuntimeFrameWithExpectation(runtimeSnapshot, msg, route, expectedReasoningRequest)
+        if (!merged.accepted || (msg.sequence && !merged.frame)) break
+        expectedReasoningRequest = merged.expectedReasoningRequest
+        if (merged.frame) runtimeSnapshot = merged.snapshot
+        callbacks?.onChunk?.('', undefined, merged.frame)
+        const result = projectErrorResult(msg, accumulatedContent, runtimeSnapshot)
+        if (result.terminalState === 'cancelled') {
+          settleResolve(result)
           return
         }
-        settleReject(new ChatRequestError(msg.content || 'WebSocket request failed', true))
+        settleReject(new ChatRequestError(msg.content || 'WebSocket request failed', true, result, msg))
         break
+      }
       case 'tool_approval_request':
       case 'tool_permission_request': {
         const approvalMessage = msg as unknown as {
@@ -1051,12 +1160,12 @@ function openRequestSocket(
   }
 
   ws.onerror = () => {
-    settleReject(new ChatRequestError('WebSocket connection failed', false))
+    observeStoppedRequest(new ChatRequestError('WebSocket connection failed', false))
   }
 
   ws.onclose = () => {
     if (!settled) {
-      settleReject(new ChatRequestError('WebSocket connection lost', false))
+      observeStoppedRequest(new ChatRequestError('WebSocket connection lost', false))
     }
   }
 
@@ -1139,6 +1248,18 @@ export function resumeRestStream(
   requestId: string,
   onSnapshot: (snapshot: ActiveStreamSnapshot) => void,
 ): WebSocketStreamHandle {
+  return observeStreamSnapshots(sessionId, requestId, onSnapshot, 'rest')
+}
+
+/** 两种传输共用原请求快照的只读观察、释放与后端归属，保持各自来源身份。 */
+function observeStreamSnapshots(
+  sessionId: string,
+  requestId: string,
+  onSnapshot: (snapshot: ActiveStreamSnapshot) => void,
+  source: 'rest' | 'websocket',
+  route?: { provider?: string; model?: string },
+  reasoningRequest?: ReasoningRequest,
+): WebSocketStreamHandle {
   const scope = backendScopeKey()
   let settled = false
   let cancelPending = false
@@ -1164,10 +1285,21 @@ export function resumeRestStream(
   function consume(snapshot: ActiveStreamSnapshot) {
     if (settled) return
     if (backendScopeKey() !== scope) { settle(null); return }
-    if (snapshot.request_id !== requestId || snapshot.session_id !== sessionId || snapshot.source !== 'rest') {
-      throw new ChatRequestError('REST stream snapshot identity mismatch', true)
+    if (snapshot.request_id !== requestId || snapshot.session_id !== sessionId || snapshot.source !== source) {
+      throw new ChatRequestError(`${source === 'rest' ? 'REST' : 'WebSocket'} stream snapshot identity mismatch`, true)
     }
-    onSnapshot(snapshot)
+    const metadata = normalizeRuntimeSnapshotMetadata({
+      ...snapshot.metadata,
+      request_id: requestId,
+      session_id: sessionId,
+      assistant_message_id: snapshot.assistant_message_id ?? snapshot.metadata?.assistant_message_id,
+      message_id: snapshot.message_id ?? snapshot.metadata?.message_id,
+      reasoning_disclosure: snapshot.reasoning_disclosure ?? snapshot.metadata?.reasoning_disclosure,
+      runtime_events: snapshot.runtime_events ?? snapshot.metadata?.runtime_events,
+      last_sequence: snapshot.last_sequence ?? snapshot.metadata?.last_sequence,
+    }, undefined, route, reasoningRequest)
+    const content = snapshot.message_content?.markdown ?? (snapshot.content || '')
+    onSnapshot({ ...snapshot, content, metadata })
     if (!snapshot.done) return
     const terminalState = snapshot.status === 'completed'
       ? 'completed'
@@ -1176,25 +1308,24 @@ export function resumeRestStream(
         : snapshot.status === 'errored'
           ? 'failed'
           : undefined
-    if (!terminalState) throw new ChatRequestError('REST stream terminal status is missing', true)
-    const metadata = normalizeRuntimeSnapshotMetadata({
-      ...snapshot.metadata,
-      request_id: requestId,
-      assistant_message_id: snapshot.assistant_message_id ?? snapshot.metadata?.assistant_message_id,
-      message_id: snapshot.message_id ?? snapshot.metadata?.message_id,
-      reasoning_disclosure: snapshot.reasoning_disclosure ?? snapshot.metadata?.reasoning_disclosure,
-      runtime_events: snapshot.runtime_events ?? snapshot.metadata?.runtime_events,
-      last_sequence: snapshot.last_sequence ?? snapshot.metadata?.last_sequence,
-    })
-    settle({
-      content: snapshot.content || '',
+    if (!terminalState) throw new ChatRequestError(`${source === 'rest' ? 'REST' : 'WebSocket'} stream terminal status is missing`, true)
+    const result: WebSocketStreamResult = {
+      content,
       messageContent: snapshot.message_content,
+      renderManifest: snapshot.render_manifest,
       metadata,
       toolCalls: snapshot.tool_calls,
       blocks: snapshot.blocks,
       agentName: typeof metadata.agent_name === 'string' ? metadata.agent_name : undefined,
       terminalState,
-    })
+    }
+    if (terminalState === 'failed') {
+      settle(null, new ChatRequestError(
+        typeof metadata.error === 'string' && metadata.error
+          ? metadata.error : `${source === 'rest' ? 'REST' : 'WebSocket'} stream failed`,
+        true, result, snapshot,
+      ))
+    } else settle(result)
   }
 
   async function poll() {
@@ -1205,7 +1336,7 @@ export function resumeRestStream(
     try {
       const { getActiveStreamSnapshot } = await import('@/api/chat')
       if (settled || backendScopeKey() !== scope) { settle(null); return }
-      const snapshot = await getActiveStreamSnapshot(requestId, { source: 'rest', signal: reader.signal })
+      const snapshot = await getActiveStreamSnapshot(requestId, { source, signal: reader.signal })
       received = true
       consume(snapshot)
       observationFailed = false
@@ -1213,11 +1344,11 @@ export function resumeRestStream(
       if (settled) return
       if (backendScopeKey() !== scope) { settle(null); return }
       const status = (error as { status?: number })?.status
-      if (received || (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429)) {
+      if (source === 'rest' && (received || (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429))) {
         settle(null, error)
         return
       }
-      if (!observationFailed) logger.warn('REST stream observation interrupted', error)
+      if (!observationFailed) logger.warn(`${source === 'rest' ? 'REST' : 'WebSocket'} stream observation interrupted`, error)
       observationFailed = true
     } finally {
       reader = undefined

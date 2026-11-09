@@ -324,15 +324,23 @@ export async function apiSSE(
     // FS-5 一致性：SSE 错误也优先抽后端 body.error（cron 创建走 SSE，429/400 时
     // 用户应看到后端中文错误而非泛化状态串），与 apiPost/uploadFormData 对齐。
     let serverMsg: string | undefined
+    let payload: Record<string, unknown> | undefined
     try {
       const data = (await response.clone().json()) as Record<string, unknown>
+      payload = data
       const detail = (data?.error ?? data?.message) as string | undefined
       if (typeof detail === 'string' && detail.length > 0) serverMsg = detail
     } catch {
       // 非 JSON body（SSE 端点异常时可能返回纯文本）→ 降级用状态串
     }
     const apiErr = fromHttpStatus(response.status, serverMsg)
-    throw new Error(apiErr.message)
+    // 错误仍拒绝请求，同时保留已观察结果供调用方按原错误合同归约。
+    const failure = Object.assign(new Error(apiErr.message), apiErr)
+    Object.defineProperties(failure, {
+      data: { value: payload, enumerable: false },
+      cause: { value: payload, enumerable: false },
+    })
+    throw failure
   }
 
   if (!response.body) {

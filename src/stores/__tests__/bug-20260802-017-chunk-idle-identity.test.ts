@@ -107,6 +107,7 @@ describe('BUG-20260802-017 chunk idle request identity', () => {
       return false
     })
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),

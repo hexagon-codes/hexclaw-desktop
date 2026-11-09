@@ -22,6 +22,7 @@ export function createChatStreamRecoveryController(params: {
   finalizeAssistantMessage: (args: {
     content: string
     messageContent?: import('@/contracts/message-content').MessageContent
+    renderManifest?: import('@/contracts/message-content').RenderManifest
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: import('@/types').ChatMessage['tool_calls']
@@ -61,16 +62,16 @@ export function createChatStreamRecoveryController(params: {
   } = params
 
   async function recoverActiveStreams(sending: Ref<boolean>, draftSending: Ref<boolean>) {
+    const recoveryScope = backendScopeKey()
     try {
       const response = await listActiveStreams()
+      if (backendScopeKey() !== recoveryScope) return
       for (const snapshot of response.streams || []) {
+        if (backendScopeKey() !== recoveryScope) return
         if (!snapshot.request_id || !snapshot.session_id || snapshot.done) continue
-        const existing = activeStreams.value[snapshot.session_id]
-        if (streamHandles.has(snapshot.session_id)
-          || (existing?.requestId === snapshot.request_id && snapshot.source !== 'rest')) continue
+        if (streamHandles.has(snapshot.session_id)) continue
 
         seedRecoveredStream(snapshot.session_id, snapshot)
-        const recoveryScope = backendScopeKey()
         // 恢复服务可能同步回调 onSnapshot；用 holder 在初始化前提供可读句柄，避免 TDZ。
         const handleRef: { current?: import('@/services/chatService').WebSocketStreamHandle } = {}
         const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId: snapshot.session_id, requestId: snapshot.request_id, handle: handleRef.current, scope: recoveryScope })
@@ -87,10 +88,13 @@ export function createChatStreamRecoveryController(params: {
             seedRecoveredStream(snapshot.session_id, {
               ...snapshot,
               content: current.content,
+              message_content: current.messageContent,
+              render_manifest: current.renderManifest,
               reasoning: current.reasoning,
               blocks: current.blocks,
               tool_calls: current.toolCalls,
               done: !!current.done,
+              metadata: current.metadata,
               ...current.metadata,
             })
           },
@@ -117,13 +121,6 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             const finalState = activeStreams.value[snapshot.session_id]
-            if (snapshot.source === 'rest' && result.terminalState === 'failed') {
-              handleSendError(
-                new Error(typeof result.metadata?.error === 'string' ? result.metadata.error : 'REST stream failed'),
-                snapshot.session_id, sending, draftSending, finalState,
-              )
-              return
-            }
             if (snapshot.source === 'rest' && result.terminalState === 'cancelled'
               && !result.content.trim() && !finalState?.reasoning.trim()
               && !result.toolCalls?.length && !result.blocks?.length && !result.messageContent) {
@@ -131,8 +128,9 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             finalizeAssistantMessage({
-              content: result.content || finalState?.content || '',
+              content: result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
               messageContent: result.messageContent,
+              renderManifest: result.renderManifest,
               sessionId: snapshot.session_id,
               metadata: result.metadata,
               toolCalls: result.toolCalls,
@@ -147,6 +145,10 @@ export function createChatStreamRecoveryController(params: {
           .catch((resumeError) => {
             if (!ownsRequest()) return
             streamHandles.delete(snapshot.session_id)
+            if (isSessionCancelled(snapshot.session_id)) {
+              resetSessionStream(snapshot.session_id, sending, draftSending)
+              return
+            }
             handleSendError(
               resumeError,
               snapshot.session_id,

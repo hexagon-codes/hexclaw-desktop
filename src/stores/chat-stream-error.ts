@@ -7,6 +7,9 @@ import {
 } from '@/types/chat'
 import { fromNativeError } from '@/utils/errors'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
+import type { WebSocketStreamResult } from '@/services/chatService'
+import type { createChatStreamCompletionController } from './chat-stream-completion'
+import { hasPersistedAssistantReply } from './chat-stream-completion'
 
 type LoggerModule = typeof import('@/utils/logger').logger
 
@@ -24,6 +27,7 @@ export function createChatStreamErrorController(params: {
   ) => void
   loadSessions: (opts?: { suppressAutoSelect?: boolean }) => Promise<void>
   persistErrorReply: (sessionId: string, message: ChatMessage) => void | Promise<void>
+  finalizeAssistantMessage?: ReturnType<typeof createChatStreamCompletionController>['finalizeAssistantMessage']
 }) {
   const {
     error,
@@ -35,6 +39,7 @@ export function createChatStreamErrorController(params: {
     resetSessionStream,
     loadSessions,
     persistErrorReply,
+    finalizeAssistantMessage,
   } = params
 
   function handleSendError(
@@ -44,10 +49,37 @@ export function createChatStreamErrorController(params: {
     draftSending: Ref<boolean>,
     streamState?: SessionStreamState,
   ) {
-    logger.error('发送消息失败', errorValue)
     const apiError = fromNativeError(errorValue)
+    logger.error('发送消息失败', { code: apiError.code, message: apiError.message, status: apiError.status })
     error.value = apiError
-    const targetSessionId = sessionId ?? streamingSessionId.value ?? currentSessionId.value
+    const projection = (errorValue as { result?: WebSocketStreamResult } | null)?.result
+    const projectionSessionId = typeof projection?.metadata?.session_id === 'string'
+      && projection.metadata.session_id.trim() ? projection.metadata.session_id : undefined
+    const targetSessionId = (sessionId === '' && projectionSessionId ? projectionSessionId : sessionId)
+      ?? (streamState?.sessionId || projectionSessionId)
+      ?? streamingSessionId.value ?? currentSessionId.value
+    if (projection && targetSessionId && finalizeAssistantMessage) {
+      const message = finalizeAssistantMessage({
+        content: projection.messageContent?.markdown
+          ?? (projection.content || streamState?.content || apiError.message || ''),
+        messageContent: projection.messageContent,
+        renderManifest: projection.renderManifest,
+        sessionId: targetSessionId,
+        metadata: { ...projection.metadata, is_error: true },
+        toolCalls: projection.toolCalls,
+        blocks: projection.blocks,
+        agentName: projection.agentName,
+        reasoning: streamState?.reasoning,
+        sending,
+        draftSending,
+        terminalState: 'failed',
+      })
+      // 仅服务端明确的落盘回执可替代追加，计划消息ID不证明已保存。
+      if (!hasPersistedAssistantReply(projection.metadata)) {
+        void persistErrorReply(targetSessionId, message)
+      }
+      return
+    }
     resetSessionStream(targetSessionId, sending, draftSending)
     const fallbackReasoningRequest = streamState?.reasoningReceipt?.reasoning_request
       ?? (streamState?.thinkingEnabled ? 'on' : 'off')

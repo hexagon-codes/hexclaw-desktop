@@ -69,6 +69,7 @@ function createExceptionHarness(overrides?: {
   )
 
   const controller = createChatSendController({
+    seedRecoveredStream: vi.fn(),
     currentSessionId,
     messages,
     pendingSessionIds,

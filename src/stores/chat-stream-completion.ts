@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
-import type { MessageContent } from '@/contracts/message-content'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import {
   normalizeReasoningReceipt,
   normalizeRuntimeSnapshotMetadata,
@@ -13,6 +13,13 @@ import { extractThinkTags } from '@/utils/think-tags'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
 
 type MessageServiceModule = typeof import('@/services/messageService')
+
+/** 只有服务端元数据中的明确落盘身份且无保存错误，才能省略追加。 */
+export function hasPersistedAssistantReply(metadata: Record<string, unknown> | undefined): boolean {
+  return typeof metadata?.backend_message_id === 'string'
+    && !!metadata.backend_message_id.trim()
+    && !metadata.persist_error
+}
 
 export function createChatStreamCompletionController(params: {
   activeStreams: Ref<Record<string, SessionStreamState>>
@@ -52,6 +59,7 @@ export function createChatStreamCompletionController(params: {
   function finalizeAssistantMessage(args: {
     content: string
     messageContent?: MessageContent
+    renderManifest?: RenderManifest
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
@@ -179,10 +187,12 @@ export function createChatStreamCompletionController(params: {
         || normalizedRuntimeMetadata.assistant_message_id
         || createId(),
       role: 'assistant',
-      content: (terminalState === 'failed' || terminalState === 'cancelled') && !hasDeliverableOutput
+      content: (args.messageContent && !finalContent.trim())
+        || ((terminalState === 'failed' || terminalState === 'cancelled') && !hasDeliverableOutput)
         ? ''
         : getAssistantDisplayContent(finalContent, finalReasoning),
       message_content: args.messageContent,
+      render_manifest: args.renderManifest,
       timestamp: new Date().toISOString(),
       reasoning: finalReasoning,
       metadata: finalMetadata,
@@ -192,10 +202,16 @@ export function createChatStreamCompletionController(params: {
     }
 
     appendMessageToSession(args.sessionId, assistantMessage)
+    if (args.terminalState === 'cancelled' && hasDeliverableOutput
+      && !hasPersistedAssistantReply(args.metadata)) {
+      // 真实取消没有正常助手轮次落库，沿原身份保存已观察的部分结果。
+      void msgSvc.persistCancelledReply(args.sessionId, assistantMessage)
+    }
     bumpLocalSession(args.sessionId)
 
     // 简化标题流程：直接调 suggest-title（不传 expectedTitle），后端无条件生成并写入
-    const shouldSuggestTitle = !!pendingSuggestedTitleExpectation.value[args.sessionId]
+    const shouldSuggestTitle = terminalState === 'completed'
+      && !!pendingSuggestedTitleExpectation.value[args.sessionId]
     setPendingSuggestedTitleExpectation(args.sessionId, null)
 
     void (async () => {

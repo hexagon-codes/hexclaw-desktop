@@ -21,8 +21,160 @@ import { createChatStreamRecoveryController } from '../chat-stream-recovery'
 import { createChatStreamStateController } from '../chat-stream-state'
 import { createChatThinkingTimerController } from '../chat-thinking-timer'
 import { createChatStoreState, createChatStoreRuntime } from '../chat-store-state'
+import { buildRecoveredStreamState, buildSessionStreamState } from '../chat-stream-helpers'
 
 describe('chat controller modules', () => {
+  it('uses canonical empty markdown when rebuilding a stream with an older preview', () => {
+    const stream = buildRecoveredStreamState('s1', {
+      session_id: 's1', request_id: 'req1', content: 'older preview', done: true,
+      message_content: {
+        content_id: `content:${'a'.repeat(64)}`, content_version: '1.0', producer_kind: 'chat',
+        markdown: '', source_digest: `sha256:${'a'.repeat(64)}`, locale: 'en',
+        attachments: [{ asset_id: 'partial-file', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+      },
+    })
+    expect(stream.content).toBe('')
+    expect(stream.rawContent).toBe('')
+  })
+
+  it.each([
+    ['rest', 'cancelled', false], ['websocket', 'cancelled', false],
+    ['rest', 'failed', false], ['websocket', 'failed', false], ['websocket', 'failed', true],
+  ] as const)('keeps recovered %s %s results request-owned when deleted=%s', async (source, terminalState, deleted) => {
+    const activeStreams = ref<Record<string, ReturnType<typeof buildSessionStreamState>>>({})
+    const streamHandles = new Map<string, any>()
+    let resolveDone!: (value: unknown) => void
+    let rejectDone!: (error: unknown) => void
+    const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
+    const handle = { cancel: vi.fn(), done }
+    const finalizeAssistantMessage = vi.fn()
+    const handleSendError = vi.fn()
+    const resetSessionStream = vi.fn()
+    const seedRecoveredStream = vi.fn((sessionId, snapshot) => {
+      activeStreams.value[sessionId] = buildRecoveredStreamState(sessionId, snapshot)
+    })
+    const controller = createChatStreamRecoveryController({
+      activeStreams, streamHandles, logger: { warn: vi.fn() } as any,
+      chatSvc: { resumeRestStream: vi.fn().mockReturnValue(handle), resumeWebSocketStream: vi.fn().mockReturnValue(handle) } as any,
+      storePendingApproval: vi.fn(),
+      listActiveStreams: vi.fn().mockResolvedValue({ streams: [{
+        source, session_id: 'recovered-session', request_id: 'recovered-request', content: 'older preview', done: false,
+      }], total: 1 }),
+      isSessionCancelled: () => deleted, seedRecoveredStream, updateStreamChunk: vi.fn(),
+      finalizeAssistantMessage, resetSessionStream, handleSendError,
+    })
+    const messageContent = {
+      content_id: `content:${'a'.repeat(64)}`, content_version: '1.0', producer_kind: 'chat',
+      markdown: '', source_digest: `sha256:${'a'.repeat(64)}`, locale: 'en',
+      attachments: [{ asset_id: 'recovered-file', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+    }
+    const renderManifest = {
+      render_id: 'recovered-render', content_id: messageContent.content_id, surface: 'desktop',
+      capability_snapshot: { markdown: true, tex_math: false, attachments: true }, renderer_version: '1.0',
+      source_digest: messageContent.source_digest,
+      parts: [{ kind: 'artifact', artifact_ref: 'recovered-file', artifact_digest: `sha256:${'b'.repeat(64)}`, alt_text: 'partial file' }],
+    }
+    const result = { content: '', messageContent, renderManifest, terminalState, metadata: { error: 'actual command failure', persist_error: 'storage failed' } }
+    const failure = Object.assign(new Error('actual command failure'), { result })
+
+    await controller.recoverActiveStreams(ref(false), ref(false))
+    if (terminalState === 'failed') rejectDone(failure)
+    else resolveDone(result)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const errorCall = [failure, 'recovered-session', expect.anything(), expect.anything(), expect.objectContaining({ requestId: 'recovered-request' })]
+    const completionCall = [expect.objectContaining({ content: '', messageContent, renderManifest, terminalState: 'cancelled' })]
+    const resetCall = ['recovered-session', expect.anything(), expect.anything()]
+    const expectedErrors = !deleted && terminalState === 'failed' ? [errorCall] : []
+    const expectedCompletions = !deleted && terminalState === 'cancelled' ? [completionCall] : []
+    const expectedResets = deleted ? [resetCall] : []
+    expect(handleSendError.mock.calls).toEqual(expectedErrors)
+    expect(finalizeAssistantMessage.mock.calls).toEqual(expectedCompletions)
+    expect(resetSessionStream.mock.calls).toEqual(expectedResets)
+  })
+
+  it('binds an initially unallocated failed request to its returned session instead of the selected session', () => {
+    const finalizeAssistantMessage = vi.fn().mockReturnValue({ id: 'persisted-new-session-reply' })
+    const controller = createChatStreamErrorController({
+      error: ref(null), currentSessionId: ref('unrelated-selected-session'), streamingSessionId: ref(null),
+      logger: { error: vi.fn() } as any, createId: () => 'unused',
+      appendMessageToSession: vi.fn(), resetSessionStream: vi.fn(), loadSessions: vi.fn(), persistErrorReply: vi.fn(),
+      finalizeAssistantMessage,
+    })
+    const error = Object.assign(new Error('execution failed'), {
+      result: { content: 'observed stdout', metadata: { session_id: 'server-assigned-session' }, terminalState: 'failed' },
+    })
+
+    controller.handleSendError(error, '', ref(true), ref(true))
+
+    expect(finalizeAssistantMessage).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'server-assigned-session', content: 'observed stdout', terminalState: 'failed',
+    }))
+  })
+  it.each([
+    { backendMessageId: 'saved-terminal-message', persistError: undefined, shouldPersist: false, emptyCanonical: false, withoutOutput: false },
+    { backendMessageId: 'saved-terminal-message', persistError: 'write failed', shouldPersist: true, emptyCanonical: false, withoutOutput: false },
+    { backendMessageId: undefined, persistError: undefined, shouldPersist: true, emptyCanonical: false, withoutOutput: false },
+    { backendMessageId: undefined, persistError: undefined, shouldPersist: true, emptyCanonical: true, withoutOutput: false },
+    { backendMessageId: undefined, persistError: undefined, shouldPersist: true, emptyCanonical: false, withoutOutput: true },
+  ])('preserves structured failed replies and only appends when persistence is unconfirmed: %j', (receipt) => {
+    const sessionId = 's-failed'
+    const stream = buildSessionStreamState({ sessionId, requestId: 'req-projection', thinkingEnabled: false })
+    if (receipt.emptyCanonical) stream.content = 'older partial preview'
+    const activeStreams = ref({ [sessionId]: stream })
+    const appendMessageToSession = vi.fn()
+    const resetSessionStream = vi.fn()
+    const persistErrorReply = vi.fn()
+    const error = ref(null)
+    const content = {
+      content_id: `content:${'a'.repeat(64)}`, content_version: '1.0' as const, producer_kind: 'chat' as const,
+      markdown: receipt.emptyCanonical ? '' : 'observed failed-command stdout', source_digest: `sha256:${'a'.repeat(64)}`, locale: 'en',
+      attachments: [{ asset_id: 'stdout-artifact', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+    }
+    const toolCalls: NonNullable<ChatMessage['tool_calls']> = [{ id: 'failed-shell', name: 'shell', arguments: '{}', status: 'error' }]
+    const suggestSessionTitle = vi.fn().mockResolvedValue({})
+    const completion = createChatStreamCompletionController({
+      activeStreams, pendingSuggestedTitleExpectation: ref({ [sessionId]: 'pending title' }), pendingAutoTitleSync: new Map(),
+      currentSessionId: ref('another-session'), createId: () => 'unexpected-new-message',
+      msgSvc: { touchSession: vi.fn().mockResolvedValue(undefined), persistCancelledReply: vi.fn(), suggestSessionTitle } as any,
+      loadSessions: vi.fn().mockResolvedValue(undefined), setLocalSessionTitle: vi.fn(),
+      setPendingSuggestedTitleExpectation: vi.fn(), bumpLocalSession: vi.fn(), extractArtifacts: vi.fn(),
+      appendMessageToSession, resetSessionStream,
+    })
+    const controller = createChatStreamErrorController({
+      error, currentSessionId: ref('another-session'), streamingSessionId: ref<string | null>(null),
+      logger: { error: vi.fn() } as any, createId: () => 'unexpected-new-message',
+      appendMessageToSession, resetSessionStream, loadSessions: vi.fn(), persistErrorReply,
+      finalizeAssistantMessage: completion.finalizeAssistantMessage,
+    })
+    const failure = Object.assign(new Error('Command exited with code 7'), {
+      result: {
+        terminalState: 'failed' as const,
+        content: receipt.withoutOutput ? '' : content.markdown,
+        messageContent: receipt.withoutOutput ? undefined : content,
+        toolCalls: receipt.withoutOutput ? undefined : toolCalls,
+        metadata: {
+          assistant_message_id: 'saved-terminal-message', message_id: 'saved-terminal-message',
+          backend_message_id: receipt.backendMessageId, persist_error: receipt.persistError,
+          session_id: sessionId, request_id: 'req-projection',
+        },
+      },
+    })
+
+    controller.handleSendError(failure, sessionId, ref(true), ref(false), stream)
+
+    expect(error.value).toMatchObject({ message: 'Command exited with code 7' })
+    expect(appendMessageToSession).toHaveBeenCalledExactlyOnceWith(sessionId, expect.objectContaining({
+      id: 'req-projection:assistant',
+      content: receipt.withoutOutput ? 'Command exited with code 7' : content.markdown,
+      message_content: receipt.withoutOutput ? undefined : content,
+      tool_calls: receipt.withoutOutput ? undefined : toolCalls,
+      metadata: expect.objectContaining({ is_error: true, thinking_state: 'failed', assistant_message_id: 'saved-terminal-message' }),
+    }))
+    expect(persistErrorReply).toHaveBeenCalledTimes(receipt.shouldPersist ? 1 : 0)
+    expect(suggestSessionTitle).not.toHaveBeenCalled()
+  })
   it('BUG-20260802-017 forwards request-owned stream identity through the bound error adapter', () => {
     const sending = ref(false)
     const draftSending = ref(false)
@@ -925,6 +1077,7 @@ describe('chat controller modules', () => {
 
   it('builds request metadata from thinking and memory toggles', () => {
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({}),
       agentRole: ref(''),
       thinkingEnabled: ref(true),
@@ -958,6 +1111,7 @@ describe('chat controller modules', () => {
 
   it('uses the frozen route thinking effort instead of mutable live settings', () => {
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'openai', model: 'gpt-5.6-sol' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),
@@ -1080,6 +1234,7 @@ describe('chat controller modules', () => {
     const sendViaBackend = vi.fn()
     const handleSendError = vi.fn()
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),
@@ -1144,6 +1299,7 @@ describe('chat controller modules', () => {
       activeStreams.value = next
     })
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),
@@ -1200,6 +1356,7 @@ describe('chat controller modules', () => {
       done: Promise.resolve({ content: 'backend reply' }),
     })
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams,
       agentRole,
       thinkingEnabled: ref(false),
@@ -1288,6 +1445,7 @@ describe('chat controller modules', () => {
     const draftSending = ref(false)
 
     const controller = createChatSendController({
+      seedRecoveredStream: vi.fn(),
       currentSessionId,
       messages,
       pendingSessionIds: ref({}),

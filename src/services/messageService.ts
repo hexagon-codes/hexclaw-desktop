@@ -271,6 +271,8 @@ async function persistTerminalReply(
       id: message.id,
       role: 'assistant',
       content: message.content,
+      ...(message.message_content ? { message_content: message.message_content } : {}),
+      ...(message.render_manifest ? { render_manifest: message.render_manifest } : {}),
       request_id: requestId,
       metadata,
     })

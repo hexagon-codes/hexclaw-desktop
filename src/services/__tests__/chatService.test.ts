@@ -95,12 +95,136 @@ import {
   ChatRequestError,
 } from '../chatService'
 import { DESKTOP_USER_ID } from '@/constants'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+
+const failedToolContent: MessageContent = {
+  content_id: `content:${'a'.repeat(64)}`,
+  content_version: '1.0',
+  producer_kind: 'chat',
+  markdown: 'partial stdout: HC_ERROR_PROJECTION',
+  source_digest: `sha256:${'a'.repeat(64)}`,
+  locale: 'en',
+  attachments: [{ asset_id: 'stdout-artifact', name: 'stdout.txt', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+}
+const failedToolManifest: RenderManifest = {
+  render_id: 'render-failed', content_id: failedToolContent.content_id, surface: 'desktop',
+  capability_snapshot: { markdown: true, tex_math: true }, renderer_version: 'api-markdown-v1',
+  source_digest: failedToolContent.source_digest,
+  parts: [{ kind: 'artifact', artifact_ref: 'stdout-artifact', artifact_digest: `sha256:${'b'.repeat(64)}`, alt_text: 'stdout.txt' }],
+}
 
 describe('chatService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     approvalCallbacks.length = 0
     socketInstances.length = 0
+  })
+
+  it.each(['errored', 'cancelled'] as const)('preserves canonical empty attachments on a %s resume snapshot', async (status) => {
+    const onSnapshot = vi.fn()
+    const handle = resumeWebSocketStream('s1', 'req-terminal-snapshot', { onSnapshot })
+    const outcome = handle.done.catch((error: unknown) => error)
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    const messageContent = { ...failedToolContent, markdown: '' }
+    const frame = {
+      type: 'stream_snapshot', session_id: 's1', request_id: 'req-terminal-snapshot',
+      content: 'older preview', status, done: true, error: status === 'errored' ? 'Command exited with code 7' : undefined,
+      message_content: messageContent, render_manifest: failedToolManifest,
+      tool_calls: [{ id: 'failed-shell', name: 'shell', arguments: '{}', status: 'error' }],
+      metadata: { error: status === 'errored' ? 'Command exited with code 7' : undefined, persist_error: 'storage failed' },
+    }
+
+    socket.onmessage?.({ data: JSON.stringify(frame) })
+    const settled = await outcome
+
+    const expected = {
+      content: '', messageContent, renderManifest: failedToolManifest,
+      terminalState: status === 'errored' ? 'failed' : 'cancelled',
+      metadata: expect.objectContaining({ persist_error: 'storage failed' }),
+    }
+    expect(settled instanceof ChatRequestError).toBe(status === 'errored')
+    const result = settled instanceof ChatRequestError ? settled.result : settled
+    expect(result).toMatchObject(expected)
+    const errorFields = settled instanceof ChatRequestError
+      ? { message: settled.message, noFallback: settled.noFallback, data: settled.data }
+      : { message: undefined, noFallback: undefined, data: undefined }
+    expect(errorFields).toEqual(status === 'errored'
+      ? { message: 'Command exited with code 7', noFallback: true, data: frame }
+      : { message: undefined, noFallback: undefined, data: undefined })
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      content: '', messageContent, renderManifest: failedToolManifest, done: true,
+    }))
+  })
+
+  it.each([false, true])('preserves a real failed terminal projection after stop requested=%s', async (stopRequested) => {
+    const onChunk = vi.fn()
+    const handle = openWebSocketStream('run a failing command', 's1', {}, '', undefined, { onChunk }, undefined, 'req-failure')
+    const failure = handle.done.catch((error: unknown) => error)
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    if (stopRequested) handle.cancel()
+    const toolCalls = [{ id: 'call-shell', name: 'shell', arguments: '{}', status: 'error' }]
+    socket.onmessage?.({ data: JSON.stringify({
+      type: 'error', request_id: 'req-failure', session_id: 's1', content: 'Command exited with code 7', done: true,
+      code: 'tool_execution_failed', retryable: false,
+      assistant_message_id: 'req-failure:assistant', message_id: 'req-failure:assistant', sequence: 1,
+      runtime_event: { version: 1, event_id: 'failed-terminal', kind: 'terminal', terminal_status: 'failed' },
+      message_content: failedToolContent, render_manifest: failedToolManifest, tool_calls: toolCalls,
+      metadata: { session_id: 's1', backend_message_id: 'saved-reply' },
+    }) })
+
+    expect(await failure).toMatchObject({
+      name: 'ChatRequestError', message: 'Command exited with code 7', noFallback: true, stopRequested: false,
+      data: { code: 'tool_execution_failed', retryable: false, request_id: 'req-failure' },
+      result: {
+        terminalState: 'failed', content: failedToolContent.markdown, messageContent: failedToolContent,
+        renderManifest: failedToolManifest, toolCalls,
+        metadata: { session_id: 's1', backend_message_id: 'saved-reply', last_sequence: 1,
+          runtime_events: [{ kind: 'terminal', terminal_status: 'failed' }] },
+      },
+    })
+    expect(onChunk).toHaveBeenCalledWith('', undefined, expect.objectContaining({ sequence: 1 }))
+  })
+
+  it('preserves partial files in the actual cancelled error terminal', async () => {
+    const handle = openWebSocketStream('run a command', 's1', {}, '', undefined, undefined, undefined, 'req-cancel-projection')
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    handle.cancel()
+    socket.onmessage?.({ data: JSON.stringify({
+      type: 'error', request_id: 'req-cancel-projection', session_id: 's1', content: '用户取消', done: true,
+      assistant_message_id: 'req-cancel-projection:assistant', message_id: 'req-cancel-projection:assistant', sequence: 1,
+      runtime_event: { version: 1, event_id: 'cancelled-terminal', kind: 'terminal', terminal_status: 'cancelled' },
+      message_content: failedToolContent, render_manifest: failedToolManifest,
+      tool_calls: [{ id: 'cancelled-shell', name: 'shell', arguments: '{}', status: 'error' }],
+      metadata: { session_id: 's1', backend_message_id: 'saved-cancelled-reply' },
+    }) })
+
+    await expect(handle.done).resolves.toMatchObject({
+      terminalState: 'cancelled', content: failedToolContent.markdown, messageContent: failedToolContent,
+      renderManifest: failedToolManifest, toolCalls: [{ id: 'cancelled-shell' }],
+      metadata: { session_id: 's1', backend_message_id: 'saved-cancelled-reply' },
+    })
+  })
+
+  it('ignores an error terminal from another request and a late frame after completion', async () => {
+    const onChunk = vi.fn()
+    const handle = openWebSocketStream('current request', 's1', {}, '', undefined, { onChunk }, undefined, 'req-current')
+    const observed = handle.done.catch((error: unknown) => error)
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    const receive = socket.onmessage!
+    receive({ data: JSON.stringify({ type: 'error', request_id: 'req-old', session_id: 's1', content: 'old failure', done: true }) })
+    receive({ data: JSON.stringify({ type: 'reply', request_id: 'req-current', session_id: 's1', content: 'current answer' }) })
+    receive({ data: JSON.stringify({ type: 'error', request_id: 'req-current', session_id: 's1', content: 'late failure', done: true }) })
+
+    await expect(observed).resolves.toMatchObject({ terminalState: 'completed', content: 'current answer' })
+    expect(onChunk).not.toHaveBeenCalled()
   })
 
   // ─── ensureWebSocketConnected ───

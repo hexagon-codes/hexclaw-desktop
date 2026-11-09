@@ -129,7 +129,25 @@ export function createChatStreamStateController(params: {
     sessionId: string,
     snapshot: Parameters<typeof buildRecoveredStreamState>[1],
   ) {
-    upsertStreamState(sessionId, projectStreamingPreview(buildRecoveredStreamState(sessionId, snapshot)))
+    const current = activeStreams.value[sessionId]
+    const recovered = buildRecoveredStreamState(sessionId, snapshot)
+    if (current?.requestId === recovered.requestId) {
+      if (recovered.lastSequence < current.lastSequence) return
+      // 完整快照更新数据，不改变同一运行的前端身份、冻结路由及起始时间。
+      recovered.assistantMessageId = current.assistantMessageId ?? recovered.assistantMessageId
+      recovered.assistantMessageAliases = Array.from(new Set([
+        ...current.assistantMessageAliases,
+        ...recovered.assistantMessageAliases,
+      ]))
+      recovered.requestRoute = current.requestRoute
+      recovered.startedAt = current.startedAt ?? recovered.startedAt
+      recovered.thinkingEnabled = current.thinkingEnabled ?? recovered.thinkingEnabled
+      recovered.agentDisplayName ??= current.agentDisplayName
+      recovered.recipientDisplayName ??= current.recipientDisplayName
+      recovered.reasoningStartTime = current.reasoningStartTime || recovered.reasoningStartTime
+      recovered.reasoningEndTime = current.reasoningEndTime || recovered.reasoningEndTime
+    }
+    upsertStreamState(sessionId, projectStreamingPreview(recovered, current))
   }
 
   return {

@@ -390,7 +390,7 @@ export function buildRecoveredStreamState(
   sessionId: string,
   snapshot: ActiveStreamSnapshot,
 ): SessionStreamState {
-  const snapshotContent = snapshot.content || ''
+  const snapshotContent = snapshot.message_content?.markdown ?? (snapshot.content || '')
   const snapshotReasoning = normalizeAssistantReasoning(snapshot.reasoning || '', { trim: false })
   const rawThinkingEnabled = snapshot.metadata?.thinking_enabled
   const fallbackReasoningRequest: ReasoningRequest = rawThinkingEnabled === true

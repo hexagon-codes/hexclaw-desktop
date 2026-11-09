@@ -103,6 +103,7 @@ function wireReceiptFlow() {
     activeStreams.value = next
   }
   const controller = createChatSendWebSocketDeliveryController({
+    seedRecoveredStream: vi.fn(),
     chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-luna' }),
     agentRole: ref(''),
     activeStreams,

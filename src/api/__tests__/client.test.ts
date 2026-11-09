@@ -37,6 +37,33 @@ describe('apiSSE', () => {
     globalThis.fetch = originalFetch
   })
 
+  it('retains a failed chat projection and HTTP status without resolving the request', async () => {
+    const payload = {
+      error: 'Command exited with code 7',
+      code: 'tool_execution_failed',
+      reply: 'partial stdout',
+      tool_calls: [{ id: 'shell-failed', name: 'shell', status: 'error' }],
+      message_content: { markdown: 'partial stdout', attachments: [{ asset_id: 'stdout-artifact' }] },
+      metadata: { session_id: 'failed-session', backend_message_id: 'saved-reply' },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })))
+    const { apiSSE } = await import('../client')
+
+    const failure = await apiSSE('/api/v1/chat').catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).toMatchObject({
+      message: payload.error,
+      status: 500,
+      code: 'SERVER_ERROR',
+      data: payload,
+      cause: payload,
+    })
+  })
+
   it('BUG: response.body 为 null 时会抛出非用户友好的错误', async () => {
     // 某些代理服务器可能返回 ok 但 body 为 null
     const mockResponse = {

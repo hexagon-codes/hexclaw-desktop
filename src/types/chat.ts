@@ -401,8 +401,16 @@ export function normalizeRuntimeSnapshotMetadata(
       if (!isRecord(candidate)) continue
       const sequence = Number(candidate.sequence)
       if (!Number.isSafeInteger(sequence) || sequence <= 0 || sequence > lastSequence) continue
-      const { sequence: omittedSequence, ...wire } = candidate
-      void omittedSequence
+      // 后端快照使用序列封装，前端消息元数据使用扁平事件，统一为同一内部合同。
+      let wire: Record<string, unknown>
+      if (isRecord(candidate.event)) {
+        if (!hasExactKeys(candidate, ['sequence', 'event'])) continue
+        wire = candidate.event
+      } else {
+        const { sequence: omittedSequence, ...event } = candidate
+        void omittedSequence
+        wire = event
+      }
       const normalized = normalizeRuntimeEvent(wire, sequence)
       if (!normalized || eventIds.has(normalized.event_id) || eventSequences.has(sequence)) continue
       eventIds.add(normalized.event_id)

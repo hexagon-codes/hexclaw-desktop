@@ -13,6 +13,7 @@ describe('BUG-20260626 文档卡片经 metadata.documents 透传给后端', () =
       done: Promise.resolve({ content: 'ok', metadata: { backend_message_id: 'm1' } }),
     })
     const controller = createChatSendDeliveryController({
+      seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),

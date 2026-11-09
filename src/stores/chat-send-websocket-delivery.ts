@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import { backendScopeKey } from '@/services/backend-context'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
-import type { MessageContent } from '@/contracts/message-content'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import type { ChatPayloadLimitError } from '@/services/chatService'
 import {
   buildSessionStreamState,
@@ -23,11 +23,13 @@ export function createChatSendWebSocketDeliveryController(params: {
   isSessionCancelled: (sessionId: string) => boolean
   setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   upsertStreamState: (sessionId: string, nextState: SessionStreamState | null) => void
+  seedRecoveredStream: (sessionId: string, snapshot: import('@/api/chat').ActiveStreamSnapshot) => void
   updateStreamChunk: (sessionId: string, content?: string, reasoning?: string, runtimeFrame?: import('@/types').RuntimeWireFrame) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
     messageContent?: MessageContent
+    renderManifest?: RenderManifest
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
@@ -50,6 +52,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     isSessionCancelled,
     setSessionPending,
     upsertStreamState,
+    seedRecoveredStream,
     updateStreamChunk,
     resetSessionStream,
     finalizeAssistantMessage,
@@ -119,6 +122,23 @@ export function createChatSendWebSocketDeliveryController(params: {
         onChunk: (content, reasoning, runtimeFrame) => {
           if (ownsRequest()) updateStreamChunk(sessionId, content, reasoning, runtimeFrame)
         },
+        onSnapshot: (snapshot) => {
+          if (!ownsRequest()) return
+          seedRecoveredStream(sessionId, {
+            ...snapshot.metadata,
+            request_id: requestId,
+            session_id: sessionId,
+            source: 'websocket',
+            content: snapshot.content,
+            message_content: snapshot.messageContent,
+            render_manifest: snapshot.renderManifest,
+            reasoning: snapshot.reasoning,
+            metadata: snapshot.metadata,
+            blocks: snapshot.blocks,
+            tool_calls: snapshot.toolCalls,
+            done: !!snapshot.done,
+          })
+        },
         onApprovalRequest: (request) => {
           if (ownsRequest()) storePendingApproval(request)
         },
@@ -150,8 +170,9 @@ export function createChatSendWebSocketDeliveryController(params: {
         metadata.memory_saved = memorySavedContent
       }
       return finalizeAssistantMessage({
-        content: result.content || finalState?.content || '',
+        content: result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
         messageContent: result.messageContent,
+        renderManifest: result.renderManifest,
         sessionId,
         metadata,
         toolCalls: result.toolCalls,
@@ -165,37 +186,16 @@ export function createChatSendWebSocketDeliveryController(params: {
     } catch (wsError) {
       if (!ownsRequest()) return null
       streamHandles.delete(sessionId)
+      if (isSessionCancelled(sessionId)) {
+        resetSessionStream(sessionId, sending, draftSending)
+        return null
+      }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.stopRequested) {
-        // 停止已获本地接纳但后台终态尚未取得：保留已有部分内容，按取消收口本地展示；
-        // 不能把传输中断写成业务 failed，也不能因此转发新的业务请求。
-        const streamState = activeStreams.value[sessionId]
-        if (streamState && (
-          streamState.content.trim()
-          || streamState.reasoning.trim()
-          || streamState.toolCalls?.length
-          || streamState.blocks?.length
-        )) {
-          finalizeAssistantMessage({
-            content: streamState.content,
-            sessionId,
-            toolCalls: streamState.toolCalls,
-            blocks: streamState.blocks,
-            reasoning: streamState.reasoning,
-            sending,
-            draftSending,
-            terminalState: 'cancelled',
-          })
-        } else {
-          resetSessionStream(sessionId, sending, draftSending)
-        }
+        // 未取得后台终态时保留原运行与部分预览，传输错误不能制造取消或失败终稿。
         return null
       }
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
         handleSendError(wsError, sessionId, activeStreams.value[sessionId])
-        return null
-      }
-      if (isSessionCancelled(sessionId)) {
-        resetSessionStream(sessionId, sending, draftSending)
         return null
       }
       return CHAT_SEND_WEBSOCKET_FALLBACK

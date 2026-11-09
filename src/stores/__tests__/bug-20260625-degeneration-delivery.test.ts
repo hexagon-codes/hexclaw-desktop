@@ -69,6 +69,7 @@ function wire(sessionId = 's1') {
 
   const handleSendError = vi.fn()
   const controller = createChatSendWebSocketDeliveryController({
+    seedRecoveredStream: streamState.seedRecoveredStream,
     // 退化熔断与模型无关（纯客户端兜底），故用中性占位，不写具体测试模型名。
     chatParams: ref({ provider: 'test-provider', model: 'test-model' }),
     agentRole: ref(''),
@@ -101,6 +102,28 @@ function wire(sessionId = 's1') {
 }
 
 describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
+  it('取消终帧的空正文及附件覆盖旧预览并保留取消终态', async () => {
+    const w = wire()
+    const pending = w.controller.deliverViaWebSocket({
+      backendText: 'stop', sessionId: w.sessionId, requestId: 'cancelled-with-file',
+      sending: ref(false), draftSending: ref(false),
+    })
+    w.getOnChunk()!('older partial preview')
+    const messageContent = {
+      content_id: `content:${'a'.repeat(64)}`, content_version: '1.0', producer_kind: 'chat',
+      markdown: '', source_digest: `sha256:${'a'.repeat(64)}`, locale: 'en',
+      attachments: [{ asset_id: 'partial-file', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+    }
+    w.resolveDone({ content: '', messageContent, terminalState: 'cancelled' })
+
+    await pending
+
+    expect(w.finalizeAssistantMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      content: '', messageContent, terminalState: 'cancelled',
+    }))
+    expect(w.handleSendError).not.toHaveBeenCalled()
+  })
+
   it('旧句柄迟到完成不能删除新句柄或定稿到新运行', async () => {
     const w = wire()
     const pending = w.controller.deliverViaWebSocket({ backendText: 'old', sessionId: w.sessionId, requestId: 'old', sending: ref(false), draftSending: ref(false) })
@@ -169,7 +192,7 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
     expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
   })
 
-  it('停止后断连保留部分内容并按取消收口，不写成失败终稿', async () => {
+  it('停止后终态未知保留部分数据，不制造取消或失败终稿', async () => {
     const w = wire()
     const resultPromise = w.controller.deliverViaWebSocket({
       backendText: '计算', sessionId: w.sessionId, requestId: 'req-1',
@@ -183,12 +206,8 @@ describe('BUG-20260625 退化熔断 · delivery 层端到端', () => {
     w.rejectDone(failure)
     expect(await resultPromise).toBeNull()
     expect(w.handleSendError).not.toHaveBeenCalled()
-    expect(w.finalizeAssistantMessage).toHaveBeenCalledTimes(1)
-    expect(w.finalizeAssistantMessage).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: w.sessionId,
-      content: DEGENERATE,
-      terminalState: 'cancelled',
-    }))
+    expect(w.finalizeAssistantMessage).not.toHaveBeenCalled()
+    expect(w.activeStreams.value[w.sessionId]?.content).toBe(DEGENERATE)
   })
 
   it('干净输出：不误触发熔断，正常用 result.content 定稿', async () => {

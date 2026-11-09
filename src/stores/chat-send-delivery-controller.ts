@@ -31,6 +31,7 @@ export function createChatSendDeliveryController(params: {
   isSessionCancelled: (sessionId: string) => boolean
   setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
+  seedRecoveredStream: (sessionId: string, snapshot: import('@/api/chat').ActiveStreamSnapshot) => void
   updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
@@ -60,6 +61,7 @@ export function createChatSendDeliveryController(params: {
     isSessionCancelled,
     setSessionPending,
     upsertStreamState,
+    seedRecoveredStream,
     updateStreamChunk,
     resetSessionStream,
     finalizeAssistantMessage,
@@ -123,6 +125,7 @@ export function createChatSendDeliveryController(params: {
     isSessionCancelled,
     setSessionPending,
     upsertStreamState,
+    seedRecoveredStream,
     updateStreamChunk,
     resetSessionStream,
     finalizeAssistantMessage,

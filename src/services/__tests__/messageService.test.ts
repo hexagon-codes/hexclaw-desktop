@@ -33,7 +33,7 @@ import {
   loadAllSessions, deleteSession, persistMessage, loadMessages,
   createSession, updateSessionTitle, touchSession,
   getLastSessionId, setLastSessionId,
-  loadArtifacts, saveArtifact, removeMessage, persistErrorReply,
+  loadArtifacts, saveArtifact, removeMessage, persistErrorReply, persistCancelledReply,
 } from '../messageService'
 
 describe('messageService', () => {
@@ -308,6 +308,34 @@ describe('messageService', () => {
   })
 
   // ─── persistErrorReply: 失败回复显式落库 ───
+  it.each([
+    ['failed', persistErrorReply],
+    ['cancelled', persistCancelledReply],
+  ] as const)('keeps canonical partial attachments when appending a %s terminal', async (terminalState, persist) => {
+    const messageContent = {
+      content_id: `content:${'a'.repeat(64)}`, content_version: '1.0' as const, producer_kind: 'chat' as const,
+      markdown: '', source_digest: `sha256:${'a'.repeat(64)}`, locale: 'en',
+      attachments: [{ asset_id: 'partial-file', mime: 'text/plain', digest: `sha256:${'b'.repeat(64)}` }],
+    }
+    const renderManifest = {
+      render_id: 'partial-render', content_id: messageContent.content_id, surface: 'desktop' as const,
+      capability_snapshot: { markdown: true, tex_math: false, attachments: true },
+      renderer_version: '1.0', source_digest: messageContent.source_digest,
+      parts: [{ kind: 'artifact' as const, artifact_ref: 'partial-file', artifact_digest: `sha256:${'b'.repeat(64)}`, alt_text: 'partial output' }],
+    }
+
+    await persist('s1', {
+      id: 'req-partial:assistant', role: 'assistant', content: '', timestamp: '2026-01-01',
+      message_content: messageContent, render_manifest: renderManifest,
+      metadata: { request_id: 'req-partial', thinking_state: terminalState },
+    })
+
+    expect(appendSessionMessageApi).toHaveBeenCalledExactlyOnceWith('s1', expect.objectContaining({
+      content: '', message_content: messageContent, render_manifest: renderManifest,
+      request_id: 'req-partial', metadata: expect.objectContaining({ thinking_state: terminalState }),
+    }))
+  })
+
   it('persistErrorReply appends the error message to backend with is_error flag', async () => {
     await persistErrorReply('s1', {
       id: 'err-1', role: 'assistant', content: '引擎调用失败', timestamp: '2026-01-01',

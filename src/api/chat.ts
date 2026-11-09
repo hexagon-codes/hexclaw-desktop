@@ -34,6 +34,7 @@ export interface ActiveStreamSnapshot {
   tool_calls?: ChatMessage['tool_calls']
   started_at?: string
   message_content?: ChatMessage['message_content']
+  render_manifest?: ChatMessage['render_manifest']
   done: boolean
   [key: string]: unknown
 }
