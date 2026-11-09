@@ -476,6 +476,8 @@ export interface BackendRuntimeConfig {
   /** 桌面语言同步后的 IM 展示语言；旧服务缺省为中文。 */
   display_locale?: DisplayLocale
   memory?: MemoryConfig
+  /** 当前后端的全局巡查配置；旧服务可能不提供。 */
+  heartbeat?: { enabled: boolean; available: boolean }
   server: {
     host: string
     port: number
@@ -510,6 +512,7 @@ export interface BackendRuntimeConfig {
 
 export interface RuntimeConfigUpdateRequest {
   display_locale?: DisplayLocale
+  heartbeat?: { enabled: boolean }
   memory?: MemoryConfig
   security?: SecurityConfig
   sandbox?: SandboxConfigUpdate

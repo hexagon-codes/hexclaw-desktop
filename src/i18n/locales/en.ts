@@ -3059,6 +3059,11 @@ export default {
       autoStart: 'Auto Start',
       autoStartDesc: 'Launch HexClaw when system starts',
     },
+    heartbeat: {
+      toggle: 'Heartbeat checks',
+      toggleDesc: 'Periodically uses the current default model and consumes tokens. Results are recorded in logs. Applies to all agents and IM channels on the current backend.',
+      unavailable: 'The current backend does not support heartbeat settings. Update the backend to use this setting.',
+    },
     memory: {
       toggle: 'Memory',
       toggleDesc: 'Auto-extract and recall memories from conversations',

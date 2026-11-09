@@ -3003,6 +3003,11 @@ export default {
       autoStart: '开机自启',
       autoStartDesc: '系统启动时自动运行 HexClaw',
     },
+    heartbeat: {
+      toggle: '心跳巡查',
+      toggleDesc: '定期调用当前默认模型巡查，会消耗 Token；结果记录在日志中。作用于当前后端的全部智能体和 IM。',
+      unavailable: '当前后端尚未支持心跳设置，请先更新后端。',
+    },
     memory: {
       toggle: '记忆功能',
       toggleDesc: '自动从对话中提取和使用记忆，关闭后不检索也不提取',

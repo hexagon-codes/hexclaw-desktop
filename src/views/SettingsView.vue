@@ -234,6 +234,11 @@ function revertModelExclusionDraft() {
   }
 }
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
+const runtimeConfigScope = ref<string | null>(null)
+const heartbeatSaveScope = ref<string | null>(null)
+const heartbeatSaving = computed(() => heartbeatSaveScope.value !== null && heartbeatSaveScope.value === backendScopeKey())
+const heartbeatAvailable = computed(() => runtimeConfigScope.value === backendScopeKey() && runtimeConfig.value?.heartbeat?.available === true)
+const heartbeatEnabled = computed(() => runtimeConfigScope.value === backendScopeKey() && (runtimeConfig.value?.heartbeat?.enabled ?? false))
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
 const appVersion = ref('—')
 const openAbout = useAboutWindow()
@@ -806,6 +811,28 @@ async function saveImmediateSetting(section: 'memory' | 'sandbox') {
   catch (error) { toast.error(messageFromUnknownError(error)); await loadRuntimeInfo(section) }
 }
 
+async function handleHeartbeatChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const scope = backendScopeKey()
+  if (heartbeatSaving.value) return
+  heartbeatSaveScope.value = scope
+  try {
+    const snapshot = await settingsStore.setHeartbeatEnabled(input.checked)
+    if (scope === backendScopeKey()) {
+      // 保存确认后的快照优先于此前发起的读取，包括其迟到的错误回调。
+      runtimeInfoGen += 1
+      runtimeInfoLoading.value = false
+      runtimeConfig.value = snapshot
+      runtimeConfigScope.value = scope
+    }
+  } catch (error) {
+    if (scope === backendScopeKey()) toast.error(messageFromUnknownError(error))
+  } finally {
+    if (heartbeatSaveScope.value === scope) heartbeatSaveScope.value = null
+    if (scope === backendScopeKey() && input.isConnected) input.checked = heartbeatEnabled.value
+  }
+}
+
 // ─── A7 模型 tool_call 能力探测 ──────────────────────────
 
 /** 正在探测中的 model，格式 "providerId:modelId" */
@@ -1260,6 +1287,7 @@ async function loadRuntimeInfo(preferenceSection?: 'memory' | 'sandbox') {
     ])
     if (gen !== runtimeInfoGen || scope !== backendScopeKey()) return
     runtimeConfig.value = nextRuntimeConfig
+    runtimeConfigScope.value = scope
     runtimeLLMConfig.value = nextLLMConfig
     if (config.value && preferenceSnapshot === JSON.stringify(currentPreferences())) {
       if (preferenceSection === 'sandbox') {
@@ -3027,6 +3055,22 @@ async function saveConfig() {
                   type="checkbox"
                   class="hc-toggle"
                   @change="saveImmediateSetting('memory')"
+                />
+              </label>
+
+              <label class="hc-settings__toggle-row">
+                <div>
+                  <span class="hc-settings__toggle-label">{{ t('settings.heartbeat.toggle') }}</span>
+                  <p class="hc-settings__toggle-desc">{{ heartbeatAvailable ? t('settings.heartbeat.toggleDesc') : t('settings.heartbeat.unavailable') }}</p>
+                </div>
+                <input
+                  :checked="heartbeatEnabled"
+                  :disabled="!heartbeatAvailable || heartbeatSaving"
+                  type="checkbox"
+                  class="hc-toggle"
+                  style="margin: 3px 3px 3px 4px"
+                  data-testid="heartbeat-toggle"
+                  @change="handleHeartbeatChange"
                 />
               </label>
 

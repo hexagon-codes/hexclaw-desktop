@@ -792,6 +792,23 @@ export const useSettingsStore = defineStore('settings', () => {
     })
   }
 
+  /** 巡查只写当前后端，不进入客户端持久副本；未知写结果只回读，不重发。 */
+  async function setHeartbeatEnabled(enabled: boolean) {
+    const scope = backendScopeKey()
+    let writeError: unknown
+    await providerSync.enqueue(async () => {
+      if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+      try { await updateConfig({ heartbeat: { enabled } }) }
+      catch (error) { writeError = error }
+    })
+    if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+    const snapshot = await getRuntimeConfig().catch((error) => { throw writeError ?? error })
+    if (scope !== backendScopeKey()) throw new Error('Backend connection changed during settings save')
+    if (!snapshot.heartbeat?.available) throw new Error('Heartbeat settings are unavailable on this backend')
+    if (snapshot.heartbeat.enabled !== enabled) throw writeError ?? new Error('Heartbeat setting was not applied')
+    return snapshot
+  }
+
   /** 添加 Provider */
   function addProvider(provider: Omit<ProviderConfig, 'id'>) {
     if (!config.value) return null
@@ -888,6 +905,7 @@ export const useSettingsStore = defineStore('settings', () => {
     saveConfig,
     setModelDraftEditing: (active: boolean) => { modelDraftEditing.value = active },
     saveImmediateSetting,
+    setHeartbeatEnabled,
     saveOllamaConnection,
     addProvider,
     updateProvider,
