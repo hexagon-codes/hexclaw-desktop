@@ -29,7 +29,7 @@ CANONICAL_LOCAL_CARGO_TARGET_DIR := $(DESKTOP_ROOT)/src-tauri/target
 PACKAGE_LOCAL_CARGO_TARGET_DIR ?= $(CANONICAL_LOCAL_CARGO_TARGET_DIR)
 # 装机（build-local）sidecar 校验用的 Go 工具链身份与固定快照目录。
 BUILD_LOCAL_GO_EXECUTABLE := $(shell command -v go)
-BUILD_LOCAL_GO_GOROOT := $(shell go env GOROOT)
+BUILD_LOCAL_GO_GOROOT := $(shell GOWORK=off go env GOROOT)
 BUILD_LOCAL_SNAPSHOT_DIR := $(DESKTOP_ROOT)/src-tauri/binaries/.verify-snapshot
 LOCAL_PACKAGE_TAURI_CONFIG := $(DESKTOP_ROOT)/src-tauri/tauri.package-local.conf.json
 PACKAGE_LOCAL_DIST_DIR ?=

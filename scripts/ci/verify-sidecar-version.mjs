@@ -164,6 +164,34 @@ export function assertGoBuildTarget(buildInfo, targetTriple) {
   return { goos: target.goos, goarch: target.goarch }
 }
 
+/** 发布依赖必须与本次校验过的模块身份一致，不能被工作区或 replace 替换。 */
+export function assertGoPublishedModules(metadata, expectedModules) {
+  const dependencies = []
+  let current = null
+  for (const rawLine of metadata.split(/\r?\n/u)) {
+    const fields = rawLine.trimStart().split('\t')
+    if (fields[0] === 'dep' && fields.length >= 3) {
+      current = { path: fields[1], version: fields[2], sum: fields[3] ?? null, replaced: false }
+      dependencies.push(current)
+    } else if (fields[0] === '=>') {
+      if (current !== null) current.replaced = true
+    } else {
+      current = null
+    }
+  }
+  for (const expected of expectedModules) {
+    const found = dependencies.filter((dependency) => dependency.path === expected.path)
+    if (
+      found.length !== 1 ||
+      found[0].replaced ||
+      found[0].version !== expected.version ||
+      found[0].sum !== expected.sum
+    ) {
+      throw new Error('Go published dependency identity must match exactly')
+    }
+  }
+}
+
 function normalizeGoModuleVersion(version) {
   return version.startsWith('v') ? version : `v${version}`
 }
@@ -314,6 +342,7 @@ async function runGoBuildMetadata(goSnapshot, binarySnapshot, goToolchain) {
     GOENV: 'off',
     GOROOT: goToolchain.goroot,
     GOTOOLCHAIN: 'local',
+    GOWORK: 'off',
   }
 
   await goSnapshot.assertUnchanged()
@@ -466,16 +495,21 @@ export async function inspectSidecarArtifact(binaryPath, expectedVersion, option
   return withSecureGoInspection(
     binaryPath,
     options,
-    async ({ architecture, goToolchainSnapshot, metadata, snapshot }, binarySnapshot) => ({
-      ...assertSidecarArtifact({ architecture, metadata, targetTriple }),
-      version: await assertOpenSidecarVersion(
-        binarySnapshot.file,
-        binarySnapshot.size,
-        expectedVersion,
-      ),
-      goToolchainSnapshot,
-      snapshot,
-    }),
+    async ({ architecture, goToolchainSnapshot, metadata, snapshot }, binarySnapshot) => {
+      if (options.publishedModules !== undefined) {
+        assertGoPublishedModules(metadata, options.publishedModules)
+      }
+      return {
+        ...assertSidecarArtifact({ architecture, metadata, targetTriple }),
+        version: await assertOpenSidecarVersion(
+          binarySnapshot.file,
+          binarySnapshot.size,
+          expectedVersion,
+        ),
+        goToolchainSnapshot,
+        snapshot,
+      }
+    },
   )
 }
 

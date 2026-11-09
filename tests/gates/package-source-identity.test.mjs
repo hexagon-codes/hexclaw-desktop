@@ -23,9 +23,8 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const identityModuleURL = new URL('../../scripts/ci/package-source-identity.mjs', import.meta.url)
 const boundedProcessModuleURL = new URL('../../scripts/ci/run-bounded-process.mjs', import.meta.url)
-const repositoryIDs = ['toolkit', 'ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop']
+const repositoryIDs = ['ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop']
 const moduleByRepository = new Map([
-  ['toolkit', 'github.com/hexagon-codes/toolkit'],
   ['ai-core', 'github.com/hexagon-codes/ai-core'],
   ['hexagon', 'github.com/hexagon-codes/hexagon'],
   ['hexclaw', 'github.com/hexagon-codes/hexclaw'],
@@ -323,10 +322,95 @@ test('manifest destination rejects non-generation staging children before creati
   assert.equal((await stat(manifestPath)).isFile(), true)
 })
 
+test('legacy published manifests keep their original frozen local-Toolkit verification', async (t) => {
+  const fixture = await createFixture('legacy-published')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const adapter = await adapterFor(fixture)
+  const currentPath = join(fixture.outputRoot, 'current.json')
+  await adapter.create({ manifestPath: currentPath, target })
+  const manifest = JSON.parse(await readFile(currentPath, 'utf8'))
+  assert.equal(manifest.schema, 'hexclaw.package-source-identity.v3')
+  const toolkitGoMod = Buffer.from('module github.com/hexagon-codes/toolkit\n\ngo 1.25.7\n')
+  const originalWorkspaceBytes = manifest.workspace.file.size
+  const legacyWorkspace = Buffer.from(
+    'go 1.25.7\n\nuse (\n\t./toolkit\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n',
+  )
+  manifest.schema = 'hexclaw.package-source-identity.v2'
+  manifest.repositories.unshift({
+    id: 'toolkit',
+    module: 'github.com/hexagon-codes/toolkit',
+    deletedTracked: [],
+    files: [
+      {
+        path: 'go.mod',
+        mode: '100600',
+        sourceKind: 'tracked',
+        size: toolkitGoMod.length,
+        sha256: createHash('sha256').update(toolkitGoMod).digest('hex'),
+      },
+    ],
+    vcs: { ...manifest.repositories[0].vcs },
+  })
+  delete manifest.workspace.publishedModules
+  delete manifest.workspace.publishedModuleChecksums
+  manifest.workspace.modules.push({
+    module: 'github.com/hexagon-codes/toolkit',
+    repository: 'toolkit',
+  })
+  manifest.workspace.file.size = legacyWorkspace.length
+  manifest.workspace.file.sha256 = createHash('sha256').update(legacyWorkspace).digest('hex')
+  manifest.totals.files += 1
+  manifest.totals.entries += 1
+  manifest.totals.bytes += toolkitGoMod.length + legacyWorkspace.length - originalWorkspaceBytes
+  const canonical = (value) =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === 'object'
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, canonical(value[key])]),
+          )
+        : value
+  const bytes = Buffer.from(`${JSON.stringify(canonical(manifest))}\n`)
+  const legacyPath = join(fixture.outputRoot, 'legacy.json')
+  await writeFile(legacyPath, bytes, { mode: 0o600 })
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  assert.equal(
+    (await adapter.verify({ manifestPath: legacyPath, expectedSha256: digest, target })).sha256,
+    digest,
+  )
+  await assert.rejects(stat(join(fixture.workRoot, 'toolkit')), { code: 'ENOENT' })
+})
+
+test('source manifests freeze published dependency checksum facts before dependency installation', async (t) => {
+  const fixture = await createFixture('published-checksums')
+  t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
+  const root = fixture.roots['ai-core']
+  const sum = `h1:${Buffer.alloc(32, 1).toString('base64')}`
+  const goModSum = `h1:${Buffer.alloc(32, 2).toString('base64')}`
+  await write(
+    root,
+    'go.sum',
+    `github.com/hexagon-codes/toolkit v1.2.3 ${sum}\ngithub.com/hexagon-codes/toolkit v1.2.3/go.mod ${goModSum}\n`,
+  )
+  const adapter = await adapterFor(fixture)
+  const path = join(fixture.outputRoot, 'source.json')
+  const result = await adapter.create({ manifestPath: path, target })
+  const manifest = JSON.parse(await readFile(path, 'utf8'))
+  assert.deepEqual(manifest.workspace.publishedModuleChecksums, [
+    { path: 'github.com/hexagon-codes/toolkit', version: 'v1.2.3', sum, goModSum },
+  ])
+  assert.equal(
+    (await adapter.verify({ manifestPath: path, expectedSha256: result.sha256, target })).sha256,
+    result.sha256,
+  )
+})
+
 test('canonical manifest covers dirty tracked and relevant untracked source inputs but excludes outputs', async (t) => {
   const fixture = await createFixture('coverage')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
-  const root = fixture.roots.toolkit
+  const root = fixture.roots['ai-core']
   const trackedSources = {
     'tracked.go': 'package toolkit\n\nconst Dirty = "before"\n',
     'go.sum': 'example.invalid/module v1.0.0 h1:fixture\n',
@@ -353,10 +437,10 @@ test('canonical manifest covers dirty tracked and relevant untracked source inpu
   await unlink(join(root, 'deleted.go'))
   await write(root, 'internal/new_untracked.go', 'package internal\n')
   await write(root, 'ignored-source/ignored.go', 'package ignored\n')
-  const toolkitGoMod = await readFile(join(root, 'go.mod'), 'utf8')
+  const aiCoreGoMod = await readFile(join(root, 'go.mod'), 'utf8')
   await writeFile(
     join(root, 'go.mod'),
-    `${toolkitGoMod}\nreplace example.com/old => example.com/new v1.2.3\n`,
+    `${aiCoreGoMod}\nreplace example.com/old => example.com/new v1.2.3\n`,
   )
 
   const excluded = {
@@ -376,8 +460,8 @@ test('canonical manifest covers dirty tracked and relevant untracked source inpu
   const result = await adapter.create({ manifestPath, target })
   const bytes = await readFile(manifestPath)
   const manifest = JSON.parse(bytes)
-  const toolkit = repository(manifest, 'toolkit')
-  const files = new Map(toolkit.files.map((file) => [file.path, file]))
+  const aiCore = repository(manifest, 'ai-core')
+  const files = new Map(aiCore.files.map((file) => [file.path, file]))
 
   for (const path of [
     'tracked.go',
@@ -404,7 +488,7 @@ test('canonical manifest covers dirty tracked and relevant untracked source inpu
   }
   for (const path of Object.keys(excluded)) assert.equal(files.has(path), false)
   assert.equal(files.has('multi'), true)
-  assert.deepEqual(toolkit.deletedTracked, ['deleted.go'])
+  assert.deepEqual(aiCore.deletedTracked, ['deleted.go'])
   assert.equal(files.get('tracked.go').sourceKind, 'tracked')
   assert.equal(files.get('internal/new_untracked.go').sourceKind, 'untracked')
   assert.equal(files.get('ignored-source/ignored.go').sourceKind, 'ignored-untracked')
@@ -421,8 +505,9 @@ test('canonical manifest covers dirty tracked and relevant untracked source inpu
     manifest.workspace.modules.map(({ module, repository: id }) => [module, id]),
     [...moduleByRepository.entries()].map(([id, module]) => [module, id]).sort(),
   )
+  assert.deepEqual(manifest.workspace.publishedModules, ['github.com/hexagon-codes/toolkit'])
   const expectedWorkspace = Buffer.from(
-    'go 1.25.7\n\nuse (\n\t./toolkit\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n',
+    'go 1.25.7\n\nuse (\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n',
   )
   assert.equal(manifest.workspace.goVersion, '1.25.7')
   assert.deepEqual(manifest.workspace.file, {
@@ -462,12 +547,12 @@ test('existing sensitive build inputs fail closed before content hashing', async
       caseTest.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
       const marker = `synthetic-sensitive-${fixtureCase.classification}`
       if (fixtureCase.classification === 'ignored') {
-        await write(fixture.roots.toolkit, '.gitignore', `${fixtureCase.path}\n`)
-        await git(fixture.roots.toolkit, 'add', '.gitignore')
+        await write(fixture.roots['ai-core'], '.gitignore', `${fixtureCase.path}\n`)
+        await git(fixture.roots['ai-core'], 'add', '.gitignore')
       }
-      await write(fixture.roots.toolkit, fixtureCase.path, `${marker}\n`)
+      await write(fixture.roots['ai-core'], fixtureCase.path, `${marker}\n`)
       if (fixtureCase.classification === 'tracked') {
-        await git(fixture.roots.toolkit, 'add', '--force', fixtureCase.path)
+        await git(fixture.roots['ai-core'], 'add', '--force', fixtureCase.path)
       }
       const adapter = await adapterFor(fixture)
 
@@ -494,11 +579,11 @@ test('untracked and ignored .codex-prefixed paths are excluded before content re
       caseTest.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
       const relativePath = 'nested/.CoDeX-private/opaque.bin'
       if (classification === 'ignored') {
-        await write(fixture.roots.toolkit, '.gitignore', 'nested/.CoDeX-private/\n')
-        await git(fixture.roots.toolkit, 'add', '.gitignore')
+        await write(fixture.roots['ai-core'], '.gitignore', 'nested/.CoDeX-private/\n')
+        await git(fixture.roots['ai-core'], 'add', '.gitignore')
       }
       const privatePath = await write(
-        fixture.roots.toolkit,
+        fixture.roots['ai-core'],
         relativePath,
         'synthetic opaque bytes\n',
         0o000,
@@ -520,11 +605,11 @@ test('tracked .codex-prefixed paths fail before source content reads', async (t)
   const fixture = await createFixture('codex-tracked')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   const privatePath = await write(
-    fixture.roots.toolkit,
+    fixture.roots['ai-core'],
     'nested/.CoDeX-private/opaque.bin',
     'synthetic opaque bytes\n',
   )
-  await git(fixture.roots.toolkit, 'add', 'nested/.CoDeX-private/opaque.bin')
+  await git(fixture.roots['ai-core'], 'add', 'nested/.CoDeX-private/opaque.bin')
   await chmod(privatePath, 0o000)
   const adapter = await adapterFor(fixture)
 
@@ -680,23 +765,23 @@ test('one snapshot rechecks early repositories after concurrent toolchain collec
   const fixture = await createFixture('capture-tail-drift')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   const sourcePath = await write(
-    fixture.roots.toolkit,
+    fixture.roots['ai-core'],
     'capture-tail.go',
     'package toolkit\n\nconst CaptureTail = "before"\n',
   )
-  await git(fixture.roots.toolkit, 'add', 'capture-tail.go')
-  let markToolkitScanned
-  const toolkitScanned = new Promise((resolveScanned) => {
-    markToolkitScanned = resolveScanned
+  await git(fixture.roots['ai-core'], 'add', 'capture-tail.go')
+  let markAiCoreScanned
+  const aiCoreScanned = new Promise((resolveScanned) => {
+    markAiCoreScanned = resolveScanned
   })
   const module = await loadIdentity()
   const adapter = module.createPackageSourceIdentityTestAdapter({
     afterInitialRepositoryScan: async (repositoryID) => {
-      if (repositoryID === 'toolkit') markToolkitScanned()
+      if (repositoryID === 'ai-core') markAiCoreScanned()
     },
     desktopRoot: fixture.roots['hexclaw-desktop'],
     collectToolchains: async (requestedTarget) => {
-      await toolkitScanned
+      await aiCoreScanned
       await writeFile(sourcePath, 'package toolkit\n\nconst CaptureTail = "after"\n')
       return fixtureToolchains(requestedTarget)
     },
@@ -759,9 +844,9 @@ test('go.mod rejects local filesystem replacements outside canonical repositorie
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
   const outside = join(fixture.workRoot, 'external-module')
   await write(outside, 'go.mod', 'module example.com/external\n\ngo 1.25.7\n')
-  const goMod = await readFile(join(fixture.roots.toolkit, 'go.mod'), 'utf8')
+  const goMod = await readFile(join(fixture.roots['ai-core'], 'go.mod'), 'utf8')
   await writeFile(
-    join(fixture.roots.toolkit, 'go.mod'),
+    join(fixture.roots['ai-core'], 'go.mod'),
     `${goMod}\nreplace example.com/external => ../external-module\n`,
   )
   const adapter = await adapterFor(fixture)
@@ -787,8 +872,8 @@ test('symbolic links and hard links fail without disclosing source paths', async
     ),
   )
   const marker = 'synthetic-private-source-marker'
-  await symlink(`../../${marker}`, join(symlinkFixture.roots.toolkit, 'linked.go'))
-  await git(symlinkFixture.roots.toolkit, 'add', 'linked.go')
+  await symlink(`../../${marker}`, join(symlinkFixture.roots['ai-core'], 'linked.go'))
+  await git(symlinkFixture.roots['ai-core'], 'add', 'linked.go')
   const symlinkAdapter = await adapterFor(symlinkFixture)
   await assert.rejects(
     symlinkAdapter.create({
@@ -803,9 +888,9 @@ test('symbolic links and hard links fail without disclosing source paths', async
     },
   )
 
-  const original = await write(hardlinkFixture.roots.toolkit, 'original.go', 'package toolkit\n')
-  await link(original, join(hardlinkFixture.roots.toolkit, 'linked.go'))
-  await git(hardlinkFixture.roots.toolkit, 'add', 'original.go', 'linked.go')
+  const original = await write(hardlinkFixture.roots['ai-core'], 'original.go', 'package toolkit\n')
+  await link(original, join(hardlinkFixture.roots['ai-core'], 'linked.go'))
+  await git(hardlinkFixture.roots['ai-core'], 'add', 'original.go', 'linked.go')
   const hardlinkAdapter = await adapterFor(hardlinkFixture)
   await assert.rejects(
     hardlinkAdapter.create({
@@ -819,9 +904,9 @@ test('symbolic links and hard links fail without disclosing source paths', async
 test('a tracked directory replaced by an escaping symbolic link fails closed', async (t) => {
   const fixture = await createFixture('ancestor-symlink')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
-  const trackedDirectory = join(fixture.roots.toolkit, 'nested')
+  const trackedDirectory = join(fixture.roots['ai-core'], 'nested')
   await write(trackedDirectory, 'source.go', 'package nested\n')
-  await git(fixture.roots.toolkit, 'add', 'nested/source.go')
+  await git(fixture.roots['ai-core'], 'add', 'nested/source.go')
 
   const marker = 'synthetic-ancestor-target'
   const outsideDirectory = join(fixture.workRoot, marker)
@@ -854,17 +939,17 @@ test('source files and source ancestors reject group or other writes', async (t)
     {
       name: 'source-file',
       prepare: async (fixture) => {
-        const path = await write(fixture.roots.toolkit, 'unsafe.go', 'package toolkit\n')
-        await git(fixture.roots.toolkit, 'add', 'unsafe.go')
+        const path = await write(fixture.roots['ai-core'], 'unsafe.go', 'package toolkit\n')
+        await git(fixture.roots['ai-core'], 'add', 'unsafe.go')
         await chmod(path, 0o666)
       },
     },
     {
       name: 'source-ancestor',
       prepare: async (fixture) => {
-        await write(fixture.roots.toolkit, 'unsafe/source.go', 'package unsafe\n')
-        await git(fixture.roots.toolkit, 'add', 'unsafe/source.go')
-        await chmod(join(fixture.roots.toolkit, 'unsafe'), 0o777)
+        await write(fixture.roots['ai-core'], 'unsafe/source.go', 'package unsafe\n')
+        await git(fixture.roots['ai-core'], 'add', 'unsafe/source.go')
+        await chmod(join(fixture.roots['ai-core'], 'unsafe'), 0o777)
       },
     },
   ]
@@ -894,8 +979,8 @@ test('source files and source ancestors reject group or other writes', async (t)
 test('source ownership is bound to the current uid', async (t) => {
   const fixture = await createFixture('source-owner')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
-  const sourcePath = await write(fixture.roots.toolkit, 'owned.go', 'package toolkit\n')
-  const canonicalRoot = await realpath(fixture.roots.toolkit)
+  const sourcePath = await write(fixture.roots['ai-core'], 'owned.go', 'package toolkit\n')
+  const canonicalRoot = await realpath(fixture.roots['ai-core'])
   const canonicalSource = await realpath(sourcePath)
   const module = await import(identityModuleURL)
   assert.equal(typeof module.validateSourcePathForTest, 'function')
@@ -933,15 +1018,17 @@ test('fixture adapter enforces shared file and byte limits', async (t) => {
 test('deleted tracked paths consume the entry limit and are explicit in totals', async (t) => {
   const fixture = await createFixture('deleted-budget')
   t.after(() => rm(fixture.workRoot, { recursive: true, force: true }))
-  await write(fixture.roots.toolkit, 'deleted.go', 'package toolkit\n')
-  await git(fixture.roots.toolkit, 'add', 'deleted.go')
-  await unlink(join(fixture.roots.toolkit, 'deleted.go'))
+  await write(fixture.roots['ai-core'], 'deleted.go', 'package toolkit\n')
+  await git(fixture.roots['ai-core'], 'add', 'deleted.go')
+  await unlink(join(fixture.roots['ai-core'], 'deleted.go'))
   const adapter = await adapterFor(fixture)
   const commonLimits = { maxFileBytes: 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024 }
+  const expectedFiles = repositoryIDs.length + 1
+  const expectedEntries = expectedFiles + 1
 
   await assert.rejects(
     adapter.create({
-      limits: { ...commonLimits, maxFiles: 6 },
+      limits: { ...commonLimits, maxFiles: expectedEntries - 1 },
       manifestPath: join(fixture.outputRoot, 'too-small.json'),
       target,
     }),
@@ -950,7 +1037,7 @@ test('deleted tracked paths consume the entry limit and are explicit in totals',
 
   const manifestPath = join(fixture.outputRoot, 'exact.json')
   await adapter.create({
-    limits: { ...commonLimits, maxFiles: 7 },
+    limits: { ...commonLimits, maxFiles: expectedEntries },
     manifestPath,
     target,
   })
@@ -962,8 +1049,8 @@ test('deleted tracked paths consume the entry limit and are explicit in totals',
         .flatMap((item) => item.files)
         .reduce((total, file) => total + file.size, 0),
     deletedTracked: 1,
-    entries: 7,
-    files: 6,
+    entries: expectedEntries,
+    files: expectedFiles,
   })
 })
 
@@ -1157,19 +1244,13 @@ test('toolchain capture executes private snapshots with a clean environment and 
   assert.equal(manifest.toolchains.go.env.GOROOT, bindings.go.goroot)
   assert.equal(manifestBytes.includes(Buffer.from(bindings.snapshotRoot)), false)
   assert.equal(
-    (
-      await stat(
-        join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/bin/rust-objcopy`),
-      )
-    ).mode & 0o777,
+    (await stat(join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/bin/rust-objcopy`)))
+      .mode & 0o777,
     0o500,
   )
   assert.equal(
-    (
-      await stat(
-        join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/lib/libstd.rlib`),
-      )
-    ).mode & 0o777,
+    (await stat(join(bindings.rustToolchain.canonical, `lib/rustlib/${target}/lib/libstd.rlib`)))
+      .mode & 0o777,
     0o400,
   )
 

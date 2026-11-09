@@ -20,8 +20,72 @@ import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { gzipSync } from 'node:zlib'
 
+import { assertGoPublishedModules } from '../../scripts/ci/verify-sidecar-version.mjs'
+
 const moduleURL = new URL('../../scripts/ci/package-local.mjs', import.meta.url)
 const execFileAsync = promisify(execFile)
+
+test('published Go dependency identity rejects version, checksum and replacement drift', () => {
+  const expected = { path: 'example.invalid/published', version: 'v1.2.3', sum: 'h1:published' }
+  const dependency = `\tdep\t${expected.path}\t${expected.version}\t${expected.sum}`
+  assert.doesNotThrow(() => assertGoPublishedModules(dependency, [expected]))
+  for (const metadata of [
+    dependency.replace('v1.2.3', 'v1.2.4'),
+    dependency.replace('h1:published', 'h1:other'),
+    `${dependency}\n\t=>\t./local\t(devel)`,
+    `${dependency}\n${dependency}`,
+    '',
+  ]) {
+    assert.throws(
+      () => assertGoPublishedModules(metadata, [expected]),
+      /published dependency identity must match exactly/u,
+    )
+  }
+})
+
+test('neutral GOWORK off is accepted without accepting an external source workspace', async () => {
+  const identityModuleURL = new URL('../../scripts/ci/package-source-identity.mjs', import.meta.url)
+  const target = 'aarch64-apple-darwin'
+  const program = `import {createPackageSourceManifest} from ${JSON.stringify(identityModuleURL.href)};try{await createPackageSourceManifest({manifestPath:'relative.json',target:${JSON.stringify(target)}})}catch(error){process.stdout.write(error.code)}`
+  for (const [goWork, expected] of [
+    ['off', 'input:manifest-path'],
+    ['/tmp/external-source.go.work', 'input:source-override'],
+  ]) {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--input-type=module', '-e', program],
+      {
+        env: { PATH: '/usr/bin:/bin', GOWORK: goWork, MAKEFLAGS: 'GOWORK=off' },
+      },
+    )
+    assert.equal(stdout, expected)
+  }
+})
+
+test('the resolved published dependency requires both frozen source checksums', async () => {
+  const { assertPublishedGoModuleSources } =
+    await import('../../scripts/ci/package-source-identity.mjs')
+  const selected = {
+    path: 'github.com/hexagon-codes/toolkit',
+    version: 'v1.2.3',
+    sum: `h1:${Buffer.alloc(32, 1).toString('base64')}`,
+    goModSum: `h1:${Buffer.alloc(32, 2).toString('base64')}`,
+  }
+  const historical = { ...selected, version: 'v1.0.0' }
+  assert.doesNotThrow(() => assertPublishedGoModuleSources([selected], [historical, selected]))
+  for (const records of [
+    [],
+    [historical],
+    [{ ...selected, goModSum: null }],
+    [{ ...selected, goModSum: `h1:${Buffer.alloc(32, 3).toString('base64')}` }],
+    [{ ...selected, sum: null }],
+  ]) {
+    assert.throws(
+      () => assertPublishedGoModuleSources([selected], records),
+      /\[workspace:published-module\]/u,
+    )
+  }
+})
 
 function octalField(value, length) {
   return `${value.toString(8).padStart(length - 1, '0')}\0`
@@ -428,7 +492,6 @@ test('package-local plan binds one native generation and never consumes shared p
   assert.equal(plan.paths.projectedWorkRoot, join(plan.paths.generationRoot, 'source'))
   assert.equal(plan.paths.projectedGoWork, join(plan.paths.projectedWorkRoot, 'go.work'))
   assert.deepEqual(plan.paths.projectedGoModuleRoots, [
-    join(plan.paths.projectedWorkRoot, 'toolkit'),
     join(plan.paths.projectedWorkRoot, 'ai-core'),
     join(plan.paths.projectedWorkRoot, 'hexagon'),
     join(plan.paths.projectedWorkRoot, 'hexclaw'),
@@ -1259,20 +1322,20 @@ test('desktop source projection copies only manifest-bound files and ignores rep
   await assert.rejects(lstat(join(projectedRoot, 'node_modules')), { code: 'ENOENT' })
 })
 
-test('package source projection derives a five-repository workspace without consuming global go.work', async (t) => {
+test('package source projection derives a three-local-module workspace with a published Toolkit without consuming global go.work', async (t) => {
   const { projectPackageSourceFromManifest, verifyProjectedPackageSourceFromManifest } =
     await import(moduleURL)
   const root = await mkdtemp(join(tmpdir(), 'hexclaw-package-source-projection-'))
   t.after(() => rm(root, { force: true, recursive: true }))
   const sourceWorkRoot = join(root, 'work')
   const projectedWorkRoot = join(root, 'generation', 'source')
-  const repositoryNames = ['toolkit', 'ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop']
+  const repositoryNames = ['ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop']
   const repositories = []
   let repositoryBytes = 0
 
   for (const name of repositoryNames) {
     const relativePath = name === 'hexclaw-desktop' ? 'src/main.ts' : 'go.mod'
-    const goVersion = name === 'toolkit' ? '1.25.12' : '1.25.7'
+    const goVersion = name === 'ai-core' ? '1.25.12' : '1.25.7'
     const modulePath = `github.com/hexagon-codes/${name}`
     const bytes =
       name === 'hexclaw-desktop' ? `${name}\n` : `module ${modulePath}\n\ngo ${goVersion}\n`
@@ -1320,8 +1383,7 @@ test('package source projection derives a five-repository workspace without cons
     await writeFile(join(sourceWorkRoot, path), bytes, { mode: 0o600 })
   }
 
-  const dedicatedWorkspace =
-    'go 1.25.12\n\nuse (\n\t./toolkit\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n'
+  const dedicatedWorkspace = 'go 1.25.12\n\nuse (\n\t./ai-core\n\t./hexagon\n\t./hexclaw\n)\n'
 
   const manifest = {
     repositories,
@@ -1340,8 +1402,9 @@ test('package source projection derives a five-repository workspace without cons
       },
       goVersion: '1.25.12',
       localReplacements: [],
+      publishedModules: ['github.com/hexagon-codes/toolkit'],
+      publishedModuleChecksums: [],
       modules: [
-        { module: 'github.com/hexagon-codes/toolkit', repository: 'toolkit' },
         { module: 'github.com/hexagon-codes/ai-core', repository: 'ai-core' },
         { module: 'github.com/hexagon-codes/hexagon', repository: 'hexagon' },
         { module: 'github.com/hexagon-codes/hexclaw', repository: 'hexclaw' },
@@ -1360,7 +1423,7 @@ test('package source projection derives a five-repository workspace without cons
     sourceWorkRoot,
   })
 
-  assert.deepEqual(result, { copiedBytes: expectedBytes, copiedFiles: 6 })
+  assert.deepEqual(result, { copiedBytes: expectedBytes, copiedFiles: 5 })
   for (const repository of repositories) {
     const file = repository.files[0]
     assert.equal(
@@ -1368,7 +1431,7 @@ test('package source projection derives a five-repository workspace without cons
       repository.id === 'hexclaw-desktop'
         ? `${repository.id}\n`
         : `module github.com/hexagon-codes/${repository.id}\n\ngo ${
-            repository.id === 'toolkit' ? '1.25.12' : '1.25.7'
+            repository.id === 'ai-core' ? '1.25.12' : '1.25.7'
           }\n`,
     )
   }
@@ -1391,7 +1454,7 @@ test('package source projection derives a five-repository workspace without cons
     manifest,
     projectedWorkRoot,
   })
-  assert.deepEqual(verified, { verifiedBytes: expectedBytes, verifiedFiles: 6 })
+  assert.deepEqual(verified, { verifiedBytes: expectedBytes, verifiedFiles: 5 })
   await writeFile(
     join(sourceWorkRoot, 'go.work'),
     'go 1.99.0\n\nuse (\n\t./yc-server\n\t./external-drift\n)\n',

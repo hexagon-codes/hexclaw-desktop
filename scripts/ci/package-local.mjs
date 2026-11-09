@@ -2,17 +2,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
-import {
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  realpath,
-  rm,
-  rmdir,
-  symlink,
-  unlink,
-} from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, realpath, rm, rmdir, symlink, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
@@ -45,6 +35,7 @@ import {
   resolveCurrentPackageGeneration,
 } from './package-generation-publication.mjs'
 import {
+  assertPublishedGoModuleSources,
   createPackageSourceManifest,
   verifyPackageSourceManifest,
 } from './package-source-identity.mjs'
@@ -127,19 +118,13 @@ const TARGETS = Object.freeze({
   }),
 })
 
-const PACKAGE_REPOSITORY_IDS = Object.freeze([
-  'toolkit',
-  'ai-core',
-  'hexagon',
-  'hexclaw',
-  'hexclaw-desktop',
-])
+const PACKAGE_REPOSITORY_IDS = Object.freeze(['ai-core', 'hexagon', 'hexclaw', 'hexclaw-desktop'])
 const PACKAGE_GO_MODULES = Object.freeze([
-  Object.freeze({ module: 'github.com/hexagon-codes/toolkit', repository: 'toolkit' }),
   Object.freeze({ module: 'github.com/hexagon-codes/ai-core', repository: 'ai-core' }),
   Object.freeze({ module: 'github.com/hexagon-codes/hexagon', repository: 'hexagon' }),
   Object.freeze({ module: 'github.com/hexagon-codes/hexclaw', repository: 'hexclaw' }),
 ])
+const PACKAGE_PUBLISHED_GO_MODULES = Object.freeze(['github.com/hexagon-codes/toolkit'])
 
 const PIPELINE_OPERATION_NAMES = Object.freeze([
   'createSourceManifest',
@@ -273,6 +258,7 @@ export function createDependencyProvenanceOptions(plan, toolchains, sourceManife
       goWork: plan.paths.projectedGoWork,
       goroot: toolchains.go.goroot,
       moduleRoots: plan.paths.projectedGoModuleRoots,
+      publishedModules: PACKAGE_PUBLISHED_GO_MODULES,
       sha256: hasGoSourceBinding ? toolchains.go.sourceSha256 : toolchains.go.executableSha256,
       version: toolchains.go.version,
     }),
@@ -560,7 +546,7 @@ export async function projectDesktopSourceFromManifest(options) {
   return Object.freeze(await copyManifestRecords(desktopRoot, projectedRoot, repositories[0].files))
 }
 
-/** 将五仓与清单派生的专用 Go workspace 投影到唯一 generation。 */
+/** 将本地源码与清单派生的专用 Go workspace 投影到唯一 generation。 */
 export async function projectPackageSourceFromManifest(options) {
   exactOptions(options, ['manifest', 'projectedWorkRoot', 'sourceWorkRoot'])
   const sourceWorkRoot = absolutePath(options.sourceWorkRoot, 'source-projection-root')
@@ -588,6 +574,17 @@ export async function projectPackageSourceFromManifest(options) {
 }
 
 function packageWorkspaceContract(manifest) {
+  const publishedModules = manifest.workspace?.publishedModules
+  if (
+    !Array.isArray(publishedModules) ||
+    publishedModules.length !== PACKAGE_PUBLISHED_GO_MODULES.length ||
+    publishedModules.some((module, index) => module !== PACKAGE_PUBLISHED_GO_MODULES[index])
+  ) {
+    fail('source-projection-workspace')
+  }
+  if (!Array.isArray(manifest.workspace?.publishedModuleChecksums)) {
+    fail('source-projection-workspace')
+  }
   const modules = manifest.workspace?.modules
   const recordedModules = Array.isArray(modules)
     ? [...modules].sort((left, right) =>
@@ -1148,7 +1145,9 @@ async function loadBoundSourceManifest(
   }
   if (
     !isPlainObject(manifest) ||
-    manifest.schema !== 'hexclaw.package-source-identity.v2' ||
+    !['hexclaw.package-source-identity.v2', 'hexclaw.package-source-identity.v3'].includes(
+      manifest.schema,
+    ) ||
     manifest.target !== plan.target.triple
   ) {
     fail('source-manifest-contract')
@@ -2035,7 +2034,7 @@ export function createPackageLocalPlan(options) {
     privateTemp: join(generationRoot, 'tmp'),
     projectedDesktopRoot,
     projectedGoModuleRoots: Object.freeze(
-      ['toolkit', 'ai-core', 'hexagon', 'hexclaw'].map((name) => join(projectedWorkRoot, name)),
+      PACKAGE_GO_MODULES.map(({ repository }) => join(projectedWorkRoot, repository)),
     ),
     projectedGoWork: join(projectedWorkRoot, 'go.work'),
     projectedWorkRoot,
@@ -2618,7 +2617,7 @@ function productionOperations() {
     },
 
     async verifyGoDependencies(context) {
-      const { dependencies, plan, sourceManifestSHA256, toolchains } = context
+      const { dependencies, plan, sourceManifest, sourceManifestSHA256, toolchains } = context
       const verified = await verifyPackageDependencyProvenance(
         createDependencyProvenanceOptions(plan, toolchains, sourceManifestSHA256),
       ).catch((error) => failPackageDependency('dependency-provenance-verify', error))
@@ -2631,7 +2630,6 @@ function productionOperations() {
         fail('dependency-provenance-drift')
       }
       const expectedModules = [
-        ['github.com/hexagon-codes/toolkit', join(plan.paths.projectedWorkRoot, 'toolkit')],
         ['github.com/hexagon-codes/ai-core', join(plan.paths.projectedWorkRoot, 'ai-core')],
         ['github.com/hexagon-codes/hexagon', join(plan.paths.projectedWorkRoot, 'hexagon')],
         ['github.com/hexagon-codes/hexclaw', join(plan.paths.projectedWorkRoot, 'hexclaw')],
@@ -2662,6 +2660,47 @@ function productionOperations() {
         ) {
           fail('go-workspace')
         }
+      }
+      const published = dependencies.go.publishedModules
+      if (
+        !Array.isArray(published) ||
+        published.length !== PACKAGE_PUBLISHED_GO_MODULES.length ||
+        published.some((module, index) => module.path !== PACKAGE_PUBLISHED_GO_MODULES[index])
+      ) {
+        fail('go-published-modules')
+      }
+      try {
+        assertPublishedGoModuleSources(published, sourceManifest.workspace.publishedModuleChecksums)
+      } catch {
+        fail('go-published-modules')
+      }
+      const remote = await runPackageCommand(
+        dependencies.go.executable,
+        ['list', '-m', '-json', ...PACKAGE_PUBLISHED_GO_MODULES],
+        {
+          cwd: join(plan.paths.projectedWorkRoot, 'hexclaw'),
+          env: goEnvironment(context),
+          timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+        },
+      )
+      let module
+      try {
+        module = JSON.parse(remote.stdout)
+      } catch {
+        fail('go-published-modules')
+      }
+      const expected = published[0]
+      if (
+        module.Path !== expected.path ||
+        module.Version !== expected.version ||
+        module.Sum !== expected.sum ||
+        module.GoModSum !== expected.goModSum ||
+        (module.Main !== undefined && module.Main !== false) ||
+        module.Replace !== undefined ||
+        module.Dir !== join(dependencies.go.environment.GOMODCACHE, expected.directory) ||
+        module.GoMod !== join(dependencies.go.environment.GOMODCACHE, expected.goMod)
+      ) {
+        fail('go-published-modules')
       }
     },
 
@@ -2733,6 +2772,7 @@ function productionOperations() {
           join(plan.paths.generationBinaries, `hexclaw-${plan.target.triple}`),
           plan.version,
           {
+            publishedModules: dependencies.go.publishedModules,
             goToolchain: {
               executable: dependencies.go.executable,
               executableSha256: toolchains.go.sourceSha256,
@@ -2801,15 +2841,15 @@ function productionOperations() {
           },
         )
       }
-      const archive = await secureFileSHA256(
-        plan.paths.sharedOllamaArchive,
-        contract.archiveBytes,
-      )
+      const archive = await secureFileSHA256(plan.paths.sharedOllamaArchive, contract.archiveBytes)
       if (archive.size !== contract.archiveBytes || archive.sha256 !== contract.archiveSha256) {
         fail('ollama-archive-digest')
       }
       // 解包树由归档 sha256 完全决定：落到宿主持久缓存跨代复用，generation 内 clonefile 引用。
-      const cachedTreeRoot = join(plan.paths.cacheRoot, `ollama-tree-${contract.archiveSha256.slice(0, 16)}`)
+      const cachedTreeRoot = join(
+        plan.paths.cacheRoot,
+        `ollama-tree-${contract.archiveSha256.slice(0, 16)}`,
+      )
       const cachedTree = await lstat(cachedTreeRoot, { bigint: true }).catch((error) => {
         if (error?.code === 'ENOENT') return undefined
         fail('ollama-cache-state')

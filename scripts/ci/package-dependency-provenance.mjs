@@ -703,7 +703,7 @@ function validateConfigShape(options) {
   )
   requireExactOptions(
     options.go,
-    ['executable', 'sha256', 'goroot', 'goWork', 'moduleRoots', 'version'],
+    ['executable', 'sha256', 'goroot', 'goWork', 'moduleRoots', 'publishedModules', 'version'],
     'input:go',
   )
   if (
@@ -712,6 +712,18 @@ function validateConfigShape(options) {
     options.go.moduleRoots.length > MAX_MODULE_ROOTS
   ) {
     fail('input:module-roots')
+  }
+  if (
+    options.go.publishedModules !== undefined &&
+    (!Array.isArray(options.go.publishedModules) ||
+      options.go.publishedModules.length > MAX_MODULE_ROOTS ||
+      options.go.publishedModules.some(
+        (module) =>
+          typeof module !== 'string' || !/^[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)+$/u.test(module),
+      ) ||
+      new Set(options.go.publishedModules).size !== options.go.publishedModules.length)
+  ) {
+    fail('input:published-modules')
   }
   const hasPnpmWorker =
     options.pnpm.packageExecutable !== undefined ||
@@ -842,6 +854,7 @@ async function resolveConfig(options, preparing) {
   return Object.freeze({
     limits: requireLimits(options.limits),
     paths: Object.freeze(paths),
+    publishedModules: Object.freeze([...(options.go.publishedModules ?? [])]),
     requestedTools: Object.freeze({
       go: Object.freeze({
         executable: goExecutable,
@@ -929,6 +942,7 @@ function configBinding(config) {
   }
   return Object.freeze({
     sourceManifestSha256: config.sourceManifestSha256,
+    ...(config.publishedModules.length > 0 ? { publishedModules: config.publishedModules } : {}),
     tools: Object.freeze(tools),
   })
 }
@@ -1162,12 +1176,96 @@ async function prepareGoDependencies(config, tools) {
   }
 }
 
-function publicResult(config, tools) {
+async function collectPublishedModules(config, tools) {
+  const identities = []
+  for (const path of config.publishedModules) {
+    const listed = await runPinned(
+      tools.go,
+      [],
+      ['-C', config.paths.moduleRoots[0], 'list', '-m', '-json', path],
+      processOptions(config, config.paths.moduleRoots[0], goEnvironment(config.paths, false)),
+      'go:published-module:list',
+    )
+    let module
+    try {
+      module = JSON.parse(listed.stdout)
+    } catch {
+      fail('go:published-module:metadata')
+    }
+    if (
+      !isPlainObject(module) ||
+      module.Path !== path ||
+      !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(
+        module.Version ?? '',
+      ) ||
+      !/^h1:[A-Za-z0-9+/]{43}=$/u.test(module.Sum ?? '') ||
+      !/^h1:[A-Za-z0-9+/]{43}=$/u.test(module.GoModSum ?? '') ||
+      (module.Main !== undefined && module.Main !== false) ||
+      module.Replace !== undefined ||
+      module.Error !== undefined
+    ) {
+      fail('go:published-module:metadata')
+    }
+    const directory = relativePath(
+      config.paths.goModuleCache,
+      requireAbsolutePath(module.Dir, 'go:published-module:directory'),
+      'go:published-module:directory',
+    )
+    const goMod = relativePath(
+      config.paths.goModuleCache,
+      requireAbsolutePath(module.GoMod, 'go:published-module:go-mod'),
+      'go:published-module:go-mod',
+    )
+    let hasSum = false
+    let hasGoModSum = false
+    for (const root of config.paths.moduleRoots) {
+      const sumPath = join(root, 'go.sum')
+      const exists = await lstat(sumPath).catch((error) => {
+        if (error?.code === 'ENOENT') return undefined
+        fail('go:published-module:checksum')
+      })
+      if (exists === undefined) continue
+      const sums = await readSecureFile(sumPath, 'go:published-module:checksum', {
+        inside: config.paths.generationRoot,
+        maxBytes: MAX_RECEIPT_BYTES,
+      })
+      for (const line of sums.bytes.toString('utf8').split(/\r?\n/u)) {
+        const [name, version, sum] = line.trim().split(/\s+/u)
+        if (name !== path) continue
+        if (version === module.Version) {
+          if (sum !== module.Sum) fail('go:published-module:checksum')
+          hasSum = true
+        }
+        if (version === `${module.Version}/go.mod`) {
+          if (sum !== module.GoModSum) fail('go:published-module:checksum')
+          hasGoModSum = true
+        }
+      }
+    }
+    if (!hasSum || !hasGoModSum) fail('go:published-module:checksum')
+    // 发布依赖采用 Go 模块身份，不将宿主缓存绝对路径写入来源回执。
+    identities.push(
+      Object.freeze({
+        directory,
+        goMod,
+        goModSum: module.GoModSum,
+        main: false,
+        path,
+        sum: module.Sum,
+        version: module.Version,
+      }),
+    )
+  }
+  return Object.freeze(identities)
+}
+
+function publicResult(config, tools, publishedModules = []) {
   return Object.freeze({
     go: Object.freeze({
       environment: goEnvironment(config.paths, false),
       executable: tools.go.privatePath,
       moduleRoots: config.paths.moduleRoots,
+      ...(config.publishedModules.length > 0 ? { publishedModules } : {}),
       workspace: config.paths.goDependencyWork,
     }),
     node: Object.freeze({
@@ -1180,11 +1278,12 @@ function publicResult(config, tools) {
   })
 }
 
-async function writeReceipt(config, tools, inputs, trees, versions) {
+async function writeReceipt(config, tools, inputs, trees, versions, publishedModules) {
   const receipt = Object.freeze({
     configurationDigest: digestValue(configBinding(config)),
     inputs,
     limits: config.limits,
+    ...(config.publishedModules.length > 0 ? { publishedModules } : {}),
     schema: RECEIPT_SCHEMA,
     tools: Object.freeze(
       Object.fromEntries(
@@ -1228,11 +1327,12 @@ export async function preparePackageDependencyProvenance(options) {
   const versions = await collectVersions(config, tools)
   await installNodeDependencies(config, tools)
   await prepareGoDependencies(config, tools)
+  const publishedModules = await collectPublishedModules(config, tools)
   const afterInputs = await dependencyInputs(config.paths)
   if (digestValue(afterInputs) !== digestValue(beforeInputs)) fail('input:drift')
   const trees = await scanDependencyTrees(config.paths, config.limits)
-  await writeReceipt(config, tools, afterInputs, trees, versions)
-  return publicResult(config, tools)
+  await writeReceipt(config, tools, afterInputs, trees, versions, publishedModules)
+  return publicResult(config, tools, publishedModules)
 }
 
 export async function verifyPackageDependencyProvenance(options) {
@@ -1263,6 +1363,10 @@ export async function verifyPackageDependencyProvenance(options) {
   if (digestValue(inputsBefore) !== digestValue(receipt.inputs)) fail('input:drift')
   const versions = await collectVersions(config, tools)
   if (digestValue(versions) !== digestValue(receipt.versions)) fail('tool:version-drift')
+  const publishedModules = await collectPublishedModules(config, tools)
+  if (digestValue(publishedModules) !== digestValue(receipt.publishedModules ?? [])) {
+    fail('go:published-module:drift')
+  }
   const offline = Object.freeze({ ...goEnvironment(config.paths, false), GOWORK: 'off' })
   for (const moduleRoot of config.paths.moduleRoots) {
     await runPinned(
@@ -1277,7 +1381,7 @@ export async function verifyPackageDependencyProvenance(options) {
   if (digestValue(inputsAfter) !== digestValue(receipt.inputs)) fail('input:drift')
   const trees = await scanDependencyTrees(config.paths, config.limits)
   if (digestValue(trees) !== digestValue(receipt.trees)) fail('tree:drift')
-  return publicResult(config, tools)
+  return publicResult(config, tools, publishedModules)
 }
 
 async function readCLIConfig(argv) {

@@ -60,7 +60,7 @@ function fakePnpmSource(extra = '') {
   ].join('\n')
 }
 
-function fakeGoSource(extra = '') {
+function fakeGoSource(extra = '', publishedInfoPath = null) {
   return `#!/bin/sh
 set -eu
 if [ "\${1:-}" = version ]; then
@@ -92,6 +92,14 @@ if [ "\${1:-}" = work ] && [ "\${2:-}" = init ]; then
   echo "$GOPROXY|$GOSUMDB|$GOTOOLCHAIN|$GOWORK|\${GOPRIVATE:-}|\${GONOSUMDB:-}|workspace-init" >> "$GOTMPDIR/../go-command.log"
   exit 0
 fi
+${
+  publishedInfoPath === null
+    ? ''
+    : `if [ "\${1:-}" = list ] && [ "\${2:-}" = -m ] && [ "\${3:-}" = -json ] && [ "\${4:-}" = example.invalid/dependency ]; then
+  cat ${shellQuote(publishedInfoPath)}
+  exit 0
+fi`
+}
 if [ "\${1:-}" != mod ]; then
   exit 44
 fi
@@ -101,6 +109,15 @@ if [ "\${2:-}" = download ]; then
   fi
   mkdir -p "$GOMODCACHE/example.invalid/fixture@v1.0.0"
   printf '%s\\n' 'package fixture' > "$GOMODCACHE/example.invalid/fixture@v1.0.0/fixture.go"
+${
+  publishedInfoPath === null
+    ? ''
+    : `  for version in v1.2.3 v1.2.4; do
+    mkdir -p "$GOMODCACHE/example.invalid/dependency@$version" "$GOMODCACHE/cache/download/example.invalid/dependency/@v"
+    printf '%s\\n' 'package dependency' > "$GOMODCACHE/example.invalid/dependency@$version/dependency.go"
+    printf '%s\\n' 'module example.invalid/dependency' > "$GOMODCACHE/cache/download/example.invalid/dependency/@v/$version.mod"
+  done`
+}
   echo 'fixture workspace sum' > "\${GOWORK}.sum"
 elif [ "\${2:-}" != verify ]; then
   exit 46
@@ -110,7 +127,7 @@ ${extra}
 `
 }
 
-async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
+async function createFixture(name, { pnpmExtra = '', goExtra = '', publishedModule = false } = {}) {
   const created = await mkdtemp(join(tmpdir(), `hexclaw-dependency-${name}-`))
   const root = await realpath(created)
   await chmod(root, 0o700)
@@ -146,12 +163,58 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
   const cacheRoot = join(root, 'host-cache')
   await mkdir(cacheRoot, { recursive: true, mode: 0o700 })
   await chmod(cacheRoot, 0o700)
+  const publishedInfoPath = publishedModule ? join(root, 'published-info.json') : null
+  const publishedVersions = [
+    {
+      version: 'v1.2.3',
+      sum: `h1:${Buffer.alloc(32, 1).toString('base64')}`,
+      goModSum: `h1:${Buffer.alloc(32, 2).toString('base64')}`,
+    },
+    {
+      version: 'v1.2.4',
+      sum: `h1:${Buffer.alloc(32, 3).toString('base64')}`,
+      goModSum: `h1:${Buffer.alloc(32, 4).toString('base64')}`,
+    },
+  ]
+  const moduleInfo = ({ version, sum, goModSum }) => ({
+    Path: 'example.invalid/dependency',
+    Version: version,
+    Sum: sum,
+    GoModSum: goModSum,
+    Dir: join(cacheRoot, 'go-module-cache', `example.invalid/dependency@${version}`),
+    GoMod: join(
+      cacheRoot,
+      'go-module-cache',
+      'cache/download/example.invalid/dependency/@v',
+      `${version}.mod`,
+    ),
+  })
+  if (publishedInfoPath !== null) {
+    await writeFile(publishedInfoPath, JSON.stringify(moduleInfo(publishedVersions[0])), {
+      mode: 0o600,
+    })
+    await writeFile(
+      join(moduleRoot, 'go.mod'),
+      'module example.invalid/fixture\n\ngo 1.26.0\n\nrequire example.invalid/dependency v1.2.3\n',
+      { mode: 0o600 },
+    )
+    await writeFile(
+      join(moduleRoot, 'go.sum'),
+      publishedVersions
+        .flatMap(({ version, sum, goModSum }) => [
+          `example.invalid/dependency ${version} ${sum}`,
+          `example.invalid/dependency ${version}/go.mod ${goModSum}`,
+        ])
+        .join('\n') + '\n',
+      { mode: 0o600 },
+    )
+  }
   const nodeSha256 = await writeExecutable(
     nodeExecutable,
     `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`,
   )
   const pnpmSha256 = await writeExecutable(pnpmExecutable, fakePnpmSource(pnpmExtra))
-  const goSha256 = await writeExecutable(goExecutable, fakeGoSource(goExtra))
+  const goSha256 = await writeExecutable(goExecutable, fakeGoSource(goExtra, publishedInfoPath))
   const limits = {
     commandTimeoutMs: 30_000,
     maxCommandOutputBytes: 64 * 1024,
@@ -173,6 +236,7 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
       goroot,
       goWork,
       moduleRoots: [moduleRoot],
+      ...(publishedModule ? { publishedModules: ['example.invalid/dependency'] } : {}),
       version: 'go version go1.26.5 darwin/amd64',
     },
     limits,
@@ -186,10 +250,66 @@ async function createFixture(name, { pnpmExtra = '', goExtra = '' } = {}) {
     nodeExecutable,
     options,
     pnpmExecutable,
+    publishedInfoPath,
+    publishedVersions: publishedVersions.map(moduleInfo),
     root,
     sourceRoot,
   }
 }
+
+test('published modules retain version and both checksums through dependency verification', async (t) => {
+  const fixture = await createFixture('published-identity', { publishedModule: true })
+  t.after(() => rm(fixture.root, { recursive: true, force: true }))
+  const module = await import(moduleURL)
+  const prepared = await module.preparePackageDependencyProvenance(fixture.options)
+  assert.deepEqual(await module.verifyPackageDependencyProvenance(fixture.options), prepared)
+  const [identity] = prepared.go.publishedModules
+  assert.equal(identity.path, 'example.invalid/dependency')
+  assert.equal(identity.version, 'v1.2.3')
+  assert.equal(identity.sum, fixture.publishedVersions[0].Sum)
+  assert.equal(identity.goModSum, fixture.publishedVersions[0].GoModSum)
+  assert.equal(identity.main, false)
+  assert.equal(JSON.stringify(identity).includes(fixture.root), false)
+})
+
+test('published module replacement, main-module substitution, version and checksum drift are rejected', async (t) => {
+  const cases = [
+    [
+      'replacement',
+      (fixture) => ({ ...fixture.publishedVersions[0], Replace: { Path: './local' } }),
+      'go:published-module:metadata',
+    ],
+    [
+      'main',
+      (fixture) => ({ ...fixture.publishedVersions[0], Main: true }),
+      'go:published-module:metadata',
+    ],
+    ['version', (fixture) => fixture.publishedVersions[1], 'go:published-module:drift'],
+    [
+      'checksum',
+      (fixture) => ({ ...fixture.publishedVersions[0], Sum: fixture.publishedVersions[1].Sum }),
+      'go:published-module:checksum',
+    ],
+    [
+      'go-mod-checksum',
+      (fixture) => ({
+        ...fixture.publishedVersions[0],
+        GoModSum: fixture.publishedVersions[1].GoModSum,
+      }),
+      'go:published-module:checksum',
+    ],
+  ]
+  for (const [name, mutated, category] of cases) {
+    await t.test(name, async (t) => {
+      const fixture = await createFixture(`published-${name}`, { publishedModule: true })
+      t.after(() => rm(fixture.root, { recursive: true, force: true }))
+      const module = await import(moduleURL)
+      await module.preparePackageDependencyProvenance(fixture.options)
+      await writeFile(fixture.publishedInfoPath, JSON.stringify(mutated(fixture)), { mode: 0o600 })
+      await rejectsCategory(module.verifyPackageDependencyProvenance(fixture.options), category)
+    })
+  }
+})
 
 test('configuration digest ignores generation and snapshot paths but binds manifest identity', async (t) => {
   const left = await createFixture('stable-digest-left')
@@ -317,10 +437,7 @@ test('rejects node_modules inside the private generation before installing', asy
     recursive: true,
     mode: 0o700,
   })
-  await writeFile(
-    join(fixture.generationRoot, 'node_modules', 'host-canary', 'index.js'),
-    'host\n',
-  )
+  await writeFile(join(fixture.generationRoot, 'node_modules', 'host-canary', 'index.js'), 'host\n')
   const module = await import(moduleURL)
 
   await rejectsCategory(

@@ -103,7 +103,7 @@ printf '%s\\n' \\
   '\tbuild\tGOARCH=amd64' \\
   '\tbuild\tGOOS=darwin'
 printf '\tbuild\tprobe.inherited=%s\\n' "$inherited"
-printf '\tbuild\tprobe.allowed=%s|%s|%s\\n' "\${GOENV-}" "\${GOROOT-}" "\${GOTOOLCHAIN-}"
+printf '\tbuild\tprobe.allowed=%s|%s|%s|%s\\n' "\${GOENV-}" "\${GOROOT-}" "\${GOTOOLCHAIN-}" "\${GOWORK-}"
 `
   await writeFile(executable, source, { mode: 0o700 })
   await chmod(executable, 0o700)
@@ -316,7 +316,7 @@ test('Go helper uses a clean allowlisted environment and returns trusted-copy ev
   assert.doesNotMatch(verifierSource, /\{\s*\.\.\.process\.env\s*\}/u)
   assert.match(
     verifierSource,
-    /const environment = \{\s*GOENV: 'off',\s*GOROOT: goToolchain\.goroot,\s*GOTOOLCHAIN: 'local',\s*\}/u,
+    /const environment = \{\s*GOENV: 'off',\s*GOROOT: goToolchain\.goroot,\s*GOTOOLCHAIN: 'local',\s*GOWORK: 'off',\s*\}/u,
   )
 
   const fixtureRoot = await privateTestRoot('hexclaw-go-environment-')
@@ -324,7 +324,14 @@ test('Go helper uses a clean allowlisted environment and returns trusted-copy ev
   const binaryPath = join(fixtureRoot, 'hexclaw-x86_64-apple-darwin')
   await writeFile(binaryPath, x86MachO64(), { mode: 0o500 })
   const goToolchain = await writeEnvironmentProbeGoTool(fixtureRoot)
-  const inheritedNames = ['HOME', 'PATH', 'HEXCLAW_SECRET_PROBE', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD']
+  const inheritedNames = [
+    'HOME',
+    'PATH',
+    'HEXCLAW_SECRET_PROBE',
+    'DYLD_LIBRARY_PATH',
+    'LD_PRELOAD',
+    'GOWORK',
+  ]
   const previous = new Map(inheritedNames.map((name) => [name, process.env[name]]))
   for (const name of inheritedNames) process.env[name] = `forbidden-${name}`
   t.after(() => {
@@ -341,7 +348,7 @@ test('Go helper uses a clean allowlisted environment and returns trusted-copy ev
   assert.equal(extractGoBuildSetting(result.metadata, 'probe.inherited'), 'none')
   assert.equal(
     extractGoBuildSetting(result.metadata, 'probe.allowed'),
-    `off|${goToolchain.goroot}|local`,
+    `off|${goToolchain.goroot}|local|off`,
   )
   assert.equal(result.goToolchainSnapshot.copyIdentity.linkCount, '1')
   assert.equal(result.goToolchainSnapshot.copyIdentity.ownerUserId, String(process.getuid()))

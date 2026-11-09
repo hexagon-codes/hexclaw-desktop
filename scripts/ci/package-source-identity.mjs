@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url'
 
 import { BoundedProcessError, runBoundedProcess } from './run-bounded-process.mjs'
 
-const SOURCE_MANIFEST_SCHEMA = 'hexclaw.package-source-identity.v2'
+const SOURCE_MANIFEST_SCHEMA = 'hexclaw.package-source-identity.v3'
+const LEGACY_SOURCE_MANIFEST_SCHEMA = 'hexclaw.package-source-identity.v2'
 const HASH_CHUNK_BYTES = 1024 * 1024
 const COMMAND_TIMEOUT_MS = 60_000
 const COMMAND_OUTPUT_LIMIT_BYTES = 512 * 1024
@@ -63,11 +64,18 @@ const NATIVE_MAC_TARGETS = Object.freeze({
 })
 
 const REPOSITORY_CONTRACT = Object.freeze([
-  Object.freeze({ id: 'toolkit', module: 'github.com/hexagon-codes/toolkit' }),
   Object.freeze({ id: 'ai-core', module: 'github.com/hexagon-codes/ai-core' }),
   Object.freeze({ id: 'hexagon', module: 'github.com/hexagon-codes/hexagon' }),
   Object.freeze({ id: 'hexclaw', module: 'github.com/hexagon-codes/hexclaw' }),
   Object.freeze({ id: 'hexclaw-desktop', module: null }),
+])
+const PUBLISHED_MODULES = Object.freeze(['github.com/hexagon-codes/toolkit'])
+const GO_MODULE_VERSION_PATTERN =
+  /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
+const GO_MODULE_SUM_PATTERN = /^h1:[A-Za-z0-9+/]{43}=$/u
+const LEGACY_REPOSITORY_CONTRACT = Object.freeze([
+  Object.freeze({ id: 'toolkit', module: 'github.com/hexagon-codes/toolkit' }),
+  ...REPOSITORY_CONTRACT,
 ])
 
 const SOURCE_OVERRIDE_NAMES = Object.freeze([
@@ -2214,6 +2222,7 @@ async function validateWorkspace(layout) {
   const modules = []
   const localReplacements = []
   const goVersions = []
+  const publishedChecksums = new Map()
   for (const repository of expectedRepositories) {
     const goModPath = join(repository.root, 'go.mod')
     const goMod = await readSmallSecureFile(
@@ -2229,6 +2238,34 @@ async function validateWorkspace(layout) {
       ...(await validateLocalReplacements(goModText, goModPath, `${repository.id}/go.mod`, layout)),
     )
     modules.push(Object.freeze({ module: repository.module, repository: repository.id }))
+    const sumPath = join(repository.root, 'go.sum')
+    if ((await safeLstat(sumPath, true)) !== null) {
+      const goSum = await readSmallSecureFile(
+        sumPath,
+        DEFAULT_LIMITS.maxFileBytes,
+        'workspace:published-checksum',
+        repository.root,
+      )
+      for (const line of goSum.toString('utf8').split(/\r?\n/u)) {
+        const [path, declaredVersion, sum, extra] = line.trim().split(/\s+/u)
+        if (!PUBLISHED_MODULES.includes(path)) continue
+        const goMod = declaredVersion?.endsWith('/go.mod') === true
+        const version = goMod ? declaredVersion.slice(0, -'/go.mod'.length) : declaredVersion
+        if (
+          extra !== undefined ||
+          !GO_MODULE_VERSION_PATTERN.test(version ?? '') ||
+          !GO_MODULE_SUM_PATTERN.test(sum ?? '')
+        ) {
+          fail('workspace:published-checksum')
+        }
+        const key = `${path}\0${version}`
+        const record = publishedChecksums.get(key) ?? { path, version, sum: null, goModSum: null }
+        const field = goMod ? 'goModSum' : 'sum'
+        if (record[field] !== null && record[field] !== sum) fail('workspace:published-checksum')
+        record[field] = sum
+        publishedChecksums.set(key, record)
+      }
+    }
   }
   localReplacements.sort((left, right) =>
     compareUTF8(
@@ -2250,7 +2287,60 @@ async function validateWorkspace(layout) {
     goVersion,
     localReplacements: Object.freeze(localReplacements),
     modules: Object.freeze(modules.sort((left, right) => compareUTF8(left.module, right.module))),
+    publishedModules: PUBLISHED_MODULES,
+    // 这里只冻结源校验和事实，版本选择仍由绑定本轮 go.mod 的 Go 解析器负责。
+    publishedModuleChecksums: Object.freeze(
+      [...publishedChecksums.values()]
+        .sort((left, right) =>
+          compareUTF8(`${left.path}\0${left.version}`, `${right.path}\0${right.version}`),
+        )
+        .map(Object.freeze),
+    ),
   })
+}
+
+function validatePublishedModuleChecksums(records) {
+  if (!Array.isArray(records)) fail('manifest:published-checksums')
+  const keys = new Set()
+  for (const record of records) {
+    if (
+      !isPlainObject(record) ||
+      !PUBLISHED_MODULES.includes(record.path) ||
+      !GO_MODULE_VERSION_PATTERN.test(record.version ?? '') ||
+      (record.sum !== null && !GO_MODULE_SUM_PATTERN.test(record.sum ?? '')) ||
+      (record.goModSum !== null && !GO_MODULE_SUM_PATTERN.test(record.goModSum ?? '')) ||
+      (record.sum === null && record.goModSum === null)
+    ) {
+      fail('manifest:published-checksums')
+    }
+    const key = `${record.path}\0${record.version}`
+    if (keys.has(key)) fail('manifest:published-checksums')
+    keys.add(key)
+  }
+}
+
+/** 用冻结的源校验和核对 Go 实际选择的发布依赖，不从历史校验和中挑选版本。 */
+export function assertPublishedGoModuleSources(modules, records) {
+  validatePublishedModuleChecksums(records)
+  if (!Array.isArray(modules) || modules.length !== PUBLISHED_MODULES.length) {
+    fail('workspace:published-module')
+  }
+  for (const [index, module] of modules.entries()) {
+    if (!isPlainObject(module)) fail('workspace:published-module')
+    const record = records.find(
+      (item) => item.path === module.path && item.version === module.version,
+    )
+    if (
+      module.path !== PUBLISHED_MODULES[index] ||
+      record === undefined ||
+      record.sum === null ||
+      record.goModSum === null ||
+      record.sum !== module.sum ||
+      record.goModSum !== module.goModSum
+    ) {
+      fail('workspace:published-module')
+    }
+  }
 }
 
 async function resolveLayoutFromDesktop(desktopRoot) {
@@ -2361,6 +2451,7 @@ export async function validateSourcePathForTest(options) {
 
 function assertNoSourceOverrides(env) {
   for (const name of SOURCE_OVERRIDE_NAMES) {
+    if (name === 'GOWORK' && env[name] === 'off') continue
     if (typeof env[name] === 'string' && env[name].trim() !== '') fail('input:source-override')
   }
   const assignmentPattern = new RegExp(
@@ -2368,7 +2459,9 @@ function assertNoSourceOverrides(env) {
     'u',
   )
   for (const name of ['MAKEFLAGS', 'MAKEOVERRIDES', 'MFLAGS']) {
-    if (typeof env[name] === 'string' && assignmentPattern.test(env[name])) {
+    const assignments =
+      typeof env[name] === 'string' ? env[name].replace(/(?:^|\s)GOWORK=off(?=\s|$)/gu, ' ') : ''
+    if (assignmentPattern.test(assignments)) {
       fail('input:source-override')
     }
   }
@@ -2562,7 +2655,10 @@ async function readCanonicalManifest(manifestPath, expectedSha256) {
   }
   const canonical = canonicalManifestBytes(manifest)
   if (!canonical.equals(bytes)) fail('manifest:canonical')
-  if (!isPlainObject(manifest) || manifest.schema !== SOURCE_MANIFEST_SCHEMA)
+  if (
+    !isPlainObject(manifest) ||
+    ![SOURCE_MANIFEST_SCHEMA, LEGACY_SOURCE_MANIFEST_SCHEMA].includes(manifest.schema)
+  )
     fail('manifest:schema')
   return manifest
 }
@@ -2580,9 +2676,11 @@ function resultFromManifest(manifest, digest, toolchains = null) {
 /** 冻结后的校验只验证清单自身及其摘要，不再访问宿主源码或 Git。 */
 function validateFrozenManifest(manifest, target, allowLimitOverrides) {
   const topLevelKeys = isPlainObject(manifest) ? Object.keys(manifest).sort() : []
+  const legacy = manifest?.schema === LEGACY_SOURCE_MANIFEST_SCHEMA
+  const repositories = legacy ? LEGACY_REPOSITORY_CONTRACT : REPOSITORY_CONTRACT
   if (
     topLevelKeys.join(',') !== 'limits,repositories,schema,target,toolchains,totals,workspace' ||
-    manifest.schema !== SOURCE_MANIFEST_SCHEMA ||
+    (!legacy && manifest.schema !== SOURCE_MANIFEST_SCHEMA) ||
     manifest.target !== target
   ) {
     fail('manifest:schema')
@@ -2591,7 +2689,7 @@ function validateFrozenManifest(manifest, target, allowLimitOverrides) {
   validateToolchainTarget(manifest.toolchains, target)
   if (
     !Array.isArray(manifest.repositories) ||
-    manifest.repositories.length !== REPOSITORY_CONTRACT.length
+    manifest.repositories.length !== repositories.length
   ) {
     fail('manifest:repositories')
   }
@@ -2599,9 +2697,9 @@ function validateFrozenManifest(manifest, target, allowLimitOverrides) {
   let files = 0
   let deletedTracked = 0
   let bytes = 0
-  for (let index = 0; index < REPOSITORY_CONTRACT.length; index += 1) {
+  for (let index = 0; index < repositories.length; index += 1) {
     const repository = manifest.repositories[index]
-    const contract = REPOSITORY_CONTRACT[index]
+    const contract = repositories[index]
     if (
       !isPlainObject(repository) ||
       repository.id !== contract.id ||
@@ -2659,6 +2757,10 @@ function validateFrozenManifest(manifest, target, allowLimitOverrides) {
     !isPlainObject(workspace) ||
     !isPlainObject(workspace.file) ||
     !Array.isArray(workspace.modules) ||
+    (!legacy &&
+      (!Array.isArray(workspace.publishedModules) ||
+        workspace.publishedModules.length !== PUBLISHED_MODULES.length ||
+        workspace.publishedModules.some((module, index) => module !== PUBLISHED_MODULES[index]))) ||
     typeof workspace.goVersion !== 'string' ||
     workspace.file.path !== 'go.work' ||
     workspace.file.mode !== '100600' ||
@@ -2669,6 +2771,7 @@ function validateFrozenManifest(manifest, target, allowLimitOverrides) {
     fail('manifest:workspace')
   }
   validateSha256(workspace.file.sha256, 'manifest:workspace')
+  if (!legacy) validatePublishedModuleChecksums(workspace.publishedModuleChecksums)
   files += 1
   bytes += workspace.file.size
   const totals = manifest.totals
