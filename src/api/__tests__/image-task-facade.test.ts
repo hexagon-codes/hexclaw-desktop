@@ -939,6 +939,49 @@ describe('K12 ImageTaskDispatch public facade', () => {
     )
   })
 
+  it('preserves the existing frozen teaching report in a completed dispatch', async () => {
+    const response = completedHomeworkDispatch()
+    const projection = response.dispatch.target_projection as Record<string, unknown>
+    const artifact = projection.final_artifact as Record<string, unknown>
+    const report = {
+      schema_version: 1,
+      content_version: 'answer-first-v3',
+      source: { kind: 'grading', source_id: 'grading-job-1', revision: 1, digest: 'source-digest' },
+      metadata: {
+        title: '作业批改结果',
+        agent_display_name: '辅导助手',
+        grade_term: '六年级上',
+        subject: '数学',
+        report_date: '2026-11-13',
+        timezone: 'Asia/Shanghai',
+      },
+      items: [{ problem_id: 'problem-1', display_label: '1.', short_title: '求积' }],
+    }
+    artifact.teaching_report = report
+    client.apiGet.mockResolvedValue(response)
+
+    const result = await k12Api.k12GetImageTask('mingming', 'dispatch-homework')
+
+    expect(result.dispatch.target_projection?.kind).toBe('homework')
+    if (result.dispatch.target_projection?.kind !== 'homework') throw new Error('Expected homework')
+    expect(result.dispatch.target_projection.final_artifact?.teaching_report).toEqual(report)
+  })
+
+  it.each([
+    ['null', null],
+    ['string', 'report'],
+    ['array', []],
+  ])('rejects a non-object frozen teaching report: %s', async (_name, report) => {
+    const response = completedHomeworkDispatch()
+    const projection = response.dispatch.target_projection as Record<string, unknown>
+    ;(projection.final_artifact as Record<string, unknown>).teaching_report = report
+    client.apiGet.mockResolvedValue(response)
+
+    await expect(k12Api.k12GetImageTask('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task dispatch response/i,
+    )
+  })
+
   it('preserves the complete grounding receipt exact-set from the dispatch handler wire', async () => {
     const response = completedHomeworkDispatch()
     const projection = response.dispatch.target_projection as Record<string, unknown>

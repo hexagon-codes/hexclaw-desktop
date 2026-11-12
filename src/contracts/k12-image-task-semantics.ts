@@ -544,6 +544,7 @@ function normalizeFinalArtifact(value: unknown, progressive: WireRecord, path: s
       'skipped_count',
       'ordered_current_digests_json',
       'canonical_markdown',
+      'teaching_report',
       'artifact_digest',
       'summary_invocation_id',
       'title',
@@ -571,6 +572,9 @@ function normalizeFinalArtifact(value: unknown, progressive: WireRecord, path: s
     stringValue(artifact[key], `${path}.${key}`)
   }
   optionalString(artifact.title, `${path}.title`)
+  if (artifact.teaching_report !== undefined) {
+    record(artifact.teaching_report, `${path}.teaching_report`)
+  }
   for (const key of [
     'total_count',
     'published_count',
@@ -605,6 +609,7 @@ function normalizeFinalArtifact(value: unknown, progressive: WireRecord, path: s
     artifact_digest: artifact.artifact_digest,
     ...(artifact.title !== undefined ? { title: artifact.title } : {}),
     canonical_markdown: artifact.canonical_markdown,
+    ...(artifact.teaching_report !== undefined ? { teaching_report: artifact.teaching_report } : {}),
     coverage_status: artifact.coverage_status,
     total_count: artifact.total_count,
     published_count: artifact.published_count,
