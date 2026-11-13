@@ -17,7 +17,8 @@ import WebSocket from 'ws'
 export const BASE_URL = (process.env.HEX_E2E_SIDECAR_URL || 'http://localhost:16060').replace(/\/$/, '')
 export const WS_URL = process.env.HEX_E2E_SIDECAR_WS_URL
   || `${BASE_URL.replace(/^http/, 'ws')}/ws`
-export const USER_ID = process.env.HEX_E2E_USER_ID?.trim() || 'api-user'
+// 默认认证通道是 Sidecar capability；其它预期主体由运行环境明确声明。
+export const USER_ID = process.env.HEX_E2E_USER_ID?.trim() || 'desktop-user'
 
 export function e2eMarker(prefix = 'marker'): string {
   const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8).padEnd(8, 'x')

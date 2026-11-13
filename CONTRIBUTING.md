@@ -117,7 +117,7 @@ pnpm exec vitest run src/api/__tests__/knowledge-retry-intent.test.ts
 | `HEXCLAW_SIDECAR_CAPABILITY_TOKEN` | 该 Sidecar 的能力令牌；HTTP 与 WebSocket 握手均通过 Bearer 发送，沿用 live runner 的环境命名 |
 | `HEX_E2E_PROVIDER` | 从当前配置读取并明确授权的 Provider ID；使用配置键，不从列表顺序或显示名猜测 |
 | `HEX_E2E_MODEL` | 该 Provider 下明确授权的模型 ID |
-| `HEX_E2E_USER_ID` | 当前认证主体；普通 API Bearer 默认为 `api-user`，不能用请求字段切换主体 |
+| `HEX_E2E_USER_ID` | 预期的当前认证主体；Sidecar capability 通道默认 `desktop-user`。使用普通 API Bearer 时须显式设为对应主体（当前为 `api-user`）；该值仅用于请求与断言，不能切换后端认证归属 |
 | `HEX_E2E_EVIDENCE_PATH` | 可选私有 JSONL 路径，仅记录请求身份、状态及实际响应的 Provider/model，不记录正文或凭据 |
 
 令牌通过私有运行环境注入，不写入命令示例、测试报告或提交内容。API 与 WebSocket 的模型参数默认使用上述显式配置，单个用例明确给出的参数保留原有优先级；流式套件的云端能力用例只使用所选 Provider，不探测其他真实模型。指定单一 Provider 且没有 `HEX_E2E_ALT_PROVIDER` 时，跨 Provider 组明确跳过；运行该组前另行提供已授权的隔离目标。
