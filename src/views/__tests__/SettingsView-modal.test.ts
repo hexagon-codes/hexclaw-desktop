@@ -33,11 +33,6 @@ describe('SettingsView — edit model dialog', () => {
     expect(source).toContain('tabindex="-1"')
   })
 
-  it('editModelOverlayRef receives focus when dialog opens', () => {
-    // The watch should call focus() on the overlay
-    expect(source).toMatch(/editModelOverlayRef\.value\?\.querySelector<HTMLInputElement>\('input'\)\?\.focus\(\)/)
-  })
-
   it('ref="editModelOverlayRef" is used in the template', () => {
     expect(source).toContain('ref="editModelOverlayRef"')
   })

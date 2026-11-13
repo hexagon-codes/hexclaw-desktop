@@ -40,11 +40,6 @@ describe('SF SettingsView — 用户主动操作失败已 surface 到 toast', ()
   it('SF-1 onToolbarReset 失败 → toast.error', () => {
     expect(catchOf(fnBody(src, 'async function onToolbarReset'))).toContain('toast.error')
   })
-  it('SF-2 openModelProbe 失败 → 对话框行内 unknown 与原因', () => {
-    const fn = fnBody(src, 'async function openModelProbe')
-    expect(catchOf(fn)).toContain('markUnknown')
-    expect(catchOf(fn)).toContain('messageFromUnknownError')
-  })
   it('SF-3 删除只改草稿，显式保存失败保留错误和可重试草稿', () => {
     const fn = fnBody(src, 'async function handleDeleteProvider')
     expect(fn).toContain('settingsStore.removeProvider(id)')

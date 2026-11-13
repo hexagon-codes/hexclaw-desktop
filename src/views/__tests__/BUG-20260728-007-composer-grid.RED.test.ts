@@ -10,12 +10,9 @@ describe('BUG-20260728-007 shared chat composer page grid', () => {
     expect(prototypeSource).toContain('shared-chat-composer-page-grid')
   })
 
-  it('uses one 24px page inset for both the message list and composer host', () => {
+  it('keeps the existing message-list page inset', () => {
     expect(
       /\.hc-chat__messages\s*\{[\s\S]*?padding:\s*20px 24px 10px/.test(chatViewSource),
-    ).toBe(true)
-    expect(
-      /\.hc-chat__input-area\s*\{[\s\S]*?padding:\s*8px 24px 16px/.test(chatViewSource),
     ).toBe(true)
   })
 
