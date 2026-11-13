@@ -1233,6 +1233,18 @@ function normalizeDispatch(value: unknown, path: string): WireRecord {
   return dispatch
 }
 
+// 逐题与批改结果携带相同来源事实，两处沿用同一公共字段合同。
+function validateAnswerSource(value: unknown, path: string): void {
+  const source = record(value, path)
+  exact(source, ['kind', 'facts_digest', 'invocation_id', 'asset_id', 'asset_version', 'asset_revision', 'adoption_id'], path)
+  enumValue(source.kind, new Set(['model', 'deterministic', 'asset']), `${path}.kind`)
+  stringValue(source.facts_digest, `${path}.facts_digest`)
+  for (const key of ['invocation_id', 'asset_id', 'adoption_id']) optionalString(source[key], `${path}.${key}`)
+  for (const key of ['asset_version', 'asset_revision']) {
+    if (source[key] !== undefined) numberValue(source[key], `${path}.${key}`, true)
+  }
+}
+
 function validateGrade(value: unknown, path: string): WireRecord {
   const grade = record(value, path)
   exact(
@@ -1252,6 +1264,7 @@ function validateGrade(value: unknown, path: string): WireRecord {
       'record_id',
       'curriculum_unmapped',
       'solve_only',
+      'answer_source',
     ],
     path,
   )
@@ -1273,6 +1286,7 @@ function validateGrade(value: unknown, path: string): WireRecord {
   booleanValue(grade.out_of_scope, `${path}.out_of_scope`)
   booleanValue(grade.record_created, `${path}.record_created`)
   if (grade.solve_only !== undefined) booleanValue(grade.solve_only, `${path}.solve_only`)
+  if (grade.answer_source !== undefined) validateAnswerSource(grade.answer_source, `${path}.answer_source`)
   for (const key of ['wrong_step', 'error_cause', 'out_of_scope_kp', 'record_id']) {
     optionalString(grade[key], `${path}.${key}`)
   }
@@ -1295,18 +1309,19 @@ function validateParentGuide(value: unknown, path: string): WireRecord {
   ] as const
   exact(guide, [...keys, 'teaching_diagrams'], path)
   required(guide, keys, path)
-  for (const key of ['answer', 'grade_level_method', 'checking_method']) {
-    stringValue(guide[key], `${path}.${key}`)
+  stringValue(guide.answer, `${path}.answer`)
+  stringArray(guide.full_solution_steps, `${path}.full_solution_steps`, {
+    nonEmptyItems: true,
+    minItems: 1,
+  })
+  for (const key of ['grade_level_method', 'checking_method']) {
+    stringValue(guide[key], `${path}.${key}`, true)
   }
-  for (const key of [
-    'full_solution_steps',
-    'likely_mistakes',
-    'parent_teaching_sequence',
-    'follow_up_questions',
-  ]) {
+  // 已验证原解的简化讲法不编造附加内容；Go nil列表只在响应副本中归一为空列表。
+  for (const key of ['likely_mistakes', 'parent_teaching_sequence', 'follow_up_questions']) {
+    if (guide[key] === null) guide[key] = []
     stringArray(guide[key], `${path}.${key}`, {
       nonEmptyItems: true,
-      minItems: 1,
     })
   }
   // 同源图为可选资产元数据，不改变七项讲法正文或旧无图响应的合同。
@@ -1374,14 +1389,7 @@ function validatePhotoPayload(
     exact(item, ['question', 'status', 'warning', 'grade', 'result_kind', 'parent_guide', 'answer_source', 'reuse'], itemPath)
     required(item, ['question', 'status', 'result_kind'], itemPath)
     if (item.answer_source !== undefined) {
-      const source = record(item.answer_source, `${itemPath}.answer_source`)
-      exact(source, ['kind', 'facts_digest', 'invocation_id', 'asset_id', 'asset_version', 'asset_revision', 'adoption_id'], `${itemPath}.answer_source`)
-      enumValue(source.kind, new Set(['model', 'deterministic', 'asset']), `${itemPath}.answer_source.kind`)
-      stringValue(source.facts_digest, `${itemPath}.answer_source.facts_digest`)
-      for (const key of ['invocation_id', 'asset_id', 'adoption_id']) optionalString(source[key], `${itemPath}.answer_source.${key}`)
-      for (const key of ['asset_version', 'asset_revision']) {
-        if (source[key] !== undefined) numberValue(source[key], `${itemPath}.answer_source.${key}`, true)
-      }
+      validateAnswerSource(item.answer_source, `${itemPath}.answer_source`)
     }
     if (item.reuse !== undefined) {
       const reuse = record(item.reuse, `${itemPath}.reuse`)

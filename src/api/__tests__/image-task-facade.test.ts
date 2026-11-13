@@ -796,6 +796,93 @@ describe('K12 ImageTaskDispatch public facade', () => {
     )
   })
 
+  it('preserves the adopted answer source in both grade and item receipts', async () => {
+    const source = { kind: 'asset', facts_digest: `sha256:${'f'.repeat(64)}`, asset_id: 'asset-sha256:answer', asset_version: 1, asset_revision: 1, adoption_id: 'adopt-answer' }
+    const response = homeworkResult('completed_homework', {
+      question: recognizedQuestion, status: 'wrong', result_kind: 'assessment',
+      grade: { ...wrongGrade, answer_source: source }, parent_guide: parentGuide, answer_source: source,
+    })
+    client.apiGet.mockResolvedValue(response)
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).resolves.toEqual(response)
+  })
+
+  it.each([{ kind: 'invented', facts_digest: 'digest' }, { kind: 'asset', facts_digest: 'digest', internal: true }])('rejects invalid grade answer source %j', async (source) => {
+    client.apiGet.mockResolvedValue(homeworkResult('completed_homework', {
+      question: recognizedQuestion, status: 'wrong', result_kind: 'assessment', grade: { ...wrongGrade, answer_source: source }, parent_guide: parentGuide,
+    }))
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(/invalid image task result response/i)
+  })
+
+  it.each([null, []])(
+    'accepts verified answer steps with empty supplementary teaching lists %j',
+    async (emptyList) => {
+      const response = homeworkResult('blank_worksheet', {
+        question: {
+          ...recognizedQuestion,
+          student_answer: '',
+          answer_raw_transcription: '',
+          answer_canonical_markdown: '',
+          answer_state: 'blank',
+        },
+        status: 'blank_solved',
+        result_kind: 'parent_teaching_guide',
+        parent_guide: {
+          answer: '9',
+          full_solution_steps: ['4.5×2=9'],
+          grade_level_method: '',
+          checking_method: '',
+          likely_mistakes: emptyList,
+          parent_teaching_sequence: emptyList,
+          follow_up_questions: emptyList,
+        },
+      })
+      client.apiGet.mockResolvedValue(response)
+      const result = await k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')
+      expect(result).toMatchObject({
+        result: {
+          payload: {
+            items: [
+              {
+                parent_guide: {
+                  answer: '9',
+                  full_solution_steps: ['4.5×2=9'],
+                  likely_mistakes: [],
+                  parent_teaching_sequence: [],
+                  follow_up_questions: [],
+                },
+              },
+            ],
+          },
+        },
+      })
+    },
+  )
+
+  it.each([
+    { answer: '' },
+    { full_solution_steps: [] },
+    { grade_level_method: false },
+    { likely_mistakes: [7] },
+  ])('rejects invalid verified-guide content %j', async (invalid) => {
+    client.apiGet.mockResolvedValue(
+      homeworkResult('blank_worksheet', {
+        question: {
+          ...recognizedQuestion,
+          student_answer: '',
+          answer_raw_transcription: '',
+          answer_canonical_markdown: '',
+          answer_state: 'blank',
+        },
+        status: 'blank_solved',
+        result_kind: 'parent_teaching_guide',
+        parent_guide: { ...parentGuide, ...invalid },
+      }),
+    )
+    await expect(k12Api.k12GetImageTaskResult('mingming', 'dispatch-homework')).rejects.toThrow(
+      /invalid image task result response/i,
+    )
+  })
+
   it('BUG-20260728-018 accepts the complete current result audit envelope', async () => {
     client.apiGet.mockResolvedValue({
       ...homeworkResult('completed_homework', {

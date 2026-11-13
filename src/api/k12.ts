@@ -270,6 +270,7 @@ export interface TextGradeReportReferenceDTO {
 }
 
 export interface GradeResp {
+  answer_source?: PhotoJobItemDTO['answer_source']
   teaching_report?: TeachingReportDTO
   report_markdown?: string
   finalization?: TextSolveFinalizationDTO
