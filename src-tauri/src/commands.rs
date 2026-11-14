@@ -19,6 +19,9 @@ use crate::sidecar_client::{read_bounded, SidecarClient};
 
 const MAX_PROXY_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+// 文档传输与既有渲染请求、产物预算对齐，仅用于明确的文档路由。
+const MAX_RENDER_REQUEST_BYTES: usize = 50 * 1024 * 1024;
+const MAX_DOCUMENT_RESPONSE_BYTES: usize = 100 * 1024 * 1024;
 // 原文件读取与知识库后端既有上传上限一致，不能沿用普通接口响应上限。
 const MAX_KNOWLEDGE_SOURCE_BYTES: usize = 200 * 1024 * 1024;
 const MAX_ACTIVE_SIDECAR_FETCHES: usize = 64;
@@ -257,6 +260,65 @@ fn proxy_response_header(name: &reqwest::header::HeaderName) -> bool {
     )
 }
 
+fn proxy_request_limit(method: &str, path: &str) -> usize {
+    let source_path = path.split('?').next().unwrap_or(path);
+    if method.trim().eq_ignore_ascii_case("POST") && source_path == "/api/v1/render" {
+        MAX_RENDER_REQUEST_BYTES
+    } else {
+        MAX_PROXY_REQUEST_BYTES
+    }
+}
+
+fn document_content_path(path: &str) -> bool {
+    for prefix in ["/api/v1/document-artifacts/", "/api/k12/print-artifacts/"] {
+        if path
+            .strip_prefix(prefix)
+            .and_then(|tail| tail.strip_suffix("/content"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+        {
+            return true;
+        }
+    }
+    let Some(relative) = path.strip_prefix("/api/v1/files/generated/") else {
+        return false;
+    };
+    let Some((month, filename)) = relative.split_once('/') else {
+        return false;
+    };
+    let Some((digest, extension)) = filename.rsplit_once('.') else {
+        return false;
+    };
+    month.len() == 6
+        && month.bytes().all(|byte| byte.is_ascii_digit())
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && matches!(
+            extension,
+            "pdf" | "docx" | "html" | "epub" | "odt" | "rtf" | "txt" | "md"
+        )
+}
+
+fn proxy_response_limit(method: &str, path: &str) -> usize {
+    let source_path = path.split('?').next().unwrap_or(path);
+    let is_get = method.trim().eq_ignore_ascii_case("GET");
+    let knowledge_source = is_get
+        && source_path
+            .strip_prefix("/api/v1/knowledge/documents/")
+            .and_then(|tail| tail.strip_suffix("/source"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'));
+    if knowledge_source {
+        MAX_KNOWLEDGE_SOURCE_BYTES
+    } else if (method.trim().eq_ignore_ascii_case("POST") && source_path == "/api/v1/render")
+        || (is_get && document_content_path(source_path))
+    {
+        MAX_DOCUMENT_RESPONSE_BYTES
+    } else {
+        MAX_PROXY_RESPONSE_BYTES
+    }
+}
+
 async fn execute_sidecar_fetch(
     method: String,
     path: String,
@@ -264,7 +326,7 @@ async fn execute_sidecar_fetch(
     body: Vec<u8>,
     cancellation: CancellationToken,
 ) -> Result<SidecarFetchResponse, String> {
-    if body.len() > MAX_PROXY_REQUEST_BYTES {
+    if body.len() > proxy_request_limit(&method, &path) {
         return Err("Sidecar request body exceeds IPC limit".into());
     }
     let client = SidecarClient::new(Duration::from_secs(300))?;
@@ -289,17 +351,7 @@ async fn execute_sidecar_fetch(
     .await?;
     SidecarClient::require_non_redirect(&response)?;
     let status = response.status();
-    let source_path = path.split('?').next().unwrap_or(&path);
-    let knowledge_source = method.trim().eq_ignore_ascii_case("GET")
-        && source_path
-            .strip_prefix("/api/v1/knowledge/documents/")
-            .and_then(|tail| tail.strip_suffix("/source"))
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'));
-    let response_limit = if knowledge_source {
-        MAX_KNOWLEDGE_SOURCE_BYTES
-    } else {
-        MAX_PROXY_RESPONSE_BYTES
-    };
+    let response_limit = proxy_response_limit(&method, &path);
     let response_headers = response
         .headers()
         .iter()
@@ -641,3 +693,152 @@ pub async fn restart_ollama(app: tauri::AppHandle) -> Result<String, String> {
 //   - **不经过 base64 / 不进 JS string**——避免 100 MB 输出在三处放大内存
 //   - 复用 validate_save_path 路径校验
 //   - 错误分支按 sidecar 返回的 RenderError JSON 透传
+
+#[cfg(test)]
+mod document_proxy_limit_tests {
+    use super::*;
+
+    #[test]
+    fn render_request_budget_applies_only_to_the_existing_post_route() {
+        assert_eq!(
+            proxy_request_limit("POST", "/api/v1/render"),
+            50 * 1024 * 1024
+        );
+        assert_eq!(
+            proxy_request_limit("post", "/api/v1/render?locale=zh-CN"),
+            50 * 1024 * 1024
+        );
+        for (method, path) in [
+            ("GET", "/api/v1/render"),
+            ("PUT", "/api/v1/render"),
+            ("POST", "/api/v1/render/"),
+            ("POST", "/api/v1/rendering"),
+            ("POST", "/api/v1/chat"),
+        ] {
+            assert_eq!(
+                proxy_request_limit(method, path),
+                16 * 1024 * 1024,
+                "{method} {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn document_content_routes_use_the_existing_render_output_budget() {
+        for path in [
+            "/api/v1/document-artifacts/document-original/content",
+            "/api/v1/document-artifacts/document-original/content?download=1",
+            "/api/k12/print-artifacts/print-original/content?agent=child",
+        ] {
+            assert_eq!(
+                proxy_response_limit("GET", path),
+                100 * 1024 * 1024,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            proxy_response_limit("POST", "/api/v1/render"),
+            100 * 1024 * 1024
+        );
+        let digest = "a".repeat(64);
+        for extension in ["pdf", "docx", "html", "epub", "odt", "rtf", "txt", "md"] {
+            let path =
+                format!("/api/v1/files/generated/202611/{digest}.{extension}?download=report");
+            assert_eq!(
+                proxy_response_limit("GET", &path),
+                100 * 1024 * 1024,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_methods_routes_and_knowledge_contracts_keep_their_budgets() {
+        let digest = "a".repeat(64);
+        let image = format!("/api/v1/files/generated/202611/{digest}.png");
+        let media = format!("/api/v1/files/generated/202611/{digest}.mp4");
+        let unknown = format!("/api/v1/files/generated/202611/{digest}.zip");
+        for (method, path) in [
+            ("GET", "/api/v1/render"),
+            ("PUT", "/api/v1/render"),
+            ("GET", "/api/k12/export?format=pdf"),
+            ("POST", "/api/v1/document-artifacts/document-original/content"),
+            ("GET", "/api/v1/document-artifacts//content"),
+            ("GET", "/api/v1/document-artifacts/a/b/content"),
+            ("GET", "/api/v1/document-artifacts/document-original/contents"),
+            ("GET", "/api/v1/files/generated/202611/short.pdf"),
+            ("GET", "/api/v1/files/generated/20261/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf"),
+            ("GET", image.as_str()),
+            ("GET", media.as_str()),
+            ("GET", unknown.as_str()),
+            ("GET", "/api/v1/config"),
+        ] {
+            assert_eq!(proxy_response_limit(method, path), 32 * 1024 * 1024, "{method} {path}");
+        }
+        assert_eq!(
+            proxy_response_limit("GET", "/api/v1/knowledge/documents/book/source?download=1"),
+            200 * 1024 * 1024
+        );
+        assert_eq!(
+            proxy_response_limit("POST", "/api/v1/knowledge/documents/book/source"),
+            32 * 1024 * 1024
+        );
+    }
+
+    #[tokio::test]
+    async fn requests_over_their_existing_contracts_stop_before_connecting() {
+        for (path, size) in [
+            ("/api/v1/render", 50 * 1024 * 1024 + 1),
+            ("/api/v1/chat", 16 * 1024 * 1024 + 1),
+        ] {
+            let error = execute_sidecar_fetch(
+                "POST".into(),
+                path.into(),
+                BTreeMap::new(),
+                vec![0; size],
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("oversized request must not reach the backend");
+            assert_eq!(error, "Sidecar request body exceeds IPC limit");
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_over_their_existing_contracts_stop_at_the_declared_size() {
+        use std::io::{Read, Write};
+        for (method, path) in [
+            ("POST", "/api/v1/render"),
+            ("GET", "/api/v1/config"),
+            ("GET", "/api/v1/knowledge/documents/book/source"),
+        ] {
+            let limit = proxy_response_limit(method, path);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 1024];
+                stream.read(&mut request).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    limit + 1
+                )
+                .unwrap();
+            });
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                read_bounded(response, limit).await.unwrap_err(),
+                "Sidecar response exceeds limit"
+            );
+            server.join().unwrap();
+        }
+    }
+}
