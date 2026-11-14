@@ -839,16 +839,16 @@ function openRequestSocket(
       clearTimeout(inactivityTimer)
     }
     inactivityTimer = setTimeout(() => {
-      sendRequestCancel()
-      settleReject(
+      if (!cancelRequested) sendRequestCancel()
+      observeStoppedRequest(
         new ChatRequestError('Assistant reply stalled — no new content received.', false),
       )
     }, WS_INACTIVITY_TIMEOUT_MS)
   }
 
   firstReplyTimer = setTimeout(() => {
-    sendRequestCancel()
-    settleReject(new ChatRequestError('Assistant reply timed out — no response received.', false))
+    if (!cancelRequested) sendRequestCancel()
+    observeStoppedRequest(new ChatRequestError('Assistant reply timed out — no response received.', false))
   }, WS_FIRST_REPLY_TIMEOUT_MS)
 
   ws.onopen = () => {

@@ -10,6 +10,7 @@ const {
   wsOnApprovalRequest,
   wsSendMessage,
   sendChatViaBackend,
+  getActiveStreamSnapshot,
   approvalCallbacks,
   socketInstances,
   MockRequestWebSocket,
@@ -32,6 +33,7 @@ const {
   }),
   wsSendMessage: vi.fn(),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
+  getActiveStreamSnapshot: vi.fn(),
   ...(() => {
     const socketInstances: Array<{
       url: string
@@ -82,7 +84,7 @@ vi.mock('@/api/websocket', () => ({
     sendMessage: wsSendMessage,
   },
 }))
-vi.mock('@/api/chat', () => ({ sendChatViaBackend }))
+vi.mock('@/api/chat', () => ({ sendChatViaBackend, getActiveStreamSnapshot }))
 vi.mock('@/api/native-sidecar-websocket', () => ({ NativeSidecarWebSocket: MockRequestWebSocket }))
 
 import { hexclawWS } from '@/api/websocket'
@@ -715,6 +717,39 @@ describe('chatService', () => {
       content: 'partial', status: 'cancelled', done: true,
     }) })
     await expect(handle.done).resolves.toMatchObject({ content: 'partial', terminalState: 'cancelled' })
+  })
+
+  it.each([
+    { name: 'chunk idle', chunk: true, delay: 60_001 },
+    { name: 'first response', chunk: false, delay: 300_001 },
+  ])('keeps a stopped request observing after the $name timer', async ({ chunk, delay }) => {
+    vi.useFakeTimers()
+    let resolveSnapshot!: (snapshot: unknown) => void
+    getActiveStreamSnapshot.mockReset()
+    getActiveStreamSnapshot.mockImplementation(() => new Promise(resolve => { resolveSnapshot = resolve }))
+    const handle = openWebSocketStream('controlled request', 'stopped-session', {}, '', undefined, undefined, undefined, 'stopped-request')
+    let settled = false
+    void handle.done.then(() => { settled = true }, () => { settled = true })
+    const socket = socketInstances[0]!
+    try {
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      if (chunk) socket.onmessage?.({ data: JSON.stringify({ type: 'chunk', content: 'partial', done: false }) })
+      handle.cancel()
+      await vi.advanceTimersByTimeAsync(delay)
+      await vi.dynamicImportSettled()
+
+      expect(settled).toBe(false)
+      expect(getActiveStreamSnapshot).toHaveBeenCalledExactlyOnceWith('stopped-request', expect.objectContaining({ source: 'websocket' }))
+      expect(socket.send.mock.calls.map(([payload]) => JSON.parse(payload).type)).toEqual(['message', 'cancel'])
+      resolveSnapshot({ request_id: 'stopped-request', session_id: 'stopped-session', source: 'websocket', content: 'partial', status: 'cancelled', done: true })
+      await expect(handle.done).resolves.toMatchObject({ content: 'partial', terminalState: 'cancelled' })
+      expect(socket.send).toHaveBeenCalledTimes(2)
+    } finally {
+      handle.dispose?.()
+      await handle.done.catch(() => undefined)
+      vi.useRealTimers()
+    }
   })
 
   it('resumeWebSocketStream sends a resume payload and resolves from stream_snapshot', async () => {
