@@ -526,7 +526,8 @@ describe('Issue #11: Rust proxy methods share one bounded request pipeline', () 
   })
 
   it('all body-capable methods use one bounded body attachment path', () => {
-    expect(commandsRs).toContain('if body.len() > MAX_PROXY_REQUEST_BYTES')
+    // 具体预算由原生路由合同验证，这里保持正文附加前的共用预算检查。
+    expect(commandsRs).toContain('if body.len() > proxy_request_limit(&method, &path)')
     expect(commandsRs).toContain('if !body.is_empty()')
     expect(commandsRs).toContain('request = request.body(body)')
   })
