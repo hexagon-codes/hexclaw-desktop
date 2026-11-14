@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import type { Mock } from 'vitest'
@@ -7,10 +7,26 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12AgentCard from '../views/K12AgentCard.vue'
 import { k12ListMistakes, k12ReviewQueue } from '@/api/k12'
+import { profileBundleFixture } from '@/test/fixtures/k12-profile-bundle'
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [{}, {}, {}] }), // 3 错题
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [{}, {}] }), // 2 待复习
+  k12GetProfileBundle: vi.fn(async (name: string) => profileBundleFixture(
+    { name, display_name: '小明的辅导老师 · 五年级' },
+    { child_name: '小明', grade_term: '五年级上', revision: 1 },
+    { progress: null, revision: 0 },
+    {
+      agent: name, revision: 0, timezone: 'Asia/Shanghai', due_review_enabled: true,
+      textbook_consolidation_enabled: false, textbook_consolidation_tier: 'standard',
+      arithmetic_warmup_enabled: false, arithmetic_minutes: 10, created_at: '', updated_at: '',
+    },
+  )),
+  k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ agent: 'k12-tutor-abc', subject: 'math', items: [] }),
+  k12GetCurriculumProgress: vi.fn().mockResolvedValue({ agent: 'k12-tutor-abc', subject: 'math', progress: null, revision: 0 }),
+}))
+vi.mock('@/api/skills', () => ({
+  getSkills: vi.fn().mockResolvedValue({ skills: [], total: 0, dir: '' }),
 }))
 vi.mock('@/api/agents', () => ({
   registerAgent: vi.fn(),
@@ -20,6 +36,20 @@ vi.mock('@/api/agents', () => ({
 }))
 const pushSpy = vi.fn()
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: pushSpy }) }))
+
+const fetchSpy = vi.spyOn(globalThis, 'fetch')
+enableAutoUnmount((unmount) => {
+  afterEach(async () => {
+    unmount()
+    await flushPromises()
+    document.body.innerHTML = ''
+    if (fetchSpy.mock.calls.length !== 0) {
+      throw new Error('Test fixture must not issue real HTTP requests')
+    }
+    fetchSpy.mockClear()
+  })
+})
+afterAll(() => fetchSpy.mockRestore())
 
 function i18n() {
   return createI18n({
