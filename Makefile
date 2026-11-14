@@ -57,6 +57,7 @@ build:
 build-local: sidecar-local render-bundle
 	mkdir -p "$(BUILD_LOCAL_SNAPSHOT_DIR)" && chmod 700 "$(BUILD_LOCAL_SNAPSHOT_DIR)"
 	$(PNPM_BIN) build
+	$(NODE_BIN) ./scripts/ci/browser-runtime-package.mjs --target="$(HOST_TRIPLE)"
 	$(PACKAGE_LOCAL_NODE) ./scripts/ci/verify-build-local-fingerprint.mjs --write-manifest
 	@touch src-tauri/build.rs
 	HEXCLAW_PACKAGE_GO_EXECUTABLE="$(BUILD_LOCAL_GO_EXECUTABLE)" \
