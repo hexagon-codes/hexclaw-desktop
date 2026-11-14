@@ -146,9 +146,9 @@ function sourceLabel(key: string): string {
   return translateOpenIdentifier(t, te, 'autonomy.source', key)
 }
 
-/** 内部验算沿运行时授权，不把只读矩阵单元格计数投影为任务放行状态。 */
+/** 受限档内部验算沿运行时授权；全功能直接显示同一 API 的有效矩阵。 */
 function isRuntimeGrantBoundSource(source: string) {
-  return source === 'solve' || source === 'internal_verification'
+  return profile.value !== 'full_access' && (source === 'solve' || source === 'internal_verification')
 }
 
 function cellTitle(source: string, category: string, state: string): string {
