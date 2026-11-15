@@ -543,7 +543,7 @@ function accumulationHasPending(): boolean {
 }
 
 function accumulationPollingEnabled(): boolean {
-  return props.active !== false
+  return !recordsDisposed && props.active !== false
 }
 
 function syncAccumulationDetail() {
@@ -570,17 +570,21 @@ function scheduleAccumulationPoll() {
 }
 
 async function reloadAccum() {
+  if (recordsDisposed) return
+  clearAccumulationPoll()
+  const agent = props.agentId
   const request = ++accumulationLoadRequest
+  const isCurrent = () => !recordsDisposed && agent === props.agentId && request === accumulationLoadRequest
   accumulationLoading.value = true
   try {
-    await store.loadAccumulation(props.agentId)
-    if (request !== accumulationLoadRequest) return
+    await store.loadAccumulation(agent)
+    if (!isCurrent()) return
     if (store.accumView) {
       accumulationTotalCount.value = store.accumView.items.length
       syncAccumulationDetail()
     }
   } finally {
-    if (request === accumulationLoadRequest) {
+    if (isCurrent()) {
       accumulationLoading.value = false
       scheduleAccumulationPoll()
     }
@@ -589,12 +593,15 @@ async function reloadAccum() {
 
 const mistakesLoading = ref(true)
 async function reloadMistakes() {
+  if (recordsDisposed) return
+  const agent = props.agentId
   mistakesLoading.value = true
   try {
-    await store.loadMistakes(props.agentId)
+    await store.loadMistakes(agent)
+    if (recordsDisposed || agent !== props.agentId) return
     await reloadPracticeGenerationStates()
   } finally {
-    mistakesLoading.value = false
+    if (!recordsDisposed && agent === props.agentId) mistakesLoading.value = false
   }
 }
 
@@ -622,6 +629,7 @@ watch(
     weeklyTextbookBusy.value = null
     weeklyArithmeticBusy.value = null
     weeklyReadSequence++
+    accumulationLoadRequest++
     clearArchiveUndos()
     clearAccumulationPoll()
     archiveBusy.value = []
@@ -645,6 +653,7 @@ watch(
 
 onBeforeUnmount(() => {
   recordsDisposed = true
+  accumulationLoadRequest++
   clearArchiveUndos()
   clearAccumulationPoll()
 })
@@ -675,18 +684,22 @@ watch(
 
 async function submitAccum() {
   const content = accumForm.value.content.trim()
-  if (!content || accumSaving.value) return
+  if (recordsDisposed || !content || accumSaving.value) return
+  const agent = props.agentId
   const idempotencyKey = accumCreateIdempotencyKey.value || newAccumCreateKey()
   accumSaving.value = true
   try {
-    await k12AddAccumulation(props.agentId, { content }, idempotencyKey)
+    await k12AddAccumulation(agent, { content }, idempotencyKey)
+    if (recordsDisposed || agent !== props.agentId) return
     toast.success(t('k12.accum.added'))
     accumForm.value.content = ''
     rotateAccumCreateKey()
     accumAddOpen.value = false
     await reloadAccum()
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
+    if (!recordsDisposed && agent === props.agentId) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    }
   } finally {
     accumSaving.value = false
   }
@@ -714,7 +727,8 @@ function onMistakeKeydown(e: KeyboardEvent) {
 }
 async function submitMistake() {
   const problem = mistakeForm.value.problem.trim()
-  if (!mistakeForm.value.subject || !problem || mistakeSaving.value) return
+  if (recordsDisposed || !mistakeForm.value.subject || !problem || mistakeSaving.value) return
+  const agent = props.agentId
   mistakeSaving.value = true
   try {
     const kps = mistakeForm.value.knowledgePoints
@@ -722,19 +736,22 @@ async function submitMistake() {
       .map((s) => s.trim())
       .filter(Boolean)
     const res = await store.recordMistake({
-      agent: props.agentId,
+      agent,
       subject: mistakeForm.value.subject,
       grade: props.grade,
       problem,
       student_answer: mistakeForm.value.studentAnswer.trim() || undefined,
       knowledge_points: kps.length ? kps : undefined,
     })
+    if (recordsDisposed || agent !== props.agentId) return
     toast.success(res.record_created ? t('k12.mistakeAdd.recorded') : t('k12.mistakeAdd.exists'))
     mistakeForm.value = { subject: '', problem: '', studentAnswer: '', knowledgePoints: '' }
     mistakeAddOpen.value = false
     await reloadMistakes()
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
+    if (!recordsDisposed && agent === props.agentId) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    }
   } finally {
     mistakeSaving.value = false
   }
