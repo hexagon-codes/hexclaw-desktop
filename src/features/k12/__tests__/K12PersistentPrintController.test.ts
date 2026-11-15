@@ -114,4 +114,58 @@ describe('K12PersistentPrintController', () => {
     expect(document.body.querySelector('[data-testid="k12-print-preview"]')).toBeNull()
     wrapper.unmount()
   })
+
+  it.each(['printed', 'rejected'] as const)(
+    '旧确认%s在新命令开始后到达，不发布旧结果或释放新命令锁',
+    async (outcome) => {
+      let resolveOld!: (printed: boolean) => void
+      let rejectOld!: (cause: Error) => void
+      let resolveNew!: (printed: boolean) => void
+      const oldConfirmation = new Promise<boolean>((resolve, reject) => {
+        resolveOld = resolve
+        rejectOld = reject
+      })
+      const newConfirmation = new Promise<boolean>((resolve) => { resolveNew = resolve })
+      const confirmNew = vi.fn(() => newConfirmation)
+      const preparedA = {
+        status: 'preview', title: 'A', pdf: new Blob(['%PDF-a']), confirm: () => oldConfirmation,
+      }
+      const preparedB = {
+        status: 'preview', title: 'B', pdf: new Blob(['%PDF-b']), confirm: confirmNew,
+      }
+      h.prepare.mockResolvedValueOnce(preparedA).mockResolvedValueOnce(preparedB)
+      const wrapper = mount(K12PersistentPrintController, {
+        global: { stubs: { K12PrintPreviewModal: true } },
+      })
+      const vm = wrapper.vm as unknown as {
+        open(req: typeof request): Promise<void>
+        close(force: boolean): void
+        confirm(): Promise<void>
+        state: { preparation: unknown }
+      }
+      try {
+        await vm.open(request)
+        const oldOperation = vm.confirm()
+        vm.close(true)
+        await vm.open({ ...request, agent: 'tutor-b', sourceRef: 'tutoring-tips:2' })
+        const newOperation = vm.confirm()
+        if (outcome === 'printed') resolveOld(true)
+        else rejectOld(new Error('old confirmation failed'))
+        await oldOperation
+
+        expect(vm.state.preparation).toEqual(preparedB)
+        expect(wrapper.emitted('result')).toBeUndefined()
+        expect(wrapper.emitted('error')).toBeUndefined()
+        await vm.confirm()
+        expect(confirmNew).toHaveBeenCalledOnce()
+
+        resolveNew(true)
+        await newOperation
+        expect(wrapper.emitted('result')).toEqual([[true]])
+        expect(wrapper.emitted('error')).toBeUndefined()
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
 })

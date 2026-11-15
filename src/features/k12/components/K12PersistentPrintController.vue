@@ -85,18 +85,22 @@ async function open(request: PersistentPrintRequest): Promise<void> {
 async function confirm() {
   const prepared = state.value.preparation
   if (!prepared || state.value.printing) return
+  const requestGeneration = generation
+  const isCurrent = () => requestGeneration === generation && state.value.preparation === prepared
   state.value.printing = true
   try {
     const printed = await prepared.confirm()
+    if (!isCurrent()) return
     close(true)
     emit('result', printed)
   } catch (cause) {
+    if (!isCurrent()) return
     // An unavailable receipt is outcome_unknown. Close the stale preview so a
     // second native operation cannot be started against that unresolved job.
     close(true)
     emit('error', cause instanceof Error ? cause : new Error(String(cause)))
   } finally {
-    state.value.printing = false
+    if (isCurrent()) state.value.printing = false
   }
 }
 
