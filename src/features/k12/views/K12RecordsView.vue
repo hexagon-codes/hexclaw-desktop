@@ -103,6 +103,7 @@ const { t } = useI18n()
 const toast = useToast()
 const store = useK12Store()
 const agentsStore = useAgentsStore()
+let recordsDisposed = false
 const accumulationDelivery = useK12DeliveryBatch({
   agent: () => props.agentId,
   idleLabel: '发送到手机',
@@ -645,6 +646,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  recordsDisposed = true
   clearArchiveUndos()
   clearAccumulationPoll()
 })
@@ -887,13 +889,13 @@ async function onAction(payload: { id: 'markMastered' | 'detail'; record: Record
 
 async function suppressMistake(record: RecordItem) {
   const agent = props.agentId
-  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'suppressed')
+  if (recordsDisposed || !agent || archiveBusy.value.includes(record.recordId) || record.status === 'suppressed')
     return
   const intent = ++archiveIntentSequence
   setArchiveBusy(record.recordId, true)
   try {
     const suppressed = await store.suppressMistake(agent, record.recordId, record.version)
-    if (props.agentId !== agent) return
+    if (recordsDisposed || props.agentId !== agent) return
     // 多条长期排除可并发；Undo 归属按用户发起顺序，而不是网络响应顺序。
     if (intent >= latestArchiveUndoIntent) {
       latestArchiveUndoIntent = intent
@@ -902,8 +904,9 @@ async function suppressMistake(record: RecordItem) {
     if (detail.value.record?.recordId === record.recordId) closeDetail()
     void store.calibrateMistakes(agent)
   } catch (error) {
+    if (recordsDisposed || props.agentId !== agent) return
     toast.error(error instanceof Error ? error.message : String(error))
-    if (props.agentId === agent) void store.calibrateMistakes(agent)
+    void store.calibrateMistakes(agent)
   } finally {
     setArchiveBusy(record.recordId, false)
   }
@@ -911,18 +914,19 @@ async function suppressMistake(record: RecordItem) {
 
 async function restoreMistakeReview(recordId: string, version: number, undo = false) {
   const agent = props.agentId
-  if (!agent || archiveBusy.value.includes(recordId)) return
+  if (recordsDisposed || !agent || archiveBusy.value.includes(recordId)) return
   setArchiveBusy(recordId, true)
   try {
     await store.restoreMistakeReview(agent, recordId, version)
-    if (props.agentId !== agent) return
+    if (recordsDisposed || props.agentId !== agent) return
     removeArchiveUndo(recordId)
     if (detail.value.record?.recordId === recordId) closeDetail()
     toast.success(t(undo ? 'k12.records.archiveUndone' : 'k12.records.restoreSucceeded'))
     void store.calibrateMistakes(agent)
   } catch (error) {
+    if (recordsDisposed || props.agentId !== agent) return
     toast.error(error instanceof Error ? error.message : String(error))
-    if (props.agentId === agent) void store.calibrateMistakes(agent)
+    void store.calibrateMistakes(agent)
   } finally {
     setArchiveBusy(recordId, false)
   }

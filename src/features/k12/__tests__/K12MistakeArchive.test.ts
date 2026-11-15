@@ -232,6 +232,35 @@ afterEach(() => {
 })
 
 describe('BUG-20260725-017 · controlled suppression and restore', () => {
+  it.each(['suppress', 'restore'] as const)(
+    '%s 命令在档案页卸载后完成，不发起卸载实例的校准',
+    async (action) => {
+      let resolve!: (value: typeof suppressed) => void
+      const pending = new Promise<typeof suppressed>((done) => { resolve = done })
+      const command = action === 'suppress' ? h.suppressMistake : h.restoreMistakeReview
+      command.mockReturnValueOnce(pending)
+      const wrapper = render()
+      await flushPromises()
+      const vm = wrapper.vm as unknown as {
+        store: ReturnType<typeof useK12Store>
+        suppressMistake: (record: NonNullable<ReturnType<typeof useK12Store>['mistakeView']>['items'][number]) => Promise<void>
+        restoreMistakeReview: (recordID: string, version: number) => Promise<void>
+      }
+      const calibrate = vi.spyOn(vm.store, 'calibrateMistakes')
+      const completion = action === 'suppress'
+        ? vm.suppressMistake(vm.store.mistakeView!.items[0]!)
+        : vm.restoreMistakeReview('m1', 4)
+      expect(command).toHaveBeenCalledOnce()
+
+      wrapper.unmount()
+      resolve(suppressed)
+      await completion
+      await flushPromises()
+
+      expect(calibrate).not.toHaveBeenCalled()
+    },
+  )
+
   it.each([
     {
       state: 'available',

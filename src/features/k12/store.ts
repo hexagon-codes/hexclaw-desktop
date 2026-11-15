@@ -165,13 +165,13 @@ export const useK12Store = defineStore('k12', () => {
   /** 「他会了」→ mark-mastered（乐观锁）后局部刷新 */
   async function markMastered(agent: string, recordId: string, version: number): Promise<void> {
     await k12MarkMastered({ agent, record_id: recordId, version })
-    await loadMistakes(agent)
+    if (mistakesAgent === agent) await loadMistakes(agent)
   }
 
   /** 「删除这条错题」→ delete-mistake（数据纠错）后重载列表 */
   async function deleteMistake(agent: string, recordId: string): Promise<void> {
     await k12DeleteMistake(agent, recordId)
-    await loadMistakes(agent)
+    if (mistakesAgent === agent) await loadMistakes(agent)
   }
 
   function replaceMistakeProjection(agent: string, dto: MistakeDTO) {
@@ -221,14 +221,16 @@ export const useK12Store = defineStore('k12', () => {
    * request 序号仍阻止旧孩子的迟到响应覆盖新孩子。
    */
   async function calibrateMistakes(agent: string): Promise<void> {
+    // 后台校准不选择孩子，旧命令不能夺走当前列表的活动归属。
+    if (agent !== mistakesAgent) return
     const request = ++mistakesRequest
     try {
       const [all, due] = await Promise.all([k12ListMistakes(agent), k12ReviewQueue(agent)])
-      if (request !== mistakesRequest) return
+      if (request !== mistakesRequest || agent !== mistakesAgent) return
       mistakeView.value = mistakesToView(agent, all.items, due.items)
       mistakesError.value = null
     } catch (error) {
-      if (request !== mistakesRequest || mistakeView.value) return
+      if (request !== mistakesRequest || agent !== mistakesAgent || mistakeView.value) return
       mistakesError.value = error instanceof Error ? error.message : String(error)
     }
   }

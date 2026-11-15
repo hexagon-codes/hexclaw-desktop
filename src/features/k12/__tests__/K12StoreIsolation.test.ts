@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   insightReport: vi.fn(),
   accumulation: vi.fn(),
   tutoringTips: vi.fn(),
+  markMastered: vi.fn(),
+  deleteMistake: vi.fn(),
 }))
 
 vi.mock('@/api/k12', () => ({
@@ -15,7 +17,8 @@ vi.mock('@/api/k12', () => ({
   k12ReviewQueue: (agent: string) => h.reviewQueue(agent),
   k12InsightReport: (agent: string) => h.insightReport(agent),
   k12ListAccumulation: (agent: string) => h.accumulation(agent),
-  k12MarkMastered: vi.fn(),
+  k12MarkMastered: (req: unknown) => h.markMastered(req),
+  k12DeleteMistake: (...args: unknown[]) => h.deleteMistake(...args),
   k12TutoringTips: (req: { agent: string }) => h.tutoringTips(req),
   k12Grade: vi.fn(),
     k12ColdStart: vi.fn(),
@@ -57,6 +60,65 @@ describe('K12 records 多孩异步隔离', () => {
 
     expect(store.mistakeView?.items[0]?.fields.question).toBe('新题')
   })
+
+  it('旧命令在新孩子加载完成后校准，不重新派发旧孩子读取', async () => {
+    h.listMistakes.mockImplementation((agent: string) => Promise.resolve({
+      items: [{ record_id: `${agent}-r`, question: agent, status: 'new', version: 1 }],
+    }))
+    h.reviewQueue.mockResolvedValue({ items: [] })
+    const store = useK12Store()
+    await store.loadMistakes('old-child')
+    await store.loadMistakes('new-child')
+
+    await store.calibrateMistakes('old-child')
+
+    expect(h.listMistakes.mock.calls.map(([agent]) => agent)).toEqual(['old-child', 'new-child'])
+    expect(store.mistakeView?.items[0]?.agentId).toBe('new-child')
+  })
+
+  it('活动孩子的校准在切换后返回，不覆盖新孩子的正式投影', async () => {
+    const oldCalibration = deferred<{ items: Array<{ record_id: string; question: string }> }>()
+    h.listMistakes.mockResolvedValue({ items: [] })
+    h.reviewQueue.mockResolvedValue({ items: [] })
+    const store = useK12Store()
+    await store.loadMistakes('old-child')
+    h.listMistakes.mockReturnValueOnce(oldCalibration.promise)
+    const pending = store.calibrateMistakes('old-child')
+    h.listMistakes.mockResolvedValueOnce({
+      items: [{ record_id: 'new-r', question: 'new-child', status: 'new', version: 1 }],
+    })
+    await store.loadMistakes('new-child')
+
+    oldCalibration.resolve({ items: [{ record_id: 'old-r', question: 'old-child' }] })
+    await pending
+
+    expect(store.mistakeView?.items[0]?.agentId).toBe('new-child')
+  })
+
+  it.each(['markMastered', 'deleteMistake'] as const)(
+    '%s 的旧孩子命令迟到完成，不把已选择的新孩子切回旧孩子',
+    async (action) => {
+      const mutation = deferred<void>()
+      h[action].mockReturnValueOnce(mutation.promise)
+      h.listMistakes.mockImplementation((agent: string) => Promise.resolve({
+        items: [{ record_id: `${agent}-r`, question: agent, status: 'new', version: 1 }],
+      }))
+      h.reviewQueue.mockResolvedValue({ items: [] })
+      const store = useK12Store()
+      await store.loadMistakes('old-child')
+      const pending = action === 'markMastered'
+        ? store.markMastered('old-child', 'old-r', 1)
+        : store.deleteMistake('old-child', 'old-r')
+      await store.loadMistakes('new-child')
+
+      mutation.resolve()
+      await pending
+
+      expect(h[action]).toHaveBeenCalledOnce()
+      expect(h.listMistakes.mock.calls.map(([agent]) => agent)).toEqual(['old-child', 'new-child'])
+      expect(store.mistakeView?.items[0]?.agentId).toBe('new-child')
+    },
+  )
 
   it('辅导要点乱序返回时，只保留最后切换到的孩子', async () => {
     const oldTips = deferred<any>()
