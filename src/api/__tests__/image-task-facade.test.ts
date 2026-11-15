@@ -246,9 +246,78 @@ function completedHomeworkDispatch() {
   }
 }
 
+function frozenTeachingReportPair() {
+  const snapshot = completedHomeworkDispatch()
+  const artifact = (snapshot.dispatch.target_projection as unknown as {
+    final_artifact: { canonical_markdown: string }
+  }).final_artifact
+  const markdown = '# 家长讲题指南\n\n## 一、快速解答\n\n9\n\n## 二、深度讲解\n\n先按整数计算，再还原小数位。'
+  artifact.canonical_markdown = markdown
+  Object.assign(artifact, { teaching_report: {
+    schema_version: 1, content_version: 'teaching-report-v1',
+    source: { kind: 'grading', source_id: 'grading-job-1', revision: 1, digest: 'frozen-input' },
+    source_pages: [{ asset_id: 'page-original', asset_digest: 'a'.repeat(64),
+      source_digest: 'a'.repeat(64), mime: 'image/jpeg', width: 100, height: 100 }],
+  } })
+  const response = homeworkResult('completed_homework', {
+    question: recognizedQuestion, status: 'wrong', result_kind: 'assessment',
+    grade: wrongGrade, parent_guide: parentGuide,
+  })
+  response.dispatch_id = snapshot.dispatch.dispatch_id
+  response.result.payload.markdown = markdown
+  delete response.result.payload.annotated_image
+  return { snapshot, response: { ...response, source_digest: sourceImageDigest,
+    source_attachments: [{ digest: `sha256:${'b'.repeat(64)}`, size_bytes: 3 }],
+    operation_receipts: [{ invocation_id: 'recognizing-1', operation: 'recognizing',
+      execution_kind: 'local_deterministic', canonical_input_digest: sourceImageDigest,
+      status: 'succeeded', attempt: 1, result_digest: recognizingResultDigest }],
+    grounding_evidence_receipts: [], problem_grounding_receipts: [],
+  } }
+}
+
 describe('K12 ImageTaskDispatch public facade', () => {
   beforeEach(() => {
     Object.values(client).forEach((mock) => mock.mockReset())
+  })
+
+  it('同孩子同任务冻结报告允许无批注，保留原图与规范图的不同来源摘要', async () => {
+    const { snapshot, response } = frozenTeachingReportPair()
+    client.apiGet.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(response)
+    const { dispatch: current } = await k12Api.k12GetImageTask('tutor/小明', snapshot.dispatch.dispatch_id)
+
+    await expect(k12Api.k12GetImageTaskResult('tutor/小明', current.dispatch_id, undefined, current))
+      .resolves.toEqual(response)
+    expect(current.target_projection?.kind === 'homework' && current.target_projection.final_artifact?.agent_name)
+      .toBe('tutor/小明')
+    expect(response.result.payload).not.toHaveProperty('annotated_image')
+    expect(client.apiGet).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['context', 'agent', 'dispatch', 'content', 'source-pages'] as const)(
+    '无批注结果不能沿%s错配的报告放行', async (mismatch) => {
+      const { snapshot, response } = frozenTeachingReportPair()
+      client.apiGet.mockResolvedValueOnce(snapshot)
+      const { dispatch: current } = await k12Api.k12GetImageTask('tutor/小明', snapshot.dispatch.dispatch_id)
+      const artifact = current.target_projection?.kind === 'homework' ? current.target_projection.final_artifact : null
+      if (mismatch === 'agent' && artifact) artifact.agent_name = 'another-child'
+      if (mismatch === 'dispatch') response.dispatch_id = 'another-dispatch'
+      if (mismatch === 'content') response.result.payload.markdown = '# 其它内容'
+      if (mismatch === 'source-pages' && artifact?.teaching_report) artifact.teaching_report.source_pages = []
+      client.apiGet.mockResolvedValueOnce(response)
+
+      await expect(k12Api.k12GetImageTaskResult('tutor/小明', snapshot.dispatch.dispatch_id,
+        undefined, mismatch === 'context' ? undefined : current)).rejects.toThrow('Invalid image task result response')
+    },
+  )
+
+  it('有批注成功回执时仍要求对应真实批注图，不能借冻结报告跳过摘要合同', async () => {
+    const { snapshot, response } = frozenTeachingReportPair()
+    response.operation_receipts[0]!.operation = 'annotation'
+    client.apiGet.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(response)
+    const { dispatch: current } = await k12Api.k12GetImageTask('tutor/小明', snapshot.dispatch.dispatch_id)
+
+    await expect(k12Api.k12GetImageTaskResult('tutor/小明', current.dispatch_id, undefined, current))
+      .rejects.toThrow('Invalid image task result response')
   })
 
   it('exports the exact six image-task operations and no GradingJob client', () => {
@@ -493,6 +562,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
       problem_grounding_receipts: [],
       final_artifact: {
         artifact_id: 'artifact-1',
+        agent_name: 'tutor/小明',
         artifact_digest: '0123456789abcdef',
         canonical_markdown: '# 批改结果',
         coverage_status: 'complete',

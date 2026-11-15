@@ -572,6 +572,7 @@ function normalizeFinalArtifact(value: unknown, progressive: WireRecord, path: s
     stringValue(artifact[key], `${path}.${key}`)
   }
   optionalString(artifact.title, `${path}.title`)
+  optionalString(artifact.agent_name, `${path}.agent_name`)
   if (artifact.teaching_report !== undefined) {
     record(artifact.teaching_report, `${path}.teaching_report`)
   }
@@ -607,6 +608,7 @@ function normalizeFinalArtifact(value: unknown, progressive: WireRecord, path: s
   return {
     artifact_id: artifact.artifact_id,
     artifact_digest: artifact.artifact_digest,
+    ...(artifact.agent_name !== undefined ? { agent_name: artifact.agent_name } : {}),
     ...(artifact.title !== undefined ? { title: artifact.title } : {}),
     canonical_markdown: artifact.canonical_markdown,
     ...(artifact.teaching_report !== undefined ? { teaching_report: artifact.teaching_report } : {}),
@@ -1452,8 +1454,6 @@ function validatePhotoPayload(
     stringValue(image.mime, `${path}.annotated_image.mime`)
     stringValue(image.data_base64, `${path}.annotated_image.data_base64`)
     optionalString(image.digest, `${path}.annotated_image.digest`)
-  } else if (kind === 'completed_homework') {
-    fail(`${path}.annotated_image`, 'completed-homework artifact')
   }
   return statusByProblem
 }
@@ -1710,7 +1710,54 @@ export function normalizeImageTaskDispatchEnvelope<T>(value: T): T {
   return value
 }
 
-export function assertImageTaskResultSemantics(value: unknown): void {
+/** 同次受认证查询取得的任务快照；不以可任意放行的布尔值代替报告来源。 */
+export interface ImageTaskResultContext {
+  agent: string
+  dispatchId: string
+  dispatch: unknown
+}
+
+function assertUnannotatedTeachingReport(
+  response: WireRecord,
+  payload: WireRecord,
+  context: ImageTaskResultContext | undefined,
+  audit: ValidatedImageTaskAuditEnvelope | undefined,
+): void {
+  const path = '$.result.payload.annotated_image'
+  if (!context || !audit || !context.agent.trim()) fail(path, 'same-task frozen teaching report')
+  const dispatch = record(context.dispatch, '$context.dispatch')
+  if (dispatch.dispatch_id !== context.dispatchId || response.dispatch_id !== context.dispatchId
+    || dispatch.task_intent !== 'completed_homework' || dispatch.status !== 'routed') {
+    fail(path, 'report bound to the requested agent and dispatch')
+  }
+  const projection = record(dispatch.target_projection, '$context.dispatch.target_projection')
+  if (projection.kind !== 'homework' || projection.stage !== 'completed') {
+    fail(path, 'completed homework report')
+  }
+  const artifact = record(projection.final_artifact, '$context.final_artifact')
+  if (artifact.agent_name !== context.agent || artifact.canonical_markdown !== payload.markdown) {
+    fail(path, 'same-agent frozen report content')
+  }
+  stringValue(artifact.artifact_id, '$context.final_artifact.artifact_id')
+  stringValue(artifact.artifact_digest, '$context.final_artifact.artifact_digest')
+  stringValue(artifact.canonical_markdown, '$context.final_artifact.canonical_markdown')
+  const report = record(artifact.teaching_report, '$context.final_artifact.teaching_report')
+  const source = record(report.source, '$context.teaching_report.source')
+  if (source.kind !== 'grading') fail(path, 'frozen grading report source')
+  stringValue(source.source_id, '$context.teaching_report.source.source_id')
+  stringValue(source.digest, '$context.teaching_report.source.digest')
+  const pages = arrayValue(report.source_pages, '$context.teaching_report.source_pages')
+  if (pages.length === 0) fail(path, 'frozen report source pages')
+  for (const value of pages) {
+    const page = record(value, '$context.teaching_report.source_pages[]')
+    stringValue(page.asset_id, '$context.teaching_report.source_pages[].asset_id')
+    stringValue(page.asset_digest, '$context.teaching_report.source_pages[].asset_digest')
+    stringValue(page.source_digest, '$context.teaching_report.source_pages[].source_digest')
+  }
+  // 原图和规范识别图可能因方向校正而不同；来源绑定由同归属后端完成，不比较两种图的摘要。
+}
+
+export function assertImageTaskResultSemantics(value: unknown, context?: ImageTaskResultContext): void {
   const response = record(value, '$')
   exact(
     response,
@@ -1781,6 +1828,9 @@ export function assertImageTaskResultSemantics(value: unknown): void {
   }
   if (kind === 'completed_homework' || kind === 'blank_worksheet') {
     const statusByProblem = validatePhotoPayload(result.payload, kind, '$.result.payload')
+    if (kind === 'completed_homework' && record(result.payload, '$.result.payload').annotated_image === undefined) {
+      assertUnannotatedTeachingReport(response, result.payload as WireRecord, context, auditEnvelope)
+    }
     if (kind === 'completed_homework' && auditEnvelope?.annotationResultDigests.length) {
       const payload = record(result.payload, '$.result.payload')
       const image = record(payload.annotated_image, '$.result.payload.annotated_image')

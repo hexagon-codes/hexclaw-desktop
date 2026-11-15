@@ -252,6 +252,14 @@ export interface TeachingReportDTO {
   source: { kind: 'grading' | 'text_solve'; source_id: string; revision: number; digest: string }
   metadata: { title: string; agent_display_name: string; grade_term: string; subject: string; report_date: string; timezone: string }
   items: Array<{ problem_id: string; display_label: string; short_title: string }>
+  source_pages?: Array<{
+    asset_id: string
+    asset_digest: string
+    source_digest: string
+    mime: string
+    width: number
+    height: number
+  }>
 }
 
 /** 原文字求解结算身份，用于准备同源文件，不改写求解证据。 */
@@ -2178,6 +2186,7 @@ export interface ImageTaskHomeworkProjectionDTO {
 
 export interface GradingFinalArtifactDTO {
   teaching_report?: TeachingReportDTO
+  agent_name?: string
   artifact_id: string
   artifact_digest: string
   title?: string
@@ -2562,11 +2571,12 @@ export async function k12GetImageTask(agent: string, dispatchId: string, signal?
     throw Object.assign(new Error('Invalid image task dispatch response'), { cause })
   }
 }
-/** 读取同一 dispatch 的四类判别式终态结果，不从状态文案推断领域类型。 */
+/** 读取同一任务终态；无批注结果须传入本次已读取的冻结任务报告，不从状态文案推断领域类型。 */
 export async function k12GetImageTaskResult(
   agent: string,
   dispatchId: string,
   signal?: AbortSignal,
+  currentDispatch?: ImageTaskDispatchDTO,
 ) {
   const response = await apiGet<unknown>(
     `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/result`,
@@ -2575,7 +2585,7 @@ export async function k12GetImageTaskResult(
   )
   try {
     assertK12ImageTaskResultResponse(response)
-    assertImageTaskResultSemantics(response)
+    assertImageTaskResultSemantics(response, currentDispatch ? { agent, dispatchId, dispatch: currentDispatch } : undefined)
     return response as unknown as ImageTaskResultResp
   } catch (cause) {
     throw Object.assign(new Error('Invalid image task result response'), { cause })
