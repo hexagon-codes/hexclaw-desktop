@@ -1309,11 +1309,12 @@ function parentTeachingGuideItems(result: PhotoJobResult): BlankWorksheetGuideIt
 const showOverlay = computed(
   () => !!annotatedImage.value || (isImageData.value && overlayMarks.value.length > 0),
 )
-const unannotatedTeachingReport = computed(() =>
+const teachingReportMarkdown = computed(() =>
   photoResultApplied.value && currentTaskIntent.value === 'completed_homework'
     && currentTaskStage.value === 'completed' && finalArtifact.value?.teaching_report
-    && !annotatedImage.value ? finalArtifact.value.canonical_markdown : '',
+    ? finalArtifact.value.canonical_markdown : '',
 )
+const unannotatedTeachingReport = computed(() => annotatedImage.value ? '' : teachingReportMarkdown.value)
 const unclearAnswerCount = computed(
   () =>
     rows.value.filter(
@@ -3015,14 +3016,9 @@ async function coldStart() {
       </div>
     </div>
 
-    <!-- 无可靠批注的冻结讲题报告复用完整正文与唯一PDF，原图仍属于原用户消息。 -->
-    <MarkdownRenderer
-      v-if="unannotatedTeachingReport"
-      :content="unannotatedTeachingReport"
-    />
     <!-- 已作答作业终态只投影一个结果面：批注原图与摘要在前，错题家长讲法和正确题折叠均内聚其中。 -->
     <PhotoGradeOverlay
-      v-else-if="currentTaskIntent === 'completed_homework' && showOverlay"
+      v-else-if="currentTaskIntent === 'completed_homework' && showOverlay && !unannotatedTeachingReport"
       :image="sourceImage || imageB64"
       :annotated-image="annotatedImage"
       :preview-key="sourceMessageId || currentDispatchId || restoreDispatchId"
@@ -3046,7 +3042,8 @@ async function coldStart() {
       v-else-if="
         (currentTaskIntent === 'completed_homework' || currentTaskIntent === 'blank_worksheet') &&
         rows.length &&
-        homeworkTaskProgressState !== 'running'
+        homeworkTaskProgressState !== 'running' &&
+        !unannotatedTeachingReport
       "
       class="rec-guard"
     >
@@ -3235,6 +3232,8 @@ async function coldStart() {
       {{ t('k12.recognize.empty') }}
     </p>
 
+    <!-- 完整讲题正文读取同一冻结报告，不随学生对错或批注显隐删减；PDF仍只出现一次。 -->
+    <MarkdownRenderer v-if="teachingReportMarkdown" :content="teachingReportMarkdown" />
     <FinalArtifactPdfAttachment
       v-if="finalArtifactID && finalArtifactDigest && (currentTaskIntent === 'completed_homework' || currentTaskIntent === 'blank_worksheet')"
       :agent="agentId"
