@@ -565,6 +565,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       .click()
     await flushPromises()
     expect(h.executePrintJobSpy).toHaveBeenCalledWith({
+      scope: '',
       agent: 'k12-xiaoming',
       printJobId: 'print-1',
     })
@@ -583,12 +584,165 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       .click()
     await flushPromises()
     expect(h.executePrintJobSpy).toHaveBeenLastCalledWith({
+      scope: '',
       agent: 'k12-xiaoming',
       printJobId: 'print-1',
     })
     expect(h.executePrintJobSpy).toHaveBeenCalledTimes(2)
     expect(h.commitPrintSpy).not.toHaveBeenCalled()
     expect(h.finalizeSpy).not.toHaveBeenCalled()
+  })
+
+  it.each(['printed', 'cancelled', 'outcome_unknown'] as const)(
+    '练习打印 %s 只在已确认 printed 后回读列表，不自行固化练习集',
+    async (outcome) => {
+      const draft = basket([item('m1', '题', '数学', 'verified')])
+      const assigned = historySet({ status: 'assigned', status_label: '待完成' })
+      h.listSpy.mockResolvedValueOnce({ items: [draft] }).mockResolvedValue({ items: [assigned] })
+      if (outcome === 'outcome_unknown') {
+        h.executePrintJobSpy.mockRejectedValueOnce(new Error('native response channel closed'))
+      } else {
+        h.executePrintJobSpy.mockResolvedValueOnce(outcome === 'printed')
+      }
+      const w = render()
+      try {
+        await flushPromises()
+        await w.get('[data-testid="ps-finalize-print"]').trigger('click')
+        await flushPromises()
+        w.findAllComponents({ name: 'K12PrintPreviewModal' }).slice(-1)[0]!.vm.$emit('print')
+        await flushPromises()
+
+        expect(h.executePrintJobSpy).toHaveBeenCalledOnce()
+        expect(h.listSpy).toHaveBeenCalledTimes(outcome === 'printed' ? 2 : 1)
+        const state = w.vm as unknown as { sets: PracticeSetDTO[] }
+        expect(state.sets.map((set) => set.record_id)).toEqual([
+          outcome === 'printed' ? assigned.record_id : draft.record_id,
+        ])
+        expect(h.finalizeSpy).not.toHaveBeenCalled()
+        expect(h.commitPrintSpy).not.toHaveBeenCalled()
+      } finally {
+        w.unmount()
+      }
+    },
+  )
+
+  it.each(['child', 'unmount'] as const)(
+    '打印回执在 %s 失效后返回，不发起旧预览的列表校准',
+    async (invalidation) => {
+      let resolve!: (printed: boolean) => void
+      h.executePrintJobSpy.mockReturnValueOnce(new Promise<boolean>((done) => { resolve = done }))
+      h.listSpy.mockResolvedValue({ items: [basket([item('m1', '题', '数学', 'verified')])] })
+      const w = render()
+      await flushPromises()
+      await w.get('[data-testid="ps-finalize-print"]').trigger('click')
+      await flushPromises()
+      w.findAllComponents({ name: 'K12PrintPreviewModal' }).slice(-1)[0]!.vm.$emit('print')
+      await flushPromises()
+
+      if (invalidation === 'child') await w.setProps({ agentId: 'other-child' })
+      else w.unmount()
+      await flushPromises()
+      const reads = h.listSpy.mock.calls.length
+      resolve(true)
+      await flushPromises()
+
+      expect(h.listSpy).toHaveBeenCalledTimes(reads)
+      expect(h.executePrintJobSpy).toHaveBeenCalledExactlyOnceWith({
+        scope: '', agent: 'k12-xiaoming', printJobId: 'print-1',
+      })
+      if (invalidation === 'child') w.unmount()
+    },
+  )
+
+  it('较早的复批轮询迟到，不把已打印后校准的历史覆盖回旧篮', async () => {
+    vi.useFakeTimers()
+    let resolvePoll!: (value: { items: PracticeSetDTO[] }) => void
+    let resolvePrint!: (printed: boolean) => void
+    const oldItems = [
+      basket([item('m1', '题', '数学', 'verified')]),
+      historySet({
+        return_assets: [{
+          return_id: 'pending-return', asset_id: 'asset://k12-xiaoming/pending.png',
+          item_ids: ['q9'], returned_at: 1784300000, regrade_status: 'running',
+        }],
+      }),
+    ]
+    h.listSpy
+      .mockResolvedValueOnce({ items: oldItems })
+      .mockReturnValueOnce(new Promise((done) => { resolvePoll = done }))
+      .mockResolvedValueOnce({ items: [historySet({ record_id: 'printed-history' })] })
+    h.executePrintJobSpy.mockReturnValueOnce(new Promise<boolean>((done) => { resolvePrint = done }))
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[data-testid="ps-finalize-print"]').trigger('click')
+      await flushPromises()
+      w.findAllComponents({ name: 'K12PrintPreviewModal' }).slice(-1)[0]!.vm.$emit('print')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(h.listSpy).toHaveBeenCalledTimes(2)
+
+      resolvePrint(true)
+      await flushPromises()
+      const state = w.vm as unknown as { sets: PracticeSetDTO[] }
+      expect(state.sets.map((set) => set.record_id)).toEqual(['printed-history'])
+      resolvePoll({ items: oldItems })
+      await flushPromises()
+
+      expect(state.sets.map((set) => set.record_id)).toEqual(['printed-history'])
+      expect(h.listSpy).toHaveBeenCalledTimes(3)
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('列表请求在卸载后返回，不回写数据或复活复批轮询', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: { items: PracticeSetDTO[] }) => void
+    h.listSpy.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const w = render()
+    const state = w.vm as unknown as { sets: PracticeSetDTO[] }
+    await flushPromises()
+    w.unmount()
+
+    resolve({ items: [historySet({
+      return_assets: [{
+        return_id: 'pending-return', asset_id: 'asset://k12-xiaoming/pending.png',
+        item_ids: ['q9'], returned_at: 1784300000, regrade_status: 'running',
+      }],
+    })] })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    expect(state.sets).toEqual([])
+    expect(h.listSpy).toHaveBeenCalledOnce()
+  })
+
+  it('打印完成后的校准在切换孩子后迟到，不覆盖新孩子练习集', async () => {
+    let resolve!: (value: { items: PracticeSetDTO[] }) => void
+    h.listSpy
+      .mockResolvedValueOnce({ items: [basket([item('m1', '题', '数学', 'verified')])] })
+      .mockReturnValueOnce(new Promise((done) => { resolve = done }))
+      .mockResolvedValueOnce({ items: [historySet({ record_id: 'other-history' })] })
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[data-testid="ps-finalize-print"]').trigger('click')
+      await flushPromises()
+      w.findAllComponents({ name: 'K12PrintPreviewModal' }).slice(-1)[0]!.vm.$emit('print')
+      await flushPromises()
+      await w.setProps({ agentId: 'other-child' })
+      await flushPromises()
+      resolve({ items: [historySet({ record_id: 'old-history' })] })
+      await flushPromises()
+
+      const state = w.vm as unknown as { sets: PracticeSetDTO[] }
+      expect(state.sets.map((set) => set.record_id)).toEqual(['other-history'])
+      expect(h.listSpy.mock.calls.map(([agent]) => agent))
+        .toEqual(['k12-xiaoming', 'k12-xiaoming', 'other-child'])
+    } finally {
+      w.unmount()
+    }
   })
 
   it('BUG-20260802-014 练习集预览消费 PracticePrintJob immutable artifact', async () => {
@@ -625,6 +779,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await flushPromises()
 
     expect(h.executePrintJobSpy).toHaveBeenCalledWith({
+      scope: '',
       agent: 'k12-xiaoming',
       printJobId: 'print-1',
     })
@@ -655,6 +810,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await flushPromises()
 
     expect(h.executePrintJobSpy).toHaveBeenCalledWith({
+      scope: '',
       agent: 'k12-xiaoming',
       printJobId: 'print-1',
     })

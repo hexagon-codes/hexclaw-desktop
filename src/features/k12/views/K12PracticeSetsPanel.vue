@@ -60,6 +60,7 @@ const persistentPrintController = ref<{
 } | null>(null)
 
 const sets = ref<PracticeSetDTO[]>([])
+let listRequest = 0
 const loading = ref(false)
 const error = ref('')
 const busy = ref('') // record_id（或 record_id:item_id）级操作锁
@@ -167,20 +168,28 @@ function closePrintPreview(force = false) {
   }
 }
 
-async function load() {
+async function load(stillCurrent: () => boolean = () => true) {
   if (!props.agentId) return
+  const request = ++listRequest
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  const isCurrent = () => request === listRequest && agent === props.agentId
+    && scope === backendScopeKey() && stillCurrent()
   loading.value = true
   error.value = ''
   try {
-    const resp = await k12ListPracticeSets(props.agentId)
+    const resp = await k12ListPracticeSets(agent)
+    if (!isCurrent()) return
     sets.value = resp.items ?? []
     syncPracticeAssets()
     await focusRequestedItem()
   } catch (e) {
-    error.value = (e as Error).message || t('k12.practice.loadError')
+    if (isCurrent()) error.value = (e as Error).message || t('k12.practice.loadError')
   } finally {
-    loading.value = false
-    scheduleRegradePoll()
+    if (isCurrent()) {
+      loading.value = false
+      scheduleRegradePoll()
+    }
   }
 }
 onMounted(load)
@@ -218,6 +227,7 @@ async function focusRequestedItem() {
 }
 
 onBeforeUnmount(() => {
+  listRequest++
   closePrintPreview(true)
   if (focusClearTimer) clearTimeout(focusClearTimer)
   if (regradePollTimer) clearTimeout(regradePollTimer)
@@ -432,19 +442,31 @@ async function finalize(via: 'print' | 'send') {
 async function confirmPrintPreview() {
   const current = printPreview.value
   if (!current.jobId || !current.pdf || current.printing) return
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  const generation = printPreviewGeneration
+  const isCurrent = () => generation === printPreviewGeneration
+    && current === printPreview.value && agent === props.agentId && scope === backendScopeKey()
+  let completedGeneration: number | null = null
+  const isCompletedCurrent = () => completedGeneration === printPreviewGeneration
+    && agent === props.agentId && scope === backendScopeKey()
   current.printing = true
   busy.value = current.recordId
   try {
     const printed = await executeNativePrintJob({
-      agent: props.agentId,
+      scope,
+      agent,
       printJobId: current.jobId,
     })
+    if (!isCurrent()) return
     closePrintPreview(printed)
+    completedGeneration = printPreviewGeneration
+    if (printed) await load(isCompletedCurrent)
   } catch (errorValue) {
-    toast.error(errorValue instanceof Error ? errorValue.message : '原生打印失败')
+    if (isCurrent()) toast.error(errorValue instanceof Error ? errorValue.message : '原生打印失败')
   } finally {
     current.printing = false
-    busy.value = ''
+    if (isCurrent() || isCompletedCurrent()) busy.value = ''
   }
 }
 
@@ -861,7 +883,7 @@ async function cancelSet(s: PracticeSetDTO) {
     />
     <div v-if="error" class="k12ps__err" data-testid="ps-error">
       <span>{{ error }}</span>
-      <button class="k12ps__btn" data-testid="ps-load-retry" :disabled="loading" @click="load">
+      <button class="k12ps__btn" data-testid="ps-load-retry" :disabled="loading" @click="load()">
         {{ t('k12.practice.retry') }}
       </button>
     </div>
