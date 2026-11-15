@@ -253,7 +253,12 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     await flushPromises()
 
     expect(h.confirmTask).toHaveBeenCalledTimes(1)
-    expect(h.getResult).toHaveBeenCalledWith('mingming', 'dispatch-1', expect.any(AbortSignal))
+    expect(h.getResult).toHaveBeenCalledWith(
+      'mingming',
+      'dispatch-1',
+      expect.any(AbortSignal),
+      status('completed').dispatch,
+    )
     expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="recognize-grade-all"]').exists()).toBe(false)
   })

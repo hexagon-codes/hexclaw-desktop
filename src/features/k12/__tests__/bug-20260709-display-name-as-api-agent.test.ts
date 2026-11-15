@@ -225,7 +225,12 @@ describe('审计单-High-2：K12 grade/coldStart/tutoringTips 必须用 agents.n
     expect(k12CreateImageTask).toHaveBeenCalledTimes(1)
     expect((k12CreateImageTask.mock.calls[0]![0] as { agent: string }).agent).toBe(AGENT_ID)
 
-    expect(k12GetImageTaskResult).toHaveBeenCalledWith(AGENT_ID, 'dispatch-1', expect.any(AbortSignal))
+    expect(k12GetImageTaskResult).toHaveBeenCalledWith(
+      AGENT_ID,
+      'dispatch-1',
+      expect.any(AbortSignal),
+      homeworkDispatch('completed', 'confirmed').dispatch,
+    )
     expect(k12ConfirmImageTask).not.toHaveBeenCalled()
   })
 
@@ -235,7 +240,12 @@ describe('审计单-High-2：K12 grade/coldStart/tutoringTips 必须用 agents.n
     await recognizeOnce(w, true)
 
     expect(k12TutoringTips).not.toHaveBeenCalled()
-    expect(k12GetImageTaskResult).toHaveBeenCalledWith(AGENT_ID, 'dispatch-1', expect.any(AbortSignal))
+    expect(k12GetImageTaskResult).toHaveBeenCalledWith(
+      AGENT_ID,
+      'dispatch-1',
+      expect.any(AbortSignal),
+      homeworkDispatch('completed', 'confirmed').dispatch,
+    )
     expect(k12GetImageTaskResult).toHaveBeenCalledTimes(1)
     expect(k12ConfirmImageTask).not.toHaveBeenCalled()
   })

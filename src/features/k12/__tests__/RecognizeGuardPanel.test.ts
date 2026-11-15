@@ -349,7 +349,16 @@ describe('RecognizeGuardPanel · ImageTaskDispatch 自动处理契约', () => {
       expect.any(AbortSignal),
     )
     expect(h.get).toHaveBeenCalledWith('mingming', 'dispatch-1', expect.any(AbortSignal))
-    expect(h.getResult).toHaveBeenCalledWith('mingming', 'dispatch-1', expect.any(AbortSignal))
+    expect(h.getResult).toHaveBeenCalledWith(
+      'mingming',
+      'dispatch-1',
+      expect.any(AbortSignal),
+      homeworkStatus('completed', {
+        questions: [clearQuestion, riskQuestion],
+        confirmationState: 'confirmed',
+        version: 5,
+      }).dispatch,
+    )
     expect(wrapper.get('[data-testid="overlay-image"]').attributes('src')).toBe(
       'data:image/png;base64,QU5OT1RBVEVE',
     )

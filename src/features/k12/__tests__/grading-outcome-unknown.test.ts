@@ -276,6 +276,7 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
       'mingming',
       'dispatch-unknown',
       controller.signal,
+      status('completed').dispatch,
     )
   })
 
