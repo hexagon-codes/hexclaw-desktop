@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { backendContext } from '@/services/backend-context'
 import {
   clearImageTaskBinding,
   getImageTaskBinding,
@@ -91,6 +92,22 @@ describe('K12 store ImageTaskDispatch adoption', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('后端切换后不把旧任务快照用于新后端的结果读取', async () => {
+    const previous = backendContext.value
+    let resolve!: (value: ReturnType<typeof dispatch>) => void
+    h.get.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const pending = useK12Store().completeImageTask('mingming', 'dispatch-1', {})
+    try {
+      backendContext.value = { connectionId: 'other', backendId: 'other', configRevision: 1,
+        activationGeneration: 1, kind: 'remote', apiBase: '', wsBase: '', hasToken: true }
+      resolve(dispatch())
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      expect(h.getResult).not.toHaveBeenCalled()
+    } finally {
+      backendContext.value = previous
+    }
   })
 
   it('uploads the immutable image and creates one facade dispatch with the frozen route', async () => {
@@ -187,7 +204,7 @@ describe('K12 store ImageTaskDispatch adoption', () => {
       taskIntent: 'blank_worksheet',
       result: expect.objectContaining({ result_surface: 'parent_teaching_guide' }),
     })
-    expect(h.getResult).toHaveBeenCalledWith('mingming', 'dispatch-1', undefined)
+    expect(h.getResult).toHaveBeenCalledWith('mingming', 'dispatch-1', undefined, expect.objectContaining({ dispatch_id: 'dispatch-1' }))
   })
 
   it('freezes only the confirmed writing OCR conflicts through the creative facade', async () => {

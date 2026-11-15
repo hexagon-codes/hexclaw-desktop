@@ -61,6 +61,7 @@ import type {
   ScenarioImageModelRoute,
 } from '@/shell/scenario/registry'
 import { i18n } from '@/i18n'
+import { assertBackendActive, backendScopeKey } from '@/services/backend-context'
 import {
   mistakesToView,
   mistakeToRecord,
@@ -749,9 +750,14 @@ export const useK12Store = defineStore('k12', () => {
     signal?: AbortSignal,
     onStatus?: ImageTaskStatusObserver,
   ): Promise<ImageTaskCompletionOutcome> {
-    throwIfAborted(signal)
+    const scope = backendScopeKey()
+    const assertContext = () => {
+      throwIfAborted(signal)
+      assertBackendActive(scope)
+    }
+    assertContext()
     const response = await k12GetImageTask(agent, dispatchId, signal)
-    throwIfAborted(signal)
+    assertContext()
     onStatus?.(response.dispatch)
     const dispatch = resultReady(response.dispatch) || isImageTaskOutcomeUnknown(response.dispatch)
       ? response.dispatch
@@ -761,7 +767,10 @@ export const useK12Store = defineStore('k12', () => {
           (candidate) => resultReady(candidate) || isFacadeFailure(candidate),
           JOB_POLL_INTERVAL_MS,
           signal,
-          onStatus,
+          (snapshot) => {
+            assertContext()
+            onStatus?.(snapshot)
+          },
         )
     if (isImageTaskOutcomeUnknown(dispatch)) {
       throw new Error(i18n.global.t('k12.recognize.outcomeUnknownTitle'))
@@ -769,7 +778,9 @@ export const useK12Store = defineStore('k12', () => {
     if (isFacadeFailure(dispatch)) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }
-    const projection = await k12GetImageTaskResult(agent, dispatchId, signal)
+    assertContext()
+    const projection = await k12GetImageTaskResult(agent, dispatchId, signal, dispatch)
+    assertContext()
     if (!projection.result || projection.task_intent !== dispatch.task_intent) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }
