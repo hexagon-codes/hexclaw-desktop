@@ -316,6 +316,13 @@ fn proxy_response_limit(method: &str, path: &str) -> usize {
     let source_path = path.split('?').next().unwrap_or(path);
     let is_get = method.trim().eq_ignore_ascii_case("GET");
     let is_post = method.trim().eq_ignore_ascii_case("POST");
+    let archive_document_export = is_get
+        && source_path == "/api/k12/export"
+        && path.split_once('?').is_some_and(|(_, query)| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "format")
+                .is_some_and(|(_, format)| matches!(format.as_ref(), "pdf" | "docx"))
+        });
     let knowledge_source = is_get
         && source_path
             .strip_prefix("/api/v1/knowledge/documents/")
@@ -332,6 +339,7 @@ fn proxy_response_limit(method: &str, path: &str) -> usize {
         MAX_KNOWLEDGE_SOURCE_BYTES
     } else if (method.trim().eq_ignore_ascii_case("POST") && source_path == "/api/v1/render")
         || (is_get && document_content_path(source_path))
+        || archive_document_export
     {
         MAX_DOCUMENT_RESPONSE_BYTES
     } else {
@@ -869,6 +877,10 @@ mod document_proxy_limit_tests {
             "/api/v1/document-artifacts/document-original/content",
             "/api/v1/document-artifacts/document-original/content?download=1",
             "/api/k12/print-artifacts/print-original/content?agent=child",
+            "/api/k12/export?agent=child&format=pdf",
+            "/api/k12/export?format=docx&agent=child",
+            "/api/k12/export?format=%70df&agent=child",
+            "/api/k12/export?format=pdf&format=md",
         ] {
             assert_eq!(
                 proxy_response_limit("GET", path),
@@ -901,7 +913,15 @@ mod document_proxy_limit_tests {
         for (method, path) in [
             ("GET", "/api/v1/render"),
             ("PUT", "/api/v1/render"),
-            ("GET", "/api/k12/export?format=pdf"),
+            ("GET", "/api/k12/export"),
+            ("GET", "/api/k12/export?format=md"),
+            ("GET", "/api/k12/export?format=markdown"),
+            ("GET", "/api/k12/export?format=md&format=pdf"),
+            ("GET", "/api/k12/export?other=pdf"),
+            ("GET", "/api/k12/export/?format=pdf"),
+            ("GET", "/api/k12/exports?format=pdf"),
+            ("POST", "/api/k12/export?format=pdf"),
+            ("PUT", "/api/k12/export?format=docx"),
             ("POST", "/api/v1/document-artifacts/document-original/content"),
             ("GET", "/api/v1/document-artifacts//content"),
             ("GET", "/api/v1/document-artifacts/a/b/content"),
