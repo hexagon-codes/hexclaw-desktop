@@ -19,6 +19,9 @@ use crate::sidecar_client::{read_bounded, SidecarClient};
 
 const MAX_PROXY_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+// 备份请求及裸归档保持128MiB；恢复回执为同规模快照保留1MiB封装空间。
+const MAX_HEXBAK_BYTES: usize = 128 * 1024 * 1024;
+const MAX_HEXBAK_ENVELOPED_BYTES: usize = MAX_HEXBAK_BYTES + 1024 * 1024;
 // 文档传输与既有渲染请求、产物预算对齐，仅用于明确的文档路由。
 const MAX_RENDER_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 const MAX_DOCUMENT_RESPONSE_BYTES: usize = 100 * 1024 * 1024;
@@ -262,7 +265,10 @@ fn proxy_response_header(name: &reqwest::header::HeaderName) -> bool {
 
 fn proxy_request_limit(method: &str, path: &str) -> usize {
     let source_path = path.split('?').next().unwrap_or(path);
-    if method.trim().eq_ignore_ascii_case("POST") && source_path == "/api/v1/render" {
+    let is_post = method.trim().eq_ignore_ascii_case("POST");
+    if is_post && matches!(source_path, "/api/k12/restore" | "/api/k12/restore-as") {
+        MAX_HEXBAK_BYTES
+    } else if is_post && source_path == "/api/v1/render" {
         MAX_RENDER_REQUEST_BYTES
     } else {
         MAX_PROXY_REQUEST_BYTES
@@ -300,15 +306,29 @@ fn document_content_path(path: &str) -> bool {
         )
 }
 
+fn hexbak_rollback_path(path: &str) -> bool {
+    path.strip_prefix("/api/k12/restore-as/")
+        .and_then(|tail| tail.strip_suffix("/rollback"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn proxy_response_limit(method: &str, path: &str) -> usize {
     let source_path = path.split('?').next().unwrap_or(path);
     let is_get = method.trim().eq_ignore_ascii_case("GET");
+    let is_post = method.trim().eq_ignore_ascii_case("POST");
     let knowledge_source = is_get
         && source_path
             .strip_prefix("/api/v1/knowledge/documents/")
             .and_then(|tail| tail.strip_suffix("/source"))
             .is_some_and(|id| !id.is_empty() && !id.contains('/'));
-    if knowledge_source {
+    if is_get && source_path == "/api/k12/backup" {
+        MAX_HEXBAK_BYTES
+    } else if is_post
+        && (matches!(source_path, "/api/k12/restore" | "/api/k12/restore-as")
+            || hexbak_rollback_path(source_path))
+    {
+        MAX_HEXBAK_ENVELOPED_BYTES
+    } else if knowledge_source {
         MAX_KNOWLEDGE_SOURCE_BYTES
     } else if (method.trim().eq_ignore_ascii_case("POST") && source_path == "/api/v1/render")
         || (is_get && document_content_path(source_path))
@@ -697,6 +717,126 @@ pub async fn restart_ollama(app: tauri::AppHandle) -> Result<String, String> {
 #[cfg(test)]
 mod document_proxy_limit_tests {
     use super::*;
+
+    #[test]
+    fn hexbak_budgets_apply_only_to_exact_backup_and_restore_routes() {
+        for path in ["/api/k12/restore", "/api/k12/restore-as?agent=child"] {
+            assert_eq!(proxy_request_limit("post", path), 128 * 1024 * 1024);
+            assert_eq!(proxy_response_limit("post", path), 129 * 1024 * 1024);
+        }
+        assert_eq!(
+            proxy_response_limit("GET", "/api/k12/backup?agent=child"),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            proxy_response_limit("POST", "/api/k12/restore-as/migration/rollback?agent=child"),
+            129 * 1024 * 1024
+        );
+        for (method, path) in [
+            ("GET", "/api/k12/restore"),
+            ("POST", "/api/k12/backup"),
+            ("POST", "/api/k12/restore/"),
+            ("POST", "/api/k12/restore-as-extra"),
+            ("POST", "/api/k12/restore-as/migration/rollback"),
+        ] {
+            assert_eq!(proxy_request_limit(method, path), 16 * 1024 * 1024, "{method} {path}");
+        }
+        for (method, path) in [
+            ("GET", "/api/k12/restore"),
+            ("POST", "/api/k12/backup"),
+            ("GET", "/api/k12/backup/"),
+            ("POST", "/api/k12/restore-as-extra"),
+            ("POST", "/api/k12/restore-as//rollback"),
+            ("POST", "/api/k12/restore-as/a/b/rollback"),
+            ("POST", "/api/k12/restore-as/migration/rollback/"),
+            ("GET", "/api/k12/restore-as/migration/rollback"),
+        ] {
+            assert_eq!(proxy_response_limit(method, path), 32 * 1024 * 1024, "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn archive_contract_transfers_preserve_wire_bytes() {
+        use std::io::{Read, Write};
+        const CHILD_FLAG: &str = "HEXCLAW_HEXBAK_PROXY_CHILD";
+        const REQUEST_SIZE: usize = 24 * 1024 * 1024;
+        const RESPONSE_SIZE: usize = 40 * 1024 * 1024;
+        if std::env::var(CHILD_FLAG).ok().as_deref() == Some("1") {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                for (method, path, body) in [
+                    ("POST", "/api/k12/restore", vec![b'r'; REQUEST_SIZE]),
+                    ("GET", "/api/k12/backup?agent=controlled", Vec::new()),
+                ] {
+                    let response = execute_sidecar_fetch(method.into(), path.into(), BTreeMap::new(), body, CancellationToken::new()).await.unwrap();
+                    assert_eq!(response.status, 200);
+                    assert_eq!(response.body.len(), RESPONSE_SIZE);
+                    assert!(response.body.iter().all(|byte| *byte == b'o'));
+                }
+            });
+            return;
+        }
+        // 独立进程只使用现有测试连接模式，避免改变其它用例的连接身份或环境。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            for expected_method in ["POST", "GET"] {
+                let deadline = std::time::Instant::now() + Duration::from_secs(25);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                        Err(error) => panic!("accept archive proxy fixture: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(20))).unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0_u8; 1];
+                    stream.read_exact(&mut byte).unwrap();
+                    header.extend_from_slice(&byte);
+                }
+                let header = String::from_utf8(header).unwrap().to_ascii_lowercase();
+                assert!(header.starts_with(&format!("{} /api/k12/", expected_method.to_ascii_lowercase())));
+                assert!(header.contains("\r\nauthorization: bearer "));
+                let length = header.lines().find_map(|line| line.strip_prefix("content-length:").map(|value| value.trim().parse::<usize>().unwrap())).unwrap_or(0);
+                assert_eq!(length, if expected_method == "POST" { REQUEST_SIZE } else { 0 });
+                let mut body = vec![0_u8; length];
+                stream.read_exact(&mut body).unwrap();
+                assert!(body.iter().all(|byte| *byte == b'r'));
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {RESPONSE_SIZE}\r\nConnection: close\r\n\r\n").unwrap();
+                let chunk = [b'o'; 64 * 1024];
+                for _ in 0..RESPONSE_SIZE / chunk.len() { stream.write_all(&chunk).unwrap(); }
+            }
+        });
+        let home = std::env::temp_dir().join(format!("hexclaw-hexbak-proxy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let test_name = format!("{}::archive_contract_transfers_preserve_wire_bytes", module_path!().split_once("::").unwrap().1);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_FLAG, "1")
+            .env(crate::test_runtime::TEST_MODE_ENV, "1")
+            .env(crate::test_runtime::TEST_HOME_ENV, &home)
+            .env(crate::test_runtime::TEST_SIDECAR_PORT_ENV, port.to_string())
+            .spawn().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() { break status; }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("archive proxy fixture exceeded its wait window");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let server_result = server.join();
+        std::fs::remove_dir_all(home).unwrap();
+        server_result.unwrap();
+        assert!(status.success());
+    }
 
     #[test]
     fn render_request_budget_applies_only_to_the_existing_post_route() {
