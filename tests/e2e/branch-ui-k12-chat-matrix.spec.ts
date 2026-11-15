@@ -582,6 +582,8 @@ function homeworkDispatch(
     target: { type: 'homework_submission', id: 'submission-chat-matrix' },
     target_projection: {
       kind: 'homework',
+      grounding_evidence_receipts: [],
+      problem_grounding_receipts: [],
       stage,
       confirmation_state: options.confirmation ?? (final ? 'confirmed' : 'pending'),
       anchor_state: 'located',

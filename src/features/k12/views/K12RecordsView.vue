@@ -244,7 +244,6 @@ async function runWeeklyArtifactAction(intent: FinalArtifactActionIntent) {
     if (intent.action === 'print') {
       await weeklyPrintController.value?.open({
         agent: props.agentId,
-        idempotencyKey: weeklyCommandKey('print', output.artifact.artifact_id),
         sourceKind: 'weekly_practice_snapshot',
         sourceRef: output.snapshot.snapshot_id,
         title: output.artifact.title,
@@ -292,7 +291,6 @@ async function runWeeklyHistoryArtifactAction(intent: {
     if (intent.action === 'print') {
       await weeklyPrintController.value?.open({
         agent: props.agentId,
-        idempotencyKey: weeklyCommandKey('history-print', intent.artifact_id),
         sourceKind: 'weekly_practice_snapshot',
         sourceRef: intent.snapshot_id,
         title: '本周该练',

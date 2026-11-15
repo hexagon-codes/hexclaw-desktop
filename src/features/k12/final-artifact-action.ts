@@ -128,7 +128,6 @@ export function createFinalArtifactActionHandler(host: FinalArtifactActionHost) 
     }
     await host.openPrint({
       agent,
-      idempotencyKey: `grading-final:${artifact.artifact_id}`,
       sourceKind: 'grading_final_artifact',
       sourceRef: artifact.source_ref,
       title: artifact.title,
