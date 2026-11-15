@@ -7,6 +7,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
+import { assertBackendActive, backendLocalStorage, backendScopeKey } from '@/services/backend-context'
 import {
   k12Backup,
   k12Restore,
@@ -31,6 +32,7 @@ const guardianConfirmed = ref(false)
 const importError = ref('')
 const exportError = ref('')
 const busy = ref(false)
+let disposed = false
 const isRestoreAs = computed(() =>
   Boolean(pendingArchive.value && pendingArchive.value.agent_name !== props.agentId),
 )
@@ -99,7 +101,10 @@ onMounted(async () => {
   )
   ;(preferred ?? dialogRef.value)?.focus()
 })
-onBeforeUnmount(restoreOpeningFocus)
+onBeforeUnmount(() => {
+  disposed = true
+  restoreOpeningFocus()
+})
 
 // 导出：真实 GET /api/k12/backup（服务端全量归档 + checksum）→ 下载 .hexbak
 async function doExport() {
@@ -177,34 +182,84 @@ function parseArchive(value: unknown): HexbakArchive {
   return archive as HexbakArchive
 }
 
+// 只保留未决命令身份；归档与快照始终留在当前文件和服务端事实源。
+function restoreAsCommand(target: string, checksum: string) {
+  const storageKey = `k12-restore-as-pending:${encodeURIComponent(target)}:${encodeURIComponent(checksum)}`
+  try {
+    const raw = backendLocalStorage.getItem(storageKey)
+    if (raw !== null) {
+      const pending = JSON.parse(raw) as { key?: unknown; target?: unknown; checksum?: unknown } | null
+      if (!pending || typeof pending.key !== 'string' || !pending.key.trim()
+        || pending.target !== target || pending.checksum !== checksum
+        || Object.keys(pending).some((key) => !['key', 'target', 'checksum'].includes(key))) {
+        throw new Error('Invalid pending restore command')
+      }
+      return { storageKey, key: pending.key }
+    }
+    const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+    const key = `restore-as:${target}:${nonce}`
+    backendLocalStorage.setItem(storageKey, JSON.stringify({ key, target, checksum }))
+    return { storageKey, key }
+  } catch (cause) {
+    // 损坏的未决身份不能被新命令覆盖，技术原因只随内部错误保留。
+    const error = new Error(t('error.unknown'))
+    Object.defineProperty(error, 'cause', { value: cause })
+    throw error
+  }
+}
+
 async function confirmRestore() {
   const archive = pendingArchive.value
   if (!archive || !canRestore.value) return
+  const target = props.agentId
+  const scope = backendScopeKey()
   busy.value = true
   importError.value = ''
   try {
-    if (archive.agent_name !== props.agentId) {
+    if (archive.agent_name !== target) {
+      const command = restoreAsCommand(target, archive.checksum)
       const res = await k12RestoreAs({
         archive,
         source_agent: archive.agent_name,
-        target_agent: props.agentId,
+        target_agent: target,
         guardian_confirmed: guardianConfirmed.value,
-        // 与原 archive checksum + target 绑定：用户在超时/重启后重试仍是同一命令。
-        idempotency_key: `restore-as:${props.agentId}:${archive.checksum}`,
+        idempotency_key: command.key,
       })
-      restoredCount.value = res.restored
+      assertBackendActive(scope)
+      if (res.status === 'completed' || res.status === 'rolled_back') {
+        let pending: { key?: unknown } | null = null
+        try {
+          pending = JSON.parse(backendLocalStorage.getItem(command.storageKey) ?? 'null')
+        } catch {
+          // 损坏记录保留原样，迟到回执只清理仍属于本命令的未决身份。
+        }
+        if (pending?.key === command.key) backendLocalStorage.removeItem(command.storageKey)
+      }
+      if (disposed || props.agentId !== target) return
+      restoredCount.value = res.status === 'completed' ? res.restored : null
       restoreSnapshot.value = res.snapshot ?? null
       restoreMigration.value = res
+      if (res.status !== 'completed') {
+        if (res.status === 'rolled_back') {
+          pendingArchive.value = null
+          toast.success(t('k12.backup.rollbackDone'))
+        }
+        return
+      }
     } else {
       // 同 Tutor 保留 v1/v2/v3 旧 restore 兼容通道，不改写 archive。
       const res = await k12Restore(archive)
+      assertBackendActive(scope)
+      if (disposed || props.agentId !== target) return
       restoredCount.value = res.restored
       restoreSnapshot.value = res.snapshot
     }
     pendingArchive.value = null
     toast.success(t('k12.backup.restored', { count: restoredCount.value }))
   } catch (e) {
-    importError.value = e instanceof Error ? e.message : String(e)
+    if (!disposed && props.agentId === target && scope === backendScopeKey()) {
+      importError.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
     busy.value = false
   }
@@ -220,7 +275,10 @@ async function rollbackMigration() {
       target_agent: props.agentId,
       guardian_confirmed: true,
     })
-    toast.success(t('k12.backup.rollbackDone'))
+    if (restoreMigration.value.status === 'rolled_back') {
+      restoredCount.value = null
+      toast.success(t('k12.backup.rollbackDone'))
+    }
   } catch (e) {
     importError.value = e instanceof Error ? e.message : String(e)
   } finally {

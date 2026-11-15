@@ -5,6 +5,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12BackupModal from '../views/K12BackupModal.vue'
 import backupSource from '../views/K12BackupModal.vue?raw'
+import { backendContext, backendLocalStorage } from '@/services/backend-context'
 
 const h = vi.hoisted(() => ({
   backupSpy: vi.fn(),
@@ -44,8 +45,28 @@ function render() {
   })
 }
 
+const pendingKey = 'k12-restore-as-pending:target-child:source-checksum'
+const crossArchive = {
+  version: 3,
+  archive_id: 'archive-1',
+  agent_name: 'source-child',
+  exported_at: 1783526400,
+  records: [],
+  checksum: 'source-checksum',
+}
+
+async function confirmCrossRestore(w: ReturnType<typeof render>) {
+  const file = { text: async () => JSON.stringify(crossArchive) }
+  await w.get('.k12bk__drop').trigger('drop', { dataTransfer: { files: [file] } })
+  await flushPromises()
+  await w.get('[data-testid="backup-restore-guardian"]').setValue(true)
+  await w.get('[data-testid="backup-restore-confirm"]').trigger('click')
+  await flushPromises()
+}
+
 describe('K12BackupModal 恢复安全门', () => {
   beforeEach(() => {
+    backendLocalStorage.removeItem(pendingKey)
     h.backupSpy.mockReset()
     h.restoreSpy.mockReset().mockResolvedValue({
       restored: 1,
@@ -88,6 +109,137 @@ describe('K12BackupModal 恢复安全门', () => {
     })
     h.saveSpy.mockReset().mockResolvedValue(true)
     h.successSpy.mockReset()
+  })
+
+  it('完成并回退后再次明确导入同档案，发起新命令而非重放旧回执', async () => {
+    const w = render()
+    try {
+      await confirmCrossRestore(w)
+      const firstKey = h.restoreAsSpy.mock.calls[0]![0].idempotency_key
+      expect(backendLocalStorage.getItem(pendingKey)).toBeNull()
+
+      await w.get('[data-testid="backup-restore-rollback"]').trigger('click')
+      await flushPromises()
+      await confirmCrossRestore(w)
+
+      expect(h.restoreAsSpy).toHaveBeenCalledTimes(2)
+      expect(h.restoreAsSpy.mock.calls[1]![0].idempotency_key).not.toBe(firstKey)
+      expect(backendLocalStorage.getItem(pendingKey)).toBeNull()
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('未决请求跨弹窗重启沿用命令，只持久化 key、target、checksum', async () => {
+    h.restoreAsSpy.mockRejectedValueOnce(new Error('response channel closed'))
+    const first = render()
+    await confirmCrossRestore(first)
+    const key = h.restoreAsSpy.mock.calls[0]![0].idempotency_key
+    expect(JSON.parse(backendLocalStorage.getItem(pendingKey)!)).toEqual({
+      key, target: 'target-child', checksum: 'source-checksum',
+    })
+    first.unmount()
+
+    const second = render()
+    try {
+      await confirmCrossRestore(second)
+      expect(h.restoreAsSpy.mock.calls[1]![0].idempotency_key).toBe(key)
+      expect(backendLocalStorage.getItem(pendingKey)).toBeNull()
+    } finally {
+      second.unmount()
+    }
+  })
+
+  it('回读 rolled_back 终态不写恢复计数，清除未决身份后允许新命令', async () => {
+    h.restoreAsSpy.mockResolvedValueOnce({
+      migration_id: 'migration-1', source_agent: 'source-child', target_agent: 'target-child',
+      status: 'rolled_back', restored: 0,
+    })
+    const w = render()
+    try {
+      await confirmCrossRestore(w)
+      const state = w.vm as unknown as {
+        restoredCount: number | null
+        restoreMigration: { status: string }
+      }
+      expect(state.restoredCount).toBeNull()
+      expect(state.restoreMigration.status).toBe('rolled_back')
+      expect(backendLocalStorage.getItem(pendingKey)).toBeNull()
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('未决身份损坏时保留原记录，禁止产生新恢复命令', async () => {
+    const corrupt = '{"key":"pending-key","target":"other-child","checksum":"source-checksum"}'
+    backendLocalStorage.setItem(pendingKey, corrupt)
+    const w = render()
+    try {
+      await confirmCrossRestore(w)
+      expect(h.restoreAsSpy).not.toHaveBeenCalled()
+      expect(h.restoreSpy).not.toHaveBeenCalled()
+      expect(backendLocalStorage.getItem(pendingKey)).toBe(corrupt)
+    } finally {
+      w.unmount()
+      backendLocalStorage.removeItem(pendingKey)
+    }
+  })
+
+  it('迟到的完成回执不能清除同目标档案的新未决命令', async () => {
+    let resolve!: (value: unknown) => void
+    h.restoreAsSpy.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const w = render()
+    try {
+      await confirmCrossRestore(w)
+      const nextCommand = JSON.stringify({
+        key: 'next-command', target: 'target-child', checksum: 'source-checksum',
+      })
+      backendLocalStorage.setItem(pendingKey, nextCommand)
+      resolve({ migration_id: 'migration-1', status: 'completed', restored: 1 })
+      await flushPromises()
+
+      expect(backendLocalStorage.getItem(pendingKey)).toBe(nextCommand)
+    } finally {
+      w.unmount()
+      backendLocalStorage.removeItem(pendingKey)
+    }
+  })
+
+  it('相同孩子和档案的未决命令按后端隔离，回到原后端仍沿用原键', async () => {
+    const original = backendContext.value
+    const context = (backendId: string) => ({
+      connectionId: backendId, backendId, configRevision: 1, activationGeneration: 1,
+      kind: 'remote' as const, apiBase: 'https://example.invalid', wsBase: 'wss://example.invalid', hasToken: false,
+    })
+    h.restoreAsSpy.mockRejectedValue(new Error('response channel closed'))
+    try {
+      backendContext.value = context('backend-a')
+      backendLocalStorage.removeItem(pendingKey)
+      const first = render()
+      await confirmCrossRestore(first)
+      const firstKey = h.restoreAsSpy.mock.calls[0]![0].idempotency_key
+      first.unmount()
+
+      backendContext.value = context('backend-b')
+      backendLocalStorage.removeItem(pendingKey)
+      const second = render()
+      await confirmCrossRestore(second)
+      expect(h.restoreAsSpy.mock.calls[1]![0].idempotency_key).not.toBe(firstKey)
+      second.unmount()
+      backendLocalStorage.removeItem(pendingKey)
+
+      backendContext.value = context('backend-a')
+      const resumed = render()
+      await confirmCrossRestore(resumed)
+      expect(h.restoreAsSpy.mock.calls[2]![0].idempotency_key).toBe(firstKey)
+      resumed.unmount()
+    } finally {
+      backendContext.value = context('backend-a')
+      backendLocalStorage.removeItem(pendingKey)
+      backendContext.value = context('backend-b')
+      backendLocalStorage.removeItem(pendingKey)
+      backendContext.value = original
+    }
   })
 
   it('归档范围只陈述当前 v5 后端真实能力，不声称已备份学情记忆或实例配置', () => {
