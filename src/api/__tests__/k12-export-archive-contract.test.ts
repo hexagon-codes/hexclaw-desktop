@@ -61,6 +61,27 @@ describe('K12 LearningArchive export HTTP contract', () => {
   })
 
   it.each([
+    ['pdf', 'Renderer unavailable'],
+    ['docx', 'Renderer unavailable'],
+    ['pdf', undefined],
+    ['docx', undefined],
+  ] as const)('兼容JSON回包沿%s原导出错误路径保留原因（%s）', async (format, renderError) => {
+    h.raw.mockResolvedValue({
+      _data: new Blob([JSON.stringify({
+        format: 'markdown', content: '# 同一冻结档案', artifact_id: 'archive-1',
+        source_digest: 'snapshot-1', ...(renderError ? { render_error: renderError } : {}),
+      })], { type: 'application/json' }),
+      headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }),
+    })
+
+    await expect(k12ExportArchive('mingming', format)).rejects.toThrow(
+      renderError ?? 'Archive export returned an invalid binary response',
+    )
+    expect(h.raw).toHaveBeenCalledOnce()
+    expect(h.get).not.toHaveBeenCalled()
+  })
+
+  it.each([
     [
       'encoded path separator',
       "attachment; filename*=UTF-8''..%2F..%2Fprivate.pdf",

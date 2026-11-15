@@ -1687,6 +1687,27 @@ export interface HexbakTeachingDiagramArchive {
   svg: string
   created_at: number
 }
+/** 服务端冻结的派生依据；缺少证据时不由客户端重建。 */
+export interface DerivationProvenance {
+  method: 'rule' | 'model'
+  policy: string
+  version: string
+  confidence?: number
+  evidence_ref?: string
+}
+export interface HexbakCurrentAccumulation {
+  accumulation_id: string
+  agent_name: string
+  row_version: number
+  derived_source_ref?: string
+  subject_provenance?: DerivationProvenance
+  entry_type_provenance?: DerivationProvenance
+  source_provenance?: DerivationProvenance
+  deleted_at?: number
+  deleted_by?: string
+  delete_command_key?: string
+  delete_receipt_json?: string
+}
 export interface HexbakArchive {
   version: number
   /** v3 content-addressed immutable archive identity; absent on compatible v1/v2 files. */
@@ -1705,6 +1726,8 @@ export interface HexbakArchive {
   teaching_diagrams?: HexbakTeachingDiagramArchive[]
   /** v9冻结来源关联、原题输入及页元数据；客户端完整透传，由服务端核验归属与有效性。 */
   review_sources?: Record<string, unknown> | null
+  /** v10积累的来源、派生依据及既有行版本和删除事实；旧版本未携带时保持缺省。 */
+  current_accumulations?: HexbakCurrentAccumulation[]
   checksum: string
 }
 export interface K12RestoreResp {
@@ -1839,6 +1862,22 @@ export async function k12ExportArchive(
     responseType: 'blob',
   })
   const blob = response._data
+  const contentType = response.headers.get('content-type') ?? 'application/octet-stream'
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+  if (blob instanceof Blob && (mediaType === 'application/json' || mediaType?.endsWith('+json'))) {
+    let compatibility: Partial<ExportMdResp> = {}
+    try {
+      const parsed: unknown = JSON.parse(await blob.text())
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        compatibility = parsed as Partial<ExportMdResp>
+      }
+    } catch {
+      // 兼容回包不可解析时仍走原导出错误，不把它保存成请求格式的文件。
+    }
+    const reason = compatibility.format === 'markdown' && typeof compatibility.render_error === 'string'
+      && compatibility.render_error.trim() ? compatibility.render_error : ''
+    throw new Error(reason || 'Archive export returned an invalid binary response')
+  }
   const artifactId = response.headers.get('x-hexclaw-artifact-id') ?? ''
   const sourceDigest = response.headers.get('x-hexclaw-source-digest') ?? ''
   const filename = assertSafeExportFilename(
@@ -1860,7 +1899,7 @@ export async function k12ExportArchive(
   return {
     blob,
     filename,
-    contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+    contentType,
     artifactId,
     sourceDigest,
     objectCounts,
