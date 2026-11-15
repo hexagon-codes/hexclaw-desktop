@@ -266,6 +266,7 @@ const rows = ref<GuardRow[]>([])
 const problemProgressSlots = ref<ImageTaskProblemProgressDTO[]>([])
 const taskCoverage = ref<ImageTaskCoverageDTO | null>(null)
 const finalArtifact = ref<GradingFinalArtifactDTO | null>(null)
+const photoResultApplied = ref(false)
 const frozenProviderDisplayName = ref('')
 const frozenModelID = ref('')
 const currentStructureVersion = ref(0)
@@ -1308,6 +1309,11 @@ function parentTeachingGuideItems(result: PhotoJobResult): BlankWorksheetGuideIt
 const showOverlay = computed(
   () => !!annotatedImage.value || (isImageData.value && overlayMarks.value.length > 0),
 )
+const unannotatedTeachingReport = computed(() =>
+  photoResultApplied.value && currentTaskIntent.value === 'completed_homework'
+    && currentTaskStage.value === 'completed' && finalArtifact.value?.teaching_report
+    && !annotatedImage.value ? finalArtifact.value.canonical_markdown : '',
+)
 const unclearAnswerCount = computed(
   () =>
     rows.value.filter(
@@ -1689,6 +1695,7 @@ watch(
     imageB64.value = ''
     sourceFile.value = undefined
     annotatedImage.value = ''
+    photoResultApplied.value = false
     blankWorksheetGuide.value = []
     mathOperationReceipts.value = []
     mathSkillContextReceipts.value = []
@@ -1822,6 +1829,7 @@ async function run() {
   outcomeUnknown.value = false
   restoredFromBinding.value = false
   annotatedImage.value = ''
+  photoResultApplied.value = false
   blankWorksheetGuide.value = []
   mathOperationReceipts.value = []
   mathSkillContextReceipts.value = []
@@ -2317,6 +2325,7 @@ async function completeImageTaskFlow() {
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
 function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTaskOperationReceipt[], skillReceipts?: SkillContextReceipt[]) {
+  photoResultApplied.value = false
   mathOperationReceipts.value = operationReceipts ?? []
   mathSkillContextReceipts.value = skillReceipts ?? []
   const parentGuides = parentTeachingGuideItems(result)
@@ -2327,6 +2336,7 @@ function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTa
     annotatedImage.value = ''
     rows.value = []
     confirmed.value = true
+    photoResultApplied.value = true
     return
   }
   blankWorksheetGuide.value = []
@@ -2411,6 +2421,7 @@ function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTa
         break
     }
   })
+  photoResultApplied.value = true
 }
 
 async function coldStart() {
@@ -2564,7 +2575,7 @@ async function coldStart() {
 
     <div
       v-if="
-        !hasBlankWorksheetGuide &&
+        !hasBlankWorksheetGuide && !unannotatedTeachingReport &&
         !showOverlay &&
         currentTaskIntent === 'completed_homework' &&
         (rows.length || recognizing || batchWorking || anchoring)
@@ -2785,7 +2796,7 @@ async function coldStart() {
     </section>
 
     <div
-      v-show="!hasBlankWorksheetGuide && !showOverlay && rows.length && !selectedSubject"
+      v-show="!hasBlankWorksheetGuide && !unannotatedTeachingReport && !showOverlay && rows.length && !selectedSubject"
       class="rec-panel__subject"
       data-testid="recognize-subject"
     >
@@ -2832,7 +2843,7 @@ async function coldStart() {
     </div>
 
     <!-- 冷启动倒查建档入口（#3，仅无年级 + 已识题时） -->
-    <div v-if="!hasBlankWorksheetGuide && !showOverlay && canColdStart" class="rec-cold">
+    <div v-if="!hasBlankWorksheetGuide && !unannotatedTeachingReport && !showOverlay && canColdStart" class="rec-cold">
       <span class="rec-cold__hint">{{ t('k12.recognize.coldStartHint') }}</span>
       <button
         class="rec-cold__btn"
@@ -2846,7 +2857,7 @@ async function coldStart() {
       </button>
     </div>
     <div
-      v-if="!hasBlankWorksheetGuide && !showOverlay && coldStartResult"
+      v-if="!hasBlankWorksheetGuide && !unannotatedTeachingReport && !showOverlay && coldStartResult"
       class="rec-cold rec-cold--done"
       data-testid="coldstart-result"
     >
@@ -3004,6 +3015,11 @@ async function coldStart() {
       </div>
     </div>
 
+    <!-- 无可靠批注的冻结讲题报告复用完整正文与唯一PDF，原图仍属于原用户消息。 -->
+    <MarkdownRenderer
+      v-if="unannotatedTeachingReport"
+      :content="unannotatedTeachingReport"
+    />
     <!-- 已作答作业终态只投影一个结果面：批注原图与摘要在前，错题家长讲法和正确题折叠均内聚其中。 -->
     <PhotoGradeOverlay
       v-else-if="currentTaskIntent === 'completed_homework' && showOverlay"
