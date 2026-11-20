@@ -219,12 +219,20 @@ const annotatedImage = ref('')
  * completed-homework/recognition projection and are not repurposed as a
  * blank-worksheet UI.
  */
-interface BlankWorksheetGuideItem {
+type BlankWorksheetGuideCore = Pick<
+  ParentTeachingGuideDTO,
+  'answer' | 'full_solution_steps' | 'teaching_diagrams'
+>
+
+type BlankWorksheetGuideItem = {
   problemId: string
   question: string
-  guide: ParentTeachingGuideDTO
-}
+} & (
+  | { presentation: 'complete'; guide: ParentTeachingGuideDTO }
+  | { presentation: 'answer_and_steps'; guide: BlankWorksheetGuideCore }
+)
 const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
+const partialWorksheetMarkdown = ref('')
 const mathOperationReceipts = ref<ImageTaskOperationReceipt[]>([])
 const mathSkillContextReceipts = ref<SkillContextReceipt[]>([])
 // 逻辑与物理回执按实际操作聚合，不推断 Skill 调用或调用次数。
@@ -474,10 +482,12 @@ const canRegenerateTask = computed(() =>
 const taskMessageContent = computed(() => {
   if (finalArtifact.value?.canonical_markdown) return finalArtifact.value.canonical_markdown
   if (blankWorksheetGuide.value.length) {
-    return blankWorksheetGuide.value.map(({ question, guide }) => [
-      question, guide.answer, ...guide.full_solution_steps, guide.grade_level_method,
-      ...guide.likely_mistakes, ...guide.parent_teaching_sequence,
-      ...guide.follow_up_questions, guide.checking_method,
+    return blankWorksheetGuide.value.map(({ question, guide, presentation }) => [
+      question, guide.answer, ...guide.full_solution_steps,
+      ...(presentation === 'complete' ? [
+        guide.grade_level_method, ...guide.likely_mistakes, ...guide.parent_teaching_sequence,
+        ...guide.follow_up_questions, guide.checking_method,
+      ] : []),
     ].join('\n\n')).join('\n\n')
   }
   return taskShellTitle.value
@@ -487,7 +497,7 @@ const taskMessageContent = computed(() => {
 function getConversationExportContent() {
   let content = finalArtifact.value?.canonical_markdown || ''
   if (!content && blankWorksheetGuide.value.length) {
-    content = blankWorksheetGuide.value.map(({ question, guide }, index) => [
+    content = blankWorksheetGuide.value.map(({ question, guide, presentation }, index) => [
       `## ${index + 1}. ${question}`,
       `**答案**\n\n${guide.answer}`,
       '**必要步骤**',
@@ -497,11 +507,13 @@ function getConversationExportContent() {
           (diagram) => `![${diagram.alt_text}](${diagram.asset_id})`,
         ) : []),
       ]),
-      `**本年级方法**\n\n${guide.grade_level_method}`,
-      '**易错点**', ...guide.likely_mistakes,
-      '**家长怎么讲**', ...guide.parent_teaching_sequence,
-      '**可以追问**', ...guide.follow_up_questions,
-      `**怎么检查**\n\n${guide.checking_method}`,
+      ...(presentation === 'complete' ? [
+        `**本年级方法**\n\n${guide.grade_level_method}`,
+        '**易错点**', ...guide.likely_mistakes,
+        '**家长怎么讲**', ...guide.parent_teaching_sequence,
+        '**可以追问**', ...guide.follow_up_questions,
+        `**怎么检查**\n\n${guide.checking_method}`,
+      ] : []),
     ].join('\n\n')).join('\n\n')
   }
   if (!content) content = creativeResult.value?.payload.feedback?.projection_markdown || taskMessageContent.value
@@ -1279,41 +1291,48 @@ function isParentTeachingGuide(value: unknown): value is ParentTeachingGuideDTO 
   )
 }
 
+function isAnswerAndStepsGuide(value: unknown): value is BlankWorksheetGuideCore {
+  if (!value || typeof value !== 'object') return false
+  const guide = value as Partial<ParentTeachingGuideDTO>
+  const emptyList = (list: unknown) => list === null || (Array.isArray(list) && !list.length)
+  // 已核验解答的简化形状只含真实答案和步骤，五个扩展字段全部为空。
+  return typeof guide.answer === 'string' && !!guide.answer.trim() &&
+    hasGuideTextList(guide.full_solution_steps) &&
+    guide.grade_level_method === '' && guide.checking_method === '' &&
+    emptyList(guide.likely_mistakes) && emptyList(guide.parent_teaching_sequence) &&
+    emptyList(guide.follow_up_questions)
+}
+
 function parentTeachingGuideItems(result: PhotoJobResult): BlankWorksheetGuideItem[] {
   if (result.task_intent !== 'blank_worksheet') return []
-  if (
-    result.result_surface !== 'parent_teaching_guide' ||
-    result.items.length === 0 ||
-    result.items.some(
-      (item) =>
-        item.status !== 'blank_solved' ||
-        item.result_kind !== 'parent_teaching_guide' ||
-        !isParentTeachingGuide(item.parent_guide),
-    )
-  ) {
-    // A whole-sheet guide is one atomic result. Never present a filtered
-    // subset as though the page had been completely solved.
+  if (result.result_surface !== 'parent_teaching_guide' || result.items.length === 0) {
     throw new Error('invalid blank worksheet parent guide')
   }
-  return result.items.map((item) => ({
-    problemId: item.question.problem_id ?? '',
-    // The recognized display question is the frozen original-order label.
-    // Canonical Markdown is reserved for formula-bearing body content and
-    // may be a delimiter-free transport form, so never expose it raw here.
-    question: item.question.question || item.question.canonical_markdown || '',
-    guide: item.parent_guide as ParentTeachingGuideDTO,
-  }))
+  return result.items.map((item) => {
+    if (item.status !== 'blank_solved' || item.result_kind !== 'parent_teaching_guide') {
+      throw new Error('invalid blank worksheet parent guide')
+    }
+    const identity = {
+      problemId: item.question.problem_id ?? '',
+      question: item.question.question || item.question.canonical_markdown || '',
+    }
+    const guide: unknown = item.parent_guide
+    if (isParentTeachingGuide(guide)) return { ...identity, presentation: 'complete', guide }
+    if (isAnswerAndStepsGuide(guide)) return { ...identity, presentation: 'answer_and_steps', guide }
+    throw new Error('invalid blank worksheet parent guide')
+  })
 }
 
 // 新服务优先展示不可变批注图；老服务缺字段时保留原图+bbox 确定性叠加兼容。
 const showOverlay = computed(
   () => !!annotatedImage.value || (isImageData.value && overlayMarks.value.length > 0),
 )
-const teachingReportMarkdown = computed(() =>
-  photoResultApplied.value && currentTaskIntent.value === 'completed_homework'
-    && currentTaskStage.value === 'completed' && finalArtifact.value?.teaching_report
-    ? finalArtifact.value.canonical_markdown : '',
-)
+const teachingReportMarkdown = computed(() => {
+  if (!photoResultApplied.value || currentTaskStage.value !== 'completed') return ''
+  if (currentTaskIntent.value === 'blank_worksheet') return partialWorksheetMarkdown.value
+  return currentTaskIntent.value === 'completed_homework' && finalArtifact.value?.teaching_report
+    ? finalArtifact.value.canonical_markdown : ''
+})
 const unannotatedTeachingReport = computed(() => annotatedImage.value ? '' : teachingReportMarkdown.value)
 const unclearAnswerCount = computed(
   () =>
@@ -2327,13 +2346,22 @@ async function completeImageTaskFlow() {
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
 function applyPhotoJobResult(result: PhotoJobResult, operationReceipts?: ImageTaskOperationReceipt[], skillReceipts?: SkillContextReceipt[]) {
   photoResultApplied.value = false
+  partialWorksheetMarkdown.value = ''
   mathOperationReceipts.value = operationReceipts ?? []
   mathSkillContextReceipts.value = skillReceipts ?? []
-  const parentGuides = parentTeachingGuideItems(result)
-  if (parentGuides.length) {
+  if (result.task_intent === 'blank_worksheet') {
     // Preserve backend item order (the frozen original-question order), and
     // suppress the legacy recognition/grade controls for this separate surface.
-    blankWorksheetGuide.value = parentGuides
+    if (result.items.some(item => item.status !== 'blank_solved')) {
+      const artifact = finalArtifact.value
+      if (!result.markdown.trim() || (artifact?.teaching_report && artifact.canonical_markdown !== result.markdown)) {
+        throw new Error('invalid blank worksheet report')
+      }
+      partialWorksheetMarkdown.value = result.markdown
+      blankWorksheetGuide.value = []
+    } else {
+      blankWorksheetGuide.value = parentTeachingGuideItems(result)
+    }
     annotatedImage.value = ''
     rows.value = []
     confirmed.value = true
@@ -2911,38 +2939,40 @@ async function coldStart() {
                 </li>
               </ol>
             </div>
-            <div class="grade-card__row">
-              <span>本年级方法</span
-              ><MarkdownRenderer class="grade-card__md" :content="item.guide.grade_level_method" />
-            </div>
-            <div class="grade-card__row">
-              <span>易错点</span>
-              <ul class="grade-card__list">
-                <li v-for="mistake in item.guide.likely_mistakes" :key="mistake">
-                  <MarkdownRenderer class="grade-card__md" :content="mistake" />
-                </li>
-              </ul>
-            </div>
-            <div class="grade-card__row">
-              <span>家长怎么讲</span>
-              <ol class="grade-card__list">
-                <li v-for="step in item.guide.parent_teaching_sequence" :key="step">
-                  <MarkdownRenderer class="grade-card__md" :content="step" />
-                </li>
-              </ol>
-            </div>
-            <div class="grade-card__row">
-              <span>可以追问</span>
-              <ul class="grade-card__list">
-                <li v-for="question in item.guide.follow_up_questions" :key="question">
-                  <MarkdownRenderer class="grade-card__md" :content="question" />
-                </li>
-              </ul>
-            </div>
-            <div class="grade-card__row">
-              <span>怎么检查</span
-              ><MarkdownRenderer class="grade-card__md" :content="item.guide.checking_method" />
-            </div>
+            <template v-if="item.presentation === 'complete'">
+              <div class="grade-card__row">
+                <span>本年级方法</span
+                ><MarkdownRenderer class="grade-card__md" :content="item.guide.grade_level_method" />
+              </div>
+              <div class="grade-card__row">
+                <span>易错点</span>
+                <ul class="grade-card__list">
+                  <li v-for="mistake in item.guide.likely_mistakes" :key="mistake">
+                    <MarkdownRenderer class="grade-card__md" :content="mistake" />
+                  </li>
+                </ul>
+              </div>
+              <div class="grade-card__row">
+                <span>家长怎么讲</span>
+                <ol class="grade-card__list">
+                  <li v-for="step in item.guide.parent_teaching_sequence" :key="step">
+                    <MarkdownRenderer class="grade-card__md" :content="step" />
+                  </li>
+                </ol>
+              </div>
+              <div class="grade-card__row">
+                <span>可以追问</span>
+                <ul class="grade-card__list">
+                  <li v-for="question in item.guide.follow_up_questions" :key="question">
+                    <MarkdownRenderer class="grade-card__md" :content="question" />
+                  </li>
+                </ul>
+              </div>
+              <div class="grade-card__row">
+                <span>怎么检查</span
+                ><MarkdownRenderer class="grade-card__md" :content="item.guide.checking_method" />
+              </div>
+            </template>
           </div>
         </details>
       </div>

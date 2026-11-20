@@ -237,6 +237,13 @@ function digestValue(value: unknown, path: string, prefixed = false): string {
   return digest
 }
 
+// 图片来源可以按原字节或有序资产清单冻结。保留版本前缀参与回执身份比对。
+function imageTaskSourceDigest(value: unknown, path: string): string {
+  const source = stringValue(value, path)
+  digestValue(source.replace(/^page-assets-v1:/, ''), path, true)
+  return source
+}
+
 function validateGroundingEvidenceReceiptFields(
   receipt: WireRecord,
   path: string,
@@ -1438,13 +1445,14 @@ function validatePhotoPayload(
     if (status === 'correct' && item.parent_guide !== undefined) {
       fail(`${itemPath}.parent_guide`, 'omitted for correct assessment')
     }
-    if (
-      kind === 'blank_worksheet' &&
-      (status !== 'blank_solved' ||
-        resultKind !== 'parent_teaching_guide' ||
-        item.parent_guide === undefined)
-    ) {
-      fail(itemPath, 'complete blank-worksheet teaching guide')
+    if (kind === 'blank_worksheet') {
+      const solved = status === 'blank_solved' && resultKind === 'parent_teaching_guide' && item.parent_guide !== undefined
+      const unresolved = (status === 'answer_unclear' || status === 'untrusted') && resultKind === 'needs_review'
+      const outside = status === 'out_of_scope' && resultKind === 'out_of_scope'
+      if (!solved && !(unresolved || outside)) fail(itemPath, 'valid blank-worksheet outcome')
+      if (!solved && grade && (grade.solve_only !== true || grade.record_created === true || grade.record_id !== undefined)) {
+        fail(itemPath, 'ungraded blank-worksheet outcome')
+      }
     }
   })
   if (payload.annotated_image !== undefined) {
@@ -1589,7 +1597,7 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
     fail('$', 'complete audit envelope or no audit envelope')
   }
   if (present.length === 0) return undefined
-  const sourceDigest = digestValue(response.source_digest, '$.source_digest', true)
+  const sourceDigest = imageTaskSourceDigest(response.source_digest, '$.source_digest')
   const annotationResultDigests: string[] = []
   const attachments = arrayValue(response.source_attachments, '$.source_attachments')
   if (attachments.length === 0) fail('$.source_attachments', 'at least one receipt')
@@ -1643,10 +1651,9 @@ function validateAuditEnvelope(response: WireRecord): ValidatedImageTaskAuditEnv
     if (executionKind !== 'provider' && executionKind !== 'local_deterministic') {
       fail(`${path}.execution_kind`, 'provider or local_deterministic')
     }
-    const canonicalInputDigest = digestValue(
+    const canonicalInputDigest = imageTaskSourceDigest(
       receipt.canonical_input_digest,
       `${path}.canonical_input_digest`,
-      true,
     )
     if (canonicalInputDigest !== sourceDigest) {
       fail(`${path}.canonical_input_digest`, 'equal to $.source_digest')

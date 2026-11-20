@@ -250,7 +250,7 @@ export interface TeachingReportDTO {
   schema_version: number
   content_version: string
   source: { kind: 'grading' | 'text_solve'; source_id: string; revision: number; digest: string }
-  metadata: { title: string; agent_display_name: string; grade_term: string; subject: string; report_date: string; timezone: string }
+  metadata: { title: string; agent_display_name: string; grade_term: string; subject: string; report_date: string; timezone: string; task_intent?: 'blank_worksheet' }
   items: Array<{ problem_id: string; display_label: string; short_title: string }>
   source_pages?: Array<{
     asset_id: string

@@ -320,6 +320,22 @@ describe('K12 ImageTaskDispatch public facade', () => {
       .rejects.toThrow('Invalid image task result response')
   })
 
+  it.each(['valid', 'wrong-version', 'different-identity', 'tagged-attachment'] as const)(
+    '按用途校验资产列表来源与原附件字节摘要：%s', async (variant) => {
+      const { snapshot, response } = frozenTeachingReportPair()
+      response.source_digest = `${variant === 'wrong-version' ? 'page-assets-v2' : 'page-assets-v1'}:${sourceImageDigest}`
+      response.operation_receipts[0]!.canonical_input_digest = variant === 'different-identity'
+        ? sourceImageDigest : response.source_digest
+      if (variant === 'tagged-attachment') response.source_attachments[0]!.digest = response.source_digest
+      client.apiGet.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(response)
+      const { dispatch: current } = await k12Api.k12GetImageTask('tutor/小明', snapshot.dispatch.dispatch_id)
+      const result = k12Api.k12GetImageTaskResult('tutor/小明', current.dispatch_id, undefined, current)
+      await expect(result.catch((error: Error) => error.message)).resolves.toEqual(
+        variant === 'valid' ? response : 'Invalid image task result response',
+      )
+    },
+  )
+
   it('exports the exact six image-task operations and no GradingJob client', () => {
     const exports = k12Api as Record<string, unknown>
 
@@ -344,6 +360,19 @@ describe('K12 ImageTaskDispatch public facade', () => {
     ]) {
       expect(exports[retired], `${retired} must not remain public`).toBeUndefined()
     }
+  })
+
+  it.each([
+    ['answer_unclear', 'needs_review', true],
+    ['untrusted', 'needs_review', true],
+    ['out_of_scope', 'out_of_scope', true],
+    ['answer_unclear', 'assessment', false],
+    ['wrong', 'assessment', false],
+  ] as const)('空白卷逐项合同 %s / %s', async (status, resultKind, valid) => {
+    const response = homeworkResult('blank_worksheet', { question: recognizedQuestion, status, result_kind: resultKind })
+    client.apiGet.mockResolvedValueOnce(response)
+    const result = k12Api.k12GetImageTaskResult('child', response.dispatch_id)
+    await expect(result.catch((error: Error) => error.message)).resolves.toEqual(valid ? response : 'Invalid image task result response')
   })
 
   it('keeps the public photo result discriminators equal to the Go DTO enums', () => {
