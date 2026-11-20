@@ -127,7 +127,8 @@ export class NativeSidecarWebSocket extends EventTarget {
     try {
       const { Channel, invoke } = await import('@tauri-apps/api/core')
       assertBackendActive(scope)
-      const onEvent = new Channel<NativeSocketEvent>((event) => {
+      const pendingEvents: NativeSocketEvent[] = []
+      const publish = (event: NativeSocketEvent) => {
         if (event.type !== 'close') {
           try {
             assertBackendActive(scope)
@@ -142,9 +143,16 @@ export class NativeSidecarWebSocket extends EventTarget {
         else if (event.type === 'close') {
           this.emitClose(event.code, event.reason, event.was_clean)
         }
+      }
+      const onEvent = new Channel<NativeSocketEvent>((event) => {
+        if (this.socketId) publish(event)
+        else pendingEvents.push(event)
       })
       this.socketId = await invoke<string>('sidecar_socket_open', { path, onEvent, scope })
-      if (this.closeRequested) {
+      const closedBeforeAcknowledgement = this.closeRequested
+      // 通道可能先送出 OPEN 和第一帧。先取得原生句柄，再按原顺序向调用方发布。
+      for (const event of pendingEvents.splice(0)) publish(event)
+      if (closedBeforeAcknowledgement && this.readyState !== NativeSidecarWebSocket.CLOSED) {
         await this.enqueueNativeCommand('sidecar_socket_close', { socketId: this.socketId })
       }
     } catch (error) {

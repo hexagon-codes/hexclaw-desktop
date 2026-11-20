@@ -4,6 +4,7 @@ const nativeHarness = vi.hoisted(() => ({
   enabled: false,
   calls: [] as Array<{ command: string; args: Record<string, unknown> }>,
   eventHandler: undefined as ((event: Record<string, unknown>) => void) | undefined,
+  openResponse: undefined as Promise<string> | undefined,
   resolveSend: undefined as (() => void) | undefined,
 }))
 
@@ -22,7 +23,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
   invoke: (command: string, args: Record<string, unknown>) => {
     nativeHarness.calls.push({ command, args })
-    if (command === 'sidecar_socket_open') return Promise.resolve('socket-1')
+    if (command === 'sidecar_socket_open') return nativeHarness.openResponse ?? Promise.resolve('socket-1')
     if (command === 'sidecar_socket_send') {
       return new Promise<void>((resolve) => {
         nativeHarness.resolveSend = resolve
@@ -80,6 +81,7 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
     nativeHarness.enabled = false
     nativeHarness.calls = []
     nativeHarness.eventHandler = undefined
+    nativeHarness.openResponse = undefined
     nativeHarness.resolveSend = undefined
     vi.stubGlobal('WebSocket', BrowserSocketDouble)
   })
@@ -126,5 +128,33 @@ describe('NativeSidecarWebSocket browser compatibility boundary', () => {
         'sidecar_socket_close',
       ])
     })
+  })
+
+  it('delivers early native events only when the open callback can send', async () => {
+    nativeHarness.enabled = true
+    let acknowledge!: (id: string) => void
+    nativeHarness.openResponse = new Promise<string>((resolve) => { acknowledge = resolve })
+    const { NativeSidecarWebSocket } = await import('../native-sidecar-websocket')
+    const socket = new NativeSidecarWebSocket('/ws')
+    const events: string[] = []
+    socket.onopen = () => {
+      events.push('open')
+      socket.send('first request')
+    }
+    socket.onmessage = ({ data }) => { events.push(data) }
+
+    await vi.waitFor(() => { expect(nativeHarness.eventHandler).toBeDefined() })
+    nativeHarness.eventHandler!({ type: 'open' })
+    nativeHarness.eventHandler!({ type: 'message', data: 'early message' })
+    expect(events).toEqual([])
+
+    acknowledge('native-id')
+    await vi.waitFor(() => {
+      expect(events).toEqual(['open', 'early message'])
+      expect(nativeHarness.calls).toContainEqual({
+        command: 'sidecar_socket_send', args: { socketId: 'native-id', data: 'first request' },
+      })
+    })
+    nativeHarness.resolveSend?.()
   })
 })
