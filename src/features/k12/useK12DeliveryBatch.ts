@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { backendScopeKey } from '@/services/backend-context'
 import {
   k12GetDeliveryBatch,
   k12QueryDeliveryBatch,
@@ -13,8 +14,11 @@ interface DeliveryBatchControllerOptions {
   pollDelayMs?: number
 }
 
-const IN_FLIGHT = new Set<DeliveryBatchDTO['status']>(['pending', 'sending', 'outcome_unknown'])
 const RETRYABLE = new Set<DeliveryBatchDTO['status']>(['failed', 'partial_failed'])
+
+export function isDeliveryBatchInFlight(status?: string): boolean {
+  return status === 'pending' || status === 'sending' || status === 'outcome_unknown'
+}
 
 /**
  * K12 三个批准发送入口共用的唯一 UI 状态机。
@@ -24,6 +28,7 @@ const RETRYABLE = new Set<DeliveryBatchDTO['status']>(['failed', 'partial_failed
  */
 export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   const batch = ref<DeliveryBatchDTO | null>(null)
+  const observing = computed(() => isDeliveryBatchInFlight(batch.value?.status))
   const busy = ref(false)
   const createFailed = ref(false)
   let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -46,7 +51,7 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
     const operationGeneration = generation
     const current = batch.value
     const agent = options.agent().trim()
-    if (!current || !agent || !IN_FLIGHT.has(current.status) || busy.value) return
+    if (!current || !agent || !isDeliveryBatchInFlight(current.status) || busy.value) return
     busy.value = true
     try {
       // pending/sending/outcome_unknown 都只查询原批次；这里绝不调用 retry。
@@ -62,7 +67,7 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
   function scheduleReconcile(operationGeneration = generation) {
     if (operationGeneration !== generation) return
     clearPoll()
-    if (!batch.value || !IN_FLIGHT.has(batch.value.status)) return
+    if (!isDeliveryBatchInFlight(batch.value?.status)) return
     pollTimer = setTimeout(() => {
       if (operationGeneration === generation) void reconcile()
     }, options.pollDelayMs ?? 1_500)
@@ -74,10 +79,10 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
     if (!next) return
     batch.value = next
     createFailed.value = false
-    if (IN_FLIGHT.has(next.status)) scheduleReconcile()
+    if (isDeliveryBatchInFlight(next.status)) scheduleReconcile()
   }
 
-  async function send(create: () => Promise<DeliveryBatchDTO>) {
+  async function send(create?: () => Promise<DeliveryBatchDTO>) {
     if (busy.value || batch.value?.status === 'delivered') return
     const agent = options.agent().trim()
     if (!agent) {
@@ -92,9 +97,9 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
       if (current && RETRYABLE.has(current.status)) {
         // 服务端只重发 failed child；delivered/unknown child 均不进入重发集合。
         adopt(await k12RetryDeliveryBatch(agent, current.batch_id), operationGeneration)
-      } else if (current && IN_FLIGHT.has(current.status)) {
+      } else if (current && isDeliveryBatchInFlight(current.status)) {
         adopt(await k12QueryDeliveryBatch(agent, current.batch_id), operationGeneration)
-      } else {
+      } else if (create) {
         // 初次发送或创建响应丢失后的重放。稳定业务 dedupe 由服务端返回原 batch。
         adopt(await create(), operationGeneration)
       }
@@ -108,28 +113,41 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
     }
   }
 
-  async function restore(batchId: string | undefined) {
+  async function restore(batchId: string | undefined, objectId?: string) {
     const id = batchId?.trim()
     const agent = options.agent().trim()
-    if (!id || !agent) return
+    if (!id || !agent) return false
     const operationGeneration = generation
+    const backend = backendScopeKey()
     busy.value = true
     try {
-      adopt(await k12GetDeliveryBatch(agent, id), operationGeneration)
+      const restored = await k12GetDeliveryBatch(agent, id)
+      if (operationGeneration !== generation || backend !== backendScopeKey()
+        || agent !== options.agent().trim() || restored.batch_id !== id || restored.agent_name !== agent
+        || (objectId !== undefined && restored.object_id !== objectId)) return false
+      adopt(restored, operationGeneration)
+      return true
     } catch {
-      if (operationGeneration !== generation) return
+      if (operationGeneration !== generation) return false
       // 恢复读取失败不创建新批次；原按钮保持可重试，下一次业务命令由服务端稳定去重。
       createFailed.value = true
+      return false
     } finally {
       if (operationGeneration === generation) busy.value = false
     }
+  }
+
+  // 历史卡只接回其已知批次，旧列表状态本身不能授权创建或重发。
+  async function retryExisting(batchId: string, objectId?: string) {
+    if (busy.value || !await restore(batchId, objectId)) return
+    if (batch.value?.batch_id === batchId && RETRYABLE.has(batch.value.status)) await send()
   }
 
   const label = computed(() => {
     if (createFailed.value || (batch.value && RETRYABLE.has(batch.value.status))) {
       return '发送失败 · 重试'
     }
-    if (busy.value || (batch.value && IN_FLIGHT.has(batch.value.status))) return '发送中…'
+    if (busy.value || observing.value) return '发送中…'
     if (batch.value?.status === 'delivered') return '发送成功'
     return options.idleLabel
   })
@@ -137,14 +155,14 @@ export function useK12DeliveryBatch(options: DeliveryBatchControllerOptions) {
     () =>
       busy.value ||
       batch.value?.status === 'delivered' ||
-      Boolean(batch.value && IN_FLIGHT.has(batch.value.status)),
+      observing.value,
   )
 
-  watch(options.agent, reset)
+  watch(() => [backendScopeKey(), options.agent()], reset, { flush: 'sync' })
   onBeforeUnmount(() => {
     generation += 1
     clearPoll()
   })
 
-  return { batch, label, disabled, send, restore, adopt, reset }
+  return { batch, label, disabled, observing, send, restore, adopt, retryExisting, reset }
 }

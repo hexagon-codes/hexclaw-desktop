@@ -4,7 +4,7 @@
   打印/发送即家长确认（finalize 一步固化，逐题跳过阻断题）；界面不展示六态时间轴（三态：待打印/待完成/已批改）。
 -->
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, shallowRef, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -33,7 +33,8 @@ import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
 import { printPracticePaper, savePracticePaperPdf } from '../export'
 import { executeNativePrintJob, type PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
-import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
+import K12DeliveryBatchRetry from '../components/K12DeliveryBatchRetry.vue'
+import { isDeliveryBatchInFlight, useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { backendScopeKey } from '@/services/backend-context'
 
 const props = defineProps<{
@@ -64,6 +65,12 @@ let listRequest = 0
 const loading = ref(false)
 const error = ref('')
 const busy = ref('') // record_id（或 record_id:item_id）级操作锁
+let finalizeSendSequence = 0
+const pendingDeliverySet = shallowRef<{
+  set: PracticeSetDTO
+  agent: string
+  scope: string
+} | null>(null)
 const printPreview = ref({
   open: false,
   printing: false,
@@ -196,7 +203,10 @@ onMounted(load)
 watch(
   () => props.agentId,
   () => {
+    finalizeSendSequence++
+    pendingDeliverySet.value = null
     releasePracticeAssets()
+    closePaper()
     returnDraft.value = emptyReturnDraft()
     returnError.value = ''
     busy.value = ''
@@ -227,6 +237,8 @@ async function focusRequestedItem() {
 }
 
 onBeforeUnmount(() => {
+  finalizeSendSequence++
+  closePaper()
   listRequest++
   closePrintPreview(true)
   if (focusClearTimer) clearTimeout(focusClearTimer)
@@ -257,6 +269,23 @@ function scheduleRegradePoll() {
 
 // ── 待打印篮（单 Learner 单篮：draft 态练习集，§3.8）──
 const basket = computed(() => sets.value.find((s) => s.status === 'draft') ?? null)
+watch(() => basket.value?.record_id, (recordId) => {
+  if (recordId && recordId !== delivery.batch.value?.object_id) {
+    pendingDeliverySet.value = null
+    delivery.reset()
+  }
+})
+watch(delivery.batch, (batch) => {
+  const pending = pendingDeliverySet.value
+  if (!pending || pending.agent !== props.agentId || pending.scope !== backendScopeKey() ||
+      batch?.status !== 'delivered' || batch.agent_name !== pending.agent ||
+      batch.object_id !== pending.set.record_id) return
+  // 已送达才收起待打印区的投递动作，未送达仍能沿原批次重试。
+  const completed = { ...pending.set, delivery_status: batch.status }
+  pendingDeliverySet.value = null
+  sets.value = sets.value.map((set) => set.record_id === completed.record_id ? completed : set)
+  void load()
+})
 const pendingGenerations = computed(() =>
   Object.values(props.practiceGenerationByMistake ?? {}).filter(
     (generation) => generation.state === 'pending',
@@ -373,9 +402,17 @@ async function finalize(via: 'print' | 'send') {
   const b = basket.value
   if (!b) return
   if (via === 'send') {
+    if (delivery.disabled.value) return
+    const sequence = ++finalizeSendSequence
+    const agent = props.agentId
+    const scope = backendScopeKey()
     await delivery.send(async () => {
-      const response = await k12FinalizePracticeSet(props.agentId, b.record_id, 'send')
+      const response = await k12FinalizePracticeSet(agent, b.record_id, 'send')
       if (!response.delivery_batch) throw new Error('投递批次未创建')
+      if (sequence === finalizeSendSequence && agent === props.agentId &&
+          scope === backendScopeKey() && response.set?.record_id === b.record_id) {
+        pendingDeliverySet.value = { set: response.set, agent, scope }
+      }
       return response.delivery_batch
     })
     return
@@ -777,14 +814,27 @@ const paper = ref<{
   error: '',
   resp: null,
 })
-const paperRequest = ref<{ recordId: string; kind: 'question' | 'answer' } | null>(null)
+type PaperRequest = {
+  recordId: string
+  kind: 'question' | 'answer'
+  agent: string
+  scope: string
+}
+const paperRequest = shallowRef<PaperRequest | null>(null)
+function isCurrentPaper(request: PaperRequest) {
+  return paperRequest.value === request && request.agent === props.agentId &&
+    request.scope === backendScopeKey()
+}
 async function openPaper(recordId: string, kind: 'question' | 'answer') {
-  paperRequest.value = { recordId, kind }
+  const request = { recordId, kind, agent: props.agentId, scope: backendScopeKey() }
+  paperRequest.value = request
   paper.value = { open: true, loading: true, error: '', resp: null }
   try {
-    const resp = await k12GetPracticePaper(props.agentId, recordId, kind)
+    const resp = await k12GetPracticePaper(request.agent, recordId, kind)
+    if (!isCurrentPaper(request)) return
     paper.value = { open: true, loading: false, error: '', resp }
   } catch (e) {
+    if (!isCurrentPaper(request)) return
     paper.value = {
       open: true,
       loading: false,
@@ -806,13 +856,14 @@ function closePaper() {
 async function printPaper() {
   const p = paper.value.resp
   const req = paperRequest.value
-  if (!p || p.preview || !req) return
+  if (!p || p.preview || !req || !isCurrentPaper(req)) return
   // 重试开始即撤下上一次失败提示；本次仍失败时再写入新的可重试错误。
   paper.value.error = ''
   try {
     const title = p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : '')
     await persistentPrintController.value?.open({
-      agent: props.agentId,
+      agent: req.agent,
+      scope: req.scope,
       sourceKind: p.kind === 'answer' ? 'practice_answer' : 'practice_question',
       sourceRef: `practice-set:${req.recordId}:${p.kind}`,
       title,
@@ -820,7 +871,9 @@ async function printPaper() {
       browserPrint: () => printPracticePaper(p.markdown, title),
     })
   } catch (e) {
-    paper.value.error = (e as Error).message || t('k12.practice.paperPrintFailed')
+    if (isCurrentPaper(req)) {
+      paper.value.error = (e as Error).message || t('k12.practice.paperPrintFailed')
+    }
   }
 }
 
@@ -848,7 +901,8 @@ async function savePaperPdf() {
 function deliveryLabel(status: string): string {
   if (status === 'pending') return t('k12.practice.deliveryPendingShort')
   if (status === 'delivered') return t('k12.practice.deliveryDelivered')
-  if (status === 'failed') return t('k12.practice.deliveryFailed')
+  if (status === 'failed' || status === 'partial_failed') return t('workflow.delivery.status.failed')
+  if (status === 'sending' || status === 'outcome_unknown') return t(`workflow.delivery.status.${status}`)
   return ''
 }
 
@@ -1060,11 +1114,25 @@ async function cancelSet(s: PracticeSetDTO) {
               <span v-if="s.skipped_blocked_count">{{
                 t('k12.practice.skipped', { n: s.skipped_blocked_count })
               }}</span>
+              <K12DeliveryBatchRetry
+                v-if="s.delivery_batch_id && s.status !== 'cancelled' &&
+                  (isDeliveryBatchInFlight(s.delivery_status) ||
+                    (s.delivery_retryable !== false && ['failed', 'partial_failed'].includes(s.delivery_status)))"
+                :key="backendScopeKey() + ':' + agentId + ':' + s.delivery_batch_id"
+                class="k12ps__btn k12ps__btn--ghost"
+                :agent="agentId"
+                :record-id="s.record_id"
+                :batch-id="s.delivery_batch_id"
+                :status="s.delivery_status"
+                :retryable="s.delivery_retryable"
+                :status-label="deliveryLabel"
+                @settled="load()"
+              />
               <span
-                v-if="deliveryLabel(s.delivery_status)"
+                v-else-if="deliveryLabel(s.delivery_status)"
                 :class="{
-                  'k12ps__delivery--pending': s.delivery_status === 'pending',
-                  'k12ps__delivery--failed': s.delivery_status === 'failed',
+                  'k12ps__delivery--pending': isDeliveryBatchInFlight(s.delivery_status),
+                  'k12ps__delivery--failed': s.delivery_status === 'failed' || s.delivery_status === 'partial_failed',
                 }"
               >
                 {{ deliveryLabel(s.delivery_status) }}

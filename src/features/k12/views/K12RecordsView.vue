@@ -13,6 +13,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
+import { backendScopeKey } from '@/services/backend-context'
 import { useK12Store } from '../store'
 import { useAgentsStore } from '@/stores/agents'
 import K12PracticeSetsPanel from './K12PracticeSetsPanel.vue'
@@ -112,6 +113,12 @@ const weeklyDelivery = useK12DeliveryBatch({
   agent: () => props.agentId,
   idleLabel: '发送到手机',
 })
+const weeklyHistoryDelivery = useK12DeliveryBatch({
+  agent: () => props.agentId,
+  idleLabel: '发送到手机',
+})
+const weeklyHistoryBatchIDs = new Map<string, string>()
+let selectedWeeklyHistory = ''
 const weeklyProgress = ref<CurriculumProgressDTO | null>(null)
 const weeklySettings = ref<WeeklyPracticeSettingsDTO | null>(null)
 const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
@@ -219,15 +226,21 @@ async function refreshCurrentWeeklyPlan(agent: string) {
 
 async function prepareWeeklyOutput(): Promise<WeeklyPracticePrepareOutputResp | null> {
   const plan = weeklyPlan.value
-  if (!plan) return null
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  if (!plan || plan.agent !== agent) return null
   try {
-    weeklyOutput.value = await k12PrepareWeeklyPracticeOutput(
-      props.agentId,
+    const output = await k12PrepareWeeklyPracticeOutput(
+      agent,
       plan.plan_id,
       plan.revision,
       weeklyCommandKey('prepare', `${plan.plan_id}:${plan.revision}`),
     )
-    return weeklyOutput.value
+    if (recordsDisposed || agent !== props.agentId || scope !== backendScopeKey() ||
+        plan.plan_id !== weeklyPlan.value?.plan_id ||
+        plan.revision !== weeklyPlan.value?.revision) return null
+    weeklyOutput.value = output
+    return output
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
     return null
@@ -270,14 +283,32 @@ async function runWeeklyArtifactAction(intent: FinalArtifactActionIntent) {
 }
 
 async function openWeeklyHistory(item: WeeklyPracticeHistorySummaryDTO) {
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  const selection = selectWeeklyHistoryDelivery(item.snapshot_id)
   try {
-    weeklyHistorySnapshot.value = await k12GetWeeklyPracticeSnapshot(
-      props.agentId,
+    const snapshot = await k12GetWeeklyPracticeSnapshot(
+      agent,
       item.snapshot_id,
     )
+    if (!recordsDisposed && scope === backendScopeKey() && selection === selectedWeeklyHistory) {
+      weeklyHistorySnapshot.value = snapshot
+    }
   } catch (cause) {
-    toast.error(cause instanceof Error ? cause.message : String(cause))
+    if (!recordsDisposed && scope === backendScopeKey() && selection === selectedWeeklyHistory) {
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    }
   }
+}
+
+function selectWeeklyHistoryDelivery(snapshotID: string) {
+  const identity = JSON.stringify([backendScopeKey(), props.agentId, snapshotID])
+  if (selectedWeeklyHistory !== identity) {
+    selectedWeeklyHistory = identity
+    weeklyHistoryDelivery.reset()
+    void weeklyHistoryDelivery.restore(weeklyHistoryBatchIDs.get(identity))
+  }
+  return identity
 }
 
 async function runWeeklyHistoryArtifactAction(intent: {
@@ -286,6 +317,7 @@ async function runWeeklyHistoryArtifactAction(intent: {
   artifact_id: string
 }) {
   if (weeklyBusy.value) return
+  const agent = props.agentId
   weeklyBusy.value = true
   try {
     if (intent.action === 'print') {
@@ -302,13 +334,23 @@ async function runWeeklyHistoryArtifactAction(intent: {
       })
       return
     }
-    await weeklyDelivery.send(() =>
-      k12SendWeeklyPracticeSnapshot(
-        props.agentId,
+    const selection = selectWeeklyHistoryDelivery(intent.snapshot_id)
+    const scope = backendScopeKey()
+    await weeklyHistoryDelivery.send(async () => {
+      const batch = await k12SendWeeklyPracticeSnapshot(
+        agent,
         intent.snapshot_id,
         weeklyCommandKey('history-send', intent.snapshot_id),
-      ),
-    )
+      )
+      if (batch.agent_name !== agent || batch.object_id !== intent.snapshot_id ||
+          batch.object_kind !== 'weekly_practice_snapshot') {
+        throw new Error('Weekly practice delivery identity mismatch')
+      }
+      if (!recordsDisposed && scope === backendScopeKey()) {
+        weeklyHistoryBatchIDs.set(selection, batch.batch_id)
+      }
+      return batch
+    })
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
   } finally {
@@ -626,6 +668,9 @@ watch(
 watch(
   () => props.agentId,
   () => {
+    selectedWeeklyHistory = ''
+    weeklyHistorySnapshot.value = null
+    weeklyOutput.value = null
     weeklyTextbookBusy.value = null
     weeklyArithmeticBusy.value = null
     weeklyReadSequence++

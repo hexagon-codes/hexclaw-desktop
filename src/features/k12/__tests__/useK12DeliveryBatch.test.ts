@@ -75,6 +75,19 @@ function wrapper() {
 }
 
 describe('K12 DeliveryBatch 单按钮状态机', () => {
+  it('retries only the reloaded failed history batch', async () => {
+    h.get.mockResolvedValueOnce(batch('failed')).mockResolvedValueOnce(batch('delivered'))
+    h.retry.mockResolvedValueOnce(batch('delivered'))
+    const w = wrapper()
+
+    await w.vm.delivery.retryExisting('batch-1')
+    await w.vm.delivery.retryExisting('batch-1')
+
+    expect(h.get.mock.calls).toEqual([['ming', 'batch-1'], ['ming', 'batch-1']])
+    expect(h.retry.mock.calls).toEqual([['ming', 'batch-1']])
+    expect(h.start).not.toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     vi.useFakeTimers()
     h.get.mockReset()

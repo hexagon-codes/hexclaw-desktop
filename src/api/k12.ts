@@ -2881,6 +2881,7 @@ export interface PracticeSetDTO {
   finalized_via?: string
   /** via=send 时冻结的全绑定投递批次；重放与重启恢复只能查询这个批次。 */
   delivery_batch_id?: string
+  delivery_retryable?: boolean
   delivery_status: string
   items: PracticeItemDTO[]
   /** 只追加、不覆盖的作答照片批次（DD-028）。 */

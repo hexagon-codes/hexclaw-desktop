@@ -20,6 +20,7 @@ import {
   k12SendCreativeWork,
   k12UploadAsset,
   type CreativeWorkDTO,
+  type DeliveryBatchDTO,
   type ImageTaskCreativeProjectionDTO,
   type ImageTaskDispatchDTO,
   type WorkFeedbackDTO,
@@ -31,6 +32,7 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { backendScopeKey } from '@/services/backend-context'
 import { exportArchiveDocument } from '../export'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 
@@ -461,9 +463,22 @@ async function copyWork(work: CreativeWorkDTO) {
 }
 
 async function sendWork(work: CreativeWorkDTO) {
-  await delivery.send(() => k12SendCreativeWork(props.agentId, work.work_id))
-  const batchID = delivery.batch.value?.batch_id
-  if (batchID) replaceWork({ ...work, delivery_batch_id: batchID })
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  const generation = latestFeedbackGeneration(work)?.generation_id
+  let sentBatch: DeliveryBatchDTO | undefined
+  await delivery.send(async () => {
+    sentBatch = await k12SendCreativeWork(agent, work.work_id)
+    return sentBatch
+  })
+  const batch = sentBatch ?? delivery.batch.value
+  if (scope !== backendScopeKey() || agent !== props.agentId ||
+      batch?.agent_name !== agent || batch.object_kind !== 'creative_work' ||
+      batch.object_id !== work.work_id) return
+  const current = works.value.find((item) => item.work_id === work.work_id)
+  if (current && latestFeedbackGeneration(current)?.generation_id === generation) {
+    replaceWork({ ...current, delivery_batch_id: batch.batch_id })
+  }
 }
 
 function safePDFName(name: string): string {
@@ -747,12 +762,15 @@ async function pollManualCreativeTask(
   apply: (dispatch: ImageTaskDispatchDTO) => void,
 ): Promise<ImageTaskDispatchDTO> {
   let current = initial
+  if (!active()) return current
   apply(current)
   for (let index = 0; index < manualCreativePollLimit; index += 1) {
     if (!active() || manualCreativeTaskSettled(current)) return current
     await new Promise<void>((resolve) => window.setTimeout(resolve, manualCreativePollIntervalMS))
     if (!active()) return current
-    current = (await k12GetImageTask(props.agentId, current.dispatch_id)).dispatch
+    const next = (await k12GetImageTask(props.agentId, current.dispatch_id)).dispatch
+    if (!active()) return current
+    current = next
     apply(current)
   }
   throw new Error(t('k12.works.ocrFailed'))
@@ -864,6 +882,7 @@ const photoReady = computed(
     !!photoAssetID.value &&
     !photoUploading.value &&
     !photoError.value &&
+    photoOCRJob.value?.source_asset_id === photoAssetID.value &&
     creativeProjection(photoImageTask.value)?.status === 'ready',
 )
 const photoOCRConfirmed = computed(() => {
@@ -1002,7 +1021,9 @@ async function submitAdd() {
   try {
     if (photoPreview.value) {
       const dispatch = photoImageTask.value
-      if (!dispatch || creativeProjection(dispatch)?.status !== 'ready') return
+      if (!dispatch || !photoReady.value) return
+      const generation = photoOCRGeneration
+      const scope = backendScopeKey()
       const creative =
         addType.value === 'writing'
           ? {
@@ -1018,6 +1039,7 @@ async function submitAdd() {
         version: dispatch.version,
         creative,
       })
+      if (generation !== photoOCRGeneration || scope !== backendScopeKey()) return
       photoImageTask.value = response.dispatch
       if (creativeProjection(response.dispatch)?.status !== 'promoted') {
         throw new Error(t('k12.works.saveFailed'))

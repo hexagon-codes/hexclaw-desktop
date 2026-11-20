@@ -8,6 +8,7 @@ import k12Zh from '../i18n/zh-CN'
 import K12CreativeWorksPanel from '../views/K12CreativeWorksPanel.vue'
 import type {
   CreativeWorkDTO,
+  DeliveryBatchDTO,
   WorkFeedbackDTO,
   WorkFeedbackGenerationDTO,
   WorkType,
@@ -427,8 +428,20 @@ describe('K12CreativeWorksPanel current contract', () => {
 
   it('首发成功写回批次身份，关闭并重开详情后恢复同一 delivered 批次', async () => {
     h.list.mockResolvedValue({ items: [work()] })
-    h.sendWork.mockResolvedValue({ batch_id: 'batch-1', status: 'delivered' })
-    h.getDeliveryBatch.mockResolvedValue({ batch_id: 'batch-1', status: 'delivered' })
+    const batch: DeliveryBatchDTO = {
+      batch_id: 'batch-1',
+      agent_name: 'agent-1',
+      object_kind: 'creative_work',
+      object_id: 'work-1',
+      dedupe_key: 'creative-work-1',
+      content_digest: 'sha256:' + 'a'.repeat(64),
+      status: 'delivered',
+      receipts: [],
+      created_at: 1,
+      updated_at: 1,
+    }
+    h.sendWork.mockResolvedValue(batch)
+    h.getDeliveryBatch.mockResolvedValue(batch)
     const wrapper = render()
     await flushPromises()
     await openOnlyDetail(wrapper)
