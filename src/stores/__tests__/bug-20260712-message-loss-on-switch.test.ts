@@ -72,4 +72,33 @@ describe('BUG-20260712 #F 切会话再切回不丢刚发的消息', () => {
     await ctrl.selectSession('A')
     expect(messages.value.map((m) => m.id)).toContain('u-opt') // RED（修前）：被盲覆盖成 []
   })
+
+  it('keeps each session’s own messages while earlier history is still loading', async () => {
+    const a = msg('a1', 'user', 'A pending message')
+    const b = msg('b1', 'user', 'B saved message')
+    const bPending = msg('b2', 'user', 'B pending message')
+    const messages = ref([a])
+    const currentSessionId = ref<string | null>('A')
+    let resolveFirstB!: (rows: ChatMessage[]) => void
+    let readsOfB = 0
+    const ctrl = makeController(messages, currentSessionId, async (sessionId) => {
+      if (sessionId !== 'B') return []
+      if (++readsOfB === 1) return new Promise<ChatMessage[]>((resolve) => { resolveFirstB = resolve })
+      return [b]
+    })
+
+    const firstB = ctrl.selectSession('B')
+    const firstProjection = messages.value.slice()
+    await ctrl.selectSession('C')
+    const currentB = ctrl.selectSession('B')
+    messages.value.push(bPending)
+    await currentB
+    resolveFirstB([b])
+    await firstB
+
+    expect(firstProjection).toEqual([])
+    expect(messages.value.map(({ id }) => id)).toEqual(['b1', 'b2'])
+    await ctrl.selectSession('A')
+    expect(messages.value.map(({ id }) => id)).toEqual(['a1'])
+  })
 })

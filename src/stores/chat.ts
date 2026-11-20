@@ -258,6 +258,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     sessions,
     currentSessionId,
+    sessionHistory: sessionController.sessionHistory,
     messages,
     activeStreams,
     streaming,

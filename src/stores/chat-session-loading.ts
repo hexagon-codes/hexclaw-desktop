@@ -1,10 +1,20 @@
-import type { Ref } from 'vue'
+import { computed, shallowRef, type Ref } from 'vue'
 import type { Artifact, ChatMessage, ChatSession } from '@/types'
+import { backendScopeKey } from '@/services/backend-context'
+import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { mergeMessagesById, upsertSession } from './chat-session-helpers'
 import { pruneSessionModels } from './session-model-binding'
 import { getSessionAgent, pruneSessionAgents } from './session-agent-binding'
 import { getSessionDeepThinking, pruneSessionDeepThinking } from './session-thinking-preference'
+
+export type SessionHistoryStatus = 'loading' | 'ready' | 'failed'
+
+type SessionSelection = {
+  sessionId: string
+  generation: number
+  scope: string
+}
 
 export function createChatSessionLoadingController(params: {
   sessions: Ref<ChatSession[]>
@@ -51,16 +61,39 @@ export function createChatSessionLoadingController(params: {
     extractArtifacts,
   } = params
 
-  // 按会话缓存内存中的消息快照（BUG-20260712 #F）：切走会话时存下其当前消息（含乐观/在途、
-  // 后端尚未落库的），切回时与后端历史按 id 合并，避免盲目覆盖抹掉刚发的消息。
   const sessionMessageCache = new Map<string, ChatMessage[]>()
+  const invalidatedHistory = new Map<string, Set<string>>()
+  const history = shallowRef<(SessionSelection & { status: SessionHistoryStatus }) | null>(null)
+  let cacheScope = backendScopeKey()
+
+  function ownsSelection(selection: SessionSelection) {
+    return selection.generation === sessionSelectionGen.value
+      && selection.sessionId === currentSessionId.value && selection.scope === backendScopeKey()
+  }
+
+  const sessionHistory = computed(() => {
+    const read = history.value
+    return read && ownsSelection(read) ? read : null
+  })
+
+  function validCachedMessages(sessionId: string, rows: ChatMessage[]): ChatMessage[] {
+    const invalidated = invalidatedHistory.get(sessionId)
+    return invalidated ? rows.filter((row) => !invalidated.has(backendDeletableMessageId(row))) : rows
+  }
 
   async function selectSession(sessionId: string) {
-    const selectionGen = ++sessionSelectionGen.value
-    // 切走前先把「当前会话」的内存消息快照存入缓存（含尚未落库的乐观消息）。
+    const scope = backendScopeKey()
+    const selection = { sessionId, generation: ++sessionSelectionGen.value, scope }
+    const sameScope = cacheScope === scope
+    const isCurrentSelection = () => ownsSelection(selection)
     const prevId = currentSessionId.value
-    if (prevId && prevId !== sessionId) {
-      sessionMessageCache.set(prevId, messages.value.slice())
+    const changedSession = !sameScope || prevId !== sessionId
+    if (!sameScope) {
+      sessionMessageCache.clear()
+      invalidatedHistory.clear()
+      cacheScope = scope
+    } else if (prevId && changedSession) {
+      sessionMessageCache.set(prevId, validCachedMessages(prevId, messages.value).slice())
     }
     // 会话级 Agent 绑定恢复（BUG-20260708）：切走再切回不再丢失该会话的辅导老师人设 / 场景增强。
     // 无绑定（普通会话）→ agentRole 空、chat 模式，与旧行为一致；有绑定 → agent 模式 + 恢复收件人。
@@ -72,23 +105,38 @@ export function createChatSessionLoadingController(params: {
     thinkingEnabled.value = deepThinking
     hasCustomTitle.value = false
 
+    history.value = { ...selection, status: 'loading' }
     currentSessionId.value = sessionId
+    if (changedSession) {
+      // 选择和消息快照同步交接，后续切换只能缓存目标会话自己的内容。
+      messages.value = validCachedMessages(sessionId, sessionMessageCache.get(sessionId) ?? []).slice()
+      artifacts.value = []
+      selectedArtifactId.value = null
+      showArtifacts.value = false
+      error.value = null
+    }
     syncStreamingMirrors()
-    msgSvc.setLastSessionId(sessionId)
+    // 最近会话是恢复偏好，写入失败时仍要读取用户选中的历史。
+    try {
+      msgSvc.setLastSessionId(sessionId)
+    } catch (errorValue) {
+      logger.warn('保存最近会话失败', errorValue)
+    }
     try {
       const nextMessages = await msgSvc.loadMessages(sessionId)
-      if (selectionGen !== sessionSelectionGen.value) return
-      // 后端历史 ∪ 本地快照（后端权威 + 保留后端尚无的乐观/在途消息），不盲目覆盖（#F）。
-      messages.value = mergeMessagesById(nextMessages, sessionMessageCache.get(sessionId) ?? [])
+      if (!isCurrentSelection()) return
+      // 读取过程中新增的同会话消息可能尚未落库，和权威历史按身份合并。
+      messages.value = mergeMessagesById(nextMessages, validCachedMessages(sessionId, messages.value))
+      invalidatedHistory.delete(sessionId)
+      history.value = { ...selection, status: 'ready' }
     } catch (errorValue) {
-      if (selectionGen !== sessionSelectionGen.value) return
+      if (!isCurrentSelection()) return
+      history.value = { ...selection, status: 'failed' }
       logger.warn('加载消息历史失败', errorValue)
-      // 加载失败也不清空：回退到本地缓存快照，避免刚发的消息因一次网络抖动消失。
-      messages.value = sessionMessageCache.get(sessionId) ?? []
     }
     try {
       const persisted = await msgSvc.loadArtifacts(sessionId)
-      if (selectionGen !== sessionSelectionGen.value) return
+      if (!isCurrentSelection()) return
       if (persisted.length > 0) {
         artifacts.value = persisted
       } else {
@@ -100,16 +148,34 @@ export function createChatSessionLoadingController(params: {
         }
       }
     } catch {
-      if (selectionGen !== sessionSelectionGen.value) return
+      if (!isCurrentSelection()) return
       artifacts.value = []
     }
-    if (selectionGen !== sessionSelectionGen.value) return
+    if (!isCurrentSelection()) return
     selectedArtifactId.value = null
     showArtifacts.value = false
     error.value = null
   }
 
+  async function refreshReplacedHistory(sessionId: string, requestId?: string) {
+    if (cacheScope !== backendScopeKey()) return
+    const visible = currentSessionId.value === sessionId
+    const previous = visible ? messages.value : (sessionMessageCache.get(sessionId) ?? [])
+    // 失效持续到该会话成功读回，避免切走时再次把待替换的历史写进缓存。
+    const invalidated = invalidatedHistory.get(sessionId) ?? new Set<string>()
+    for (const message of previous) invalidated.add(backendDeletableMessageId(message))
+    invalidatedHistory.set(sessionId, invalidated)
+    sessionMessageCache.delete(sessionId)
+    if (!visible) return
+    if (requestId) {
+      const replaced = `${requestId}:assistant`
+      messages.value = messages.value.filter((message) => backendDeletableMessageId(message) !== replaced)
+    }
+    await selectSession(sessionId)
+  }
+
   async function loadSessions(opts?: { suppressAutoSelect?: boolean }) {
+    const scope = backendScopeKey()
     try {
       // Vitest's module proxy throws when an omitted export is read directly.
       // Check ownership before reading the optional compatibility API so older
@@ -121,7 +187,7 @@ export function createChatSessionLoadingController(params: {
       // 冷启动 sidecar 尚未就绪时，旧 loadAllSessions 会把请求失败压成 []。失败不是
       // “后端权威确认零会话”：此时既不能清空当前列表，也不能 prune 会话级模型/Agent/
       // 深度思考绑定，否则 sidecar-ready 后虽能补回会话，稳定身份（图标/固定置顶）已经丢失。
-      if (!loadResult.succeeded) return
+      if (!loadResult.succeeded || scope !== backendScopeKey()) return
       const loadedSessions = loadResult.sessions
       let nextSessions = loadedSessions
       // Preserve local title for sessions with a pending auto-title sync
@@ -159,9 +225,12 @@ export function createChatSessionLoadingController(params: {
         !ensureSessionPromise.value &&
         sessions.value.length > 0
       ) {
+        const selectionGen = sessionSelectionGen.value
         try {
           const lastId = await msgSvc.getLastSessionId()
-          if (lastId && sessions.value.some((session) => session.id === lastId)) {
+          if (selectionGen === sessionSelectionGen.value && scope === backendScopeKey()
+            && !currentSessionId.value && !ensureSessionPromise.value
+            && lastId && sessions.value.some((session) => session.id === lastId)) {
             await selectSession(lastId)
           }
         } catch {

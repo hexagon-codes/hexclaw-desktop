@@ -93,6 +93,7 @@ import MessageFooter from '@/components/chat/MessageFooter.vue'
 import PdfAttachmentCard from '@/components/chat/PdfAttachmentCard.vue'
 import { messageFileAttachments } from '@/utils/message-pdf-attachments'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import ChatHistoryStatus from '@/components/chat/ChatHistoryStatus.vue'
 import { useConversationScrollCoordinator } from '@/composables/useConversationScrollCoordinator'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
@@ -1615,6 +1616,16 @@ const isChatEmpty = computed(
   () =>
     chatStore.messages.length === 0 && !chatStore.isCurrentStreaming && !scenarioInlineActive.value,
 )
+const historyPlaceholder = computed(() => isChatEmpty.value ? chatStore.sessionHistory : null)
+const showDraftWelcome = computed(() => isChatEmpty.value && !historyPlaceholder.value)
+
+function retrySessionHistory() {
+  const history = historyPlaceholder.value
+  if (history?.status !== 'failed') return
+  messagesContainerRef.value?.focus({ preventScroll: true })
+  void chatStore.selectSession(history.sessionId)
+}
+
 const scenarioComposerPlaceholder = computed(() => {
   const key = scenarioCtx.value?.descriptor.composer?.placeholderKey
   return key ? t(key) : undefined
@@ -3527,7 +3538,7 @@ function startSidebarResize(event: MouseEvent) {
     <!-- Main chat area -->
     <div
       class="hc-chat__main"
-      :data-chat-canvas="isChatEmpty ? 'empty' : 'conversation'"
+      :data-chat-canvas="showDraftWelcome ? 'empty' : 'conversation'"
       @dragover.prevent="isDragging = true"
       @dragleave.prevent="isDragging = false"
       @drop.prevent="handleDrop"
@@ -3579,13 +3590,21 @@ function startSidebarResize(event: MouseEvent) {
         v-show="!(scenarioCtx && scenarioRecordsActive)"
         ref="messagesContainerRef"
         class="hc-chat__messages"
+        :class="{ 'hc-chat__messages--history': historyPlaceholder }"
+        :tabindex="historyPlaceholder ? -1 : undefined"
         @scroll="handleMessagesScroll"
         :data-image-preview-group="chatStore.currentSessionId || 'draft-chat'"
         @wheel.passive="markMessagesUserIntent"
         @touchstart.passive="markMessagesUserIntent"
         @pointerdown="markMessagesUserIntent"
       >
-        <div v-if="isChatEmpty" class="hc-chat__empty">
+        <ChatHistoryStatus
+          v-if="historyPlaceholder"
+          :key="historyPlaceholder.generation"
+          :status="historyPlaceholder.status"
+          @retry="retrySessionHistory"
+        />
+        <div v-else-if="showDraftWelcome" class="hc-chat__empty">
           <EmptyState
             :icon="MessageSquarePlus"
             :title="scenarioEmptyState ? t(scenarioEmptyState.titleKey) : t('chat.startChat')"
@@ -4819,6 +4838,12 @@ body[data-k12-skin-active='k12'] .hc-chat__main :deep(.hc-composer__box--primary
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px 10px;
+}
+
+.hc-chat__messages--history {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
 
 /* ─── Scroll-to-bottom 按钮（ChatGPT 风格 · 磨玻璃材质 · 输入框正上方居中） ─────
