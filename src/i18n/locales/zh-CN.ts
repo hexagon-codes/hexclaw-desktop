@@ -327,6 +327,7 @@ export default {
       },
     },
     assistantRun: {
+      outcomeUnconfirmed: '结果待核实',
       generating: '正在回复…',
       preparing: '正在回复…',
       thinking: '正在深度思考 · {duration}',

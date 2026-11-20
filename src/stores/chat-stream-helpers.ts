@@ -23,6 +23,7 @@ import { isDegenerateTail, trimDegenerateTail } from '@/utils/degeneration'
 import { backendScopeKey } from '@/services/backend-context'
 
 export type SessionStreamState = {
+  regenerateFromMessageId?: string
   sessionId: string
   requestId: string
   source?: ActiveStreamSnapshot['source']
@@ -76,6 +77,7 @@ export function buildLiveAssistantMessageId(requestId: string): string {
 export function buildSessionStreamState(args: {
   sessionId: string
   requestId: string
+  regenerateFromMessageId?: string
   thinkingEnabled: boolean
   reasoningSupport?: ModelReasoningSupport
   requestRoute?: { provider?: string; model?: string }
@@ -97,6 +99,7 @@ export function buildSessionStreamState(args: {
   return {
     sessionId: args.sessionId,
     requestId: args.requestId,
+    ...(args.regenerateFromMessageId ? { regenerateFromMessageId: args.regenerateFromMessageId } : {}),
     ...(requestRoute ? { requestRoute } : {}),
     assistantMessageId: buildLiveAssistantMessageId(args.requestId),
     assistantMessageAliases: [],
@@ -469,6 +472,8 @@ export function buildRecoveredStreamState(
   return {
     sessionId,
     requestId: snapshot.request_id,
+    ...(typeof metadata.regenerate_from_message_id === 'string' && metadata.regenerate_from_message_id
+      ? { regenerateFromMessageId: metadata.regenerate_from_message_id } : {}),
     ...(snapshot.source ? { source: snapshot.source } : {}),
     assistantMessageId: frontendAssistantMessageId,
     canonicalAssistantMessageId: canonicalAssistantMessageId !== frontendAssistantMessageId

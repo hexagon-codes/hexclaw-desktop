@@ -77,25 +77,20 @@ describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
     expect(fnBody).toContain('return')
   })
 
-  it('handleRetry checks chatStore.chatParams.model before deleting', () => {
+  it('handleRetry does not delete the original turn before regeneration', () => {
     const fnStart = src.indexOf('async function handleRetry')
     const fnEnd = src.indexOf('async function handleLike')
     const fnBody = src.slice(fnStart, fnEnd)
-    const delPos = fnBody.indexOf('removeRangeAtomic(')
-    const modelCheckPos = fnBody.indexOf('chatStore.chatParams.model')
-    // Model check must appear before the atomic delete
-    expect(modelCheckPos).toBeGreaterThan(-1)
-    expect(delPos).toBeGreaterThan(-1)
-    expect(modelCheckPos).toBeLessThan(delPos)
+    expect(fnBody).not.toContain('removeRangeAtomic(')
+    expect(fnBody).toContain('regenerateFromMessageId: sourceMessageId')
   })
 
-  it('handleRetry returns early when model is empty string', () => {
+  it('handleRetry delegates the original model selection to the stored turn', () => {
     const fnStart = src.indexOf('async function handleRetry')
     const fnEnd = src.indexOf('async function handleLike')
     const fnBody = src.slice(fnStart, fnEnd)
-    // Should check model and return
-    expect(fnBody).toMatch(/model\s*!==\s*undefined/)
-    expect(fnBody).toContain('return')
+    expect(fnBody).not.toContain('chatStore.chatParams.model')
+    expect(fnBody).toContain('targetSessionId: sessionId')
   })
 })
 
@@ -188,8 +183,8 @@ describe('BUG 9: retry atomic delete and edit immutable submission (AP-094)', ()
     expect(body).toContain('return false') // 中止重发，杜绝重复
   })
 
-  it('handleRetry 与 confirmEdit 都以删除结果为重发门禁（本会话替换）', () => {
-    expect(src).toContain('if (!(await removeRangeAtomic(userMsgIdx))) return')
+  it('重新生成委托后端原子替换，编辑仍以现有删除结果为提交门禁', () => {
+    expect(src).toContain('regenerateFromMessageId: sourceMessageId')
     const fnStart = src.indexOf('async function confirmEdit')
     const fnEnd = src.indexOf('\n  function cancelEdit', fnStart)
     const fnBody = src.slice(fnStart, fnEnd)
@@ -360,6 +355,7 @@ function makeMockChatStore(overrides: {
     thinkingEnabled: false,
     streaming: false,
     chatParams: { model: overrides.model ?? '' },
+    sendMessage: vi.fn().mockResolvedValue(null),
     setMessageFeedback: vi.fn().mockResolvedValue(null),
     loadSessions: vi.fn().mockResolvedValue(undefined),
     selectSession: vi.fn<(sessionId: string) => Promise<void>>(),
@@ -520,7 +516,7 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
   })
 })
 
-describe('useChatActions runtime: handleRetry model guard', () => {
+describe('useChatActions runtime: handleRetry keeps original source', () => {
   let mockHandleSend: (text: string, files?: File[]) => Promise<boolean>
 
   beforeEach(() => {
@@ -528,7 +524,7 @@ describe('useChatActions runtime: handleRetry model guard', () => {
     mockHandleSend = vi.fn().mockResolvedValue(true)
   })
 
-  it('handleRetry with no model -> messages NOT spliced, returns early', async () => {
+  it('regenerates the original route when the new composer has no model selected', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'bad reply', timestamp: '2025-01-01T00:00:01Z' },
@@ -539,12 +535,12 @@ describe('useChatActions runtime: handleRetry model guard', () => {
 
     await handleRetry(1) // index of assistant message
 
-    // Messages should NOT be spliced
     expect(messages).toHaveLength(2)
     expect(mockHandleSend).not.toHaveBeenCalled()
+    expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith('', undefined, { targetSessionId: 'source-session', regenerateFromMessageId: 'u1' })
   })
 
-  it('handleRetry with valid model -> messages spliced, handleSend called', async () => {
+  it('regenerates using the persisted source while leaving the existing turn visible', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'bad reply', timestamp: '2025-01-01T00:00:01Z' },
@@ -555,9 +551,9 @@ describe('useChatActions runtime: handleRetry model guard', () => {
 
     await handleRetry(1)
 
-    // Messages SHOULD be spliced (user + assistant removed)
-    expect(messages).toHaveLength(0)
-    expect(mockHandleSend).toHaveBeenCalledWith('hello')
+    expect(messages).toHaveLength(2)
+    expect(mockHandleSend).not.toHaveBeenCalled()
+    expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith('', undefined, { targetSessionId: 'source-session', regenerateFromMessageId: 'u1' })
   })
 
   it('handleRetry on non-assistant message -> returns early, no splice', async () => {
@@ -600,11 +596,12 @@ describe('useChatActions runtime: handleRetry model guard', () => {
 
     await handleRetry(1)
 
-    expect(messages).toHaveLength(0)
-    expect(mockHandleSend).toHaveBeenCalledWith('test')
+    expect(messages).toHaveLength(2)
+    expect(mockHandleSend).not.toHaveBeenCalled()
+    expect(store.sendMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('handleRetry with whitespace-only model -> returns early', async () => {
+  it('does not use the composer model when the source is already persisted', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
@@ -617,6 +614,7 @@ describe('useChatActions runtime: handleRetry model guard', () => {
 
     expect(messages).toHaveLength(2)
     expect(mockHandleSend).not.toHaveBeenCalled()
+    expect(store.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('handleRetry out-of-bounds index -> returns early', async () => {

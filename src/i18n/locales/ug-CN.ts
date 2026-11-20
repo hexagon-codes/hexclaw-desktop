@@ -344,6 +344,7 @@ export default {
       },
     },
     assistantRun: {
+      outcomeUnconfirmed: 'نەتىجە تېخى دەلىللەنمىدى',
       generating: 'جاۋاب ھاسىللىنىۋاتىدۇ…',
       preparing: 'جاۋاب تەييارلىنىۋاتىدۇ…',
       thinking: 'چوڭقۇر ئويلىنىۋاتىدۇ · {duration}',

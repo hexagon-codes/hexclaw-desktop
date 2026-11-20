@@ -4,6 +4,8 @@ import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import type { PromptInvocation } from '@/api/prompts'
 import type { ChatPayloadLimitError } from '@/services/chatService'
+import { backendScopeKey } from '@/services/backend-context'
+import { getVersion } from '@/api/system'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -32,6 +34,8 @@ export interface ChatSendOptions {
    * 因而不能从全局 currentSessionId 推断写入目标。
    */
   targetSessionId?: string
+  /** 仅指向同一会话原持久用户消息，服务端原子替换该轮回复。 */
+  regenerateFromMessageId?: string
   /** 编辑确认时冻结的源会话路由；存在时不得重新读取可变全局模型状态。 */
   routeSnapshot?: ChatRouteSnapshot
 }
@@ -61,7 +65,7 @@ export function createChatSendController(params: {
   refreshSendingState: (sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   setLocalSessionTitle: (sessionId: string, title: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
-  pendingAutoTitleSync: Map<string, Promise<void>>
+  pendingAutoTitleSync: Map<string, Promise<string>>
   persistMessage: (message: ChatMessage, sessionId: string) => Promise<boolean>
   upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
   seedRecoveredStream: (sessionId: string, snapshot: import('@/api/chat').ActiveStreamSnapshot) => void
@@ -155,12 +159,15 @@ export function createChatSendController(params: {
     attachments?: ChatAttachment[],
     options?: ChatSendOptions,
   ): Promise<ChatMessage | null> {
+    const scope = backendScopeKey()
     let claimedSessionId: string | null = null
-    let claimedStreamState: import('./chat-stream-helpers').SessionStreamState | undefined
+    let claimedRequestId: string | undefined
     const directedSessionId = options?.targetSessionId?.trim() || null
+    const regenerateFromMessageId = options?.regenerateFromMessageId?.trim()
+    if (regenerateFromMessageId && !directedSessionId) throw new Error('Chat regeneration requires the original session')
     const initialSessionId = directedSessionId ?? currentSessionId.value
-    const projectsIntoCurrentSession = !directedSessionId
-      || directedSessionId === currentSessionId.value
+    const projectsIntoCurrentSession = !regenerateFromMessageId
+      && (!directedSessionId || directedSessionId === currentSessionId.value)
     const shouldSeedAutoTitle = !directedSessionId && shouldSeedChatAutoTitle({
         hasCustomTitle: hasCustomTitle.value,
         initialSessionId,
@@ -225,6 +232,7 @@ export function createChatSendController(params: {
       // 因而只投递到显式目标，不污染当前会话的消息数组。
       if (projectsIntoCurrentSession) messages.value.push(userMessage)
       const sessionId = directedSessionId ?? await ensureSession()
+      if (scope !== backendScopeKey()) return null
       // 消息保存后按持久身份读取原图；保存前仅借用同一上传回执。
       if (attachments?.some((attachment) => attachment.type === 'image' && attachment.attachmentId)) {
         attachments = attachments.map((attachment, index) => attachment.type === 'image' && attachment.attachmentId
@@ -250,7 +258,7 @@ export function createChatSendController(params: {
       }
 
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
-      void persistMessage(userMessage, sessionId).catch(() => {})
+      if (!regenerateFromMessageId) void persistMessage(userMessage, sessionId).catch(() => {})
       // BUG-20260704：在 await Auto-RAG 之前就把本会话置为 pending，让 assistant 挂起气泡
       // （ChatView showAssistantPending 依赖 sending）随用户气泡即时上屏；否则用户要等
       // Auto-RAG(≤AUTO_RAG_BUDGET_MS 1.2s)+WS 连接完成、deliverMessage 才置 pending，
@@ -266,21 +274,28 @@ export function createChatSendController(params: {
         requestRoute: samplingSnapshot.chatParams,
         agentDisplayName: samplingSnapshot.agentDisplayName,
         recipientDisplayName: samplingSnapshot.recipientDisplayName,
+        regenerateFromMessageId,
       })
       upsertStreamState(sessionId, streamState)
       claimedSessionId = sessionId
-      claimedStreamState = streamState
+      claimedRequestId = requestId
       setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
-      const backendText =
+      if (regenerateFromMessageId) {
+        const version = await getVersion()
+        if (version.chat_regenerate !== 'atomic_replace_v1') throw new Error('This backend does not support atomic chat regeneration')
+      }
+      const backendText = regenerateFromMessageId ? '' : (
         (typeof options?.backendText === 'function'
           ? await options.backendText()
-          : options?.backendText) ?? text
+          : options?.backendText) ?? text)
+      if (scope !== backendScopeKey()) return null
       const result = await deliveryController.deliverMessage({
         backendText,
         sessionId,
         attachments,
         requestId,
+        regenerateFromMessageId,
         sending,
         draftSending,
         skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
@@ -293,12 +308,15 @@ export function createChatSendController(params: {
       return result
     } catch (sendError) {
       // claim 建立后的异常统一进入既有错误投影，以同一请求身份终结并释放发送状态。
-      if (claimedSessionId && claimedStreamState) {
-        handleSendError(
-          sendError,
-          claimedSessionId,
-          activeStreams.value[claimedSessionId] ?? claimedStreamState,
-        )
+      if (claimedSessionId && claimedRequestId) {
+        const claimedStream = activeStreams.value[claimedSessionId]
+        if (scope === backendScopeKey() && claimedStream?.requestId === claimedRequestId) {
+          if (regenerateFromMessageId) {
+            resetSessionStream(claimedSessionId, sending, draftSending)
+            throw sendError
+          }
+          handleSendError(sendError, claimedSessionId, claimedStream)
+        }
         return null
       }
       throw sendError

@@ -22,7 +22,8 @@ export function createChatSessionController(params: ChatSessionControllerParams)
     sessions.value = bumpSession(sessions.value, sessionId)
   }
 
-  function setLocalSessionTitle(sessionId: string, title: string) {
+  function setLocalSessionTitle(sessionId: string, title: string, expectedTitle?: string) {
+    if (expectedTitle !== undefined && sessions.value.find((session) => session.id === sessionId)?.title !== expectedTitle) return
     sessions.value = setSessionTitle(sessions.value, sessionId, title)
   }
 

@@ -26,6 +26,7 @@ export function createChatStreamErrorController(params: {
     draftSending?: Ref<boolean>,
   ) => void
   loadSessions: (opts?: { suppressAutoSelect?: boolean }) => Promise<void>
+  refreshReplacedHistory?: (sessionId: string, requestId?: string) => Promise<void>
   persistErrorReply: (sessionId: string, message: ChatMessage) => void | Promise<void>
   finalizeAssistantMessage?: ReturnType<typeof createChatStreamCompletionController>['finalizeAssistantMessage']
 }) {
@@ -38,6 +39,7 @@ export function createChatStreamErrorController(params: {
     appendMessageToSession,
     resetSessionStream,
     loadSessions,
+    refreshReplacedHistory,
     persistErrorReply,
     finalizeAssistantMessage,
   } = params
@@ -49,15 +51,20 @@ export function createChatStreamErrorController(params: {
     draftSending: Ref<boolean>,
     streamState?: SessionStreamState,
   ) {
-    const apiError = fromNativeError(errorValue)
-    logger.error('发送消息失败', { code: apiError.code, message: apiError.message, status: apiError.status })
-    error.value = apiError
     const projection = (errorValue as { result?: WebSocketStreamResult } | null)?.result
     const projectionSessionId = typeof projection?.metadata?.session_id === 'string'
       && projection.metadata.session_id.trim() ? projection.metadata.session_id : undefined
     const targetSessionId = (sessionId === '' && projectionSessionId ? projectionSessionId : sessionId)
       ?? (streamState?.sessionId || projectionSessionId)
       ?? streamingSessionId.value ?? currentSessionId.value
+    if (projection?.superseded && targetSessionId) {
+      resetSessionStream(targetSessionId, sending, draftSending)
+      void refreshReplacedHistory?.(targetSessionId, streamState?.requestId)
+      return
+    }
+    const apiError = fromNativeError(errorValue)
+    logger.error('发送消息失败', { code: apiError.code, message: apiError.message, status: apiError.status })
+    error.value = apiError
     if (projection && targetSessionId && finalizeAssistantMessage) {
       const message = finalizeAssistantMessage({
         content: projection.messageContent?.markdown

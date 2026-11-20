@@ -55,6 +55,8 @@ export interface RuntimeWireSnapshot {
 }
 
 export interface ChatMessageMetadata extends Record<string, unknown> {
+  /** 客户端已释放观察，后台执行结果仍无可信终态。 */
+  outcome_unconfirmed?: true
   /** 服务端成功加载的 Skill 快照 JSON；原值随消息持久化，不从目录追补。 */
   skill_context_receipts?: string
   thinking_state?: ThinkingState
@@ -632,6 +634,8 @@ export type ContentBlock =
 /** 聊天消息 */
 export interface ChatMessage {
   id: string
+  session_id?: string
+  request_id?: string
   role: 'user' | 'assistant' | 'system'
   content: string
   /** v0.5.0 canonical Markdown/LaTeX envelope; content remains the legacy fallback. */

@@ -1,6 +1,7 @@
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { Ref } from 'vue'
 import type { Artifact, ChatMessage } from '@/types'
+import { backendScopeKey } from '@/services/backend-context'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { clearSessionModel } from './session-model-binding'
 import { clearSessionAgent } from './session-agent-binding'
@@ -59,6 +60,7 @@ export function createChatSessionLifecycleController(params: {
     // U2：bump 代际使任何在途 selectSession 失效——否则慢网下已发起的旧会话加载
     // 晚到会把旧消息灌进这个空白新会话（currentSessionId 却为 null 的幽灵消息）。
     sessionSelectionGen.value++
+    ensureSessionPromise.value = null
     currentSessionId.value = null
     messages.value = []
     artifacts.value = []
@@ -73,40 +75,50 @@ export function createChatSessionLifecycleController(params: {
   async function ensureSession(): Promise<string> {
     if (currentSessionId.value) return currentSessionId.value
     if (ensureSessionPromise.value) return ensureSessionPromise.value
-    ensureSessionPromise.value = (async () => {
+    const selectionGen = sessionSelectionGen.value
+    const scope = backendScopeKey()
+    const creation = (async () => {
       const id = createId()
       const now = new Date().toISOString()
       const initialTitle = pendingSessionTitle.value || DEFAULT_SESSION_TITLE
+      let created = false
       try {
         await msgSvc.createSession(id, initialTitle)
-        pendingSessionTitle.value = null
+        created = true
       } catch (errorValue) {
         logger.warn('创建会话失败', errorValue)
       }
-      currentSessionId.value = id
-      // 新会话一经创建就已经是当前会话；即使尚未发送首条消息，也必须成为重载恢复目标。
-      // 否则 Agent/FTUE 深链预创建的空会话刷新后会停在无选中态，连带丢失会话绑定与场景 UI。
-      msgSvc.setLastSessionId(id)
-      syncStreamingMirrors()
-      upsertLocalSession({
-        id,
-        title: initialTitle,
-        created_at: now,
-        updated_at: now,
-        message_count: 0,
-      }, true)
+      if (scope !== backendScopeKey()) return id
+      const ownsSelection = selectionGen === sessionSelectionGen.value && currentSessionId.value === null
+      if (ownsSelection) {
+        if (created) pendingSessionTitle.value = null
+        currentSessionId.value = id
+        msgSvc.setLastSessionId(id)
+        syncStreamingMirrors()
+      }
+      // 迟到的新建回执仍供原调用继续使用，不能替换新的当前会话或草稿标题。
+      if (created || ownsSelection) {
+        upsertLocalSession({
+          id,
+          title: initialTitle,
+          created_at: now,
+          updated_at: now,
+          message_count: 0,
+        }, true)
+      }
       return id
     })()
+    ensureSessionPromise.value = creation
     try {
-      return await ensureSessionPromise.value
+      return await creation
     } finally {
-      ensureSessionPromise.value = null
+      if (ensureSessionPromise.value === creation) ensureSessionPromise.value = null
     }
   }
 
   async function deleteSession(sessionId: string) {
     // U2：bump 代际使针对被删会话的在途 selectSession 失效（防旧消息晚到写回已删会话）。
-    sessionSelectionGen.value++
+    if (currentSessionId.value === sessionId) sessionSelectionGen.value++
     let cancelMarkerSet = false
     try {
       if (pendingSessionIds.value[sessionId] || isSessionStreaming(sessionId)) {

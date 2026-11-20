@@ -519,6 +519,7 @@ describe('CHAT-DEEP-THINK-PROGRESS-001 lifecycle data contract', () => {
     const persistCancelled = vi.fn()
     const activeStreams = ref({ s1: streamState() })
     const controller = createChatStreamCancelController({
+      pendingSessionIds: ref({}),
       activeStreams,
       currentSessionId: ref('s1'),
       messages: ref([]),

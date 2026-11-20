@@ -4,6 +4,7 @@ import { persistErrorReply } from '@/services/messageService'
 import { createBoundChatStreamController } from '../chat-stream-bound-controller'
 import { createChatSendDeliveryController } from '../chat-send-delivery-controller'
 import { createChatStreamErrorController } from '../chat-stream-error'
+import { buildSessionStreamState } from '../chat-stream-helpers'
 
 const apiMocks = vi.hoisted(() => ({
   appendSessionMessage: vi.fn().mockResolvedValue({}),
@@ -41,7 +42,9 @@ describe('BUG-20260802-017 chunk idle request identity', () => {
     const sessionId = 'session-chunk-idle'
     const requestId = 'request-chunk-idle'
     const idleFailure = deferred<never>()
-    const activeStreams = ref<Record<string, any>>({})
+    const activeStreams = ref<Record<string, ReturnType<typeof buildSessionStreamState>>>({
+      [sessionId]: buildSessionStreamState({ sessionId, requestId, thinkingEnabled: false }),
+    })
     const appendedMessages: any[] = []
     let streamCallbacks:
       | {

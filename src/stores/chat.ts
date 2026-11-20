@@ -101,9 +101,11 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   let loadSessionsAction: () => Promise<void> = async () => {}
+  let refreshReplacedHistoryAction: (sessionId: string, requestId?: string) => Promise<void> = async () => {}
   let setLocalSessionTitleAction: (sessionId: string, title: string) => void = () => {}
   let setPendingSuggestedTitleExpectationAction: (sessionId: string, expectedTitle: string | null) => void = () => {}
   let bumpLocalSessionAction: (sessionId: string) => void = () => {}
+  let projectObservedMessageAction: ReturnType<typeof createChatSessionController>['projectObservedMessage'] = () => {}
 
   const streamController = createChatStreamController({
     activeStreams,
@@ -126,10 +128,12 @@ export const useChatStore = defineStore('chat', () => {
     logger,
     createId: nanoid,
     loadSessions: () => loadSessionsAction(),
+    refreshReplacedHistory: (sessionId, requestId) => refreshReplacedHistoryAction(sessionId, requestId),
     setLocalSessionTitle: (sessionId, title) => setLocalSessionTitleAction(sessionId, title),
     setPendingSuggestedTitleExpectation: (sessionId, expectedTitle) =>
       setPendingSuggestedTitleExpectationAction(sessionId, expectedTitle),
     bumpLocalSession: (sessionId) => bumpLocalSessionAction(sessionId),
+    projectObservedMessage: (...args) => projectObservedMessageAction(...args),
     extractArtifacts: artifactController.extractArtifacts,
     storePendingApproval: approvalController.storePendingApproval,
     listActiveStreams: async () => {
@@ -197,9 +201,11 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   loadSessionsAction = sessionController.loadSessions
+  refreshReplacedHistoryAction = sessionController.refreshReplacedHistory
   setLocalSessionTitleAction = sessionController.setLocalSessionTitle
   setPendingSuggestedTitleExpectationAction = sessionController.setPendingSuggestedTitleExpectation
   bumpLocalSessionAction = sessionController.bumpLocalSession
+  projectObservedMessageAction = sessionController.projectObservedMessage
 
   const sendController = createChatSendController({
     currentSessionId,

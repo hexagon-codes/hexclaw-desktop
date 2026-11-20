@@ -432,7 +432,10 @@ const ctxMsgRole = ref<'user' | 'assistant'>('user')
 const msgContextItems = computed<ContextMenuItem[]>(() => {
   const items: ContextMenuItem[] = [{ id: 'copy', label: t('chat.copyMessage'), icon: undefined }]
   if (ctxMsgRole.value === 'assistant') {
-    items.push({ id: 'retry', label: t('chat.regenerate'), icon: undefined })
+    const index = chatStore.messages.findIndex(({ id }) => id === ctxMsgId.value)
+    if (!chatStore.messages[index]?.metadata?.outcome_unconfirmed_on_disconnect) {
+      items.push({ id: 'retry', label: t('chat.regenerate'), icon: undefined, disabled: blockedRegeneration(index) })
+    }
   } else {
     items.push({ id: 'edit', label: t('chat.editMessage'), icon: undefined })
   }
@@ -2867,6 +2870,7 @@ const {
   editingMsgId,
   editingText,
   handleRetry,
+  blockedRegeneration,
   handleFork,
   handleLike,
   handleDislike,
@@ -3693,7 +3697,7 @@ function startSidebarResize(event: MouseEvent) {
                     :reports="subAgentReportsByMsg.get(msg.id)!"
                   />
                   <div
-                    v-if="!isLiveAssistantMessage(msg) || Boolean(msg.content.trim())"
+                    v-if="(!isLiveAssistantMessage(msg) && !msg.metadata?.outcome_unconfirmed) || Boolean(msg.content.trim())"
                     class="hc-msg__bubble-wrap"
                   >
                     <div
@@ -3975,7 +3979,8 @@ function startSidebarResize(event: MouseEvent) {
                         role="assistant"
                         :content="msg.content"
                         :feedback="messageFeedbackValue(msg)"
-                        :retry-disabled="isLiveAssistantMessage(msg)"
+                        :show-retry="!msg.metadata?.outcome_unconfirmed_on_disconnect"
+                        :retry-disabled="isLiveAssistantMessage(msg) || blockedRegeneration(windowOffset + idx)"
                         @retry="handleRetry(windowOffset + idx)"
                         @fork="handleFork(windowOffset + idx)"
                         @like="handleLike(msg.id)"

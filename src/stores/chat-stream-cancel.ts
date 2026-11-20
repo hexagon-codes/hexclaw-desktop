@@ -12,6 +12,7 @@ type MessageServiceModule = typeof import('@/services/messageService')
 
 export function createChatStreamCancelController(params: {
   activeStreams: Ref<Record<string, SessionStreamState>>
+  pendingSessionIds: Ref<Record<string, boolean>>
   currentSessionId: Ref<string | null>
   messages: Ref<ChatMessage[]>
   streaming: Ref<boolean>
@@ -35,6 +36,7 @@ export function createChatStreamCancelController(params: {
 }) {
   const {
     activeStreams,
+    pendingSessionIds,
     currentSessionId,
     messages,
     streaming,
@@ -61,8 +63,13 @@ export function createChatStreamCancelController(params: {
     const current = activeStreams.value[sessionId]
     if (!current) return false
 
-    // 停止只请求后台取消；原句柄继续观察同一请求的真实终态。
     const handle = streamHandles.get(sessionId)
+    if (!handle && pendingSessionIds.value[sessionId]) {
+      // 未取得私有句柄，撤回本次派发占位，无需向后端发送取消。
+      resetSessionStream(sessionId, sending, draftSending)
+      return true
+    }
+    // 已派发只请求后台取消，原句柄继续观察同一请求的真实终态。
     if (handle) handle.cancel()
     else sendCancel(sessionId)
     if (!preservePartial) resetSessionStream(sessionId, sending, draftSending)

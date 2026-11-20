@@ -327,6 +327,7 @@ export default {
       },
     },
     assistantRun: {
+      outcomeUnconfirmed: 'Outcome unconfirmed',
       generating: 'Responding…',
       preparing: 'Responding…',
       thinking: 'Deep thinking · {duration}',

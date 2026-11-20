@@ -10,7 +10,9 @@ import {
 } from '@/types/chat'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
+import { freezeProcessAnswer } from '@/utils/assistant-process'
 import { getStreamThinkingDuration, type SessionStreamState } from './chat-stream-helpers'
+import { backendScopeKey } from '@/services/backend-context'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -24,16 +26,17 @@ export function hasPersistedAssistantReply(metadata: Record<string, unknown> | u
 export function createChatStreamCompletionController(params: {
   activeStreams: Ref<Record<string, SessionStreamState>>
   pendingSuggestedTitleExpectation: Ref<Record<string, string>>
-  pendingAutoTitleSync: Map<string, Promise<void>>
+  pendingAutoTitleSync: Map<string, Promise<string>>
   currentSessionId: Ref<string | null>
   msgSvc: MessageServiceModule
   createId: () => string
   loadSessions: (opts?: { suppressAutoSelect?: boolean }) => Promise<void>
-  setLocalSessionTitle: (sessionId: string, title: string) => void
+  setLocalSessionTitle: (sessionId: string, title: string, expectedTitle?: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
   bumpLocalSession: (sessionId: string) => void
   extractArtifacts: (content: string, messageId: string) => void
   appendMessageToSession: (sessionId: string, message: ChatMessage) => void
+  projectObservedMessage?: (sessionId: string, message: ChatMessage, regenerateFromMessageId?: string) => void
   resetSessionStream: (
     sessionId?: string | null,
     sending?: Ref<boolean>,
@@ -53,6 +56,7 @@ export function createChatStreamCompletionController(params: {
     bumpLocalSession,
     extractArtifacts,
     appendMessageToSession,
+    projectObservedMessage,
     resetSessionStream,
   } = params
 
@@ -69,6 +73,8 @@ export function createChatStreamCompletionController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
     terminalState?: 'completed' | 'failed' | 'cancelled'
+    outcomeUnconfirmed?: true
+    regenerateFromMessageId?: string
   }): ChatMessage {
     const parsed = extractThinkTags(args.content || '')
     const finalContent = parsed.content
@@ -171,7 +177,7 @@ export function createChatStreamCompletionController(params: {
       || args.toolCalls?.length
       || args.blocks?.length
     )
-    const terminalState = args.terminalState ?? (
+    const terminalState = args.outcomeUnconfirmed ? undefined : args.terminalState ?? (
       reasoningReceipt.reasoning_request === 'on' && !hasDeliverableOutput ? 'failed' : 'completed'
     )
     const normalizedRuntimeMetadata = normalizeRuntimeSnapshotMetadata(
@@ -181,13 +187,20 @@ export function createChatStreamCompletionController(params: {
       reasoningReceipt.reasoning_request,
     )
     const finalMetadata = normalizeThinkingMetadata(normalizedRuntimeMetadata, finalReasoning, terminalState)
+    if (args.outcomeUnconfirmed && finalMetadata) {
+      delete finalMetadata.backend_message_id
+      delete finalMetadata.thinking_state
+      finalMetadata.request_id = streamState?.requestId
+      if (args.regenerateFromMessageId) finalMetadata.regenerate_from_message_id = args.regenerateFromMessageId
+      finalMetadata.outcome_unconfirmed = true
+    }
 
     const assistantMessage: ChatMessage = {
       id: streamState?.assistantMessageId
         || normalizedRuntimeMetadata.assistant_message_id
         || createId(),
       role: 'assistant',
-      content: (args.messageContent && !finalContent.trim())
+      content: args.outcomeUnconfirmed ? finalContent : (args.messageContent && !finalContent.trim())
         || ((terminalState === 'failed' || terminalState === 'cancelled') && !hasDeliverableOutput)
         ? ''
         : getAssistantDisplayContent(finalContent, finalReasoning),
@@ -197,11 +210,20 @@ export function createChatStreamCompletionController(params: {
       reasoning: finalReasoning,
       metadata: finalMetadata,
       tool_calls: args.toolCalls ?? streamState?.toolCalls,
-      blocks: args.blocks ?? streamState?.blocks,
+      blocks: args.outcomeUnconfirmed && streamState?.degenerated
+        ? freezeProcessAnswer(streamState.blocks, finalContent)
+        : args.blocks ?? streamState?.blocks,
       agent_name: streamState?.agentDisplayName || args.agentName,
     }
 
-    appendMessageToSession(args.sessionId, assistantMessage)
+    if (args.outcomeUnconfirmed) {
+      // 只保留部分预览，不追加历史、生成标题或执行回复后的自动动作。
+      projectObservedMessage?.(args.sessionId, assistantMessage)
+      resetSessionStream(args.sessionId, args.sending, args.draftSending)
+      return assistantMessage
+    }
+    if (args.regenerateFromMessageId) projectObservedMessage?.(args.sessionId, assistantMessage, args.regenerateFromMessageId)
+    else appendMessageToSession(args.sessionId, assistantMessage)
     if (args.terminalState === 'cancelled' && hasDeliverableOutput
       && !hasPersistedAssistantReply(args.metadata)) {
       // 真实取消没有正常助手轮次落库，沿原身份保存已观察的部分结果。
@@ -209,28 +231,27 @@ export function createChatStreamCompletionController(params: {
     }
     bumpLocalSession(args.sessionId)
 
-    // 简化标题流程：直接调 suggest-title（不传 expectedTitle），后端无条件生成并写入
-    const shouldSuggestTitle = terminalState === 'completed'
-      && !!pendingSuggestedTitleExpectation.value[args.sessionId]
+    const expectedTitle = terminalState === 'completed' ? pendingSuggestedTitleExpectation.value[args.sessionId] : undefined
+    const titleSync = pendingAutoTitleSync.get(args.sessionId)
+    const titleBackend = backendScopeKey()
+    pendingAutoTitleSync.delete(args.sessionId)
     setPendingSuggestedTitleExpectation(args.sessionId, null)
 
     void (async () => {
       try {
-        if (shouldSuggestTitle) {
-          // 等待临时标题 PATCH 完成
-          const titleSync = pendingAutoTitleSync.get(args.sessionId)
-          if (titleSync) await titleSync
-
-          // 调用后端生成标题（不传 expectedTitle，让后端直接覆盖）
-          const result = await msgSvc.suggestSessionTitle?.(args.sessionId, '')
-          if (result?.updated && result.title) {
-            setLocalSessionTitle(args.sessionId, result.title)
+        if (expectedTitle) {
+          // 服务端以实际暂存标题提交，页面也只替换仍属于本次建议的标题。
+          const storedTitle = titleSync ? await titleSync : expectedTitle
+          if (titleBackend !== backendScopeKey()) return
+          const result = await msgSvc.suggestSessionTitle?.(args.sessionId, storedTitle)
+          if (titleBackend === backendScopeKey() && result?.updated && result.title) {
+            setLocalSessionTitle(args.sessionId, result.title, expectedTitle)
           }
         }
       } catch {
         // best-effort，失败保留临时标题
       } finally {
-        void loadSessions({ suppressAutoSelect: true })
+        if (titleBackend === backendScopeKey()) void loadSessions({ suppressAutoSelect: true })
       }
     })()
 

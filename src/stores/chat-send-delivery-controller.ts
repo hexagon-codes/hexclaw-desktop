@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import type { MessageContent } from '@/contracts/message-content'
 import type { ChatPayloadLimitError } from '@/services/chatService'
+import { backendScopeKey } from '@/services/backend-context'
 import { buildChatRequestMetadata } from './chat-request-metadata'
 import { createChatTransportUnavailableController } from './chat-transport-unavailable'
 import {
@@ -43,6 +44,7 @@ export function createChatSendDeliveryController(params: {
     blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
+    regenerateFromMessageId?: string
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
   }) => ChatMessage
@@ -139,6 +141,7 @@ export function createChatSendDeliveryController(params: {
     sessionId: string
     attachments?: ChatAttachment[]
     requestId: string
+    regenerateFromMessageId?: string
     sending: Ref<boolean>
     draftSending: Ref<boolean>
     skillNames?: string[]
@@ -168,9 +171,11 @@ export function createChatSendDeliveryController(params: {
       documents,
     } = args
 
-    // U3：先检查 pre-delivery 窗口（send-controller 的 Auto-RAG + 下方 WS 连接）内会话是否
-    // 已被删除/取消——此前无条件 clearSessionCancelled 会抹掉删除时设的取消标记，导致
-    // 回复照常 openWebSocketStream 投递到已删会话。仅未取消时才清（清的是陈旧标记）。
+    const scope = backendScopeKey()
+    // 会话删除会撤回派发占位，且完成后会清除取消标记。任何等待之后必须仍持有同一占位。
+    const ownsRequest = () => backendScopeKey() === scope
+      && activeStreams.value[sessionId]?.requestId === requestId
+    if (!ownsRequest()) return null
     if (isSessionCancelled(sessionId)) {
       resetSessionStream(sessionId, sending, draftSending)
       return null
@@ -202,12 +207,14 @@ export function createChatSendDeliveryController(params: {
     }
     const wsConnected = await chatSvc.ensureWebSocketConnected()
 
+    if (!ownsRequest()) return null
     if (isSessionCancelled(sessionId)) {
       resetSessionStream(sessionId, sending, draftSending)
       return null
     }
 
     if (!wsConnected) {
+      if (args.regenerateFromMessageId) throw new Error('WebSocket transport unavailable for chat regeneration')
       return unavailableDelivery.rejectUnavailableTransport({
         backendText,
         sessionId,
@@ -225,6 +232,7 @@ export function createChatSendDeliveryController(params: {
       sessionId,
       attachments,
       requestId,
+      regenerateFromMessageId: args.regenerateFromMessageId,
       requestMetadata,
       onPayloadRejected: args.onPayloadRejected,
       samplingSnapshot: args.samplingSnapshot,
@@ -235,6 +243,7 @@ export function createChatSendDeliveryController(params: {
       return websocketResult
     }
 
+    if (!ownsRequest()) return null
     setSessionPending(sessionId, true, sending, draftSending)
     return unavailableDelivery.rejectUnavailableTransport({
       backendText,

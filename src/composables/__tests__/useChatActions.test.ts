@@ -26,6 +26,7 @@ function makeMockStore() {
       { id: 'a1', role: 'assistant', content: 'hi there', timestamp: '', metadata: {} },
     ],
     chatParams: { model: 'gpt-4' },
+    sendMessage: vi.fn().mockResolvedValue(null),
     setMessageFeedback: vi.fn().mockResolvedValue(null),
     loadSessions: vi.fn().mockResolvedValue(undefined),
     selectSession: vi.fn(),
@@ -52,12 +53,13 @@ describe('useChatActions', () => {
     mockSend = vi.fn().mockResolvedValue(true) as unknown as (text: string, files?: File[]) => Promise<boolean>
   })
 
-  it('handleRetry finds user message and re-sends', async () => {
+  it('regenerates by the original user identity without deleting the visible history', async () => {
     const store = makeMockStore()
     const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
-    await handleRetry(1) // retry from assistant msg at index 1
-    expect(mockSend).toHaveBeenCalledWith('hello')
-    expect(store.messages).toHaveLength(0) // both messages spliced
+    await handleRetry(1)
+    expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith('', undefined, { targetSessionId: 'source-session', regenerateFromMessageId: 'u1' })
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(store.messages.map(({ id }) => id)).toEqual(['u1', 'a1'])
   })
 
   it('handleRetry does nothing when no previous user message', async () => {
@@ -421,6 +423,7 @@ describe('useChatActions', () => {
         { id: 'a1', role: 'assistant', content: '收到', timestamp: '', metadata: {} },
       ],
       chatParams: { model: 'gpt-4' },
+      sendMessage: vi.fn().mockResolvedValue(null),
       setMessageFeedback: vi.fn().mockResolvedValue(null),
       loadSessions: vi.fn().mockResolvedValue(undefined),
       selectSession: vi.fn(),
@@ -547,15 +550,14 @@ describe('useChatActions', () => {
     expect(toast.error).toHaveBeenCalled()
   })
 
-  it('BUG-20260625 handleRetry 重发携带原用户消息的图片附件（不丢图）', async () => {
+  it('regenerates an image turn by its durable source without resending or deleting the image', async () => {
     const store = makeStoreWithImage()
     const send = vi.fn().mockResolvedValue(true)
     const { handleRetry } = useChatActions(store as any, makeMockToast() as any, send as any)
-    await handleRetry(1) // 从 assistant 触发，回溯到 u1（带图）
-    expect(send).toHaveBeenCalledTimes(1)
-    const [text, , options] = send.mock.calls[0]!
-    expect(text).toBe('看这张图')
-    expect(options?.attachments).toEqual([IMG])
+    await handleRetry(1)
+    expect(send).not.toHaveBeenCalled()
+    expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith('', undefined, { targetSessionId: 'source-session', regenerateFromMessageId: 'u1' })
+    expect(store.messages[0]?.metadata?.attachments).toEqual([IMG])
   })
 
   it('confirmEdit with empty text calls cancelEdit instead', async () => {
@@ -594,40 +596,35 @@ describe('useChatActions', () => {
       await Promise.resolve()
     }
 
-    // AP-094：删除失败必须**回滚 + 中止重发**（旧行为"删一半仍重发"→重载重复，是 bug）。
-    it('handleRetry rolls back and aborts (no resend) when a backend delete fails', async () => {
+    it('keeps the original turn when regeneration fails after switching sessions', async () => {
       const { removeMessage } = await import('@/services/messageService')
-      const { logger } = await import('@/utils/logger')
-      vi.mocked(removeMessage).mockRejectedValue(new Error('delete failed'))
-      const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
-
       const store = makeMockStore()
+      const source = store.messages
+      store.sendMessage.mockImplementation(async () => {
+        store.currentSessionId = 'other-session'
+        store.messages = [{ id: 'other', role: 'user', content: 'other', timestamp: '' }]
+        throw new Error('regen failed')
+      })
       const toast = makeMockToast()
       const { handleRetry } = useChatActions(store as any, toast as any, mockSend)
       await handleRetry(1)
-      await flushMicrotasks()
 
       expect(toast.error).toHaveBeenCalled()
-      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('removeMessage'))
-      // ★关键修正：删除失败 → 不重发（杜绝"旧消息残留 + 新消息落库 = 重载重复"）
+      expect(removeMessage).not.toHaveBeenCalled()
       expect(mockSend).not.toHaveBeenCalled()
-      // ★回滚：被乐观移除的消息原样恢复，用户输入不丢
-      expect(store.messages.map((m) => m.id)).toEqual(['u1', 'a1'])
-      loggerSpy.mockRestore()
-      vi.mocked(removeMessage).mockResolvedValue(undefined)
+      expect(source.map((m) => m.id)).toEqual(['u1', 'a1'])
+      expect(store.messages.map((m) => m.id)).toEqual(['other'])
     })
 
-    it('handleRetry toasts (not silently no-ops) when no model is selected', async () => {
+    it('does not submit another regeneration while an earlier attempt for the same source is unknown', async () => {
       const store = makeMockStore()
-      store.chatParams.model = '' // 未选模型
-      const toast = makeMockToast()
-      const { removeMessage } = await import('@/services/messageService')
-      const { handleRetry } = useChatActions(store as any, toast as any, mockSend)
+      store.messages.push({ id: 'unknown', role: 'assistant', content: 'partial', timestamp: '',
+        metadata: { outcome_unconfirmed: true, regenerate_from_message_id: 'u1' } })
+      const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
       await handleRetry(1)
-      expect(toast.error).toHaveBeenCalled()
-      expect(mockSend).not.toHaveBeenCalled()
-      expect(vi.mocked(removeMessage)).not.toHaveBeenCalled() // 未删任何消息
-      expect(store.messages).toHaveLength(2) // 原样保留
+      await handleRetry(2)
+      expect(store.sendMessage).not.toHaveBeenCalled()
+      expect(store.messages).toHaveLength(3)
     })
 
     it('confirmEdit 确认后删除目标消息及会话尾部并重发', async () => {
@@ -646,7 +643,7 @@ describe('useChatActions', () => {
       expect(toast.error).not.toHaveBeenCalled()
     })
 
-    it('does not toast when deletes succeed', async () => {
+    it('does not report failure for a cancelled regeneration', async () => {
       const store = makeMockStore()
       const toast = makeMockToast()
       const { handleRetry } = useChatActions(store as any, toast as any, mockSend)
@@ -656,17 +653,16 @@ describe('useChatActions', () => {
       expect(toast.error).not.toHaveBeenCalled()
     })
 
-    it('BUG-20260629 handleRetry 删除后端真实 message id，避免旧回复重载后复活', async () => {
+    it('uses the durable source identity even if the renderer has another ID', async () => {
       const { removeMessage } = await import('@/services/messageService')
       const store = makeMockStore()
-      store.messages[1]!.metadata = { backend_message_id: 'backend-a1' }
+      store.messages[0]!.metadata = { backend_message_id: 'backend-u1' }
 
       const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
       await handleRetry(1)
 
-      expect(vi.mocked(removeMessage)).toHaveBeenCalledWith('u1')
-      expect(vi.mocked(removeMessage)).toHaveBeenCalledWith('backend-a1')
-      expect(vi.mocked(removeMessage)).not.toHaveBeenCalledWith('a1')
+      expect(removeMessage).not.toHaveBeenCalled()
+      expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith('', undefined, { targetSessionId: 'source-session', regenerateFromMessageId: 'backend-u1' })
     })
 
     it('confirmEdit 删除目标之后的所有轮次并在本会话重发', async () => {

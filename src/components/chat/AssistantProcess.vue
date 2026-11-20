@@ -35,6 +35,7 @@ const expanded = ref(false)
 const bodyID = useId()
 const events = computed(() => props.message?.metadata?.runtime_events ?? [])
 const receipt = computed(() => props.message?.metadata?.reasoning_receipt)
+const outcomeUnconfirmed = computed(() => props.message?.metadata?.outcome_unconfirmed === true)
 const visibleReasoning = computed(
   () =>
     props.message?.metadata?.reasoning_visibility === 'visible' ||
@@ -170,6 +171,7 @@ const runPresentation = computed(() =>
   ),
 )
 const label = computed(() => {
+  if (outcomeUnconfirmed.value) return t('chat.assistantRun.outcomeUnconfirmed')
   if (operations.value.length && !props.message && !props.toolCalls?.length && !props.live) return t('chat.operationProcess.title')
   if (terminal.value === 'cancelled') return 'Cancelled'
   if (failed.value && !props.live)
@@ -186,7 +188,7 @@ const label = computed(() => {
   return t('chat.operationProcess.title')
 })
 const state = computed(() =>
-  terminal.value === 'cancelled'
+  outcomeUnconfirmed.value ? 'unknown' : terminal.value === 'cancelled'
     ? 'cancelled'
     : props.live
       ? 'running'
@@ -299,11 +301,12 @@ function callFor(id: string, name: string, input: string): ToolCall {
     </div>
   </section>
   <AssistantRunStatus
-    v-else-if="live || receipt"
+    v-else-if="live || receipt || outcomeUnconfirmed"
     :reasoning-request="receipt?.reasoning_request ?? 'off'"
     :reasoning-support="receipt?.reasoning_support ?? 'unknown'"
     :reasoning-execution="receipt?.reasoning_execution ?? 'unknown'"
     :has-visible-answer="!!message?.content.trim()"
     :elapsed-seconds="elapsedSeconds"
+    :outcome-unconfirmed="outcomeUnconfirmed"
   />
 </template>

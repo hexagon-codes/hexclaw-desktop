@@ -29,6 +29,7 @@ describe('F-01 stopStreaming 不得停掉另一并发会话', () => {
     const streamingSessionId = vueRef<string | null>('B') // 镜像指向 B
 
     const controller = createChatStreamCancelController({
+      pendingSessionIds: vueRef({}),
       activeStreams: vueRef({
         B: {
           sessionId: 'B',

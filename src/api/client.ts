@@ -54,6 +54,7 @@ export async function sidecarFetch(
   const { Channel, invoke } = await import('@tauri-apps/api/core')
   headers['x-hexclaw-connection-scope'] = scope
   assertBackendActive(scope)
+  if (request.signal.aborted) throw new DOMException('The operation was aborted', 'AbortError')
   const cancellationId = `sidecar-fetch:${globalThis.crypto.randomUUID()}`
   let registered = false
   let cancellationPending = false

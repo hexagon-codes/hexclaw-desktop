@@ -242,8 +242,45 @@ export function createChatSessionLoadingController(params: {
     }
   }
 
+  function projectObservedMessage(sessionId: string, message: ChatMessage, regenerateFromMessageId?: string) {
+    if (cacheScope !== backendScopeKey()) return
+    const visible = currentSessionId.value === sessionId
+    const previous = visible ? messages.value : (sessionMessageCache.get(sessionId) ?? [])
+    if (!regenerateFromMessageId) {
+      if (visible) messages.value.push(message)
+      else sessionMessageCache.set(sessionId, [...previous, message])
+      return
+    }
+
+    // 成功回执携带已落库助手身份；切换后只收口原会话，不重新选择它。
+    const replyId = backendDeletableMessageId(message)
+    if (previous.some((row) => backendDeletableMessageId(row) === replyId)) return
+    const original = previous.findIndex((row) => row.role === 'user'
+      && backendDeletableMessageId(row) === regenerateFromMessageId)
+    if (original < 0) {
+      sessionMessageCache.delete(sessionId)
+      if (visible) void selectSession(sessionId)
+      return
+    }
+    const next = [...previous.slice(0, original + 1), message]
+    sessionMessageCache.set(sessionId, next)
+    if (!visible) return
+    // 早于提交发出的历史读取可能仍带旧尾部，不能再覆盖原子替换结果。
+    sessionSelectionGen.value++
+    messages.value = next
+    const replacedIds = new Set(previous.slice(original + 1).map(({ id }) => id))
+    artifacts.value = artifacts.value.filter(({ messageId }) => !replacedIds.has(messageId))
+    if (selectedArtifactId.value && !artifacts.value.some(({ id }) => id === selectedArtifactId.value)) {
+      selectedArtifactId.value = null
+      showArtifacts.value = false
+    }
+  }
+
   return {
     loadSessions,
     selectSession,
+    sessionHistory,
+    refreshReplacedHistory,
+    projectObservedMessage,
   }
 }

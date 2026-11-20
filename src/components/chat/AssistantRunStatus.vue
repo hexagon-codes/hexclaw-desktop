@@ -20,6 +20,7 @@ const props = withDefaults(
     reasoningExecution: AssistantReasoningExecution
     hasVisibleAnswer: boolean
     elapsedSeconds: number
+    outcomeUnconfirmed?: boolean
     statusLabel?: string
     reasoning?: string
     visibility?: ReasoningVisibility
@@ -50,7 +51,9 @@ const labels = computed<AssistantRunPresentationLabels>(() => ({
 }))
 
 const presentation = computed(() =>
-  deriveAssistantRunPresentation(
+  props.outcomeUnconfirmed
+    ? { kind: 'outcome_unknown' as const, text: t('chat.assistantRun.outcomeUnconfirmed'), animated: false }
+    : deriveAssistantRunPresentation(
     {
       reasoningRequest: props.reasoningRequest,
       reasoningSupport: props.reasoningSupport,
@@ -90,6 +93,7 @@ const usesThinkingProgress = computed(
     :class="`hc-assistant-run-status--${presentation.kind}`"
     data-component="AssistantRunStatus"
     :data-run-kind="presentation.kind"
+    :data-run-phase="outcomeUnconfirmed ? 'outcome_unknown' : undefined"
     :data-reasoning-request="reasoningRequest"
     :data-reasoning-support="reasoningSupport"
     :data-reasoning-execution="reasoningExecution"

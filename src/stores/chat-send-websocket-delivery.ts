@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import { backendScopeKey } from '@/services/backend-context'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
+import { hasPersistedAssistantReply } from './chat-stream-completion'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 import type { ChatPayloadLimitError } from '@/services/chatService'
@@ -39,6 +40,8 @@ export function createChatSendWebSocketDeliveryController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
     terminalState?: 'completed' | 'failed' | 'cancelled'
+    outcomeUnconfirmed?: true
+    regenerateFromMessageId?: string
   }) => ChatMessage
   handleSendError: ChatSendErrorHandler
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
@@ -66,6 +69,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     sessionId: string
     attachments?: ChatAttachment[]
     requestId: string
+    regenerateFromMessageId?: string
     requestMetadata?: Record<string, string>
     onPayloadRejected?: (error: ChatPayloadLimitError) => void
     samplingSnapshot?: {
@@ -148,6 +152,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       },
       requestMetadata,
       requestId,
+      ...(args.regenerateFromMessageId ? [args.regenerateFromMessageId] as const : [] as const),
     )
     const handle = handleRef.current!
     streamHandles.set(sessionId, handle)
@@ -165,12 +170,23 @@ export function createChatSendWebSocketDeliveryController(params: {
         resetSessionStream(sessionId, sending, draftSending)
         return null
       }
+      if (args.regenerateFromMessageId && !result.outcomeUnconfirmed) {
+        if (result.terminalState === 'cancelled') {
+          resetSessionStream(sessionId, sending, draftSending)
+          return null
+        }
+        if (result.terminalState !== 'completed' || !hasPersistedAssistantReply(result.metadata)
+          || result.metadata?.regenerate_from_message_id !== args.regenerateFromMessageId) {
+          throw new Error('Chat regeneration has no durable replacement receipt')
+        }
+      }
       const metadata = { ...result.metadata }
       if (memorySavedContent && !metadata.memory_saved) {
         metadata.memory_saved = memorySavedContent
       }
-      return finalizeAssistantMessage({
-        content: result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
+      const message = finalizeAssistantMessage({
+        content: result.outcomeUnconfirmed ? (finalState?.previewContent ?? finalState?.content ?? '')
+          : result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
         messageContent: result.messageContent,
         renderManifest: result.renderManifest,
         sessionId,
@@ -182,7 +198,10 @@ export function createChatSendWebSocketDeliveryController(params: {
         sending,
         draftSending,
         terminalState: result.terminalState,
+        outcomeUnconfirmed: result.outcomeUnconfirmed,
+        regenerateFromMessageId: args.regenerateFromMessageId,
       })
+      return result.outcomeUnconfirmed ? null : message
     } catch (wsError) {
       if (!ownsRequest()) return null
       streamHandles.delete(sessionId)
@@ -190,6 +209,11 @@ export function createChatSendWebSocketDeliveryController(params: {
         resetSessionStream(sessionId, sending, draftSending)
         return null
       }
+      if (wsError instanceof chatSvc.ChatRequestError && wsError.result?.superseded) {
+        handleSendError(wsError, sessionId, activeStreams.value[sessionId])
+        return null
+      }
+      if (args.regenerateFromMessageId) throw wsError
       if (wsError instanceof chatSvc.ChatRequestError && wsError.stopRequested) {
         // 未取得后台终态时保留原运行与部分预览，传输错误不能制造取消或失败终稿。
         return null

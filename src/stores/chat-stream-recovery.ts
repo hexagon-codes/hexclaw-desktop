@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import { backendScopeKey } from '@/services/backend-context'
 import { isCurrentStreamRequest, type SessionStreamState } from './chat-stream-helpers'
+import { hasPersistedAssistantReply } from './chat-stream-completion'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type LoggerModule = typeof import('@/utils/logger').logger
@@ -32,6 +33,8 @@ export function createChatStreamRecoveryController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
     terminalState?: 'completed' | 'failed' | 'cancelled'
+    outcomeUnconfirmed?: true
+    regenerateFromMessageId?: string
   }) => import('@/types').ChatMessage
   resetSessionStream: (
     sessionId?: string | null,
@@ -77,6 +80,7 @@ export function createChatStreamRecoveryController(params: {
         const ownsRequest = () => isCurrentStreamRequest({ streams: activeStreams.value, handles: streamHandles, sessionId: snapshot.session_id, requestId: snapshot.request_id, handle: handleRef.current, scope: recoveryScope })
         const recoveredReasoningRequest = activeStreams.value[snapshot.session_id]
           ?.reasoningReceipt?.reasoning_request ?? 'off'
+        const regenerateFromMessageId = activeStreams.value[snapshot.session_id]?.regenerateFromMessageId
         handleRef.current = snapshot.source === 'rest'
           ? chatSvc.resumeRestStream(snapshot.session_id, snapshot.request_id, (current) => {
               if (!ownsRequest()) return
@@ -104,7 +108,7 @@ export function createChatStreamRecoveryController(params: {
           onApprovalRequest: (request) => {
             if (ownsRequest()) storePendingApproval(request)
           },
-        }, recoveredReasoningRequest)
+        }, recoveredReasoningRequest, ...(regenerateFromMessageId ? [regenerateFromMessageId] as const : [] as const))
         const handle = handleRef.current!
         streamHandles.set(snapshot.session_id, handle)
 
@@ -121,6 +125,12 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             const finalState = activeStreams.value[snapshot.session_id]
+            if (regenerateFromMessageId && !result.outcomeUnconfirmed
+              && (result.terminalState !== 'completed' || !hasPersistedAssistantReply(result.metadata)
+                || result.metadata?.regenerate_from_message_id !== regenerateFromMessageId)) {
+              resetSessionStream(snapshot.session_id, sending, draftSending)
+              return
+            }
             if (snapshot.source === 'rest' && result.terminalState === 'cancelled'
               && !result.content.trim() && !finalState?.reasoning.trim()
               && !result.toolCalls?.length && !result.blocks?.length && !result.messageContent) {
@@ -128,7 +138,8 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             finalizeAssistantMessage({
-              content: result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
+              content: result.outcomeUnconfirmed ? (finalState?.previewContent ?? finalState?.content ?? '')
+                : result.messageContent?.markdown ?? (result.content || finalState?.content || ''),
               messageContent: result.messageContent,
               renderManifest: result.renderManifest,
               sessionId: snapshot.session_id,
@@ -140,12 +151,15 @@ export function createChatStreamRecoveryController(params: {
               sending,
               draftSending,
               terminalState: result.terminalState,
+              outcomeUnconfirmed: result.outcomeUnconfirmed,
+              regenerateFromMessageId,
             })
           })
           .catch((resumeError) => {
             if (!ownsRequest()) return
             streamHandles.delete(snapshot.session_id)
-            if (isSessionCancelled(snapshot.session_id)) {
+            const superseded = (resumeError as { result?: { superseded?: true } } | null)?.result?.superseded
+            if (isSessionCancelled(snapshot.session_id) || (regenerateFromMessageId && !superseded)) {
               resetSessionStream(snapshot.session_id, sending, draftSending)
               return
             }

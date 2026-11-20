@@ -9,8 +9,11 @@ const {
   wsOnError,
   wsOnApprovalRequest,
   wsSendMessage,
+  wsSendRaw,
   sendChatViaBackend,
   getActiveStreamSnapshot,
+  cancelActiveStream,
+  listSessionMessages,
   approvalCallbacks,
   socketInstances,
   MockRequestWebSocket,
@@ -32,8 +35,11 @@ const {
     }
   }),
   wsSendMessage: vi.fn(),
+  wsSendRaw: vi.fn(),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
   getActiveStreamSnapshot: vi.fn(),
+  cancelActiveStream: vi.fn(),
+  listSessionMessages: vi.fn(),
   ...(() => {
     const socketInstances: Array<{
       url: string
@@ -82,9 +88,10 @@ vi.mock('@/api/websocket', () => ({
     onError: wsOnError,
     onApprovalRequest: wsOnApprovalRequest,
     sendMessage: wsSendMessage,
+    sendRaw: wsSendRaw,
   },
 }))
-vi.mock('@/api/chat', () => ({ sendChatViaBackend, getActiveStreamSnapshot }))
+vi.mock('@/api/chat', () => ({ sendChatViaBackend, getActiveStreamSnapshot, cancelActiveStream, listSessionMessages }))
 vi.mock('@/api/native-sidecar-websocket', () => ({ NativeSidecarWebSocket: MockRequestWebSocket }))
 
 import { hexclawWS } from '@/api/websocket'
@@ -93,6 +100,7 @@ import {
   sendViaBackend,
   sendViaWebSocket,
   openWebSocketStream,
+  resumeRestStream,
   resumeWebSocketStream,
   ChatRequestError,
 } from '../chatService'
@@ -687,6 +695,50 @@ describe('chatService', () => {
     }
   })
 
+  it('does not send a new chat request cancelled before the private socket opens', async () => {
+    const handle = openWebSocketStream('cancel before open', 's1', {}, '', undefined, undefined, undefined, 'req-early-stop')
+    const socket = socketInstances[0]!
+    const delayedOpen = socket.onopen
+    handle.cancel()
+    try {
+      socket.readyState = MockRequestWebSocket.OPEN
+      delayedOpen?.()
+      expect(socket.send).not.toHaveBeenCalled()
+      await expect(handle.done).resolves.toBeNull()
+    } finally {
+      handle.dispose?.()
+    }
+  })
+
+  it('reads the original regeneration status after an unsequenced provider error', async () => {
+    getActiveStreamSnapshot.mockReset().mockResolvedValue({
+      request_id: 'regenerate-req', session_id: 's1', source: 'websocket', done: true, status: 'errored',
+      metadata: { error: 'Provider unavailable' },
+    })
+    const handle = openWebSocketStream(
+      '', 's1', { provider: 'current-provider', model: 'current-model' }, 'current-agent',
+      undefined, undefined, { thinking: 'off' }, 'regenerate-req', 'original-user',
+    )
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    socket.onmessage?.({ data: JSON.stringify({
+      type: 'error', request_id: 'regenerate-req', code: 'UPSTREAM_UNAVAILABLE',
+      assistant_message_id: 'regenerate-req:assistant', content: 'Provider unavailable',
+    }) })
+    try {
+      await expect(handle.done).rejects.toMatchObject({ result: { terminalState: 'failed' } })
+      expect(getActiveStreamSnapshot).toHaveBeenCalledExactlyOnceWith('regenerate-req', expect.objectContaining({ source: 'websocket' }))
+      expect(socket.send).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(socket.send.mock.calls[0]![0])).toEqual({
+        type: 'message', content: '', request_id: 'regenerate-req', session_id: 's1',
+        user_id: DESKTOP_USER_ID, regenerate_from_message_id: 'original-user',
+      })
+    } finally {
+      handle.dispose?.()
+    }
+  })
+
   it('openWebSocketStream cancel keeps observing until the backend terminal snapshot', async () => {
     const handle = openWebSocketStream(
       'hello',
@@ -717,6 +769,169 @@ describe('chatService', () => {
       content: 'partial', status: 'cancelled', done: true,
     }) })
     await expect(handle.done).resolves.toMatchObject({ content: 'partial', terminalState: 'cancelled' })
+  })
+
+  it('sends one cancel for the original request when Stop is pressed during disconnect recovery', async () => {
+    vi.useFakeTimers()
+    let publishSnapshot!: (value: unknown) => void
+    const identity = { request_id: 'disconnected', session_id: 's1', source: 'websocket' }
+    getActiveStreamSnapshot.mockReset()
+      .mockImplementationOnce(() => new Promise((resolve) => { publishSnapshot = resolve }))
+      .mockResolvedValueOnce({ ...identity, status: 'cancelled', done: true })
+    wsIsConnected.mockReturnValueOnce(false)
+    wsConnect.mockResolvedValueOnce(undefined)
+    const handle = openWebSocketStream('input', 's1', {}, '', undefined, undefined, undefined, 'disconnected')
+    const socket = socketInstances[0]!
+    try {
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      socket.readyState = MockRequestWebSocket.CLOSED
+      socket.onclose?.()
+      handle.cancel()
+      handle.cancel()
+      await vi.dynamicImportSettled()
+      expect(socket.send).toHaveBeenCalledTimes(1)
+      expect(wsSendRaw).not.toHaveBeenCalled()
+      publishSnapshot({ ...identity, status: 'streaming', done: false, cancel_requested: false })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wsSendRaw).toHaveBeenCalledExactlyOnceWith({
+        type: 'cancel', session_id: 's1', request_id: 'disconnected',
+      })
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(handle.done).resolves.toMatchObject({ terminalState: 'cancelled' })
+    } finally {
+      handle.dispose?.()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true, undefined])('recovers a locally sent Stop with backend acceptance %s', async (accepted) => {
+    vi.useFakeTimers()
+    const identity = { request_id: 'recover-stop', session_id: 's1', source: 'websocket' }
+    const active = { ...identity, status: 'streaming', done: false, cancel_requested: accepted }
+    getActiveStreamSnapshot.mockReset().mockResolvedValueOnce(active).mockResolvedValueOnce(active)
+      .mockResolvedValueOnce({ ...identity, status: 'cancelled', done: true })
+    const handle = openWebSocketStream('input', 's1', {}, '', undefined, undefined, undefined, 'recover-stop')
+    const socket = socketInstances[0]!
+    try {
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      handle.cancel()
+      socket.readyState = MockRequestWebSocket.CLOSED
+      socket.onclose?.()
+      await vi.dynamicImportSettled()
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(handle.done).resolves.toMatchObject({ terminalState: 'cancelled' })
+      expect(socket.send.mock.calls.map(([payload]) => JSON.parse(payload).type)).toEqual(['message', 'cancel'])
+      const expected = accepted === false
+        ? [[{ type: 'cancel', session_id: 's1', request_id: 'recover-stop' }]]
+        : []
+      expect(wsSendRaw.mock.calls).toEqual(expected)
+    } finally {
+      handle.dispose?.()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a durable replacement receipt without projecting an old answer', async () => {
+    getActiveStreamSnapshot.mockReset().mockRejectedValueOnce({
+      status: 404,
+      data: { receipt_ref: { request_id: 'replaced', session_id: 's1', outcome: 'superseded' } },
+    })
+    const handle = openWebSocketStream('input', 's1', {}, '', undefined, undefined, undefined, 'replaced')
+    const socket = socketInstances[0]!
+    socket.readyState = MockRequestWebSocket.OPEN
+    socket.onopen?.()
+    socket.readyState = MockRequestWebSocket.CLOSED
+    socket.onclose?.()
+    await expect(handle.done).rejects.toMatchObject({
+      noFallback: true, result: { content: '', superseded: true },
+    })
+    expect(listSessionMessages).not.toHaveBeenCalled()
+  })
+
+  it('uses a replacement receipt from REST cancellation while the snapshot is still pending', async () => {
+    getActiveStreamSnapshot.mockReset().mockImplementationOnce(() => new Promise(() => {}))
+    cancelActiveStream.mockRejectedValueOnce({
+      status: 404,
+      data: { receipt_ref: { request_id: 'replaced-rest', session_id: 's1', outcome: 'superseded' } },
+    })
+    const project = vi.fn()
+    const handle = resumeRestStream('s1', 'replaced-rest', project)
+    try {
+      await vi.dynamicImportSettled()
+      expect(getActiveStreamSnapshot).toHaveBeenCalledExactlyOnceWith('replaced-rest', expect.objectContaining({ source: 'rest' }))
+      handle.cancel()
+      await expect(handle.done).rejects.toMatchObject({
+        noFallback: true, result: { content: '', superseded: true },
+      })
+      expect(cancelActiveStream).toHaveBeenCalledExactlyOnceWith('replaced-rest')
+      expect(project).not.toHaveBeenCalled()
+    } finally {
+      handle.dispose?.()
+    }
+  })
+
+  it.each([false, true])('checks owned history after persistent stop snapshot read failures (stored terminal=%s)', async (stored) => {
+    vi.useFakeTimers()
+    const missing = { status: 404 }
+    getActiveStreamSnapshot.mockReset().mockRejectedValue(missing)
+      .mockRejectedValueOnce(missing).mockRejectedValueOnce({ status: 503 })
+    const record = {
+      id: 'stored-assistant', role: 'assistant', session_id: 's1', request_id: stored ? 'owned-request' : 'other-request',
+      content: 'original persisted terminal', metadata: JSON.stringify({
+        last_sequence: 1,
+        runtime_events: [{ sequence: 1, event: { version: 1, kind: 'terminal', event_id: 'terminal-1', terminal_status: 'completed' } }],
+      }),
+    }
+    listSessionMessages.mockReset().mockResolvedValue({ messages: [record], total: 1 })
+    const handle = openWebSocketStream('controlled input', 's1', {}, '', undefined, undefined, undefined, 'owned-request')
+    const socket = socketInstances[0]!
+    try {
+      socket.readyState = MockRequestWebSocket.OPEN
+      socket.onopen?.()
+      handle.cancel()
+      socket.onclose?.()
+      await vi.dynamicImportSettled()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(listSessionMessages).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(listSessionMessages).toHaveBeenCalledTimes(1)
+      await expect(handle.done).resolves.toMatchObject(stored
+        ? { terminalState: 'completed', content: 'original persisted terminal', metadata: { backend_message_id: 'stored-assistant' } }
+        : { outcomeUnconfirmed: true })
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(getActiveStreamSnapshot).toHaveBeenCalledTimes(3)
+      expect(socket.send.mock.calls.map(([payload]) => JSON.parse(payload).type)).toEqual(['message', 'cancel'])
+    } finally {
+      handle.dispose?.()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reads the original REST terminal from history after a plain snapshot 404', async () => {
+    const requestId = 'rest-snapshot-missing'
+    getActiveStreamSnapshot.mockReset().mockRejectedValueOnce({ status: 404 })
+    listSessionMessages.mockReset().mockResolvedValueOnce({ messages: [{
+      id: 'persisted-rest-answer', role: 'assistant', session_id: 's1', request_id: requestId,
+      content: 'final answer',
+      metadata: {
+        last_sequence: 1,
+        runtime_events: [{ sequence: 1, event: { version: 1, kind: 'terminal', event_id: 'terminal-rest', terminal_status: 'completed' } }],
+      },
+    }], total: 1 })
+    const project = vi.fn()
+    const handle = resumeRestStream('s1', requestId, project)
+    try {
+      await expect(handle.done).resolves.toMatchObject({
+        content: 'final answer', terminalState: 'completed', metadata: { backend_message_id: 'persisted-rest-answer' },
+      })
+      expect(project).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        source: 'rest', request_id: requestId, session_id: 's1', done: true,
+      }))
+    } finally {
+      handle.dispose?.()
+    }
   })
 
   it.each([

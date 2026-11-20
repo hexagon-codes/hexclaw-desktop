@@ -23,6 +23,7 @@ export interface ActiveStreamSnapshot {
   session_id: string
   source?: 'rest' | 'websocket'
   status?: string
+  cancel_requested?: boolean
   content?: string
   reasoning?: string
   metadata?: Record<string, unknown> & {
@@ -133,17 +134,16 @@ export function getSessionBranches(id: string) {
 
 export function listSessionMessages(
   id: string,
-  params: { limit?: number; offset?: number; attachmentMode?: 'url' } = {},
+  params: { limit?: number; offset?: number; attachmentMode?: 'url'; signal?: AbortSignal } = {},
 ) {
-  return apiGet<{ messages: ChatMessage[]; total: number }>(
-    `/api/v1/sessions/${encodeURIComponent(id)}/messages`,
-    {
-      ...userQuery(),
-      ...(params.limit ? { limit: params.limit } : {}),
-      ...(params.offset ? { offset: params.offset } : {}),
-      ...(params.attachmentMode ? { attachment_mode: params.attachmentMode } : {}),
-    },
-  )
+  const path = `/api/v1/sessions/${encodeURIComponent(id)}/messages`
+  const query = {
+    ...userQuery(),
+    ...(params.limit ? { limit: params.limit } : {}),
+    ...(params.offset ? { offset: params.offset } : {}),
+    ...(params.attachmentMode ? { attachment_mode: params.attachmentMode } : {}),
+  }
+  return apiGet<{ messages: ChatMessage[]; total: number }>(path, query, params.signal ? { signal: params.signal } : undefined)
 }
 
 export function searchMessages(query: string, params: { limit?: number; offset?: number } = {}) {

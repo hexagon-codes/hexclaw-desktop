@@ -149,9 +149,7 @@ describe('MCP Tool Call API alignment: mcp.ts vs handler_extended.go', () => {
 describe('Version API alignment: system.ts vs handler_extended.go', () => {
   it('ALIGNED: frontend expects version and engine matching backend', () => {
     const systemSource = readFrontendFile('system.ts')
-    expect(systemSource).toContain(
-      "apiGet<{ version: string; engine: string; engine_version?: string }>('/api/v1/version')",
-    )
+    expect(systemSource).toMatch(/apiGet<\{[^}]*version: string; engine: string; engine_version\?: string[^}]*\}>\('\/api\/v1\/version'\)/)
   })
 })
 

@@ -42,7 +42,8 @@ interface RegenerateCallEvidence {
   outcome: RegenerateOutcome
   text: string
   attachmentCount: number
-  attachmentIds: string[]
+  sourceMessageId?: string
+  targetSessionId?: string
 }
 
 interface GeometryTarget {
@@ -986,6 +987,7 @@ async function installRegenerateStreamFixture(page: Page, outcomes: RegenerateOu
       sendMessage: (
         text: string,
         attachments?: FixtureAttachment[],
+        options?: { targetSessionId?: string; regenerateFromMessageId?: string },
       ) => Promise<FixtureMessage | null>
       stopStreaming: () => void
     }
@@ -1014,31 +1016,26 @@ async function installRegenerateStreamFixture(page: Page, outcomes: RegenerateOu
       cancel?.()
     }
 
-    store.sendMessage = async (text, attachments = []) => {
+    store.sendMessage = async (text, attachments = [], options) => {
       const callIndex = fixture.calls.length
       const outcome = fixture.outcomes[callIndex] ?? 'failed'
       fixture.calls.push({
         outcome,
         text,
         attachmentCount: attachments.length,
-        attachmentIds: attachments.map((attachment) => attachment.attachmentId ?? ''),
+        sourceMessageId: options?.regenerateFromMessageId,
+        targetSessionId: options?.targetSessionId,
       })
 
       const sessionId = store.currentSessionId || 'chat-interactions-matrix'
       const requestId = `browser-regenerate-${callIndex + 1}`
       const assistantId = `${requestId}:assistant`
-      store.messages.push({
-        id: requestId,
-        role: 'user',
-        content: text,
-        timestamp: new Date().toISOString(),
-        metadata: attachments.length > 0 ? { attachments } : undefined,
-      })
       store.activeStreams = {
         ...store.activeStreams,
         [sessionId]: {
           sessionId,
           requestId,
+          regenerateFromMessageId: options?.regenerateFromMessageId,
           assistantMessageId: assistantId,
           assistantMessageAliases: [],
           lastSequence: 0,
@@ -1061,33 +1058,32 @@ async function installRegenerateStreamFixture(page: Page, outcomes: RegenerateOu
       // 流已被接受，发送握手结束；此时输入区必须暴露可点击的停止动作。
       store.sending = false
 
-      return await new Promise<FixtureMessage>((resolve) => {
+      return await new Promise<FixtureMessage | null>((resolve, reject) => {
         const finish = () => {
-          const content =
-            outcome === 'completed'
-              ? `浏览器重试完成 #${callIndex + 1}`
-              : outcome === 'cancelled'
-                ? `浏览器重试已取消 #${callIndex + 1}`
-                : `浏览器重试失败 #${callIndex + 1}`
           const assistant: FixtureMessage = {
             id: assistantId,
             role: 'assistant',
-            content,
+            content: `浏览器重试完成 #${callIndex + 1}`,
             timestamp: new Date().toISOString(),
             metadata: {
               provider: 'openai',
               model: 'gpt-5.6-sol',
-              thinking_state: outcome,
+              thinking_state: 'completed',
             },
           }
-          store.messages.push(assistant)
           const remainingStreams = { ...store.activeStreams }
           delete remainingStreams[sessionId]
           store.activeStreams = remainingStreams
           store.streaming = false
           store.streamingSessionId = null
           store.sending = false
-          resolve(assistant)
+          if (outcome === 'completed') {
+            const source = store.messages.findIndex(({ id }) => id === options?.regenerateFromMessageId)
+            if (source < 0) { reject(new Error('Original fixture message is missing')); return }
+            store.messages.splice(source + 1, store.messages.length, assistant)
+            resolve(assistant)
+          } else if (outcome === 'cancelled') resolve(null)
+          else reject(new Error('Fixture regeneration failed'))
         }
 
         if (outcome === 'cancelled') fixture.pendingCancel = finish
@@ -1650,7 +1646,7 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contract
     await expect(page.getByText('旧助手回复：57+38=95。')).toHaveCount(0)
 
     await page.getByTestId('message-regenerate').click()
-    await expectRegenerateTerminal(page, '浏览器重试失败 #2', 2)
+    await expectRegenerateTerminal(page, '浏览器重试完成 #1', 2)
     await expectRegenerateActionBetweenCopyAndSpeak(page)
 
     await page.getByTestId('message-regenerate').click()
@@ -1658,10 +1654,10 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contract
     await expect(stop).toBeVisible()
     await expect(stop).toBeEnabled()
     await stop.click()
-    await expectRegenerateTerminal(page, '浏览器重试已取消 #3', 3)
+    await expectRegenerateTerminal(page, '浏览器重试完成 #1', 3)
 
     await page.getByTestId('message-regenerate').click()
-    await expectRegenerateTerminal(page, '浏览器重试失败 #4', 4)
+    await expectRegenerateTerminal(page, '浏览器重试完成 #1', 4)
     await expectRegenerateActionBetweenCopyAndSpeak(page)
 
     const callEvidence = await page.evaluate(() => {
@@ -1678,9 +1674,10 @@ test.describe('feat/v0.5.0-k12-parent-tutor — Chat browser true-click contract
       'failed',
     ])
     for (const call of callEvidence) {
-      expect(call.text).toBe('请解释 57+38，并保留原题图片。')
-      expect(call.attachmentCount).toBe(1)
-      expect(call.attachmentIds).toEqual(['fixture-math-question-receipt'])
+      expect(call.text).toBe('')
+      expect(call.attachmentCount).toBe(0)
+      expect(call.sourceMessageId).toBe('regenerate-original-user')
+      expect(call.targetSessionId).toBe('chat-interactions-matrix')
     }
     await expect(page.getByTestId('chat-message-user')).toHaveCount(1)
     await expect(page.getByTestId('chat-message-assistant')).toHaveCount(1)

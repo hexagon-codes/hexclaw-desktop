@@ -456,7 +456,7 @@ describe('chat controller modules', () => {
     expect(sessions.value.find((s: any) => s.id === 's1')?.title).toBe('上海好玩的地方')
   })
 
-  it('deduplicates ensureSession and seeds a local session once', async () => {
+  it.each([false, true])('deduplicates ensureSession with a pending selection change=%s', async (changedSelection) => {
     let releaseCreate!: () => void
     const upsertLocalSession = vi.fn()
     const pendingSessionTitle = ref('临时标题')
@@ -468,6 +468,7 @@ describe('chat controller modules', () => {
     )
     const setLastSessionId = vi.fn()
     const currentSessionId = ref<string | null>(null)
+    const sessionSelectionGen = ref(0)
     const controller = createChatSessionLifecycleController({
       currentSessionId,
       messages: ref([]),
@@ -480,7 +481,7 @@ describe('chat controller modules', () => {
       pendingSessionIds: ref({}),
       ensureSessionPromise: ref<Promise<string> | null>(null),
       cancelledSessions: new Set<string>(),
-      sessionSelectionGen: ref(0),
+      sessionSelectionGen,
       msgSvc: {
         createSession,
         setLastSessionId,
@@ -498,13 +499,17 @@ describe('chat controller modules', () => {
 
     const first = controller.ensureSession()
     const second = controller.ensureSession()
+    if (changedSelection) {
+      sessionSelectionGen.value++
+      currentSessionId.value = 'existing-session'
+    }
     releaseCreate()
 
     await expect(Promise.all([first, second])).resolves.toEqual(['session-1', 'session-1'])
     expect(createSession).toHaveBeenCalledTimes(1)
-    expect(currentSessionId.value).toBe('session-1')
-    expect(setLastSessionId).toHaveBeenCalledExactlyOnceWith('session-1')
-    expect(pendingSessionTitle.value).toBeNull()
+    expect(currentSessionId.value).toBe(changedSelection ? 'existing-session' : 'session-1')
+    expect(setLastSessionId.mock.calls).toEqual(changedSelection ? [] : [['session-1']])
+    expect(pendingSessionTitle.value).toBe(changedSelection ? '临时标题' : null)
     expect(upsertLocalSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'session-1', title: '临时标题' }),
       true,
@@ -673,13 +678,15 @@ describe('chat controller modules', () => {
       }),
     )
     expect(extractArtifacts).toHaveBeenCalledWith('最终回答', 'assistant-1')
-    expect(setLocalSessionTitle).toHaveBeenCalledWith('s1', '正式标题')
+    expect(suggestSessionTitle).toHaveBeenCalledWith('s1', '临时标题')
+    expect(setLocalSessionTitle).toHaveBeenCalledWith('s1', '正式标题', '临时标题')
     expect(loadSessions).toHaveBeenCalled()
     expect(resetSessionStream).toHaveBeenCalledWith('s1', expect.any(Object), expect.any(Object))
   })
 
-  it('requests cancellation without replacing the partial stream before the real terminal', () => {
+  it.each([false, true])('stops only the owned work before any real terminal (not dispatched=%s)', (notDispatched) => {
     const cancel = vi.fn()
+    const sendCancel = vi.fn()
     const appendMessageToSession = vi.fn()
     const resetSessionStream = vi.fn()
     const activeStreams = ref({
@@ -702,6 +709,7 @@ describe('chat controller modules', () => {
 
     const controller = createChatStreamCancelController({
       activeStreams,
+      pendingSessionIds: ref<Record<string, boolean>>(notDispatched ? { s1: true } : {}),
       currentSessionId: ref('s1'),
       messages: ref([]),
       streaming: ref(false),
@@ -710,20 +718,21 @@ describe('chat controller modules', () => {
       streamingReasoning: ref(''),
       streamingReasoningStartTime: ref(0),
       streamingReasoningEndTime: ref(0),
-      streamHandles: new Map([['s1', { cancel } as any]]),
+      streamHandles: notDispatched ? new Map() : new Map([['s1', { cancel } as any]]),
       msgSvc: { persistMessage: vi.fn() } as any,
       createId: () => 'partial-1',
       appendMessageToSession,
       resetSessionStream,
-      sendCancel: vi.fn(),
+      sendCancel,
       clearSocketCallbacks: vi.fn(),
       triggerSocketError: vi.fn(),
     })
 
     expect(controller.stopSessionStream('s1')).toBe(true)
-    expect(cancel).toHaveBeenCalled()
     expect(appendMessageToSession).not.toHaveBeenCalled()
-    expect(resetSessionStream).not.toHaveBeenCalled()
+    expect(sendCancel).not.toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalledTimes(notDispatched ? 0 : 1)
+    expect(resetSessionStream.mock.calls).toEqual(notDispatched ? [['s1', undefined, undefined]] : [])
     expect(activeStreams.value.s1?.content).toBe('半截回答')
   })
 
@@ -1206,7 +1215,7 @@ describe('chat controller modules', () => {
   })
 
   it('seeds a temporary auto title and clears pending sync state after persistence', async () => {
-    const pendingAutoTitleSync = new Map<string, Promise<void>>()
+    const pendingAutoTitleSync = new Map<string, Promise<string>>()
     const setLocalSessionTitle = vi.fn()
     const setPendingSuggestedTitleExpectation = vi.fn()
     const text = '这是一个很长的标题候选，需要被裁剪成临时标题以避免侧栏溢出'
@@ -1233,12 +1242,13 @@ describe('chat controller modules', () => {
     const finalizeAssistantMessage = vi.fn().mockReturnValue({ id: 'assistant-1' })
     const sendViaBackend = vi.fn()
     const handleSendError = vi.fn()
+    const stream = buildSessionStreamState({ sessionId: 's1', requestId: 'req-1', thinkingEnabled: false })
     const controller = createChatSendDeliveryController({
       seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),
-      activeStreams: ref({}),
+      activeStreams: ref({ s1: stream }),
       chatSvc: {
         ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
         sendViaBackend,
@@ -1270,7 +1280,7 @@ describe('chat controller modules', () => {
         message: expect.stringContaining('WebSocket transport unavailable'),
       }),
       's1',
-      undefined,
+      stream,
     )
     expect(finalizeAssistantMessage).not.toHaveBeenCalled()
     expect(sendViaBackend).not.toHaveBeenCalled()
@@ -1284,7 +1294,9 @@ describe('chat controller modules', () => {
         this.noFallback = noFallback
       }
     }
-    const activeStreams = ref<Record<string, any>>({})
+    const activeStreams = ref<Record<string, ReturnType<typeof buildSessionStreamState>>>({
+      'session-idle': buildSessionStreamState({ sessionId: 'session-idle', requestId: 'req-idle', thinkingEnabled: false }),
+    })
     const handleSendError = vi.fn()
     const upsertStreamState = vi.fn((sessionId: string, nextState: any) => {
       const next = { ...activeStreams.value }
@@ -1347,7 +1359,7 @@ describe('chat controller modules', () => {
     )
   })
 
-  it('keeps the accepted edit model and agent route frozen while websocket connection settles', async () => {
+  it.each([false, true])('only sends the frozen route if the claim survives connection setup (released=%s)', async (released) => {
     let resolveConnection!: (connected: boolean) => void
     const chatParams = ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' })
     const agentRole = ref('k12-tutor-mingming')
@@ -1355,12 +1367,15 @@ describe('chat controller modules', () => {
       cancel: vi.fn(),
       done: Promise.resolve({ content: 'backend reply' }),
     })
+    const activeStreams = ref<Record<string, ReturnType<typeof buildSessionStreamState>>>({
+      'edit-branch': buildSessionStreamState({ sessionId: 'edit-branch', requestId: 'edited-request', thinkingEnabled: false }),
+    })
     const controller = createChatSendDeliveryController({
       seedRecoveredStream: vi.fn(),
       chatParams,
       agentRole,
       thinkingEnabled: ref(false),
-      activeStreams: ref({}),
+      activeStreams,
       chatSvc: {
         ensureWebSocketConnected: vi.fn().mockReturnValue(
           new Promise<boolean>((resolve) => {
@@ -1399,10 +1414,11 @@ describe('chat controller modules', () => {
     })
     chatParams.value = { provider: 'other-provider', model: 'other-model' }
     agentRole.value = 'other-agent'
+    if (released) activeStreams.value = {}
     resolveConnection(true)
     await pending
 
-    expect(openWebSocketStream).toHaveBeenCalledWith(
+    const expectedCall = [
       'edited question',
       'edit-branch',
       { provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' },
@@ -1411,7 +1427,8 @@ describe('chat controller modules', () => {
       expect.any(Object),
       expect.any(Object),
       'edited-request',
-    )
+    ]
+    expect(openWebSocketStream.mock.calls).toEqual(released ? [] : [expectedCall])
   })
 
   it('directs an edited version to its explicit branch without mutating the visible source session', async () => {

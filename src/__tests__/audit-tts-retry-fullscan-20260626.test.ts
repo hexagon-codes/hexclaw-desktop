@@ -20,11 +20,13 @@ import { useChatActions } from '@/composables/useChatActions'
 
 function makeStore() {
   return {
+    currentSessionId: 'original-session',
     messages: [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '', metadata: {} },
     ],
     chatParams: { model: 'glm-4-flash' },
+    sendMessage: vi.fn().mockRejectedValue(new Error('regeneration rejected')),
     setMessageFeedback: vi.fn().mockResolvedValue(null),
   }
 }
@@ -33,10 +35,9 @@ const toast = () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info:
 describe('hex-test 审计 RED — retry/edit', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('P1-A: 删除成功后重发被拦截(handleSend=false) → 不得静默丢整轮', async () => {
+  it('P1-A: 重生成被服务端拒绝时整轮仍保留', async () => {
     const { removeMessage } = await import('@/services/messageService')
     vi.mocked(removeMessage).mockResolvedValue(undefined)
-    // 模拟"流式/pending 中点重试"：sendMessage 在 push 前 return null → handleSend 返回 false
     const send = vi.fn().mockResolvedValue(false)
     const store = makeStore()
     const t = toast()
@@ -44,12 +45,12 @@ describe('hex-test 审计 RED — retry/edit', () => {
 
     await handleRetry(1)
 
-    // 期望（修复后）：整轮不被静默删光——要么前置拦截不删、要么回滚+提示
-    expect(store.messages.length).toBeGreaterThan(0)
+    expect(store.messages.map(({ id }) => id)).toEqual(['u1', 'a1'])
+    expect(removeMessage).not.toHaveBeenCalled()
     expect(t.error).toHaveBeenCalled()
   })
 
-  it('P2-C: 重试一条后端不存在的消息(fast-path 卡片/已删) → 404 应视为已删而非整体失败', async () => {
+  it('P2-C: 从未落库的本地卡片仍能在本机重新生成', async () => {
     const { removeMessage } = await import('@/services/messageService')
     // 客户端独占消息(fastpath-/slash-/user-)从未落库 → 后端删它 404
     const notFound = Object.assign(new Error('message not found'), { status: 404 })
@@ -68,7 +69,7 @@ describe('hex-test 审计 RED — retry/edit', () => {
 
     await handleRetry(1)
 
-    // 期望（修复后）：404=已删，视为成功并继续重发；不报"重试失败"
+    expect(removeMessage).not.toHaveBeenCalled()
     expect(send).toHaveBeenCalled()
     expect(t.error).not.toHaveBeenCalled()
   })

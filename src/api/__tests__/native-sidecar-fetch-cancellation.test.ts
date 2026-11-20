@@ -42,6 +42,20 @@ describe('native Sidecar HTTP cancellation boundary', () => {
     native.rejectFetch = null
   })
 
+  it('does not invoke HTTP when aborted during IPC module loading', async () => {
+    const { sidecarFetch } = await import('../client')
+    const abort = new AbortController()
+    const pending = sidecarFetch('/api/v1/knowledge/operations', { signal: abort.signal })
+    const outcome = pending.catch((error: unknown) => error)
+    abort.abort()
+    await vi.dynamicImportSettled()
+    const dispatched = native.calls.map(({ command }) => command)
+    native.rejectFetch?.(new Error('Release the unexpected IPC request'))
+
+    await expect(outcome).resolves.toMatchObject({ name: 'AbortError' })
+    expect(dispatched).toEqual([])
+  })
+
   it('sends the same cancellation identity while the Rust HTTP request is still pending', async () => {
     const { sidecarFetch } = await import('../client')
     const abort = new AbortController()

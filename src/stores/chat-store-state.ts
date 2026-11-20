@@ -51,7 +51,7 @@ export interface ChatStoreState {
 
 export interface ChatStoreRuntime {
   streamHandles: Map<string, WebSocketStreamHandle>
-  pendingAutoTitleSync: Map<string, Promise<void>>
+  pendingAutoTitleSync: Map<string, Promise<string>>
   cancelledSessions: Set<string>
   sessionSelectionGen: Ref<number>
   approvalCleanup: Ref<(() => void) | null>
@@ -95,7 +95,7 @@ export function createChatStoreState(): ChatStoreState {
 export function createChatStoreRuntime(): ChatStoreRuntime {
   return {
     streamHandles: new Map<string, WebSocketStreamHandle>(),
-    pendingAutoTitleSync: new Map<string, Promise<void>>(),
+    pendingAutoTitleSync: new Map<string, Promise<string>>(),
     cancelledSessions: new Set<string>(),
     sessionSelectionGen: ref(0),
     approvalCleanup: ref<(() => void) | null>(null),

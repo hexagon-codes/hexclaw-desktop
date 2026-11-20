@@ -864,11 +864,14 @@ async function handleSend() {
   }
   submitting.value = true
   const preparingDraftKey = composerDraftKey()
+  const preparingScopeRevision = draftScopeRevision
+  const ownsPreparedDraft = () => !chatInputUnmounted && preparingDraftKey === composerDraftKey()
+    && preparingScopeRevision === draftScopeRevision
   let handedToSendHandler = false
   try {
     files = await Promise.all(files.map(async (file) => nativeGrantFromFile(file)
       ? restoreComposerFile(await preserveComposerFile(file)) : file))
-    if (preparingDraftKey !== composerDraftKey()) return
+    if (!ownsPreparedDraft()) return
     if (!props.sendHandler) {
       emit('send', text, files)
       await clearSentDrafts()
@@ -878,6 +881,8 @@ async function handleSend() {
     if (pendingContextFills.size > 0) {
       await Promise.allSettled(pendingContextFills)
     }
+    // 只有同一草稿仍处于发送准备阶段，迟到的引用才可以进入派发。
+    if (!ownsPreparedDraft()) return
     const contextRefs: ChatContextRef[] = contextChips.value.map((c) => ({
       type: c.type,
       id: c.id,
@@ -986,7 +991,7 @@ async function handleSend() {
         voiceToast.error(error instanceof Error ? error.message : String(error))
       })
     }
-    if (!sourceIsActive()) return
+    if (!ownsPreparedDraft() || !sourceIsActive()) return
     handedToSendHandler = true
     const accepted = await props.sendHandler(
       text,

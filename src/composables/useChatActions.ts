@@ -18,7 +18,7 @@ import type { useToast } from './useToast'
 type ChatStore = ReturnType<typeof useChatStore>
 type Toast = ReturnType<typeof useToast>
 
-/** 编辑/重试重发时需保留的原消息载荷（图片等附件 + 挂载技能）。 */
+/** 编辑重发时需保留的原消息载荷（图片等附件 + 挂载技能）。 */
 type ResendCarry = { attachments?: ChatAttachment[]; skillNames?: string[] }
 type DirectedResend = ResendCarry & {
   targetSessionId: string
@@ -84,6 +84,7 @@ export function useChatActions(
   // 这是内部并发闸，不改变任何可见按钮或交互布局。
   let editGeneration = 0
   let activeEditSubmission: number | null = null
+  let regeneratingLocalReply = false
 
   function editSubmissionIsCurrent(
     token: number,
@@ -112,18 +113,6 @@ export function useChatActions(
     chatStore.messages.splice(idx, 0, ...tail)
   }
 
-  /**
-   * 原子删除从 fromIdx 起的整段消息（重试/编辑即"替换整轮"）。
-   *
-   * AP-094 修正：旧实现 fire-and-forget 删除后**无条件重发**——若某条后端删除失败，旧消息残留
-   * 库里、新消息又落库 → 重载后**重复**；且删除先于重发成功存在数据丢失窗口。
-   *
-   * 现在：快照 → 乐观移除 UI → **逆序逐条 await 后端删除**（尾部回复先删、用户消息最后删）。
-   * 任一失败即**回滚尚未删除的消息、返回 false 让调用方中止重发**——
-   * 逆序保证失败时用户输入大概率仍在库里，且只会"删少"绝不"删多"（杜绝重复）。
-   *
-   * @returns true=全部删除成功可重发；false=已回滚+提示，调用方应中止。
-   */
   // 后端已不存在该消息（404/410/not-found）=删除目标已达成，视为成功。
   // AP-094 续：fast-path/slash cron 卡片等客户端独占消息从不落库，删它必 404；
   // 旧实现会因此整体失败、报"重试失败"。容忍 not-found 才不阻断这类重试。
@@ -158,20 +147,31 @@ export function useChatActions(
     return true
   }
 
+  function originalUserMessage(index: number): ChatMessage | undefined {
+    for (let i = index - 1; i >= 0; i--) {
+      const message = chatStore.messages[i]
+      if (message?.role === 'user') return message
+    }
+  }
+
+  function blockedRegeneration(index: number): boolean {
+    const reply = chatStore.messages[index]
+    if (reply?.metadata?.outcome_unconfirmed) return true
+    const user = originalUserMessage(index)
+    if (!user) return false
+    const source = backendDeletableMessageId(user)
+    const sessionId = chatStore.currentSessionId
+    return (!!sessionId && chatStore.activeStreams?.[sessionId]?.regenerateFromMessageId === source)
+      || chatStore.messages.some((message) => message.metadata?.outcome_unconfirmed
+        && message.metadata.regenerate_from_message_id === source)
+  }
+
   async function handleRetry(msgIndex: number) {
     const targetMsg = chatStore.messages[msgIndex]
-    if (!targetMsg || targetMsg.role !== 'assistant') return
-
-    // 找到触发重试的 AI 消息之前的用户消息
-    const msgs = chatStore.messages
-    let userMsgIdx = -1
-    for (let i = msgIndex - 1; i >= 0; i--) {
-      if (msgs[i]?.role === 'user') {
-        userMsgIdx = i
-        break
-      }
-    }
-    if (userMsgIdx < 0) return
+    if (!targetMsg || targetMsg.role !== 'assistant' || blockedRegeneration(msgIndex)) return
+    const userMsg = originalUserMessage(msgIndex)
+    const sessionId = chatStore.currentSessionId
+    if (!userMsg) return
 
     // AP-096 前置闸：流式/发送中不允许重试——否则删光整轮后 handleSend 被 shouldBlockChatSend
     // 拦截返回 false，整轮已删却发不出去 = 静默数据丢失。先拦在删除之前。
@@ -180,14 +180,42 @@ export function useChatActions(
       return
     }
 
-    const userMsg = msgs[userMsgIdx]!
-    const sessionId = chatStore.currentSessionId
+    const isLocalReply = (message: ChatMessage | undefined) => message?.role === 'assistant'
+      && (message.id.startsWith('fastpath-') || message.id.startsWith('slash-'))
+    if (userMsg.id.startsWith('user-') && isLocalReply(targetMsg)) {
+      if (regeneratingLocalReply) return
+      regeneratingLocalReply = true
+      const rows = chatStore.messages
+      const originalLength = rows.length
+      try {
+        // 本地提示没有后端轮次，只替换本次成功生成的本地回复。
+        if (!(await handleSend(userMsg.content))) {
+          toast.error(i18n.global.t('chat.retryFailed'))
+          return
+        }
+        const reply = rows[originalLength + 1]
+        const replacementIndex = rows.findIndex(({ id }) => id === targetMsg.id)
+        if (chatStore.messages === rows && chatStore.currentSessionId === sessionId && replacementIndex >= 0
+          && rows[originalLength]?.id.startsWith('user-') && reply && isLocalReply(reply)) {
+          rows.splice(originalLength, 2)
+          rows.splice(replacementIndex, 1, reply)
+        }
+      } catch (error) {
+        logger.warn('Local chat regeneration failed', error)
+        toast.error(i18n.global.t('chat.retryFailed'))
+      } finally {
+        regeneratingLocalReply = false
+      }
+      return
+    }
+    if (!sessionId) return
+
+    const sourceMessageId = backendDeletableMessageId(userMsg)
     const requestId = typeof targetMsg.metadata?.request_id === 'string'
       ? targetMsg.metadata.request_id.trim()
       : ''
     // 持久失败回执先交原场景对账；领域成功与外层模型失败分开，不能删历史再生成。
-    if (targetMsg.metadata?.is_error === true && sessionId && requestId && recoverFailedReply) {
-      const sourceMessageId = backendDeletableMessageId(userMsg)
+    if (targetMsg.metadata?.is_error === true && requestId && recoverFailedReply) {
       if (sourceMessageId === requestId) {
         try {
           if (await recoverFailedReply({
@@ -206,24 +234,11 @@ export function useChatActions(
       }
     }
 
-    // 只读恢复不依赖模型；普通明确重新生成仍在删除前核对原模型设置。
-    const model = chatStore.chatParams.model
-    if (model !== undefined && model.trim() === '') {
-      toast.error(i18n.global.t('chat.selectModelFirst'))
-      return
-    }
-    const userText = userMsg.content
-    // BUG-20260625：重试必须带回原用户消息的图片附件 + 挂载技能，否则重发丢图。
-    const carry = resendCarryFrom(userMsg)
-
-    // AP-096 兜底：删前快照，供"删成功但重发失败/被拒"时恢复 UI，绝不让整轮凭空消失。
-    const snapshot = chatStore.messages.slice(userMsgIdx)
-    // 原子删除整轮（用户消息 + AI 回复），失败则已回滚+提示、不重发。
-    if (!(await removeRangeAtomic(userMsgIdx))) return
-
-    const ok = carry ? await handleSend(userText, undefined, carry) : await handleSend(userText)
-    if (!ok) {
-      chatStore.messages.splice(userMsgIdx, 0, ...snapshot)
+    // 由后端直接复用原持久内容和附件。旧回复保留到新结果原子提交成功。
+    try {
+      await chatStore.sendMessage('', undefined, { targetSessionId: sessionId, regenerateFromMessageId: sourceMessageId })
+    } catch (error) {
+      logger.warn('Atomic chat regeneration failed', error)
       toast.error(i18n.global.t('chat.retryFailed'))
     }
   }
@@ -395,6 +410,7 @@ export function useChatActions(
     editingMsgId,
     editingText,
     handleRetry,
+    blockedRegeneration,
     handleFork,
     handleLike,
     handleDislike,

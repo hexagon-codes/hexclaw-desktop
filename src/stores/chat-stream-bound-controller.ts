@@ -65,6 +65,8 @@ export function createBoundChatStreamController(params: {
       blocks?: ChatMessage['blocks']
       agentName?: string
       reasoning?: string
+      outcomeUnconfirmed?: true
+      regenerateFromMessageId?: string
     }) {
       return streamController.finalizeAssistantMessage({ ...params, sending, draftSending })
     },

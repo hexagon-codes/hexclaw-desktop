@@ -4,7 +4,7 @@ type MessageServiceModule = Pick<typeof import('@/services/messageService'), 'up
 
 export function createChatSendAutoTitleController(params: {
   msgSvc: MessageServiceModule
-  pendingAutoTitleSync: Map<string, Promise<void>>
+  pendingAutoTitleSync: Map<string, Promise<string>>
   setLocalSessionTitle: (sessionId: string, title: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
   defaultSessionTitle?: string
@@ -26,8 +26,11 @@ export function createChatSendAutoTitleController(params: {
     setLocalSessionTitle(sessionId, tempTitle)
     setPendingSuggestedTitleExpectation(sessionId, tempTitle)
     const titleSync = msgSvc.updateSessionTitle(sessionId, tempTitle)
-      .catch(() => {
-        setPendingSuggestedTitleExpectation(sessionId, defaultSessionTitle)
+      .then(() => tempTitle, () => {
+        if (pendingAutoTitleSync.get(sessionId) === titleSync) {
+          setPendingSuggestedTitleExpectation(sessionId, defaultSessionTitle)
+        }
+        return defaultSessionTitle
       })
       .finally(() => {
         if (pendingAutoTitleSync.get(sessionId) === titleSync) {

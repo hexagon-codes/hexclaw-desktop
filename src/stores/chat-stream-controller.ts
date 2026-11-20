@@ -25,16 +25,18 @@ export function createChatStreamController(params: {
   error: Ref<import('@/types').ApiError | null>
   pendingSuggestedTitleExpectation: Ref<Record<string, string>>
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
-  pendingAutoTitleSync: Map<string, Promise<void>>
+  pendingAutoTitleSync: Map<string, Promise<string>>
   cancelledSessions: Set<string>
   msgSvc: MessageServiceModule
   chatSvc: ChatServiceModule
   logger: LoggerModule
   createId: () => string
   loadSessions: () => Promise<void>
-  setLocalSessionTitle: (sessionId: string, title: string) => void
+  refreshReplacedHistory: (sessionId: string, requestId?: string) => Promise<void>
+  setLocalSessionTitle: (sessionId: string, title: string, expectedTitle?: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
   bumpLocalSession: (sessionId: string) => void
+  projectObservedMessage: (sessionId: string, message: ChatMessage, regenerateFromMessageId?: string) => void
   extractArtifacts: (content: string, messageId: string) => void
   storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
   listActiveStreams: typeof import('@/api/chat').listActiveStreams
@@ -63,9 +65,11 @@ export function createChatStreamController(params: {
     logger,
     createId,
     loadSessions,
+    refreshReplacedHistory,
     setLocalSessionTitle,
     setPendingSuggestedTitleExpectation,
     bumpLocalSession,
+    projectObservedMessage,
     extractArtifacts,
     storePendingApproval,
     listActiveStreams,
@@ -114,11 +118,13 @@ export function createChatStreamController(params: {
     bumpLocalSession,
     extractArtifacts,
     appendMessageToSession: stateController.appendMessageToSession,
+    projectObservedMessage,
     resetSessionStream: stateController.resetSessionStream,
   })
 
   const cancelController = createChatStreamCancelController({
     activeStreams,
+    pendingSessionIds,
     currentSessionId,
     messages,
     streaming,
@@ -146,6 +152,7 @@ export function createChatStreamController(params: {
     appendMessageToSession: stateController.appendMessageToSession,
     resetSessionStream: stateController.resetSessionStream,
     loadSessions,
+    refreshReplacedHistory,
     // 延迟访问 + best-effort：失败回复落库失败不影响错误展示，
     // 也容忍测试里 messageService 的部分 mock（缺该导出时静默跳过）。
     persistErrorReply: (sessionId, message) => {

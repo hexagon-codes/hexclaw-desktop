@@ -1,5 +1,7 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
+import { backendDeletableMessageId } from '@/utils/chat-message-id'
+import { hasPersistedAssistantReply } from './chat-stream-completion'
 import {
   buildRecoveredStreamState,
   buildStreamingMirrorState,
@@ -98,6 +100,14 @@ export function createChatStreamStateController(params: {
 
   function appendMessageToSession(sessionId: string, message: ChatMessage) {
     if (currentSessionId.value === sessionId) {
+      if (hasPersistedAssistantReply(message.metadata)) {
+        const id = backendDeletableMessageId(message)
+        const index = messages.value.findIndex((row) => backendDeletableMessageId(row) === id)
+        if (index >= 0) {
+          if (messages.value[index]?.metadata?.outcome_unconfirmed) messages.value[index] = message
+          return
+        }
+      }
       messages.value.push(message)
     }
     msgSvc.persistMessage(message, sessionId)
@@ -140,6 +150,7 @@ export function createChatStreamStateController(params: {
         ...recovered.assistantMessageAliases,
       ]))
       recovered.requestRoute = current.requestRoute
+      recovered.regenerateFromMessageId ??= current.regenerateFromMessageId
       recovered.startedAt = current.startedAt ?? recovered.startedAt
       recovered.thinkingEnabled = current.thinkingEnabled ?? recovered.thinkingEnabled
       recovered.agentDisplayName ??= current.agentDisplayName
