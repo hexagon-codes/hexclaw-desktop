@@ -222,7 +222,14 @@ describe('V-4 VoiceChatComposer 录音中 mouseleave 误触发发送', () => {
     })
     vi.stubGlobal('Audio', class { play() { return Promise.resolve() } } as unknown as typeof Audio)
 
-    const wrapper = mount(Composer, { props: { modelId: 'gpt-4o-audio', modelName: 'GPT-4o' } })
+    const wrapper = mount(Composer, { props: {
+      modelId: 'gpt-4o-audio',
+      modelName: 'GPT-4o',
+      captureExchange: () => async () => ({
+        result: { provider: 'p', model: 'm', transcript: 'hi' },
+        isCurrent: () => true,
+      }),
+    } })
     return { wrapper }
   }
 

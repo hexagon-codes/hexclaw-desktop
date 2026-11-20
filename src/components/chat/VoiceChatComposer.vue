@@ -7,26 +7,31 @@
  */
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { Mic, Loader2, Send, MessageCircle } from 'lucide-vue-next'
-import { voiceChat, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
+import { audioToSrc, type VoiceChatRequest, type VoiceChatResult } from '@/api/voicechat'
 import { logger } from '@/utils/logger'
 import { inputLimitError } from '@/utils/input-limits'
 import { audioBlobToWavBase64 } from '@/utils/audio-wav'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { useBackendMedia } from '@/composables/useBackendMedia'
 
+type VoiceExchange = (request: VoiceChatRequest) => Promise<{
+  result: VoiceChatResult
+  isCurrent: () => boolean
+} | null>
+
 const props = defineProps<{
   modelId: string
   modelName: string
+  captureExchange: () => VoiceExchange
 }>()
 
 const emit = defineEmits<{
-  exchanged: [result: VoiceChatResult, userPrompt: string]
   error: [message: string]
 }>()
 
 const recording = ref(false)
 const sending = ref(false)
-const text = ref('')
+const text = defineModel<string>('text', { default: '' })
 const lastError = ref('')
 type Voice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer'
 const voice = ref<Voice>('alloy')
@@ -55,16 +60,20 @@ let canceling = false
 const backendMedia = useBackendMedia()
 let playback: HTMLAudioElement | null = null
 
-async function playResponse(source: string) {
+async function playResponse(source: string, isCurrent: () => boolean) {
+  if (!isCurrent()) return
   playback?.pause()
   backendMedia.retain([source])
   const url = await backendMedia.load(source)
+  if (!isCurrent()) return
   playback = new Audio(url)
   await playback.play()
 }
 
 async function startRecording() {
   if (recording.value || sending.value) return
+  const exchange = props.captureExchange()
+  const request = { model: props.modelId, format: 'wav', voice: voice.value }
   lastError.value = ''
   try {
     activeStream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -93,7 +102,7 @@ async function startRecording() {
         canceling = false
         return
       }
-      await sendAudio(blob)
+      await sendAudio(blob, exchange, request)
     }
     // timeslice=1000ms 每秒切一次数据块（长录音不积压单块）
     mediaRecorder.start(1000)
@@ -118,7 +127,7 @@ function cancelRecording() {
   try { mediaRecorder.stop() } catch { /* ignore */ }
 }
 
-async function sendAudio(blob: Blob) {
+async function sendAudio(blob: Blob, exchange: VoiceExchange, request: VoiceChatRequest) {
   sending.value = true
   try {
     // AUD-4：gpt-4o-audio 的 input_audio 只收 wav/mp3，而 MediaRecorder 产出 webm/opus。
@@ -130,19 +139,13 @@ async function sendAudio(blob: Blob) {
       logger.warn('[VoiceChatComposer] WAV 转码不可用，回退原始音频直传', convErr)
       audioB64 = await blobToBase64(blob)
     }
-    const result = await voiceChat({
-      model: props.modelId,
-      audio: audioB64,
-      format: 'wav', // 输入已转码为 WAV + 期望输出 wav
-      voice: voice.value,
-    })
-    const userPrompt = result.user_text || '[语音输入]'
-    emit('exchanged', result, userPrompt)
+    const response = await exchange({ ...request, audio: audioB64 })
+    if (!response) return
     // 自动播放回应；autoplay policy 拒绝时提示用户手动点消息播放
-    const src = audioToSrc(result)
+    const src = audioToSrc(response.result)
     if (src) {
       try {
-        await playResponse(src)
+        await playResponse(src, response.isCurrent)
       } catch (playErr) {
         lastError.value = '浏览器阻止自动播放，请点击消息气泡里的播放按钮'
         logger.warn('[VoiceChatComposer] autoplay blocked', playErr)
@@ -177,18 +180,17 @@ async function sendText() {
   }
   sending.value = true
   try {
-    const result = await voiceChat(request)
-    emit('exchanged', result, t)
-    const src = audioToSrc(result)
+    const response = await props.captureExchange()(request)
+    if (!response?.isCurrent()) return
+    const src = audioToSrc(response.result)
     if (src) {
       try {
-        await playResponse(src)
+        await playResponse(src, response.isCurrent)
       } catch (playErr) {
         lastError.value = '浏览器阻止自动播放，请点击消息气泡里的播放按钮'
         logger.warn('[VoiceChatComposer] autoplay blocked', playErr)
       }
     }
-    text.value = ''
   } catch (e) {
     const msg = e instanceof Error ? e.message : '对话失败'
     lastError.value = msg
@@ -216,6 +218,7 @@ onBeforeUnmount(() => {
   playback?.pause()
   playback = null
   if (mediaRecorder?.state !== 'inactive') {
+    canceling = true
     try { mediaRecorder?.stop() } catch { /* ignore */ }
   }
   activeStream?.getTracks().forEach(t => t.stop())

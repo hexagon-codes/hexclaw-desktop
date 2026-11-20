@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch, computed, shallowReactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -141,7 +141,7 @@ import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
 import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
 import { getVideoGenStatus, videoToSrc, coverToSrc, type VideoTaskStatus } from '@/api/videogen'
-import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
+import { getVoiceChatStatus, audioToSrc, voiceChat, type VoiceChatRequest, type VoiceChatResult } from '@/api/voicechat'
 import { nanoid } from 'nanoid'
 import type {
   ChatAttachment,
@@ -3008,11 +3008,10 @@ watch(
  * 持久化生成模式消息 — 走 batch 接口单事务落库，避免 user 写成功但 assistant 失败的不一致。
  * 失败时 toast 通知用户（UI 保留消息不阻断），引导其在下次刷新前知晓可能丢失。
  */
-async function persistGenMessages(userMsg: ChatMessage, assistantMsg: ChatMessage) {
-  const sid = chatStore.currentSessionId
+async function persistGenMessages(sid: string | null, userMsg: ChatMessage, assistantMsg: ChatMessage) {
   if (!sid) {
     logger.warn('[ChatView] no currentSessionId, skipping persist')
-    return
+    return false
   }
   try {
     await appendSessionMessagesBatch(sid, [
@@ -3032,9 +3031,11 @@ async function persistGenMessages(userMsg: ChatMessage, assistantMsg: ChatMessag
         parent_id: userMsg.id,
       },
     ])
+    return true
   } catch (e) {
     logger.error('[ChatView] persist gen messages failed', e)
     toast.error?.(t('chat.persistFailed', '消息已生成但保存失败，刷新会话后可能丢失'))
+    return false
   }
 }
 
@@ -3144,7 +3145,7 @@ async function handleImageGenerated(result: ImageGenResult, prompt: string) {
     usage_ms: result.usage_ms,
     attachments,
   }
-  void persistGenMessages(userMsg, assistantMsg)
+  void persistGenMessages(chatStore.currentSessionId, userMsg, assistantMsg)
   await nextTick(scrollToBottom)
 }
 
@@ -3206,18 +3207,59 @@ async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
     poster: coverSrc || undefined,
     attachments,
   }
-  void persistGenMessages(userMsg, assistantMsg)
+  void persistGenMessages(chatStore.currentSessionId, userMsg, assistantMsg)
   await nextTick(scrollToBottom)
 }
+
+const voiceTextDrafts = shallowReactive(new Map<string, { text: string }>())
+function voiceDraftKey(backend: string, sessionId: string | null) {
+  return JSON.stringify([backend, sessionId, sessionId ? '' : chatStore.agentRole])
+}
+const voiceDraftText = computed({
+  get: () => voiceTextDrafts.get(voiceDraftKey(backendScopeKey(), chatStore.currentSessionId))?.text ?? '',
+  set: (text) => {
+    const key = voiceDraftKey(backendScopeKey(), chatStore.currentSessionId)
+    if (text) voiceTextDrafts.set(key, { text })
+    else voiceTextDrafts.delete(key)
+  },
+})
 
 /**
  * 语音对话回合完成 — user 输入（语音转写 or 文字） + assistant 音频/转写。
  * 音频走 file_path 持久化（同 image/video gen），24h 后旧消息仍能播放。
  */
-async function handleVoiceChatExchanged(result: VoiceChatResult, userPrompt: string) {
-  if (!chatStore.currentSessionId) {
-    await chatStore.ensureSession()
+function captureVoiceExchange() {
+  const backend = backendScopeKey()
+  const originalSession = chatStore.currentSessionId
+  const originalKey = voiceDraftKey(backend, originalSession)
+  const draft = voiceTextDrafts.get(originalKey)
+  return async (request: VoiceChatRequest) => {
+    if (backend !== backendScopeKey()) return null
+    if (!originalSession && chatStore.currentSessionId !== originalSession) return null
+    const sessionID = originalSession ?? await chatStore.ensureSession()
+    if (!sessionID || backend !== backendScopeKey()) return null
+    const isCurrent = () => backend === backendScopeKey() && chatStore.currentSessionId === sessionID
+    const submittedDraft = request.text && draft?.text.trim() === request.text ? draft : undefined
+    let draftKey = originalKey
+    if (submittedDraft && !originalSession && voiceTextDrafts.get(originalKey) === submittedDraft) {
+      const sessionKey = voiceDraftKey(backend, sessionID)
+      if (!voiceTextDrafts.has(sessionKey)) {
+        voiceTextDrafts.delete(originalKey)
+        voiceTextDrafts.set(sessionKey, submittedDraft)
+        draftKey = sessionKey
+      }
+    }
+    const result = await voiceChat(request)
+    if (backend !== backendScopeKey()) return null
+    const saved = await persistVoiceExchange(sessionID, result, request.text || result.user_text || '[语音输入]', isCurrent)
+    if (saved && submittedDraft && voiceTextDrafts.get(draftKey) === submittedDraft) {
+      voiceTextDrafts.delete(draftKey)
+    }
+    return { result, isCurrent }
   }
+}
+
+async function persistVoiceExchange(sessionID: string, result: VoiceChatResult, userPrompt: string, isCurrent: () => boolean) {
   const ts = new Date().toISOString()
   const userMsg: ChatMessage = {
     id: nanoid(12),
@@ -3250,9 +3292,12 @@ async function handleVoiceChatExchanged(result: VoiceChatResult, userPrompt: str
       attachments,
     },
   }
-  chatStore.messages.push(userMsg, assistantMsg)
-  void persistGenMessages(userMsg, assistantMsg)
-  await nextTick(scrollToBottom)
+  const saving = persistGenMessages(sessionID, userMsg, assistantMsg)
+  if (isCurrent()) {
+    chatStore.messages.push(userMsg, assistantMsg)
+    await nextTick(() => { if (isCurrent()) scrollToBottom() })
+  }
+  return saving
 }
 
 function handleVoiceChatError(message: string) {
@@ -4300,9 +4345,10 @@ function startSidebarResize(event: MouseEvent) {
           <!-- 语音对话模式（audio-to-audio）— 独立媒介，不属于 composer mode 切换范畴 -->
           <VoiceChatComposer
             v-if="isVoiceChatModel"
+            v-model:text="voiceDraftText"
             :model-id="selectedModel"
             :model-name="selectedModelDisplay"
-            @exchanged="handleVoiceChatExchanged"
+            :capture-exchange="captureVoiceExchange"
             @error="handleVoiceChatError"
           />
           <!--
