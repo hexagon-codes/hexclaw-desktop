@@ -31,7 +31,11 @@ const restoreMigration = ref<K12RestoreAsResp | null>(null)
 const guardianConfirmed = ref(false)
 const importError = ref('')
 const exportError = ref('')
-const busy = ref(false)
+const archiveReading = ref(false)
+const operationBusy = ref(false)
+const busy = computed(() => archiveReading.value || operationBusy.value)
+const archiveRecordCount = computed(() => pendingArchive.value?.records?.length ?? 0)
+let archiveReadSequence = 0
 let disposed = false
 const isRestoreAs = computed(() =>
   Boolean(pendingArchive.value && pendingArchive.value.agent_name !== props.agentId),
@@ -108,7 +112,7 @@ onBeforeUnmount(() => {
 
 // 导出：真实 GET /api/k12/backup（服务端全量归档 + checksum）→ 下载 .hexbak
 async function doExport() {
-  busy.value = true
+  operationBusy.value = true
   exportError.value = ''
   try {
     const archive = await k12Backup(props.agentId)
@@ -122,7 +126,7 @@ async function doExport() {
   } catch (e) {
     exportError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    busy.value = false
+    operationBusy.value = false
   }
 }
 
@@ -134,7 +138,7 @@ async function onFile(e: Event) {
     await handleFile(file)
   } finally {
     // 允许修正归档后再次选择同一路径；否则浏览器不会再次触发 change。
-    input.value = ''
+    if (input.files?.[0] === file) input.value = ''
   }
 }
 async function onDrop(e: DragEvent) {
@@ -144,20 +148,29 @@ async function onDrop(e: DragEvent) {
 
 // 选文件只做客户端结构预览；checksum 的真实性由确认后的服务端 restore 校验。
 async function handleFile(file: File) {
+  if (operationBusy.value) return
+  const sequence = ++archiveReadSequence
+  const agent = props.agentId
+  const scope = backendScopeKey()
+  const isCurrentRead = () =>
+    !disposed && sequence === archiveReadSequence && agent === props.agentId &&
+    scope === backendScopeKey()
   importError.value = ''
   pendingArchive.value = null
   restoredCount.value = null
   restoreSnapshot.value = null
   restoreMigration.value = null
   guardianConfirmed.value = false
-  busy.value = true
+  archiveReading.value = true
   try {
     const archive = parseArchive(JSON.parse(await file.text()))
-    pendingArchive.value = archive
+    if (isCurrentRead()) pendingArchive.value = archive
   } catch (e) {
-    importError.value = e instanceof Error ? e.message : t('k12.backup.errorBadFile')
+    if (isCurrentRead()) {
+      importError.value = e instanceof Error ? e.message : t('k12.backup.errorBadFile')
+    }
   } finally {
-    busy.value = false
+    if (!disposed && sequence === archiveReadSequence) archiveReading.value = false
   }
 }
 
@@ -171,7 +184,7 @@ function parseArchive(value: unknown): HexbakArchive {
     !Number.isFinite(archive.exported_at) ||
     typeof archive.agent_name !== 'string' ||
     !archive.agent_name.trim() ||
-    !Array.isArray(archive.records) ||
+    (archive.records !== null && !Array.isArray(archive.records)) ||
     (archive.assets !== undefined && !Array.isArray(archive.assets)) ||
     (archive.creative_work_ocr !== undefined && !Array.isArray(archive.creative_work_ocr)) ||
     (archive.problem_attempts !== undefined && !Array.isArray(archive.problem_attempts)) ||
@@ -213,7 +226,7 @@ async function confirmRestore() {
   if (!archive || !canRestore.value) return
   const target = props.agentId
   const scope = backendScopeKey()
-  busy.value = true
+  operationBusy.value = true
   importError.value = ''
   try {
     if (archive.agent_name !== target) {
@@ -261,14 +274,14 @@ async function confirmRestore() {
       importError.value = e instanceof Error ? e.message : String(e)
     }
   } finally {
-    busy.value = false
+    operationBusy.value = false
   }
 }
 
 async function rollbackMigration() {
   const migration = restoreMigration.value
   if (!migration || migration.status !== 'completed' || busy.value) return
-  busy.value = true
+  operationBusy.value = true
   importError.value = ''
   try {
     restoreMigration.value = await k12RollbackRestoreAs(migration.migration_id, {
@@ -282,7 +295,7 @@ async function rollbackMigration() {
   } catch (e) {
     importError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    busy.value = false
+    operationBusy.value = false
   }
 }
 
@@ -347,7 +360,7 @@ async function saveSnapshot() {
           <p v-if="pendingArchive" class="k12bk__preview" data-testid="backup-restore-preview">
             {{
               t('k12.backup.previewCount', {
-                count: pendingArchive.records.length,
+                count: archiveRecordCount,
                 source: pendingArchive.agent_name,
                 target: agentId,
               })
@@ -366,7 +379,7 @@ async function saveSnapshot() {
               <b>{{ t('k12.backup.impactScope') }}</b
               ><span>{{
                 t('k12.backup.impactDetail', {
-                  count: pendingArchive.records.length,
+                  count: archiveRecordCount,
                   assetCount: pendingArchive.assets?.length ?? 0,
                 })
               }}</span>

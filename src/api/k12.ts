@@ -1723,7 +1723,8 @@ export interface HexbakArchive {
   agent_name: string
   exported_at: number
   profile?: ProfileDTO | null
-  records: unknown[]
+  /** 服务端没有档案记录时保留 null，恢复时不改写归档正文。 */
+  records: unknown[] | null
   /** v3 content-addressed files referenced by canonical record fields. */
   assets?: HexbakAsset[]
   /** v4 confirmed-only CreativeWork OCR evidence, covered by checksum/exact-set validation. */
