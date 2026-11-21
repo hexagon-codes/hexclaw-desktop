@@ -123,6 +123,9 @@ const weeklyProgress = ref<CurriculumProgressDTO | null>(null)
 const weeklySettings = ref<WeeklyPracticeSettingsDTO | null>(null)
 const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
 const weeklyHistory = ref<WeeklyPracticeHistorySummaryDTO[]>([])
+const weeklyHistoryCursor = ref<string | null>(null)
+let historyGeneration = 0
+let loadingHistoryPage = false
 const weeklyOutput = ref<WeeklyPracticePrepareOutputResp | null>(null)
 const weeklyHistorySnapshot = ref<WeeklyPracticeSnapshotDTO | null>(null)
 // 方案 1（用户批准）：学情趋势数据可用即显示「趋势 ↑ 在进步」pill，无数据不显示。
@@ -180,6 +183,9 @@ async function loadWeeklyPractice() {
   if (!props.agentId) return
   const agent = props.agentId
   const sequence = ++weeklyReadSequence
+  historyGeneration++
+  loadingHistoryPage = false
+  weeklyHistoryCursor.value = null
   weeklyLoading.value = true
   weeklyError.value = ''
   try {
@@ -194,6 +200,7 @@ async function loadWeeklyPractice() {
     weeklySettings.value = settingsResp
     weeklyPlan.value = planResp.plan
     weeklyHistory.value = historyResp.items
+    weeklyHistoryCursor.value = historyResp.next_cursor
     if (
       weeklyOutput.value &&
       weeklyOutput.value.snapshot.plan_revision !== planResp.plan.revision
@@ -208,6 +215,27 @@ async function loadWeeklyPractice() {
     }
   } finally {
     if (agent === props.agentId && sequence === weeklyReadSequence) weeklyLoading.value = false
+  }
+}
+
+async function loadNextWeeklyHistory() {
+  const cursor = weeklyHistoryCursor.value
+  if (!cursor || loadingHistoryPage || weeklyView.value !== 'history') return
+  const agent = props.agentId
+  const generation = historyGeneration
+  loadingHistoryPage = true
+  try {
+    const page = await k12GetWeeklyPracticeHistory(agent, cursor)
+    if (agent !== props.agentId || generation !== historyGeneration) return
+    const known = new Set(weeklyHistory.value.map((item) => item.snapshot_id))
+    weeklyHistory.value = [...weeklyHistory.value, ...page.items.filter((item) => !known.has(item.snapshot_id))]
+    weeklyHistoryCursor.value = page.next_cursor === cursor ? null : page.next_cursor
+  } catch (cause) {
+    if (agent === props.agentId && generation === historyGeneration) {
+      weeklyError.value = cause instanceof Error ? cause.message : String(cause)
+    }
+  } finally {
+    if (generation === historyGeneration) loadingHistoryPage = false
   }
 }
 
@@ -674,6 +702,10 @@ watch(
     weeklyTextbookBusy.value = null
     weeklyArithmeticBusy.value = null
     weeklyReadSequence++
+    historyGeneration++
+    loadingHistoryPage = false
+    weeklyHistoryCursor.value = null
+    weeklyHistory.value = []
     accumulationLoadRequest++
     clearArchiveUndos()
     clearAccumulationPoll()
@@ -1764,6 +1796,7 @@ async function doExportMd() {
           :settings="weeklySettings"
           :plan="weeklyPlan"
           :history="weeklyHistory"
+          :history-cursor="weeklyHistoryCursor"
           :history-snapshot="weeklyHistorySnapshot"
           :output="weeklyOutput"
           :loading="weeklyLoading"
@@ -1781,6 +1814,7 @@ async function doExportMd() {
           @open-progress="openWeeklyProfile"
           @update:view="weeklyView = $event"
           @open-history="openWeeklyHistory"
+          @more-history="loadNextWeeklyHistory"
           @history-artifact-action="runWeeklyHistoryArtifactAction"
           @history-insights="emit('go-insights')"
           @arithmetic-action="runWeeklyArithmeticAction"

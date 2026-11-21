@@ -37,6 +37,7 @@ const props = defineProps<{
   settings: WeeklyPracticeSettingsDTO | null
   plan: WeeklyPracticePlanDTO | null
   history: WeeklyPracticeHistorySummaryDTO[]
+  historyCursor?: string | null
   historySnapshot?: WeeklyPracticeSnapshotDTO | null
   output?: WeeklyPracticePrepareOutputResp | null
   loading?: boolean
@@ -58,6 +59,7 @@ type ArithmeticAction = 'create' | 'start' | 'resume' | 'retry'
 const emit = defineEmits<{
   (e: 'open-progress'): void
   (e: 'retry'): void
+  (e: 'more-history'): void
   (e: 'join-practice', item: WeeklyPracticeItemDTO): void
   (e: 'view-practice', item: WeeklyPracticeItemDTO): void
   (e: 'view-mistake', item: WeeklyPracticeItemDTO): void
@@ -84,6 +86,24 @@ const emit = defineEmits<{
 }>()
 
 const activeTab = ref<'current' | 'history'>(props.view ?? 'current')
+const historyList = ref<HTMLElement | null>(null)
+
+watch(
+  () => [historyList.value, props.history, props.historyCursor] as const,
+  ([list, , cursor], _, onCleanup) => {
+    const last = list?.lastElementChild
+    if (!cursor || !last) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect()
+        emit('more-history')
+      }
+    })
+    observer.observe(last)
+    onCleanup(() => observer.disconnect())
+  },
+  { flush: 'post' },
+)
 const historyDetail = ref<WeeklyPracticeHistorySummaryDTO | null>(null)
 const selectedTextbookItemCount = ref<number | null>(5)
 const selectedArithmeticItemCount = ref<number | null>(10)
@@ -1012,7 +1032,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
       </template>
 
       <section v-else class="weekly-history" role="tabpanel" aria-label="历史周练">
-        <div class="weekly-history__list resource-list">
+        <div ref="historyList" class="weekly-history__list resource-list">
           <article
             v-for="item in history"
             :key="item.snapshot_id"
