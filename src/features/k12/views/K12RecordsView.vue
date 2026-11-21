@@ -182,7 +182,10 @@ function weeklyPlanCommandKey(): string {
 async function loadWeeklyPractice() {
   if (!props.agentId) return
   const agent = props.agentId
+  const scope = backendScopeKey()
   const sequence = ++weeklyReadSequence
+  const current = () =>
+    !recordsDisposed && agent === props.agentId && scope === backendScopeKey() && sequence === weeklyReadSequence
   historyGeneration++
   loadingHistoryPage = false
   weeklyHistoryCursor.value = null
@@ -195,7 +198,7 @@ async function loadWeeklyPractice() {
       k12EnsureWeeklyPracticePlan(props.agentId, weeklyPlanCommandKey()),
       k12GetWeeklyPracticeHistory(props.agentId, undefined, 20),
     ])
-    if (agent !== props.agentId || sequence !== weeklyReadSequence) return
+    if (!current()) return
     weeklyProgress.value = progressResp.progress
     weeklySettings.value = settingsResp
     weeklyPlan.value = planResp.plan
@@ -210,11 +213,11 @@ async function loadWeeklyPractice() {
     }
     weeklyPlanIntent.value = null
   } catch (cause) {
-    if (agent === props.agentId && sequence === weeklyReadSequence) {
+    if (current()) {
       weeklyError.value = cause instanceof Error ? cause.message : String(cause)
     }
   } finally {
-    if (agent === props.agentId && sequence === weeklyReadSequence) weeklyLoading.value = false
+    if (current()) weeklyLoading.value = false
   }
 }
 
@@ -222,16 +225,22 @@ async function loadNextWeeklyHistory() {
   const cursor = weeklyHistoryCursor.value
   if (!cursor || loadingHistoryPage || weeklyView.value !== 'history') return
   const agent = props.agentId
+  const scope = backendScopeKey()
   const generation = historyGeneration
+  const current = () =>
+    !recordsDisposed && agent === props.agentId && scope === backendScopeKey() && generation === historyGeneration
   loadingHistoryPage = true
   try {
     const page = await k12GetWeeklyPracticeHistory(agent, cursor)
-    if (agent !== props.agentId || generation !== historyGeneration) return
+    if (!current()) return
     const known = new Set(weeklyHistory.value.map((item) => item.snapshot_id))
-    weeklyHistory.value = [...weeklyHistory.value, ...page.items.filter((item) => !known.has(item.snapshot_id))]
+    weeklyHistory.value = [
+      ...weeklyHistory.value,
+      ...page.items.filter((item) => !known.has(item.snapshot_id)),
+    ]
     weeklyHistoryCursor.value = page.next_cursor === cursor ? null : page.next_cursor
   } catch (cause) {
-    if (agent === props.agentId && generation === historyGeneration) {
+    if (current()) {
       weeklyError.value = cause instanceof Error ? cause.message : String(cause)
     }
   } finally {

@@ -94,7 +94,11 @@ watch(
     const last = list?.lastElementChild
     if (!cursor || !last) return
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
+      if (
+        cursor === props.historyCursor &&
+        last === historyList.value?.lastElementChild &&
+        entries.some((entry) => entry.target === last && entry.isIntersecting)
+      ) {
         observer.disconnect()
         emit('more-history')
       }
