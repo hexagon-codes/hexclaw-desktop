@@ -1078,9 +1078,9 @@ export interface WeeklyArithmeticBatchDTO {
   content_digest: string
   retryable: boolean
   failure_message: string
-  created_at: string
-  updated_at: string
-  completed_at?: string
+  created_at: number
+  updated_at: number
+  completed_at?: number
 }
 
 export interface WeeklyPracticeTrackDTO {
@@ -1111,17 +1111,17 @@ export interface WeeklyPracticePlanDTO {
   iso_week_year: number
   iso_week_number: number
   timezone: string
-  week_start: string
-  week_end: string
+  week_start: number
+  week_end: number
   local_start_date: string
   local_end_date: string
   status: WeeklyPracticePlanStatus
   settings_revision: number
-  curriculum_progress_revision?: number
+  curriculum_progress_revision: number | null
   tracks: WeeklyPracticeTrackDTO[]
   manual_track_recommendations: WeeklyManualTrackRecommendationsDTO
-  created_at: string
-  updated_at: string
+  created_at: number
+  updated_at: number
 }
 
 export interface WeeklyPracticePlanResp {
@@ -1142,8 +1142,8 @@ export interface WeeklyPracticeSnapshotDTO {
   iso_week_year: number
   iso_week_number: number
   timezone: string
-  week_start: string
-  week_end: string
+  week_start: number
+  week_end: number
   local_start_date: string
   local_end_date: string
   settings_revision: number
@@ -1151,7 +1151,7 @@ export interface WeeklyPracticeSnapshotDTO {
   tracks: WeeklyPracticeTrackDTO[]
   render_version: string
   snapshot_digest: string
-  created_at: string
+  created_at: number
 }
 
 export interface WeeklyPracticeHistorySummaryDTO {
@@ -1202,10 +1202,10 @@ export interface WeeklyPracticeAttemptDTO {
   item_id: string
   assessment_id: string
   result: 'correct' | 'wrong' | 'needs_review'
-  verification_evidence: unknown
+  verification_evidence: string
   mistake_record_id?: string
   review_scheduled: boolean
-  created_at: string
+  created_at: number
 }
 
 export interface WeeklyPracticeAttemptResp {

@@ -502,15 +502,15 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       iso_week_year: 2026,
       iso_week_number: 29,
       timezone: 'Asia/Shanghai',
-      week_start: '2026-07-13T00:00:00+08:00',
-      week_end: '2026-07-19T23:59:59+08:00',
+      week_start: 1783872000,
+      week_end: 1784476799,
       local_start_date: '2026-07-13',
       local_end_date: '2026-07-19',
       settings_revision: 0,
       tracks: [],
       render_version: 'weekly-v1',
       snapshot_digest: 'sha256:frozen-history-29',
-      created_at: '2026-07-20T00:00:00+08:00',
+      created_at: 1784476800,
     })
     h.getWeeklyHistorySpy.mockResolvedValue({ items: [historyItem], next_cursor: null })
     h.getWeeklySnapshotSpy.mockResolvedValue(frozenSnapshot)
