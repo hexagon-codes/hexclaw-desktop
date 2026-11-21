@@ -1316,8 +1316,11 @@ function validateParentGuide(value: unknown, path: string): WireRecord {
     'follow_up_questions',
     'checking_method',
   ] as const
-  exact(guide, [...keys, 'teaching_diagrams'], path)
+  exact(guide, [...keys, 'teaching_diagrams', 'teaching_diagram_warnings'], path)
   required(guide, keys, path)
+  if (guide.teaching_diagram_warnings !== undefined) {
+    stringArray(guide.teaching_diagram_warnings, `${path}.teaching_diagram_warnings`)
+  }
   stringValue(guide.answer, `${path}.answer`)
   stringArray(guide.full_solution_steps, `${path}.full_solution_steps`, {
     nonEmptyItems: true,

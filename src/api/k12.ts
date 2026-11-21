@@ -2077,6 +2077,7 @@ export type PhotoJobResultKind =
  */
 export interface ParentTeachingGuideDTO {
   teaching_diagrams?: TeachingDiagramAssetDTO[]
+  teaching_diagram_warnings?: string[]
   answer: string
   full_solution_steps: string[]
   grade_level_method: string

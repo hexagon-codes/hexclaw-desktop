@@ -280,6 +280,17 @@ describe('K12 ImageTaskDispatch public facade', () => {
     Object.values(client).forEach((mock) => mock.mockReset())
   })
 
+  it.each([
+    { warnings: ['Optional teaching diagram storage unavailable: question-1'], valid: true },
+    { warnings: [], valid: true }, { warnings: 'missing image', valid: false }, { warnings: [3], valid: false },
+  ])('校验可选教学图诊断 $warnings', async ({ warnings, valid }) => {
+    const response = homeworkResult('blank_worksheet', { question: recognizedQuestion, status: 'blank_solved',
+      result_kind: 'parent_teaching_guide', parent_guide: { ...parentGuide, teaching_diagram_warnings: warnings } })
+    client.apiGet.mockResolvedValueOnce(response)
+    const observed = k12Api.k12GetImageTaskResult('child', response.dispatch_id).catch((err: Error) => err.message)
+    await expect(observed).resolves.toEqual(valid ? response : 'Invalid image task result response')
+  })
+
   it('同孩子同任务冻结报告允许无批注，保留原图与规范图的不同来源摘要', async () => {
     const { snapshot, response } = frozenTeachingReportPair()
     client.apiGet.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(response)
