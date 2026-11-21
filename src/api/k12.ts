@@ -1061,6 +1061,17 @@ export interface WeeklyPracticeItemDTO {
   mastery_status?: string
   verification: WeeklyPracticeItemVerificationDTO
   prompt_markdown: string
+  source_question?: string
+  asset_source?: {
+    owner_id: string
+    asset_id: string
+    asset_version: number
+    asset_revision: number
+    facts_digest: string
+    grade_term: string
+    knowledge_point: string
+    original_review?: boolean
+  }
 }
 
 export type WeeklyArithmeticBatchState =
@@ -1716,6 +1727,45 @@ export interface HexbakCurrentAccumulation {
   delete_command_key?: string
   delete_receipt_json?: string
 }
+export interface HexbakReviewSchedule {
+  state: NonNullable<MistakeDTO['review_state']>
+  deferred_iso_year?: number
+  deferred_iso_week?: number
+  prior_schedule_json: string
+  revision: number
+  updated_at: number
+}
+export interface HexbakWeeklyHistory {
+  plan: WeeklyPracticePlanDTO
+  plan_source_digest: string
+  plan_answer_keys?: Record<string, string>
+  snapshot: WeeklyPracticeSnapshotDTO
+  snapshot_answer_keys?: Record<string, string>
+  artifact: {
+    artifact_id: string
+    agent_name: string
+    source_kind: 'weekly_practice_snapshot'
+    source_ref: string
+    title: string
+    canonical_markdown: string
+    source_digest: string
+    render_spec_digest?: string
+    created_at: number
+  }
+  render: Omit<PrintableArtifactDTO, 'source_kind' | 'source_ref' | 'title' | 'source_digest'> & {
+    format: 'pdf'
+    content_type: 'application/pdf'
+    created_at: number
+  }
+  /** Go []byte 的 Base64 原文；导入时按原字节校验，不重新生成 PDF。 */
+  pdf: string
+  attempts?: {
+    attempt: WeeklyPracticeAttemptDTO
+    idempotency_key: string
+    request_digest: string
+    updated_at: number
+  }[]
+}
 export interface HexbakArchive {
   version: number
   /** v3 content-addressed immutable archive identity; absent on compatible v1/v2 files. */
@@ -1737,6 +1787,10 @@ export interface HexbakArchive {
   review_sources?: Record<string, unknown> | null
   /** v10积累的来源、派生依据及既有行版本和删除事实；旧版本未携带时保持缺省。 */
   current_accumulations?: HexbakCurrentAccumulation[]
+  /** v11 按原错题 ID 保留复习安排与暂停前的状态。 */
+  review_schedules?: Record<string, HexbakReviewSchedule>
+  /** v12 往期归档周练及其冻结文件。旧归档不补写该字段。 */
+  weekly_history?: HexbakWeeklyHistory[]
   checksum: string
 }
 export interface K12RestoreResp {

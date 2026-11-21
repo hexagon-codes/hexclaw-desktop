@@ -35,6 +35,17 @@ const archiveReading = ref(false)
 const operationBusy = ref(false)
 const busy = computed(() => archiveReading.value || operationBusy.value)
 const archiveRecordCount = computed(() => pendingArchive.value?.records?.length ?? 0)
+const archiveFileCount = computed(() => {
+  const archive = pendingArchive.value
+  const assets = archive?.assets?.length ?? 0
+  if (!archive || archive.version < 12 || !Array.isArray(archive.weekly_history)) return assets
+  const pdfs = new Set<string>()
+  for (const week of archive.weekly_history) {
+    const id = week?.artifact?.artifact_id
+    if (typeof id === 'string' && id && typeof week.pdf === 'string' && week.pdf) pdfs.add(id)
+  }
+  return assets + pdfs.size
+})
 let archiveReadSequence = 0
 let disposed = false
 const isRestoreAs = computed(() =>
@@ -380,7 +391,7 @@ async function saveSnapshot() {
               ><span>{{
                 t('k12.backup.impactDetail', {
                   count: archiveRecordCount,
-                  assetCount: pendingArchive.assets?.length ?? 0,
+                  assetCount: archiveFileCount,
                 })
               }}</span>
             </div>
