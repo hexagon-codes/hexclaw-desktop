@@ -46,7 +46,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ messages: [], total: 0 })
     const { listSessionMessages } = await import('@/api/chat')
     await listSessionMessages('s1', { limit: 100 })
-    expect(mockApi).toHaveBeenCalledWith('GET', '/api/v1/sessions/s1/messages', { limit: 100, user_id: 'desktop-user' })
+    expect(mockApi).toHaveBeenCalledWith('GET', '/api/v1/sessions/s1/messages', { limit: 100, user_id: 'desktop-user' }, undefined)
   })
 
   it('updateSessionTitle 用 PATCH', async () => {
