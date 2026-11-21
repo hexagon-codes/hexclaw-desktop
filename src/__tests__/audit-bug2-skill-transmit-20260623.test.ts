@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ref } from 'vue'
 import { createChatSendDeliveryController } from '@/stores/chat-send-delivery-controller'
+import { buildSessionStreamState } from '@/stores/chat-stream-helpers'
 
 // AUDIT bug#2 2026-06-23：挂载/召唤的技能（skillNames）必须经 metadata.skills 发给后端。
 // 修复前 deliverMessage 不接收 skillNames、也不写入 requestMetadata → 后端永远收不到 → 技能不生效。
@@ -10,12 +11,13 @@ describe('AUDIT bug#2 挂载技能经 metadata.skills 透传给后端', () => {
       cancel: vi.fn(),
       done: Promise.resolve({ content: 'ok', metadata: { backend_message_id: 'm1' } }),
     })
+    const stream = buildSessionStreamState({ sessionId: 's1', requestId: 'req-1', thinkingEnabled: false })
     const controller = createChatSendDeliveryController({
       seedRecoveredStream: vi.fn(),
       chatParams: ref({ provider: 'ollama', model: 'qwen3.5:9b' }),
       agentRole: ref(''),
       thinkingEnabled: ref(false),
-      activeStreams: ref({}),
+      activeStreams: ref({ [stream.sessionId]: stream }),
       chatSvc: {
         ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
         openWebSocketStream,
@@ -35,8 +37,8 @@ describe('AUDIT bug#2 挂载技能经 metadata.skills 透传给后端', () => {
 
     await controller.deliverMessage({
       backendText: '你在哪里',
-      sessionId: 's1',
-      requestId: 'req-1',
+      sessionId: stream.sessionId,
+      requestId: stream.requestId,
       sending: ref(false),
       draftSending: ref(false),
       skillNames: ['前女友'],
