@@ -46,6 +46,7 @@ const REASONING_KEYS = [
 const EFFORT_KEYS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const ASSISTANT_RUN_KEYS = [
   'generating',
+  'outcomeUnconfirmed',
   'preparing',
   'thinking',
   'thought',
@@ -102,6 +103,7 @@ const EXPECTED = {
     },
     assistantRun: {
       generating: '正在回复…',
+      outcomeUnconfirmed: '结果待核实',
       preparing: '正在回复…',
       thinking: '正在深度思考 · {duration}',
       thought: '思考了 {duration}',
@@ -158,6 +160,7 @@ const EXPECTED = {
     },
     assistantRun: {
       generating: 'Responding…',
+      outcomeUnconfirmed: 'Outcome unconfirmed',
       preparing: 'Responding…',
       thinking: 'Deep thinking · {duration}',
       thought: 'Thought for {duration}',
@@ -215,6 +218,7 @@ const EXPECTED = {
     },
     assistantRun: {
       generating: 'جاۋاب ھاسىللىنىۋاتىدۇ…',
+      outcomeUnconfirmed: 'نەتىجە تېخى دەلىللەنمىدى',
       preparing: 'جاۋاب تەييارلىنىۋاتىدۇ…',
       thinking: 'چوڭقۇر ئويلىنىۋاتىدۇ · {duration}',
       thought: 'ئويلاش ۋاقتى {duration}',
