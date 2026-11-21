@@ -108,7 +108,24 @@ watch(
   },
   { flush: 'post' },
 )
-const historyDetail = ref<WeeklyPracticeHistorySummaryDTO | null>(null)
+const historyDetailId = ref<string | null>(null)
+const historyDetail = computed(() =>
+  props.history.find((item) => item.snapshot_id === historyDetailId.value),
+)
+const historyPaperItems = computed(() => {
+  const snapshot = props.historySnapshot
+  const selected = historyDetail.value
+  if (
+    !snapshot || !selected || snapshot.agent !== props.plan?.agent ||
+    snapshot.snapshot_id !== selected.snapshot_id || snapshot.artifact_id !== selected.artifact_id
+  ) {
+    return null
+  }
+  // 卷面沿冻结轨道和题序展示，与该快照的打印件共用已验证题目。
+  return (snapshot.tracks ?? []).flatMap((track) =>
+    (track.items ?? []).filter((item) => item.verification.status === 'verified'),
+  )
+})
 const selectedTextbookItemCount = ref<number | null>(5)
 const selectedArithmeticItemCount = ref<number | null>(10)
 
@@ -385,7 +402,7 @@ function archiveResultLabel(item: WeeklyPracticeHistorySummaryDTO): string {
 }
 
 function openHistory(item: WeeklyPracticeHistorySummaryDTO) {
-  historyDetail.value = item
+  historyDetailId.value = item.snapshot_id
   emit('open-history', item)
 }
 
@@ -1058,7 +1075,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
         <div
           v-if="historyDetail"
           class="weekly-history-dialog__overlay"
-          @click.self="historyDetail = null"
+          @click.self="historyDetailId = null"
         >
           <section
             class="weekly-history-dialog"
@@ -1071,9 +1088,18 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
                 <b>{{ archiveDateLabel(historyDetail) }}</b>
                 <span>{{ archiveWeekLabel(historyDetail) }}</span>
               </div>
-              <button type="button" aria-label="关闭" @click="historyDetail = null">×</button>
+              <button type="button" aria-label="关闭" @click="historyDetailId = null">×</button>
             </header>
             <p>{{ archiveResultLabel(historyDetail) }} · 已归档</p>
+            <div v-if="historyPaperItems" class="weekly-history-dialog__paper">
+              <h2>本周该练</h2>
+              <p>{{ archiveWeekLabel(historyDetail) }}</p>
+              <ol>
+                <li v-for="item in historyPaperItems" :key="item.item_id">
+                  <MarkdownRenderer :content="item.prompt_markdown" :show-artifacts="false" />
+                </li>
+              </ol>
+            </div>
             <div class="weekly-history-dialog__actions">
               <button
                 v-for="action in [
@@ -1475,7 +1501,11 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   background: rgba(8, 18, 32, 0.4);
 }
 .weekly-history-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   padding: 18px;
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
@@ -1486,6 +1516,33 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   display: flex;
   justify-content: space-between;
   gap: 16px;
+}
+.weekly-history-dialog__paper {
+  overflow: auto;
+  padding: 18px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-primary);
+  font-size: 12px;
+}
+.weekly-history-dialog__paper h2 {
+  margin-block: 0.67em;
+  font-size: 24px;
+  font-weight: 700;
+}
+.weekly-history-dialog__paper > p,
+.weekly-history-dialog__paper > ol {
+  margin-block: 1em;
+}
+.weekly-history-dialog__paper > ol {
+  padding-inline-start: 40px;
+  list-style: decimal;
+}
+.weekly-history-dialog__paper :deep(.markdown-body) {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 .weekly-history-dialog header > div {
   display: grid;
