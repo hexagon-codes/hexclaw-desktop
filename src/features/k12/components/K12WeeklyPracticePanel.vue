@@ -38,6 +38,7 @@ const props = defineProps<{
   plan: WeeklyPracticePlanDTO | null
   history: WeeklyPracticeHistorySummaryDTO[]
   historyCursor?: string | null
+  historyPageError?: string
   historySnapshot?: WeeklyPracticeSnapshotDTO | null
   output?: WeeklyPracticePrepareOutputResp | null
   loading?: boolean
@@ -89,13 +90,14 @@ const activeTab = ref<'current' | 'history'>(props.view ?? 'current')
 const historyList = ref<HTMLElement | null>(null)
 
 watch(
-  () => [historyList.value, props.history, props.historyCursor] as const,
-  ([list, , cursor], _, onCleanup) => {
+  () => [historyList.value, props.history, props.historyCursor, props.historyPageError] as const,
+  ([list, , cursor, pageError], _, onCleanup) => {
     const last = list?.lastElementChild
-    if (!cursor || !last) return
+    if (!cursor || !last || pageError) return
     const observer = new IntersectionObserver((entries) => {
       if (
         cursor === props.historyCursor &&
+        !props.historyPageError &&
         last === historyList.value?.lastElementChild &&
         entries.some((entry) => entry.target === last && entry.isIntersecting)
       ) {
@@ -473,16 +475,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
 <template>
   <section class="weekly" aria-labelledby="weekly-title">
     <div v-if="loading" class="weekly__state" role="status">正在读取本周计划…</div>
-    <div
-      v-else-if="error"
-      class="weekly__state weekly__state--error"
-      role="alert"
-      data-testid="weekly-practice-error"
-    >
-      <span>{{ error }}</span>
-      <button type="button" class="btn btn-ghost" @click="emit('retry')">重试</button>
-    </div>
-    <template v-else-if="plan && settings">
+    <template v-else-if="!error && plan && settings">
       <div class="weekly-toolbar k12-secondary-toolbar">
         <K12BookTabs
           class="weekly-view-tabs"
@@ -1131,7 +1124,17 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
         </div>
       </Teleport>
     </template>
-    <div v-else class="weekly__state">当前周尚无计划</div>
+    <div v-else-if="!error" class="weekly__state">当前周尚无计划</div>
+    <div
+      v-if="!loading && (error || historyPageError)"
+      class="weekly__state weekly__state--error"
+      :class="{ 'weekly__state--history-page': !error }"
+      role="alert"
+      data-testid="weekly-practice-error"
+    >
+      <span>{{ error || historyPageError }}</span>
+      <button type="button" class="btn btn-ghost" @click="emit('retry')">重试</button>
+    </div>
   </section>
 </template>
 
@@ -1155,6 +1158,14 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   justify-content: space-between;
   gap: 12px;
   color: var(--hc-error);
+}
+.weekly__state--history-page {
+  margin-top: 10px;
+  padding: 11px 13px;
+  background: var(--k12-card, var(--hc-bg-card));
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 .weekly-view-tabs {
   width: auto;

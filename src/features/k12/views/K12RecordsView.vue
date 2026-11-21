@@ -124,6 +124,12 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO | null>(null)
 const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
 const weeklyHistory = ref<WeeklyPracticeHistorySummaryDTO[]>([])
 const weeklyHistoryCursor = ref<string | null>(null)
+const weeklyHistoryPageFailure = ref<{
+  scope: string
+  agent: string
+  cursor: string
+  message: string
+} | null>(null)
 let historyGeneration = 0
 let loadingHistoryPage = false
 const weeklyOutput = ref<WeeklyPracticePrepareOutputResp | null>(null)
@@ -140,6 +146,17 @@ const weeklyArithmeticBusy = ref<string | null>(null)
 let weeklyReadSequence = 0
 const weeklyError = ref('')
 const weeklyView = ref<'current' | 'history'>('current')
+const weeklyHistoryPageError = computed(() => {
+  const failed = weeklyHistoryPageFailure.value
+  if (
+    !failed ||
+    weeklyView.value !== 'history' ||
+    failed.agent !== props.agentId ||
+    failed.scope !== backendScopeKey() ||
+    failed.cursor !== weeklyHistoryCursor.value
+  ) return ''
+  return failed.message
+})
 const weeklyPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
 const profileOpen = ref(false)
 const profileAgent = computed(() =>
@@ -189,6 +206,7 @@ async function loadWeeklyPractice() {
   historyGeneration++
   loadingHistoryPage = false
   weeklyHistoryCursor.value = null
+  weeklyHistoryPageFailure.value = null
   weeklyLoading.value = true
   weeklyError.value = ''
   try {
@@ -239,13 +257,25 @@ async function loadNextWeeklyHistory() {
       ...page.items.filter((item) => !known.has(item.snapshot_id)),
     ]
     weeklyHistoryCursor.value = page.next_cursor === cursor ? null : page.next_cursor
+    weeklyHistoryPageFailure.value = null
   } catch (cause) {
     if (current()) {
-      weeklyError.value = cause instanceof Error ? cause.message : String(cause)
+      weeklyHistoryPageFailure.value = {
+        scope,
+        agent,
+        cursor,
+        message: cause instanceof Error ? cause.message : String(cause),
+      }
     }
   } finally {
     if (generation === historyGeneration) loadingHistoryPage = false
   }
+}
+
+function retryWeeklyPractice() {
+  const historyRetry = weeklyView.value === 'history' && weeklyHistoryPageFailure.value
+  if (!historyRetry || weeklyError.value) return loadWeeklyPractice()
+  if (weeklyHistoryPageError.value) return loadNextWeeklyHistory()
 }
 
 // 分区完成后只回读服务端当前计划，保留工作区；迟到响应不能覆盖另一分区或孩子。
@@ -714,6 +744,7 @@ watch(
     historyGeneration++
     loadingHistoryPage = false
     weeklyHistoryCursor.value = null
+    weeklyHistoryPageFailure.value = null
     weeklyHistory.value = []
     accumulationLoadRequest++
     clearArchiveUndos()
@@ -1813,13 +1844,14 @@ async function doExportMd() {
           :textbook-busy="weeklyTextbookBusy === agentId"
           :arithmetic-busy="weeklyArithmeticBusy === agentId"
           :error="weeklyError"
+          :history-page-error="weeklyHistoryPageError"
           :delivery-label="weeklyDelivery.label.value"
           :delivery-disabled="weeklyDelivery.disabled.value"
           :view="weeklyView"
           :practice-generation-by-mistake="practiceGenerationByMistake"
           :practice-generation-busy="practiceGenerationBusy"
           :trend-pill="hasWeeklyTrend"
-          @retry="loadWeeklyPractice"
+          @retry="retryWeeklyPractice"
           @open-progress="openWeeklyProfile"
           @update:view="weeklyView = $event"
           @open-history="openWeeklyHistory"
