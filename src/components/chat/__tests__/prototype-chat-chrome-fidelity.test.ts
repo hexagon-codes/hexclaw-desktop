@@ -66,7 +66,9 @@ describe('prototype chat chrome fidelity', () => {
       'formatClockTime(msg.timestamp)',
     )
     expect(assistantFooter).toContain('formatClockTime(msg.timestamp)')
-    expect(assistantFooter).toContain(':retry-disabled="isLiveAssistantMessage(msg)"')
+    expect(assistantFooter).toContain(
+      ':retry-disabled="isLiveAssistantMessage(msg) || blockedRegeneration(windowOffset + idx)"',
+    )
     expect(assistantFooter).not.toContain('hc-msg__actions-float')
 
     const userFooter = chatView.slice(
