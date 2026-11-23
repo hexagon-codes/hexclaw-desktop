@@ -285,8 +285,8 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   textbook_consolidation_tier: 'standard',
   arithmetic_warmup_enabled: false,
   arithmetic_minutes: 2,
-  created_at: '',
-  updated_at: '',
+  created_at: 0,
+  updated_at: 0,
 })
 const profileBundleKey = ref('')
 let pendingProfileCommand: UpdateProfileBundleReq | null = null

@@ -221,6 +221,10 @@ export const K12_IMAGE_TASK_SCHEMA = {
       ],
       "type": "object"
     },
+    "imageTaskSourceDigest": {
+      "pattern": "^(?:page-assets-v1:)?sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
     "operationReceipt": {
       "additionalProperties": false,
       "allOf": [
@@ -265,8 +269,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "type": "integer"
         },
         "canonical_input_digest": {
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": "string"
+          "$ref": "#/$defs/imageTaskSourceDigest"
         },
         "execution_kind": {
           "enum": [
@@ -750,8 +753,7 @@ export const K12_IMAGE_TASK_SCHEMA = {
           "type": "array"
         },
         "source_digest": {
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": "string"
+          "$ref": "#/$defs/imageTaskSourceDigest"
         },
         "status": {
           "enum": [

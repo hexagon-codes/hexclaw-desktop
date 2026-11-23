@@ -491,7 +491,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       correct_count: 7,
       wrong_count: 1,
       needs_review_count: 0,
-      archived_at: '2026-07-20T00:00:00+08:00',
+      archived_at: Date.parse('2026-07-20T00:00:00+08:00') / 1000,
     })
     const frozenSnapshot = Object.freeze({
       snapshot_id: 'snapshot-29',

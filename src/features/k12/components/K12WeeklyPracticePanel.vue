@@ -201,7 +201,7 @@ const sectionDescriptions: Record<WeeklyPracticeSection, string> = {
   textbook_consolidation: '只补充已确认教材进度内的内容，默认不自动生成',
   arithmetic_warmup: '只练已经学过的运算，按本次题量手动开始',
 }
-const generationLabels: Record<WeeklyPracticeItemDTO['generation_method'], string> = {
+const generationLabels: Partial<Record<WeeklyPracticeItemDTO['generation_method'], string>> = {
   original: '原题',
   ai_variant: 'AI变式',
   ai_generated: 'AI生成',

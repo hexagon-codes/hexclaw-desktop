@@ -37,8 +37,8 @@ const settings = {
   textbook_consolidation_tier: 'standard' as const,
   arithmetic_warmup_enabled: true,
   arithmetic_minutes: 2,
-  created_at: '2026-07-20T00:00:00Z',
-  updated_at: '2026-07-20T00:00:00Z',
+  created_at: Date.parse('2026-07-20T00:00:00Z') / 1000,
+  updated_at: Date.parse('2026-07-20T00:00:00Z') / 1000,
 }
 
 const plan = {
@@ -153,7 +153,7 @@ describe('K12WeeklyPracticePanel projection', () => {
       correct_count: 7,
       wrong_count: 1,
       needs_review_count: 0,
-      archived_at: '2026-07-20T00:00:00+08:00',
+      archived_at: Date.parse('2026-07-20T00:00:00+08:00') / 1000,
     })
     const historySnapshot = Object.freeze({
       snapshot_id: 'snapshot-29',
