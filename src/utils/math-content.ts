@@ -503,23 +503,6 @@ function pushText(segments: PlainMathSegment[], content: string) {
   }
 }
 
-function parseDollarMath(source: string): PlainMathSegment[] {
-  return parseDollarMathWithOffsets(source).map((segment) => (
-    segment.type === 'math'
-      ? {
-          type: 'math',
-          content: segment.content,
-          source: segment.source,
-          display: segment.display,
-        }
-      : {
-          type: 'text',
-          content: segment.content,
-          source: segment.source,
-        }
-  ))
-}
-
 type IndexedPlainMathSegment = PlainMathSegment & { start: number; end: number }
 
 function parseDollarMathWithOffsets(source: string): IndexedPlainMathSegment[] {
@@ -585,6 +568,24 @@ function parseDollarMathWithOffsets(source: string): IndexedPlainMathSegment[] {
   return segments
 }
 
+function* parsePlainMathWithOffsets(source: string): Iterable<IndexedPlainMathSegment> {
+  for (const segment of parseDollarMathWithOffsets(source)) {
+    // 已定界公式的括号属于 TeX 内容，不能再次作为纯文本公式归一化。
+    if (segment.type === 'math') {
+      yield segment
+      continue
+    }
+    const normalized = normalizeMathTextWithSourceMap(segment.content)
+    for (const projected of parseDollarMathWithOffsets(normalized.content)) {
+      yield {
+        ...projected,
+        start: segment.start + normalized.sourceBoundaries[projected.start]!,
+        end: segment.start + normalized.sourceBoundaries[projected.end]!,
+      }
+    }
+  }
+}
+
 /** Tokenize plain user text into literal text and safe KaTeX render units. */
 export function plainMathSegments(source: string): PlainMathSegment[] {
   const segments: PlainMathSegment[] = []
@@ -593,9 +594,16 @@ export function plainMathSegments(source: string): PlainMathSegment[] {
       pushText(segments, part.content)
       continue
     }
-    for (const segment of parseDollarMath(normalizeMathText(part.content))) {
+    for (const segment of parsePlainMathWithOffsets(part.content)) {
       if (segment.type === 'text') pushText(segments, segment.content)
-      else segments.push(segment)
+      else {
+        segments.push({
+          type: 'math',
+          content: segment.content,
+          source: segment.source,
+          display: segment.display,
+        })
+      }
     }
   }
   return segments
@@ -622,10 +630,9 @@ export function plainMathSegmentsWithSourceSpans(
       continue
     }
 
-    const normalized = normalizeMathTextWithSourceMap(part.content)
-    for (const segment of parseDollarMathWithOffsets(normalized.content)) {
-      const sourceStart = part.start + normalized.sourceBoundaries[segment.start]!
-      const sourceEnd = part.start + normalized.sourceBoundaries[segment.end]!
+    for (const segment of parsePlainMathWithOffsets(part.content)) {
+      const sourceStart = part.start + segment.start
+      const sourceEnd = part.start + segment.end
       const canonicalSlice = source.slice(sourceStart, sourceEnd)
       segments.push({
         ...(segment.type === 'math'
