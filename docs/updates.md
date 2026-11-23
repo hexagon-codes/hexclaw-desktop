@@ -2,17 +2,13 @@
 
 # 自动更新发布说明
 
-## Unreleased（源码增量，未发布）
+## v0.5.2（2026-11-24）
 
-当前源码在 `v0.5.2` 之上增加模型能力声明来源与逐项探测、工具调用执行事实，以及知识库原文件与管理详情并行读取。上述变更尚未创建 Tag、发布安装包或更新运行服务；正式发布仍按下方 `v0.5.2` 的后端 Tag、固定来源和四平台安装包顺序执行。
+Desktop 源码版本为 `0.5.2`。本版包括通用 PDF 附件的历史恢复与预览下载、持久文件条件缓存、会话人设与草稿恢复，以及模型配置和补充练习错误修复；同时增加模型能力声明来源与逐项探测、工具调用执行事实，以及知识库原文件与管理详情并行读取。完整变更见 [Changelog](../CHANGELOG.md)。
 
-## v0.5.2（2026-10-29）
+本版后端协作目标为 HexClaw `v0.5.2` 与 Hub `v0.1.1`；后端 `v0.5.2` Tag 与 Release 已于 2026-11-24 发布，`Makefile` 的 `HEXCLAW_REF` 已固定为 `refs/tags/v0.5.2`。正式发布按以下顺序推进：核对 Desktop CI 与固定提交四平台安装包 → 发布 Desktop Tag 与安装包。
 
-Desktop 源码版本为 `0.5.2`，变化包括通用 PDF 附件的历史恢复与预览下载、持久文件条件缓存、会话人设与草稿恢复，以及模型配置和补充练习错误修复，见 [Changelog](../CHANGELOG.md)。
-
-本版后端协作目标为 HexClaw `v0.5.2` 与 Hub `v0.1.0`；Hub 资源引用由后端维护。当前 `Makefile` 保留已有 `refs/tags/v0.5.1`，避免检出尚不存在的新 Tag。正式发布按以下顺序推进：后端修复提交通过 CI 与部署核验 → 发布不可变后端 `v0.5.2` Tag → 同步 Desktop 的 `HEXCLAW_REF` 及本文固定来源 → 核对 Desktop CI 和固定提交四平台安装包 → 发布 Desktop Tag 与安装包。
-
-本次版本准备不创建 Tag、不发布安装包，也不改变当前运行服务。开发验证当前未提交后端源码继续使用 `make sidecar-local` / `make build-local`；已有真实模型、文件与 IM 验收按各自源码和制品身份记录，不能仅凭 `0.5.2` 版本号推断已包含修复。
+本次版本准备不创建 Desktop Tag、不发布安装包，也不改变当前运行服务。开发验证当前未提交后端源码继续使用 `make sidecar-local` / `make build-local`；已有真实模型、文件与 IM 验收按各自源码和制品身份记录，不能仅凭 `0.5.2` 版本号推断已包含修复。
 
 ## v0.5.1（2026-10-26）
 
@@ -113,7 +109,7 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/Cargo.lock` 中 `hexclaw-desktop` 的根包版本
-2. 先确认包含本次所需修复的后端提交通过 CI 且已有不可变 SemVer tag，再核对 `Makefile` 中的 `HEXCLAW_REF` 固定到该 Tag，当前配置为 `refs/tags/v0.5.1`。元数据可先准备，远端正式构建须等该 Tag 可用；后端 Release 产物发布状态单独核对，后端来源版号独立于 Desktop 版号。内置 Sidecar 制品身份随 Desktop 发行版号注入，不能仅凭该身份断言后端源码已更新，还须核对实际来源提交。
+2. 先确认包含本次所需修复的后端提交通过 CI 且已有不可变 SemVer tag，再核对 `Makefile` 中的 `HEXCLAW_REF` 固定到该 Tag，当前配置为 `refs/tags/v0.5.2`。元数据可先准备，远端正式构建须等该 Tag 可用；后端 Release 产物发布状态单独核对，后端来源版号独立于 Desktop 版号。内置 Sidecar 制品身份随 Desktop 发行版号注入，不能仅凭该身份断言后端源码已更新，还须核对实际来源提交。
 3. 提交代码并推送，确认普通 CI 通过。使用已推送的固定提交 SHA 手动触发 `Release`，确认四平台测试安装包构建通过；手动运行只上传 workflow artifacts，不发布 GitHub Release：
 
 ```bash

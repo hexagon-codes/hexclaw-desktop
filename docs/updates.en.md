@@ -2,17 +2,13 @@
 
 # Auto-Update Release Guide
 
-## Unreleased (source increment, not published)
+## v0.5.2 (2026-11-24)
 
-The current source adds model capability declaration sources with per-capability probes, tool execution facts, and parallel source/document-detail loading in Knowledge. These changes have not created a tag, published installers, or updated a running service. Release still follows the backend tag, pinned source, and four-platform installer sequence in the `v0.5.2` section below.
+Desktop source version is `0.5.2`. This release includes historical recovery and preview/download of general PDF attachments, conditional caching of persistent files, session persona and draft restoration, and model configuration and supplemental-practice fixes. It also adds model capability declaration sources with per-capability probes, tool execution facts, and parallel source/document-detail loading in Knowledge. See the [Changelog](../CHANGELOG.md) for the full change set.
 
-## v0.5.2 (2026-10-29)
+The coordinated backend target is HexClaw `v0.5.2` with Hub `v0.1.1`. The backend `v0.5.2` tag and Release were published on 2026-11-24, and `HEXCLAW_REF` in `Makefile` is pinned to `refs/tags/v0.5.2`. Release order: verify Desktop CI and four-platform installers from the fixed commit → publish the Desktop tag and installers.
 
-Desktop source version is `0.5.2`. Changes include persistent PDF attachment recovery, preview and download, conditional file caching, conversation persona and draft recovery, and model configuration and supplementary-practice error fixes; see the [Changelog](../CHANGELOG.md).
-
-The coordinated backend target is HexClaw `v0.5.2` with Hub `v0.1.0`; the backend owns Hub resource references. The `Makefile` currently retains the existing `refs/tags/v0.5.1` so builds do not check out an unavailable tag. Release order is: verify backend CI and deployment for the fixed source → publish the immutable backend `v0.5.2` tag → update Desktop `HEXCLAW_REF` and this guide → verify Desktop CI and four-platform installers from the fixed commit → publish the Desktop tag and installers.
-
-This version preparation does not create tags, publish installers, or update a running service. Continue using `make sidecar-local` / `make build-local` for uncommitted local backend source. Record real model, file, and IM acceptance against their actual source and artifact identities; the `0.5.2` version alone does not establish that a running artifact includes the fixes.
+This version preparation does not create a Desktop tag, publish installers, or update a running service. Continue using `make sidecar-local` / `make build-local` to verify current uncommitted backend source. Existing real-model, file, and IM acceptance remains bound to its own source and artifact identity; the `0.5.2` version number alone does not prove fixes are included.
 
 ## v0.5.1 (2026-10-26)
 
@@ -113,7 +109,7 @@ If your private key has no password, the second secret can stay empty or be omit
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - the `hexclaw-desktop` root package version in `src-tauri/Cargo.lock`
-2. Confirm that the backend commit containing the required fixes has passed CI and has an immutable SemVer tag, then verify that `HEXCLAW_REF` in `Makefile` pins that tag, currently configured as `refs/tags/v0.5.1`. Metadata may be prepared earlier, but remote release builds must wait until the tag is available. Check publication of backend Release artifacts separately; backend and Desktop source versions remain independent. The bundled Sidecar artifact identity is injected from its Desktop release version; verify the actual backend source commit as well, since that identity alone does not prove the source was updated.
+2. Confirm that the backend commit containing the required fixes has passed CI and has an immutable SemVer tag, then verify that `HEXCLAW_REF` in `Makefile` pins that tag, currently configured as `refs/tags/v0.5.2`. Metadata may be prepared earlier, but remote release builds must wait until the tag is available. Check publication of backend Release artifacts separately; backend and Desktop source versions remain independent. The bundled Sidecar artifact identity is injected from its Desktop release version; verify the actual backend source commit as well, since that identity alone does not prove the source was updated.
 3. Commit and push your changes, and confirm that routine CI passes. Trigger `Release` manually with the fixed SHA of the pushed commit and confirm that all four platform installer builds pass. A manual run uploads workflow artifacts without publishing a GitHub Release:
 
 ```bash

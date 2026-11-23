@@ -2,7 +2,7 @@
 
 # HexClaw Desktop 使用指南
 
-适用 Desktop 源码版本：`v0.5.2`。当前后端固定引用保留已有的 `refs/tags/v0.5.1`；正式包采用本轮修复及 Hub `v0.1.0` 资源引用前，须先发布后端 `v0.5.2` Tag，再同步固定来源。本地最新源码验证使用 `make build-local`。版本准备本身不发布安装包或更新当前运行服务。本次工程更新见 [Changelog](../CHANGELOG.md)，发布顺序与自动更新条件见[自动更新发布说明](./updates.md)。
+适用 Desktop 源码版本：`v0.5.2`。后端 `v0.5.2` Tag/Release 已发布，`HEXCLAW_REF` 已固定为 `refs/tags/v0.5.2`；正式包采用本轮修复及 Hub `v0.1.1` 资源引用，待 Desktop CI 与四平台安装包核验后发布。本地最新源码验证使用 `make build-local`。本次工程更新见 [Changelog](../CHANGELOG.md)，发布顺序与自动更新条件见[自动更新发布说明](./updates.md)。
 
 ## 目录
 

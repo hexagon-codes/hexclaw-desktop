@@ -2,7 +2,7 @@
 
 # HexClaw Desktop User Guide
 
-Applies to the Desktop `v0.5.2` source. The backend pin currently retains the existing `refs/tags/v0.5.1`. Before release packaging includes these fixes and Hub `v0.1.0` resource references, publish the backend `v0.5.2` tag, then update the pinned source. Use `make build-local` to verify current local source. Version preparation does not publish installers or update a running service. See the [Changelog](../CHANGELOG.md) and [Auto-Update Release Guide](./updates.en.md) for release order and automatic-update requirements.
+Applies to the Desktop `v0.5.2` source. The backend `v0.5.2` tag and Release are published, and `HEXCLAW_REF` is pinned to `refs/tags/v0.5.2`. Release packaging with these fixes and Hub `v0.1.1` resource references awaits Desktop CI and four-platform installer verification. Use `make build-local` to verify current local source. See the [Changelog](../CHANGELOG.md) and [Auto-Update Release Guide](./updates.en.md) for release order and automatic-update requirements.
 
 ## Table of Contents
 

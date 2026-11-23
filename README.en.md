@@ -18,7 +18,7 @@ HexClaw Desktop connects a desktop application to the [HexClaw](https://github.c
 
 The app uses **Tauri 2 + Vue 3 + TypeScript**, with a Go Sidecar running the local Agent service. Ollama is available for local models; online models require network access and credentials for the selected Provider.
 
-> This README describes the `v0.5.2` source. `HEXCLAW_REF` currently retains the existing `refs/tags/v0.5.1` backend. Release packaging with this round of backend fixes and Hub `v0.1.0` resource references requires publishing the backend `v0.5.2` tag first, then updating the pinned source; see the [release guide](docs/updates.en.md). Version preparation does not publish installers; released installers contain their Release's code and may differ from the current source.
+> This README describes the `v0.5.2` source. `HEXCLAW_REF` is pinned to the published backend `refs/tags/v0.5.2`. Release packaging with this round of backend fixes and Hub `v0.1.1` resource references awaits Desktop CI and four-platform installer verification; see the [release guide](docs/updates.en.md). Version preparation does not publish installers; released installers contain their Release's code and may differ from the current source.
 
 ![HexClaw Desktop homework workspace showing the original homework image with annotations in the K12 skin](.github/assets/desktop-k12-workspace.png)
 
@@ -190,7 +190,7 @@ make dev
 
 The commands build the backend version selected by the Makefile, prepare bundled components, and launch the Vue development server and Tauri window.
 
-`make sidecar` uses the fixed `HEXCLAW_REF` from the `Makefile`, currently `refs/tags/v0.5.1`; it does not automatically select the latest backend source. For later updates, confirm that the target backend commit has passed CI and has a new SemVer tag, then update the pinned source consistently. Later commits do not update an existing pushed tag, and a version bump alone does not update an installed Sidecar. To verify uncommitted backend changes during development, use the existing `make sidecar-local` or `make build-local` target. To use the latest backend main branch, run:
+`make sidecar` uses the fixed `HEXCLAW_REF` from the `Makefile`, currently `refs/tags/v0.5.2`; it does not automatically select the latest backend source. For later updates, confirm that the target backend commit has passed CI and has a new SemVer tag, then update the pinned source consistently. Later commits do not update an existing pushed tag, and a version bump alone does not update an installed Sidecar. To verify uncommitted backend changes during development, use the existing `make sidecar-local` or `make build-local` target. To use the latest backend main branch, run:
 
 ```bash
 make sidecar HEXCLAW_REF=origin/main
