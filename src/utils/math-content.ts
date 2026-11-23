@@ -1,4 +1,5 @@
 import { normalizePastedText } from './chat-compose'
+import MarkdownIt from 'markdown-it'
 import type { Config } from 'dompurify'
 import type { KatexOptions } from 'katex'
 
@@ -261,6 +262,39 @@ function normalizeMathText(text: string, options?: MathMarkdownOptions): string 
   return normalizeMathTextWithSourceMap(text, options).content
 }
 
+const markdownLinkHelpers = new MarkdownIt().helpers
+
+// Keep Markdown destinations byte-for-byte. Use the Markdown parser's own
+// destination rules for nesting and escapes; link labels still contain prose.
+function normalizeUnprotectedMarkdown(source: string, options?: MathMarkdownOptions): string {
+  const normalize = (text: string) => parseDollarMathWithOffsets(text).map((segment) =>
+    segment.type === 'math'
+      ? segment.source
+      : normalizeMathText(segment.content.replace(/\\n(?=\\(?:\(|\[)|=|答[：:])/g, '\n'), options),
+  ).join('')
+
+  const output: string[] = []
+  let cursor = 0
+  const starts = /\]\([ \t\n]*|^ {0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?|\b(?:https?|ftp):\/\/[^\s<>"'，。；！？]+|<\w[\w+.-]*:[^<>\r\n]*>/gm
+  for (const match of source.matchAll(starts)) {
+    const index = match.index
+    if (index < cursor) continue
+    const marker = match[0]
+    let from = index
+    let end = index + marker.length
+    if (marker.startsWith('](') || marker.trimStart().startsWith('[')) {
+      const destination = markdownLinkHelpers.parseLinkDestination(source, end, source.length)
+      if (!destination.ok || destination.pos === end) continue
+      from = end
+      end = destination.pos
+    }
+    output.push(normalize(source.slice(cursor, from)), source.slice(from, end))
+    cursor = end
+  }
+  output.push(normalize(source.slice(cursor)))
+  return output.join('')
+}
+
 /**
  * Convert supported external delimiters to the app's canonical dollar-delimited
  * Markdown/LaTeX without touching inline code or fenced code blocks.
@@ -278,11 +312,7 @@ export function normalizeMathMarkdown(
     .map((part) =>
       part.code
         ? part.content
-        // 仅还原公式步骤之间的编码换行；代码区、TeX 命令与持久原文均不改写。
-        : normalizeMathText(
-            part.content.replace(/\\n(?=\\(?:\(|\[)|=|答[：:])/g, '\n'),
-            options,
-          ),
+        : normalizeUnprotectedMarkdown(part.content, options),
     )
     .join('')
 }

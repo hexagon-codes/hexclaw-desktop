@@ -31,6 +31,17 @@ describe('math content boundary', () => {
     expect(plainMathSegments(source).every((segment) => segment.type === 'text')).toBe(true)
   })
 
+  it('preserves escapes in link targets and in already delimited math across paste and send', () => {
+    const link = String.raw`[原图](https://example.com/\(a\).png)`
+    const math = String.raw`$(\frac{1}{2})$`
+    const source = String.raw`\(x\) ${link} ${math}`
+    const expected = '$x$ ' + link + ' ' + math
+    expect(normalizeMathMarkdown(source)).toBe(expected)
+    expect(normalizeMathMarkdown(source, { preserveDisplayBrackets: true, deferGroupedTex: true })).toBe(expected)
+    expect(normalizeMathMarkdown(normalizeMathMarkdown(source))).toBe(expected)
+    expect(readMathClipboard(clipboard(math)).text).toBe(math)
+  })
+
   it('extracts explicit TeX annotations and removes duplicate visual/script content', () => {
     const html = '<p>题目：<span class="katex"><math><semantics><mfrac><mn>3</mn><mn>4</mn></mfrac>'
       + '<annotation encoding="application/x-tex">\\frac{3}{4}</annotation></semantics></math>'
