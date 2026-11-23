@@ -207,7 +207,15 @@ function replaceSourceMapped(
   return { content: output.join(''), sourceBoundaries }
 }
 
-function normalizeMathTextWithSourceMap(text: string, preserveDisplayBrackets = false): SourceMappedText {
+export const GROUPED_TEX_BODY = String.raw`\\(?:dfrac|tfrac|frac)\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt(?:\[[^\]\n]+\])?\{[^{}\n]+\}`
+
+interface MathMarkdownOptions {
+  preserveDisplayBrackets?: boolean
+  /** Markdown 渲染器在正文 token 上消费普通括号公式，避免改写链接目标或已定界公式。 */
+  deferGroupedTex?: boolean
+}
+
+function normalizeMathTextWithSourceMap(text: string, options: MathMarkdownOptions = {}): SourceMappedText {
   let mapped: SourceMappedText = {
     content: text,
     sourceBoundaries: Array.from({ length: text.length + 1 }, (_, index) => index),
@@ -216,7 +224,7 @@ function normalizeMathTextWithSourceMap(text: string, preserveDisplayBrackets = 
     mapped,
     /(\\{1,2})\[([\s\S]*?)\1\]/g,
     (_all, slashes: string, body: string) => {
-      if (preserveDisplayBrackets) {
+      if (options.preserveDisplayBrackets) {
         if (slashes.length !== 2) return _all
         return `\\[${unescapeDoubleEncodedTex(body, slashes).trim()}\\]`
       }
@@ -232,15 +240,16 @@ function normalizeMathTextWithSourceMap(text: string, preserveDisplayBrackets = 
       return tex ? `$${tex}$` : _all
     },
   )
-  const explicitTex = String.raw`\\(?:dfrac|tfrac|frac)\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt(?:\[[^\]\n]+\])?\{[^{}\n]+\}`
-  mapped = replaceSourceMapped(
-    mapped,
-    new RegExp(String.raw`([([])\s*(${explicitTex})\s*([)\]])`, 'g'),
-    (all, open: string, tex: string, close: string) => {
-      if ((open === '(' && close !== ')') || (open === '[' && close !== ']')) return all
-      return `$${tex}$`
-    },
-  )
+  if (!options.deferGroupedTex) {
+    mapped = replaceSourceMapped(
+      mapped,
+      new RegExp(String.raw`([([])\s*(${GROUPED_TEX_BODY})\s*([)\]])`, 'g'),
+      (all, open: string, tex: string, close: string) => {
+        if ((open === '(' && close !== ')') || (open === '[' && close !== ']')) return all
+        return `$${tex}$`
+      },
+    )
+  }
   return replaceSourceMapped(
     mapped,
     /[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒]/g,
@@ -248,8 +257,8 @@ function normalizeMathTextWithSourceMap(text: string, preserveDisplayBrackets = 
   )
 }
 
-function normalizeMathText(text: string, preserveDisplayBrackets = false): string {
-  return normalizeMathTextWithSourceMap(text, preserveDisplayBrackets).content
+function normalizeMathText(text: string, options?: MathMarkdownOptions): string {
+  return normalizeMathTextWithSourceMap(text, options).content
 }
 
 /**
@@ -263,7 +272,7 @@ function normalizeMathText(text: string, preserveDisplayBrackets = false): strin
  */
 export function normalizeMathMarkdown(
   source: string,
-  options?: { preserveDisplayBrackets?: boolean },
+  options?: MathMarkdownOptions,
 ): string {
   return partitionCode(source)
     .map((part) =>
@@ -272,7 +281,7 @@ export function normalizeMathMarkdown(
         // 仅还原公式步骤之间的编码换行；代码区、TeX 命令与持久原文均不改写。
         : normalizeMathText(
             part.content.replace(/\\n(?=\\(?:\(|\[)|=|答[：:])/g, '\n'),
-            options?.preserveDisplayBrackets ?? false,
+            options,
           ),
     )
     .join('')

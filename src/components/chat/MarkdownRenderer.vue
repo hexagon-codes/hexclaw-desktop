@@ -7,7 +7,7 @@ import { codeToHtml } from 'shiki'
 import { tex } from '@mdit/plugin-tex'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 import { setClipboard } from '@/api/desktop'
-import { KATEX_DOMPURIFY_CONFIG, normalizeMathMarkdown } from '@/utils/math-content'
+import { GROUPED_TEX_BODY, KATEX_DOMPURIFY_CONFIG, normalizeMathMarkdown } from '@/utils/math-content'
 import { isKatexParseError, renderKatexToHtml } from '@/utils/math-render'
 import { decoratePromptPreviewHtml, projectPromptPreview } from '@/utils/prompt-preview'
 import { projectKnowledgeSourceMarkdown } from '@/utils/retrieval-hits'
@@ -264,6 +264,48 @@ function createMarkdownRenderer(copyLabel: string) {
     },
   })
 
+  // 只认 TeX 的两个数字参数。紧随的 x 仍由正文显示，已有定界符和代码沿各自的解析规则处理。
+  const argument = String.raw`(?:\{[ \t]*[0-9]+[ \t]*\}|[0-9])`
+  const bareFraction = new RegExp(String.raw`\\[dt]?frac[ \t]*${argument}[ \t]*${argument}`, 'y')
+  const groupedTex = new RegExp(String.raw`\s*(${GROUPED_TEX_BODY})\s*([)\]])`, 'y')
+  const wordBoundary = /[\s，。；：！？（）【】“”‘’]/u
+  const locatorPrefix = /:[\\/]|(?:^|[('"=])(?:www\.|mailto:|~?\/|\.{1,2}[\\/]|\\\\)/i
+  const directoryPrefix = /^[\p{L}\p{N}_.-]+[\\/][\p{L}\p{N}_.\\/-]*$/u
+  const quotedPath = /["'“‘](?:[A-Za-z]:[\\/]|~?\/|\.{1,2}[\\/]|\\\\)[^"'“”‘’\r\n]*$/u
+  instance.inline.ruler.before('newline', 'plain_tex_fraction', (state, silent) => {
+    const { src, pos, posMax } = state
+    if (src[pos] !== '\\' && src[pos] !== '\n') return false
+    // 原有的小括号、方括号孤立公式在 Markdown 划定代码、链接与已有公式后才识别。
+    const opening = /[([][ \t]*$/.exec(state.pending)?.[0] ?? ''
+    groupedTex.lastIndex = pos
+    bareFraction.lastIndex = pos
+    const group = opening && groupedTex.exec(src)
+    const paired = group && group[2] === (opening[0] === '(' ? ')' : ']') ? group : null
+    const match = paired ?? bareFraction.exec(src)
+    if (!match) return false
+    const end = pos + match[0].length
+    if (end > posMax || (pos > 0 && /[A-Za-z_:./\\]/.test(src[pos - 1]!))) return false
+    const suffix = src.slice(end, posMax)
+    if (!paired && !match[0].endsWith('}') && /^[0-9]/.test(suffix)) return false
+    // 未标成链接的路径和 URL 也可能含同形文件名；不截取其中一段排成公式。
+    let wordStart = pos
+    while (wordStart > 0 && !wordBoundary.test(src[wordStart - 1]!)) wordStart--
+    const prefix = src.slice(wordStart, pos)
+    if (
+      locatorPrefix.test(prefix) || directoryPrefix.test(prefix) ||
+      quotedPath.test(src.slice(src.lastIndexOf('\n', pos - 1) + 1, pos)) ||
+      /^(?:[\\/]|[\w-]*[./\\][\p{L}\p{N}_])/u.test(suffix)
+    ) return false
+    if (!silent) {
+      if (paired) state.pending = state.pending.slice(0, -opening.length)
+      const token = state.push('math_inline', 'math', 0)
+      token.content = paired ? paired[1]! : match[0]
+      if (paired) token.meta = { groupedTexSource: opening + paired[0] }
+    }
+    state.pos = end
+    return true
+  })
+
   // The delimiter parser owns token.markup/content, so this is the only layer
   // that can restore the complete source instead of a partial, misleading formula.
   const closeMathDelimiter = (markup: string) => {
@@ -279,7 +321,7 @@ function createMarkdownRenderer(copyLabel: string) {
       if (!html.includes(parseErrorSignal)) return html
       const token = tokens[index]!
       const source = instance.utils.escapeHtml(
-        `${token.markup}${token.content}${closeMathDelimiter(token.markup)}`,
+        token.meta?.groupedTexSource ?? `${token.markup}${token.content}${closeMathDelimiter(token.markup)}`,
       )
       const tag = token.block ? 'p' : 'span'
       return `<${tag} class="hc-math-fallback" data-math-fallback="parse-error">${source}</${tag}>${token.block ? '\n' : ''}`
@@ -478,7 +520,7 @@ const renderedResult = computed(() => {
   // 渲染管线原生支持 `\[...\]`（tex 插件 delimiters:'all'）：保留方括号形态，
   // 避开 normalize 转独占行 `$$` 后在缩进列表内的跨块误配对（乱码根因）。
   const html = mdInstance.value.render(
-    normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true }),
+    normalizeMathMarkdown(markdown, { preserveDisplayBrackets: true, deferGroupedTex: true }),
     { mediaSources },
   )
   return {
