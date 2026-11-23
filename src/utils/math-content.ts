@@ -1,5 +1,4 @@
 import { normalizePastedText } from './chat-compose'
-import MarkdownIt from 'markdown-it'
 import type { Config } from 'dompurify'
 import type { KatexOptions } from 'katex'
 
@@ -262,10 +261,33 @@ function normalizeMathText(text: string, options?: MathMarkdownOptions): string 
   return normalizeMathTextWithSourceMap(text, options).content
 }
 
-const markdownLinkHelpers = new MarkdownIt().helpers
+// 发送前只扫描链接目标的原文边界，不解码 URL，也不执行 Markdown 渲染。
+function markdownLinkDestinationEnd(source: string, start: number): number {
+  const enclosed = source[start] === '<'
+  let depth = 0
+  let pos = start + Number(enclosed)
+  for (; pos < source.length; pos++) {
+    const char = source[pos]
+    if (enclosed) {
+      if (char === '>') return pos + 1
+      if (char === '\n' || char === '<') return start
+    } else if (source.charCodeAt(pos) <= 0x20 || source.charCodeAt(pos) === 0x7f) {
+      break
+    }
+    if (char === '\\' && pos + 1 < source.length) {
+      if (!enclosed && source[pos + 1] === ' ') break
+      pos++
+    } else if (!enclosed && char === '(') {
+      if (++depth > 32) return start
+    } else if (!enclosed && char === ')') {
+      if (depth === 0) break
+      depth--
+    }
+  }
+  return !enclosed && depth === 0 ? pos : start
+}
 
-// Keep Markdown destinations byte-for-byte. Use the Markdown parser's own
-// destination rules for nesting and escapes; link labels still contain prose.
+// 链接目标保留原字节，链接标签仍按正文处理。
 function normalizeUnprotectedMarkdown(source: string, options?: MathMarkdownOptions): string {
   const normalize = (text: string) => parseDollarMathWithOffsets(text).map((segment) =>
     segment.type === 'math'
@@ -283,10 +305,10 @@ function normalizeUnprotectedMarkdown(source: string, options?: MathMarkdownOpti
     let from = index
     let end = index + marker.length
     if (marker.startsWith('](') || marker.trimStart().startsWith('[')) {
-      const destination = markdownLinkHelpers.parseLinkDestination(source, end, source.length)
-      if (!destination.ok || destination.pos === end) continue
+      const destinationEnd = markdownLinkDestinationEnd(source, end)
+      if (destinationEnd === end) continue
       from = end
-      end = destination.pos
+      end = destinationEnd
     }
     output.push(normalize(source.slice(cursor, from)), source.slice(from, end))
     cursor = end

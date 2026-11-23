@@ -42,6 +42,15 @@ describe('math content boundary', () => {
     expect(readMathClipboard(clipboard(math)).text).toBe(math)
   })
 
+  it('preserves the byte spans of nested, bracketed and reference-style link targets', () => {
+    const links = [
+      String.raw`[嵌套](/files/(batch)/\(原图\).png)`,
+      String.raw`[尖括号](</files/\(作业 图\).png>)`,
+      String.raw`[附件]: /files/section(2)/\(原图\).png`,
+    ].join('\n')
+    expect(normalizeMathMarkdown(String.raw`\(x\)` + '\n' + links)).toBe('$x$\n' + links)
+  })
+
   it('extracts explicit TeX annotations and removes duplicate visual/script content', () => {
     const html = '<p>题目：<span class="katex"><math><semantics><mfrac><mn>3</mn><mn>4</mn></mfrac>'
       + '<annotation encoding="application/x-tex">\\frac{3}{4}</annotation></semantics></math>'
