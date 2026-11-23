@@ -1,0 +1,3 @@
+# The bundled browser runtime verifies these manifest bytes on every platform.
+/scripts/browser-runtime/package.json text eol=lf
+/scripts/browser-runtime/package-lock.json text eol=lf
