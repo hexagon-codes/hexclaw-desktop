@@ -805,6 +805,31 @@ describe('K12 ImageTaskDispatch public facade', () => {
     })
   })
 
+  it.each([
+    ['recovering', undefined, false],
+    ['failed_retryable', 'writing_ocr_provider_failed', true],
+    ['failed_terminal', 'model_capability_unverified', false],
+  ] as const)(
+    'reads the writing OCR failure state %s without changing the intake',
+    async (state, failureKind, retryable) => {
+      const progress = { operation: 'writing_ocr', state }
+      const target = { kind: 'creative', intake_id: 'intake-1', work_type: 'writing', status: 'failed' }
+      client.apiGet.mockResolvedValueOnce({
+        dispatch: dispatch({
+          task_intent: 'writing',
+          status: 'failed',
+          target_projection: target,
+          progress,
+          retryable,
+          ...(failureKind ? { failure_kind: failureKind } : {}),
+        }),
+      })
+      await expect(k12Api.k12GetImageTask('mingming', 'dispatch-1')).resolves.toMatchObject({
+        dispatch: { progress, retryable, target_projection: target },
+      })
+    },
+  )
+
   it('accepts recovering failed projections only when the internal outcome-unknown kind is omitted', async () => {
     client.apiGet
       .mockResolvedValueOnce({

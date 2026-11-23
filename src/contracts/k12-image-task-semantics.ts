@@ -38,6 +38,12 @@ const CREATIVE_STATUSES = new Set([
   'failed',
   'cancelled',
 ])
+const WRITING_OCR_STATES = new Set([
+  ...CREATIVE_STATUSES,
+  'recovering',
+  'failed_retryable',
+  'failed_terminal',
+])
 const CREATIVE_FEEDBACK_STATES = new Set([
   'feedback_pending',
   'feedback_ready',
@@ -1118,7 +1124,7 @@ function validateProgress(value: unknown, path: string): void {
   } else if (operation === 'homework') {
     enumValue(state, HOMEWORK_STAGES, `${path}.state`)
   } else if (operation === 'writing_ocr') {
-    enumValue(state, CREATIVE_STATUSES, `${path}.state`)
+    enumValue(state, WRITING_OCR_STATES, `${path}.state`)
   } else if (operation === 'promotion') {
     if (!CREATIVE_STATUSES.has(state) && !CREATIVE_FEEDBACK_STATES.has(state)) {
       fail(`${path}.state`, 'creative promotion state')
