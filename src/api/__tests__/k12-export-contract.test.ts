@@ -58,7 +58,9 @@ describe('K12 Desktop runtime export contract', () => {
       ?.match(/'[^']+'/g)
       ?.map((value) => value.slice(1, -1))
 
-    expect(generationMethods).toEqual(['original', 'ai_variant', 'ai_generated', 'rule_generated'])
+    expect(generationMethods).toEqual([
+      'original', 'ai_variant', 'ai_generated', 'rule_generated', 'asset_reuse',
+    ])
     expect(apiSource).toMatch(
       /export interface WeeklyPracticeItemDTO \{[\s\S]*?source_ref:\s*string[\s\S]*?\n\}/,
     )
