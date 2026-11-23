@@ -61,7 +61,7 @@ function renderSegment(segment: PlainMathSegment): RenderedSegment {
     return {
       ...segment,
       html: DOMPurify.sanitize(
-        renderKatexToHtml(segment.content, segment.display),
+        renderKatexToHtml(segment.content, segment.display, { vulgarFractions: true }),
         KATEX_DOMPURIFY_CONFIG,
       ),
     }

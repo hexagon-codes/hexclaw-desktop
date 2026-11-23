@@ -53,7 +53,7 @@ export type PlainMathSegmentWithSourceSpan = PlainMathSegment & {
   sourceEnd: number
 }
 
-const VULGAR_FRACTIONS: Record<string, string> = {
+export const VULGAR_FRACTIONS: Readonly<Record<string, string>> = {
   '½': String.raw`\frac{1}{2}`,
   '⅓': String.raw`\frac{1}{3}`,
   '⅔': String.raw`\frac{2}{3}`,
@@ -570,9 +570,13 @@ function parseDollarMathWithOffsets(source: string): IndexedPlainMathSegment[] {
 
 function* parsePlainMathWithOffsets(source: string): Iterable<IndexedPlainMathSegment> {
   for (const segment of parseDollarMathWithOffsets(source)) {
-    // 已定界公式的括号属于 TeX 内容，不能再次作为纯文本公式归一化。
+    // 只移除包住整个公式体的重复 TeX 定界，保留普通括号和原始编辑范围。
     if (segment.type === 'math') {
-      yield segment
+      const wrapper = /^(\\{1,2})(?:\(([^\n]*?)\1\)|\[([\s\S]*?)\1\])$/.exec(segment.content.trim())
+      const body = wrapper?.[2] ?? wrapper?.[3]
+      yield wrapper && body?.trim()
+        ? { ...segment, content: unescapeDoubleEncodedTex(body, wrapper[1]!).trim() }
+        : segment
       continue
     }
     const normalized = normalizeMathTextWithSourceMap(segment.content)
