@@ -14,6 +14,7 @@ import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { nanoid } from 'nanoid'
 import { useI18n } from 'vue-i18n'
 import { useK12Store, type ImageTaskView } from '../store'
+import { projectImageTaskProgress } from '../image-task-progress'
 import { formatTime } from '@/utils/time'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
@@ -289,6 +290,8 @@ const recognitionFailed = ref(false)
 const retryable = ref(false)
 const retrySubmitting = ref(false)
 const currentTaskStage = ref('')
+const currentTaskOperation = ref<ImageTaskDispatchDTO['progress']['operation']>()
+const writingOCRFailure = ref(false)
 const taskCreatedAt = ref<number>()
 const taskCompletedAt = ref<number>()
 const automaticBudgetSeconds = ref<number>()
@@ -378,6 +381,7 @@ function taskStageSupportsRetry(stage: string): boolean {
 }
 
 function taskFailureMessage(intent: ImageTaskIntent, stage: string, canRetry: boolean): string {
+  if (writingOCRFailure.value) return t('k12.works.ocrFailed')
   if (isCreativeFeedbackFailure(intent, stage)) {
     return t(canRetry ? 'k12.works.initialReviewFailed' : 'k12.works.reviewFailed')
   }
@@ -533,7 +537,7 @@ const unconfirmedCreativeConflictCount = computed(
 // 图片 facade 的 recovering 表示结果未知；保留原任务身份，不把查询视为仍在执行。
 const outcomeUnknown = ref(false)
 const taskStageErrorText = computed(() =>
-  isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
+  writingOCRFailure.value || isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
     ? errMsg.value
     : `${t('k12.recognize.err')}：${errMsg.value}`,
 )
@@ -562,7 +566,7 @@ const taskStatusActivityItems = computed<ActivityTimelineItem[]>(() => {
         id: 'task-failed',
         state: retrySubmitting.value ? 'running' : 'failed',
         label: retrySubmitting.value ? '正在处理同一个任务…' : taskStageErrorText.value,
-        detail: !retrySubmitting.value && !retryable.value
+        detail: !retrySubmitting.value && !retryable.value && !writingOCRFailure.value
             ? '当前状态不能安全重试，系统不会重复提交。'
             : undefined,
       },
@@ -1200,6 +1204,7 @@ function enterOutcomeUnknown(dispatchId: string) {
   recognizing.value = false
   anchoring.value = false
   recognitionFailed.value = false
+  writingOCRFailure.value = false
   errMsg.value = ''
 }
 
@@ -1555,6 +1560,8 @@ function projectImageTaskView(view: ImageTaskView) {
   currentDispatchId.value = view.dispatchId
   currentDispatchVersion.value = view.dispatchVersion
   currentTaskStage.value = view.stage
+  currentTaskOperation.value = view.operation
+  writingOCRFailure.value = view.writingOCRFailure === true
   taskCreatedAt.value = view.createdAt
   taskCompletedAt.value = view.completedAt
   automaticBudgetSeconds.value = view.automaticBudgetSeconds
@@ -1607,16 +1614,10 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   projectRuntimeTiming(dispatch)
   currentTaskIntent.value = dispatch.task_intent
   const projection = dispatch.target_projection
-  currentTaskStage.value =
-    dispatch.progress.state === 'recovering'
-      ? 'recovering'
-      : projection?.kind === 'homework'
-        ? projection.stage
-        : projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
-          ? dispatch.progress.state
-          : projection?.kind === 'creative'
-            ? projection.status
-            : dispatch.status
+  const projectedProgress = projectImageTaskProgress(dispatch)
+  currentTaskStage.value = projectedProgress.stage
+  currentTaskOperation.value = dispatch.progress.operation
+  writingOCRFailure.value = projectedProgress.writingOCRFailure
   syncExecutionState(currentTaskStage.value)
   retryable.value = dispatch.retryable === true && taskStageSupportsRetry(currentTaskStage.value)
   if (projection?.kind === 'homework') {
@@ -1671,16 +1672,16 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   outcomeUnknown.value = dispatch.progress.state === 'recovering'
   recognitionFailed.value =
     !outcomeUnknown.value &&
-    (dispatch.status === 'failed' || feedbackState === 'feedback_failed')
+    (dispatch.status === 'failed' || feedbackState === 'feedback_failed' || writingOCRFailure.value)
   errMsg.value = recognitionFailed.value
     ? taskFailureMessage(dispatch.task_intent, currentTaskStage.value, retryable.value)
     : ''
   recognizing.value =
-    !outcomeUnknown.value &&
+    !outcomeUnknown.value && !recognitionFailed.value &&
     (dispatch.status === 'routing' ||
       (projection?.kind === 'creative' && projection.status === 'preparing'))
   batchWorking.value =
-    !outcomeUnknown.value &&
+    !outcomeUnknown.value && !recognitionFailed.value &&
     (recognizing.value ||
       feedbackState === 'feedback_pending' ||
       (projection?.kind === 'creative' &&
@@ -1729,6 +1730,8 @@ watch(
     anchorWarning.value = ''
     errMsg.value = ''
     recognitionFailed.value = false
+    currentTaskOperation.value = undefined
+    writingOCRFailure.value = false
     retryable.value = false
     retrySubmitting.value = false
     confirmed.value = false
@@ -1846,6 +1849,8 @@ async function run() {
   anchorWarning.value = ''
   errMsg.value = ''
   recognitionFailed.value = false
+  currentTaskOperation.value = undefined
+  writingOCRFailure.value = false
   outcomeUnknown.value = false
   restoredFromBinding.value = false
   annotatedImage.value = ''
@@ -1993,20 +1998,35 @@ async function retryRecognitionStage() {
   }
   const generation = agentGeneration
   const dispatchId = currentDispatchId.value
+  const controller = new AbortController()
+  recognitionAbort?.abort()
+  recognitionAbort = controller
+  const isCurrent = () =>
+    generation === agentGeneration && dispatchId === currentDispatchId.value && !controller.signal.aborted
   errMsg.value = ''
   batchWorking.value = true
   retrySubmitting.value = true
   try {
-    const view = await store.retryImageTask(props.agentId, dispatchId, currentDispatchVersion.value)
-    if (generation !== agentGeneration || dispatchId !== currentDispatchId.value) return
+    const view = await store.retryImageTask(props.agentId, dispatchId, currentDispatchVersion.value, {
+      signal: controller.signal,
+      operation: currentTaskOperation.value,
+    })
+    if (!isCurrent()) return
+    if (!view) {
+      currentTaskStage.value = 'recovering'
+      syncExecutionState('recovering')
+      enterOutcomeUnknown(dispatchId)
+      return
+    }
     projectImageTaskView(view)
     if (view.stage === 'recovering') {
       enterOutcomeUnknown(dispatchId)
       return
     }
+    if (view.writingOCRFailure) return
     await completeImageTaskFlow()
   } catch (error) {
-    if (generation !== agentGeneration || (error as Error).name === 'AbortError') return
+    if (!isCurrent() || (error as Error).name === 'AbortError') return
     recognitionFailed.value = true
     errMsg.value = isCreativeFeedbackFailure(currentTaskIntent.value, currentTaskStage.value)
       ? taskFailureMessage(currentTaskIntent.value, currentTaskStage.value, retryable.value)
@@ -2014,8 +2034,11 @@ async function retryRecognitionStage() {
         ? error.message
         : String(error)
   } finally {
-    if (generation === agentGeneration) retrySubmitting.value = false
-    if (generation === agentGeneration && !outcomeUnknown.value) batchWorking.value = false
+    if (recognitionAbort === controller) recognitionAbort = null
+    if (isCurrent()) {
+      retrySubmitting.value = false
+      if (!outcomeUnknown.value) batchWorking.value = false
+    }
   }
 }
 
@@ -2336,7 +2359,8 @@ async function completeImageTaskFlow() {
       (error as Error).name === 'AbortError'
     )
       return
-    if (outcomeUnknown.value) return
+    // 已从服务端快照投影的作文失败或未知结果保留原状态与重试资格。
+    if (outcomeUnknown.value || writingOCRFailure.value) return
     throw error
   } finally {
     if (gradingAbort === controller) gradingAbort = null
@@ -3294,6 +3318,7 @@ async function coldStart() {
       <MessageActions
         role="assistant"
         :content="taskMessageContent"
+        :show-retry="currentTaskOperation !== 'writing_ocr' || showTaskRetry || canRegenerateTask"
         :retry-disabled="!showTaskRetry && !canRegenerateTask"
         :retry-title="!showTaskRetry && !canRegenerateTask ? 'Retry is unavailable in the current task state' : undefined"
         :retry-mode="canRegenerateTask ? 'regenerate' : 'task-stage'"

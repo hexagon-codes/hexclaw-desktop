@@ -3,6 +3,7 @@
  * 通用 shell 组件只消费投影后的 RecordCollectionView / VerifyResult，不认识本 store。
  */
 import { defineStore } from 'pinia'
+import { projectImageTaskProgress } from './image-task-progress'
 import { ref } from 'vue'
 import type { SkillContextReceipt } from '@/types/skill'
 import {
@@ -111,6 +112,8 @@ export interface ImageTaskView {
   operationDeadlineAt?: number
   taskIntent: ImageTaskIntent
   stage: string
+  operation?: ImageTaskDispatchDTO['progress']['operation']
+  writingOCRFailure?: boolean
   retryable?: boolean
   questions: RecognizedQuestion[]
   subject: string
@@ -458,7 +461,6 @@ export const useK12Store = defineStore('k12', () => {
     const homework = homeworkProjection(dispatch)
     const creative =
       dispatch.target_projection?.kind === 'creative' ? dispatch.target_projection : undefined
-    const feedbackState = creativeFeedbackState(dispatch)
     return {
       dispatchId: dispatch.dispatch_id,
       dispatchVersion: dispatch.version,
@@ -470,9 +472,8 @@ export const useK12Store = defineStore('k12', () => {
       automaticRemainingSeconds: dispatch.automatic_remaining_seconds,
       operationDeadlineAt: dispatch.operation_deadline_at,
       taskIntent: dispatch.task_intent,
-      stage: isImageTaskOutcomeUnknown(dispatch)
-        ? 'recovering'
-        : homework?.stage ?? feedbackState ?? creative?.status ?? dispatch.status,
+      operation: dispatch.progress.operation,
+      ...projectImageTaskProgress(dispatch),
       retryable: dispatch.retryable === true,
       questions: homework?.recognition?.questions ?? [],
       subject: homework?.recognition?.subject ?? '',
@@ -485,6 +486,7 @@ export const useK12Store = defineStore('k12', () => {
 
   function isFacadeFailure(dispatch: ImageTaskDispatchDTO): boolean {
     if (dispatch.status === 'failed' || dispatch.status === 'cancelled') return true
+    if (projectImageTaskProgress(dispatch).writingOCRFailure) return true
     const projection = dispatch.target_projection
     if (projection?.kind === 'homework') {
       return (
@@ -648,10 +650,15 @@ export const useK12Store = defineStore('k12', () => {
             signal,
             onStatus,
           )
-      if (isFacadeFailure(dispatch) && !isImageTaskOutcomeUnknown(dispatch)) {
+      const view = imageTaskView(dispatch)
+      if (
+        isFacadeFailure(dispatch) &&
+        !isImageTaskOutcomeUnknown(dispatch) &&
+        !view.writingOCRFailure
+      ) {
         throw new Error(i18n.global.t('k12.recognize.jobFailed'))
       }
-      return imageTaskView(dispatch)
+      return view
     } finally {
       loading.value = false
     }
@@ -723,11 +730,31 @@ export const useK12Store = defineStore('k12', () => {
     agent: string,
     dispatchId: string,
     version: number,
-    signal?: AbortSignal,
-  ): Promise<ImageTaskView> {
-    throwIfAborted(signal)
-    const response = await k12RetryImageTask(dispatchId, { agent, version }, signal)
-    throwIfAborted(signal)
+    { signal, operation }: { signal?: AbortSignal; operation?: ImageTaskView['operation'] } = {},
+  ): Promise<ImageTaskView | undefined> {
+    const scope = backendScopeKey()
+    const assertContext = () => {
+      throwIfAborted(signal)
+      assertBackendActive(scope)
+    }
+    assertContext()
+    let response
+    try {
+      response = await k12RetryImageTask(dispatchId, { agent, version }, signal)
+    } catch (error) {
+      assertContext()
+      if (operation !== 'writing_ocr') throw error
+      // POST can fail after the same dispatch has already recorded a new OCR attempt.
+      try {
+        response = await k12GetImageTask(agent, dispatchId, signal)
+      } catch {
+        assertContext()
+        return undefined
+      }
+      assertContext()
+      if (response.dispatch.retryable && response.dispatch.version <= version) return undefined
+    }
+    assertContext()
     return imageTaskView(response.dispatch)
   }
 

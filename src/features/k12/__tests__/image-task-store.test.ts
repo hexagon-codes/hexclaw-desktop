@@ -94,6 +94,71 @@ describe('K12 store ImageTaskDispatch adoption', () => {
     vi.useRealTimers()
   })
 
+  it('reads the same writing OCR dispatch after a rejected retry, without sending again', async () => {
+    h.retry.mockRejectedValue({ status: 409 })
+    h.get.mockResolvedValue(dispatch({
+      version: 5,
+      task_intent: 'writing',
+      progress: { operation: 'writing_ocr', state: 'recovering' },
+      retryable: false,
+    }))
+
+    const view = await useK12Store().retryImageTask('mingming', 'dispatch-1', 3, {
+      operation: 'writing_ocr',
+    })
+
+    expect(view).toMatchObject({ dispatchId: 'dispatch-1', stage: 'recovering', retryable: false })
+    expect(h.get).toHaveBeenCalledExactlyOnceWith('mingming', 'dispatch-1', undefined)
+    expect(h.retry).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the retry result unconfirmed if the same dispatch cannot be read', async () => {
+    h.retry.mockRejectedValue(new Error('connection closed'))
+    h.get.mockRejectedValue(new Error('read failed'))
+
+    await expect(useK12Store().retryImageTask('mingming', 'dispatch-1', 3, {
+      operation: 'writing_ocr',
+    })).resolves.toBeUndefined()
+
+    expect(h.retry).toHaveBeenCalledTimes(1)
+    expect(h.get).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['failed', true, 'failed_retryable', true],
+    ['failed', false, 'failed_terminal', true],
+    ['recovering', false, 'recovering', false],
+  ] as const)('projects writing_ocr %s with retryable=%s on create and restore', async (
+    state, retryable, stage, writingOCRFailure,
+  ) => {
+    const response = dispatch({
+      task_intent: 'writing',
+      target_projection: { kind: 'creative', status: 'failed', work_type: 'writing' },
+      progress: { operation: 'writing_ocr', state },
+      retryable,
+    })
+    h.upload.mockResolvedValue({ asset_id: 'asset://mingming/sha.png', size: 3 })
+    h.create.mockResolvedValue({ created: true, ...response })
+    h.get.mockResolvedValue(response)
+    const store = useK12Store()
+
+    const created = await store.dispatchImageTask({
+      agent: 'mingming',
+      dataUrl: 'data:image/png;base64,QUJD',
+      sourceSession: 'session-1',
+      sourceRef: 'message-ocr',
+    })
+    const restored = await store.restoreImageTaskDispatch('mingming', {
+      sourceSession: 'session-1',
+      sourceMessageId: 'message-ocr',
+      dispatchId: 'dispatch-1',
+    })
+
+    expect(created).toMatchObject({ dispatchId: 'dispatch-1', stage, writingOCRFailure, retryable })
+    expect(restored).toMatchObject({ dispatchId: 'dispatch-1', stage, writingOCRFailure, retryable })
+    expect(h.retry).not.toHaveBeenCalled()
+  })
+
   it('后端切换后不把旧任务快照用于新后端的结果读取', async () => {
     const previous = backendContext.value
     let resolve!: (value: ReturnType<typeof dispatch>) => void

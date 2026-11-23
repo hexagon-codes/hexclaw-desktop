@@ -960,8 +960,8 @@ export interface WeeklyPracticeSettingsDTO {
   textbook_consolidation_tier: WeeklyTextbookConsolidationTier
   arithmetic_warmup_enabled: boolean
   arithmetic_minutes: number
-  created_at: string
-  updated_at: string
+  created_at: number
+  updated_at: number
 }
 
 export interface ProfileBundleProfileDTO extends ProfileDTO {
@@ -1038,6 +1038,7 @@ export type WeeklyPracticeGenerationMethod =
   | 'ai_variant'
   | 'ai_generated'
   | 'rule_generated'
+  | 'asset_reuse'
 
 export interface WeeklyPracticeItemVerificationDTO {
   status: 'verified' | 'failed'
@@ -1178,7 +1179,7 @@ export interface WeeklyPracticeHistorySummaryDTO {
   correct_count: number
   wrong_count: number
   needs_review_count: number
-  archived_at: string
+  archived_at: number
 }
 
 export interface WeeklyPracticeHistoryResp {
@@ -1233,7 +1234,7 @@ export interface WeeklyArithmeticAttemptDTO {
   verification_evidence: unknown
   mistake_record_id?: string
   review_scheduled: boolean
-  created_at: string
+  created_at: number
 }
 
 export interface WeeklyArithmeticAttemptResp {
@@ -1252,7 +1253,7 @@ export interface WeeklyPracticeSaveReceiptDTO {
   plan_revision: number
   snapshot_id: string
   practice_set_id: string
-  created_at: string
+  created_at: number
 }
 
 export interface WeeklyPracticeSaveResp {
@@ -2198,7 +2199,10 @@ export type ImageTaskCreativeFeedbackState =
 export type ImageTaskProgressDTO =
   | { operation: 'classification'; state: ImageTaskDispatchStatus | 'recovering' }
   | { operation: 'homework'; state: ImageTaskHomeworkStage }
-  | { operation: 'writing_ocr'; state: CreativeWorkIntakeStatus }
+  | {
+      operation: 'writing_ocr'
+      state: CreativeWorkIntakeStatus | 'failed_retryable' | 'failed_terminal' | 'recovering'
+    }
   | {
       operation: 'promotion'
       state: CreativeWorkIntakeStatus | ImageTaskCreativeFeedbackState
