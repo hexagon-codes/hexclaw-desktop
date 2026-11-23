@@ -290,7 +290,7 @@ async function installMocks(page: Page) {
               units: [{ unit_id: 'unit-4', unit_title: '第4单元「分数的意义和性质」' }],
               page_refs: [],
             },
-            updated_at: '2026-07-20T00:00:00+08:00',
+            updated_at: Date.parse('2026-07-20T00:00:00+08:00') / 1000,
           },
         ],
       })

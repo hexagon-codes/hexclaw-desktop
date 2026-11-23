@@ -131,7 +131,7 @@ async function installK12ProfileMocks(page: Page) {
               ],
               page_refs: [],
             },
-            updated_at: '2026-07-23T00:00:00Z',
+            updated_at: Date.parse('2026-07-23T00:00:00Z') / 1000,
           },
         ],
       })

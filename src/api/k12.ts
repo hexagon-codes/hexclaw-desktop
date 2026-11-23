@@ -886,7 +886,7 @@ export interface TextbookBindingOptionDTO {
   text_index_state: string
   vector_index_state: string
   catalog: TextbookManifestCatalogDTO | null
-  updated_at: string
+  updated_at: number
 }
 
 export interface TextbookBindingOptionsResp {

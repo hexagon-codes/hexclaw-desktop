@@ -120,7 +120,7 @@ const binding = {
     ],
     page_refs: [],
   },
-  updated_at: NOW,
+  updated_at: Date.parse(NOW) / 1000,
 }
 
 const emptyTrack = (planSection: string) => ({

@@ -238,7 +238,7 @@ function fixtureData() {
       ],
       page_refs: [],
     },
-    updated_at: now,
+    updated_at: Date.parse(now) / 1000,
   }
   const settings = {
     agent: agent.name,
