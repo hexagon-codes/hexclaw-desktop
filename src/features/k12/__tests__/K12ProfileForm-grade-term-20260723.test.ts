@@ -50,7 +50,7 @@ vi.mock('@/api/k12', async (importOriginal) => {
         failure_message: '',
         text_index_state: 'ready',
         vector_index_state: 'ready',
-        updated_at: '',
+        updated_at: 1,
         catalog: {
           subject: 'math',
           textbook_binding_id: 'binding-1',

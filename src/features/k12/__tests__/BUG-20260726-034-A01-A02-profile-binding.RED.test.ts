@@ -164,7 +164,7 @@ const bindingOptions = [
     text_index_state: 'pending',
     vector_index_state: 'pending',
     catalog: null,
-    updated_at: '2026-07-27T08:00:00Z',
+    updated_at: Date.parse('2026-07-27T08:00:00Z') / 1000,
   },
   {
     manifest_id: 'manifest-extracting',
@@ -177,7 +177,7 @@ const bindingOptions = [
     text_index_state: 'processing',
     vector_index_state: 'pending',
     catalog: null,
-    updated_at: '2026-07-27T08:01:00Z',
+    updated_at: Date.parse('2026-07-27T08:01:00Z') / 1000,
   },
   {
     manifest_id: 'manifest-math-pep-5b-g1',
@@ -190,7 +190,7 @@ const bindingOptions = [
     text_index_state: 'ready',
     vector_index_state: 'ready',
     catalog: readyCatalog,
-    updated_at: '2026-07-27T08:02:00Z',
+    updated_at: Date.parse('2026-07-27T08:02:00Z') / 1000,
   },
   {
     manifest_id: 'manifest-no-default-model',
@@ -203,7 +203,7 @@ const bindingOptions = [
     text_index_state: 'failed',
     vector_index_state: 'pending',
     catalog: null,
-    updated_at: '2026-07-27T08:03:00Z',
+    updated_at: Date.parse('2026-07-27T08:03:00Z') / 1000,
   },
   {
     manifest_id: 'manifest-retryable',
@@ -216,7 +216,7 @@ const bindingOptions = [
     text_index_state: 'failed',
     vector_index_state: 'pending',
     catalog: null,
-    updated_at: '2026-07-27T08:04:00Z',
+    updated_at: Date.parse('2026-07-27T08:04:00Z') / 1000,
   },
   {
     manifest_id: 'manifest-stale',
@@ -229,7 +229,7 @@ const bindingOptions = [
     text_index_state: 'stale',
     vector_index_state: 'stale',
     catalog: null,
-    updated_at: '2026-07-27T08:05:00Z',
+    updated_at: Date.parse('2026-07-27T08:05:00Z') / 1000,
   },
 ]
 
