@@ -2,13 +2,19 @@
 
 # Auto-Update Release Guide
 
-## v0.5.2 (2026-11-24)
+## Desktop v0.5.3 (2026-11-24)
+
+Desktop `v0.5.3` carries forward the changes below and addresses cross-platform packaging issues. The bundled Sidecar still builds from the published **HexClaw backend `v0.5.2`**, pinned in `Makefile` via `HEXCLAW_REF=refs/tags/v0.5.2`. The backend manages Hub `v0.1.1` resource references. Publication requires CI and installer verification for all four build targets on a fixed commit.
+
+Browser runtime download archives are cached by operating system, target, and script and manifest digests. Every build verifies cached content against the frozen official sources. Installer and updater Actions artifacts use compression level 0.
+
+## Desktop v0.5.2 (2026-11-24, publication incomplete)
 
 Desktop source version is `0.5.2`. This release includes historical recovery and preview/download of general PDF attachments, conditional caching of persistent files, session persona and draft restoration, and model configuration and supplemental-practice fixes. It also adds model capability declaration sources with per-capability probes, tool execution facts, and parallel source/document-detail loading in Knowledge. See the [Changelog](../CHANGELOG.md) for the full change set.
 
 The coordinated backend target is HexClaw `v0.5.2` with Hub `v0.1.1`. The backend `v0.5.2` tag and Release were published on 2026-11-24, and `HEXCLAW_REF` in `Makefile` is pinned to `refs/tags/v0.5.2`. Release order: verify Desktop CI and four-platform installers from the fixed commit → publish the Desktop tag and installers.
 
-This version preparation does not create a Desktop tag, publish installers, or update a running service. Continue using `make sidecar-local` / `make build-local` to verify current uncommitted backend source. Existing real-model, file, and IM acceptance remains bound to its own source and artifact identity; the `0.5.2` version number alone does not prove fixes are included.
+The Desktop `v0.5.2` tag exists. The [release workflow](https://github.com/hexagon-codes/hexclaw-desktop/actions/runs/45368094713) was canceled after Windows packaging failed and Linux packaging stalled. The Desktop Release remains a draft. Continue using `make sidecar-local` / `make build-local` to verify uncommitted backend source. Existing real-model, file, and IM verification remains tied to its source and artifacts.
 
 ## v0.5.1 (2026-10-26)
 

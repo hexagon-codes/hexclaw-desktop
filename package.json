@@ -1,6 +1,6 @@
 {
   "name": "hexclaw-desktop",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "author": "hexagon-codes <ai@hexclaw.net>",
   "license": "Apache-2.0",
@@ -87,7 +87,7 @@
     "@playwright/test": "^1.59.0",
     "@rollup/rollup-darwin-arm64": "4.59.0",
     "@tailwindcss/vite": "^4.2.1",
-    "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/cli": "2.12.6",
     "@tsconfig/node24": "^24.0.4",
     "@types/dompurify": "^3.2.0",
     "@types/jsdom": "^28.0.0",

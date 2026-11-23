@@ -2,13 +2,19 @@
 
 # 自动更新发布说明
 
-## v0.5.2（2026-11-24）
+## Desktop v0.5.3（2026-11-24）
+
+Desktop `v0.5.3` 延续下文的功能变更，并修复跨平台发布打包问题。内置 Sidecar 继续从已发布的 **HexClaw 后端 `v0.5.2`** 构建，`Makefile` 的 `HEXCLAW_REF` 为 `refs/tags/v0.5.2`。Hub `v0.1.1` 的引用由后端管理。Desktop 发布仍需固定提交通过 CI 和四平台试打包。
+
+浏览器运行时下载归档按操作系统、目标平台及脚本和清单摘要缓存。每次构建继续校验缓存内容与官方冻结来源，安装包和更新包的 Actions Artifact 使用压缩级别 0。
+
+## Desktop v0.5.2（2026-11-24，发布未完成）
 
 Desktop 源码版本为 `0.5.2`。本版包括通用 PDF 附件的历史恢复与预览下载、持久文件条件缓存、会话人设与草稿恢复，以及模型配置和补充练习错误修复；同时增加模型能力声明来源与逐项探测、工具调用执行事实，以及知识库原文件与管理详情并行读取。完整变更见 [Changelog](../CHANGELOG.md)。
 
 本版后端协作目标为 HexClaw `v0.5.2` 与 Hub `v0.1.1`；后端 `v0.5.2` Tag 与 Release 已于 2026-11-24 发布，`Makefile` 的 `HEXCLAW_REF` 已固定为 `refs/tags/v0.5.2`。正式发布按以下顺序推进：核对 Desktop CI 与固定提交四平台安装包 → 发布 Desktop Tag 与安装包。
 
-本次版本准备不创建 Desktop Tag、不发布安装包，也不改变当前运行服务。开发验证当前未提交后端源码继续使用 `make sidecar-local` / `make build-local`；已有真实模型、文件与 IM 验收按各自源码和制品身份记录，不能仅凭 `0.5.2` 版本号推断已包含修复。
+Desktop `v0.5.2` Tag 已创建，[发布工作流](https://github.com/hexagon-codes/hexclaw-desktop/actions/runs/45368094713)在 Windows 打包失败和 Linux 打包长时间停留后被取消。Desktop Release 仍为草稿。开发验证当前未提交后端源码继续使用 `make sidecar-local` / `make build-local`，已有真实模型、文件与 IM 验收按各自源码和制品身份记录。
 
 ## v0.5.1（2026-10-26）
 
